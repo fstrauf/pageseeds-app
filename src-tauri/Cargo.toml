@@ -1,0 +1,41 @@
+[package]
+name = "pageseeds"
+version = "0.1.0"
+description = "PageSeeds Desktop App"
+authors = []
+edition = "2021"
+rust-version = "1.77.2"
+default-run = "pageseeds"
+
+[lib]
+name = "pageseeds_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+dotenvy = "0.15"
+dirs = "5"
+log = "0.4"
+regex = "1"
+walkdir = "2"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time"] }
+jsonwebtoken = "9"
+csv = "1"
+urlencoding = "2"
+env_logger = "0.11"
+
+[[bin]]
+name = "content_review_smoke"
+path = "src/bin/content_review_smoke.rs"

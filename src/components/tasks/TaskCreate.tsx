@@ -1,0 +1,152 @@
+import React, { useState } from 'react'
+import { X } from 'lucide-react'
+import { createTask } from '../../lib/tauri'
+import type { Task } from '../../lib/types'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+
+const TASK_TYPES = [
+  'write_article',
+  'collect_gsc',
+  'collect_posthog',
+  'research_keywords',
+  'reddit_search',
+  'reddit_reply',
+  'analyse_gsc',
+  'optimise_article',
+  'fix_indexing',
+  'fix_redirects',
+  'implementation',
+]
+
+interface TaskCreateProps {
+  projectId: string
+  onClose: () => void
+  onCreated: (task: Task) => void
+}
+
+export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
+  const [taskType, setTaskType] = useState('write_article')
+  const [customType, setCustomType] = useState('')
+  const [title, setTitle] = useState('')
+  const [priority, setPriority] = useState('medium')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const resolvedType = taskType === '__custom__' ? customType.trim() : taskType
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault()
+    if (!resolvedType) return
+    setSaving(true)
+    setError(null)
+    try {
+      const task = await createTask(projectId, resolvedType, title || undefined, priority)
+      onCreated(task)
+    } catch (e: unknown) {
+      setError(String(e))
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.5)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="bg-card border border-border rounded-lg shadow-xl w-[400px]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-semibold text-foreground">New Task</h2>
+          <Button variant="ghost" size="icon-sm" onClick={onClose} className="text-muted-foreground">
+            <X size={15} />
+          </Button>
+        </div>
+
+        <form onSubmit={handleCreate}>
+          <div className="px-5 py-5 space-y-4">
+            {error && (
+              <div className="px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
+                {error}
+              </div>
+            )}
+
+            {/* Task type */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Type</Label>
+              <Select value={taskType} onValueChange={setTaskType}>
+                <SelectTrigger className="bg-background border-border text-foreground text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-popover border-border text-popover-foreground">
+                  {TASK_TYPES.map(t => (
+                    <SelectItem key={t} value={t} className="text-sm font-mono">{t}</SelectItem>
+                  ))}
+                  <SelectItem value="__custom__" className="text-sm">Custom…</SelectItem>
+                </SelectContent>
+              </Select>
+              {taskType === '__custom__' && (
+                <Input
+                  value={customType}
+                  onChange={e => setCustomType(e.target.value)}
+                  placeholder="e.g. fix_canonicals"
+                  className="mt-1.5 bg-background border-border text-foreground text-sm font-mono"
+                  autoFocus
+                />
+              )}
+            </div>
+
+            {/* Title */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Title <span className="text-muted-foreground/50">(optional)</span></Label>
+              <Input
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Brief description…"
+                className="bg-background border-border text-foreground text-sm"
+              />
+            </div>
+
+            {/* Priority */}
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Priority</Label>
+              <Select value={priority} onValueChange={setPriority}>
+                <SelectTrigger className="bg-background border-border text-foreground text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-popover border-border text-popover-foreground">
+                  {['high', 'medium', 'low'].map(p => (
+                    <SelectItem key={p} value={p} className="text-sm">{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="px-5 pb-5 flex items-center justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={onClose} className="text-muted-foreground">
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={saving || !resolvedType}
+            >
+              {saving ? 'Creating…' : 'Create task'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
