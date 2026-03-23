@@ -190,7 +190,13 @@ pub fn reset_task_error(conn: &Connection, id: &str) -> Result<Task> {
 }
 
 pub fn delete_task(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
+    // task_runs has a foreign key to tasks without ON DELETE CASCADE.
+    // Remove dependent rows first so task deletion succeeds consistently.
+    conn.execute("DELETE FROM task_runs WHERE task_id = ?1", [id])?;
+    let rows = conn.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
+    if rows == 0 {
+        return Err(Error::Other(format!("Task '{id}' not found")));
+    }
     Ok(())
 }
 

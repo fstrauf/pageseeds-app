@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { checkProjectSetup, fixDateMismatches, getContentHealth, initWorkspaceConfig } from '../../lib/tauri'
 import type { ContentHealthResult, ProjectSetup, SetupCheckItem, SetupSeverity } from '../../lib/types'
 import { Button } from '@/components/ui/button'

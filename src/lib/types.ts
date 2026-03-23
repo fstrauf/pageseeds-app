@@ -6,6 +6,31 @@ export interface TaskArtifact {
   content?: string;
 }
 
+export interface KeywordDifficultyEntry {
+  keyword: string;
+  difficulty: number | string | null;
+  volume?: number | string | null;
+  traffic?: number | string | null;
+  topVolume?: number | string | null;
+  serp_count?: number;
+  top_result?: string;
+}
+
+export interface KeywordResearchResult {
+  themes?: string[];
+  total_candidates?: number;
+  new_keywords: string[];
+  filtered_out?: number;
+  /** Batch difficulty data — either a dict with a results array, or a list directly */
+  difficulty?: {
+    results?: KeywordDifficultyEntry[];
+    total?: number;
+    successful?: number;
+  } | KeywordDifficultyEntry[] | null;
+  difficulty_analyzed_count?: number;
+  difficulty_skipped_keywords?: string[];
+}
+
 export interface TaskRun {
   attempts: number;
   last_error?: string;
@@ -128,6 +153,14 @@ export interface DateFixResult {
   fixes: DateFix[];
   articles_fixed: number;
   dry_run: boolean;
+}
+
+export interface DatePolicyReport {
+  total_checked: number;
+  future_count: number;
+  duplicate_count: number;
+  issues: DateIssue[];
+  duplicate_dates: [string, number[]][];
 }
 
 export interface ArticleLinkProfile {

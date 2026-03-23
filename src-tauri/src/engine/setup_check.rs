@@ -183,11 +183,12 @@ pub fn resolve(
         &mut checks,
     );
     check_content_dir(&content_dir, workspace_config_exists, &mut checks);
+    check_clis(&mut checks);
+    check_secrets(&repo_root, &mut checks);
 
     let is_valid = checks.iter().all(|c| c.severity != Severity::Error);
 
     let summary = if is_valid {
-        let errors = 0usize;
         let warns = checks.iter().filter(|c| c.severity == Severity::Warn).count();
         if warns == 0 {
             "Project is fully configured".into()
@@ -332,7 +333,7 @@ fn check_workspace_config(
     path: &Path,
     exists: bool,
     config: Option<&SeoWorkspaceConfig>,
-    content_dir: &ContentDirResult,
+    _content_dir: &ContentDirResult,
     checks: &mut Vec<SetupCheckItem>,
 ) {
     if !exists {
@@ -406,6 +407,96 @@ fn check_content_dir(content_dir: &ContentDirResult, workspace_config_exists: bo
             });
         }
         _ => {}
+    }
+}
+
+// ─── CLI availability ───────────────────────────────────────────────────────
+
+/// CLIs that the app launches as subprocesses.
+const REQUIRED_CLIS: &[(&str, &str)] = &[
+    (
+        "seo-content-cli",
+        "Content workflows (keyword research, article planning)",
+    ),
+];
+
+fn check_clis(checks: &mut Vec<SetupCheckItem>) {
+    for (bin, desc) in REQUIRED_CLIS {
+        if !is_on_path(bin) {
+            checks.push(SetupCheckItem {
+                id: format!("cli_missing_{}", bin.replace('-', "_")),
+                severity: Severity::Error,
+                title: format!("{} not found on PATH", bin),
+                detail: format!("Required for: {}.", desc),
+                fix_hint: Some(
+                    "uv tool install git+https://github.com/fstrauf/pageseeds-cli"
+                        .to_string(),
+                ),
+                auto_fixable: false,
+            });
+        }
+    }
+}
+
+fn is_on_path(binary: &str) -> bool {
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path_var).any(|dir| {
+        let candidate = dir.join(binary);
+        if candidate.exists() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        if dir.join(format!("{}.exe", binary)).exists() {
+            return true;
+        }
+        false
+    })
+}
+
+// ─── Secrets checks ──────────────────────────────────────────────────────────
+
+fn check_secrets(repo_root: &Path, checks: &mut Vec<SetupCheckItem>) {
+    use crate::config::env_resolver::EnvResolver;
+    let resolver = EnvResolver::new(repo_root);
+
+    // GSC: either service account OR oauth client secrets
+    let gsc_ok = resolver.resolve("GSC_SERVICE_ACCOUNT_PATH").is_some()
+        || resolver.resolve("GSC_REPORT_OAUTH_CLIENT_SECRETS").is_some();
+    if !gsc_ok {
+        checks.push(SetupCheckItem {
+            id: "secret_gsc_missing".into(),
+            severity: Severity::Warn,
+            title: "Google Search Console not configured".into(),
+            detail: "GSC_SERVICE_ACCOUNT_PATH or GSC_REPORT_OAUTH_CLIENT_SECRETS is required for GSC features.".into(),
+            fix_hint: Some("Add credentials to ~/.config/automation/secrets.env".into()),
+            auto_fixable: false,
+        });
+    }
+
+    // Reddit: both client creds needed for API access
+    let reddit_ok = resolver.resolve("REDDIT_CLIENT_ID").is_some()
+        && resolver.resolve("REDDIT_CLIENT_SECRET").is_some();
+    if !reddit_ok {
+        checks.push(SetupCheckItem {
+            id: "secret_reddit_api_missing".into(),
+            severity: Severity::Warn,
+            title: "Reddit API credentials not configured".into(),
+            detail: "REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET are needed for Reddit opportunity search.".into(),
+            fix_hint: Some("Add credentials to ~/.config/automation/secrets.env".into()),
+            auto_fixable: false,
+        });
+    }
+
+    // Ahrefs traffic / keyword difficulty
+    if resolver.resolve("CAPSOLVER_API_KEY").is_none() {
+        checks.push(SetupCheckItem {
+            id: "secret_capsolver_missing".into(),
+            severity: Severity::Warn,
+            title: "Ahrefs keyword research not configured".into(),
+            detail: "CAPSOLVER_API_KEY is needed for keyword difficulty analysis.".into(),
+            fix_hint: Some("Add CAPSOLVER_API_KEY to ~/.config/automation/secrets.env".into()),
+            auto_fixable: false,
+        });
     }
 }
 

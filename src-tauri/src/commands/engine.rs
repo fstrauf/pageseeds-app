@@ -1,17 +1,52 @@
 use std::sync::Arc;
 use tauri::State;
+use crate::config::env_resolver::EnvResolver;
 use crate::engine::{batch, executor, ledger, scheduler, task_store};
-use super::AppState;
+use super::{AppState, GscState};
 
 #[tauri::command]
 pub async fn execute_task(
     state: State<'_, AppState>,
+    gsc_state: State<'_, GscState>,
     task_id: String,
 ) -> Result<executor::ExecutionResult, String> {
     let db_arc = Arc::clone(&state.db);
+    let mut token = gsc_state
+        .token
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .filter(|t| !t.is_expired())
+        .map(|t| t.access_token.clone());
+
+    // If there is no cached token, attempt service-account auth and cache it.
+    if token.is_none() {
+        let project_path = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            let task = task_store::get_task(&db, &task_id).map_err(|e| e.to_string())?;
+            let project = task_store::get_project(&db, &task.project_id).map_err(|e| e.to_string())?;
+            project.path
+        };
+
+        let resolver = EnvResolver::new(&project_path);
+        if let Some(sa_path) = resolver
+            .resolve("GSC_SERVICE_ACCOUNT_PATH")
+            .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS"))
+            .map(|(v, _)| v)
+        {
+            if let Ok(token_state) = crate::gsc::auth::get_service_account_token(&sa_path).await {
+                token = Some(token_state.access_token.clone());
+                if let Ok(mut guard) = gsc_state.token.lock() {
+                    *guard = Some(token_state);
+                }
+            }
+        }
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task(&db, &task_id).map_err(|e| e.to_string())
+        executor::execute_task_with_token(&db, &task_id, token.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -29,6 +64,7 @@ pub fn get_batch_summary(
 #[tauri::command]
 pub async fn run_batch(
     state: State<'_, AppState>,
+    gsc_state: State<'_, GscState>,
     project_id: String,
     max_tasks: Option<usize>,
     pause_on_error: Option<bool>,
@@ -38,10 +74,42 @@ pub async fn run_batch(
         pause_on_error: pause_on_error.unwrap_or(true),
         delay_secs: 0.5,
     };
+
+    let mut token = gsc_state
+        .token
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .filter(|t| !t.is_expired())
+        .map(|t| t.access_token.clone());
+
+    if token.is_none() {
+        let project_path = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+            project.path
+        };
+
+        let resolver = EnvResolver::new(&project_path);
+        if let Some(sa_path) = resolver
+            .resolve("GSC_SERVICE_ACCOUNT_PATH")
+            .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS"))
+            .map(|(v, _)| v)
+        {
+            if let Ok(token_state) = crate::gsc::auth::get_service_account_token(&sa_path).await {
+                token = Some(token_state.access_token.clone());
+                if let Ok(mut guard) = gsc_state.token.lock() {
+                    *guard = Some(token_state);
+                }
+            }
+        }
+    }
+
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        batch::run_batch(&db, &project_id, &config).map_err(|e| e.to_string())
+        batch::run_batch_with_token(&db, &project_id, &config, token.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

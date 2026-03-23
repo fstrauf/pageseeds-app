@@ -1,5 +1,6 @@
 use tauri::State;
 use crate::db::export;
+use crate::content::date_policy;
 use crate::engine::task_store;
 use crate::models::article::Article;
 use super::AppState;
@@ -48,6 +49,22 @@ pub fn export_to_repo(
     project_id: String,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
+    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    let report = date_policy::validate_publish_ready_dates(&articles);
+    if !report.is_valid() {
+        let detail = report
+            .issues
+            .iter()
+            .take(8)
+            .map(|i| format!("id {} {} ({})", i.article_id, i.description, i.current_date))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!(
+            "Date policy check failed: {} issue(s). Resolve future/duplicate dates before export. {}",
+            report.issues.len(),
+            detail
+        ));
+    }
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let project_path = std::path::PathBuf::from(&project.path);
 

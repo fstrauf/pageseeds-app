@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { AlertCircle, CheckCircle, RefreshCw, Wrench } from 'lucide-react'
-import { scanContentHealth, fixContentDates } from '../../lib/tauri'
-import type { CleaningResult, DateFixResult } from '../../lib/types'
+import { scanContentHealth, fixContentDates, analyzeArticleDatePolicy } from '../../lib/tauri'
+import type { CleaningResult, DateFixResult, DatePolicyReport } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -32,6 +32,7 @@ interface ContentHealthProps {
 export function ContentHealth({ projectId }: ContentHealthProps) {
   const [cleaning, setCleaning] = useState<CleaningResult | null>(null)
   const [dateResult, setDateResult] = useState<DateFixResult | null>(null)
+  const [datePolicy, setDatePolicy] = useState<DatePolicyReport | null>(null)
   const [scanLoading, setScanLoading] = useState(false)
   const [dateLoading, setDateLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -54,8 +55,12 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
     setDateLoading(true)
     setError(null)
     try {
-      const result = await fixContentDates(projectId, !apply)
+      const [result, policy] = await Promise.all([
+        fixContentDates(projectId, !apply),
+        analyzeArticleDatePolicy(projectId, ['published', 'ready_to_publish'], 0),
+      ])
       setDateResult(result)
+      setDatePolicy(policy)
     } catch (e: unknown) {
       setError(String(e))
     } finally {
@@ -144,7 +149,7 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
                       <TableBody>
                         {cleaning.issues.map((issue, i) => (
                           <TableRow key={i} className="border-border">
-                            <TableCell className="font-mono text-xs text-muted-foreground max-w-[160px] truncate">
+                            <TableCell className="font-mono text-xs text-muted-foreground max-w-40 truncate">
                               {issue.file}
                             </TableCell>
                             <TableCell>
@@ -152,7 +157,7 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
                                 {issue.issue_type.replace(/_/g, ' ')}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-xs text-foreground max-w-[280px]">
+                            <TableCell className="text-xs text-foreground max-w-70">
                               {issue.description}
                             </TableCell>
                             <TableCell>
@@ -240,6 +245,42 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
                       </TableBody>
                     </Table>
                   </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {datePolicy && (
+            <Card className="bg-card border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-foreground flex items-center justify-between">
+                  <span>Publish date policy</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {datePolicy.issues.length} issue{datePolicy.issues.length !== 1 ? 's' : ''}
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Badge className="bg-secondary text-muted-foreground border-transparent">Future: {datePolicy.future_count}</Badge>
+                  <Badge className="bg-secondary text-muted-foreground border-transparent">Duplicates: {datePolicy.duplicate_count}</Badge>
+                </div>
+                {datePolicy.issues.length === 0 ? (
+                  <div className="flex items-center gap-2 text-sm text-emerald-600">
+                    <CheckCircle size={15} />
+                    Publish policy is clean for published and ready_to_publish articles
+                  </div>
+                ) : (
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    {datePolicy.issues.slice(0, 5).map((issue, idx) => (
+                      <li key={`${issue.article_id}-${idx}`}>
+                        Article {issue.article_id}: {issue.description}
+                      </li>
+                    ))}
+                    {datePolicy.issues.length > 5 && (
+                      <li>...and {datePolicy.issues.length - 5} more</li>
+                    )}
+                  </ul>
                 )}
               </CardContent>
             </Card>

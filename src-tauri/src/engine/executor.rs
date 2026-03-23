@@ -39,6 +39,14 @@ pub struct ExecutionResult {
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 pub fn execute_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult, String> {
+    execute_task_with_token(conn, task_id, None)
+}
+
+pub fn execute_task_with_token(
+    conn: &Connection,
+    task_id: &str,
+    gsc_token: Option<&str>,
+) -> Result<ExecutionResult, String> {
     let mut task = task_store::get_task(conn, task_id).map_err(|e| e.to_string())?;
 
     let started_at = Utc::now().to_rfc3339();
@@ -93,7 +101,15 @@ pub fn execute_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult,
     for (i, step) in steps.iter().enumerate() {
         progress[i].status = "running".to_string();
 
-        let result = run_step(step, &task, &project_path, &site_url, &agent_provider, latest_raw_output.as_deref());
+        let result = run_step(
+            step,
+            &task,
+            &project_path,
+            &site_url,
+            &agent_provider,
+            latest_raw_output.as_deref(),
+            gsc_token,
+        );
 
         // Track the raw output of agentic steps for the normalizer that follows
         if step.kind == "agentic" {
@@ -176,13 +192,24 @@ pub fn execute_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult,
     }
 
     let finished_at = Utc::now().to_rfc3339();
-    let new_status = if all_ok { "done" } else { "todo" }; // reset to todo on failure so it can be retried
+    // research_keywords and custom_keyword_research go to "review" so the user can pick keywords.
+    // All other tasks go to "done".
+    let new_status = if all_ok {
+        if matches!(task.task_type.as_str(), "research_keywords" | "custom_keyword_research") { "review" } else { "done" }
+    } else {
+        "todo" // reset to todo on failure so it can be retried
+    };
 
     task_store::update_task_status(conn, task_id, new_status).map_err(|e| e.to_string())?;
 
     // After a successful content review, create a single content_review_apply task from recommendations.json.
     if all_ok && matches!(task.task_type.as_str(), "content_review" | "content_audit") {
         create_content_review_apply_task(conn, &task, &project_path);
+    }
+
+    // After a successful collect_gsc, spawn fix tasks from the gsc_collection.json artifact.
+    if all_ok && task.task_type == "collect_gsc" {
+        create_tasks_from_collection_after_exec(conn, &task, &project_path);
     }
 
     if !all_ok {
@@ -212,6 +239,7 @@ fn run_step(
     site_url: &str,
     agent_provider: &str,
     latest_raw: Option<&str>,
+    gsc_token: Option<&str>,
 ) -> crate::engine::workflows::StepResult {
     match step.kind.as_str() {
         "deterministic" => exec_deterministic(step, task, project_path),
@@ -248,10 +276,13 @@ fn run_step(
         }
         "content_review_recommend" => exec_content_review_recommend(task, project_path, agent_provider),
         "content_review_apply_execute" => exec_content_review_apply(task, project_path, agent_provider),
+        "keyword_research_cli" => exec_keyword_research_native(task, project_path),
         "reddit_search" => exec_reddit_search(task, project_path),
         "content_sync" => exec_content_sync(task, project_path),
-        "gsc_sync_articles" => exec_gsc_sync_articles(task, project_path),
+        "gsc_sync_articles" => exec_gsc_sync_articles(task, project_path, gsc_token),
         "content_audit" => exec_content_audit(task, project_path),
+        "collect_gsc_inspect" => exec_collect_gsc(task, project_path, gsc_token),
+        "gsc_investigate_agentic" => exec_gsc_investigate(step, task, project_path, agent_provider),
         other => crate::engine::workflows::StepResult {
             success: false,
             message: format!("Unknown step kind '{}'", other),
@@ -263,6 +294,429 @@ fn run_step(
 fn _fail_task(conn: &Connection, task: &mut Task, msg: &str) {
     let _ = task_store::update_task_status(conn, &task.id, "todo");
     let _ = task_store::record_task_run(conn, &task.id, false, Some(msg), None);
+}
+
+// ─── Keyword research — native Rust pipeline ─────────────────────────────────
+
+/// Native keyword research:
+/// 1. `get_keyword_ideas` per theme → keywords WITH volume (from stGetFreeKeywordIdeas)
+/// 2. Dedupe against articles.json
+/// 3. `get_keyword_difficulty` per top-N keyword → KD scores
+/// 4. Merge into the standard output schema so KeywordPicker shows both volume and KD.
+fn exec_keyword_research_native(
+    task: &Task,
+    project_path: &str,
+) -> crate::engine::workflows::StepResult {
+    use crate::config::env_resolver::EnvResolver;
+    use crate::engine::project_paths::ProjectPaths;
+    use std::collections::{HashMap, HashSet};
+
+    let paths = ProjectPaths::from_path(project_path);
+
+    // ── Resolve CAPSOLVER_API_KEY ─────────────────────────────────────────────
+    let env = EnvResolver::new(project_path).build_env(HashMap::new());
+    let capsolver_key = match env.get("CAPSOLVER_API_KEY").map(|s| s.as_str()) {
+        Some(k) if !k.is_empty() => k.to_string(),
+        _ => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "CAPSOLVER_API_KEY not set. Add it in Settings → Secrets.".to_string(),
+                output: None,
+            };
+        }
+    };
+
+    // ── Parse themes from task description ───────────────────────────────────
+    let raw_desc = task.description.as_deref().unwrap_or("");
+    let desc_themes: Vec<String> = raw_desc
+        .lines()
+        .flat_map(|line| line.split(','))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let themes = if !desc_themes.is_empty() {
+        desc_themes
+    } else {
+        let auto = derive_themes_from_project(&paths.automation_dir);
+        if auto.is_empty() {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!(
+                    "No keyword themes found. Add themes to the task description (one per line), \
+                     or ensure seo_content_brief.md or project_summary.md exists in {}.",
+                    paths.automation_dir.display()
+                ),
+                output: None,
+            };
+        }
+        auto
+    };
+
+    log::info!("[keyword_research_native] {} themes: {:?}", themes.len(), themes);
+
+    // ── Pre-flight: articles.json must exist ──────────────────────────────────
+    let articles_json_path = paths.automation_dir.join("articles.json");
+    if !articles_json_path.exists() {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "Workspace not initialised: articles.json not found at {}. \
+                 Run 'Init Workspace' from Project Settings first.",
+                paths.automation_dir.display()
+            ),
+            output: None,
+        };
+    }
+
+    // Load existing keywords from articles.json so we can skip already-covered ones.
+    let existing_keywords: HashSet<String> = std::fs::read_to_string(&articles_json_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|a| a["target_keyword"].as_str())
+                .map(|k| k.to_lowercase())
+                .collect()
+        }))
+        .unwrap_or_default();
+
+    log::info!("[keyword_research_native] {} existing keywords to filter against", existing_keywords.len());
+
+    // ── Bridge to tokio async runtime ─────────────────────────────────────────
+    let handle = tokio::runtime::Handle::current();
+
+    // Step 1 — Generate keyword ideas (includes volume) for each theme.
+    let mut volume_map: HashMap<String, String> = HashMap::new();
+    let mut all_new_keywords: Vec<String> = vec![];
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for theme in &themes {
+        log::info!("[keyword_research_native] fetching ideas for theme '{}'", theme);
+        match handle.block_on(crate::seo::keywords::get_keyword_ideas(
+            &capsolver_key, theme, "us", "Google",
+        )) {
+            Ok(result) => {
+                let all_ideas = result.ideas.iter().chain(result.question_ideas.iter());
+                for idea in all_ideas {
+                    let kw_lower = idea.keyword.to_lowercase();
+                    if existing_keywords.contains(&kw_lower) {
+                        continue; // already covered
+                    }
+                    if !seen.contains(&kw_lower) {
+                        seen.insert(kw_lower.clone());
+                        // Capture volume before deduping the string
+                        if let Some(vol) = &idea.volume {
+                            volume_map.insert(idea.keyword.clone(), vol.clone());
+                        }
+                        all_new_keywords.push(idea.keyword.clone());
+                    }
+                }
+                log::info!("[keyword_research_native] theme '{}' → {} new keywords so far", theme, all_new_keywords.len());
+            }
+            Err(e) => {
+                log::warn!("[keyword_research_native] keyword ideas failed for '{}': {}", theme, e);
+                // Continue with other themes rather than aborting.
+            }
+        }
+    }
+
+    if all_new_keywords.is_empty() {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "No new keyword ideas found for themes: {}. All suggestions may already be covered.",
+                themes.join(", ")
+            ),
+            output: None,
+        };
+    }
+
+    // Step 2 — Analyse difficulty for the top-N keywords.
+    let top_n = 10usize;
+    let kw_to_analyze: Vec<String> = all_new_keywords.iter().take(top_n).cloned().collect();
+    log::info!("[keyword_research_native] analyzing difficulty for {} keywords", kw_to_analyze.len());
+
+    let mut difficulty_results: Vec<serde_json::Value> = vec![];
+    for kw in &kw_to_analyze {
+        match handle.block_on(crate::seo::keywords::get_keyword_difficulty(
+            &capsolver_key, kw, "us",
+        )) {
+            Ok(kd) => {
+                let vol = volume_map.get(kw).cloned().unwrap_or_default();
+                difficulty_results.push(serde_json::json!({
+                    "keyword": kw,
+                    "difficulty": kd.difficulty,
+                    "volume": vol,
+                    "serp_count": kd.serp.len(),
+                    "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
+                    "last_update": kd.last_update,
+                }));
+                log::info!("[keyword_research_native] '{}' kd={} vol={}", kw, kd.difficulty, vol);
+            }
+            Err(e) => {
+                log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
+                // Still include the keyword with volume, just no KD.
+                let vol = volume_map.get(kw).cloned().unwrap_or_default();
+                difficulty_results.push(serde_json::json!({
+                    "keyword": kw,
+                    "difficulty": serde_json::Value::Null,
+                    "volume": vol,
+                    "serp_count": 0,
+                    "top_result": "",
+                    "last_update": "",
+                }));
+            }
+        }
+    }
+
+    // ── Assemble output in the same schema as seo-content-cli research-keywords
+    let total_candidates = all_new_keywords.len();
+    let output = serde_json::json!({
+        "themes": themes,
+        "total_candidates": total_candidates,
+        "new_keywords": all_new_keywords,
+        "filtered_out": 0,
+        "difficulty": {
+            "total": kw_to_analyze.len(),
+            "successful": difficulty_results.iter().filter(|r| r["difficulty"] != serde_json::Value::Null).count(),
+            "failed": difficulty_results.iter().filter(|r| r["difficulty"] == serde_json::Value::Null).count(),
+            "results": difficulty_results,
+        }
+    });
+
+    crate::engine::workflows::StepResult {
+        success: true,
+        message: format!(
+            "Keyword research complete ({} themes, {} candidates, {} analyzed)",
+            themes.len(), total_candidates, kw_to_analyze.len()
+        ),
+        output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
+    }
+}
+
+
+// ─── Theme auto-derivation from project configs ───────────────────────────────
+
+/// Try to derive keyword themes from existing project configuration files.
+///
+/// Priority order:
+/// 1. `*seo_content_brief*.md` — PLANNED cluster topics (🎯) and gap cluster names
+/// 2. `*project_summary*.md`   — Content Pillar names
+/// 3. `articles.json`          — unique existing target_keywords (as baseline coverage)
+///
+/// File matching uses a suffix/substring glob so project-prefixed files like
+/// `coffee_seo_content_brief.md` are found automatically (mirrors CLI behaviour).
+///
+/// Returns up to 8 themes. Caller decides whether to use or fail.
+fn derive_themes_from_project(automation_dir: &std::path::Path) -> Vec<String> {
+    // 1. Content brief — prefer planned/gap topics
+    if let Some(brief) = find_file_by_suffix(automation_dir, "seo_content_brief.md") {
+        log::info!("[keyword_research] using brief: {:?}", brief);
+        let themes = extract_from_brief(&brief);
+        if !themes.is_empty() {
+            return themes;
+        }
+    }
+
+    // 2. Project summary — content pillars
+    if let Some(summary) = find_file_by_suffix(automation_dir, "project_summary.md") {
+        log::info!("[keyword_research] using summary: {:?}", summary);
+        let themes = extract_from_summary(&summary);
+        if !themes.is_empty() {
+            return themes;
+        }
+    }
+
+    // 3. articles.json — unique target keywords already covered (for gap analysis context)
+    let articles_json = automation_dir.join("articles.json");
+    if articles_json.exists() {
+        let themes = extract_from_articles(&articles_json);
+        if !themes.is_empty() {
+            return themes;
+        }
+    }
+
+    vec![]
+}
+
+/// Find the first file in `dir` whose name ends with `suffix` (case-insensitive).
+/// Falls back to an exact path match so `seo_content_brief.md` still works directly.
+fn find_file_by_suffix(dir: &std::path::Path, suffix: &str) -> Option<std::path::PathBuf> {
+    // Exact match first (fast path)
+    let exact = dir.join(suffix);
+    if exact.exists() {
+        return Some(exact);
+    }
+    // Glob: any file whose name contains the suffix as a substring
+    let Ok(entries) = std::fs::read_dir(dir) else { return None };
+    let suffix_lower = suffix.to_lowercase();
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.to_lowercase().contains(&suffix_lower))
+                .unwrap_or(false)
+        })
+}
+
+/// Extract themes from `seo_content_brief.md`.
+///
+/// Strategy (in order):
+/// 1. Items marked 🎯 (planned / gap items) inside any cluster block.
+/// 2. Names of PLANNED cluster headers ("Cluster N: <Name> (PLANNED)").
+/// 3. Names of all cluster headers as a fallback.
+fn extract_from_brief(path: &std::path::Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+
+    // Collect 🎯 items first — these are explicit gap opportunities.
+    let planned_items: Vec<String> = content
+        .lines()
+        .filter(|l| l.contains('🎯'))
+        .map(|l| {
+            // Strip leading "- ", "  - ", "* ", markdown checkbox chars, then trim
+            let stripped = l.trim()
+                .trim_start_matches("- [ ] ")
+                .trim_start_matches("- [x] ")
+                .trim_start_matches("- ")
+                .trim_start_matches("* ")
+                .replace('🎯', "")
+                .replace("**", "")
+                .trim()
+                .to_string();
+            // Take only the first clause (before parens or colon)
+            stripped
+                .split('(')
+                .next()
+                .unwrap_or(&stripped)
+                .split(':')
+                .next()
+                .unwrap_or(&stripped)
+                .trim()
+                .to_string()
+        })
+        .filter(|s| !s.is_empty() && s.len() > 3)
+        .take(8)
+        .collect();
+
+    if !planned_items.is_empty() {
+        return planned_items;
+    }
+
+    // Fall back to PLANNED cluster names
+    let planned_clusters: Vec<String> = content
+        .lines()
+        .filter(|l| l.contains("PLANNED") && l.starts_with("###"))
+        .map(|l| {
+            // "### Cluster 4: Automated Distribution & Community SEO (PLANNED)"
+            // → "Automated Distribution & Community SEO"
+            let s = l.trim_start_matches('#').trim();
+            let s = s.split(':').nth(1).unwrap_or(s);
+            let s = s.split('(').next().unwrap_or(s).trim();
+            s.to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .take(8)
+        .collect();
+
+    if !planned_clusters.is_empty() {
+        return planned_clusters;
+    }
+
+    // Fall back to all cluster names
+    content
+        .lines()
+        .filter(|l| l.starts_with("### Cluster"))
+        .map(|l| {
+            let s = l.trim_start_matches('#').trim();
+            let s = s.split(':').nth(1).unwrap_or(s);
+            let s = s.split('(').next().unwrap_or(s).trim();
+            s.to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .take(6)
+        .collect()
+}
+
+/// Extract content pillar topics from `project_summary.md`.
+///
+/// Looks for lines like "### Pillar N: <Topic>" and returns the topic names.
+fn extract_from_summary(path: &std::path::Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+
+    let mut themes: Vec<String> = content
+        .lines()
+        .filter(|l| {
+            let lower = l.to_lowercase();
+            lower.contains("pillar") && l.starts_with("###")
+        })
+        .map(|l| {
+            // "### Pillar 1: Programmatic SEO" → "Programmatic SEO"
+            let s = l.trim_start_matches('#').trim();
+            let s = s.split(':').nth(1).unwrap_or(s).trim();
+            // Strip trailing period / parens
+            s.split('(').next().unwrap_or(s).trim().to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .take(6)
+        .collect();
+
+    // Also look for "**Search Keywords:**" sections and pull listed keywords.
+    if themes.is_empty() {
+        let mut in_keywords = false;
+        for line in content.lines() {
+            if line.contains("Search Keywords") {
+                in_keywords = true;
+                continue;
+            }
+            if in_keywords {
+                if line.trim().starts_with('-') || line.trim().starts_with('*') {
+                    let kw = line.trim()
+                        .trim_start_matches('-')
+                        .trim_start_matches('*')
+                        .trim()
+                        .trim_matches('"')
+                        .to_string();
+                    if !kw.is_empty() {
+                        themes.push(kw);
+                    }
+                    if themes.len() >= 8 { break; }
+                } else if line.trim().is_empty() || line.starts_with('#') {
+                    in_keywords = false;
+                }
+            }
+        }
+    }
+
+    themes
+}
+
+/// Extract unique target_keywords from `articles.json` as theme seeds.
+/// Returns up to 6 unique keywords, stripped of long-tail modifiers.
+fn extract_from_articles(path: &std::path::Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+    let Ok(articles) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else { return vec![] };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut themes = Vec::new();
+
+    for article in &articles {
+        if let Some(kw) = article.get("target_keyword").and_then(|v| v.as_str()) {
+            if kw.is_empty() { continue; }
+            // Take only first 3–4 words to get the broad theme
+            let short: String = kw.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
+            let lower = short.to_lowercase();
+            if seen.insert(lower.clone()) {
+                themes.push(short);
+            }
+        }
+        if themes.len() >= 6 { break; }
+    }
+
+    themes
 }
 
 // ─── Content review apply ────────────────────────────────────────────────────
@@ -804,7 +1258,11 @@ fn create_content_review_apply_task(conn: &Connection, parent_task: &Task, proje
 /// block into each matching article in automation/articles.json.
 /// Matching uses normalised URL paths (scheme-stripped, trailing-slash removed,
 /// underscore→dash, lowercase) with a secondary last-segment index.
-fn exec_gsc_sync_articles(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
+fn exec_gsc_sync_articles(
+    task: &Task,
+    project_path: &str,
+    gsc_token: Option<&str>,
+) -> crate::engine::workflows::StepResult {
     use crate::config::env_resolver::EnvResolver;
     use crate::engine::project_paths::ProjectPaths;
     use regex::Regex;
@@ -828,13 +1286,17 @@ fn exec_gsc_sync_articles(task: &Task, project_path: &str) -> crate::engine::wor
 
     // 2. Get token
     let rt = tokio::runtime::Handle::current();
-    let token = match rt.block_on(crate::gsc::auth::get_service_account_token(&sa_path)) {
-        Ok(t) => t.access_token,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("GSC auth failed: {}", e),
-            output: None,
-        },
+    let token = if let Some(token) = gsc_token {
+        token.to_string()
+    } else {
+        match rt.block_on(crate::gsc::auth::get_service_account_token(&sa_path)) {
+            Ok(t) => t.access_token,
+            Err(e) => return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("GSC auth failed: {}", e),
+                output: None,
+            },
+        }
     };
 
     // 3. Read articles.json
@@ -2018,4 +2480,536 @@ fn extract_json_array(output: &str) -> String {
         trimmed
     };
     inner.to_string()
+}
+
+// ─── GSC Collection ───────────────────────────────────────────────────────────
+
+/// Native Rust implementation of the GSC collection step.
+///
+/// 1. Reads sitemap URL from manifest.json.
+/// 2. Mints a service account token.
+/// 3. Fetches all sitemap URLs (up to 200).
+/// 4. Calls the URL Inspection API for each URL.
+/// 5. Classifies each result into a reason code.
+/// 6. Writes `gsc_collection.json` to the automation dir.
+///
+/// Task spawning happens in `create_tasks_from_collection_after_exec` after
+/// the task completes — the same pattern as `create_content_review_apply_task`.
+fn exec_collect_gsc(
+    task: &Task,
+    project_path: &str,
+    gsc_token: Option<&str>,
+) -> crate::engine::workflows::StepResult {
+    use crate::config::env_resolver::EnvResolver;
+    use crate::engine::project_paths::ProjectPaths;
+    use std::collections::HashMap;
+
+    let paths = ProjectPaths::from_path(project_path);
+    let resolver = EnvResolver::new(project_path);
+
+    // 1. Read manifest.json for site_url and derive sitemap_url
+    let manifest_path = paths.automation_dir.join("manifest.json");
+    let manifest: serde_json::Value = match std::fs::read_to_string(&manifest_path) {
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(v) => v,
+            Err(e) => return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to parse manifest.json: {}", e),
+                output: None,
+            },
+        },
+        Err(_) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "manifest.json not found at {} — run 'Init Workspace' first",
+                manifest_path.display()
+            ),
+            output: None,
+        },
+    };
+
+    let site_url = match manifest
+        .get("gsc_site")
+        .or_else(|| manifest.get("url"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+    {
+        Some(u) => u,
+        None => return crate::engine::workflows::StepResult {
+            success: false,
+            message: "No 'url' or 'gsc_site' field in manifest.json — add the site URL".to_string(),
+            output: None,
+        },
+    };
+
+    let sitemap_url = manifest
+        .get("sitemap")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| {
+            let base = site_url.trim_end_matches('/');
+            format!("{}/sitemap.xml", base)
+        });
+
+    log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
+    let site_match_prefix = normalize_site_for_url_match(&site_url);
+
+    // 2. Get service account credentials and mint a token
+    let sa_path = match resolver
+        .resolve("GSC_SERVICE_ACCOUNT_PATH")
+        .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS"))
+        .map(|(v, _)| v)
+    {
+        Some(p) => p,
+        None => return crate::engine::workflows::StepResult {
+            success: false,
+            message: "GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets".to_string(),
+            output: None,
+        },
+    };
+
+    let rt = tokio::runtime::Handle::current();
+    let token = if let Some(token) = gsc_token {
+        token.to_string()
+    } else {
+        match rt.block_on(crate::gsc::auth::get_service_account_token(&sa_path)) {
+            Ok(t) => t.access_token,
+            Err(e) => return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("GSC auth failed: {}", e),
+                output: None,
+            },
+        }
+    };
+
+    // 3. Fetch sitemap URLs
+    let urls = match rt.block_on(crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url, 200)) {
+        Ok(u) if !u.is_empty() => u,
+        Ok(_) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "Sitemap at '{}' is empty or unreachable — check the URL in manifest.json",
+                sitemap_url
+            ),
+            output: None,
+        },
+        Err(e) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("Failed to fetch sitemap: {}", e),
+            output: None,
+        },
+    };
+
+    log::info!("[collect_gsc] {} URLs to inspect", urls.len());
+
+    // Fast-fail before expensive URL Inspection calls if sitemap domain clearly mismatches.
+    let sample_size = urls.len().min(10);
+    let sample_matches = urls
+        .iter()
+        .take(sample_size)
+        .filter(|u| u.starts_with(&site_match_prefix))
+        .count();
+    if sample_size > 0 && sample_matches == 0 {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "GSC site URL mismatch (precheck): 0/{} sitemap URLs match '{}'. Check 'url'/'gsc_site' in manifest.json.",
+                sample_size, site_url
+            ),
+            output: None,
+        };
+    }
+
+    // 4. URL Inspection API
+    let records = match rt.block_on(crate::gsc::indexing::inspect_batch(&token, &site_url, urls.clone())) {
+        Ok(r) => r,
+        Err(e) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("URL Inspection API failed: {}", e),
+            output: None,
+        },
+    };
+
+    // 5. Domain validation — majority of URLs should match site_url
+    let url_matching = records
+        .iter()
+        .filter(|r| r.url.starts_with(&site_match_prefix))
+        .count();
+    if records.len() > 5 && url_matching < records.len() / 2 {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "GSC site URL mismatch: only {}/{} URLs match '{}'. Check 'url' field in manifest.json.",
+                url_matching, records.len(), site_url
+            ),
+            output: None,
+        };
+    }
+
+    // 6. Build counts and items
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for rec in &records {
+        let rc = rec.reason_code.as_deref().unwrap_or("unknown");
+        *counts.entry(rc.to_string()).or_insert(0) += 1;
+    }
+
+    let issues_found = records
+        .iter()
+        .filter(|r| r.reason_code.as_deref().unwrap_or("") != "indexed_pass")
+        .count();
+
+    let mut items: Vec<serde_json::Value> = records
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "url": r.url,
+                "verdict": r.verdict,
+                "coverage_state": r.coverage_state,
+                "reason_code": r.reason_code,
+                "action": r.action,
+                "priority": r.priority,
+            })
+        })
+        .collect();
+
+    // Sort by priority ascending (most urgent first)
+    items.sort_by_key(|item| item["priority"].as_i64().unwrap_or(999));
+
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let collection = serde_json::json!({
+        "meta": {
+            "site_url": site_url,
+            "sitemap_url": sitemap_url,
+            "collected_at": now_iso,
+            "total_urls": records.len(),
+            "issues_found": issues_found,
+        },
+        "counts": counts,
+        "items": items,
+    });
+
+    // 7. Write gsc_collection.json
+    let output_path = paths.automation_dir.join("gsc_collection.json");
+    match std::fs::create_dir_all(&paths.automation_dir) {
+        Ok(_) => {}
+        Err(e) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("Failed to create automation dir: {}", e),
+            output: None,
+        },
+    }
+    let json_str = serde_json::to_string_pretty(&collection).unwrap_or_default();
+    if let Err(e) = std::fs::write(&output_path, &json_str) {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("Failed to write gsc_collection.json: {}", e),
+            output: None,
+        };
+    }
+
+    log::info!(
+        "[collect_gsc] wrote {} — {} URLs, {} issues",
+        output_path.display(), records.len(), issues_found
+    );
+
+    let _ = task; // task metadata available if needed for future use
+    crate::engine::workflows::StepResult {
+        success: true,
+        message: format!("{} URLs inspected, {} issues found", records.len(), issues_found),
+        output: Some(json_str),
+    }
+}
+
+/// Normalise project site configuration into a URL prefix suitable for `starts_with` checks.
+///
+/// Examples:
+/// - `sc-domain:example.com` -> `https://example.com`
+/// - `https://example.com/`  -> `https://example.com`
+/// - `http://example.com`    -> `http://example.com`
+fn normalize_site_for_url_match(site_url: &str) -> String {
+    if let Some(domain) = site_url.strip_prefix("sc-domain:") {
+        format!("https://{}", domain.trim_end_matches('/'))
+    } else {
+        site_url.trim_end_matches('/').to_string()
+    }
+}
+
+/// Post-completion hook for `collect_gsc`: reads gsc_collection.json and spawns fix tasks.
+fn create_tasks_from_collection_after_exec(conn: &Connection, parent_task: &Task, project_path: &str) {
+    use crate::engine::project_paths::ProjectPaths;
+
+    let paths = ProjectPaths::from_path(project_path);
+    let collection_path = paths.automation_dir.join("gsc_collection.json");
+
+    let json_str = match std::fs::read_to_string(&collection_path) {
+        Ok(s) => s,
+        Err(_) => {
+            log::info!("[collect_gsc] gsc_collection.json not found — no tasks created");
+            return;
+        }
+    };
+
+    let data: serde_json::Value = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[collect_gsc] failed to parse gsc_collection.json: {}", e);
+            return;
+        }
+    };
+
+    let count = create_tasks_from_collection(conn, parent_task, &data);
+    log::info!("[collect_gsc] spawned {} fix tasks", count);
+}
+
+/// Parse gsc_collection.json and create specific fix tasks in SQLite.
+///
+/// Maps reason codes to task types:
+///   robots_blocked / noindex / fetch_error / canonical_mismatch  → fix_technical
+///   not_indexed_*                                                 → fix_indexing
+///   api_error                                                     → fix_gsc_access (batched)
+///   (no issues)                                                   → investigate_gsc
+fn create_tasks_from_collection(
+    conn: &Connection,
+    parent_task: &Task,
+    data: &serde_json::Value,
+) -> i32 {
+    use crate::engine::task_store;
+    use crate::models::task::{Task as TaskModel, TaskRun};
+
+    let items = match data["items"].as_array() {
+        Some(a) => a,
+        None => return 0,
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tasks_created: i32 = 0;
+    let mut seen_issues = std::collections::HashSet::<String>::new();
+    let mut api_error_count = 0u32;
+
+    for item in items.iter().take(20) {
+        let url = item["url"].as_str().unwrap_or("");
+        let reason = item["reason_code"].as_str().unwrap_or("unknown");
+        let action = item["action"].as_str().unwrap_or("");
+        let verdict = item["verdict"].as_str().unwrap_or("");
+        let priority_val = item["priority"].as_i64().unwrap_or(999);
+
+        // Skip indexed pages
+        if reason == "indexed_pass" {
+            continue;
+        }
+
+        // Accumulate API errors — batched into one task below
+        if reason == "api_error" {
+            api_error_count += 1;
+            continue;
+        }
+
+        // Deduplicate
+        let issue_key = format!("{}:{}", reason, url);
+        if seen_issues.contains(&issue_key) {
+            continue;
+        }
+        seen_issues.insert(issue_key);
+
+        let task_type = match reason {
+            "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch" => "fix_technical",
+            "not_indexed_crawled" | "not_indexed_discovered" | "not_indexed_other" => "fix_indexing",
+            _ => "fix_indexing",
+        };
+
+        // Skip if a similar task already exists
+        let existing: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type=?2 AND status IN ('todo','in_progress') AND (title LIKE ?3 OR description LIKE ?3)",
+            rusqlite::params![&parent_task.project_id, task_type, format!("%{}%", url)],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        if existing > 0 {
+            continue;
+        }
+
+        // Build a short URL slug for the title
+        let url_slug = {
+            let without_scheme = url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            if let Some(slash_pos) = without_scheme.find('/') {
+                &without_scheme[slash_pos..]
+            } else {
+                url
+            }
+        };
+        let reason_human = reason.replace('_', " ");
+        let title = format!("Fix {}: {}", reason_human, url_slug);
+        let description = format!(
+            "URL: {}\nIssue: {}\nAction: {}\nVerdict: {}",
+            url, reason, action, verdict
+        );
+
+        let priority = if priority_val <= 30 { "high" } else { "medium" };
+        let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis() + tasks_created as i64);
+
+        let new_task = TaskModel {
+            id: task_id,
+            task_type: task_type.to_string(),
+            phase: "implementation".to_string(),
+            status: "todo".to_string(),
+            priority: priority.to_string(),
+            execution_mode: "manual".to_string(),
+            agent_policy: "optional".to_string(),
+            title: Some(title),
+            description: Some(description),
+            project_id: parent_task.project_id.clone(),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+
+        match task_store::create_task(conn, &new_task) {
+            Ok(_) => tasks_created += 1,
+            Err(e) => log::warn!("[collect_gsc] failed to create fix task: {}", e),
+        }
+    }
+
+    // One batched fix_gsc_access task for all API errors
+    if api_error_count > 0 {
+        let existing: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='fix_gsc_access' AND status IN ('todo','in_progress')",
+            rusqlite::params![&parent_task.project_id],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        if existing == 0 {
+            let task_id = format!("task-gsc-access-{}", chrono::Utc::now().timestamp_millis());
+            let new_task = crate::models::task::Task {
+                id: task_id,
+                task_type: "fix_gsc_access".to_string(),
+                phase: "implementation".to_string(),
+                status: "todo".to_string(),
+                priority: "high".to_string(),
+                execution_mode: "manual".to_string(),
+                agent_policy: "optional".to_string(),
+                title: Some(format!("Fix GSC API access errors ({} URLs affected)", api_error_count)),
+                description: Some(
+                    "GSC URL Inspection API returned errors for some URLs. \
+                     Check that the service account has Search Console property access.".to_string()
+                ),
+                project_id: parent_task.project_id.clone(),
+                depends_on: vec![],
+                artifacts: vec![],
+                run: crate::models::task::TaskRun::default(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            if task_store::create_task(conn, &new_task).is_ok() {
+                tasks_created += 1;
+            }
+        }
+    }
+
+    // If no issues at all — all pages indexed — trigger investigation
+    if tasks_created == 0 && api_error_count == 0 {
+        let all_indexed = items
+            .iter()
+            .all(|i| i["reason_code"].as_str().unwrap_or("") == "indexed_pass");
+        if all_indexed {
+            let existing: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='investigate_gsc' AND status IN ('todo','in_progress')",
+                rusqlite::params![&parent_task.project_id],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            if existing == 0 {
+                let task_id = format!("task-inv-gsc-{}", chrono::Utc::now().timestamp_millis());
+                let new_task = crate::models::task::Task {
+                    id: task_id,
+                    task_type: "investigate_gsc".to_string(),
+                    phase: "investigation".to_string(),
+                    status: "todo".to_string(),
+                    priority: "medium".to_string(),
+                    execution_mode: "manual".to_string(),
+                    agent_policy: "required".to_string(),
+                    title: Some("Investigate GSC — all pages indexed, look for opportunities".to_string()),
+                    description: Some("gsc_collection.json shows all pages are indexed. Run investigation to find optimization opportunities.".to_string()),
+                    project_id: parent_task.project_id.clone(),
+                    depends_on: vec![],
+                    artifacts: vec![],
+                    run: crate::models::task::TaskRun::default(),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                };
+                if task_store::create_task(conn, &new_task).is_ok() {
+                    tasks_created += 1;
+                }
+            }
+        }
+    }
+
+    tasks_created
+}
+
+/// Agentic investigation step for `investigate_gsc`.
+///
+/// Reads gsc_collection.json and passes its content as context to the LLM,
+/// which generates a structured investigation report.
+fn exec_gsc_investigate(
+    step: &crate::engine::workflows::WorkflowStep,
+    task: &Task,
+    project_path: &str,
+    agent_provider: &str,
+) -> crate::engine::workflows::StepResult {
+    use crate::engine::{agent, project_paths::ProjectPaths};
+    use std::path::Path;
+
+    let paths = ProjectPaths::from_path(project_path);
+    let collection_path = paths.automation_dir.join("gsc_collection.json");
+
+    let collection_json = match std::fs::read_to_string(&collection_path) {
+        Ok(s) => s,
+        Err(_) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "gsc_collection.json not found — run collect_gsc first".to_string(),
+                output: None,
+            };
+        }
+    };
+
+    let prompt = format!(
+        "## Task: Investigate GSC Indexing Results\n\n\
+         - Task ID: {}\n\
+         - Site: {}\n\
+         - Repo: {}\n\n\
+         ## GSC Collection Data\n\n\
+         ```json\n{}\n```\n\n\
+         ## Instructions\n\n\
+         Analyse the GSC collection data above. Identify patterns among non-indexed pages, \
+         group issues by root cause, and generate a structured investigation report.\n\n\
+         Return a JSON object with this structure:\n\
+         ```json\n\
+         {{\n  \"summary\": \"...\",\n  \"issues_found\": [\n    {{\n      \
+         \"url\": \"...\",\n      \"reason\": \"...\",\n      \
+         \"recommendation\": \"...\",\n      \"priority\": \"high|medium|low\"\n    \
+         }}\n  ]\n}}\n\
+         ```",
+        task.id,
+        project_path,
+        project_path,
+        collection_json,
+    );
+
+    let _ = step; // step name available if needed for future use
+
+    match agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
+        Ok(output) => crate::engine::workflows::StepResult {
+            success: true,
+            message: format!("GSC investigation complete ({} chars)", output.len()),
+            output: Some(output),
+        },
+        Err(e) => crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("GSC investigation agent failed: {}", e),
+            output: None,
+        },
+    }
 }

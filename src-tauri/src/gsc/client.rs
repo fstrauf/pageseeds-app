@@ -12,7 +12,10 @@ impl GscClient {
     pub fn new(access_token: impl Into<String>) -> Self {
         Self {
             access_token: access_token.into(),
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
         }
     }
 
@@ -28,11 +31,48 @@ impl GscClient {
 
     /// POST to the URL Inspection API.
     pub async fn url_inspection_inspect(&self, body: &Value) -> Result<Value> {
-        self.post(
-            "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect",
-            body,
-        )
-        .await
+        const URL: &str = "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect";
+        const MAX_ATTEMPTS: usize = 3;
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            let resp = self
+                .client
+                .post(URL)
+                .bearer_auth(&self.access_token)
+                .json(body)
+                .send()
+                .await;
+
+            match resp {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        return Ok(resp.json().await?);
+                    }
+
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    let retryable = status.as_u16() == 429 || status.is_server_error();
+
+                    if retryable && attempt < MAX_ATTEMPTS {
+                        let backoff_ms = (attempt as u64) * 1000;
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        continue;
+                    }
+
+                    return Err(Error::Other(format!("GSC API error {}: {}", status, text)));
+                }
+                Err(e) => {
+                    if attempt < MAX_ATTEMPTS {
+                        let backoff_ms = (attempt as u64) * 1000;
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        continue;
+                    }
+                    return Err(Error::Other(format!("GSC request failed: {}", e)));
+                }
+            }
+        }
+
+        Err(Error::Other("GSC inspection request failed after retries".to_string()))
     }
 
     async fn post(&self, url: &str, body: &Value) -> Result<Value> {

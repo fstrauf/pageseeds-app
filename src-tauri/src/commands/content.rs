@@ -1,5 +1,6 @@
 use tauri::State;
 use crate::engine::task_store;
+use crate::content::date_policy::{self, DatePolicyConfig, DatePolicyReport};
 use super::AppState;
 
 #[tauri::command]
@@ -57,6 +58,41 @@ pub fn fix_content_dates(
     }
 
     Ok(fix_result)
+}
+
+#[tauri::command]
+pub fn analyze_article_date_policy(
+    state: State<'_, AppState>,
+    project_id: String,
+    status_filter: Option<Vec<String>>,
+    allowed_future_days: Option<i64>,
+) -> Result<DatePolicyReport, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+
+    let statuses = status_filter.map(|values| {
+        values
+            .into_iter()
+            .map(|s| s.to_lowercase())
+            .collect::<std::collections::HashSet<_>>()
+    });
+
+    let cfg = DatePolicyConfig {
+        allowed_future_days: allowed_future_days.unwrap_or(0),
+        statuses,
+    };
+
+    Ok(date_policy::validate_dates(&articles, &cfg))
+}
+
+#[tauri::command]
+pub fn suggest_next_article_publish_date(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    Ok(date_policy::suggest_next_safe_date(&articles))
 }
 
 #[tauri::command]

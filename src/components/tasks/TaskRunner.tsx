@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight } from 'lucide-react'
+import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp } from 'lucide-react'
 import { executeTask } from '../../lib/tauri'
 import type { Task, ExecutionResult, StepProgress } from '../../lib/types'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '../../lib/utils'
 
 interface RunnerItem {
@@ -18,13 +19,16 @@ interface Props {
   onDone: () => void
   /** Called when the user dismisses the panel. */
   onClose: () => void
+  /** Notifies parent when run state changes (for disabling duplicate runs, etc.). */
+  onRunningChange?: (running: boolean) => void
 }
 
-export function TaskRunner({ tasks, onDone, onClose }: Props) {
+export function TaskRunner({ tasks, onDone, onClose, onRunningChange }: Props) {
   const [items, setItems] = useState<RunnerItem[]>(() =>
     tasks.map(t => ({ task: t, status: 'queued' as const })),
   )
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [isPanelExpanded, setIsPanelExpanded] = useState(true)
   const [isRunning, setIsRunning] = useState(false)
   const [isDone, setIsDone] = useState(false)
   const hasStarted = useRef(false)
@@ -38,6 +42,7 @@ export function TaskRunner({ tasks, onDone, onClose }: Props) {
 
   async function runAll() {
     setIsRunning(true)
+    onRunningChange?.(true)
     for (const task of tasks) {
       setItems(prev => prev.map(it =>
         it.task.id === task.id ? { ...it, status: 'running' } : it,
@@ -62,6 +67,7 @@ export function TaskRunner({ tasks, onDone, onClose }: Props) {
       }
     }
     setIsRunning(false)
+    onRunningChange?.(false)
     setIsDone(true)
     onDone()
   }
@@ -69,7 +75,11 @@ export function TaskRunner({ tasks, onDone, onClose }: Props) {
   function toggleExpand(id: string) {
     setExpanded(prev => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
       return next
     })
   }
@@ -79,76 +89,108 @@ export function TaskRunner({ tasks, onDone, onClose }: Props) {
   const completed = succeeded + failed
   const progress = tasks.length > 0 ? (completed / tasks.length) * 100 : 0
 
+  const headerLabel = isRunning
+    ? 'Running task queue'
+    : isDone
+      ? 'Task queue finished'
+      : 'Task queue pending'
+
+  const summary = isDone
+    ? [
+        succeeded > 0 ? `${succeeded} succeeded` : null,
+        failed > 0 ? `${failed} failed` : null,
+      ].filter(Boolean).join(' · ') || 'Done'
+    : `${completed} / ${tasks.length} complete`
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="w-[660px] max-h-[80vh] bg-background border border-border rounded-xl shadow-2xl flex flex-col">
-        {/* Header */}
-        <div className="px-6 pt-5 pb-4 border-b border-border flex-shrink-0">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h2 className="text-base font-semibold text-foreground">Task Runner</h2>
-              {isRunning && (
-                <p className="text-xs text-muted-foreground mt-0.5">Running tasks one at a time…</p>
-              )}
-              {isDone && (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {succeeded > 0 && `${succeeded} succeeded`}
-                  {succeeded > 0 && failed > 0 && '  ·  '}
-                  {failed > 0 && `${failed} failed`}
-                  {succeeded === 0 && failed === 0 && 'Done'}
-                </p>
-              )}
-            </div>
-            <span className="text-sm tabular-nums text-muted-foreground">
-              {completed} / {tasks.length}
-            </span>
+    <div className="fixed bottom-0 left-56 right-0 z-50 border-t border-border bg-card shadow-lg animate-in slide-in-from-bottom-2 duration-200">
+      <div className="px-6 py-3 border-b border-border">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex items-center gap-2">
+            {isRunning && <Loader2 size={14} className="animate-spin text-blue-600 shrink-0" />}
+            {isDone && failed === 0 && <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />}
+            {isDone && failed > 0 && <XCircle size={14} className="text-red-500 shrink-0" />}
+            {!isRunning && !isDone && <Clock size={14} className="text-muted-foreground shrink-0" />}
+
+            <span className="text-sm font-medium text-foreground truncate">{headerLabel}</span>
+            <Badge variant="outline" className="text-xs border-border text-muted-foreground shrink-0">
+              {summary}
+            </Badge>
           </div>
 
-          {/* Progress bar */}
-          <div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
-            <div
-              className={cn(
-                'h-full rounded-full transition-all duration-500 ease-out',
-                isDone
-                  ? failed > 0 ? 'bg-amber-500' : 'bg-emerald-500'
-                  : 'bg-primary',
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setIsPanelExpanded(v => !v)}
+              className="text-xs text-muted-foreground"
+            >
+              {isPanelExpanded ? (
+                <><ChevronDown size={12} className="mr-1" />Collapse</>
+              ) : (
+                <><ChevronUp size={12} className="mr-1" />Expand</>
               )}
-              style={{ width: `${progress}%` }}
-            />
+            </Button>
+            {!isRunning && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={onClose}
+                className="text-xs text-muted-foreground"
+              >
+                Dismiss
+              </Button>
+            )}
           </div>
         </div>
 
-        {/* Task list */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
-          {items.map(item => (
-            <ItemRow
-              key={item.task.id}
-              item={item}
-              expanded={expanded.has(item.task.id)}
-              onToggle={() => toggleExpand(item.task.id)}
-            />
-          ))}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-border flex-shrink-0 flex items-center justify-between">
-          {isRunning ? (
-            <span className="text-xs text-muted-foreground flex items-center gap-2">
-              <Loader2 size={12} className="animate-spin" />
-              Do not close the app while tasks are running
-            </span>
-          ) : (
-            <span />
-          )}
-          <Button
-            variant={isDone ? 'default' : 'outline'}
-            size="sm"
-            onClick={onClose}
-          >
-            {isRunning ? 'Running…' : 'Close'}
-          </Button>
+        <div className="mt-2.5 h-1.5 w-full rounded-full bg-secondary overflow-hidden">
+          <div
+            className={cn(
+              'h-full rounded-full transition-all duration-500 ease-out',
+              isDone
+                ? failed > 0 ? 'bg-amber-500' : 'bg-emerald-500'
+                : 'bg-primary',
+            )}
+            style={{ width: `${progress}%` }}
+          />
         </div>
       </div>
+
+      {isPanelExpanded && (
+        <>
+          <div className="max-h-56 overflow-y-auto p-4 space-y-2 min-h-0">
+            {items.map(item => (
+              <ItemRow
+                key={item.task.id}
+                item={item}
+                expanded={expanded.has(item.task.id)}
+                onToggle={() => toggleExpand(item.task.id)}
+              />
+            ))}
+          </div>
+
+          <div className="px-6 py-3 border-t border-border flex items-center justify-between">
+            {isRunning ? (
+              <span className="text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 size={12} className="animate-spin" />
+                Running in background while you continue using the app
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">Queue complete</span>
+            )}
+            {!isRunning && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onClose}
+              >
+                Close
+              </Button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

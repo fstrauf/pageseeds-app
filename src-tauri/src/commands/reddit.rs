@@ -6,7 +6,7 @@ use crate::models::reddit::{
     MigrationResult, RedditOpportunity, RedditStats, SubmissionSummary, ValidationResult,
 };
 use crate::reddit;
-use super::AppState;
+use super::{AppState, GscState};
 
 #[tauri::command]
 pub async fn search_reddit(
@@ -164,6 +164,7 @@ pub fn get_reddit_statistics(
 #[tauri::command]
 pub async fn run_reddit_opportunity_search(
     state: State<'_, AppState>,
+    gsc_state: State<'_, GscState>,
     project_id: String,
     user_context: Option<String>,
 ) -> Result<executor::ExecutionResult, String> {
@@ -217,10 +218,19 @@ pub async fn run_reddit_opportunity_search(
             .id
     };
 
+    let token = gsc_state
+        .token
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .filter(|t| !t.is_expired())
+        .map(|t| t.access_token.clone());
+
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task(&db, &task_id).map_err(|e| e.to_string())
+        executor::execute_task_with_token(&db, &task_id, token.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

@@ -12,8 +12,9 @@ import { Settings } from './components/settings/Settings'
 import { SchedulerConfig } from './components/workflow/SchedulerConfig'
 import { RunHistory } from './components/workflow/RunHistory'
 import { Overview } from './components/overview/Overview'
+import { TaskRunner } from './components/tasks/TaskRunner'
 import { listProjects } from './lib/tauri'
-import type { Project, View } from './lib/types'
+import type { Project, Task, View } from './lib/types'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './components/ui/tabs'
 
 export default function App() {
@@ -21,6 +22,9 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [activeProject, setActiveProject] = useState<Project | null>(null)
   const [pendingTaskId, setPendingTaskId] = useState<string | undefined>(undefined)
+  const [runnerTasks, setRunnerTasks] = useState<Task[] | null>(null)
+  const [runnerBusy, setRunnerBusy] = useState(false)
+  const [runCompletedTick, setRunCompletedTick] = useState(0)
   // undefined = modal closed | null = new project | Project = edit that project
   const [modalProject, setModalProject] = useState<Project | null | undefined>(undefined)
   const [ready, setReady] = useState(false)
@@ -57,6 +61,15 @@ export default function App() {
     if (activeProject) setModalProject(undefined)
   }
 
+  function handleRunTasks(tasks: Task[]) {
+    if (runnerBusy || tasks.length === 0) return
+    setRunnerTasks(tasks)
+  }
+
+  function handleRunnerDone() {
+    setRunCompletedTick(v => v + 1)
+  }
+
   if (!ready) {
     return (
       <div
@@ -86,6 +99,9 @@ export default function App() {
               setActiveView(view)
               if (taskId) setPendingTaskId(taskId)
             }}
+            onRunTasks={handleRunTasks}
+            runnerBusy={runnerBusy}
+            runCompletedTick={runCompletedTick}
           />
         )}
         {activeView === 'tasks' && (
@@ -93,6 +109,9 @@ export default function App() {
             projectId={activeProject?.id}
             initialTaskId={pendingTaskId}
             onTaskOpened={() => setPendingTaskId(undefined)}
+            onRunTasks={handleRunTasks}
+            runnerBusy={runnerBusy}
+            runCompletedTick={runCompletedTick}
           />
         )}
         {activeView === 'articles' && (
@@ -149,6 +168,15 @@ export default function App() {
         {activeView === 'scheduler' && <SchedulerConfig projectId={activeProject?.id ?? ''} />}
         {activeView === 'history' && <RunHistory projectId={activeProject?.id ?? ''} />}
       </Shell>
+
+      {runnerTasks && (
+        <TaskRunner
+          tasks={runnerTasks}
+          onDone={handleRunnerDone}
+          onClose={() => setRunnerTasks(null)}
+          onRunningChange={setRunnerBusy}
+        />
+      )}
 
       {modalProject !== undefined && (
         <ProjectModal

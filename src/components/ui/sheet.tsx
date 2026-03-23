@@ -20,6 +20,19 @@ function SheetPortal({ ...props }: React.ComponentProps<typeof SheetPrimitive.Po
   return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
 }
 
+function SheetOverlay({ className, ...props }: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+  return (
+    <SheetPrimitive.Overlay
+      data-slot="sheet-overlay"
+      className={cn(
+        'fixed inset-0 z-40 bg-black/35 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
 const sheetVariants = cva(
   'fixed z-50 flex flex-col bg-background shadow-xl transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-300 data-[state=open]:animate-in data-[state=closed]:animate-out',
   {
@@ -42,9 +55,10 @@ interface SheetContentProps
 function SheetContent({ side = 'right', className, children, ...props }: SheetContentProps) {
   return (
     <SheetPortal>
+      <SheetOverlay />
       <SheetPrimitive.Content
         data-slot="sheet-content"
-        className={cn(sheetVariants({ side }), className)}
+        className={cn(sheetVariants({ side }), 'overscroll-contain', className)}
         {...props}
       >
         {children}
@@ -89,6 +103,7 @@ export {
   Sheet,
   SheetTrigger,
   SheetClose,
+  SheetOverlay,
   SheetContent,
   SheetHeader,
   SheetFooter,

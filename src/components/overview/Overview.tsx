@@ -4,13 +4,10 @@ import {
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
   PlayCircle, TrendingUp, Users, ArrowRight,
 } from 'lucide-react'
-import { getProjectOverview, quickRunWorkflow } from '../../lib/tauri'
-import type { Project, ProjectOverview, WorkflowActivity } from '../../lib/types'
+import { createTask, getProjectOverview } from '../../lib/tauri'
+import type { Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { ActionDrawer } from '@/components/ui/action-drawer'
-import { useActionRun } from '../../hooks/useActionRun'
 import { cn } from '../../lib/utils'
 import { SetupWarnings } from './SetupWarnings'
 
@@ -30,11 +27,11 @@ const QUICK_ACTIONS: ActionDef[] = [
   {
     task_type: 'research_keywords',
     label: 'Keyword Research',
-    description: 'Find new long-tail keyword opportunities and append drafts to articles.json',
+    description: 'Find new long-tail keyword opportunities for your site, then select which to write about',
     icon: <Search size={16} />,
     phase: 'research',
-    nextView: 'articles',
-    nextLabel: 'Review new draft articles',
+    nextView: 'tasks',
+    nextLabel: 'Select keywords & create articles',
   },
   {
     task_type: 'content_review',
@@ -205,12 +202,22 @@ const PHASE_BADGE: Record<string, string> = {
 interface OverviewProps {
   project: Project | null
   onViewChange: (view: import('../../lib/types').View, taskId?: string) => void
+  onRunTasks?: (tasks: Task[]) => void
+  runnerBusy?: boolean
+  runCompletedTick?: number
 }
 
-export function Overview({ project, onViewChange }: OverviewProps) {
+export function Overview({
+  project,
+  onViewChange,
+  onRunTasks,
+  runnerBusy = false,
+  runCompletedTick = 0,
+}: OverviewProps) {
   const [overview, setOverview] = useState<ProjectOverview | null>(null)
   const [loading, setLoading] = useState(false)
-  const { state: actionState, run: runAction, dismiss: dismissAction } = useActionRun()
+  const [runningActionLabel, setRunningActionLabel] = useState<string | null>(null)
+  const [quickActionError, setQuickActionError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async () => {
@@ -228,24 +235,36 @@ export function Overview({ project, onViewChange }: OverviewProps) {
 
   useEffect(() => {
     load()
-    return () => { if (pollRef.current) clearTimeout(pollRef.current) }
+    const pollTimer = pollRef.current
+    return () => {
+      if (pollTimer) clearTimeout(pollTimer)
+    }
   }, [load])
 
+  useEffect(() => {
+    if (!project || runCompletedTick === 0) return
+    load()
+  }, [project, runCompletedTick, load])
+
   async function handleQuickAction(action: ActionDef) {
-    if (!project || actionState.status === 'running') return
-    await runAction(
-      action.label,
-      async () => {
-        const result = await quickRunWorkflow(
-          project.id,
-          action.task_type,
-          `${action.label} — ${new Date().toLocaleDateString()}`,
-        )
-        await load()
-        return { kind: 'execution' as const, data: result }
-      },
-      { view: action.nextView, label: action.nextLabel },
-    )
+    if (!project || runnerBusy) return
+    setRunningActionLabel(action.label)
+    setQuickActionError(null)
+    try {
+      const task = await createTask(
+        project.id,
+        action.task_type,
+        `${action.label} — ${new Date().toLocaleDateString()}`,
+        undefined,
+        'medium',
+      )
+      onRunTasks?.([task])
+      await load()
+    } catch (e: unknown) {
+      setQuickActionError(String(e))
+    } finally {
+      setRunningActionLabel(null)
+    }
   }
 
   if (!project) {
@@ -363,15 +382,20 @@ export function Overview({ project, onViewChange }: OverviewProps) {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 pb-4">
+              {quickActionError && (
+                <div className="mb-2 px-2.5 py-2 rounded-md text-xs bg-destructive/10 text-destructive">
+                  {quickActionError}
+                </div>
+              )}
               {QUICK_ACTIONS.map(action => (
                 <button
                   key={action.task_type}
                   onClick={() => handleQuickAction(action)}
-                  disabled={actionState.status === 'running'}
+                  disabled={runnerBusy}
                   className={cn(
                     'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors',
                     'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
-                    actionState.status === 'running' && actionState.label === action.label && 'bg-secondary ring-1 ring-blue-700/50',
+                    runnerBusy && runningActionLabel === action.label && 'bg-secondary ring-1 ring-blue-700/50',
                   )}
                 >
                   <span className="shrink-0 text-muted-foreground">{action.icon}</span>
@@ -387,7 +411,7 @@ export function Overview({ project, onViewChange }: OverviewProps) {
                     </div>
                     <span className="text-xs text-muted-foreground leading-snug">{action.description}</span>
                   </div>
-                  {actionState.status === 'running' && actionState.label === action.label
+                  {runnerBusy && runningActionLabel === action.label
                     ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
                     : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
                   }
@@ -470,13 +494,6 @@ export function Overview({ project, onViewChange }: OverviewProps) {
           </div>
         </div>
       </div>
-
-      {/* Slide-up execution drawer */}
-      <ActionDrawer
-        state={actionState}
-        onDismiss={dismissAction}
-        onNavigate={(view, taskId) => onViewChange(view as import('../../lib/types').View, taskId)}
-      />
     </div>
   )
 }

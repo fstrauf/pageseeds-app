@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::error::{Error, Result};
+use crate::models::article::Article;
 
 // ─── task_list.json (v4) ─────────────────────────────────────────────────────
 
@@ -405,12 +406,61 @@ fn articles_json_path(project_path: &Path) -> std::path::PathBuf {
     project_path.join(".github").join("automation").join("articles.json")
 }
 
+fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT id, status, published_date FROM articles WHERE project_id = ?1 ORDER BY id ASC",
+    )?;
+
+    let articles: Vec<Article> = stmt
+        .query_map([project_id], |row| {
+            let id: i64 = row.get(0)?;
+            let status: String = row.get(1)?;
+            let published_date: Option<String> = row.get(2)?;
+            Ok(Article {
+                id,
+                title: String::new(),
+                url_slug: String::new(),
+                file: String::new(),
+                target_keyword: None,
+                keyword_difficulty: None,
+                target_volume: 0,
+                published_date,
+                word_count: 0,
+                status,
+                content_gaps_addressed: vec![],
+                estimated_traffic_monthly: None,
+                project_id: project_id.to_string(),
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let report = crate::content::date_policy::validate_publish_ready_dates(&articles);
+    if report.is_valid() {
+        return Ok(());
+    }
+
+    let detail = report
+        .issues
+        .iter()
+        .take(8)
+        .map(|i| format!("id {} {} ({})", i.article_id, i.description, i.current_date))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    Err(Error::Other(format!(
+        "Date policy check failed: {} issue(s). Resolve future/duplicate dates before export. {}",
+        report.issues.len(),
+        detail
+    )))
+}
+
 /// Write articles.json to .github/automation/articles.json (CLI-compatible location).
 pub fn write_articles_to_repo(
     conn: &Connection,
     project_id: &str,
     project_path: &Path,
 ) -> Result<()> {
+    validate_export_date_policy(conn, project_id)?;
     let json = export_articles(conn, project_id)?;
     let out_path = articles_json_path(project_path);
     std::fs::create_dir_all(out_path.parent().unwrap())?;

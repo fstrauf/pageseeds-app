@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use chrono::{Duration, NaiveDate, Utc};
 use serde::Serialize;
 
+use crate::content::date_policy::{self, DatePolicyConfig};
 use crate::models::article::Article;
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,12 +46,12 @@ pub struct DateFixResult {
 
 /// Analyse article dates. Detects future dates, duplicates, and missing values.
 pub fn analyse_dates(articles: &[Article]) -> DateAnalysis {
-    let today = Utc::now().date_naive();
     let mut issues = Vec::new();
-    let mut date_map: HashMap<String, Vec<i64>> = HashMap::new();
-    let mut future_count = 0;
     let mut missing_count = 0;
     let mut published_count = 0;
+
+    let report = date_policy::validate_dates(articles, &DatePolicyConfig::default());
+    let future_count = report.future_count;
 
     for article in articles {
         match &article.published_date {
@@ -83,56 +84,30 @@ pub fn analyse_dates(articles: &[Article]) -> DateAnalysis {
                         });
                     }
                     Ok(d) => {
-                        if d > today {
-                            future_count += 1;
-                            issues.push(DateIssue {
-                                article_id: article.id,
-                                issue_type: "future_date".into(),
-                                description: format!("Date {ds} is in the future"),
-                                current_date: ds.clone(),
-                            });
-                        } else {
+                        if d <= Utc::now().date_naive() {
                             published_count += 1;
                         }
-                        date_map.entry(ds.clone()).or_default().push(article.id);
                     }
                 }
             }
         }
     }
 
-    // Detect duplicates
-    let mut duplicate_dates: Vec<(String, Vec<i64>)> = date_map
-        .into_iter()
-        .filter(|(_, ids)| ids.len() > 1)
-        .map(|(date, mut ids)| {
-            ids.sort();
-            (date, ids)
-        })
-        .collect();
-    duplicate_dates.sort_by(|a, b| a.0.cmp(&b.0));
-    let duplicate_count = duplicate_dates.iter().map(|(_, ids)| ids.len() - 1).sum();
-
-    // Add duplicate issues
-    for (date, ids) in &duplicate_dates {
-        for &id in &ids[1..] {
-            issues.push(DateIssue {
-                article_id: id,
-                issue_type: "duplicate_date".into(),
-                description: format!("Date {date} shared with article(s) {:?}", &ids[..ids.len() - 1]),
-                current_date: date.clone(),
-            });
-        }
-    }
+    issues.extend(report.issues.iter().cloned().map(|issue| DateIssue {
+        article_id: issue.article_id,
+        issue_type: issue.issue_type,
+        description: issue.description,
+        current_date: issue.current_date,
+    }));
 
     DateAnalysis {
         total_articles: articles.len(),
         published_count,
         future_count,
-        duplicate_count,
+        duplicate_count: report.duplicate_count,
         missing_count,
         issues,
-        duplicate_dates,
+        duplicate_dates: report.duplicate_dates,
     }
 }
 
@@ -141,19 +116,7 @@ pub fn analyse_dates(articles: &[Article]) -> DateAnalysis {
 /// Strategy: 2 days before the earliest existing date (or yesterday if none).
 /// Guarantees no future dates and no overlaps.
 pub fn next_article_date(articles: &[Article]) -> String {
-    let today = Utc::now().date_naive();
-    let earliest = articles
-        .iter()
-        .filter_map(|a| a.published_date.as_deref())
-        .filter_map(|ds| NaiveDate::parse_from_str(ds, "%Y-%m-%d").ok())
-        .min();
-
-    let date = match earliest {
-        None => today - Duration::days(1),
-        Some(e) => e - Duration::days(2),
-    };
-
-    date.format("%Y-%m-%d").to_string()
+    date_policy::suggest_next_safe_date(articles)
 }
 
 /// Produce a fix plan that redistributes problematic dates (future or duplicate)

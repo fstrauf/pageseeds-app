@@ -114,6 +114,15 @@ pub fn run_batch(
     project_id: &str,
     config: &BatchConfig,
 ) -> Result<BatchResult, String> {
+    run_batch_with_token(conn, project_id, config, None)
+}
+
+pub fn run_batch_with_token(
+    conn: &Connection,
+    project_id: &str,
+    config: &BatchConfig,
+    gsc_token: Option<&str>,
+) -> Result<BatchResult, String> {
     let started = std::time::Instant::now();
     let mut processed = 0usize;
     let mut errors: Vec<BatchTaskResult> = Vec::new();
@@ -132,7 +141,7 @@ pub fn run_batch(
 
         log::info!("[batch] executing task {task_id} ({task_type})");
 
-        match executor::execute_task(conn, &task_id) {
+        match executor::execute_task_with_token(conn, &task_id, gsc_token) {
             Ok(exec_result) => {
                 let batch_task_result = BatchTaskResult {
                     task_id: task_id.clone(),

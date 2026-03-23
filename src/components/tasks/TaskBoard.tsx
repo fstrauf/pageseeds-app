@@ -1,9 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { RefreshCw, Upload, Download, Plus, Play, X } from 'lucide-react'
 import { cn, formatDate } from '../../lib/utils'
-import { listTasks, importFromRepo, exportToRepo } from '../../lib/tauri'
+import { listTasks, importFromRepo, exportToRepo, analyzeArticleDatePolicy } from '../../lib/tauri'
 import type { Task } from '../../lib/types'
-import { TaskRunner } from './TaskRunner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -25,6 +24,7 @@ import {
 } from '@/components/ui/table'
 import { TaskDetail } from './TaskDetail'
 import { TaskCreate } from './TaskCreate'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
 
 const STATUS_TABS = ['all', 'todo', 'in_progress', 'review', 'done'] as const
 type StatusFilter = typeof STATUS_TABS[number]
@@ -59,9 +59,22 @@ interface TaskBoardProps {
   initialTaskId?: string
   /** Called once the task has been opened so the caller can clear the pending id. */
   onTaskOpened?: () => void
+  /** Trigger the global task runner drawer with one or more tasks. */
+  onRunTasks?: (tasks: Task[]) => void
+  /** Whether the global task runner is currently active. */
+  runnerBusy?: boolean
+  /** Changes when a global task queue completes so this board can reload. */
+  runCompletedTick?: number
 }
 
-export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardProps) {
+export function TaskBoard({
+  projectId,
+  initialTaskId,
+  onTaskOpened,
+  onRunTasks,
+  runnerBusy = false,
+  runCompletedTick = 0,
+}: TaskBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -70,7 +83,6 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
   const [importExportMsg, setImportExportMsg] = useState<string | null>(null)
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
-  const [runnerTasks, setRunnerTasks] = useState<Task[] | null>(null)
   const [showCreate, setShowCreate] = useState(false)
 
   const load = useCallback(async () => {
@@ -93,6 +105,11 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
 
   useEffect(() => { load() }, [load])
 
+  useEffect(() => {
+    if (!projectId || runCompletedTick === 0) return
+    load()
+  }, [projectId, runCompletedTick, load])
+
   // Auto-open a specific task when navigated here from Overview (e.g. after running a workflow).
   useEffect(() => {
     if (!initialTaskId || tasks.length === 0) return
@@ -101,6 +118,12 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
     if (target) {
       setSelectedTask(target)
       onTaskOpened?.()
+      return
+    }
+    // The target task may be in a different status than the current filter (e.g. 'review'
+    // while we're showing 'todo'). Widen to 'all' and reload so we can find it.
+    if (statusFilter !== 'all') {
+      setStatusFilter('all')
       return
     }
     // Fallback: the initial task may be done (e.g. content_review spawns apply task).
@@ -115,14 +138,30 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
 
   function handleTaskUpdated(updated: Task) {
     setTasks(prev => prev.map(t => t.id === updated.id ? updated : t))
-    setSelectedTask(updated)
+    // Only update selectedTask / switch tabs if this task's panel is currently open.
+    // This prevents a stale async getTask from re-opening a panel the user already closed.
+    if (selectedTask?.id === updated.id) {
+      setSelectedTask(updated)
+      // Auto-switch to the task's new status tab so it stays visible in the list.
+      if (
+        statusFilter !== 'all' &&
+        updated.status !== statusFilter &&
+        STATUS_TABS.includes(updated.status as StatusFilter)
+      ) {
+        setStatusFilter(updated.status as StatusFilter)
+      }
+    }
   }
 
   function toggleCheck(id: string, e: React.MouseEvent) {
     e.stopPropagation()
     setCheckedIds(prev => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
       return next
     })
     // Close detail pane when multi-selecting
@@ -139,11 +178,12 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
   }
 
   function handleRunSelected() {
+    if (runnerBusy) return
     const toRun = tasks.filter(t => checkedIds.has(t.id) && t.status === 'todo')
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)
-    setRunnerTasks(toRun)
+    onRunTasks?.(toRun)
   }
 
   function handleTaskDeleted(id: string) {
@@ -173,6 +213,14 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
     if (!projectId) return
     setImportExportMsg(null)
     try {
+      const report = await analyzeArticleDatePolicy(projectId, ['published', 'ready_to_publish'], 0)
+      if (report.issues.length > 0) {
+        const first = report.issues[0]
+        setImportExportMsg(
+          `Export blocked by date policy: ${report.issues.length} issue(s). First: article ${first.article_id} ${first.issue_type.replace(/_/g, ' ')}.`
+        )
+        return
+      }
       await exportToRepo(projectId)
       setImportExportMsg('Exported successfully')
     } catch (e: unknown) {
@@ -181,11 +229,12 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
   }
 
   function handleRunBatch() {
+    if (runnerBusy) return
     const toRun = tasks.filter(t => t.status === 'todo' && t.execution_mode !== 'manual')
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)
-    setRunnerTasks(toRun)
+    onRunTasks?.(toRun)
   }
 
   if (!projectId) {
@@ -219,6 +268,7 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
               variant="outline"
               size="sm"
               onClick={handleRunBatch}
+              disabled={runnerBusy}
               className="border-border text-muted-foreground hover:text-foreground"
             >
               <Play size={14} />
@@ -244,16 +294,19 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
             <Button
               size="xs"
               onClick={handleRunSelected}
+              disabled={runnerBusy}
               className="bg-primary text-primary-foreground hover:bg-primary/90 text-xs"
             >
               <><Play size={12} className="mr-1" />Run {checkedIds.size} task{checkedIds.size !== 1 ? 's' : ''}</>
             </Button>
-            <button
+            <Button
+              variant="ghost"
+              size="icon-sm"
               onClick={() => setCheckedIds(new Set())}
-              className="ml-auto text-muted-foreground hover:text-foreground"
+              className="ml-auto text-muted-foreground"
             >
               <X size={14} />
-            </button>
+            </Button>
           </div>
         )}
 
@@ -422,31 +475,43 @@ export function TaskBoard({ projectId, initialTaskId, onTaskOpened }: TaskBoardP
         </div>
       </div>
 
-      {/* Detail pane */}
-      {selectedTask && (
-        <TaskDetail
-          task={selectedTask}
-          onClose={() => {
-            // Reload the task list when closing a completed content_review so
-            // the newly-spawned optimize_article tasks appear immediately.
-            if (selectedTask.type === 'content_review' && selectedTask.status === 'done') {
+      {/* Detail sheet */}
+      <Sheet
+        open={!!selectedTask}
+        onOpenChange={(open) => {
+          if (!open) {
+            // Reload when closing a completed content_review so spawned tasks appear.
+            if (selectedTask?.type === 'content_review' && selectedTask?.status === 'done') {
               load()
             }
             setSelectedTask(null)
-          }}
-          onUpdated={handleTaskUpdated}
-          onDeleted={handleTaskDeleted}
-        />
-      )}
+          }
+        }}
+      >
+        <SheetContent side="right" className="w-[min(100vw,42rem)] max-w-[100vw] p-0 overflow-hidden [&>button:last-child]:hidden">
+          {selectedTask && (
+            <TaskDetail
+              task={selectedTask}
+              onClose={() => setSelectedTask(null)}
+              onUpdated={handleTaskUpdated}
+              onDeleted={handleTaskDeleted}
+              onArticleTasksCreated={(newTasks) => {
+                setStatusFilter('todo')
+                setPhaseFilter('all')
 
-      {/* Task runner overlay */}
-      {runnerTasks && (
-        <TaskRunner
-          tasks={runnerTasks}
-          onDone={load}
-          onClose={() => setRunnerTasks(null)}
-        />
-      )}
+                // Ensure newly created write_article tasks are visible immediately,
+                // then pre-select them so the user can run them right away.
+                setTasks(prev => {
+                  const byId = new Map(prev.map(t => [t.id, t]))
+                  for (const t of newTasks) byId.set(t.id, t)
+                  return Array.from(byId.values())
+                })
+                setCheckedIds(new Set(newTasks.map(t => t.id)))
+              }}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* Create modal */}
       {showCreate && projectId && (

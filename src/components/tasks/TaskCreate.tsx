@@ -5,6 +5,7 @@ import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -27,6 +28,8 @@ const TASK_TYPES = [
   'implementation',
 ]
 
+const KEYWORD_RESEARCH_TYPES = new Set(['research_keywords', 'custom_keyword_research'])
+
 interface TaskCreateProps {
   projectId: string
   onClose: () => void
@@ -37,11 +40,13 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
   const [taskType, setTaskType] = useState('write_article')
   const [customType, setCustomType] = useState('')
   const [title, setTitle] = useState('')
+  const [themes, setThemes] = useState('')
   const [priority, setPriority] = useState('medium')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const resolvedType = taskType === '__custom__' ? customType.trim() : taskType
+  const isKeywordResearch = KEYWORD_RESEARCH_TYPES.has(resolvedType)
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
@@ -49,7 +54,8 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
     setSaving(true)
     setError(null)
     try {
-      const task = await createTask(projectId, resolvedType, title || undefined, priority)
+      const description = isKeywordResearch && themes.trim() ? themes.trim() : undefined
+      const task = await createTask(projectId, resolvedType, title || undefined, description, priority)
       onCreated(task)
     } catch (e: unknown) {
       setError(String(e))
@@ -83,7 +89,7 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
             {/* Task type */}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Type</Label>
-              <Select value={taskType} onValueChange={setTaskType}>
+              <Select value={taskType} onValueChange={v => { setTaskType(v); setThemes('') }}>
                 <SelectTrigger className="bg-background border-border text-foreground text-sm">
                   <SelectValue />
                 </SelectTrigger>
@@ -104,6 +110,25 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
                 />
               )}
             </div>
+
+            {/* Keyword themes — shown for research task types */}
+            {isKeywordResearch && (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  Keyword Themes <span className="text-muted-foreground/50">(optional — auto-derived if blank)</span>
+                </Label>
+                <Textarea
+                  value={themes}
+                  onChange={e => setThemes(e.target.value)}
+                  placeholder={'Enter topics, one per line\nExample:\ncoffee brewing methods\nespresso guides\nhome barista tips'}
+                  rows={4}
+                  className="bg-background border-border text-foreground text-sm resize-none"
+                />
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  If left blank, themes are auto-derived from your content brief or articles.json.
+                </p>
+              </div>
+            )}
 
             {/* Title */}
             <div className="space-y-1.5">

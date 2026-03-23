@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { RefreshCw, FolderSync, Settings2 } from 'lucide-react'
-import { listArticles, importFromRepo } from '../../lib/tauri'
+import { listArticles, importFromRepo, suggestNextArticlePublishDate } from '../../lib/tauri'
 import type { Article, Project } from '../../lib/types'
 import { cn } from '../../lib/utils'
 import { Button } from '@/components/ui/button'
@@ -24,10 +24,11 @@ import {
 
 const STATUS_BADGE: Record<string, string> = {
   published: 'bg-emerald-100 text-emerald-700 border-transparent',
+  ready_to_publish: 'bg-sky-100 text-sky-700 border-transparent',
   draft: 'bg-secondary text-secondary-foreground border-transparent',
 }
 
-const STATUS_OPTIONS = ['all', 'published', 'draft']
+const STATUS_OPTIONS = ['all', 'published', 'ready_to_publish', 'draft']
 
 interface ArticleTableProps {
   projectId: string
@@ -42,6 +43,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [nextSafeDate, setNextSafeDate] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const autoSyncDone = useRef(false)
@@ -61,6 +63,15 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
     }
   }, [projectId])
 
+  const loadNextSafeDate = useCallback(async () => {
+    try {
+      const next = await suggestNextArticlePublishDate(projectId)
+      setNextSafeDate(next)
+    } catch {
+      setNextSafeDate(null)
+    }
+  }, [projectId])
+
   const sync = useCallback(async () => {
     if (!projectId) return
     setSyncing(true)
@@ -69,6 +80,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
     try {
       const result = await importFromRepo(projectId)
       await load()
+      await loadNextSafeDate()
       setSyncMsg(
         result.articles_imported === 0
           ? `No articles.json found at: ${project?.path ?? projectId}/.github/automation/articles.json`
@@ -79,7 +91,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
     } finally {
       setSyncing(false)
     }
-  }, [projectId, project, load])
+  }, [projectId, project, load, loadNextSafeDate])
 
   useEffect(() => {
     if (!projectId) return
@@ -90,6 +102,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
         sync()
       }
     })
+    loadNextSafeDate()
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = statusFilter === 'all'
@@ -105,7 +118,12 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-        <h2 className="text-sm font-semibold text-foreground">Articles ({filtered.length})</h2>
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">Articles ({filtered.length})</h2>
+          {nextSafeDate && (
+            <p className="text-xs text-muted-foreground mt-0.5">Next safe publish date: {nextSafeDate}</p>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="h-7 w-32 text-xs bg-card border-border text-muted-foreground">
@@ -130,7 +148,16 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
             <FolderSync size={13} className={syncing ? 'animate-spin' : ''} />
             {syncing ? 'Syncing…' : 'Sync'}
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => load()} disabled={loading} className="text-muted-foreground">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              load()
+              loadNextSafeDate()
+            }}
+            disabled={loading}
+            className="text-muted-foreground"
+          >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </Button>
         </div>
@@ -218,7 +245,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
                       {article.url_slug}
                     </div>
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground truncate max-w-[160px]">
+                  <TableCell className="text-xs text-muted-foreground truncate max-w-40">
                     {article.target_keyword ?? '—'}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground text-right">

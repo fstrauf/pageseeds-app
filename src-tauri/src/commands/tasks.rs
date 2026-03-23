@@ -2,6 +2,7 @@ use tauri::State;
 use crate::engine::task_store;
 use crate::models::task::Task;
 use super::AppState;
+use std::collections::HashSet;
 
 #[tauri::command]
 pub fn list_tasks(
@@ -27,6 +28,7 @@ pub fn create_task(
     project_id: String,
     task_type: String,
     title: Option<String>,
+    description: Option<String>,
     priority: String,
 ) -> Result<Task, String> {
     use crate::config::{default_execution_mode, default_phase};
@@ -46,7 +48,7 @@ pub fn create_task(
         priority,
         agent_policy: "none".to_string(),
         title,
-        description: None,
+        description,
         project_id,
         depends_on: vec![],
         artifacts: vec![],
@@ -92,4 +94,331 @@ pub fn delete_task(state: State<'_, AppState>, id: String) -> Result<(), String>
 pub fn cancel_task(state: State<'_, AppState>, id: String) -> Result<Task, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     task_store::update_task_status(&db, &id, "cancelled").map_err(|e| e.to_string())
+}
+
+/// Create one `write_article` task per selected keyword and mark the research
+/// task as done.  Each keyword string becomes both the task title and the
+/// target keyword in the description so the article-writing agent has context.
+#[tauri::command]
+pub fn create_article_tasks_from_keywords(
+    state: State<'_, AppState>,
+    project_id: String,
+    research_task_id: String,
+    keywords: Vec<String>,
+) -> Result<Vec<Task>, String> {
+    use crate::config::{default_execution_mode, default_phase};
+    use crate::models::task::{TaskArtifact, TaskRun};
+
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let research_task = task_store::get_task(&db, &research_task_id).map_err(|e| e.to_string())?;
+    if research_task.project_id != project_id {
+        return Err("Research task does not belong to this project".to_string());
+    }
+
+    let allowed_keywords = extract_selectable_keywords(&research_task);
+    if allowed_keywords.is_empty() {
+        return Err("No selectable keywords found on the research task. Re-run keyword research first.".to_string());
+    }
+
+    let mut seen_requested = HashSet::new();
+    let requested_keywords: Vec<String> = keywords
+        .into_iter()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .filter(|k| seen_requested.insert(normalize_keyword(k)))
+        .collect();
+
+    if requested_keywords.is_empty() {
+        return Err("Select at least one keyword".to_string());
+    }
+
+    let allowed_set: HashSet<String> = allowed_keywords
+        .iter()
+        .map(|k| normalize_keyword(k))
+        .collect();
+    let invalid: Vec<String> = requested_keywords
+        .iter()
+        .filter(|k| !allowed_set.contains(&normalize_keyword(k)))
+        .cloned()
+        .collect();
+
+    if !invalid.is_empty() {
+        return Err(format!(
+            "Some selected keywords are outside the workflow selection list: {}",
+            invalid.join(", ")
+        ));
+    }
+
+    let mut created = Vec::new();
+
+    let metrics = extract_keyword_metrics(&research_task);
+
+    for keyword in &requested_keywords {
+        let now = chrono::Utc::now().to_rfc3339();
+        let id = format!("task-{}", chrono::Utc::now().timestamp_millis());
+        let title = to_title_case(keyword);
+        let metric = metrics.get(&normalize_keyword(keyword));
+        let priority = match metric.and_then(|m| m.difficulty) {
+            Some(kd) if kd <= 30 => "high",
+            Some(kd) if kd <= 45 => "medium",
+            Some(_) => "low",
+            None => {
+                // If KD is unknown, use volume as a weak tie-breaker.
+                match metric.and_then(|m| m.volume) {
+                    Some(v) if v >= 1000 => "high",
+                    Some(v) if v >= 250 => "medium",
+                    _ => "medium",
+                }
+            }
+        };
+
+        let mut description = format!("Target keyword: {}", keyword);
+        if let Some(m) = metric {
+            if let Some(kd) = m.difficulty {
+                description.push_str(&format!("\nKD: {}", kd));
+            }
+            if let Some(vol) = m.volume {
+                description.push_str(&format!("\nVolume: {}", vol));
+            }
+        }
+
+        let provenance = TaskArtifact {
+            key: "keyword_research".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some(research_task_id.clone()),
+            content: Some(format!("{{\"keyword\":\"{}\"}}", keyword.replace('"', "\\\""))),
+        };
+
+        let task = Task {
+            id,
+            phase: default_phase("write_article").to_string(),
+            execution_mode: default_execution_mode("write_article").to_string(),
+            task_type: "write_article".to_string(),
+            status: "todo".to_string(),
+            priority: priority.to_string(),
+            agent_policy: "none".to_string(),
+            title: Some(title),
+            description: Some(description),
+            project_id: project_id.clone(),
+            depends_on: vec![research_task_id.clone()],
+            artifacts: vec![provenance],
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        task_store::create_task(&db, &task).map_err(|e| e.to_string())?;
+        created.push(task);
+    }
+
+    // Mark the research task done now that keywords have been dispatched.
+    task_store::update_task_status(&db, &research_task_id, "done")
+        .map_err(|e| e.to_string())?;
+
+    Ok(created)
+}
+
+/// Simple title-case: capitalise the first letter of each word.
+fn to_title_case(s: &str) -> String {
+    s.split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_keyword(s: &str) -> String {
+    s.trim().to_lowercase()
+}
+
+fn push_unique_keyword(out: &mut Vec<String>, seen: &mut HashSet<String>, kw: &str) {
+    let trimmed = kw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let key = normalize_keyword(trimmed);
+    if seen.insert(key) {
+        out.push(trimmed.to_string());
+    }
+}
+
+fn parse_range_midpoint(raw: &str) -> Option<i64> {
+    let nums: Vec<i64> = raw
+        .split(|c: char| !c.is_ascii_digit() && c != ',')
+        .filter(|s| !s.trim().is_empty())
+        .filter_map(|s| s.replace(',', "").parse::<i64>().ok())
+        .collect();
+
+    match nums.len() {
+        0 => None,
+        1 => Some(nums[0]),
+        _ => Some((nums[0] + nums[1]) / 2),
+    }
+}
+
+fn extract_keywords_from_markdown_table(raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+
+    for line in raw.lines() {
+        if !line.contains('|') {
+            continue;
+        }
+        if line.contains("---") {
+            continue;
+        }
+
+        let cols: Vec<String> = line
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+
+        // Expected shape: Priority | Keyword | Vol | KD
+        if cols.len() < 4 {
+            continue;
+        }
+        if cols[0].eq_ignore_ascii_case("priority") || cols[1].eq_ignore_ascii_case("keyword") {
+            continue;
+        }
+
+        // Only accept rows that look like keyword research table entries.
+        let _vol = parse_range_midpoint(&cols[2]);
+        let _kd = parse_range_midpoint(&cols[3]);
+        push_unique_keyword(&mut out, &mut seen, &cols[1]);
+    }
+
+    out
+}
+
+fn extract_selectable_keywords(task: &Task) -> Vec<String> {
+    use serde_json::Value;
+
+    // Prefer normalized output, then deterministic JSON, then raw agent output.
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "research_normalize_stage")
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
+    let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
+        return Vec::new();
+    };
+
+    let v = match serde_json::from_str::<Value>(raw) {
+        Ok(v) => v,
+        Err(_) => {
+            // Fallback for agent markdown-table output when JSON normalization
+            // did not produce a structured artifact.
+            return extract_keywords_from_markdown_table(raw);
+        }
+    };
+
+    let mut out: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(arr) = v.get("difficulty").and_then(|x| x.as_array()) {
+        for item in arr {
+            if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                push_unique_keyword(&mut out, &mut seen, kw);
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
+    if let Some(arr) = v
+        .get("difficulty")
+        .and_then(|x| x.get("results"))
+        .and_then(|x| x.as_array())
+    {
+        for item in arr {
+            if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                push_unique_keyword(&mut out, &mut seen, kw);
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
+    if let Some(arr) = v.get("new_keywords").and_then(|x| x.as_array()) {
+        for item in arr.iter().take(10) {
+            if let Some(kw) = item.as_str() {
+                push_unique_keyword(&mut out, &mut seen, kw);
+            }
+        }
+    }
+
+    out
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KeywordMetric {
+    difficulty: Option<i64>,
+    volume: Option<i64>,
+}
+
+fn extract_keyword_metrics(task: &Task) -> std::collections::HashMap<String, KeywordMetric> {
+    use serde_json::Value;
+    let mut out = std::collections::HashMap::new();
+
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "research_normalize_stage")
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
+
+    let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
+        return out;
+    };
+
+    let parsed_json = serde_json::from_str::<Value>(raw).ok();
+    if let Some(v) = parsed_json {
+        if let Some(arr) = v.get("difficulty").and_then(|x| x.get("results")).and_then(|x| x.as_array()) {
+            for item in arr {
+                if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                    let kd = item.get("difficulty").and_then(|x| {
+                        x.as_i64().or_else(|| x.as_f64().map(|n| n.round() as i64))
+                    });
+                    let vol = item.get("volume").and_then(|x| {
+                        x.as_i64().or_else(|| x.as_str().and_then(parse_range_midpoint))
+                    });
+                    out.insert(normalize_keyword(kw), KeywordMetric { difficulty: kd, volume: vol });
+                }
+            }
+            return out;
+        }
+    }
+
+    // Markdown fallback: parse summary table rows.
+    for line in raw.lines() {
+        if !line.contains('|') || line.contains("---") {
+            continue;
+        }
+        let cols: Vec<String> = line
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+        if cols.len() < 4 {
+            continue;
+        }
+        if cols[0].eq_ignore_ascii_case("priority") || cols[1].eq_ignore_ascii_case("keyword") {
+            continue;
+        }
+        let kw = cols[1].clone();
+        let vol = parse_range_midpoint(&cols[2]);
+        let kd = parse_range_midpoint(&cols[3]);
+        out.insert(normalize_keyword(&kw), KeywordMetric { difficulty: kd, volume: vol });
+    }
+
+    out
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Trash2, AlertCircle, Ban, ArrowRight, Play, ChevronDown } from 'lucide-react'
+import { Trash2, AlertCircle, Ban, ArrowRight, Play, ChevronDown, X } from 'lucide-react'
 import { updateTask, deleteTask, cancelTask, listTasks, executeTask, getTask } from '../../lib/tauri'
 import type { Task } from '../../lib/types'
 import { cn, formatDate } from '../../lib/utils'
@@ -15,8 +15,15 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+  SheetClose,
+} from '@/components/ui/sheet'
+import { KeywordPicker } from './KeywordPicker'
 
 const STATUS_BADGE: Record<string, string> = {
   todo: 'bg-secondary text-secondary-foreground border-transparent',
@@ -31,9 +38,11 @@ interface TaskDetailProps {
   onClose: () => void
   onUpdated: (task: Task) => void
   onDeleted: (id: string) => void
+  /** Called when keywords are selected and write_article tasks have been created. */
+  onArticleTasksCreated?: (tasks: Task[]) => void
 }
 
-export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailProps) {
+export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasksCreated }: TaskDetailProps) {
   const [editTitle, setEditTitle] = useState(task.title ?? '')
   const [editDesc, setEditDesc] = useState(task.description ?? '')
   const [editPriority, setEditPriority] = useState(task.priority ?? 'medium')
@@ -123,23 +132,25 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
   }
 
   return (
-    <Sheet open modal={false} onOpenChange={(o) => { if (!o) onClose() }}>
-      <SheetContent
-        className="w-150 sm:max-w-150 flex flex-col gap-0 p-0"
-        aria-describedby={undefined}
-      >
-        <SheetTitle className="sr-only">{task.title ?? task.type}</SheetTitle>
+    <div className="h-full flex flex-col overflow-hidden overflow-x-hidden">
+      {/* Header */}
+      <SheetHeader className="shrink-0 flex-row items-center gap-2 px-5 py-4 border-b border-border min-w-0">
+        <Badge variant="secondary" className="font-mono text-xs shrink-0">
+          {task.type}
+        </Badge>
+        <SheetTitle className="text-xs text-muted-foreground truncate font-mono font-normal flex-1">
+          {task.id}
+        </SheetTitle>
+        <SheetDescription className="sr-only">{task.type} task details</SheetDescription>
+        <SheetClose asChild>
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0">
+            <X size={14} />
+          </Button>
+        </SheetClose>
+      </SheetHeader>
 
-        {/* Header */}
-        <div className="flex items-center gap-2 min-w-0 px-5 py-4 border-b border-border pr-12">
-          <Badge variant="secondary" className="font-mono text-xs shrink-0">
-            {task.type}
-          </Badge>
-          <span className="text-xs text-muted-foreground truncate font-mono">{task.id}</span>
-        </div>
-
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="px-5 py-5 space-y-5">
+      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
+        <div className="px-5 py-5 space-y-5 min-w-0">
           {error && (
             <div className="flex items-start gap-2 px-3 py-2.5 rounded-md text-sm bg-destructive/15 text-destructive">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
@@ -195,14 +206,24 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
 
           {/* Description */}
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Description</Label>
-            <textarea
+            <Label className="text-xs text-muted-foreground">
+              {(task.type === 'research_keywords' || task.type === 'custom_keyword_research') ? 'Keyword Themes' : 'Description'}
+            </Label>
+            <Textarea
               value={editDesc}
               onChange={e => setEditDesc(e.target.value)}
-              placeholder="Notes or context…"
+              placeholder={(task.type === 'research_keywords' || task.type === 'custom_keyword_research')
+                ? 'Enter themes, one per line\nExample:\ncontent marketing\nSEO tools\nblog writing tips'
+                : 'Notes or context…'
+              }
               rows={4}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+              className="bg-background border-border text-foreground text-sm resize-none"
             />
+            {(task.type === 'research_keywords' || task.type === 'custom_keyword_research') && task.status === 'todo' && (
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Themes drive the keyword search. Enter 2–5 topics related to your site — one per line or comma-separated.
+              </p>
+            )}
           </div>
 
           {/* Depends on */}
@@ -233,7 +254,11 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
                     <div key={i} className="flex items-start justify-between gap-2 text-xs">
                       <span className="font-mono text-foreground">{a.key}</span>
                       <div className="text-right space-y-0.5">
-                        {a.path && <div className="text-muted-foreground font-mono truncate max-w-50">{a.path}</div>}
+                        {a.path && (
+                          <div className="text-muted-foreground font-mono truncate max-w-48 sm:max-w-64">
+                            {a.path}
+                          </div>
+                        )}
                         {a.source && <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">{a.source}</Badge>}
                       </div>
                     </div>
@@ -262,7 +287,7 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
                   )}
                   {task.run.last_error && (
                     <div className="mt-1 space-y-1.5">
-                      <div className="px-2 py-1.5 rounded bg-destructive/10 text-destructive text-xs font-mono">
+                      <div className="px-2 py-1.5 rounded bg-destructive/10 text-destructive text-xs font-mono wrap-break-word whitespace-pre-wrap">
                         {task.run.last_error}
                       </div>
                       {task.status === 'todo' && (
@@ -280,6 +305,30 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
                     </div>
                   )}
                 </div>
+              </div>
+            </>
+          )}
+
+          {/* Keyword picker — shown when keyword research task is in review status */}
+          {(task.type === 'research_keywords' || task.type === 'custom_keyword_research') && task.status === 'review' && (
+            <>
+              <Separator className="bg-border" />
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground font-medium">Keyword Results</div>
+                <p className="text-xs text-muted-foreground">
+                  Select the keywords you want to write articles for, then click "Create Article Tasks".
+                </p>
+                <KeywordPicker
+                  task={task}
+                  onTasksCreated={newTasks => {
+                    // Signal parent to switch to the todo tab (where new tasks will appear).
+                    // Then close the panel. The async getTask below updates the task in the
+                    // list to 'done' but won't reopen the panel (handleTaskUpdated guards this).
+                    onArticleTasksCreated?.(newTasks)
+                    onClose()
+                    getTask(task.id).then(refreshed => onUpdated(refreshed)).catch(() => {})
+                  }}
+                />
               </div>
             </>
           )}
@@ -350,10 +399,10 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
             </div>
           </div>
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Footer actions */}
-      <div className="px-5 py-4 border-t border-border space-y-3">
+      <SheetFooter className="shrink-0 px-5 py-4 border-t border-border flex-col gap-3">
         {isDirty && (
           <Button size="sm" className="w-full" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving…' : 'Save changes'}
@@ -366,8 +415,8 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
           </div>
         )}
 
-        {/* Run button for todo/batchable tasks */}
-        {task.status === 'todo' && task.execution_mode !== 'manual' && (
+        {/* Run button for todo/batchable tasks, and re-run for stuck in_progress tasks */}
+        {(task.status === 'todo' || task.status === 'in_progress') && task.execution_mode !== 'manual' && (
           <Button
             size="sm"
             className="w-full"
@@ -376,6 +425,8 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
           >
             {executing ? (
               <><span className="animate-spin mr-1.5">⌛</span>Running…</>
+            ) : task.status === 'in_progress' ? (
+              <><Play size={13} className="mr-1.5" />Re-run</>
             ) : (
               <><Play size={13} className="mr-1.5" />Run</>
             )}
@@ -414,9 +465,8 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted }: TaskDetailPr
             </div>
           )}
         </div>
-      </div>
-      </SheetContent>
-    </Sheet>
+      </SheetFooter>
+    </div>
   )
 }
 

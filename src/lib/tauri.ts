@@ -61,9 +61,10 @@ export const createTask = (
   projectId: string,
   taskType: string,
   title: string | undefined,
+  description: string | undefined,
   priority: string,
 ): Promise<Task> =>
-  invoke('create_task', { projectId, taskType, title, priority })
+  invoke('create_task', { projectId, taskType, title, description, priority })
 
 export const updateTaskStatus = (id: string, status: string): Promise<Task> =>
   invoke('update_task_status', { id, status })
@@ -81,6 +82,13 @@ export const deleteTask = (id: string): Promise<void> =>
 
 export const cancelTask = (id: string): Promise<Task> =>
   invoke('cancel_task', { id })
+
+export const createArticleTasksFromKeywords = (
+  projectId: string,
+  researchTaskId: string,
+  keywords: string[],
+): Promise<Task[]> =>
+  invoke('create_article_tasks_from_keywords', { projectId, researchTaskId, keywords })
 
 // ─── Articles ─────────────────────────────────────────────────────────────────
 
@@ -113,6 +121,7 @@ export const importEnvFile = (sourcePath: string): Promise<string[]> =>
 import type {
   CleaningResult,
   ContentDirResolution,
+  DatePolicyReport,
   DateFixResult,
   LinkScanResult,
 } from './types'
@@ -125,6 +134,20 @@ export const scanContentHealth = (projectId: string, dryRun: boolean): Promise<C
 
 export const fixContentDates = (projectId: string, dryRun: boolean): Promise<DateFixResult> =>
   invoke('fix_content_dates', { projectId, dryRun })
+
+export const analyzeArticleDatePolicy = (
+  projectId: string,
+  statusFilter?: string[],
+  allowedFutureDays?: number,
+): Promise<DatePolicyReport> =>
+  invoke('analyze_article_date_policy', {
+    projectId,
+    statusFilter: statusFilter ?? null,
+    allowedFutureDays: allowedFutureDays ?? null,
+  })
+
+export const suggestNextArticlePublishDate = (projectId: string): Promise<string> =>
+  invoke('suggest_next_article_publish_date', { projectId })
 
 export const scanContentLinks = (projectId: string): Promise<LinkScanResult> =>
   invoke('scan_content_links', { projectId })

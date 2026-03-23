@@ -5,3 +5,4 @@ pub mod coverage;
 pub mod indexing;
 pub mod redirects;
 pub mod reports;
+pub mod sitemap;

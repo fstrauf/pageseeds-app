@@ -1,14 +1,18 @@
 {
   "name": "pageseeds-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:mac": "./build-release.sh",
+    "build:windows": "./build-windows.sh",
+    "release": "./publish-release.sh",
+    "check:pre-release": "./scripts/pre-release-checks.sh"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -19,7 +23,9 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-shell": "^2.3.5",
+    "@tauri-apps/plugin-updater": "^2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",

@@ -27,9 +27,15 @@ export const STATUS_NEXT: Record<string, string> = {
 
 export function formatDate(iso: string): string {
   if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('en-US', {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return '—'
+
+  return date.toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: false,
   })
 }

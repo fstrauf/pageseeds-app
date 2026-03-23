@@ -23,6 +23,10 @@ pub const TASK_TYPES: &[&str] = &[
     "reddit_reply",
     "fix_404s",
     "fix_redirects",
+    "fix_indexing",
+    "fix_technical",
+    "fix_content",
+    "fix_gsc_access",
     "technical_seo",
     "content_cleanup",
 ];
@@ -31,6 +35,7 @@ pub fn default_execution_mode(task_type: &str) -> &'static str {
     match task_type {
         "collect_gsc" => "automatic",
         "reddit_search" => "batchable",
+        "research_keywords" | "custom_keyword_research" | "research_landing_pages" => "batchable",
         "write_article" | "optimize_article" => "spec",
         "reddit_reply" => "manual",
         _ => "manual",
@@ -45,6 +50,7 @@ pub fn default_phase(task_type: &str) -> &'static str {
         "write_article" | "optimize_article" => "implementation",
         "reddit_search" | "reddit_reply" => "implementation",
         "fix_404s" | "fix_redirects" | "technical_seo" => "implementation",
+        "fix_indexing" | "fix_technical" | "fix_content" | "fix_gsc_access" => "implementation",
         "content_cleanup" => "implementation",
         _ => "implementation",
     }

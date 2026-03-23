@@ -105,7 +105,8 @@ src/
 2. **Keep `tauri.ts` the single IPC file**. Every new command gets a typed wrapper in `tauri.ts`. Don't call `invoke()` inline in components.
 3. **`types.ts` mirrors Rust models exactly**. When you change a Rust struct, update the corresponding TypeScript interface immediately.
 4. **UI stack**: Tailwind v4, shadcn/ui primitives (`components/ui/`), Manrope body font, Fraunces display font. See `STYLE_GUIDE.md` for tokens.
-5. **No business logic in components**. Components render and dispatch. They call `tauri.ts` helpers and display the results.
+5. **All UI must use shadcn/ui — no raw HTML alternatives**. Every panel, overlay, form field, scroll container, and layout primitive must use the corresponding shadcn component: `Sheet`/`SheetContent`/`SheetHeader`/`SheetTitle`/`SheetDescription`/`SheetFooter`/`SheetClose` for side panels; `ScrollArea` for scrollable regions; `Textarea` for multi-line inputs; `Input`, `Label`, `Button`, `Badge`, `Separator`, `Select`, `Tabs`, `Dialog` etc. Do not use raw `<div>` wrappers as sheet shells, raw `<textarea>`, or custom close buttons — use shadcn primitives and `SheetClose asChild`.
+6. **No business logic in components**. Components render and dispatch. They call `tauri.ts` helpers and display the results.
 
 ### Secrets
 - Precedence: `~/.config/automation/secrets.env` → `{repo}/.env.local` → `{repo}/.env` → shell vars.

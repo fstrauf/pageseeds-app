@@ -16,6 +16,8 @@ All of these are "try it once" bugs, not design problems.
 
 ## Rules going forward
 
+Date policy baseline for all new work: use the shared date-policy path so published and ready_to_publish articles never have future dates or duplicate publish dates.
+
 ### 1. Port behavior, not architecture
 
 When porting from the CLI, start by identifying the **inputs and outputs** of the feature, not the class hierarchy. Content review takes articles.json → produces recommendations.json. That's it. Code the shortest path to that outcome.
@@ -66,3 +68,7 @@ This document is the contract between planning and implementation. If the spec d
 We were simultaneously working on: content review, task spawning, TaskRunner UI, multi-select, batch runner, Run All button, permission flags, prompt building, and article selection. That's 9 things.
 
 Ship one thing. Verify it works. Then start the next.
+
+### 7. One execution surface
+
+All task/workflow execution UX must use the shared bottom runner drawer (`TaskRunner`) and never introduce separate modal/popup runners.

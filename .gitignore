@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Build secrets & release artifacts
+.env
+.build_dmg_path
+.build_tar_gz_path
+.build_windows_exe_path
+.build_windows_signature
+latest.json

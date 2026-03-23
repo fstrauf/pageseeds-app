@@ -16,6 +16,8 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -26,6 +28,12 @@ pub fn run() {
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("pageseeds.db");
             let conn = db::init(&db_path)?;
+            // Reset any tasks that were left in_progress from a previous session
+            // (e.g. app was closed or crashed mid-execution).
+            let _ = conn.execute(
+                "UPDATE tasks SET status='todo', updated_at=?1 WHERE status='in_progress'",
+                rusqlite::params![chrono::Utc::now().to_rfc3339()],
+            );
             app.manage(AppState {
                 db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
             });
@@ -49,6 +57,7 @@ pub fn run() {
             commands::update_task,
             commands::delete_task,
             commands::cancel_task,
+            commands::create_article_tasks_from_keywords,
             commands::list_articles,
             commands::import_from_repo,
             commands::export_to_repo,
@@ -57,6 +66,8 @@ pub fn run() {
             commands::resolve_content_dir,
             commands::scan_content_health,
             commands::fix_content_dates,
+            commands::analyze_article_date_policy,
+            commands::suggest_next_article_publish_date,
             commands::scan_content_links,
             commands::search_reddit,
             commands::list_reddit_opportunities,

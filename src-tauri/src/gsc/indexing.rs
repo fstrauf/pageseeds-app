@@ -13,14 +13,22 @@ pub async fn inspect_batch(
 ) -> Result<Vec<InspectionRecord>> {
     let client = GscClient::new(token);
     let mut records = Vec::with_capacity(urls.len());
+    let total = urls.len();
 
-    for url in &urls {
+    for (idx, url) in urls.iter().enumerate() {
         let body = json!({
             "inspectionUrl": url,
             "siteUrl": site_url,
         });
         let resp = client.url_inspection_inspect(&body).await?;
         records.push(parse_inspection_record(url, &resp));
+
+        // Log coarse progress for long runs without flooding logs.
+        let n = idx + 1;
+        if n == 1 || n % 25 == 0 || n == total {
+            log::info!("[collect_gsc] URL inspection progress: {}/{}", n, total);
+        }
+
         sleep(Duration::from_millis(200)).await;
     }
 
@@ -35,71 +43,146 @@ fn parse_inspection_record(url: &str, resp: &serde_json::Value) -> InspectionRec
 
     let verdict = index["verdict"].as_str().unwrap_or("UNKNOWN").to_string();
     let coverage_state = index["coverageState"].as_str().unwrap_or("").to_string();
+    let robots_txt_state = index["robotsTxtState"].as_str().unwrap_or("").to_string();
+    let page_fetch_state = index["pageFetchState"].as_str().unwrap_or("").to_string();
+    let crawl_allowed = index["crawlAllowed"].as_bool().unwrap_or(true);
+    let indexing_allowed = index["indexingAllowed"].as_bool().unwrap_or(true);
+    let google_canonical = index["googleCanonical"].as_str().map(String::from);
+    let user_canonical = index["userDeclaredCanonical"].as_str().map(String::from);
 
-    let (action, priority) = classify_record(&verdict, &coverage_state);
+    let (reason_code, action) = classify_record(
+        crawl_allowed,
+        &robots_txt_state,
+        indexing_allowed,
+        &page_fetch_state,
+        user_canonical.as_deref(),
+        google_canonical.as_deref(),
+        &verdict,
+        &coverage_state,
+    );
+    let priority = priority_for_record(reason_code);
 
     InspectionRecord {
         url: url.to_string(),
-        verdict: Some(verdict.clone()),
-        coverage_state: Some(coverage_state.clone()),
+        verdict: Some(verdict),
+        coverage_state: Some(coverage_state),
         indexing_state: Some(
             index["indexingState"]
                 .as_str()
                 .unwrap_or("")
                 .to_string(),
         ),
-        robots_txt_state: Some(
-            index["robotsTxtState"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-        ),
-        page_fetch_state: Some(
-            index["pageFetchState"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-        ),
-        crawl_allowed: Some(index["crawlAllowed"].as_bool().unwrap_or(true)),
-        indexing_allowed: Some(index["indexingAllowed"].as_bool().unwrap_or(true)),
+        robots_txt_state: Some(robots_txt_state),
+        page_fetch_state: Some(page_fetch_state),
+        crawl_allowed: Some(crawl_allowed),
+        indexing_allowed: Some(indexing_allowed),
         last_crawl_time: index["lastCrawlTime"].as_str().map(String::from),
-        google_canonical: index["googleCanonical"].as_str().map(String::from),
-        user_canonical: index["userDeclaredCanonical"].as_str().map(String::from),
+        google_canonical,
+        user_canonical,
         sitemaps: index["sitemap"]
             .as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default(),
-        reason_code: Some(coverage_state.clone()),
-        action: Some(action),
-        priority: priority.into(),
+        reason_code: Some(reason_code.to_string()),
+        action: Some(action.to_string()),
+        priority,
     }
 }
 
-fn classify_record(verdict: &str, coverage_state: &str) -> (String, u8) {
-    match verdict {
-        "PASS" => ("No action needed".to_string(), 10),
-        "FAIL" => match coverage_state {
-            s if s.contains("Crawl") && s.contains("anomaly") => {
-                ("Investigate crawl block".to_string(), 90)
-            }
-            s if s.contains("robots") || s.contains("Blocked") => {
-                ("Fix robots.txt exclusion".to_string(), 80)
-            }
-            s if s.contains("noindex") => {
-                ("Remove noindex tag".to_string(), 70)
-            }
-            s if s.contains("404") || s.contains("Not found") => {
-                ("Fix 404 or add redirect".to_string(), 85)
-            }
-            s if s.contains("Redirect") => {
-                ("Resolve redirect chain".to_string(), 60)
-            }
-            s if s.contains("Duplicate") || s.contains("canonical") => {
-                ("Fix canonical tag".to_string(), 50)
-            }
-            _ => ("Review coverage state".to_string(), 40),
-        },
-        "NEUTRAL" => ("Monitor — soft indexing signal".to_string(), 20),
-        _ => ("Manual review needed".to_string(), 30),
+/// Classify an inspection record into a stable reason code and action description.
+///
+/// Inputs are the individual fields extracted from the API response.
+/// Returns `(reason_code, action_description)`.  
+/// Priority order: first match wins (most critical first).
+///
+/// Mirrors the Python CLI `classify_record()` in `seo/gsc/indexing.py`.
+pub fn classify_record(
+    crawl_allowed: bool,
+    robots_txt_state: &str,
+    indexing_allowed: bool,
+    page_fetch_state: &str,
+    user_canonical: Option<&str>,
+    google_canonical: Option<&str>,
+    verdict: &str,
+    coverage_state: &str,
+) -> (&'static str, &'static str) {
+    // 1. Robots / crawl block
+    if !crawl_allowed || robots_txt_state.to_uppercase().contains("BLOCKED") {
+        return (
+            "robots_blocked",
+            "Fix robots.txt / crawl allow; remove blocked URLs from sitemap until fixed.",
+        );
+    }
+
+    // 2. Noindex
+    if !indexing_allowed {
+        return (
+            "noindex",
+            "Remove/avoid noindex; ensure indexing is allowed for canonical URLs.",
+        );
+    }
+
+    // 3. Fetch errors (but not unspecified/ok states)
+    let pfs_upper = page_fetch_state.to_uppercase();
+    if !pfs_upper.is_empty()
+        && pfs_upper != "OK"
+        && pfs_upper != "SUCCESSFUL"
+        && pfs_upper != "PAGE_FETCH_STATE_UNSPECIFIED"
+    {
+        return (
+            "fetch_error",
+            "Fix fetchability (4xx/5xx/soft404/redirect); remove broken URLs from sitemap.",
+        );
+    }
+
+    // 4. Canonical mismatch
+    if let (Some(user), Some(google)) = (user_canonical, google_canonical) {
+        let user_norm = user.trim_end_matches('/').to_lowercase();
+        let google_norm = google.trim_end_matches('/').to_lowercase();
+        if !user_norm.is_empty() && !google_norm.is_empty() && user_norm != google_norm {
+            return (
+                "canonical_mismatch",
+                "Align canonicals/redirects/internal links; ensure sitemap lists canonical URLs only.",
+            );
+        }
+    }
+
+    // 5. Non-PASS verdict — differentiate by coverage state
+    if verdict.to_uppercase() != "PASS" {
+        let cov_lower = coverage_state.to_lowercase();
+        if cov_lower.contains("crawled") && cov_lower.contains("not") {
+            return (
+                "not_indexed_crawled",
+                "Content quality/duplicate issue; improve uniqueness and internal links.",
+            );
+        }
+        if cov_lower.contains("discovered") && cov_lower.contains("not") {
+            return (
+                "not_indexed_discovered",
+                "Crawl budget/queue issue; improve internal links and content quality.",
+            );
+        }
+        return (
+            "not_indexed_other",
+            "Triage via coverage/indexing states; improve internal links/content uniqueness.",
+        );
+    }
+
+    // 6. Indexed — no action needed
+    ("indexed_pass", "No action needed (indexed).")
+}
+
+/// Calculate priority for sorting.  Lower = more urgent.
+///
+/// Mirrors the Python CLI `priority_for_record()` in `seo/gsc/indexing.py`.
+pub fn priority_for_record(reason_code: &str) -> i32 {
+    match reason_code {
+        "robots_blocked" | "noindex" | "fetch_error" => 10,
+        "canonical_mismatch" => 20,
+        "api_error" => 30,
+        "not_indexed_crawled" => 40,
+        "not_indexed_discovered" => 50,
+        "not_indexed_other" => 70,
+        _ => 999, // indexed_pass and unknown
     }
 }

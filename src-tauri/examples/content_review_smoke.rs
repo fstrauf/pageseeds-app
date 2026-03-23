@@ -1,7 +1,7 @@
 /// Smoke test for the full content-review pipeline.
 ///
 /// Run with:
-///   cargo run --bin content_review_smoke
+///   cargo run --example content_review_smoke
 ///
 /// What it does:
 ///   1. Opens a temp in-memory SQLite DB

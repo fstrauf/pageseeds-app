@@ -11,7 +11,7 @@ import type { SchedulerCycleResult, SchedulerRule } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { cn } from '../../lib/utils'
+import { cn, formatDate } from '../../lib/utils'
 
 interface SchedulerConfigProps {
   projectId: string
@@ -52,7 +52,7 @@ function RuleRow({
       </Badge>
       {rule.last_run_at && (
         <span className="text-xs text-muted-foreground shrink-0 hidden lg:block">
-          Last: {new Date(rule.last_run_at).toLocaleDateString()}
+          Last: {formatDate(rule.last_run_at)}
         </span>
       )}
       <button

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { ChevronUp, ChevronDown, RefreshCw } from 'lucide-react'
-import { listRedditOpportunities, markRedditPosted, markRedditSkipped, postToReddit } from '../../lib/tauri'
+import { listRedditOpportunities, markRedditSkipped, postToReddit } from '../../lib/tauri'
 import type { RedditOpportunity } from '../../lib/types'
 
 interface Props {

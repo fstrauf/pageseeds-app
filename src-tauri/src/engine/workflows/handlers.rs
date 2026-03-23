@@ -35,8 +35,7 @@ impl WorkflowHandler for CollectionHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "collect_gsc" => vec![
-                WorkflowStep::new("collect_gsc_run", "deterministic")
-                    .with_param("cmd", "pageseeds automation seo gsc-sync-articles --workspace-dir {automation_dir} --days 90"),
+                WorkflowStep::new("collect_gsc_inspect", "collect_gsc_inspect"),
             ],
             // collect_posthog has no CLI implementation yet — fall back to agent.
             _ => vec![WorkflowStep::new("collect_agent_stage", "agentic")],
@@ -56,8 +55,8 @@ impl WorkflowHandler for InvestigationHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "investigate_gsc" => vec![
-                WorkflowStep::new("investigate_gsc_run", "deterministic")
-                    .with_param("cmd", "pageseeds automation seo content-audit --workspace-dir {automation_dir}"),
+                WorkflowStep::new("investigate_gsc_agent", "gsc_investigate_agentic")
+                    .with_param("artifact", "gsc_collection.json"),
             ],
             // investigate_posthog has no CLI implementation yet — fall back to agent.
             _ => vec![WorkflowStep::new("investigate_agent_stage", "agentic")],
@@ -78,17 +77,29 @@ impl WorkflowHandler for ResearchHandler {
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
-        let mut steps = vec![WorkflowStep::new("research_agent_stage", "agentic")];
-
-        if task_type(task) == "custom_keyword_research" {
-            steps.push(
+        match task_type(task) {
+            "research_keywords" => vec![
+                WorkflowStep::new("research_agent_stage", "agentic")
+                    .with_param("skill", "seo-keyword-research"),
                 WorkflowStep::new("research_normalize_stage", "normalizer")
                     .with_param("normalizer_id", "keyword_research")
                     .with_param("artifact_name", "keyword_research"),
-            );
+            ],
+            _ => {
+                let mut steps = vec![
+                    WorkflowStep::new("research_agent_stage", "agentic")
+                        .with_param("skill", "seo-keyword-research")
+                ];
+                if task_type(task) == "custom_keyword_research" {
+                    steps.push(
+                        WorkflowStep::new("research_normalize_stage", "normalizer")
+                            .with_param("normalizer_id", "keyword_research")
+                            .with_param("artifact_name", "keyword_research"),
+                    );
+                }
+                steps
+            }
         }
-
-        steps
     }
 }
 
@@ -339,9 +350,26 @@ pub fn exec_agentic(
     agent_provider: &str,
 ) -> StepResult {
     use crate::engine::{agent, prompts, skills};
+    use crate::engine::project_paths::ProjectPaths;
     use std::path::Path;
 
     let repo_root = Path::new(project_path);
+    let paths = ProjectPaths::from_path(project_path);
+
+    let is_content_task = matches!(
+        task.task_type.as_str(),
+        "write_article" | "optimize_article" | "create_content" | "optimize_content"
+    );
+
+    let content_context = if is_content_task {
+        let resolved = crate::content::locator::resolve(repo_root, None);
+        resolved
+            .selected
+            .as_ref()
+            .map(|dir| (dir.clone(), snapshot_markdown_mtime(dir), detect_numbered_mdx_style(dir)))
+    } else {
+        None
+    };
 
     // 1. Optionally load skill
     let skill = step
@@ -349,9 +377,31 @@ pub fn exec_agentic(
         .get("skill")
         .and_then(|name| skills::load_skill(repo_root, name));
 
-    // 2. Build prompt
-    let prompt = if let Some(ref s) = skill {
-        prompts::build_prompt(task, s, project_path, Some(site_url)).prompt
+    // 2. Optionally load step artifact content into prompt context.
+    let artifact_context = if let Some(artifact_name) = step.params.get("artifact") {
+        let artifact_path = paths.automation_dir.join(artifact_name);
+        match std::fs::read_to_string(&artifact_path) {
+            Ok(content) => format!(
+                "\n\n## Artifact: {}\n\n```json\n{}\n```",
+                artifact_name, content
+            ),
+            Err(_) => {
+                return StepResult {
+                    success: false,
+                    message: format!("{} not found — run collect_gsc first", artifact_name),
+                    output: None,
+                };
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    // 3. Build prompt
+    let mut prompt = if let Some(ref s) = skill {
+        let mut p = prompts::build_prompt(task, s, project_path, Some(site_url)).prompt;
+        p.push_str(&artifact_context);
+        p
     } else {
         // Fallback prompt when no skill is configured.
         // Include description so the agent knows exactly which file to edit and
@@ -370,8 +420,53 @@ pub fn exec_agentic(
             site_url,
             project_path,
             desc_section,
-        )
+        ) + &artifact_context
     };
+
+        // Research parity: force a machine-readable output contract so the next UI
+        // step (keyword selection) behaves like the CLI flow.
+        if matches!(task.task_type.as_str(), "research_keywords" | "custom_keyword_research") {
+                prompt.push_str(
+                        "\n\n## Output Contract (Required)\n\
+                         Return ONLY one fenced JSON block and no extra prose.\n\
+                         The JSON must use this schema:\n\
+                         ```json\n\
+                         {\n\
+                             \"new_keywords\": [\"keyword 1\", \"keyword 2\"],\n\
+                             \"filtered_out\": 0,\n\
+                             \"difficulty\": {\n\
+                                 \"results\": [\n\
+                                     {\"keyword\": \"keyword 1\", \"difficulty\": 24, \"volume\": 1200},\n\
+                                     {\"keyword\": \"keyword 2\", \"difficulty\": 31, \"volume\": 700}\n\
+                                 ]\n\
+                             }\n\
+                         }\n\
+                         ```\n\
+                         Requirements:\n\
+                         - Provide 10 keyword candidates when possible.\n\
+                         - Include numeric difficulty and numeric volume when available.\n\
+                         - Do not include tool transcripts, logs, or markdown tables outside the JSON block."
+                );
+        }
+
+            if is_content_task {
+                prompt.push_str(
+                    "\n\n## Content File Format (Required)\n\
+                     - New articles must be written as `.mdx` files (never `.md`).\n\
+                     - If you propose a filename, it must end in `.mdx`.\n\
+                     - Preserve valid frontmatter and markdown/MDX syntax."
+                );
+
+                if let Some((_dir, _before, Some(style))) = &content_context {
+                    prompt.push_str(&format!(
+                        "\n\n## Content Filename Convention (Required)\n\
+                         - Follow this naming format: `{{id}}_topic_slug.mdx`\n\
+                         - Use lowercase with underscores in the slug.\n\
+                         - Continue numbering from approximately {}.",
+                        style.next_id
+                    ));
+                }
+            }
 
     log::info!(
         "[executor] agentic step '{}' with provider '{}' (skill: {:?})",
@@ -380,13 +475,37 @@ pub fn exec_agentic(
         step.params.get("skill")
     );
 
-    // 3. Call agent
+    // 4. Call agent
     match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => StepResult {
-            success: true,
-            message: format!("Agentic step '{}' complete ({} chars)", step.name, output.len()),
-            output: Some(output),
-        },
+        Ok(output) => {
+            let mut message = format!("Agentic step '{}' complete ({} chars)", step.name, output.len());
+
+            if let Some((content_dir, before, style)) = content_context {
+                let renamed = rename_new_or_modified_md_to_mdx(&content_dir, &before);
+                if !renamed.is_empty() {
+                    message.push_str(&format!(" · enforced MDX on {} file(s)", renamed.len()));
+                    for (old, new) in &renamed {
+                        log::info!("[content_mdx] renamed {} -> {}", old.display(), new.display());
+                    }
+                }
+
+                if let Some(style) = style {
+                    let renamed_style = rename_new_files_to_numbered_mdx(&content_dir, &before, style.next_id);
+                    if !renamed_style.is_empty() {
+                        message.push_str(&format!(" · normalized naming on {} file(s)", renamed_style.len()));
+                        for (old, new) in &renamed_style {
+                            log::info!("[content_name] renamed {} -> {}", old.display(), new.display());
+                        }
+                    }
+                }
+            }
+
+            StepResult {
+                success: true,
+                message,
+                output: Some(output),
+            }
+        }
         Err(err) => {
             log::warn!("[executor] agentic step '{}' failed: {}", step.name, err);
             StepResult {
@@ -396,4 +515,187 @@ pub fn exec_agentic(
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NumberedMdxStyle {
+    next_id: i64,
+}
+
+fn detect_numbered_mdx_style(dir: &std::path::Path) -> Option<NumberedMdxStyle> {
+    let mut count = 0i64;
+    let mut max_id = 0i64;
+
+    for path in crate::content::locator::collect_markdown_files(dir) {
+        let is_mdx = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("mdx"))
+            .unwrap_or(false);
+        if !is_mdx {
+            continue;
+        }
+
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+
+        if let Some(id) = parse_numeric_prefix(name) {
+            count += 1;
+            if id > max_id {
+                max_id = id;
+            }
+        }
+    }
+
+    // Only enforce when this style is clearly established in the repo.
+    if count >= 5 {
+        Some(NumberedMdxStyle { next_id: max_id + 1 })
+    } else {
+        None
+    }
+}
+
+fn parse_numeric_prefix(filename: &str) -> Option<i64> {
+    let prefix = filename.split_once('_')?.0;
+    if prefix.chars().all(|c| c.is_ascii_digit()) {
+        prefix.parse::<i64>().ok()
+    } else {
+        None
+    }
+}
+
+fn normalize_slug_underscored(stem: &str) -> String {
+    let mut out = String::new();
+    let mut prev_sep = false;
+
+    for ch in stem.chars() {
+        let c = ch.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            prev_sep = false;
+        } else if !prev_sep {
+            out.push('_');
+            prev_sep = true;
+        }
+    }
+
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "article".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn rename_new_files_to_numbered_mdx(
+    dir: &std::path::Path,
+    before: &std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+    start_id: i64,
+) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
+    let mut renamed = Vec::new();
+    let mut next_id = start_id;
+
+    for path in crate::content::locator::collect_markdown_files(dir) {
+        // Rename only newly created files from this run, not existing repo files.
+        if before.contains_key(&path) {
+            continue;
+        }
+
+        let is_mdx = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("mdx"))
+            .unwrap_or(false);
+        if !is_mdx {
+            continue;
+        }
+
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if parse_numeric_prefix(name).is_some() {
+            continue;
+        }
+
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("article");
+        let slug = normalize_slug_underscored(stem);
+
+        let target = loop {
+            let candidate = dir.join(format!("{}_{}.mdx", next_id, slug));
+            if !candidate.exists() {
+                break candidate;
+            }
+            next_id += 1;
+        };
+
+        if std::fs::rename(&path, &target).is_ok() {
+            renamed.push((path, target));
+            next_id += 1;
+        }
+    }
+
+    renamed
+}
+
+fn snapshot_markdown_mtime(
+    dir: &std::path::Path,
+) -> std::collections::HashMap<std::path::PathBuf, std::time::SystemTime> {
+    let mut out = std::collections::HashMap::new();
+    for path in crate::content::locator::collect_markdown_files(dir) {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if let Ok(mtime) = meta.modified() {
+                out.insert(path, mtime);
+            }
+        }
+    }
+    out
+}
+
+fn rename_new_or_modified_md_to_mdx(
+    dir: &std::path::Path,
+    before: &std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
+    let mut renamed = Vec::new();
+
+    for path in crate::content::locator::collect_markdown_files(dir) {
+        let is_md = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md"))
+            .unwrap_or(false);
+        if !is_md {
+            continue;
+        }
+
+        let modified = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+
+        let changed_since_before = match (before.get(&path), modified) {
+            (None, Some(_)) => true,
+            (Some(prev), Some(now)) => now > *prev,
+            _ => false,
+        };
+
+        if !changed_since_before {
+            continue;
+        }
+
+        let target = path.with_extension("mdx");
+        if target.exists() {
+            log::warn!(
+                "[content_mdx] skipping rename {} -> {} because target exists",
+                path.display(),
+                target.display()
+            );
+            continue;
+        }
+
+        if std::fs::rename(&path, &target).is_ok() {
+            renamed.push((path, target));
+        }
+    }
+
+    renamed
 }

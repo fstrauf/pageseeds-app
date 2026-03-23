@@ -10,6 +10,7 @@
     "beforeBuildCommand": "pnpm build"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "PageSeeds",
@@ -19,22 +20,46 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "focus": false
+        "center": true
       }
     ],
     "security": {
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/fstrauf/pageseeds-releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDMkZERkE0MDI1M0YxRDgKUldUWThWTUNwTjh2ak9DTGZYdlJpWW5KVkVjVjhzdGtNTTFCTFNiclo0TENZUUZyVS9JUHY5RisK"
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "targets": ["app", "dmg", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.13",
+      "signingIdentity": "Developer ID Application: Florian Strauf (KMJ36PKPW8)",
+      "entitlements": "./Entitlements.plist"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

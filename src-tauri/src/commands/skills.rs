@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tauri::State;
 use crate::engine::{executor, normalizer, prompts, skills, task_store};
-use super::AppState;
+use super::{AppState, GscState};
 
 #[tauri::command]
 pub fn list_skills(
@@ -71,6 +71,7 @@ pub fn get_project_overview(
 #[tauri::command]
 pub async fn quick_run_workflow(
     state: State<'_, AppState>,
+    gsc_state: State<'_, GscState>,
     project_id: String,
     task_type: String,
     title: String,
@@ -126,10 +127,19 @@ pub async fn quick_run_workflow(
         }
     };
 
+    let token = gsc_state
+        .token
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .filter(|t| !t.is_expired())
+        .map(|t| t.access_token.clone());
+
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task(&db, &task_id).map_err(|e| e.to_string())
+        executor::execute_task_with_token(&db, &task_id, token.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
