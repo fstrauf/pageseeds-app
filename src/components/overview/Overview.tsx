@@ -2,14 +2,15 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Zap, RefreshCw, CheckCircle2, Clock, AlertCircle,
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
-  PlayCircle, TrendingUp, Users, ArrowRight,
+  PlayCircle, TrendingUp, Users, ArrowRight, Send,
 } from 'lucide-react'
-import { createTask, getProjectOverview } from '../../lib/tauri'
-import type { Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
+import { createTask, getProjectOverview, listArticles } from '../../lib/tauri'
+import type { Article, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '../../lib/utils'
 import { SetupWarnings } from './SetupWarnings'
+import { PublishPanel } from '../articles/PublishPanel'
 
 // ─── Quick actions definition ─────────────────────────────────────────────────
 
@@ -203,7 +204,6 @@ interface OverviewProps {
   project: Project | null
   onViewChange: (view: import('../../lib/types').View, taskId?: string) => void
   onRunTasks?: (tasks: Task[]) => void
-  runnerBusy?: boolean
   runCompletedTick?: number
 }
 
@@ -211,7 +211,6 @@ export function Overview({
   project,
   onViewChange,
   onRunTasks,
-  runnerBusy = false,
   runCompletedTick = 0,
 }: OverviewProps) {
   const [overview, setOverview] = useState<ProjectOverview | null>(null)
@@ -219,6 +218,9 @@ export function Overview({
   const [runningActionLabel, setRunningActionLabel] = useState<string | null>(null)
   const [quickActionError, setQuickActionError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [publishOpen, setPublishOpen] = useState(false)
+  const [publishCandidates, setPublishCandidates] = useState<Article[]>([])
+  const [loadingPublish, setLoadingPublish] = useState(false)
 
   const load = useCallback(async () => {
     if (!project) return
@@ -246,8 +248,22 @@ export function Overview({
     load()
   }, [project, runCompletedTick, load])
 
+  async function handleOpenPublish() {
+    if (!project || loadingPublish) return
+    setLoadingPublish(true)
+    try {
+      const all = await listArticles(project.id)
+      setPublishCandidates(all.filter(a => a.status === 'ready_to_publish' || a.status === 'draft'))
+      setPublishOpen(true)
+    } catch (e: unknown) {
+      setQuickActionError(String(e))
+    } finally {
+      setLoadingPublish(false)
+    }
+  }
+
   async function handleQuickAction(action: ActionDef) {
-    if (!project || runnerBusy) return
+    if (!project || runningActionLabel !== null) return
     setRunningActionLabel(action.label)
     setQuickActionError(null)
     try {
@@ -280,6 +296,7 @@ export function Overview({
   const pct = tasks && tasks.total > 0 ? Math.round((tasks.done / tasks.total) * 100) : 0
 
   return (
+    <>
     <div className="flex flex-col h-full overflow-y-auto bg-background">
       <div className="p-6 space-y-6 pb-20">
 
@@ -297,7 +314,7 @@ export function Overview({
         </div>
 
         {/* Setup warnings — shown when workspace config is missing or content dir is guessed */}
-        <SetupWarnings projectId={project.id} />
+        <SetupWarnings projectId={project.id} onViewChange={onViewChange} />
 
         {/* Stat cards row */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -391,11 +408,11 @@ export function Overview({
                 <button
                   key={action.task_type}
                   onClick={() => handleQuickAction(action)}
-                  disabled={runnerBusy}
+                  disabled={runningActionLabel === action.label}
                   className={cn(
                     'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors',
                     'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
-                    runnerBusy && runningActionLabel === action.label && 'bg-secondary ring-1 ring-blue-700/50',
+                    runningActionLabel === action.label && 'bg-secondary ring-1 ring-blue-700/50',
                   )}
                 >
                   <span className="shrink-0 text-muted-foreground">{action.icon}</span>
@@ -411,12 +428,35 @@ export function Overview({
                     </div>
                     <span className="text-xs text-muted-foreground leading-snug">{action.description}</span>
                   </div>
-                  {runnerBusy && runningActionLabel === action.label
+                  {runningActionLabel === action.label
                     ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
                     : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
                   }
                 </button>
               ))}
+              <button
+                onClick={handleOpenPublish}
+                disabled={loadingPublish}
+                className={cn(
+                  'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors',
+                  'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
+                )}
+              >
+                <span className="shrink-0 text-muted-foreground"><Send size={16} /></span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-foreground font-medium">Publish Articles</span>
+                    <span className={cn('text-xs px-1.5 py-0.5 rounded border-transparent', PHASE_BADGE['implementation'])}>
+                      implementation
+                    </span>
+                  </div>
+                  <span className="text-xs text-muted-foreground leading-snug">Fix dates, resolve mismatches, mark drafts as published</span>
+                </div>
+                {loadingPublish
+                  ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
+                  : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                }
+              </button>
             </CardContent>
           </Card>
 
@@ -495,5 +535,13 @@ export function Overview({
         </div>
       </div>
     </div>
+    <PublishPanel
+      open={publishOpen}
+      onOpenChange={setPublishOpen}
+      projectId={project.id}
+      candidates={publishCandidates}
+      onPublished={() => load()}
+    />
+    </>
   )
 }

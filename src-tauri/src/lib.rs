@@ -36,6 +36,7 @@ pub fn run() {
             );
             app.manage(AppState {
                 db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
+                db_path: db_path.clone(),
             });
             app.manage(GscState {
                 token: Mutex::new(None),
@@ -98,6 +99,7 @@ pub fn run() {
             commands::seo_check_traffic,
             // Phase 6 — Workflow Engine + Batch + Scheduler + Ledger
             commands::execute_task,
+            commands::dry_run_task,
             commands::get_batch_summary,
             commands::run_batch,
             commands::list_scheduler_rules,
@@ -119,9 +121,14 @@ pub fn run() {
             commands::check_agent_status,
             commands::set_agent_provider,
             commands::check_project_setup,
+            commands::get_project_config_files_status,
             commands::init_workspace_config,
             commands::get_content_health,
             commands::fix_date_mismatches,
+            commands::ingest_orphan_articles,
+            commands::preflight_publish_articles,
+            commands::apply_publish_articles,
+            commands::resolve_year_mismatch_agent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

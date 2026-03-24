@@ -7,13 +7,23 @@ use crate::error::{Error, Result};
 const CAPSOLVER_CREATE_URL: &str = "https://api.capsolver.com/createTask";
 const CAPSOLVER_RESULT_URL: &str = "https://api.capsolver.com/getTaskResult";
 
-/// Ahrefs free tools website URL and hCaptcha site key.
-const AHREFS_WEBSITE_URL: &str = "https://ahrefs.com/";
-const AHREFS_HCAPTCHA_KEY: &str = "a9b5fb07-92ff-493f-86fe-352a2803b3df";
+/// Ahrefs Cloudflare Turnstile site key.
+const AHREFS_TURNSTILE_KEY: &str = "0x4AAAAAAAAzi9ITzSN9xKMi";
 
-/// Solve an hCaptcha challenge for Ahrefs free tools using CapSolver.
-/// Returns the hCaptcha response token passed as "captcha" to Ahrefs endpoints.
-pub async fn solve_ahrefs_captcha(api_key: &str) -> Result<String> {
+fn capsolver_create_url() -> String {
+    std::env::var("PAGESEEDS_CAPSOLVER_CREATE_URL")
+        .unwrap_or_else(|_| CAPSOLVER_CREATE_URL.to_string())
+}
+
+fn capsolver_result_url() -> String {
+    std::env::var("PAGESEEDS_CAPSOLVER_RESULT_URL")
+        .unwrap_or_else(|_| CAPSOLVER_RESULT_URL.to_string())
+}
+
+/// Solve a Cloudflare Turnstile challenge for an Ahrefs free tool page using CapSolver.
+/// `site_url` must be the exact page URL (e.g. keyword-generator with query params).
+/// Returns the Turnstile token passed as "captcha" to Ahrefs endpoints.
+pub async fn solve_ahrefs_captcha(api_key: &str, site_url: &str) -> Result<String> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
         .build()
@@ -23,14 +33,15 @@ pub async fn solve_ahrefs_captcha(api_key: &str) -> Result<String> {
     let create_body = serde_json::json!({
         "clientKey": api_key,
         "task": {
-            "type": "HCaptchaTaskProxyLess",
-            "websiteURL": AHREFS_WEBSITE_URL,
-            "websiteKey": AHREFS_HCAPTCHA_KEY
+            "type": "AntiTurnstileTaskProxyLess",
+            "websiteURL": site_url,
+            "websiteKey": AHREFS_TURNSTILE_KEY,
+            "metadata": {"action": ""}
         }
     });
 
     let create_resp: serde_json::Value = client
-        .post(CAPSOLVER_CREATE_URL)
+        .post(capsolver_create_url())
         .json(&create_body)
         .send()
         .await?
@@ -55,7 +66,7 @@ pub async fn solve_ahrefs_captcha(api_key: &str) -> Result<String> {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
         let result_resp: serde_json::Value = client
-            .post(CAPSOLVER_RESULT_URL)
+            .post(capsolver_result_url())
             .json(&serde_json::json!({
                 "clientKey": api_key,
                 "taskId": task_id
@@ -74,10 +85,10 @@ pub async fn solve_ahrefs_captcha(api_key: &str) -> Result<String> {
 
         let status = result_resp["status"].as_str().unwrap_or("processing");
         if status == "ready" {
-            let token = result_resp["solution"]["gRecaptchaResponse"]
+            let token = result_resp["solution"]["token"]
                 .as_str()
                 .ok_or_else(|| {
-                    Error::Other("Missing gRecaptchaResponse in CapSolver solution".to_string())
+                    Error::Other("Missing token in CapSolver solution".to_string())
                 })?
                 .to_string();
             return Ok(token);

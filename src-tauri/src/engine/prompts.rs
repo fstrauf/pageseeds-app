@@ -128,7 +128,7 @@ fn build_task_section(task: &Task) -> String {
             if let Some(ref c) = a.content {
                 // Inline content — truncate to 500 chars to avoid huge prompts
                 let preview = if c.len() > 500 {
-                    format!("{}… [truncated]", &c[..500])
+                    format!("{}… [truncated]", crate::engine::text::char_prefix(c, 500))
                 } else {
                     c.clone()
                 };

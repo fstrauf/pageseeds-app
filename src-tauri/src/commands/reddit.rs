@@ -169,6 +169,7 @@ pub async fn run_reddit_opportunity_search(
     user_context: Option<String>,
 ) -> Result<executor::ExecutionResult, String> {
     use crate::config::{default_execution_mode, default_phase};
+    use crate::models::task::{AgentPolicy, Priority, TaskStatus};
     use crate::reddit::config as reddit_cfg;
     use std::path::Path;
 
@@ -196,11 +197,11 @@ pub async fn run_reddit_opportunity_search(
     let task = crate::models::task::Task {
         id,
         phase: default_phase("reddit_opportunity_search").to_string(),
-        execution_mode: default_execution_mode("reddit_opportunity_search").to_string(),
+        execution_mode: default_execution_mode("reddit_opportunity_search"),
         task_type: "reddit_opportunity_search".to_string(),
-        status: "todo".to_string(),
-        priority: "high".to_string(),
-        agent_policy: "optional".to_string(),
+        status: TaskStatus::Todo,
+        priority: Priority::High,
+        agent_policy: AgentPolicy::Optional,
         title: Some("Reddit Opportunity Search".to_string()),
         description,
         project_id,
@@ -229,7 +230,7 @@ pub async fn run_reddit_opportunity_search(
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task_with_token(&db, &task_id, token.as_deref())
+        executor::execute_task_with_token(&db, &task_id, token.as_deref(), None, false)
             .map_err(|e| e.to_string())
     })
     .await
@@ -276,89 +277,19 @@ pub async fn draft_reddit_reply(
         automation_dir.join("reddit").join("_reply_guardrails.md")
     ).map_err(|e| format!("Failed to read _reply_guardrails.md: {}", e))?;
 
-    let reddit_cfg = reddit_cfg::parse_reddit_config(&reddit_config_raw);
-    let product_name = reddit_cfg.product_name.as_deref().unwrap_or("the product");
-    let mention_stance = reddit_cfg.mention_stance.as_str();
-
     let skill_content = skills::load_skill(repo_root, "reddit-reply-drafting")
         .map(|s| s.content)
         .unwrap_or_default();
 
-    let post_title = opp.title.as_deref().unwrap_or("(no title)");
-    let post_subreddit = opp.subreddit.as_deref().unwrap_or("");
-    let why_relevant = opp.why_relevant.as_deref().unwrap_or("");
-    let pain_points = opp.key_pain_points.join(", ");
-    let website_fit = opp.website_fit.as_deref().unwrap_or("");
-
-    let stance_instruction = match reddit_cfg.mention_stance {
-        reddit_cfg::MentionStance::Required => format!(
-            "REQUIRED: The reply MUST contain the exact product name \"{}\" — no vague substitutes like 'a tool' or 'the app'.",
-            product_name
-        ),
-        reddit_cfg::MentionStance::Recommended => format!(
-            "RECOMMENDED: Mention \"{}\" by name if the topic is a natural fit.",
-            product_name
-        ),
-        reddit_cfg::MentionStance::Optional => format!(
-            "OPTIONAL: You may mention \"{}\" if it fits naturally. Not required.",
-            product_name
-        ),
-        reddit_cfg::MentionStance::Omit => "OMIT: Do NOT mention any product name in this reply.".to_string(),
-    };
-
-    let vague_phrases_block = if reddit_cfg.mention_stance == reddit_cfg::MentionStance::Required ||
-        reddit_cfg.mention_stance == reddit_cfg::MentionStance::Recommended {
-        format!(
-            "FORBIDDEN VAGUE PHRASES (replace all with \"{}\"): 'a dedicated tool', 'a platform', 'the app', 'a tracker', 'my tool', 'a tool I built'",
-            product_name
-        )
-    } else {
-        String::new()
-    };
-
-    let prompt = format!(r#"You are drafting a Reddit reply for the following post.
-
-## PRODUCT CONTEXT
-Product name: {product_name}
-Mention stance: {mention_stance}
-{stance_instruction}
-{vague_phrases_block}
-
-## PROJECT SUMMARY
-{project_summary}
-
-## BRAND VOICE
-{brandvoice}
-
-## REPLY GUARDRAILS
-{guardrails}
-
-## POST DETAILS
-Title: {post_title}
-Subreddit: r/{post_subreddit}
-Why relevant: {why_relevant}
-Pain points: {pain_points}
-Website fit: {website_fit}
-
-## YOUR TASK
-Write a Reddit reply following this formula:
-  Acknowledge → Educate → Product mention (per stance above) → Engage
-
-Rules:
-- 3–5 sentences, plain text only, no URLs, no markdown links
-- Conversational tone — write like you'd talk to a friend over coffee
-- Do NOT use bullet points or headers
-- Vary phrasing — don't sound like marketing copy
-
-After drafting, run this critique pass:
-  Act as a copy editor at a respected newspaper who believes in respecting your reader's time.
-  Ask: Is every sentence earning its place? Can any words be cut? Is the tone conversational?
-  Revise based on this critique before finalizing.
-
-{skill_content}
-
-Return ONLY the final reply text — no preamble, no explanation, no metadata.
-"#);
+    let cfg = reddit_cfg::parse_reddit_config(&reddit_config_raw);
+    let prompt = crate::reddit::prompts::build_draft_reply_prompt(
+        &project_summary,
+        &brandvoice,
+        &guardrails,
+        &skill_content,
+        &cfg,
+        &opp,
+    );
 
     let reply_text = agent_mod::run_agent(&agent_provider, &prompt, repo_root)
         .map_err(|e| format!("Agent failed: {}", e))?;
@@ -460,7 +391,7 @@ pub async fn enrich_reddit_opportunities(
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::exec_reddit_enrich(&db, &project_id, &project_path, &agent_provider);
+        crate::engine::exec::reddit::exec_reddit_enrich(&db, &project_id, &project_path, &agent_provider);
         Ok::<String, String>("Enrichment complete".to_string())
     })
     .await

@@ -83,7 +83,11 @@ async fn acquire_signature(
     capsolver_key: &str,
     domain: &str,
 ) -> Result<(String, String, Option<DomainOverview>)> {
-    let token = solve_ahrefs_captcha(capsolver_key).await?;
+    let site_url = format!(
+        "https://ahrefs.com/backlink-checker/?input={}",
+        urlencoding::encode(domain)
+    );
+    let token = solve_ahrefs_captcha(capsolver_key, &site_url).await?;
 
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")

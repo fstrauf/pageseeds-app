@@ -126,7 +126,7 @@ fn extract_description(content: &str, fallback_name: &str) -> String {
 
         // 2. First real paragraph
         let desc = if trimmed.len() > 200 {
-            format!("{}…", &trimmed[..200])
+            format!("{}…", crate::engine::text::char_prefix(trimmed, 200))
         } else {
             trimmed.to_string()
         };

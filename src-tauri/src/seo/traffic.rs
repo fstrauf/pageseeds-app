@@ -94,7 +94,12 @@ pub async fn check_traffic(
     mode: &str,
     country: &str,
 ) -> Result<TrafficResult> {
-    let token = solve_ahrefs_captcha(capsolver_key).await?;
+    let site_url = format!(
+        "https://ahrefs.com/traffic-checker/?input={}&mode={}",
+        urlencoding::encode(domain_or_url),
+        mode
+    );
+    let token = solve_ahrefs_captcha(capsolver_key, &site_url).await?;
 
     let input = serde_json::json!({
         "captcha": token,

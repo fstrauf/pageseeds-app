@@ -141,4 +141,4 @@ This replaces the current "agentic" step that sends raw SKILL.md.
 |------|--------|
 | `src-tauri/src/engine/executor.rs` | Add `select_priority_articles`, `build_review_context`, `build_review_prompt`. Replace `spawn_content_review_tasks` with single-task creation. Add `exec_content_review_recommend` step runner. |
 | `src-tauri/src/engine/workflows/handlers.rs` | Update `ContentReviewHandler.plan()` step 4 from `"agentic"` to `"content_review_recommend"`. Remove or repurpose `ContentHandler` for `optimize_article`. |
-| `src-tauri/src/engine/agent.rs` | No changes needed (already fixed `--allow-all`). |
+| `src-tauri/src/engine/agent.rs` | Enforce safe non-interactive Copilot permissions (`--allow-all-tools` + deny git shell commands). |

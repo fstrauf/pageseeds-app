@@ -222,18 +222,24 @@ pub fn run_cycle(conn: &Connection, project_id: &str) -> Result<SchedulerCycleRe
 
 fn create_task_for_rule(conn: &Connection, rule: &SchedulerRule) -> Result<String, String> {
     use crate::config::{default_execution_mode, default_phase};
+    use crate::models::task::{AgentPolicy, Priority, TaskStatus};
 
     let now = Utc::now().to_rfc3339();
     let id = format!("sched-{}-{}", rule.task_type.replace('_', "-"), Utc::now().timestamp());
+    let priority_enum = match rule.priority.as_str() {
+        "high" => Priority::High,
+        "low" => Priority::Low,
+        _ => Priority::Medium,
+    };
 
     let task = crate::models::task::Task {
         id: id.clone(),
         task_type: rule.task_type.clone(),
         phase: default_phase(&rule.task_type).to_string(),
-        status: "todo".to_string(),
-        priority: rule.priority.clone(),
-        execution_mode: default_execution_mode(&rule.task_type).to_string(),
-        agent_policy: "none".to_string(),
+        status: TaskStatus::Todo,
+        priority: priority_enum,
+        execution_mode: default_execution_mode(&rule.task_type),
+        agent_policy: AgentPolicy::None,
         title: Some(format!("Scheduled: {}", rule.task_type.replace('_', " "))),
         description: Some(format!("Auto-created by scheduler rule '{}'", rule.rule_id)),
         project_id: rule.project_id.clone(),

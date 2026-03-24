@@ -1,8 +1,10 @@
 use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 use crate::models::gsc::TokenState;
 
 pub struct AppState {
     pub db: Arc<Mutex<rusqlite::Connection>>,
+    pub db_path: PathBuf,
 }
 
 pub struct GscState {

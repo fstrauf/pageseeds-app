@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Shell } from './components/layout/Shell'
 import { TaskBoard } from './components/tasks/TaskBoard'
 import { ArticleTable } from './components/articles/ArticleTable'
@@ -16,15 +16,21 @@ import { TaskRunner } from './components/tasks/TaskRunner'
 import { listProjects } from './lib/tauri'
 import type { Project, Task, View } from './lib/types'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './components/ui/tabs'
+import { QueueContext } from './lib/queue-context'
+import { useQueueRunner } from './hooks/useQueueRunner'
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('overview')
   const [projects, setProjects] = useState<Project[]>([])
   const [activeProject, setActiveProject] = useState<Project | null>(null)
   const [pendingTaskId, setPendingTaskId] = useState<string | undefined>(undefined)
-  const [runnerTasks, setRunnerTasks] = useState<Task[] | null>(null)
-  const [runnerBusy, setRunnerBusy] = useState(false)
   const [runCompletedTick, setRunCompletedTick] = useState(0)
+
+  const handleRunnerCompleted = useCallback(() => {
+    setRunCompletedTick(v => v + 1)
+  }, [])
+
+  const queue = useQueueRunner(handleRunnerCompleted)
   // undefined = modal closed | null = new project | Project = edit that project
   const [modalProject, setModalProject] = useState<Project | null | undefined>(undefined)
   const [ready, setReady] = useState(false)
@@ -62,12 +68,16 @@ export default function App() {
   }
 
   function handleRunTasks(tasks: Task[]) {
-    if (runnerBusy || tasks.length === 0) return
-    setRunnerTasks(tasks)
-  }
-
-  function handleRunnerDone() {
-    setRunCompletedTick(v => v + 1)
+    if (tasks.length === 0) return
+    queue.enqueue(
+      tasks.map(t => ({
+        taskId: t.id,
+        projectId: t.project_id,
+        title: t.title ?? t.type ?? 'Untitled',
+        taskType: t.type ?? '',
+        projectName: activeProject?.name,
+      })),
+    )
   }
 
   if (!ready) {
@@ -82,7 +92,13 @@ export default function App() {
   }
 
   return (
-    <>
+    <QueueContext.Provider
+      value={{
+        enqueue: queue.enqueue,
+        enqueueNext: queue.enqueueNext,
+        isActive: queue.isVisible,
+      }}
+    >
       <Shell
         activeView={activeView}
         onViewChange={setActiveView}
@@ -100,17 +116,16 @@ export default function App() {
               if (taskId) setPendingTaskId(taskId)
             }}
             onRunTasks={handleRunTasks}
-            runnerBusy={runnerBusy}
             runCompletedTick={runCompletedTick}
           />
         )}
         {activeView === 'tasks' && (
           <TaskBoard
             projectId={activeProject?.id}
+            projectName={activeProject?.name}
             initialTaskId={pendingTaskId}
             onTaskOpened={() => setPendingTaskId(undefined)}
             onRunTasks={handleRunTasks}
-            runnerBusy={runnerBusy}
             runCompletedTick={runCompletedTick}
           />
         )}
@@ -169,12 +184,19 @@ export default function App() {
         {activeView === 'history' && <RunHistory projectId={activeProject?.id ?? ''} />}
       </Shell>
 
-      {runnerTasks && (
+      {queue.isVisible && (
         <TaskRunner
-          tasks={runnerTasks}
-          onDone={handleRunnerDone}
-          onClose={() => setRunnerTasks(null)}
-          onRunningChange={setRunnerBusy}
+          items={queue.items}
+          isRunning={queue.isRunning}
+          isPaused={queue.isPaused}
+          onPause={queue.pause}
+          onResume={queue.resume}
+          onRemove={queue.removeItem}
+          onClose={queue.close}
+          onOpenTask={(taskId) => {
+            setActiveView('tasks')
+            setPendingTaskId(taskId)
+          }}
         />
       )}
 
@@ -185,7 +207,7 @@ export default function App() {
           onSaved={handleProjectSaved}
         />
       )}
-    </>
+    </QueueContext.Provider>
   )
 }
 

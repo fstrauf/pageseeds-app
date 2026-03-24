@@ -7,6 +7,13 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+
+/// Maximum time (seconds) an agent subprocess is allowed to run before being
+/// killed.  Agent tasks (keyword research, content review, etc.) typically
+/// finish in 2–8 minutes; 15 minutes is generous.
+const AGENT_TIMEOUT_SECS: u64 = 15 * 60;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -79,24 +86,71 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
 
     cmd.current_dir(project_path);
 
-    match cmd.output() {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Prevent the subprocess from blocking on stdin (e.g. interactive prompts).
+    cmd.stdin(Stdio::null());
+    // Pipe stdout/stderr so we can capture the agent's output.
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
-            // Some CLIs exit non-zero but still produce useful output
-            if out.status.success() || !stdout.trim().is_empty() {
-                Ok(stdout)
-            } else {
-                let msg = if stderr.trim().is_empty() { stdout } else { stderr };
-                Err(format!("Agent '{}' failed (exit {}): {}", binary, out.status, msg.trim()))
-            }
+    // Spawn as a child so we can enforce a timeout instead of blocking forever.
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "Agent binary '{}' not found on PATH. Install it first.",
+                binary
+            ));
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
-            "Agent binary '{}' not found on PATH. Install it first.",
-            binary
-        )),
-        Err(e) => Err(format!("Failed to launch agent '{}': {}", binary, e)),
+        Err(e) => return Err(format!("Failed to launch agent '{}': {}", binary, e)),
+    };
+
+    let timeout = Duration::from_secs(AGENT_TIMEOUT_SECS);
+    let start = std::time::Instant::now();
+
+    // Poll the child process with a sleep interval to enforce a timeout.
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap the zombie
+                    return Err(format!(
+                        "Agent '{}' timed out after {} seconds. Killed the process.",
+                        binary, AGENT_TIMEOUT_SECS
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err(e) => return Err(format!("Error waiting for agent '{}': {}", binary, e)),
+        }
+    }
+
+    let out = child.wait_with_output().map_err(|e| {
+        format!("Failed to read output from agent '{}': {}", binary, e)
+    })?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+
+    log::info!(
+        "[agent] {} finished in {:.1}s (exit={}, stdout={}B, stderr={}B)",
+        binary,
+        start.elapsed().as_secs_f64(),
+        out.status,
+        stdout.len(),
+        stderr.len()
+    );
+
+    // Some CLIs exit non-zero but still produce useful output
+    if out.status.success() || !stdout.trim().is_empty() {
+        Ok(stdout)
+    } else {
+        let msg = if stderr.trim().is_empty() { stdout } else { stderr };
+        Err(format!(
+            "Agent '{}' failed (exit {}): {}",
+            binary, out.status, msg.trim()
+        ))
     }
 }
 
@@ -118,11 +172,13 @@ fn resolve_provider(provider: &str) -> (String, Vec<String>) {
             "claude" => "claude".to_string(),
             _ => "copilot".to_string(),
         };
-        // --allow-all pre-authorises all permissions (file access, tool
-        // execution, URL access) so non-interactive runs don't stall waiting
-        // for permission dialogs.
+        // Non-interactive mode requires auto-approval for tools, but we
+        // explicitly deny shell git commands so agents cannot stage/commit/push.
         let extra_args = if binary == "copilot" {
-            vec!["--allow-all".to_string()]
+            vec![
+                "--allow-all-tools".to_string(),
+                "--deny-tool=shell(git:*)".to_string(),
+            ]
         } else {
             vec![]
         };

@@ -5,7 +5,7 @@
 /// place and never re-implemented ad-hoc in handlers or commands.
 ///
 /// # Layout
-/// ```
+/// ```text
 /// <repo_root>/
 ///   .github/
 ///     automation/

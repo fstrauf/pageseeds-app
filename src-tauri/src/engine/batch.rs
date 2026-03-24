@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{executor, task_store};
-use crate::models::task::Task;
+use crate::models::task::{ExecutionMode, Priority, Task, TaskStatus};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,16 +57,8 @@ pub struct BatchSummary {
 
 // ─── Autonomy mode helpers ────────────────────────────────────────────────────
 
-fn autonomy_mode(task: &Task) -> &'static str {
-    match task.execution_mode.as_str() {
-        "automatic" => "automatic",
-        "batchable" => "batchable",
-        _ => "manual",
-    }
-}
-
 fn is_autonomous(task: &Task) -> bool {
-    matches!(autonomy_mode(task), "automatic" | "batchable")
+    matches!(task.execution_mode, ExecutionMode::Automatic | ExecutionMode::Batchable)
 }
 
 // ─── Ready task selection ─────────────────────────────────────────────────────
@@ -76,25 +68,24 @@ pub fn get_ready_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>,
     let all_tasks = task_store::list_tasks(conn, project_id).map_err(|e| e.to_string())?;
     let done_ids: std::collections::HashSet<String> = all_tasks
         .iter()
-        .filter(|t| t.status == "done")
+        .filter(|t| t.status == TaskStatus::Done)
         .map(|t| t.id.clone())
         .collect();
 
     let mut ready: Vec<Task> = all_tasks
         .into_iter()
         .filter(|t| {
-            t.status == "todo"
+            t.status == TaskStatus::Todo
                 && is_autonomous(t)
                 && t.depends_on.iter().all(|dep| done_ids.contains(dep))
         })
         .collect();
 
-    let priority_order = |p: &str| match p {
-        "high" => 0u8,
-        "medium" => 1,
-        _ => 2,
-    };
-    ready.sort_by_key(|t| priority_order(&t.priority));
+    ready.sort_by_key(|t| match t.priority {
+        Priority::High => 0u8,
+        Priority::Medium => 1,
+        Priority::Low => 2,
+    });
     Ok(ready)
 }
 
@@ -102,8 +93,8 @@ pub fn get_batch_summary(conn: &Connection, project_id: &str) -> Result<BatchSum
     let ready = get_ready_tasks(conn, project_id)?;
     Ok(BatchSummary {
         total_ready: ready.len(),
-        automatic: ready.iter().filter(|t| autonomy_mode(t) == "automatic").count(),
-        batchable: ready.iter().filter(|t| autonomy_mode(t) == "batchable").count(),
+        automatic: ready.iter().filter(|t| t.execution_mode == ExecutionMode::Automatic).count(),
+        batchable: ready.iter().filter(|t| t.execution_mode == ExecutionMode::Batchable).count(),
     })
 }
 
@@ -141,7 +132,7 @@ pub fn run_batch_with_token(
 
         log::info!("[batch] executing task {task_id} ({task_type})");
 
-        match executor::execute_task_with_token(conn, &task_id, gsc_token) {
+        match executor::execute_task_with_token(conn, &task_id, gsc_token, None, false) {
             Ok(exec_result) => {
                 let batch_task_result = BatchTaskResult {
                     task_id: task_id.clone(),

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod batch;
+pub mod exec;
 pub mod executor;
 pub mod ledger;
 pub mod normalizer;
@@ -9,4 +10,5 @@ pub mod scheduler;
 pub mod setup_check;
 pub mod skills;
 pub mod task_store;
+pub mod text;
 pub mod workflows;

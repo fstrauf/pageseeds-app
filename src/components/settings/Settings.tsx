@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen } from 'lucide-react'
-import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog } from '../../lib/tauri'
-import type { AgentStatus, SecretsStatus } from '../../lib/types'
+import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText } from 'lucide-react'
+import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus } from '../../lib/tauri'
+import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -35,6 +35,9 @@ export function Settings({ projectId }: SettingsProps) {
   const [selectedProvider, setSelectedProvider] = useState<string>('copilot')
   const [agentSaved, setAgentSaved] = useState(false)
 
+  const [configFiles, setConfigFiles] = useState<ProjectConfigFileStatus[]>([])
+  const [configLoading, setConfigLoading] = useState(false)
+
   async function load() {
     if (!projectId) return
     setLoading(true)
@@ -50,6 +53,20 @@ export function Settings({ projectId }: SettingsProps) {
       setError(String(e))
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function loadConfigFiles() {
+    if (!projectId) return
+    setConfigLoading(true)
+    try {
+      const files = await getProjectConfigFilesStatus(projectId)
+      setConfigFiles(files)
+    } catch {
+      // keep UI responsive even if config scan fails
+      setConfigFiles([])
+    } finally {
+      setConfigLoading(false)
     }
   }
 
@@ -85,6 +102,7 @@ export function Settings({ projectId }: SettingsProps) {
 
   useEffect(() => {
     load()
+    loadConfigFiles()
     loadAgentStatus()
   }, [projectId])
 
@@ -130,7 +148,8 @@ export function Settings({ projectId }: SettingsProps) {
   }
 
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="h-full overflow-y-auto">
+      <div className="p-6 max-w-2xl pb-10">
       <h1 className="text-lg font-semibold text-foreground mb-6">Settings</h1>
 
       {!projectId && (
@@ -249,6 +268,72 @@ export function Settings({ projectId }: SettingsProps) {
 
           <Separator className="bg-border" />
 
+          <Card className="bg-card border-border">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <FileText size={14} className="text-muted-foreground" />
+                Project Configuration Files
+              </CardTitle>
+              <Button variant="ghost" size="icon-sm" onClick={loadConfigFiles} disabled={configLoading} className="text-muted-foreground">
+                <RefreshCw size={13} className={configLoading ? 'animate-spin' : ''} />
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {configFiles.length > 0 ? (
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <Table>
+                    <TableBody>
+                      {configFiles.map(file => (
+                        <TableRow key={file.id} className="border-border align-top">
+                          <TableCell className="pl-4 w-8 pt-3">
+                            {file.configured
+                              ? <CheckCircle size={15} className="text-[var(--color-success)] shrink-0" />
+                              : <XCircle size={15} className="text-destructive shrink-0" />
+                            }
+                          </TableCell>
+                          <TableCell className="py-3">
+                            <div className="text-sm text-foreground">{file.label}</div>
+                            <div className="text-xs text-muted-foreground mt-0.5">Relative path</div>
+                            <div className="text-xs text-muted-foreground font-mono break-all">{file.relative_path}</div>
+                            <div className="text-xs text-muted-foreground mt-1">Full path</div>
+                            <div className="text-xs text-muted-foreground font-mono break-all">{file.full_path}</div>
+                            <div className="text-xs text-muted-foreground mt-1">Full link</div>
+                            <div className="text-xs text-muted-foreground font-mono break-all">{file.full_link}</div>
+                            <div className="text-xs text-muted-foreground mt-0.5">{file.used_by}</div>
+                            <div className="text-xs text-muted-foreground mt-1">{file.detail}</div>
+                          </TableCell>
+                          <TableCell className="text-right pr-4 py-3">
+                            <div className="flex justify-end gap-2">
+                              {file.required && (
+                                <Badge variant="outline" className="border-transparent bg-blue-100 text-blue-700">
+                                  required
+                                </Badge>
+                              )}
+                              <Badge
+                                variant="outline"
+                                className={file.configured
+                                  ? 'border-transparent bg-emerald-100 text-emerald-700'
+                                  : 'border-transparent bg-destructive/15 text-destructive'}
+                              >
+                                {file.configured ? 'configured' : 'missing'}
+                              </Badge>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {configLoading ? 'Checking configuration files…' : 'No project config files detected.'}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Separator className="bg-border" />
+
           {/* Agent configuration section */}
           <Card className="bg-card border-border">
             <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -351,6 +436,7 @@ export function Settings({ projectId }: SettingsProps) {
           </Card>
         </div>
       )}
+      </div>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { checkProjectSetup, fixDateMismatches, getContentHealth, initWorkspaceConfig } from '../../lib/tauri'
+import { checkProjectSetup, fixDateMismatches, getContentHealth, ingestOrphanArticles, initWorkspaceConfig } from '../../lib/tauri'
 import type { ContentHealthResult, ProjectSetup, SetupCheckItem, SetupSeverity } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { ActionDrawer } from '@/components/ui/action-drawer'
@@ -8,6 +8,7 @@ import type { ActionResultPayload } from '../../hooks/useActionRun'
 
 interface Props {
   projectId: string
+  onViewChange?: (view: string) => void
 }
 
 const SEVERITY_STYLES: Record<SetupSeverity, string> = {
@@ -154,7 +155,88 @@ function DateMismatchBanner({
   )
 }
 
-export function SetupWarnings({ projectId }: Props) {
+function OrphanFilesBanner({
+  health,
+  projectId,
+  isRunning,
+  onFixed,
+  onRun,
+  onViewChange,
+}: {
+  health: ContentHealthResult
+  projectId: string
+  isRunning: boolean
+  onFixed: () => void | Promise<void>
+  onRun: (label: string, fn: () => Promise<ActionResultPayload>, nextStep?: { view: string; label: string }) => void
+  onViewChange?: (view: string) => void
+}) {
+  const [dismissed, setDismissed] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  if (dismissed) return null
+
+  const count = health.orphan_files.length
+  const preview = health.orphan_files.slice(0, 3)
+  const extra = count > 3 ? count - 3 : 0
+
+  function handleImport() {
+    onRun('Importing untracked files', async () => {
+      const r = await ingestOrphanArticles(projectId)
+      await onFixed()
+      return {
+        kind: 'summary' as const,
+        success: true,
+        items: [
+          { label: 'Files imported', value: String(r.ingested) },
+        ],
+      }
+    }, onViewChange ? { view: 'articles', label: 'View imported articles' } : undefined)
+  }
+
+  return (
+    <div className={`flex items-start gap-3 rounded-md border px-3 py-2.5 text-sm ${SEVERITY_STYLES.warn}`}>
+      <span className="mt-0.5 shrink-0 font-semibold">{SEVERITY_ICON.warn}</span>
+      <div className="flex-1 min-w-0">
+        <span className="font-medium">
+          {count} MDX file{count !== 1 ? 's' : ''} not tracked in articles.json
+        </span>
+        <span className="ml-2 opacity-90">These won't appear in the publish flow</span>
+        <button
+          className="ml-2 text-xs underline opacity-70 hover:opacity-100"
+          onClick={() => setExpanded(e => !e)}
+        >
+          {expanded ? 'hide' : 'show'}
+        </button>
+        {expanded && (
+          <div className="mt-1 space-y-0.5">
+            {preview.map(f => (
+              <div key={f} className="text-xs font-mono opacity-80 truncate">{f}</div>
+            ))}
+            {extra > 0 && <div className="text-xs opacity-60">…and {extra} more</div>}
+          </div>
+        )}
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="shrink-0 h-6 px-2 text-xs"
+        onClick={handleImport}
+        disabled={isRunning}
+      >
+        {isRunning ? 'Importing…' : `Import ${count}`}
+      </Button>
+      <button
+        className="shrink-0 opacity-40 hover:opacity-70 text-xs leading-none pt-0.5"
+        aria-label="Dismiss"
+        onClick={() => setDismissed(true)}
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
+export function SetupWarnings({ projectId, onViewChange }: Props) {
   const [setup, setSetup] = useState<ProjectSetup | null>(null)
   const [health, setHealth] = useState<ContentHealthResult | null>(null)
   const { state: actionState, run: runAction, dismiss: dismissAction } = useActionRun()
@@ -173,6 +255,7 @@ export function SetupWarnings({ projectId }: Props) {
   }, [projectId])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load()
   }, [load])
 
@@ -184,8 +267,9 @@ export function SetupWarnings({ projectId }: Props) {
   )
 
   const showDateMismatch = health && health.date_mismatches > 0 && setup.is_valid
+  const showOrphans = health && health.orphan_files.length > 0 && setup.is_valid
 
-  if (visible.length === 0 && !showDateMismatch && actionState.status === 'idle') return null
+  if (visible.length === 0 && !showDateMismatch && !showOrphans && actionState.status === 'idle') return null
 
   return (
     <>
@@ -196,8 +280,11 @@ export function SetupWarnings({ projectId }: Props) {
         {showDateMismatch && health && (
           <DateMismatchBanner health={health} projectId={projectId} isRunning={actionState.status === 'running'} onFixed={load} onRun={runAction} />
         )}
+        {showOrphans && health && (
+          <OrphanFilesBanner health={health} projectId={projectId} isRunning={actionState.status === 'running'} onFixed={load} onRun={runAction} onViewChange={onViewChange} />
+        )}
       </div>
-      <ActionDrawer state={actionState} onDismiss={dismissAction} />
+      <ActionDrawer state={actionState} onDismiss={dismissAction} onNavigate={onViewChange} />
     </>
   )
 }

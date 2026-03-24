@@ -43,6 +43,21 @@ pub fn check_project_setup(
 }
 
 #[tauri::command]
+pub fn get_project_config_files_status(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<crate::engine::setup_check::ProjectConfigFileStatus>, String> {
+    let project = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?
+    };
+    Ok(crate::engine::setup_check::collect_config_file_statuses(
+        &project.path,
+        project.content_dir.as_deref(),
+    ))
+}
+
+#[tauri::command]
 pub fn init_workspace_config(
     state: State<'_, AppState>,
     project_id: String,

@@ -6,7 +6,7 @@
 /// then surface actionable warnings to the user.
 ///
 /// # Workspace layout expected
-/// ```
+/// ```text
 /// <repo_root>/
 ///   .github/
 ///     automation/
@@ -112,6 +112,255 @@ pub struct ProjectSetup {
     pub is_valid: bool,
     /// Summary message for quick display.
     pub summary: String,
+}
+
+// ─── Config file status (Settings page) ─────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectConfigFileStatus {
+    pub id: String,
+    pub category: String,
+    pub label: String,
+    /// Path relative to repo root (e.g. ".github/automation/manifest.json").
+    pub relative_path: String,
+    /// Absolute path on disk.
+    pub full_path: String,
+    /// File URL form of `full_path`.
+    pub full_link: String,
+    pub used_by: String,
+    pub required: bool,
+    pub configured: bool,
+    pub detail: String,
+}
+
+/// Build a complete list of known project config files and whether they are configured.
+pub fn collect_config_file_statuses(
+    repo_root_str: &str,
+    project_content_dir_override: Option<&str>,
+) -> Vec<ProjectConfigFileStatus> {
+    let repo_root = PathBuf::from(repo_root_str);
+    let automation_dir = repo_root.join(".github").join("automation");
+    let workspace_config_path = automation_dir.join("seo_workspace.json");
+    let (workspace_config_exists, workspace_config) = read_workspace_config(&workspace_config_path);
+    let _ = project_content_dir_override;
+
+    let mut files: Vec<ProjectConfigFileStatus> = Vec::new();
+
+    // Core SEO workspace files
+    {
+        let path = automation_dir.join("seo_workspace.json");
+        let (full_path, full_link) = path_strings(&path);
+        let configured = workspace_config_exists
+            && workspace_config
+                .as_ref()
+                .and_then(|cfg| cfg.content_dir.as_ref())
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+        let detail = if !path.exists() {
+            "Missing file".to_string()
+        } else if configured {
+            "Configured (content_dir present)".to_string()
+        } else {
+            "File exists but content_dir is missing/empty".to_string()
+        };
+        files.push(ProjectConfigFileStatus {
+            id: "seo_workspace".to_string(),
+            category: "seo".to_string(),
+            label: "SEO workspace".to_string(),
+            relative_path: ".github/automation/seo_workspace.json".to_string(),
+            full_path,
+            full_link,
+            used_by: "SEO content workflows".to_string(),
+            required: true,
+            configured,
+            detail,
+        });
+    }
+
+    {
+        let path = automation_dir.join("articles.json");
+        let (full_path, full_link) = path_strings(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "articles_json".to_string(),
+            category: "seo".to_string(),
+            label: "Article index".to_string(),
+            relative_path: ".github/automation/articles.json".to_string(),
+            full_path,
+            full_link,
+            used_by: "SEO research, content review, publishing".to_string(),
+            required: true,
+            configured: path.exists(),
+            detail: if path.exists() {
+                "Present".to_string()
+            } else {
+                "Missing file".to_string()
+            },
+        });
+    }
+
+    {
+        let path = automation_dir.join("seo_content_brief.md");
+        let (full_path, full_link) = path_strings(&path);
+        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "seo_content_brief".to_string(),
+            category: "seo".to_string(),
+            label: "SEO content brief".to_string(),
+            relative_path: ".github/automation/seo_content_brief.md".to_string(),
+            full_path,
+            full_link,
+            used_by: "Keyword theme discovery".to_string(),
+            required: false,
+            configured,
+            detail: if !path.exists() {
+                "Optional file missing".to_string()
+            } else if configured {
+                "Present".to_string()
+            } else {
+                "File is empty".to_string()
+            },
+        });
+    }
+
+    {
+        let path = automation_dir.join("task_list.json");
+        let (full_path, full_link) = path_strings(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "task_list_json".to_string(),
+            category: "workflow".to_string(),
+            label: "Task list export".to_string(),
+            relative_path: ".github/automation/task_list.json".to_string(),
+            full_path,
+            full_link,
+            used_by: "Task import/export compatibility".to_string(),
+            required: false,
+            configured: path.exists(),
+            detail: if path.exists() {
+                "Present".to_string()
+            } else {
+                "Optional file missing".to_string()
+            },
+        });
+    }
+
+    // GSC / analytics files
+    {
+        let path = automation_dir.join("manifest.json");
+        let (full_path, full_link) = path_strings(&path);
+        let (configured, detail) = manifest_configured(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "manifest_json".to_string(),
+            category: "gsc".to_string(),
+            label: "Site manifest".to_string(),
+            relative_path: ".github/automation/manifest.json".to_string(),
+            full_path,
+            full_link,
+            used_by: "GSC collection and sync".to_string(),
+            required: false,
+            configured,
+            detail,
+        });
+    }
+
+    // Shared context / sentiment style files
+    {
+        let path = automation_dir.join("project_summary.md");
+        let (full_path, full_link) = path_strings(&path);
+        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "project_summary".to_string(),
+            category: "context".to_string(),
+            label: "Project summary".to_string(),
+            relative_path: ".github/automation/project_summary.md".to_string(),
+            full_path,
+            full_link,
+            used_by: "SEO + Reddit prompt context".to_string(),
+            required: false,
+            configured,
+            detail: if !path.exists() {
+                "Optional file missing".to_string()
+            } else if configured {
+                "Present".to_string()
+            } else {
+                "File is empty".to_string()
+            },
+        });
+    }
+
+    {
+        let path = automation_dir.join("brandvoice.md");
+        let (full_path, full_link) = path_strings(&path);
+        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "brandvoice".to_string(),
+            category: "sentiment".to_string(),
+            label: "Brand voice / tone".to_string(),
+            relative_path: ".github/automation/brandvoice.md".to_string(),
+            full_path,
+            full_link,
+            used_by: "Reddit reply sentiment and writing tone".to_string(),
+            required: false,
+            configured,
+            detail: if !path.exists() {
+                "Optional file missing".to_string()
+            } else if configured {
+                "Present".to_string()
+            } else {
+                "File is empty".to_string()
+            },
+        });
+    }
+
+    // Reddit-specific files
+    {
+        let path = automation_dir.join("reddit_config.md");
+        let (full_path, full_link) = path_strings(&path);
+        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "reddit_config".to_string(),
+            category: "reddit".to_string(),
+            label: "Reddit config".to_string(),
+            relative_path: ".github/automation/reddit_config.md".to_string(),
+            full_path,
+            full_link,
+            used_by: "Reddit opportunity search".to_string(),
+            required: false,
+            configured,
+            detail: if !path.exists() {
+                "Optional file missing".to_string()
+            } else if configured {
+                "Present".to_string()
+            } else {
+                "File is empty".to_string()
+            },
+        });
+    }
+
+    {
+        let path = automation_dir.join("reddit").join("_reply_guardrails.md");
+        let (full_path, full_link) = path_strings(&path);
+        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        files.push(ProjectConfigFileStatus {
+            id: "reddit_reply_guardrails".to_string(),
+            category: "reddit".to_string(),
+            label: "Reddit reply guardrails".to_string(),
+            relative_path: ".github/automation/reddit/_reply_guardrails.md".to_string(),
+            full_path,
+            full_link,
+            used_by: "Reddit reply safety and style constraints".to_string(),
+            required: false,
+            configured,
+            detail: if !path.exists() {
+                "Optional file missing".to_string()
+            } else if configured {
+                "Present".to_string()
+            } else {
+                "File is empty".to_string()
+            },
+        });
+    }
+
+    files
 }
 
 // ─── Template ─────────────────────────────────────────────────────────────────
@@ -513,6 +762,39 @@ fn read_workspace_config(path: &Path) -> (bool, Option<SeoWorkspaceConfig>) {
             (true, None)
         }
     }
+}
+
+fn file_has_non_whitespace_content(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn manifest_configured(path: &Path) -> (bool, String) {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return (false, "Optional file missing".to_string());
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (false, "Invalid JSON".to_string());
+    };
+    let has_site = json
+        .get("gsc_site")
+        .or_else(|| json.get("url"))
+        .and_then(|v| v.as_str())
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    if has_site {
+        (true, "Configured (url/gsc_site present)".to_string())
+    } else {
+        (false, "Missing 'url' or 'gsc_site'".to_string())
+    }
+}
+
+fn path_strings(path: &Path) -> (String, String) {
+    let full_path = path.to_string_lossy().to_string();
+    let full_link = format!("file://{}", full_path);
+    (full_path, full_link)
 }
 
 /// Load the `seo_workspace.json` from `{automation_dir}/seo_workspace.json`.

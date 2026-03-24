@@ -1,96 +1,85 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp } from 'lucide-react'
-import { executeTask } from '../../lib/tauri'
-import type { Task, ExecutionResult, StepProgress } from '../../lib/types'
+import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X } from 'lucide-react'
+import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '../../lib/utils'
+import { useQueue } from '../../lib/queue-context'
 
-interface RunnerItem {
-  task: Task
-  status: 'queued' | 'running' | 'done' | 'failed'
-  result?: ExecutionResult
-  error?: string
-}
+// ─── Props ──────────────────────────────────────────────────────────────────
 
 interface Props {
-  tasks: Task[]
-  /** Called (with no args) when all tasks have finished, so the parent can reload. */
-  onDone: () => void
-  /** Called when the user dismisses the panel. */
+  /** Items managed by useQueueRunner */
+  items: RunnerItem[]
+  isRunning: boolean
+  isPaused: boolean
+  onPause: () => void
+  onResume: () => void
+  onRemove: (taskId: string) => void
   onClose: () => void
-  /** Notifies parent when run state changes (for disabling duplicate runs, etc.). */
-  onRunningChange?: (running: boolean) => void
+  onOpenTask?: (taskId: string) => void
 }
 
-export function TaskRunner({ tasks, onDone, onClose, onRunningChange }: Props) {
-  const [items, setItems] = useState<RunnerItem[]>(() =>
-    tasks.map(t => ({ task: t, status: 'queued' as const })),
-  )
+export function TaskRunner({
+  items,
+  isRunning,
+  isPaused,
+  onPause,
+  onResume,
+  onRemove,
+  onClose,
+  onOpenTask,
+}: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [isPanelExpanded, setIsPanelExpanded] = useState(true)
-  const [isRunning, setIsRunning] = useState(false)
-  const [isDone, setIsDone] = useState(false)
-  const hasStarted = useRef(false)
+  const queue = useQueue()
+  const prevStatusRef = useRef<Map<string, string>>(new Map())
 
+  // Auto-expand items that just finished with follow-ups or failed.
   useEffect(() => {
-    if (hasStarted.current) return
-    hasStarted.current = true
-    runAll()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  async function runAll() {
-    setIsRunning(true)
-    onRunningChange?.(true)
-    for (const task of tasks) {
-      setItems(prev => prev.map(it =>
-        it.task.id === task.id ? { ...it, status: 'running' } : it,
-      ))
-      try {
-        const result = await executeTask(task.id)
-        setItems(prev => prev.map(it =>
-          it.task.id === task.id
-            ? { ...it, status: result.success ? 'done' : 'failed', result }
-            : it,
-        ))
-        if (!result.success) {
-          setExpanded(prev => new Set(prev).add(task.id))
+    const prev = prevStatusRef.current
+    const toExpand: string[] = []
+    for (const item of items) {
+      const was = prev.get(item.task.id)
+      const now = item.status
+      if (was && was !== now && (now === 'done' || now === 'failed')) {
+        const hasFollowUps = (item.result?.follow_up_tasks?.length ?? 0) > 0
+        if (now === 'failed' || hasFollowUps) {
+          toExpand.push(item.task.id)
         }
-      } catch (e) {
-        setItems(prev => prev.map(it =>
-          it.task.id === task.id
-            ? { ...it, status: 'failed', error: String(e) }
-            : it,
-        ))
-        setExpanded(prev => new Set(prev).add(task.id))
       }
     }
-    setIsRunning(false)
-    onRunningChange?.(false)
-    setIsDone(true)
-    onDone()
-  }
-
-  function toggleExpand(id: string) {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }
+    if (toExpand.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setExpanded(prevExpanded => {
+        const next = new Set(prevExpanded)
+        for (const id of toExpand) next.add(id)
+        return next
+      })
+    }
+    prevStatusRef.current = new Map(items.map(it => [it.task.id, it.status]))
+  }, [items])
 
   const succeeded = items.filter(it => it.status === 'done').length
   const failed = items.filter(it => it.status === 'failed').length
   const completed = succeeded + failed
-  const progress = tasks.length > 0 ? (completed / tasks.length) * 100 : 0
+  const total = items.length
+  const progress = total > 0 ? (completed / total) * 100 : 0
+  const isDone = !isRunning && completed === total && total > 0
+
+  function toggleExpand(id: string) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const headerLabel = isRunning
-    ? 'Running task queue'
+    ? isPaused
+      ? 'Task queue paused'
+      : 'Running task queue'
     : isDone
       ? 'Task queue finished'
       : 'Task queue pending'
@@ -100,7 +89,7 @@ export function TaskRunner({ tasks, onDone, onClose, onRunningChange }: Props) {
         succeeded > 0 ? `${succeeded} succeeded` : null,
         failed > 0 ? `${failed} failed` : null,
       ].filter(Boolean).join(' · ') || 'Done'
-    : `${completed} / ${tasks.length} complete`
+    : `${completed} / ${total} complete`
 
   return (
     <div className="fixed bottom-0 left-56 right-0 z-50 border-t border-border bg-card shadow-lg animate-in slide-in-from-bottom-2 duration-200">
@@ -119,6 +108,20 @@ export function TaskRunner({ tasks, onDone, onClose, onRunningChange }: Props) {
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {isRunning && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={isPaused ? onResume : onPause}
+                className="text-xs text-muted-foreground"
+              >
+                {isPaused ? (
+                  <><Play size={12} className="mr-1" />Resume</>
+                ) : (
+                  <><Pause size={12} className="mr-1" />Pause</>
+                )}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="xs"
@@ -166,6 +169,17 @@ export function TaskRunner({ tasks, onDone, onClose, onRunningChange }: Props) {
                 item={item}
                 expanded={expanded.has(item.task.id)}
                 onToggle={() => toggleExpand(item.task.id)}
+                onRunNow={(taskId) => {
+                  queue.enqueueNext([{
+                    taskId,
+                    projectId: item.task.projectId ?? '',
+                    title: `Follow-up task`,
+                    taskType: 'follow_up',
+                    projectName: item.task.projectName,
+                  }])
+                }}
+                onRemove={onRemove}
+                onOpenTask={onOpenTask}
               />
             ))}
           </div>
@@ -201,11 +215,14 @@ interface ItemRowProps {
   item: RunnerItem
   expanded: boolean
   onToggle: () => void
+  onRunNow: (taskId: string) => void
+  onRemove: (taskId: string) => void
+  onOpenTask?: (taskId: string) => void
 }
 
-function ItemRow({ item, expanded, onToggle }: ItemRowProps) {
-  const { task, status, result, error } = item
-  const hasDetails = !!(result?.steps?.length || error)
+function ItemRow({ item, expanded, onToggle, onRunNow, onRemove, onOpenTask }: ItemRowProps) {
+  const { task, status, result, error, liveSteps } = item
+  const hasDetails = !!(result?.steps?.length || result?.follow_up_tasks?.length || error || (liveSteps && liveSteps.length > 0))
 
   const durationMs =
     result
@@ -246,7 +263,19 @@ function ItemRow({ item, expanded, onToggle }: ItemRowProps) {
 
         {/* Right-side metadata */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground flex-shrink-0">
-          {status === 'queued'  && <span>queued</span>}
+          {status === 'queued'  && (
+            <>
+              <span>queued</span>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={(e) => { e.stopPropagation(); onRemove(task.id) }}
+                className="text-xs text-muted-foreground h-5 w-5 p-0"
+              >
+                <X size={12} />
+              </Button>
+            </>
+          )}
           {status === 'running' && <span className="text-blue-600 font-medium">running…</span>}
           {status === 'done'    && durationMs != null && <span>{(durationMs / 1000).toFixed(1)}s</span>}
           {status === 'failed'  && <span className="text-red-500 font-medium">failed</span>}
@@ -278,12 +307,90 @@ function ItemRow({ item, expanded, onToggle }: ItemRowProps) {
             </div>
           )}
 
-          {/* Steps */}
+          {/* Live steps (while running, before result arrives) */}
+          {!result && liveSteps && liveSteps.length > 0 && liveSteps.map((step, i) => (
+            <StepRow key={i} step={step} />
+          ))}
+
+          {/* Steps from finished result */}
           {result?.steps?.map((step, i) => (
             <StepRow key={i} step={step} />
           ))}
+
+          {result?.follow_up_tasks && result.follow_up_tasks.length > 0 && (
+            <FollowUpList
+              followUps={result.follow_up_tasks}
+              onRunNow={onRunNow}
+              onOpenTask={onOpenTask}
+            />
+          )}
         </div>
       )}
+    </div>
+  )
+}
+
+interface FollowUpListProps {
+  followUps: FollowUpTask[]
+  onRunNow: (taskId: string) => void
+  onOpenTask?: (taskId: string) => void
+}
+
+function FollowUpList({ followUps, onRunNow, onOpenTask }: FollowUpListProps) {
+  if (followUps.length === 0) return null
+
+  return (
+    <div className="mt-2.5 pt-2 border-t border-inherit space-y-1.5">
+      <div className="text-[11px] font-medium text-muted-foreground">
+        Next task{followUps.length !== 1 ? 's' : ''}
+      </div>
+      {followUps.map(task => {
+        const canRun = task.status === 'todo' && task.execution_mode !== 'manual'
+        const isReview = task.status === 'review'
+        const reviewLabel =
+          task.task_type === 'research_keywords' || task.task_type === 'custom_keyword_research'
+            ? 'Select keywords'
+            : 'Review results'
+        return (
+          <div
+            key={task.id}
+            className="rounded-md border border-border/70 bg-background/60 px-2.5 py-2 flex items-center gap-2"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-foreground truncate">{task.title}</div>
+              <div className="text-[10px] text-muted-foreground font-mono mt-0.5 truncate">
+                {task.task_type} · {task.status}
+              </div>
+            </div>
+            {isReview ? (
+              <Button
+                size="xs"
+                onClick={() => onOpenTask?.(task.id)}
+                className="text-[11px]"
+              >
+                {reviewLabel}
+              </Button>
+            ) : canRun ? (
+              <Button
+                size="xs"
+                onClick={() => onRunNow(task.id)}
+                className="text-[11px]"
+              >
+                Run now
+              </Button>
+            ) : (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => onOpenTask?.(task.id)}
+                className="text-[11px]"
+              >
+                Open task
+              </Button>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

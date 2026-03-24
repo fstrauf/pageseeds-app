@@ -28,7 +28,7 @@ Don't build handler registries, step planners, or batch infrastructure until the
 
 Before writing any Rust code around an agent call:
 1. Copy the prompt the CLI sends (from its runner code, not SKILL.md)
-2. Paste it into the Copilot CLI manually: `copilot -p "..." --allow-all`
+2. Paste it into the Copilot CLI manually: `copilot -p "..." --allow-all-tools --deny-tool='shell(git:*)'`
 3. Verify the output matches expectations
 4. Then wrap it in Rust
 
@@ -72,3 +72,14 @@ Ship one thing. Verify it works. Then start the next.
 ### 7. One execution surface
 
 All task/workflow execution UX must use the shared bottom runner drawer (`TaskRunner`) and never introduce separate modal/popup runners.
+When a workflow creates downstream work, return those follow-up tasks in the execution result and surface direct actions (`Run now` or `Open task`) in the runner so users never have to hunt for the next step.
+
+### 8. The global task queue is the only execution path
+
+All task execution goes through the global queue (`useQueueRunner` in `App.tsx`, exposed via `QueueContext`). Do not call `executeTask` directly from components.
+
+- **To run a task from anywhere:** call `useQueue().enqueue([{ taskId, projectId, title, taskType, projectName }])`.
+- **`QueueContext`** is provided at the root — any component can consume it without prop drilling.
+- **`useQueueRunner`** owns all queue state (ordered list, running/paused/done, live step events). Do not add parallel state for this in components.
+- **Tauri event `task_step_progress`** is emitted by the Rust executor after each step and consumed by the hook to drive the live step display. If you add new step types, emit the same event — no other wiring needed.
+- **Follow-up tasks** are auto-queued from `ExecutionResult.follow_up_tasks`. Return them from the Rust command and they will flow through without any frontend changes.

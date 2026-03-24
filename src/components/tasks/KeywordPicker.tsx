@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CheckSquare, Square, Loader2, Sparkles } from 'lucide-react'
 import { createArticleTasksFromKeywords } from '../../lib/tauri'
 import type { KeywordDifficultyEntry, KeywordResearchResult, Task } from '../../lib/types'
@@ -12,6 +12,8 @@ interface KeywordRow {
   difficulty: number | null
   volume: number | null
   traffic: number | null
+  shortage: number | null
+  has_data: boolean
   serp_count?: number
 }
 
@@ -58,6 +60,28 @@ function parseMetric(raw: number | string | null | undefined): number | null {
 function formatMetric(n: number | null): string {
   if (n == null) return '—'
   return n.toLocaleString('en-US')
+}
+
+function opportunityScore(row: KeywordRow): number {
+  const kd = row.difficulty
+  const kdScore = kd == null ? 40 : Math.max(0, 100 - kd)
+  // Use traffic or volume only — never use shortage as a traffic proxy.
+  const trafficSignal = Math.max(0, row.traffic ?? row.volume ?? 0)
+  const trafficScore = Math.min(100, Math.log10(trafficSignal + 1) * 25)
+  return kdScore * 0.6 + trafficScore * 0.4
+}
+
+function opportunityTier(row: KeywordRow): 'High' | 'Medium' | 'Low' {
+  const score = opportunityScore(row)
+  if (score >= 70) return 'High'
+  if (score >= 45) return 'Medium'
+  return 'Low'
+}
+
+function opportunityTierClass(tier: 'High' | 'Medium' | 'Low'): string {
+  if (tier === 'High') return 'bg-emerald-100 text-emerald-700 border-transparent'
+  if (tier === 'Medium') return 'bg-amber-100 text-amber-700 border-transparent'
+  return 'bg-slate-100 text-slate-700 border-transparent'
 }
 
 function parseRangeMidpoint(raw: string): number | null {
@@ -153,13 +177,26 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
 
   return selectedKeywords.map(kw => {
     const entry = diffMap.get(kw.toLowerCase())
-    const volume = parseMetric(entry?.volume ?? entry?.topVolume)
+    // Use parseRangeMidpoint for volume since Ahrefs returns ranges like "1,000-10,000"
+    const rawVol = entry?.volume ?? entry?.topVolume
+    const volume = rawVol == null
+      ? null
+      : typeof rawVol === 'number'
+        ? (Number.isFinite(rawVol) ? rawVol : null)
+        : parseRangeMidpoint(String(rawVol)) ?? parseMetric(rawVol)
     const traffic = parseMetric(entry?.traffic)
+    const shortage = parseMetric(entry?.shortage)
+    // has_data: explicit field from backend, or derived from non-null difficulty for legacy results
+    const has_data = entry?.has_data !== undefined
+      ? entry.has_data
+      : entry?.difficulty != null
     return {
       keyword: kw,
       difficulty: entry ? kdValue(entry.difficulty) : null,
       volume,
       traffic,
+      shortage,
+      has_data: has_data ?? false,
       serp_count: entry?.serp_count,
     }
   })
@@ -177,13 +214,20 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
     [artifact?.content],
   )
 
-  const rows = useMemo(() => (result ? extractRows(result) : []), [result])
+  const rows = useMemo(() => {
+    if (!result) return []
+    return extractRows(result).sort((a, b) => opportunityScore(b) - opportunityScore(a))
+  }, [result])
 
-  // Pre-select keywords with KD < 30 (Easy or better) — matches CLI reference scoring.
-  // Unknown KD (null) is included because we don't have enough data to exclude it.
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(rows.filter(r => r.difficulty == null || r.difficulty < 30).map(r => r.keyword)),
+  const defaultSelected = useMemo(
+    () => new Set(rows.filter(r => r.has_data && opportunityTier(r) !== 'Low').map(r => r.keyword)),
+    [rows],
   )
+
+  const [selected, setSelected] = useState<Set<string>>(defaultSelected)
+  useEffect(() => {
+    setSelected(defaultSelected)
+  }, [defaultSelected])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -209,6 +253,8 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
       : (result.difficulty.results?.length ?? 0)
     : 0
 
+  const noDataCount = rows.filter(r => !r.has_data).length
+
   const difficultyBuckets = rows.reduce(
     (acc, row) => {
       const kd = row.difficulty
@@ -231,7 +277,11 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
   function toggle(keyword: string) {
     setSelected(prev => {
       const next = new Set(prev)
-      next.has(keyword) ? next.delete(keyword) : next.add(keyword)
+      if (next.has(keyword)) {
+        next.delete(keyword)
+      } else {
+        next.add(keyword)
+      }
       return next
     })
   }
@@ -296,12 +346,19 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
             <Badge variant="outline" className="border-border text-muted-foreground">Unknown {difficultyBuckets.unknown}</Badge>
           )}
         </div>
+        {noDataCount > rows.length / 2 && (
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded-md">
+            {noDataCount} of {rows.length} keywords had no Ahrefs data — Ahrefs free tier doesn't index all keywords. Re-run with broader themes for better results.
+          </div>
+        )}
         <div className="max-h-[min(44vh,22rem)] rounded-md border border-border min-w-0 overflow-y-auto overflow-x-hidden">
           <div className="space-y-0.5 p-1">
           {rows.map(row => {
             const isSelected = selected.has(row.keyword)
             const kd = row.difficulty
+            // Traffic is only real SERP organic traffic — never falls back to shortage
             const trafficLabel = formatMetric(row.traffic ?? row.volume)
+            const tier = opportunityTier(row)
             return (
               <button
                 key={row.keyword}
@@ -319,17 +376,29 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
                 }
                 <span className="flex-1 min-w-0 truncate text-foreground">{row.keyword}</span>
                 <div className="flex items-center gap-1.5 shrink-0 max-w-[48%]">
+                  {!row.has_data && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-50 text-amber-600 border-amber-200">
+                      No data
+                    </Badge>
+                  )}
+                  {row.has_data && (
+                    <Badge variant="outline" className={cn('text-[10px] px-1.5 py-0', opportunityTierClass(tier))}>
+                      {tier}
+                    </Badge>
+                  )}
                   <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
                     Traffic {trafficLabel}
                   </Badge>
-                  {kd != null && (
+                  {kd != null && row.has_data && (
                     <Badge variant="outline" className={cn('text-[10px] px-1.5 py-0', kdColor(kd))}>
                       KD {kd}
                     </Badge>
                   )}
-                  <span className={cn('text-[10px] truncate', kd == null ? 'text-muted-foreground' : kdColor(kd).split(' ')[1])}>
-                    {kdLabel(kd)}
-                  </span>
+                  {row.has_data && (
+                    <span className={cn('text-[10px] truncate', kd == null ? 'text-muted-foreground' : kdColor(kd).split(' ')[1])}>
+                      {kdLabel(kd)}
+                    </span>
+                  )}
                 </div>
               </button>
             )

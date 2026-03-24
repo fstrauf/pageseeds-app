@@ -6,7 +6,7 @@ interface Props {
   projectId: string
 }
 
-function OverviewCard({ overview, domain: _domain }: { overview?: DomainOverview; domain: string }) {
+function OverviewCard({ overview }: { overview?: DomainOverview }) {
   if (!overview) return null
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
@@ -144,7 +144,7 @@ export function BacklinkView({ projectId }: Props) {
       <div className="flex-1 overflow-y-auto p-3">
         {result && (
           <>
-            <OverviewCard overview={result.overview} domain={result.domain} />
+            <OverviewCard overview={result.overview} />
             <div className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
               Top Backlinks ({result.backlinks.length})
             </div>

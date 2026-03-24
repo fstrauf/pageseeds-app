@@ -1,3 +1,5 @@
+use crate::models::task::ExecutionMode;
+
 /// Application-level constants matching the Python CLI config.py
 pub mod env_resolver;
 
@@ -31,14 +33,14 @@ pub const TASK_TYPES: &[&str] = &[
     "content_cleanup",
 ];
 
-pub fn default_execution_mode(task_type: &str) -> &'static str {
+pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
     match task_type {
-        "collect_gsc" => "automatic",
-        "reddit_search" => "batchable",
-        "research_keywords" | "custom_keyword_research" | "research_landing_pages" => "batchable",
-        "write_article" | "optimize_article" => "spec",
-        "reddit_reply" => "manual",
-        _ => "manual",
+        "collect_gsc" => ExecutionMode::Automatic,
+        "reddit_search" => ExecutionMode::Batchable,
+        "research_keywords" | "custom_keyword_research" | "research_landing_pages" => ExecutionMode::Batchable,
+        "write_article" | "optimize_article" => ExecutionMode::Spec,
+        "reddit_reply" => ExecutionMode::Manual,
+        _ => ExecutionMode::Manual,
     }
 }
 

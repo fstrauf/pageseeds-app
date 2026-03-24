@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { RefreshCw, FolderSync, Settings2 } from 'lucide-react'
+import { RefreshCw, FolderSync, Settings2, Send } from 'lucide-react'
 import { listArticles, importFromRepo, suggestNextArticlePublishDate } from '../../lib/tauri'
 import type { Article, Project } from '../../lib/types'
+import { PublishPanel } from './PublishPanel'
 import { cn } from '../../lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -46,6 +47,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
   const [nextSafeDate, setNextSafeDate] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [publishOpen, setPublishOpen] = useState(false)
   const autoSyncDone = useRef(false)
 
   const load = useCallback(async () => {
@@ -109,13 +111,18 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
     ? articles
     : articles.filter(a => a.status === statusFilter)
 
+  const publishCandidates = articles.filter(
+    a => a.status === 'ready_to_publish' || a.status === 'draft'
+  )
+
   function handleRowClick(article: Article) {
     setSelectedId(article.id === selectedId ? null : article.id)
     onSelect?.(article)
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <>
+      <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <div>
@@ -148,6 +155,18 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
             <FolderSync size={13} className={syncing ? 'animate-spin' : ''} />
             {syncing ? 'Syncing…' : 'Sync'}
           </Button>
+          {publishCandidates.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPublishOpen(true)}
+              className="h-7 text-xs border-border text-muted-foreground hover:text-foreground gap-1.5"
+              title="Publish draft and ready articles"
+            >
+              <Send size={13} />
+              Publish ({publishCandidates.length})
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-sm"
@@ -282,5 +301,16 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
         </Table>
       </div>
     </div>
+    <PublishPanel
+      open={publishOpen}
+      onOpenChange={setPublishOpen}
+      projectId={projectId}
+      candidates={publishCandidates}
+      onPublished={() => {
+        load()
+        loadNextSafeDate()
+      }}
+    />
+    </>
   )
 }

@@ -18,7 +18,7 @@ use pageseeds_lib::{
     engine::{executor, task_store},
     models::{
         project::Project,
-        task::{Task, TaskRun},
+        task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus},
     },
 };
 
@@ -74,10 +74,10 @@ fn main() {
         id: task_id.clone(),
         task_type: "content_review".to_string(),
         phase: "investigation".to_string(),
-        status: "todo".to_string(),
-        priority: "high".to_string(),
-        execution_mode: "auto".to_string(),
-        agent_policy: "required".to_string(),
+        status: TaskStatus::Todo,
+        priority: Priority::High,
+        execution_mode: ExecutionMode::Automatic,
+        agent_policy: AgentPolicy::Required,
         title: Some("Smoke: Content Review".to_string()),
         description: None,
         project_id: "smoke-project".to_string(),

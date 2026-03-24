@@ -4,8 +4,10 @@ import type {
   Article,
   ContentHealthResult,
   ImportResult,
+  IngestOrphanResult,
   MigrationResult,
   Project,
+  ProjectConfigFileStatus,
   ProjectSetup,
   RedditOpportunity,
   RedditStats,
@@ -151,6 +153,39 @@ export const suggestNextArticlePublishDate = (projectId: string): Promise<string
 
 export const scanContentLinks = (projectId: string): Promise<LinkScanResult> =>
   invoke('scan_content_links', { projectId })
+
+import type {
+  PublishPreflightResult,
+  PublishResult,
+  YearMismatchResolution,
+} from './types'
+// Re-export to keep callers from needing to import from types directly
+export type { PublishPreflightResult, PublishResult, YearMismatchResolution }
+export type { ArticleWithIssue } from './types'
+export type { YearMismatch } from './types'
+
+export const preflightPublishArticles = (
+  projectId: string,
+  articleIds: number[],
+): Promise<PublishPreflightResult> =>
+  invoke('preflight_publish_articles', { projectId, articleIds })
+
+export const applyPublishArticles = (
+  projectId: string,
+  articleIds: number[],
+  dateFixes: Record<string, string>,
+  yearResolutions: YearMismatchResolution[],
+): Promise<PublishResult> =>
+  invoke('apply_publish_articles', { projectId, articleIds, dateFixes, yearResolutions })
+
+export const resolveYearMismatchAgent = (
+  projectId: string,
+  articleId: number,
+  title: string,
+  titleYear: number,
+  publishYear: number,
+): Promise<YearMismatchResolution> =>
+  invoke('resolve_year_mismatch_agent', { projectId, articleId, title, titleYear, publishYear })
 
 // ─── Reddit ──────────────────────────────────────────────────────────────────
 
@@ -351,6 +386,10 @@ export type { DueRuleResult } // re-export so components can import from tauri.t
 export const executeTask = (taskId: string): Promise<ExecutionResult> =>
   invoke('execute_task', { taskId })
 
+/** Plan steps for a task without executing anything. Returns the planned step graph. */
+export const dryRunTask = (taskId: string): Promise<ExecutionResult> =>
+  invoke('dry_run_task', { taskId })
+
 // ── Batch ─────────────────────────────────────────────────────────────────────
 
 export const getBatchSummary = (projectId: string): Promise<BatchSummary> =>
@@ -442,6 +481,12 @@ export const quickRunWorkflow = (
 export const checkProjectSetup = (projectId: string): Promise<ProjectSetup> =>
   invoke('check_project_setup', { projectId })
 
+/** Return known project config files and whether each one is configured. */
+export const getProjectConfigFilesStatus = (
+  projectId: string,
+): Promise<ProjectConfigFileStatus[]> =>
+  invoke('get_project_config_files_status', { projectId })
+
 /**
  * Create (or overwrite) seo_workspace.json for a project.
  * Returns the path of the written file.
@@ -460,3 +505,7 @@ export const getContentHealth = (projectId: string): Promise<ContentHealthResult
 /** Patch frontmatter dates that differ from articles.json. */
 export const fixDateMismatches = (projectId: string): Promise<ContentHealthResult> =>
   invoke('fix_date_mismatches', { projectId })
+
+/** Import MDX files that exist on disk but have no entry in articles.json. */
+export const ingestOrphanArticles = (projectId: string): Promise<IngestOrphanResult> =>
+  invoke('ingest_orphan_articles', { projectId })

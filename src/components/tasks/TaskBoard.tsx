@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw, Upload, Download, Plus, Play, X } from 'lucide-react'
+import { RefreshCw, Upload, Download, Plus, Play, Trash2, X } from 'lucide-react'
 import { cn, formatDate } from '../../lib/utils'
-import { listTasks, importFromRepo, exportToRepo, analyzeArticleDatePolicy } from '../../lib/tauri'
+import { listTasks, importFromRepo, exportToRepo, analyzeArticleDatePolicy, deleteTask } from '../../lib/tauri'
 import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -55,24 +55,23 @@ const PHASE_OPTIONS = ['all', '1-foundation', '2-research', '3-creation', '4-pub
 
 interface TaskBoardProps {
   projectId?: string
+  projectName?: string
   /** If set, auto-open this task as soon as the task list loads. */
   initialTaskId?: string
   /** Called once the task has been opened so the caller can clear the pending id. */
   onTaskOpened?: () => void
   /** Trigger the global task runner drawer with one or more tasks. */
   onRunTasks?: (tasks: Task[]) => void
-  /** Whether the global task runner is currently active. */
-  runnerBusy?: boolean
   /** Changes when a global task queue completes so this board can reload. */
   runCompletedTick?: number
 }
 
 export function TaskBoard({
   projectId,
+  projectName,
   initialTaskId,
   onTaskOpened,
   onRunTasks,
-  runnerBusy = false,
   runCompletedTick = 0,
 }: TaskBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([])
@@ -84,6 +83,7 @@ export function TaskBoard({
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
   const [showCreate, setShowCreate] = useState(false)
+  const [deletingSelected, setDeletingSelected] = useState(false)
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -112,7 +112,16 @@ export function TaskBoard({
 
   // Auto-open a specific task when navigated here from Overview (e.g. after running a workflow).
   useEffect(() => {
-    if (!initialTaskId || tasks.length === 0) return
+    if (!initialTaskId) return
+
+    // If the current filtered list is empty and we're not already on 'all',
+    // widen the filter first so the next load can find the task.
+    if (tasks.length === 0 && statusFilter !== 'all') {
+      setStatusFilter('all')
+      return
+    }
+    if (tasks.length === 0) return
+
     // First try exact match (e.g. a task navigated to directly)
     const target = tasks.find(t => t.id === initialTaskId)
     if (target) {
@@ -178,12 +187,55 @@ export function TaskBoard({
   }
 
   function handleRunSelected() {
-    if (runnerBusy) return
     const toRun = tasks.filter(t => checkedIds.has(t.id) && t.status === 'todo')
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)
     onRunTasks?.(toRun)
+  }
+
+  async function handleDeleteSelected() {
+    if (deletingSelected) return
+
+    const selected = tasks.filter(t => checkedIds.has(t.id))
+    const deletableSelected = selected.filter(t => t.status === 'todo' || t.status === 'review')
+    const nonDeletableCount = selected.length - deletableSelected.length
+
+    if (deletableSelected.length === 0) {
+      setImportExportMsg('Only to-do or review tasks can be bulk deleted.')
+      return
+    }
+
+    const confirmMsg =
+      nonDeletableCount > 0
+        ? `Delete ${deletableSelected.length} selected to-do/review task${deletableSelected.length !== 1 ? 's' : ''}? (${nonDeletableCount} selected item${nonDeletableCount !== 1 ? 's are' : ' is'} not to-do/review and will be kept.)`
+        : `Delete ${deletableSelected.length} selected to-do/review task${deletableSelected.length !== 1 ? 's' : ''}?`
+
+    if (!window.confirm(confirmMsg)) return
+
+    setDeletingSelected(true)
+    setImportExportMsg(null)
+    try {
+      await Promise.all(deletableSelected.map(t => deleteTask(t.id)))
+      const deletedIds = new Set(deletableSelected.map(t => t.id))
+      setTasks(prev => prev.filter(t => !deletedIds.has(t.id)))
+      setCheckedIds(prev => {
+        const next = new Set(prev)
+        for (const id of deletedIds) next.delete(id)
+        return next
+      })
+      if (selectedTask && deletedIds.has(selectedTask.id)) {
+        setSelectedTask(null)
+      }
+      setImportExportMsg(
+        `Deleted ${deletableSelected.length} to-do/review task${deletableSelected.length !== 1 ? 's' : ''}.`
+      )
+    } catch (e: unknown) {
+      setImportExportMsg(`Bulk delete failed: ${String(e)}`)
+      await load()
+    } finally {
+      setDeletingSelected(false)
+    }
   }
 
   function handleTaskDeleted(id: string) {
@@ -229,7 +281,6 @@ export function TaskBoard({
   }
 
   function handleRunBatch() {
-    if (runnerBusy) return
     const toRun = tasks.filter(t => t.status === 'todo' && t.execution_mode !== 'manual')
     if (toRun.length === 0) return
     setCheckedIds(new Set())
@@ -268,7 +319,6 @@ export function TaskBoard({
               variant="outline"
               size="sm"
               onClick={handleRunBatch}
-              disabled={runnerBusy}
               className="border-border text-muted-foreground hover:text-foreground"
             >
               <Play size={14} />
@@ -294,10 +344,18 @@ export function TaskBoard({
             <Button
               size="xs"
               onClick={handleRunSelected}
-              disabled={runnerBusy}
               className="bg-primary text-primary-foreground hover:bg-primary/90 text-xs"
             >
               <><Play size={12} className="mr-1" />Run {checkedIds.size} task{checkedIds.size !== 1 ? 's' : ''}</>
+            </Button>
+            <Button
+              size="xs"
+              variant="destructive"
+              onClick={handleDeleteSelected}
+              disabled={deletingSelected}
+              className="text-xs"
+            >
+              <><Trash2 size={12} className="mr-1" />{deletingSelected ? 'Deleting...' : 'Delete selected'}</>
             </Button>
             <Button
               variant="ghost"
@@ -492,6 +550,7 @@ export function TaskBoard({
           {selectedTask && (
             <TaskDetail
               task={selectedTask}
+              projectName={projectName}
               onClose={() => setSelectedTask(null)}
               onUpdated={handleTaskUpdated}
               onDeleted={handleTaskDeleted}

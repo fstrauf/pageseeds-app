@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::models::task::Task;
+use crate::models::task::{Priority, Task, TaskStatus};
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     let depends_on_str: String = row.get(10)?;
@@ -47,7 +47,7 @@ pub fn list_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
     let sql = format!(
         "SELECT {SELECT_COLS} FROM tasks WHERE project_id = ?1 ORDER BY
          CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-         created_at ASC"
+         updated_at DESC, created_at DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let tasks: Vec<Task> = stmt
@@ -81,7 +81,7 @@ pub fn list_tasks_filtered(
     let sql = format!(
         "SELECT {SELECT_COLS} FROM tasks WHERE {where_clause} ORDER BY
          CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-         created_at ASC"
+            updated_at DESC, created_at DESC"
     );
 
     let mut stmt = conn.prepare(&sql)?;
@@ -130,12 +130,13 @@ pub fn create_task(conn: &Connection, task: &Task) -> Result<Task> {
     get_task(conn, &task.id)
 }
 
-pub fn update_task_status(conn: &Connection, id: &str, status: &str) -> Result<Task> {
+pub fn update_task_status(conn: &Connection, id: &str, status: TaskStatus) -> Result<Task> {
     let now = chrono::Utc::now().to_rfc3339();
     let rows = conn.execute(
         "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3",
         rusqlite::params![status, now, id],
-    )?;
+    )?
+    ;
     if rows == 0 {
         return Err(Error::Other(format!("Task '{id}' not found")));
     }
@@ -147,7 +148,7 @@ pub fn update_task(
     id: &str,
     title: Option<&str>,
     description: Option<&str>,
-    priority: &str,
+    priority: Priority,
 ) -> Result<Task> {
     let now = chrono::Utc::now().to_rfc3339();
     let rows = conn.execute(

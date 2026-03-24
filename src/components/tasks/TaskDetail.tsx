@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Trash2, AlertCircle, Ban, ArrowRight, Play, ChevronDown, X } from 'lucide-react'
-import { updateTask, deleteTask, cancelTask, listTasks, executeTask, getTask } from '../../lib/tauri'
+import { updateTask, deleteTask, cancelTask, listTasks, getTask } from '../../lib/tauri'
+import { useQueue } from '../../lib/queue-context'
 import type { Task } from '../../lib/types'
 import { cn, formatDate } from '../../lib/utils'
 import { Button } from '@/components/ui/button'
@@ -38,11 +39,13 @@ interface TaskDetailProps {
   onClose: () => void
   onUpdated: (task: Task) => void
   onDeleted: (id: string) => void
+  projectName?: string
   /** Called when keywords are selected and write_article tasks have been created. */
   onArticleTasksCreated?: (tasks: Task[]) => void
 }
 
-export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasksCreated }: TaskDetailProps) {
+export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasksCreated, projectName }: TaskDetailProps) {
+  const { enqueue } = useQueue()
   const [editTitle, setEditTitle] = useState(task.title ?? '')
   const [editDesc, setEditDesc] = useState(task.description ?? '')
   const [editPriority, setEditPriority] = useState(task.priority ?? 'medium')
@@ -50,8 +53,6 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [dismissing, setDismissing] = useState(false)
-  const [executing, setExecuting] = useState(false)
-  const [execMsg, setExecMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [spawnedTasks, setSpawnedTasks] = useState<import('../../lib/types').Task[]>([])
 
@@ -113,22 +114,14 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
     }
   }
 
-  async function handleExecute() {
-    setExecuting(true)
-    setExecMsg(null)
-    setError(null)
-    try {
-      const result = await executeTask(task.id)
-      // Fetch the refreshed task (status will have changed)
-      const refreshed = await getTask(task.id)
-      onUpdated(refreshed)
-      setExecMsg(result.success ? result.message : null)
-      if (!result.success) setError(result.message)
-    } catch (e: unknown) {
-      setError(String(e))
-    } finally {
-      setExecuting(false)
-    }
+  function handleEnqueue() {
+    enqueue([{
+      taskId: task.id,
+      projectId: task.project_id,
+      title: task.title ?? task.type ?? 'Untitled',
+      taskType: task.type ?? '',
+      projectName,
+    }])
   }
 
   return (
@@ -409,23 +402,14 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
           </Button>
         )}
 
-        {execMsg && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-md text-xs bg-emerald-50 text-emerald-700">
-            <ArrowRight size={12} />{execMsg}
-          </div>
-        )}
-
-        {/* Run button for todo/batchable tasks, and re-run for stuck in_progress tasks */}
+        {/* Queue button for todo/batchable tasks, and re-run for stuck in_progress tasks */}
         {(task.status === 'todo' || task.status === 'in_progress') && task.execution_mode !== 'manual' && (
           <Button
             size="sm"
             className="w-full"
-            onClick={handleExecute}
-            disabled={executing}
+            onClick={handleEnqueue}
           >
-            {executing ? (
-              <><span className="animate-spin mr-1.5">⌛</span>Running…</>
-            ) : task.status === 'in_progress' ? (
+            {task.status === 'in_progress' ? (
               <><Play size={13} className="mr-1.5" />Re-run</>
             ) : (
               <><Play size={13} className="mr-1.5" />Run</>
@@ -486,7 +470,11 @@ function RecommendationsPreview({ articles }: { articles: RecArticle[] }) {
   function toggle(id: number) {
     setOpen(prev => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
       return next
     })
   }

@@ -1,3 +1,8 @@
+export type TaskStatus = 'todo' | 'in_progress' | 'review' | 'done' | 'cancelled';
+export type ExecutionMode = 'automatic' | 'batchable' | 'manual' | 'spec';
+export type AgentPolicy = 'none' | 'required' | 'optional';
+export type Priority = 'high' | 'medium' | 'low';
+
 export interface TaskArtifact {
   key: string;
   path?: string;
@@ -12,6 +17,9 @@ export interface KeywordDifficultyEntry {
   volume?: number | string | null;
   traffic?: number | string | null;
   topVolume?: number | string | null;
+  shortage?: number | string | null;
+  /** True when Ahrefs returned real data; false/absent when the keyword had no index data. */
+  has_data?: boolean;
   serp_count?: number;
   top_result?: string;
 }
@@ -42,10 +50,10 @@ export interface Task {
   type: string;
   task_type?: string;
   phase?: string;
-  status: string;
-  priority?: string;
-  execution_mode: string;
-  agent_policy: string;
+  status: TaskStatus;
+  priority?: Priority;
+  execution_mode: ExecutionMode;
+  agent_policy: AgentPolicy;
   title?: string;
   description?: string;
   article_slug?: string;
@@ -412,6 +420,48 @@ export interface TrafficResult {
   top_keywords: TrafficTopKeyword[];
 }
 
+// ─── Publish Articles ─────────────────────────────────────────────────────────
+
+export interface ArticleWithIssue {
+  article: Article;
+  issue: string;
+}
+
+export interface YearMismatch {
+  article_id: number;
+  title: string;
+  title_year: number;
+  publish_year: number;
+}
+
+export interface YearMismatchResolution {
+  article_id: number;
+  /** "update_title" or "backdate" */
+  action: 'update_title' | 'backdate';
+  /** New title string (update_title) or new date YYYY-MM-DD (backdate) */
+  new_value: string;
+}
+
+export interface PublishPreflightResult {
+  ready: Article[];
+  needs_date_fix: ArticleWithIssue[];
+  year_mismatches: YearMismatch[];
+  blocked: ArticleWithIssue[];
+  structural_issue_count: number;
+}
+
+export interface PublishedArticle {
+  id: number;
+  title: string;
+  published_date: string;
+}
+
+export interface PublishResult {
+  published: PublishedArticle[];
+  skipped: ArticleWithIssue[];
+  errors: string[];
+}
+
 // ─── Phase 6: Workflow Engine + Batch + Scheduler + Ledger ───────────────────
 
 export type View =
@@ -438,8 +488,53 @@ export interface ExecutionResult {
   success: boolean;
   message: string;
   steps: StepProgress[];
+  follow_up_tasks?: FollowUpTask[];
   started_at: string;
   finished_at: string;
+}
+
+export interface FollowUpTask {
+  id: string;
+  task_type: string;
+  title: string;
+  status: string;
+  execution_mode: string;
+  priority: string;
+}
+
+// ─── Global Task Queue ────────────────────────────────────────────────────────
+
+/** Minimal descriptor used to add a task to the global queue. */
+export interface QueueItem {
+  taskId: string;
+  projectId: string;
+  title: string;
+  taskType: string;
+  projectName?: string;
+}
+
+/** Runtime item tracking a task through the queue lifecycle. */
+export interface RunnerItem {
+  task: {
+    id: string;
+    title?: string;
+    type?: string;
+    projectId?: string;
+    projectName?: string;
+  };
+  status: 'queued' | 'running' | 'done' | 'failed';
+  result?: ExecutionResult;
+  /** Live step updates streamed from the executor before the full result arrives. */
+  liveSteps?: StepProgress[];
+  error?: string;
+}
+
+/** Emitted by the Rust executor after each workflow step completes. */
+export interface TaskStepEvent {
+  task_id: string;
+  step_name: string;
+  status: string;
+  message: string;
 }
 
 export interface BatchTaskResult {
@@ -601,14 +696,7 @@ export interface QuickAction {
   themes?: string[];
 }
 
-/** Re-export TaskArtifact for use in Phase 7 components */
-export interface TaskArtifact {
-  key: string;
-  path?: string;
-  type?: string;
-  source?: string;
-  content?: string;
-}
+// TaskArtifact is defined at the top of this file.
 
 // ─── Project setup / diagnostics ─────────────────────────────────────────────
 
@@ -639,6 +727,19 @@ export interface SetupCheckItem {
   auto_fixable: boolean;
 }
 
+export interface ProjectConfigFileStatus {
+  id: string;
+  category: string;
+  label: string;
+  relative_path: string;
+  full_path: string;
+  full_link: string;
+  used_by: string;
+  required: boolean;
+  configured: boolean;
+  detail: string;
+}
+
 export interface ProjectSetup {
   project_id: string;
   repo_root: string;
@@ -661,6 +762,15 @@ export interface ContentHealthResult {
   date_mismatches: number;
   /** Title or id of each mismatched article */
   mismatch_details: string[];
+  /** MDX files on disk with no entry in articles.json */
+  orphan_files: string[];
   /** true when this result came from apply_date_fixes (fixes were written) */
   fixed: boolean;
+}
+
+export interface IngestOrphanResult {
+  /** Number of files successfully ingested */
+  ingested: number;
+  /** Basenames of newly added files */
+  files: string[];
 }

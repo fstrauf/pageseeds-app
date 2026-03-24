@@ -1,16 +1,17 @@
-use std::sync::Arc;
 use tauri::State;
 use crate::config::env_resolver::EnvResolver;
 use crate::engine::{batch, executor, ledger, scheduler, task_store};
 use super::{AppState, GscState};
+use std::time::Duration;
 
 #[tauri::command]
 pub async fn execute_task(
     state: State<'_, AppState>,
     gsc_state: State<'_, GscState>,
+    app_handle: tauri::AppHandle,
     task_id: String,
 ) -> Result<executor::ExecutionResult, String> {
-    let db_arc = Arc::clone(&state.db);
+    let db_path = state.db_path.clone();
     let mut token = gsc_state
         .token
         .lock()
@@ -44,9 +45,28 @@ pub async fn execute_task(
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task_with_token(&db, &task_id, token.as_deref())
+        // Use a dedicated connection for long-running task execution so UI
+        // reads (e.g., list_tasks filter switches) are not blocked on AppState.db.
+        let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+        db.busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        executor::execute_task_with_token(&db, &task_id, token.as_deref(), Some(app_handle), false)
             .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Dry-run a task: plan steps via the handler registry without executing anything.
+/// Returns the planned step graph so callers can verify routing before committing to a full run.
+#[tauri::command]
+pub async fn dry_run_task(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<executor::ExecutionResult, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+        executor::dry_run_task(&db, &task_id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -105,9 +125,12 @@ pub async fn run_batch(
         }
     }
 
-    let db_arc = Arc::clone(&state.db);
+    let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let db = db_arc.lock().map_err(|e| e.to_string())?;
+        // Use a dedicated connection for long-running batch execution for the
+        // same reason as execute_task: keep AppState.db responsive for reads.
+        let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+        db.busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
         batch::run_batch_with_token(&db, &project_id, &config, token.as_deref())
             .map_err(|e| e.to_string())
     })

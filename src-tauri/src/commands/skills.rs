@@ -78,13 +78,14 @@ pub async fn quick_run_workflow(
     themes: Option<Vec<String>>,
 ) -> Result<executor::ExecutionResult, String> {
     use crate::config::{default_execution_mode, default_phase};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskStatus};
 
     let task_id = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         match task_store::find_active_task_by_type(&db, &project_id, &task_type)
             .map_err(|e| e.to_string())?
         {
-            Some(existing) if existing.status == "in_progress" => {
+            Some(existing) if existing.status == TaskStatus::InProgress => {
                 return Err(format!(
                     "Task '{}' is already running ({})",
                     task_type, existing.id
@@ -105,11 +106,11 @@ pub async fn quick_run_workflow(
                 let task = crate::models::task::Task {
                     id,
                     phase: default_phase(&task_type).to_string(),
-                    execution_mode: default_execution_mode(&task_type).to_string(),
+                    execution_mode: default_execution_mode(&task_type),
                     task_type: task_type.clone(),
-                    status: "todo".to_string(),
-                    priority: "high".to_string(),
-                    agent_policy: "optional".to_string(),
+                    status: TaskStatus::Todo,
+                    priority: Priority::High,
+                    agent_policy: AgentPolicy::Optional,
                     title: Some(title),
                     description,
                     project_id,
@@ -138,7 +139,7 @@ pub async fn quick_run_workflow(
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task_with_token(&db, &task_id, token.as_deref())
+        executor::execute_task_with_token(&db, &task_id, token.as_deref(), None, false)
             .map_err(|e| e.to_string())
     })
     .await

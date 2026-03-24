@@ -124,6 +124,18 @@ pub fn get_content_health(
 }
 
 #[tauri::command]
+pub fn ingest_orphan_articles(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::content::ops::IngestOrphanResult, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::Path::new(&project.path);
+    let automation_dir = repo_root.join(".github").join("automation");
+    crate::content::ops::ingest_orphan_files(&automation_dir, repo_root, &project_id, &db)
+}
+
+#[tauri::command]
 pub fn fix_date_mismatches(
     state: State<'_, AppState>,
     project_id: String,
@@ -133,4 +145,77 @@ pub fn fix_date_mismatches(
     let repo_root = std::path::Path::new(&project.path);
     let automation_dir = repo_root.join(".github").join("automation");
     crate::content::ops::apply_date_fixes(&automation_dir, repo_root)
+}
+
+#[tauri::command]
+pub fn preflight_publish_articles(
+    state: State<'_, AppState>,
+    project_id: String,
+    article_ids: Vec<i64>,
+) -> Result<crate::content::publish::PublishPreflightResult, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::PathBuf::from(&project.path);
+    let resolution = crate::content::locator::resolve(&repo_root, project.content_dir.as_deref());
+    let content_dir = resolution
+        .selected
+        .ok_or_else(|| "Content directory not found".to_string())?;
+    let all_articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    let candidates: Vec<_> = all_articles
+        .iter()
+        .filter(|a| article_ids.contains(&a.id))
+        .cloned()
+        .collect();
+    Ok(crate::content::publish::preflight(&candidates, &all_articles, &content_dir))
+}
+
+#[tauri::command]
+pub fn apply_publish_articles(
+    state: State<'_, AppState>,
+    project_id: String,
+    article_ids: Vec<i64>,
+    date_fixes: std::collections::HashMap<String, String>,
+    year_resolutions: Vec<crate::content::publish::YearMismatchResolution>,
+) -> Result<crate::content::publish::PublishResult, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::PathBuf::from(&project.path);
+    let resolution = crate::content::locator::resolve(&repo_root, project.content_dir.as_deref());
+    let content_dir = resolution
+        .selected
+        .ok_or_else(|| "Content directory not found".to_string())?;
+    Ok(crate::content::publish::apply_publish(
+        &db,
+        &project_id,
+        &article_ids,
+        &date_fixes,
+        &year_resolutions,
+        &content_dir,
+        &repo_root,
+    ))
+}
+
+#[tauri::command]
+pub fn resolve_year_mismatch_agent(
+    state: State<'_, AppState>,
+    project_id: String,
+    article_id: i64,
+    title: String,
+    title_year: i32,
+    publish_year: i32,
+) -> Result<crate::content::publish::YearMismatchResolution, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::PathBuf::from(&project.path);
+    let provider = project.agent_provider.as_deref().unwrap_or("copilot");
+    let all_articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    crate::content::publish::resolve_year_mismatch_with_agent(
+        provider,
+        article_id,
+        &title,
+        title_year,
+        publish_year,
+        &repo_root,
+        &all_articles,
+    )
 }

@@ -99,6 +99,31 @@ src/
 4. **SQLite is the runtime store**. All mutable state goes through `engine/task_store.rs`. Schema changes require a new migration constant in `db/mod.rs` — never alter existing SQL migration blocks.
 5. **No subprocess calls**. All I/O uses Rust crates directly (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.).
 6. **Independent but isolated codebase**. Do not share code with `pageseeds-cli`. If a Python module needs porting, re-implement it cleanly in Rust.
+7. **Choose execution mode deliberately.** Every new workflow step requires an explicit decision. Use the tests below — if you cannot answer them, go back to the design.
+
+   **The Deterministic-First Test:** Could a developer write a finite set of rules that produces the correct output for *all* valid inputs? If yes → deterministic. If the rules would need to understand intent, weigh tradeoffs between equally valid options, or generate prose → agentic.
+
+   **The Input/Output Test:**
+   - Structured input → structured output via a computable mapping = **deterministic**
+   - Any input → prose, or open-ended selection from a large option space = **agentic**
+   - Structured input → prioritised/recommended subset requiring judgment = **agentic for the selection, deterministic for the execution**
+
+   **External API calls are deterministic.** Calling Ahrefs, GSC, Reddit, etc. is deterministic — the API does the computation. The step that *calls the API* is deterministic. The step that *interprets the API results* may be agentic.
+
+   **The Hybrid Pattern (canonical example: `content_review`).** Most real workflows contain both aspects. The correct pattern is always:
+   1. Deterministic step: collect data, compute metrics, filter, rank, group, format
+   2. Agentic step: interpret, recommend, write prose, make judgment calls using the structured output from step 1
+   
+   Never feed raw bulk data to an LLM when a `sort/filter/group_by` could produce a structured summary first. Never hard-code a heuristic where understanding intent is required.
+
+   **Minimum viability for an agentic step.** An agentic step MUST have:
+   - Specific input context (task details, artifacts, structured data from prior steps)
+   - A documented output contract (schema/format in the handler comment or in the prompt via `output_contract`)
+   - A comment explaining *why* this cannot be deterministic
+
+   If a step lacks all three → it is a placeholder, not a feature. Use kind `"manual"` instead until it is real.
+
+   **Do not add deterministic fallbacks that reinterpret ambiguous brief text.** When an agentic selection step is required, it must run. A hard-coded heuristic that extracts themes from a brief is fake intelligence — it will silently produce wrong answers on inputs it was never tested against.
 
 ### Frontend
 1. **Frontend calls Rust**. All data fetching and mutations go through `invoke()` in `src/lib/tauri.ts`. No direct file I/O in React.
@@ -238,3 +263,6 @@ Feature specs live in `docs/`. Write one before writing code.
 - [ ] `types.ts` updated to match Rust struct changes
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls — use Rust crates instead
+- [ ] Reviewed `CONTRACTS.md` for any affected implicit contracts (statuses, step ordering, auto-spawned tasks, handler registry order)
+- [ ] Every new agentic step has: (a) specific input context, (b) an output contract in a code comment, (c) a comment explaining why it cannot be deterministic
+- [ ] Every new deterministic step does not contain a hard-coded heuristic that substitutes for judgment (that is fake intelligence — use an agentic step for the selection)
