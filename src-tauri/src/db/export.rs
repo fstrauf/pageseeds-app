@@ -434,7 +434,7 @@ fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let report = crate::content::date_policy::validate_publish_ready_dates(&articles);
+    let report = crate::content::date_policy::validate_no_future_dates(&articles);
     if report.is_valid() {
         return Ok(());
     }
@@ -448,7 +448,7 @@ fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()
         .join("; ");
 
     Err(Error::Other(format!(
-        "Date policy check failed: {} issue(s). Resolve future/duplicate dates before export. {}",
+        "Date policy check failed: {} issue(s). Future-dated articles must be corrected before export. {}",
         report.issues.len(),
         detail
     )))

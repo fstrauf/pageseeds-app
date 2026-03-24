@@ -7,8 +7,27 @@
 ///   - create_tasks_from_collection_after_exec  (post-completion task spawner)
 ///   - create_tasks_from_collection        (parse gsc_collection.json → fix tasks)
 ///   - normalize_site_for_url_match        (sc-domain: normalisation)
+///   - normalize_url_for_comparison        (URL normalization for domain matching)
 
 use rusqlite::Connection;
+
+/// Normalize a URL for domain comparison by stripping scheme and www.
+///
+/// This ensures URLs like `https://www.example.com/page` and `https://example.com/page`
+/// are treated as belonging to the same domain for validation purposes.
+///
+/// # Examples
+/// - `https://www.example.com/page` → `example.com/page`
+/// - `http://example.com/` → `example.com/`
+/// - `https://EXAMPLE.COM` → `example.com`
+pub(crate) fn normalize_url_for_comparison(url: &str) -> String {
+    let lower = url.to_lowercase();
+    let without_scheme = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(&lower);
+    without_scheme.strip_prefix("www.").unwrap_or(without_scheme).to_string()
+}
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
@@ -287,7 +306,7 @@ pub(crate) fn exec_collect_gsc(
     let sitemap_url = manifest.get("sitemap")
         .and_then(|v| v.as_str())
         .map(String::from)
-        .unwrap_or_else(|| format!("{}/sitemap.xml", site_url.trim_end_matches('/')));
+        .unwrap_or_else(|| format!("{}/sitemap.xml", normalize_site_for_url_match(&site_url)));
 
     log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
     let site_match_prefix = normalize_site_for_url_match(&site_url);
@@ -338,14 +357,27 @@ pub(crate) fn exec_collect_gsc(
 
     // Fast-fail: check that sitemap domain matches gsc_site
     let sample_size = urls.len().min(10);
+    
+    // Normalize for comparison (strip scheme and www.)
+    let site_normalized = normalize_url_for_comparison(&site_match_prefix);
     let sample_matches = urls.iter().take(sample_size)
-        .filter(|u| u.starts_with(&site_match_prefix)).count();
+        .filter(|u| normalize_url_for_comparison(u).starts_with(&site_normalized)).count();
+    
+    // Debug: log the comparison
+    if sample_size > 0 {
+        let first_urls: Vec<&str> = urls.iter().take(3).map(|s| s.as_str()).collect();
+        log::info!("[collect_gsc] site_match_prefix='{}' (normalized: '{}'), sample URLs: {:?}", 
+            site_match_prefix, site_normalized, first_urls);
+        log::info!("[collect_gsc] URL match check: {}/{} match normalized prefix '{}'", 
+            sample_matches, sample_size, site_normalized);
+    }
+    
     if sample_size > 0 && sample_matches == 0 {
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
                 "GSC site URL mismatch: 0/{} sitemap URLs match '{}'. Check 'url'/'gsc_site' in manifest.json.",
-                sample_size, site_url
+                sample_size, site_match_prefix
             ),
             output: None,
         };
@@ -361,14 +393,17 @@ pub(crate) fn exec_collect_gsc(
         },
     };
 
-    // 5. Domain validation
-    let url_matching = records.iter().filter(|r| r.url.starts_with(&site_match_prefix)).count();
+    // 5. Domain validation (normalize for www. comparison)
+    let site_domain_normalized = normalize_url_for_comparison(&site_match_prefix);
+    let url_matching = records.iter()
+        .filter(|r| normalize_url_for_comparison(&r.url).starts_with(&site_domain_normalized))
+        .count();
     if records.len() > 5 && url_matching < records.len() / 2 {
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
                 "GSC site URL mismatch: only {}/{} URLs match '{}'. Check 'url' in manifest.json.",
-                url_matching, records.len(), site_url
+                url_matching, records.len(), site_match_prefix
             ),
             output: None,
         };
@@ -436,14 +471,21 @@ pub(crate) fn exec_collect_gsc(
 
 /// Normalise a GSC property identifier into a URL prefix suitable for `starts_with`.
 ///
+/// Converts various GSC site formats to a canonical `https://domain` prefix,
+/// stripping `www.` to ensure consistent matching regardless of subdomain.
+///
 /// - `sc-domain:example.com` → `https://example.com`
+/// - `sc-domain:www.example.com` → `https://example.com`
 /// - `https://example.com/`  → `https://example.com`
+/// - `https://www.example.com/` → `https://example.com`
+/// - `http://example.com` → `https://example.com`
 pub(crate) fn normalize_site_for_url_match(site_url: &str) -> String {
-    if let Some(domain) = site_url.strip_prefix("sc-domain:") {
-        format!("https://{}", domain.trim_end_matches('/'))
-    } else {
-        site_url.trim_end_matches('/').to_string()
-    }
+    // Strip sc-domain: prefix if present
+    let without_prefix = site_url.strip_prefix("sc-domain:").unwrap_or(site_url);
+    
+    // Use shared normalization for scheme/www stripping, then reconstruct as https://
+    let normalized = normalize_url_for_comparison(without_prefix);
+    format!("https://{}", normalized.trim_start_matches('/'))
 }
 
 /// Post-completion hook: reads gsc_collection.json and spawns fix tasks.
@@ -546,7 +588,7 @@ pub(crate) fn create_tasks_from_collection(
             phase: "implementation".to_string(),
             status: crate::models::task::TaskStatus::Todo,
             priority: priority_enum,
-            execution_mode: crate::models::task::ExecutionMode::Manual,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
             agent_policy: crate::models::task::AgentPolicy::Optional,
             title: Some(title),
             description: Some(description),
@@ -614,7 +656,7 @@ pub(crate) fn create_tasks_from_collection(
                     phase: "investigation".to_string(),
                     status: crate::models::task::TaskStatus::Todo,
                     priority: crate::models::task::Priority::Medium,
-                    execution_mode: crate::models::task::ExecutionMode::Manual,
+                    execution_mode: crate::models::task::ExecutionMode::Automatic,
                     agent_policy: crate::models::task::AgentPolicy::Required,
                     title: Some("Investigate GSC — all pages indexed, look for opportunities".to_string()),
                     description: Some("gsc_collection.json shows all pages are indexed. Run investigation to find optimization opportunities.".to_string()),

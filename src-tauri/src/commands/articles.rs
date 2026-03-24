@@ -50,7 +50,7 @@ pub fn export_to_repo(
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
-    let report = date_policy::validate_publish_ready_dates(&articles);
+    let report = date_policy::validate_no_future_dates(&articles);
     if !report.is_valid() {
         let detail = report
             .issues
@@ -60,7 +60,7 @@ pub fn export_to_repo(
             .collect::<Vec<_>>()
             .join("; ");
         return Err(format!(
-            "Date policy check failed: {} issue(s). Resolve future/duplicate dates before export. {}",
+            "Date policy check failed: {} issue(s). Future-dated articles must be corrected before export. {}",
             report.issues.len(),
             detail
         ));

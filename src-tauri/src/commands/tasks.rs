@@ -170,9 +170,9 @@ pub fn create_article_tasks_from_keywords(
 
     let metrics = extract_keyword_metrics(&research_task);
 
-    for keyword in &requested_keywords {
+    for (idx, keyword) in requested_keywords.iter().enumerate() {
         let now = chrono::Utc::now().to_rfc3339();
-        let id = format!("task-{}", chrono::Utc::now().timestamp_millis());
+        let id = format!("task-{}-{}", chrono::Utc::now().timestamp_millis(), idx);
         let title = to_title_case(keyword);
         let metric = metrics.get(&normalize_keyword(keyword));
         let priority_enum = match metric.and_then(|m| m.difficulty) {

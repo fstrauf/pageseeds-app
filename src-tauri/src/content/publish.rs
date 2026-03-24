@@ -231,6 +231,19 @@ pub fn apply_publish(
         .filter_map(|ds| NaiveDate::parse_from_str(ds, "%Y-%m-%d").ok())
         .collect();
 
+    // Identify batch articles that still have date issues (future or duplicate)
+    // after any explicit date_fixes have been applied. These must be auto-reassigned
+    // rather than using their stored (bad) date — which would cause duplicates or
+    // future-dated articles to be published as-is and block the articles.json export.
+    let date_analysis = dates::analyse_dates(&all_articles);
+    let needs_reassign: HashSet<i64> = date_analysis
+        .issues
+        .iter()
+        .filter(|i| i.issue_type == "future_date" || i.issue_type == "duplicate_date")
+        .filter(|i| article_ids.contains(&i.article_id))
+        .map(|i| i.article_id)
+        .collect();
+
     // Track dates we assign during this publish run to avoid self-collisions.
     let mut assigned_dates: HashSet<NaiveDate> = HashSet::new();
 
@@ -245,8 +258,12 @@ pub fn apply_publish(
         };
 
         // Determine the final published_date.
-        let publish_date: String = if let Some(d_str) = article.published_date.as_deref().filter(|s| !s.is_empty()) {
-            // Already has a date (fixed in earlier steps or originally fine).
+        let publish_date: String = if needs_reassign.contains(&id) {
+            // Date is problematic (future or duplicate) — auto-assign the most
+            // recent free past date, skipping everything already occupied.
+            assign_free_date(today, &occupied, &assigned_dates)
+        } else if let Some(d_str) = article.published_date.as_deref().filter(|s| !s.is_empty()) {
+            // Already has a clean date (not flagged as future/duplicate).
             d_str.to_string()
         } else if let Some(resolution) = resolution_map.get(&id) {
             if resolution.action == "backdate" {

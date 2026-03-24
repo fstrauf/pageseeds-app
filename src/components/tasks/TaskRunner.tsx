@@ -3,6 +3,8 @@ import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, Chevr
 import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
 import { useQueue } from '../../lib/queue-context'
 
@@ -398,7 +400,7 @@ function FollowUpList({ followUps, onRunNow, onOpenTask }: FollowUpListProps) {
 // ---------------------------------------------------------------------------
 
 function StepRow({ step }: { step: StepProgress }) {
-  const [showOutput, setShowOutput] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
 
   const icon =
     step.status === 'ok'      ? '✓' :
@@ -426,18 +428,25 @@ function StepRow({ step }: { step: StepProgress }) {
           )}
           {step.output && (
             <button
-              onClick={() => setShowOutput(v => !v)}
+              onClick={() => setDialogOpen(true)}
               className="text-muted-foreground underline underline-offset-2 hover:text-foreground flex-shrink-0"
             >
-              {showOutput ? 'hide output' : 'show output'}
+              show output
             </button>
           )}
         </div>
-        {step.output && showOutput && (
-          <pre className="mt-1 text-muted-foreground font-mono whitespace-pre-wrap break-all bg-secondary/60 rounded px-2 py-1.5 text-[10px] max-h-48 overflow-y-auto">
-            {step.output}
-          </pre>
-        )}
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="font-mono text-sm">{step.step_name}</DialogTitle>
+            </DialogHeader>
+            <ScrollArea className="h-[60vh] w-full rounded border">
+              <pre className="p-3 text-[11px] font-mono whitespace-pre-wrap break-words text-muted-foreground">
+                {step.output}
+              </pre>
+            </ScrollArea>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )

@@ -128,18 +128,6 @@ fn best_serp_metric(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     })
 }
 
-/// Returns `true` when `candidate` is just `base` with extra words appended (a date/year
-/// variant like "vix options trading strategies 2026" vs "vix options trading strategies").
-/// Both inputs are expected to already be lowercased.
-fn is_word_prefix_variant(base: &str, candidate: &str) -> bool {
-    let base_words: Vec<&str> = base.split_whitespace().collect();
-    let cand_words: Vec<&str> = candidate.split_whitespace().collect();
-    if cand_words.len() <= base_words.len() {
-        return false; // candidate is not longer — not a prefix variant
-    }
-    cand_words[..base_words.len()] == base_words[..]
-}
-
 pub(crate) fn exec_keyword_research_native(
     task: &Task,
     project_path: &str,
@@ -200,15 +188,20 @@ pub(crate) fn exec_keyword_research_native(
     }
 
     // Load existing keywords from articles.json so we can skip already-covered ones.
+    // articles.json format: {"nextArticleId": N, "articles": [...]}
     let existing_keywords: HashSet<String> = std::fs::read_to_string(&articles_json_path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.as_array().map(|arr| {
-            arr.iter()
-                .filter_map(|a| a["target_keyword"].as_str())
-                .map(|k| k.to_lowercase())
-                .collect()
-        }))
+        .and_then(|v| {
+            // Support both {"articles": [...]} wrapper and bare [...] array.
+            let arr = v["articles"].as_array().or_else(|| v.as_array());
+            arr.map(|items| {
+                items.iter()
+                    .filter_map(|a| a["target_keyword"].as_str())
+                    .map(|k| k.to_lowercase())
+                    .collect()
+            })
+        })
         .unwrap_or_default();
 
     log::info!("[keyword_research_native] {} existing keywords to filter against", existing_keywords.len());
@@ -234,14 +227,6 @@ pub(crate) fn exec_keyword_research_native(
                         continue; // already covered
                     }
                     if seen.contains(&kw_lower) {
-                        continue;
-                    }
-                    // Skip date/year-appended variants: "vix strategies 2026" when
-                    // "vix strategies" is already accepted this run.
-                    if all_new_keywords
-                        .iter()
-                        .any(|existing| is_word_prefix_variant(&existing.to_lowercase(), &kw_lower))
-                    {
                         continue;
                     }
                     seen.insert(kw_lower.clone());
@@ -271,27 +256,38 @@ pub(crate) fn exec_keyword_research_native(
         };
     }
 
-    // Step 2 — Analyse difficulty for the top-N keywords.
-    let top_n = 10usize;
-    let kw_to_analyze: Vec<String> = all_new_keywords.iter().take(top_n).cloned().collect();
-    log::info!("[keyword_research_native] analyzing difficulty for {} keywords", kw_to_analyze.len());
+    // Step 2 — Analyse difficulty, over-sampling to fill 10 with-data results.
+    // Ahrefs free tier often returns no data for long-tail keywords. Rather than
+    // analyzing exactly 10 and accepting 3 hits, iterate through candidates until
+    // we have 10 with-data results or exhaust a budget of 30 API calls.
+    let target_with_data = 10usize;
+    let max_api_calls = 30usize;
+    log::info!(
+        "[keyword_research_native] analyzing difficulty (target {} with data, max {} calls, {} candidates)",
+        target_with_data, max_api_calls, all_new_keywords.len()
+    );
 
-    let mut difficulty_results: Vec<serde_json::Value> = vec![];
-    for kw in &kw_to_analyze {
+    let mut with_data_results: Vec<serde_json::Value> = vec![];
+    let mut no_data_results: Vec<serde_json::Value> = vec![];
+    let mut api_calls = 0usize;
+    let mut analyzed_count = 0usize;
+
+    for kw in &all_new_keywords {
+        if with_data_results.len() >= target_with_data || api_calls >= max_api_calls {
+            break;
+        }
+        api_calls += 1;
+        analyzed_count += 1;
+
         match handle.block_on(crate::seo::keywords::get_keyword_difficulty(
             &capsolver_key, kw, "us",
         )) {
             Ok(kd) => {
-                // `has_data` is true only when Ahrefs returned a real difficulty score
-                // with a timestamp. When the free API returns null/empty for a keyword,
-                // difficulty and shortage are None and last_update is "".
                 let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
                 let vol = volume_map.get(kw).copied();
                 let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
                 let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
-                // Traffic comes from SERP organic results only — no shortage fallback.
-                // Shortage is a supply/demand signal, not a search volume proxy.
-                difficulty_results.push(serde_json::json!({
+                let entry = serde_json::json!({
                     "keyword": kw,
                     "difficulty": kd.difficulty,
                     "volume": vol,
@@ -302,23 +298,25 @@ pub(crate) fn exec_keyword_research_native(
                     "serp_count": kd.serp.len(),
                     "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
                     "last_update": kd.last_update,
-                }));
+                });
                 log::info!(
                     "[keyword_research_native] '{}' kd={:?} vol={:?} top_traffic={:?} has_data={}",
-                    kw,
-                    kd.difficulty,
-                    vol,
-                    top_traffic,
-                    has_data,
+                    kw, kd.difficulty, vol, top_traffic, has_data,
                 );
+                if has_data {
+                    with_data_results.push(entry);
+                } else {
+                    no_data_results.push(entry);
+                }
             }
             Err(e) => {
                 log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
                 let vol = volume_map.get(kw).copied();
-                difficulty_results.push(serde_json::json!({
+                no_data_results.push(serde_json::json!({
                     "keyword": kw,
                     "difficulty": serde_json::Value::Null,
                     "volume": vol,
+                    "has_data": false,
                     "serp_count": 0,
                     "top_result": "",
                     "last_update": "",
@@ -327,15 +325,27 @@ pub(crate) fn exec_keyword_research_native(
         }
     }
 
+    // Present with-data results first, then pad with no-data up to 10 total.
+    let mut difficulty_results = with_data_results;
+    let remaining_slots = target_with_data.saturating_sub(difficulty_results.len());
+    difficulty_results.extend(no_data_results.into_iter().take(remaining_slots));
+
+    log::info!(
+        "[keyword_research_native] {} with data, {} total shown (checked {} keywords)",
+        difficulty_results.iter().filter(|r| r["has_data"] == true).count(),
+        difficulty_results.len(),
+        analyzed_count,
+    );
+
     let total_candidates = all_new_keywords.len();
-    let skipped_keywords: Vec<String> = all_new_keywords.iter().skip(top_n).cloned().collect();
+    let skipped_keywords: Vec<String> = all_new_keywords.iter().skip(analyzed_count).cloned().collect();
     let output = serde_json::json!({
         "themes": themes,
         "total_candidates": total_candidates,
         "new_keywords": all_new_keywords,
         "filtered_out": 0,
         "difficulty": {
-            "total": kw_to_analyze.len(),
+            "total": analyzed_count,
             "successful": difficulty_results.iter().filter(|r| r["has_data"] == true).count(),
             "failed": difficulty_results.iter().filter(|r| r["has_data"] != true).count(),
             "results": difficulty_results,
@@ -347,7 +357,7 @@ pub(crate) fn exec_keyword_research_native(
         success: true,
         message: format!(
             "Keyword research complete ({} themes, {} candidates, {} analyzed)",
-            themes.len(), total_candidates, kw_to_analyze.len()
+            themes.len(), total_candidates, analyzed_count
         ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
     }

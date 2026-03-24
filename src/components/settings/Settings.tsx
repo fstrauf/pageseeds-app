@@ -398,6 +398,7 @@ export function Settings({ projectId }: SettingsProps) {
                 >
                   <option value="copilot">copilot</option>
                   <option value="claude">claude</option>
+                  <option value="kimi">kimi</option>
                 </select>
                 <Button
                   variant="outline"

@@ -21,5 +21,6 @@ pub struct Article {
     pub content_gaps_addressed: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_traffic_monthly: Option<String>,
+    #[serde(default)]
     pub project_id: String,
 }

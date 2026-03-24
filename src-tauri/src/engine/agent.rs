@@ -3,6 +3,7 @@
 /// Supported providers:
 /// - `"copilot"` — GitHub Copilot CLI (`copilot -p "<prompt>" --output-format text`)
 /// - `"claude"`  — Claude Code CLI    (`claude -p "<prompt>" --output-format text`)
+/// - `"kimi"`    — Kimi Code CLI      (`kimi -p "<prompt>" --print --output-format text`)
 /// - `"custom:<binary>"` — Any binary that accepts `-p <prompt>` and writes to stdout
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,7 @@ pub struct AgentStatus {
 
 /// Check which agent CLIs are available on PATH.
 pub fn detect_agents(configured_provider: &str) -> AgentStatus {
-    let candidates = [("copilot", "copilot"), ("claude", "claude")];
+    let candidates = [("copilot", "copilot"), ("claude", "claude"), ("kimi", "kimi")];
 
     let available_agents = candidates
         .iter()
@@ -60,9 +61,10 @@ pub fn detect_agents(configured_provider: &str) -> AgentStatus {
 
 /// Run an agent with the given prompt and return the captured stdout.
 ///
-/// Invocation pattern (both CLIs accept this):
+/// Invocation pattern:
 /// - copilot: `copilot -p "<prompt>" --output-format text`
 /// - claude:  `claude  -p "<prompt>" --output-format text`
+/// - kimi:    `kimi -p "<prompt>" --print --output-format text --work-dir <project_path>`
 /// - custom:  `<binary> [extra args] -p "<prompt>"` — binary extracted from "custom:<binary>"
 ///
 /// The prompt is passed as a direct argument to `Command::arg()` — no shell involved,
@@ -78,13 +80,21 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
         cmd.arg(arg);
     }
 
-    // Prompt flag — both CLIs interpret -p as "non-interactive prompt mode"
+    // Prompt flag — CLIs interpret -p as "non-interactive prompt mode"
     cmd.arg("-p").arg(prompt);
 
-    // Plain text output (not JSON or rich ANSI)
-    cmd.arg("--output-format").arg("text");
-
-    cmd.current_dir(project_path);
+    // Kimi requires --print for non-interactive mode (implicitly adds --yolo)
+    if provider == "kimi" {
+        cmd.arg("--print");
+        // Kimi uses --output-format text (same as copilot/claude)
+        cmd.arg("--output-format").arg("text");
+        // Kimi uses --work-dir instead of current_dir
+        cmd.arg("--work-dir").arg(project_path);
+    } else {
+        // Plain text output (not JSON or rich ANSI)
+        cmd.arg("--output-format").arg("text");
+        cmd.current_dir(project_path);
+    }
 
     // Prevent the subprocess from blocking on stdin (e.g. interactive prompts).
     cmd.stdin(Stdio::null());
@@ -170,6 +180,7 @@ fn resolve_provider(provider: &str) -> (String, Vec<String>) {
     } else {
         let binary = match provider {
             "claude" => "claude".to_string(),
+            "kimi" => "kimi".to_string(),
             _ => "copilot".to_string(),
         };
         // Non-interactive mode requires auto-approval for tools, but we

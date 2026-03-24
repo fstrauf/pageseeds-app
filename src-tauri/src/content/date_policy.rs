@@ -158,3 +158,32 @@ pub fn validate_publish_ready_dates(articles: &[Article]) -> DatePolicyReport {
         },
     )
 }
+
+/// Export-time gate: only block on future dates.
+///
+/// Duplicate dates among already-published articles are a legacy import artefact.
+/// Retroactively changing them risks Google re-indexing signals, so we treat
+/// them as informational only and never block an export on their account.
+pub fn validate_no_future_dates(articles: &[Article]) -> DatePolicyReport {
+    let report = validate_dates(
+        articles,
+        &DatePolicyConfig {
+            allowed_future_days: 0,
+            statuses: Some(statuses_set(&["published", "ready_to_publish"])),
+        },
+    );
+    // Strip duplicate_date issues — only keep future_date and invalid_format.
+    let issues: Vec<DatePolicyIssue> = report
+        .issues
+        .into_iter()
+        .filter(|i| i.issue_type != "duplicate_date")
+        .collect();
+    let future_count = issues.iter().filter(|i| i.issue_type == "future_date").count();
+    DatePolicyReport {
+        total_checked: report.total_checked,
+        future_count,
+        duplicate_count: 0,
+        duplicate_dates: vec![],
+        issues,
+    }
+}

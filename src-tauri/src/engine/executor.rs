@@ -248,6 +248,65 @@ pub fn execute_task_with_token(
             }
         }
 
+        // After a successful content write, register the new MDX file in SQLite + articles.json.
+        // Mirrors the Python CLI's article_manager.add_article() call which runs immediately
+        // after the agent writes the file. Without this, articles.json is only updated at
+        // publish time, meaning the next write_article task cannot compute a safe date.
+        if step.name == "content_write_stage" && result.success {
+            let automation_dir = std::path::Path::new(&project_path)
+                .join(".github")
+                .join("automation");
+            match crate::content::ops::ingest_orphan_files(
+                &automation_dir,
+                std::path::Path::new(&project_path),
+                &task.project_id,
+                conn,
+            ) {
+                Ok(ingested) if ingested.ingested > 0 => {
+                    // Patch keyword metadata from the task description onto the newly
+                    // inserted row. ingest_orphan_files has no task context so it
+                    // cannot fill these fields itself.
+                    let (keyword, kd_str, vol) = parse_content_task_keyword_meta(&task);
+                    for filename in &ingested.files {
+                        let _ = conn.execute(
+                            "UPDATE articles
+                             SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                                 status='draft'
+                             WHERE project_id=?4 AND file LIKE ?5",
+                            rusqlite::params![
+                                keyword.as_deref(),
+                                kd_str.as_deref(),
+                                vol,
+                                &task.project_id,
+                                format!("%{}", filename),
+                            ],
+                        );
+                    }
+                    // Re-export articles.json so keyword fields are persisted.
+                    if let Ok(json) =
+                        crate::db::export::export_articles(conn, &task.project_id)
+                    {
+                        let articles_path = std::path::Path::new(&project_path)
+                            .join(".github")
+                            .join("automation")
+                            .join("articles.json");
+                        let _ = std::fs::write(&articles_path, json);
+                    }
+                    log::info!(
+                        "[content_register] registered {} article(s): {:?}",
+                        ingested.ingested,
+                        ingested.files
+                    );
+                }
+                Ok(_) => {
+                    log::info!(
+                        "[content_register] no new orphan files to register after content write"
+                    )
+                }
+                Err(e) => log::warn!("[content_register] article registration failed: {}", e),
+            }
+        }
+
         if !result.success {
             if step.optional {
                 progress[i].status = "skipped".to_string();
@@ -269,6 +328,14 @@ pub fn execute_task_with_token(
     // After a successful content review, create a single content_review_apply task from recommendations.json.
     if all_ok && matches!(task.task_type.as_str(), "content_review" | "content_audit") {
         if let Some(task_id) = crate::engine::exec::content::create_content_review_apply_task(conn, &task, &project_path) {
+            follow_up_ids.push(task_id);
+        }
+    }
+
+    // After a successful write_article, queue a cluster_and_link task so the
+    // new article is integrated into the site's internal link graph.
+    if all_ok && task.task_type == "write_article" {
+        if let Some(task_id) = crate::engine::exec::content::create_cluster_and_link_task(conn, &task, &project_path) {
             follow_up_ids.push(task_id);
         }
     }
@@ -372,6 +439,9 @@ fn run_step(
                 }
             }
         }
+        "cluster_link_scan" => crate::engine::exec::content::exec_cluster_link_scan(task, project_path),
+        "cluster_link_strategy" => crate::engine::exec::content::exec_cluster_link_strategy(task, project_path, agent_provider),
+        "cluster_link_apply" => crate::engine::exec::content::exec_cluster_link_apply(task, project_path),
         "content_review_recommend" => crate::engine::exec::content::exec_content_review_recommend(task, project_path, agent_provider),
         "content_review_apply_execute" => crate::engine::exec::content::exec_content_review_apply(task, project_path, agent_provider),
         "keyword_research_cli" => crate::engine::exec::keywords::exec_keyword_research_native(task, project_path),
@@ -400,6 +470,32 @@ fn run_step(
 fn _fail_task(conn: &Connection, task: &mut Task, msg: &str) {
     let _ = task_store::update_task_status(conn, &task.id, TaskStatus::Todo);
     let _ = task_store::record_task_run(conn, &task.id, false, Some(msg), None);
+}
+
+/// Parse keyword metadata embedded in the write_article task description.
+///
+/// Task creation puts `"Target keyword: {kw}\nKD: {kd}\nVolume: {vol}"` in the description.
+/// Returns (keyword, keyword_difficulty_as_string, volume).
+fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<String>, i64) {
+    let desc = match task.description.as_deref() {
+        Some(d) if !d.is_empty() => d,
+        _ => return (None, None, 0),
+    };
+    let mut keyword = None;
+    let mut kd: Option<String> = None;
+    let mut volume = 0i64;
+    for line in desc.lines() {
+        if let Some(rest) = line.strip_prefix("Target keyword:") {
+            keyword = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("KD:") {
+            if let Ok(n) = rest.trim().parse::<i64>() {
+                kd = Some(n.to_string());
+            }
+        } else if let Some(rest) = line.strip_prefix("Volume:") {
+            volume = rest.trim().parse::<i64>().unwrap_or(0);
+        }
+    }
+    (keyword, kd, volume)
 }
 
 /// Determine the final task status after all steps have run.
@@ -726,6 +822,226 @@ mod tests {
         if let Some(v) = old_ahrefs { std::env::set_var("PAGESEEDS_AHREFS_BASE_URL", v); } else { std::env::remove_var("PAGESEEDS_AHREFS_BASE_URL"); }
 
         std::fs::remove_dir_all(&project_dir).ok();
+    }
+
+    // ── Fix 1: date injection ──────────────────────────────────────────────────
+
+    // compute_next_publish_date returns yesterday when articles.json has no entries.
+    #[test]
+    fn compute_next_publish_date_no_existing_articles() {
+        use crate::engine::workflows::handlers::compute_next_publish_date;
+        use chrono::{Duration, Utc};
+
+        let dir = unique_temp_dir("ps_date_empty");
+        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
+        let articles_path = dir.join(".github").join("automation").join("articles.json");
+        std::fs::write(
+            &articles_path,
+            r#"{"nextArticleId":1,"articles":[]}"#,
+        )
+        .unwrap();
+
+        let result = compute_next_publish_date(&dir.to_string_lossy()).unwrap();
+
+        let yesterday = (Utc::now().date_naive() - Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(result, yesterday, "empty articles.json should return yesterday");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // compute_next_publish_date skips occupied dates and returns first free past date.
+    #[test]
+    fn compute_next_publish_date_skips_occupied_slots() {
+        use crate::engine::workflows::handlers::compute_next_publish_date;
+        use chrono::{Duration, Utc};
+
+        let dir = unique_temp_dir("ps_date_occupied");
+        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
+        let articles_path = dir.join(".github").join("automation").join("articles.json");
+
+        // Occupy yesterday and two days ago.
+        let today = Utc::now().date_naive();
+        let d1 = (today - Duration::days(1)).format("%Y-%m-%d").to_string();
+        let d2 = (today - Duration::days(2)).format("%Y-%m-%d").to_string();
+        let json = format!(
+            r#"{{"nextArticleId":3,"articles":[
+                {{"id":1,"published_date":"{d1}","status":"published"}},
+                {{"id":2,"published_date":"{d2}","status":"published"}}
+            ]}}"#
+        );
+        std::fs::write(&articles_path, json).unwrap();
+
+        let result = compute_next_publish_date(&dir.to_string_lossy()).unwrap();
+
+        let expected = (today - Duration::days(3)).format("%Y-%m-%d").to_string();
+        assert_eq!(
+            result, expected,
+            "should skip occupied yesterday/two-days-ago and return three days ago"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // compute_next_publish_date returns None when articles.json is missing.
+    #[test]
+    fn compute_next_publish_date_missing_file_returns_none() {
+        use crate::engine::workflows::handlers::compute_next_publish_date;
+
+        let dir = unique_temp_dir("ps_date_missing");
+        std::fs::create_dir_all(&dir).unwrap();
+        // No articles.json — function must gracefully return None, not panic.
+        let result = compute_next_publish_date(&dir.to_string_lossy());
+        assert!(result.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Fix 2: keyword metadata parsing ───────────────────────────────────────
+
+    // parse_content_task_keyword_meta extracts all three fields from a full description.
+    #[test]
+    fn parse_keyword_meta_full_description() {
+        let mut task = make_task("write_article", "proj1");
+        task.description =
+            Some("Target keyword: options risk management\nKD: 25\nVolume: 1200".to_string());
+
+        let (kw, kd, vol) = parse_content_task_keyword_meta(&task);
+        assert_eq!(kw.as_deref(), Some("options risk management"));
+        assert_eq!(kd.as_deref(), Some("25"));
+        assert_eq!(vol, 1200);
+    }
+
+    // parse_content_task_keyword_meta handles partial descriptions gracefully.
+    #[test]
+    fn parse_keyword_meta_partial_description() {
+        let mut task = make_task("write_article", "proj1");
+        task.description = Some("Target keyword: coffee brewing\nVolume: 500".to_string());
+
+        let (kw, kd, vol) = parse_content_task_keyword_meta(&task);
+        assert_eq!(kw.as_deref(), Some("coffee brewing"));
+        assert!(kd.is_none(), "KD should be None when not in description");
+        assert_eq!(vol, 500);
+    }
+
+    // parse_content_task_keyword_meta returns empty tuple for None description.
+    #[test]
+    fn parse_keyword_meta_no_description() {
+        let task = make_task("write_article", "proj1");
+
+        let (kw, kd, vol) = parse_content_task_keyword_meta(&task);
+        assert!(kw.is_none());
+        assert!(kd.is_none());
+        assert_eq!(vol, 0);
+    }
+
+    // ── Fix 2: articles.json registration after content write ─────────────────
+
+    #[test]
+    fn content_write_registers_article_in_articles_json() {
+        use crate::content::ops::ingest_orphan_files;
+        use crate::db::export::export_articles;
+
+        let dir = unique_temp_dir("ps_content_register");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content").join("blog");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        // Set up articles.json pointing at the content dir.
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            r#"{"nextArticleId":1,"articles":[]}"#,
+        )
+        .unwrap();
+
+        // Simulate the agent writing a new MDX file with a frontmatter date.
+        std::fs::write(
+            content_dir.join("001_test_article.mdx"),
+            "---\ntitle: \"Test Article\"\ndate: \"2026-01-15\"\n---\n\nBody text here.\n",
+        )
+        .unwrap();
+
+        // Set up SQLite + project as executor would have it.
+        let conn = in_memory_db();
+
+        // articles_meta table is needed by ingest_orphan_files.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS articles (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                url_slug TEXT NOT NULL DEFAULT '',
+                file TEXT NOT NULL DEFAULT '',
+                target_keyword TEXT,
+                keyword_difficulty TEXT,
+                target_volume INTEGER NOT NULL DEFAULT 0,
+                published_date TEXT,
+                word_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'draft',
+                content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
+                estimated_traffic_monthly TEXT,
+                project_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS articles_meta (
+                project_id TEXT PRIMARY KEY,
+                next_article_id INTEGER NOT NULL DEFAULT 1
+            );",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active) VALUES ('p1', 'Test', ?1, 1)",
+            [dir.to_str().unwrap()],
+        )
+        .unwrap();
+
+        // Also insert a seo_workspace.json so resolve_content_dir can find the content dir.
+        std::fs::write(
+            auto_dir.join("seo_workspace.json"),
+            r#"{"content_dir":"content/blog"}"#,
+        )
+        .unwrap();
+
+        // --- Step 1: ingest_orphan_files finds and registers the new file.
+        let ingested = ingest_orphan_files(&auto_dir, &dir, "p1", &conn)
+            .expect("ingest_orphan_files should succeed");
+        assert_eq!(ingested.ingested, 1, "expected 1 article to be ingested");
+        assert_eq!(ingested.files, vec!["001_test_article.mdx"]);
+
+        // --- Step 2: Patch keyword metadata (simulating what the executor hook does).
+        for filename in &ingested.files {
+            conn.execute(
+                "UPDATE articles SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                 status='draft' WHERE project_id=?4 AND file LIKE ?5",
+                rusqlite::params![
+                    Some("test article keyword"),
+                    Some("28"),
+                    900i64,
+                    "p1",
+                    format!("%{}", filename),
+                ],
+            )
+            .unwrap();
+        }
+
+        // --- Step 3: Re-export articles.json with keyword metadata.
+        let json = export_articles(&conn, "p1").unwrap();
+        std::fs::write(auto_dir.join("articles.json"), &json).unwrap();
+
+        // --- Verify the articles.json on disk contains the new article.
+        let on_disk: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let articles = on_disk["articles"].as_array().unwrap();
+        assert_eq!(articles.len(), 1, "articles.json should have 1 article");
+
+        let a = &articles[0];
+        assert_eq!(a["published_date"], "2026-01-15");
+        assert_eq!(a["target_keyword"], "test article keyword");
+        assert_eq!(a["keyword_difficulty"], "28");
+        assert_eq!(a["target_volume"], 900);
+        assert_eq!(a["status"], "draft");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

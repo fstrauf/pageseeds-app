@@ -208,16 +208,23 @@ impl WorkflowHandler for ImplementationHandler {
                     .with_param(step_params::CMD, "pageseeds content validate --workspace-dir {automation_dir}"),
             ],
             "cluster_and_link" => vec![
-                // Step 1 (deterministic): scan all MDX files, build the full link map,
-                // identify gaps. The scan itself is pure file I/O + regex — no judgment.
-                WorkflowStep::new("cluster_and_link_scan", "deterministic")
-                    .with_param(step_params::CMD, "pageseeds content scan-internal-links --workspace-dir {automation_dir}"),
-                // Step 2 (agentic): interpret the scan output, pick pillar/cluster
-                // structure, recommend specific links to add.
-                // Cannot be deterministic: choosing which articles are pillars vs supports,
+                // Step 1 (deterministic, native Rust): scan all MDX files, build the full link
+                // map, identify orphans and coverage gaps.  Pure file I/O + regex — no judgment.
+                // Writes link_scan.json to the automation dir for the next step to consume.
+                WorkflowStep::new("cluster_and_link_scan", "cluster_link_scan"),
+                // Step 2 (agentic): interpret the scan output, determine pillar/cluster
+                // structure, and recommend specific missing links to add.
+                // Cannot be deterministic: deciding which articles are pillars vs supports,
                 // and which gaps matter most, requires understanding article intent and
                 // business priorities — not just graph connectivity.
-                WorkflowStep::new("cluster_and_link_strategy", "agentic"),
+                // Writes links_to_add.json (output contract: {links_to_add:[{source_article_id,
+                // source_file, target_article_id, target_title, target_slug, reason}]}).
+                WorkflowStep::new("cluster_and_link_strategy", "cluster_link_strategy"),
+                // Step 3 (deterministic): read links_to_add.json and append "Related Articles"
+                // sections to the MDX files that are missing them.
+                // Skips files that already have a Related Articles section or already link
+                // to the target slug.
+                WorkflowStep::new("cluster_and_link_apply", "cluster_link_apply"),
             ],
             // fix_* and other implementation types: agentic for now.
             //
@@ -482,7 +489,7 @@ pub fn exec_agentic(
             let automation_dir = paths.automation_dir.to_string_lossy();
             prompt.push_str(&format!(
                 "\n\n## Theme Selection Contract (Required)\n\
-                 You are selecting keyword seed themes only. Do NOT run keyword research yet.\n\
+                 You are selecting keyword SEED QUERIES for the Ahrefs free keyword ideas API.\n\
                  Read project context files in this repo, especially:\n\
                  - {automation_dir}/seo_content_brief.md\n\
                  - {automation_dir}/project_summary.md (if present)\n\
@@ -493,15 +500,29 @@ pub fn exec_agentic(
                    \"themes\": [\"theme 1\", \"theme 2\", \"theme 3\"]\n\
                  }}\n\
                  ```\n\
+                 \n\
+                 ## CRITICAL: Themes are SEED QUERIES, not target keywords\n\
+                 The Ahrefs ideas API expands short seed terms into dozens of related keywords.\n\
+                 Long, specific phrases (4+ words) return ZERO ideas — they are too narrow to expand.\n\
+                 \n\
+                 GOOD seeds (1-3 words, broad enough for Ahrefs to expand):\n\
+                 - \"budget planner\", \"expense tracker\", \"savings tracker\"\n\
+                 - \"options trading\", \"wheel strategy\", \"covered calls\"\n\
+                 - \"content marketing\", \"keyword research\", \"internal linking\"\n\
+                 \n\
+                 BAD seeds (too long/specific, Ahrefs returns zero ideas):\n\
+                 - \"monthly cash flow planner spreadsheet\" → use \"cash flow planner\" instead\n\
+                 - \"variable income budget planner template\" → use \"budget planner\" instead\n\
+                 - \"small business expense categories tax\" → use \"business expenses\" instead\n\
+                 - \"savings goals tracker Google Sheets\" → use \"savings tracker\" instead\n\
+                 \n\
                  Requirements:\n\
-                 - Return 3 to 6 themes.\n\
-                 - Prefer specific gap topics / missing intents from the brief.\n\
-                 - Avoid generic umbrella terms (example: \"risk management\", \"advanced topics\").\n\
-                 - Avoid job-seeker / unrelated enterprise/cybersecurity drift unless explicitly core to this project.\n\
-                 - Keep each theme concise (2-6 words).\n\
-                 - Do NOT include date, year, or month suffixes in themes (wrong: \"vix strategies 2026\", right: \"vix trading strategies\").\n\
-                 - Prefer established, searchable topics that are NOT time-specific; these are used as Ahrefs seed queries.\n\
-                 - Avoid highly niche or newly-coined phrases unlikely to have measurable search volume."
+                 - Return 4 to 6 themes.\n\
+                 - Each theme MUST be 1-3 words maximum.\n\
+                 - Derive topics from the content brief gaps and pillars.\n\
+                 - Pick topics that have real search volume (established, not newly-coined).\n\
+                 - Do NOT include brand names, tool names (Google Sheets, Excel), or year/date suffixes.\n\
+                 - Do NOT include job-seeker / enterprise/cybersecurity terms unless core to this project."
             ));
         }
 
@@ -534,6 +555,19 @@ pub fn exec_agentic(
         }
 
             if is_content_task {
+                // Pre-compute the next safe publish date and inject it into the prompt.
+                // Without this, the agent defaults to today's date which conflicts with
+                // articles already in articles.json and breaks the date distribution.
+                // Cannot be deterministic-only: the date depends on the current state of
+                // articles.json and must be computed from the existing occupied slots.
+                if let Some(date) = compute_next_publish_date(project_path) {
+                    prompt.push_str(&format!(
+                        "\n\n## Publish Date (Required)\n\
+                         - The frontmatter `date:` field MUST be exactly: `{date}`\n\
+                         - Do not use today's date or any other value — use the date above."
+                    ));
+                }
+
                 prompt.push_str(
                     "\n\n## Content File Format (Required)\n\
                      - New articles must be written as `.mdx` files (never `.md`).\n\
@@ -734,6 +768,40 @@ fn snapshot_markdown_mtime(
         }
     }
     out
+}
+
+/// Read articles.json from `{project_path}/.github/automation/articles.json` and return
+/// the next unoccupied past date for a new article.
+///
+/// Implements the same logic as `content::date_policy::suggest_next_safe_date` but reads
+/// dates directly from the on-disk JSON file instead of requiring a DB connection, so it
+/// can be called from inside `exec_agentic` which has no access to SQLite.
+pub(crate) fn compute_next_publish_date(project_path: &str) -> Option<String> {
+    use chrono::{Duration, NaiveDate, Utc};
+    use std::collections::HashSet;
+
+    let articles_path = std::path::Path::new(project_path)
+        .join(".github")
+        .join("automation")
+        .join("articles.json");
+
+    let json = std::fs::read_to_string(&articles_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&json).ok()?;
+    let articles = value.get("articles")?.as_array()?;
+
+    let occupied: HashSet<NaiveDate> = articles
+        .iter()
+        .filter_map(|a| a["published_date"].as_str())
+        .filter(|d| !d.is_empty())
+        .filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .collect();
+
+    let today = Utc::now().date_naive();
+    let mut cursor = today - Duration::days(1);
+    while occupied.contains(&cursor) {
+        cursor -= Duration::days(1);
+    }
+    Some(cursor.format("%Y-%m-%d").to_string())
 }
 
 fn rename_new_or_modified_md_to_mdx(
