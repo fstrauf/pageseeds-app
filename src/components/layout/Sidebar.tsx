@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Layers, FileText, Search, Globe, Settings, ChevronDown, Plus, Pencil, Check, Clock, History, LayoutDashboard } from 'lucide-react'
+import { Layers, FileText, Search, Globe, Settings, ChevronDown, Plus, Pencil, Check, Clock, History, LayoutDashboard, Share2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import type { Project, View } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'reddit', label: 'Reddit', icon: <Search size={16} /> },
   { id: 'gsc', label: 'Search Console', icon: <Globe size={16} /> },
   { id: 'seo', label: 'Keywords', icon: <Search size={16} /> },
+  { id: 'social', label: 'Social', icon: <Share2 size={16} /> },
   { id: 'scheduler', label: 'Scheduler', icon: <Clock size={16} /> },
   { id: 'history', label: 'Run History', icon: <History size={16} /> },
   { id: 'settings', label: 'Settings', icon: <Settings size={16} /> },

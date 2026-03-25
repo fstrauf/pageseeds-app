@@ -471,6 +471,7 @@ export type View =
   | 'reddit'
   | 'gsc'
   | 'seo'
+  | 'social'
   | 'settings'
   | 'scheduler'
   | 'history';
@@ -773,4 +774,141 @@ export interface IngestOrphanResult {
   ingested: number;
   /** Basenames of newly added files */
   files: string[];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Social Media Marketing Types
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type Platform = 'tiktok' | 'instagram_feed' | 'instagram_reel' | 'instagram_story';
+export type PostStatus = 'draft' | 'review' | 'approved' | 'scheduled' | 'posted' | 'failed';
+export type SourceType = 'article' | 'screenshot' | 'spec';
+export type PostFormat = 'single_image' | 'carousel' | 'video_hook';
+export type CampaignStatus = 'draft' | 'generating' | 'active' | 'completed';
+export type AssetType = 'image' | 'video';
+export type CanvasSize = 'tiktok' | 'square' | 'portrait' | 'story';
+export type TextPosition = 'top' | 'center' | 'bottom';
+export type ScheduleStrategy = 'immediate' | 'staggered' | 'specific_times';
+
+export interface SourceConfig {
+  include_articles: boolean;
+  article_slugs: string[];
+  include_screenshots: boolean;
+  screenshot_dirs: string[];
+  include_specs: boolean;
+}
+
+export interface VisualAsset {
+  path: string;
+  asset_type: AssetType;
+  description: string;
+  overlay_text?: string;
+}
+
+export interface PostMetrics {
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  clicks?: number;
+}
+
+export interface OverlayConfig {
+  canvas_size: CanvasSize;
+  font_family: string;
+  primary_color: string;
+  secondary_color: string;
+  text_position: TextPosition;
+  max_text_length: number;
+}
+
+export interface TemplateExample {
+  hook: string;
+  caption: string;
+  visual_description: string;
+}
+
+export interface SocialCampaign {
+  id: string;
+  project_id: string;
+  name: string;
+  description?: string;
+  source_config: SourceConfig;
+  target_platforms: Platform[];
+  template_ids: string[];
+  status: CampaignStatus;
+  post_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SocialPost {
+  id: string;
+  campaign_id: string;
+  project_id: string;
+  source_type: SourceType;
+  source_id: string;
+  source_url?: string;
+  platform: Platform;
+  format: PostFormat;
+  hook: string;
+  caption: string;
+  hashtags: string[];
+  cta: string;
+  visual_assets: VisualAsset[];
+  status: PostStatus;
+  scheduled_at?: string;
+  posted_at?: string;
+  platform_post_id?: string;
+  platform_post_url?: string;
+  metrics?: PostMetrics;
+  template_id: string;
+  generated_by?: string;
+  generation_prompt_hash?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContentTemplate {
+  id: string;
+  project_id?: string;
+  name: string;
+  description?: string;
+  platform: Platform;
+  format: PostFormat;
+  creation_prompt: string;
+  overlay_config: OverlayConfig;
+  default_hashtags: string[];
+  example_output?: TemplateExample;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CampaignStats {
+  total_posts: number;
+  by_status: Record<string, number>;
+  by_platform: Record<string, number>;
+}
+
+export interface ScheduleConfig {
+  strategy: ScheduleStrategy;
+  start_at?: string;
+  interval_hours?: number;
+}
+
+export interface CreateCampaignRequest {
+  project_id: string;
+  name: string;
+  description?: string;
+  source_config: SourceConfig;
+  target_platforms: Platform[];
+  template_ids: string[];
+}
+
+export interface CreateTemplateRequest {
+  project_id?: string;
+  name: string;
+  platform: Platform;
+  format: PostFormat;
+  description: string;
 }

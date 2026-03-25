@@ -1260,3 +1260,127 @@ mod volume_tests {
         assert_eq!(estimate_volume("2,400"), Some(2400));
     }
 }
+
+// Integration tests for keyword research workflow
+#[cfg(test)]
+mod keyword_workflow_tests {
+    use super::*;
+    use crate::engine::workflows::handlers::default_handlers;
+    use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
+    use chrono::Utc;
+
+    fn in_memory_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_dir TEXT,
+                site_url TEXT,
+                site_id TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                agent_provider TEXT
+             );
+             CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                agent_policy TEXT NOT NULL DEFAULT 'none',
+                title TEXT, description TEXT,
+                project_id TEXT NOT NULL,
+                depends_on TEXT NOT NULL DEFAULT '[]',
+                artifacts TEXT NOT NULL DEFAULT '[]',
+                run_attempts INTEGER NOT NULL DEFAULT 0,
+                run_last_error TEXT, run_provider TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+             );",
+        ).unwrap();
+        conn
+    }
+
+    fn create_test_project(conn: &rusqlite::Connection, path: &str) -> String {
+        let id = format!("proj-{}", Utc::now().timestamp_millis());
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active) VALUES (?1, 'Test', ?2, 1)",
+            [&id, path],
+        ).unwrap();
+        id
+    }
+
+    fn create_keyword_research_task(project_id: &str, themes: &[&str]) -> Task {
+        Task {
+            id: format!("task-{}", Utc::now().timestamp_millis()),
+            project_id: project_id.to_string(),
+            task_type: "research_keywords".to_string(),
+            phase: "research".to_string(),
+            status: TaskStatus::Todo,
+            priority: Priority::Medium,
+            execution_mode: ExecutionMode::Automatic,
+            agent_policy: AgentPolicy::Optional,
+            title: Some("Keyword Research".to_string()),
+            description: if themes.is_empty() {
+                None // No themes provided - should trigger agentic mode
+            } else {
+                Some(format!("Themes: {}", themes.join(", ")))
+            },
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        }
+    }
+
+    /// Test workflow planning with explicit themes (deterministic mode).
+    #[test]
+    fn workflow_with_explicit_themes_uses_single_deterministic_step() {
+        let conn = in_memory_db();
+        let temp_dir = std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
+        std::fs::create_dir_all(&temp_dir.join(".github").join("automation")).unwrap();
+        
+        std::fs::write(
+            temp_dir.join(".github").join("automation").join("articles.json"),
+            r#"{"nextArticleId":1,"articles":[]}"#
+        ).unwrap();
+
+        let project_id = create_test_project(&conn, &temp_dir.to_string_lossy());
+        let task = create_keyword_research_task(&project_id, &["personal finance", "budgeting"]);
+
+        let handlers = default_handlers();
+        let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
+        let steps = handler.plan(&task);
+        
+        assert_eq!(steps.len(), 1, "With explicit themes, should have 1 step");
+        assert_eq!(steps[0].kind, "keyword_research_cli");
+        
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// Test workflow planning without themes (requires agentic theme selection).
+    #[test]
+    fn workflow_without_themes_uses_agentic_plus_deterministic_steps() {
+        let conn = in_memory_db();
+        let temp_dir = std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
+        std::fs::create_dir_all(&temp_dir.join(".github").join("automation")).unwrap();
+        
+        std::fs::write(
+            temp_dir.join(".github").join("automation").join("articles.json"),
+            r#"{"nextArticleId":1,"articles":[]}"#
+        ).unwrap();
+
+        let project_id = create_test_project(&conn, &temp_dir.to_string_lossy());
+        // Create task with empty description (no themes) - this should trigger agentic mode
+        let task = create_keyword_research_task(&project_id, &[]);
+        
+        let handlers = default_handlers();
+        let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
+        let steps = handler.plan(&task);
+        
+        assert_eq!(steps.len(), 2, "Without explicit themes, should have 2 steps");
+        assert_eq!(steps[0].kind, "agentic");
+        assert_eq!(steps[1].kind, "keyword_research_cli");
+        
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+}

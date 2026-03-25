@@ -411,3 +411,102 @@ pub fn migrate_reddit_db(
     }
     reddit::db::migrate_from_client_ops(&db, &project_id, &path).map_err(|e| e.to_string())
 }
+
+/// Create reddit_reply tasks from selected opportunities in a completed search task.
+#[tauri::command]
+pub fn create_reddit_reply_tasks(
+    state: State<'_, AppState>,
+    task_id: String,
+    post_ids: Vec<String>,
+) -> Result<Vec<crate::models::task::Task>, String> {
+    use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
+    use crate::models::reddit::RedditOpportunity;
+    use chrono::Utc;
+
+    if post_ids.is_empty() {
+        return Err("No opportunities selected".to_string());
+    }
+
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    
+    // Get the parent task
+    let parent_task = task_store::get_task(&db, &task_id)
+        .map_err(|e| format!("Failed to get parent task: {}", e))?;
+    
+    // Find the reddit_results_stage artifact
+    let results_artifact = parent_task.artifacts.iter()
+        .find(|a| a.key == "reddit_results_stage")
+        .ok_or_else(|| "No reddit_results_stage artifact found. Run the search first.".to_string())?;
+    
+    let artifact_content = results_artifact.content.as_ref()
+        .ok_or_else(|| "reddit_results_stage artifact has no content".to_string())?;
+    
+    // Parse opportunities from JSON
+    let opportunities: Vec<RedditOpportunity> = serde_json::from_str(artifact_content)
+        .map_err(|e| format!("Failed to parse opportunities: {}", e))?;
+    
+    // Filter to only selected post_ids
+    let selected_opps: Vec<RedditOpportunity> = opportunities.into_iter()
+        .filter(|o| post_ids.contains(&o.post_id))
+        .collect();
+    
+    if selected_opps.is_empty() {
+        return Err("None of the selected post IDs were found in the search results".to_string());
+    }
+    
+    // Create a task for each selected opportunity
+    let mut created_tasks = Vec::new();
+    let now = Utc::now().to_rfc3339();
+    
+    for (idx, opp) in selected_opps.iter().enumerate() {
+        let task_id = format!("task-{}", Utc::now().timestamp_millis() + idx as i64);
+        
+        // Determine priority based on severity
+        let priority = match opp.severity.as_deref() {
+            Some("CRITICAL") | Some("HIGH") => Priority::High,
+            _ => Priority::Medium,
+        };
+        
+        let title = format!(
+            "Reply to: {}",
+            opp.title.as_deref().unwrap_or("Reddit post").chars().take(50).collect::<String>()
+        );
+        
+        let description = format!(
+            "**Subreddit:** r/{}\n\n**Post URL:** {}\n\n**Why Relevant:** {}\n\n**Draft Reply:**\n{}\n\n**Post ID:** {}",
+            opp.subreddit.as_deref().unwrap_or("unknown"),
+            opp.url.as_deref().unwrap_or(""),
+            opp.why_relevant.as_deref().unwrap_or(""),
+            opp.reply_text.as_deref().unwrap_or("(no draft reply)"),
+            opp.post_id
+        );
+        
+        let task = Task {
+            id: task_id,
+            project_id: parent_task.project_id.clone(),
+            task_type: "reddit_reply".to_string(),
+            phase: "engagement".to_string(),
+            status: TaskStatus::Todo,
+            priority,
+            execution_mode: ExecutionMode::Manual,
+            agent_policy: AgentPolicy::Optional,
+            title: Some(title),
+            description: Some(description),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+        
+        task_store::create_task(&db, &task)
+            .map_err(|e| format!("Failed to create task: {}", e))?;
+        
+        created_tasks.push(task);
+    }
+    
+    log::info!("[create_reddit_reply_tasks] created {} reply tasks from parent {}", 
+        created_tasks.len(), parent_task.id);
+    
+    Ok(created_tasks)
+}

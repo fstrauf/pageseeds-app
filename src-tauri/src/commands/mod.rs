@@ -24,6 +24,7 @@ pub mod reddit;
 pub mod seo;
 pub mod settings;
 pub mod skills;
+pub mod social;
 pub mod tasks;
 
 pub use articles::*;
@@ -35,4 +36,5 @@ pub use reddit::*;
 pub use seo::*;
 pub use settings::*;
 pub use skills::*;
+pub use social::*;
 pub use tasks::*;

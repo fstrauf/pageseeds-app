@@ -261,6 +261,15 @@ export const enrichRedditOpportunities = (
 ): Promise<string> =>
   invoke('enrich_reddit_opportunities', { projectId })
 
+/** Create reply tasks from selected Reddit opportunities.
+ * Called after user selects opportunities in the picker.
+ */
+export const createRedditReplyTasks = (
+  taskId: string,
+  postIds: string[],
+): Promise<Task[]> =>
+  invoke('create_reddit_reply_tasks', { taskId, postIds })
+
 // ─── GSC ─────────────────────────────────────────────────────────────────────
 
 import type {
@@ -509,3 +518,79 @@ export const fixDateMismatches = (projectId: string): Promise<ContentHealthResul
 /** Import MDX files that exist on disk but have no entry in articles.json. */
 export const ingestOrphanArticles = (projectId: string): Promise<IngestOrphanResult> =>
   invoke('ingest_orphan_articles', { projectId })
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Social Media Marketing
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import type {
+  CampaignStats,
+  ContentTemplate,
+  CreateCampaignRequest,
+  PostStatus,
+  SocialCampaign,
+  SocialPost,
+} from './types'
+
+// ─── Campaigns ────────────────────────────────────────────────────────────────
+
+export const listSocialCampaigns = (projectId: string): Promise<SocialCampaign[]> =>
+  invoke('list_social_campaigns', { projectId })
+
+export const getSocialCampaign = (campaignId: string): Promise<SocialCampaign | null> =>
+  invoke('get_social_campaign', { campaignId })
+
+export const createSocialCampaign = (req: CreateCampaignRequest): Promise<SocialCampaign> =>
+  invoke('create_social_campaign', { req })
+
+export const deleteSocialCampaign = (campaignId: string): Promise<void> =>
+  invoke('delete_social_campaign', { campaignId })
+
+export const getSocialCampaignStats = (campaignId: string): Promise<CampaignStats> =>
+  invoke('get_social_campaign_stats', { campaignId })
+
+// ─── Posts ────────────────────────────────────────────────────────────────────
+
+export const getCampaignPosts = (
+  campaignId: string,
+  status?: PostStatus,
+): Promise<SocialPost[]> =>
+  invoke('get_campaign_posts', { campaignId, status })
+
+export const getSocialPost = (postId: string): Promise<SocialPost | null> =>
+  invoke('get_social_post', { postId })
+
+export const getSocialPostsByProject = (
+  projectId: string,
+  status?: PostStatus,
+): Promise<SocialPost[]> =>
+  invoke('get_social_posts_by_project', { projectId, status })
+
+export const updateSocialPostStatus = (postId: string, status: PostStatus): Promise<void> =>
+  invoke('update_social_post_status', { postId, status })
+
+export const updateSocialPost = (post: SocialPost): Promise<void> =>
+  invoke('update_social_post', { post })
+
+export const scheduleSocialPost = (postId: string, scheduledAt: string): Promise<void> =>
+  invoke('schedule_social_post', { postId, scheduledAt })
+
+export const markSocialPostPosted = (postId: string, platformUrl: string): Promise<void> =>
+  invoke('mark_social_post_posted', { postId, platformUrl })
+
+export const deleteSocialPost = (postId: string): Promise<void> =>
+  invoke('delete_social_post', { postId })
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+export const listSocialTemplates = (projectId: string): Promise<ContentTemplate[]> =>
+  invoke('list_social_templates', { projectId })
+
+export const getSocialTemplate = (templateId: string): Promise<ContentTemplate | null> =>
+  invoke('get_social_template', { templateId })
+
+export const createSocialTemplate = (template: ContentTemplate): Promise<ContentTemplate> =>
+  invoke('create_social_template', { template })
+
+export const deleteSocialTemplate = (templateId: string): Promise<void> =>
+  invoke('delete_social_template', { templateId })

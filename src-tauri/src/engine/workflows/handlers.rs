@@ -252,14 +252,24 @@ impl WorkflowHandler for RedditHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         if task_type(task) == "reddit_opportunity_search" {
             vec![
-                // Step 1 (deterministic): API search + engagement/accessibility scoring.
-                // Filter by age, exclusions, and score threshold. No judgment required.
+                // Step 1 (agentic): Parse reddit_config.md and extract structured search parameters.
+                // Cannot be deterministic: identifying trigger topics, query keywords, product name,
+                // and mention stance from free-form markdown requires semantic understanding.
+                // The agent reads the config file and outputs a structured JSON artifact with:
+                // - product_name, mention_stance, trigger_topics, query_keywords, seed_subreddits, excluded_subreddits
+                WorkflowStep::new("reddit_config_parse_stage", "reddit_config_parse"),
+                // Step 2 (deterministic): API search using the structured parameters from step 1.
+                // Reads the artifact, executes Reddit API calls, applies filters (age, exclusions, score threshold).
+                // No judgment required - pure data fetching and filtering.
                 WorkflowStep::new("reddit_search_stage", "reddit_search"),
-                // Step 2 (agentic): relevance scoring, pain point extraction, reply drafting.
+                // Step 3 (agentic): relevance scoring, pain point extraction, reply drafting.
                 // Cannot be deterministic: deciding whether a post is relevant to *this*
                 // product, extracting intent, and writing a contextually appropriate reply
                 // all require understanding of project context and language.
                 WorkflowStep::new("reddit_enrich_stage", "reddit_enrich"),
+                // Step 4 (deterministic): Fetch enriched opportunities from DB and return as JSON.
+                // Returns concrete posting suggestions with drafted replies for user review.
+                WorkflowStep::new("reddit_results_stage", "reddit_fetch_results"),
             ]
         } else {
             // Other reddit tasks (e.g. reply drafting) still use agent + optional normalizer.

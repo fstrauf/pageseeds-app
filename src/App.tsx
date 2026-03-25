@@ -7,6 +7,7 @@ import { LinkingMap } from './components/articles/LinkingMap'
 import { Reddit } from './components/reddit/Reddit'
 import { GSC } from './components/gsc/GSC'
 import { SEO } from './components/seo/SEO'
+import { SocialDashboard } from './components/social'
 import { ProjectModal } from './components/projects/ProjectModal'
 import { Settings } from './components/settings/Settings'
 import { SchedulerConfig } from './components/workflow/SchedulerConfig'
@@ -182,6 +183,11 @@ export default function App() {
         )}
         {activeView === 'scheduler' && <SchedulerConfig projectId={activeProject?.id ?? ''} />}
         {activeView === 'history' && <RunHistory projectId={activeProject?.id ?? ''} />}
+        {activeView === 'social' && (
+          <SocialDashboard
+            projectId={activeProject?.id ?? ''}
+          />
+        )}
       </Shell>
 
       {queue.isVisible && (

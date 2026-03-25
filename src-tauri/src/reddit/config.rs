@@ -174,12 +174,18 @@ fn extract_mention_stance(content: &str) -> MentionStance {
 }
 
 /// Extract a bullet list from a `## {title}` section.
+/// Flexible parsing: accepts "## Title", "## Title:", and case-insensitive matches
 fn extract_list_section(content: &str, section_title: &str) -> Vec<String> {
     let mut in_section = false;
     let mut items = Vec::new();
+    let section_lower = section_title.to_lowercase();
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with(&format!("## {}", section_title)) {
+        // Check for section header (flexible matching)
+        let trimmed_lower = trimmed.to_lowercase();
+        let is_section = trimmed_lower.starts_with(&format!("## {}", section_lower))
+            || trimmed_lower.starts_with(&format!("## {}:", section_lower));
+        if is_section {
             in_section = true;
             continue;
         }
@@ -187,8 +193,25 @@ fn extract_list_section(content: &str, section_title: &str) -> Vec<String> {
             if trimmed.starts_with("##") {
                 break;
             }
+            // Accept various list formats: -, *, +, 1., etc.
             if let Some(item) = trimmed.strip_prefix("- ") {
                 let item = item.trim().to_string();
+                if !item.is_empty() {
+                    items.push(item);
+                }
+            } else if let Some(item) = trimmed.strip_prefix("* ") {
+                let item = item.trim().to_string();
+                if !item.is_empty() {
+                    items.push(item);
+                }
+            } else if let Some(item) = trimmed.strip_prefix("+ ") {
+                let item = item.trim().to_string();
+                if !item.is_empty() {
+                    items.push(item);
+                }
+            } else if trimmed.len() > 2 && trimmed.chars().next().unwrap().is_ascii_digit() && trimmed.chars().nth(1).unwrap() == '.' {
+                // Numbered list item: "1. item"
+                let item = trimmed[2..].trim().to_string();
                 if !item.is_empty() {
                     items.push(item);
                 }

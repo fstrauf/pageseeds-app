@@ -25,6 +25,7 @@ import {
   SheetClose,
 } from '@/components/ui/sheet'
 import { KeywordPicker } from './KeywordPicker'
+import { RedditOpportunityPicker } from './RedditOpportunityPicker'
 
 const STATUS_BADGE: Record<string, string> = {
   todo: 'bg-secondary text-secondary-foreground border-transparent',
@@ -317,6 +318,28 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
                     // Signal parent to switch to the todo tab (where new tasks will appear).
                     // Then close the panel. The async getTask below updates the task in the
                     // list to 'done' but won't reopen the panel (handleTaskUpdated guards this).
+                    onArticleTasksCreated?.(newTasks)
+                    onClose()
+                    getTask(task.id).then(refreshed => onUpdated(refreshed)).catch(() => {})
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Reddit opportunity picker — shown when Reddit search is in review status */}
+          {task.type === 'reddit_opportunity_search' && task.status === 'review' && (
+            <>
+              <Separator className="bg-border" />
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground font-medium">Reddit Opportunities</div>
+                <p className="text-xs text-muted-foreground">
+                  Select the opportunities you want to reply to, then click "Create Reply Tasks".
+                </p>
+                <RedditOpportunityPicker
+                  task={task}
+                  onTasksCreated={newTasks => {
+                    // Signal parent to switch to the todo tab (where new tasks will appear).
                     onArticleTasksCreated?.(newTasks)
                     onClose()
                     getTask(task.id).then(refreshed => onUpdated(refreshed)).catch(() => {})

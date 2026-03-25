@@ -578,7 +578,7 @@ pub(crate) fn create_tasks_from_collection(
         let title = format!("Fix {}: {}", reason_human, url_slug);
         let description = format!("URL: {}\nIssue: {}\nAction: {}\nVerdict: {}", url, reason, action, verdict);
 
-        let priority = if priority_val <= 30 { "high" } else { "medium" };
+        let _priority = if priority_val <= 30 { "high" } else { "medium" };
         let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis() + created_ids.len() as i64);
         let priority_enum = if priority_val <= 30 { crate::models::task::Priority::High } else { crate::models::task::Priority::Medium };
 

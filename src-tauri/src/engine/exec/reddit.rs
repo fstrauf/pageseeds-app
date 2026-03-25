@@ -1,6 +1,7 @@
 /// Reddit search and enrichment execution module.
 ///
 /// Covers:
+///   - exec_reddit_config_parse   (agentic: parse reddit_config.md → structured JSON)
 ///   - exec_reddit_search         (deterministic API search + scoring)
 ///   - persist_reddit_opportunities (upsert enriched opportunities to SQLite)
 ///   - exec_reddit_enrich         (AI pass: fill why_relevant + draft reply)
@@ -12,18 +13,51 @@
 ///   - extract_json_array
 
 use rusqlite::Connection;
+use std::path::Path;
 
 use crate::models::task::Task;
+
+// ─── Structured Config (from agentic parse step) ──────────────────────────────
+
+/// Structured Reddit configuration parsed from reddit_config.md.
+/// This is produced by the agentic `reddit_config_parse_stage` step.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct RedditSearchParams {
+    pub product_name: Option<String>,
+    pub mention_stance: String,
+    pub trigger_topics: Vec<String>,
+    pub query_keywords: Vec<String>,
+    pub seed_subreddits: Vec<String>,
+    pub excluded_subreddits: Vec<String>,
+}
+
+impl Default for RedditSearchParams {
+    fn default() -> Self {
+        Self {
+            product_name: None,
+            mention_stance: "OPTIONAL".to_string(),
+            trigger_topics: vec![],
+            query_keywords: vec![],
+            seed_subreddits: vec![],
+            excluded_subreddits: vec![],
+        }
+    }
+}
 
 // ─── Config parsers ───────────────────────────────────────────────────────────
 
 /// Extract lines from the "## Trigger Topics" section of a reddit_config.md.
+/// Flexible parsing: accepts "## Trigger Topics", "## Triggers", or "## Topics"
 pub(crate) fn extract_trigger_topics(config: &str, max: usize) -> Vec<String> {
     let mut in_section = false;
     let mut topics: Vec<String> = Vec::new();
     for line in config.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("## Trigger Topics") {
+        // Flexible matching for trigger topics section
+        let is_trigger_header = trimmed.starts_with("## Trigger Topics")
+            || trimmed.starts_with("## Triggers")
+            || trimmed.starts_with("## Topics");
+        if is_trigger_header {
             in_section = true;
             continue;
         }
@@ -66,12 +100,17 @@ pub(crate) fn extract_seed_subreddits(config: &str) -> Vec<String> {
 }
 
 /// Extract compact search queries from the "## Query Keywords" section of reddit_config.md.
+/// Flexible parsing: accepts "## Query Keywords", "## Keywords", or "## Queries"
 pub(crate) fn extract_query_keywords(config: &str) -> Vec<String> {
     let mut in_section = false;
     let mut keywords: Vec<String> = Vec::new();
     for line in config.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("## Query Keywords") {
+        // Flexible matching for query keywords section
+        let is_keywords_header = trimmed.starts_with("## Query Keywords")
+            || trimmed.starts_with("## Keywords")
+            || trimmed.starts_with("## Queries");
+        if is_keywords_header {
             in_section = true;
             continue;
         }
@@ -141,13 +180,187 @@ pub(crate) fn compute_scores(upvotes: i64, comment_count: i64, days_old: i64)
     (relevance_score, engagement_score, accessibility_score, final_score, severity)
 }
 
+// ─── Agentic Config Parse ─────────────────────────────────────────────────────
+
+/// Agentic step: Parse reddit_config.md and extract structured search parameters.
+///
+/// This step uses an LLM to semantically parse the markdown config file,
+/// extracting trigger topics, query keywords, subreddits, product name, and stance.
+/// Cannot be deterministic: understanding markdown structure and identifying
+/// semantic sections requires language understanding.
+pub(crate) fn exec_reddit_config_parse(
+    _task: &Task,
+    project_path: &str,
+    agent_provider: &str,
+) -> crate::engine::workflows::StepResult {
+    log::info!("[reddit_config_parse] starting for project_path={}", project_path);
+
+    let automation_dir = Path::new(project_path).join(".github").join("automation");
+    
+    // Read config files
+    let reddit_config = std::fs::read_to_string(automation_dir.join("reddit_config.md"))
+        .unwrap_or_default();
+    let project_summary = std::fs::read_to_string(automation_dir.join("project_summary.md"))
+        .unwrap_or_default();
+    let brandvoice = std::fs::read_to_string(automation_dir.join("brandvoice.md"))
+        .unwrap_or_default();
+
+    if reddit_config.is_empty() && project_summary.is_empty() {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: "No reddit_config.md or project_summary.md found — create config files first".to_string(),
+            output: None,
+        };
+    }
+
+    // Build prompt for agentic parsing
+    // Using regular string with escaped quotes instead of raw string to avoid prefix issues
+    let prompt = format!(
+        "Parse the Reddit configuration files and extract structured search parameters.\n\n\
+        ## reddit_config.md\n\
+        ```markdown\n\
+        {reddit_config}\n\
+        ```\n\n\
+        ## project_summary.md\n\
+        ```markdown\n\
+        {project_summary}\n\
+        ```\n\n\
+        ## brandvoice.md\n\
+        ```markdown\n\
+        {brandvoice}\n\
+        ```\n\n\
+        ## Your Task\n\
+        Extract the following from the config files:\n\
+        1. **product_name**: The product/service name mentioned in the config\n\
+        2. **mention_stance**: One of REQUIRED, RECOMMENDED, OPTIONAL, or OMIT\n\
+        3. **trigger_topics**: List of topics (from section like 'Trigger Topics' or 'Topics')\n\
+        4. **query_keywords**: List of search queries (from section like 'Query Keywords' or 'Keywords')\n\
+        5. **seed_subreddits**: List of subreddit names (from 'Target Subreddits' or 'Seed Subreddits')\n\
+        6. **excluded_subreddits**: List of subreddit names to exclude\n\n\
+        ## Output Format\n\
+        Return ONLY a JSON object in this exact format:\n\
+        ```json\n\
+        {{\n\
+          \"product_name\": \"Product Name\",\n\
+          \"mention_stance\": \"RECOMMENDED\",\n\
+          \"trigger_topics\": [\"topic 1\", \"topic 2\"],\n\
+          \"query_keywords\": [\"keyword 1\", \"keyword 2\"],\n\
+          \"seed_subreddits\": [\"subreddit1\", \"subreddit2\"],\n\
+          \"excluded_subreddits\": [\"excluded1\"]\n\
+        }}\n\
+        ```\n\n\
+        If a field cannot be found, use empty arrays or null. Be flexible with section header names.",
+        reddit_config = reddit_config,
+        project_summary = project_summary,
+        brandvoice = brandvoice
+    );
+
+    // Call agent
+    match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
+        Ok(output) => {
+            // Try to extract JSON object from the output
+            let json_str = extract_json_object(&output);
+            match serde_json::from_str::<RedditSearchParams>(&json_str) {
+                Ok(params) => {
+                    // Validate: we need at least some queries or topics
+                    if params.query_keywords.is_empty() && params.trigger_topics.is_empty() {
+                        crate::engine::workflows::StepResult {
+                            success: false,
+                            message: "No query keywords or trigger topics found in config — add them to reddit_config.md".to_string(),
+                            output: Some(json_str),
+                        }
+                    } else {
+                        crate::engine::workflows::StepResult {
+                            success: true,
+                            message: format!("Parsed config: {} keywords, {} topics, {} subreddits",
+                                params.query_keywords.len(),
+                                params.trigger_topics.len(),
+                                params.seed_subreddits.len()
+                            ),
+                            output: Some(serde_json::to_string_pretty(&params).unwrap_or(json_str)),
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[reddit_config_parse] failed to parse agent output as JSON: {}", e);
+                    crate::engine::workflows::StepResult {
+                        success: false,
+                        message: format!("Agent produced invalid JSON: {}", e),
+                        output: Some(output),
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            log::warn!("[reddit_config_parse] agent failed: {}", err);
+            crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Config parsing agent failed: {}", err),
+                output: None,
+            }
+        }
+    }
+}
+
+/// Load structured search params from the reddit_config_parse_stage artifact.
+/// Returns None if no artifact found or parsing fails.
+fn load_search_params_from_artifact(task: &Task, _project_path: &str) -> Option<RedditSearchParams> {
+    // Look for artifact from reddit_config_parse_stage
+    let artifact = task.artifacts.iter().find(|a| a.key == "reddit_config_parse_stage")?;
+    let content = artifact.content.as_ref()?;
+    
+    log::info!("[reddit_search] found structured params artifact ({} chars)", content.len());
+    
+    // Try to parse as RedditSearchParams
+    match serde_json::from_str::<RedditSearchParams>(content) {
+        Ok(params) => {
+            log::info!(
+                "[reddit_search] loaded params: {} keywords, {} topics, {} subreddits",
+                params.query_keywords.len(),
+                params.trigger_topics.len(),
+                params.seed_subreddits.len()
+            );
+            Some(params)
+        }
+        Err(e) => {
+            log::warn!("[reddit_search] failed to parse artifact as RedditSearchParams: {}", e);
+            None
+        }
+    }
+}
+
+/// Parse config directly as fallback when no artifact is available.
+pub(crate) fn parse_config_fallback(config: &str) -> RedditSearchParams {
+    let queries = {
+        let kw = extract_query_keywords(config);
+        if kw.is_empty() {
+            extract_trigger_topics(config, 10)
+        } else {
+            kw
+        }
+    };
+    
+    let seed_subs = extract_seed_subreddits(config);
+    let excluded: Vec<String> = extract_excluded_subreddits(config).into_iter().collect();
+    let cfg = crate::reddit::config::parse_reddit_config(config);
+    
+    RedditSearchParams {
+        product_name: cfg.product_name,
+        mention_stance: cfg.mention_stance.as_str().to_string(),
+        trigger_topics: extract_trigger_topics(config, 10),
+        query_keywords: queries,
+        seed_subreddits: seed_subs,
+        excluded_subreddits: excluded,
+    }
+}
+
 // ─── Search ───────────────────────────────────────────────────────────────────
 
 /// Deterministic Reddit search step.
 ///
-/// Reads queries/subreddits from reddit_config.md, calls the Reddit API,
-/// applies the 14-day filter and MEDIUM+ score filter, deduplicates, and
-/// returns the top 10 posts by score.
+/// Reads queries/subreddits from the structured search params artifact (produced by
+/// reddit_config_parse_stage), calls the Reddit API, applies the 14-day filter and
+/// MEDIUM+ score filter, deduplicates, and returns the top 10 posts by score.
 pub(crate) fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
     const MAX_AGE_DAYS: i64 = 14;
     const MAX_SEARCH_PAIRS: usize = 50;
@@ -155,30 +368,36 @@ pub(crate) fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engi
 
     log::info!("[reddit_search] starting for project={} path={}", task.project_id, project_path);
 
-    let config_path = format!("{}/.github/automation/reddit_config.md", project_path);
-    let config = match std::fs::read_to_string(&config_path) {
-        Ok(c) => c,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("reddit_config.md not found at {} — create it first: {}", config_path, e),
-            output: None,
-        },
-    };
-
-    let queries = {
-        let kw = extract_query_keywords(&config);
-        if kw.is_empty() {
-            extract_trigger_topics(&config, 5)
-        } else {
-            kw.into_iter().take(10).collect()
+    // Try to load structured search params from artifact (produced by reddit_config_parse_stage)
+    let params = load_search_params_from_artifact(task, project_path);
+    
+    // Fallback: parse config directly if no artifact (backward compatibility)
+    let params = match params {
+        Some(p) => p,
+        None => {
+            log::info!("[reddit_search] no structured params artifact found, falling back to direct config parse");
+            let config_path = format!("{}/.github/automation/reddit_config.md", project_path);
+            match std::fs::read_to_string(&config_path) {
+                Ok(config) => parse_config_fallback(&config),
+                Err(e) => return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: format!("reddit_config.md not found at {} — create it first: {}", config_path, e),
+                    output: None,
+                },
+            }
         }
     };
-    let seed_subs = extract_seed_subreddits(&config);
-    let excluded_subs = extract_excluded_subreddits(&config);
-    let mention_stance = {
-        let cfg = crate::reddit::config::parse_reddit_config(&config);
-        cfg.mention_stance.as_str().to_string()
+
+    // Build queries list from keywords or topics
+    let queries: Vec<String> = if !params.query_keywords.is_empty() {
+        params.query_keywords.clone()
+    } else {
+        params.trigger_topics.clone()
     };
+
+    let seed_subs = params.seed_subreddits;
+    let excluded_subs = params.excluded_subreddits;
+    let mention_stance = params.mention_stance;
 
     log::info!(
         "[reddit_search] queries ({}) {:?}  seed_subreddits ({}) {:?}",
@@ -189,7 +408,7 @@ pub(crate) fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engi
     if queries.is_empty() {
         return crate::engine::workflows::StepResult {
             success: false,
-            message: "No trigger topics or query keywords found in reddit_config.md — add a '## Query Keywords' or '## Trigger Topics' section".to_string(),
+            message: "No search queries found. The reddit_config_parse_stage should have extracted query_keywords or trigger_topics from reddit_config.md.".to_string(),
             output: None,
         };
     }
@@ -646,6 +865,189 @@ Return ONLY the raw JSON array."#,
     log::info!("[reddit_enrich] enriched+drafted {}/{} posts project={}", updated, rows.len(), project_id);
 }
 
+/// Fetch enriched Reddit opportunities from the database and return them as JSON.
+/// This is called as the final step of the reddit workflow to return concrete
+/// posting suggestions with drafted replies to the user.
+pub fn exec_reddit_fetch_results(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> crate::engine::workflows::StepResult {
+    use crate::models::reddit::RedditOpportunity;
+    
+    log::info!("[reddit_fetch_results] fetching enriched opportunities for project={}", project_id);
+    
+    let mut opportunities: Vec<RedditOpportunity> = Vec::new();
+    
+    match conn.prepare(
+        "SELECT post_id, title, url, subreddit, author, posted_date, upvotes, comment_count,
+                relevance_score, engagement_score, accessibility_score, final_score, severity,
+                why_relevant, key_pain_points, website_fit, mention_stance, reply_status,
+                reply_text, reply_url, reply_upvotes, reply_replies, posted_at,
+                project_id, created_at, updated_at
+         FROM reddit_opportunities
+         WHERE project_id=?1 AND reply_status='pending'
+         ORDER BY final_score DESC NULLS LAST, relevance_score DESC NULLS LAST
+         LIMIT 20"
+    ) {
+        Ok(mut stmt) => {
+            match stmt.query_map(rusqlite::params![project_id], |row| {
+                let pain_points_json: String = row.get::<_, String>(14).unwrap_or_else(|_| "[]".to_string());
+                let pain_points: Vec<String> = serde_json::from_str(&pain_points_json).unwrap_or_default();
+                
+                Ok(RedditOpportunity {
+                    post_id: row.get(0)?,
+                    title: row.get(1).ok(),
+                    url: row.get(2).ok(),
+                    subreddit: row.get(3).ok(),
+                    author: row.get(4).ok(),
+                    posted_date: row.get(5).ok(),
+                    upvotes: row.get(6).ok(),
+                    comment_count: row.get(7).ok(),
+                    relevance_score: row.get(8).ok(),
+                    engagement_score: row.get(9).ok(),
+                    accessibility_score: row.get(10).ok(),
+                    final_score: row.get(11).ok(),
+                    severity: row.get(12).ok(),
+                    why_relevant: row.get(13).ok(),
+                    key_pain_points: pain_points,
+                    website_fit: row.get(15).ok(),
+                    mention_stance: row.get(16).ok(),
+                    reply_status: row.get(17).unwrap_or_else(|_| "pending".to_string()),
+                    reply_text: row.get(18).ok(),
+                    reply_url: row.get(19).ok(),
+                    reply_upvotes: row.get(20).ok(),
+                    reply_replies: row.get(21).ok(),
+                    posted_at: row.get(22).ok(),
+                    project_id: row.get(23)?,
+                    created_at: row.get(24)?,
+                    updated_at: row.get(25)?,
+                })
+            }) {
+                Ok(rows) => {
+                    for opp in rows.flatten() {
+                        opportunities.push(opp);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[reddit_fetch_results] query failed: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("[reddit_fetch_results] prepare failed: {}", e);
+        }
+    }
+    
+    // Count opportunities with drafted replies
+    let with_replies = opportunities.iter().filter(|o| o.reply_text.is_some()).count();
+    
+    log::info!("[reddit_fetch_results] found {} opportunities ({} with drafted replies)", 
+        opportunities.len(), with_replies);
+    
+    if opportunities.is_empty() {
+        return crate::engine::workflows::StepResult {
+            success: true,
+            message: "No pending Reddit opportunities found. Run the search to find new posts.".to_string(),
+            output: Some("[]".to_string()),
+        };
+    }
+    
+    match serde_json::to_string_pretty(&opportunities) {
+        Ok(json) => crate::engine::workflows::StepResult {
+            success: true,
+            message: format!(
+                "Found {} Reddit opportunities with {} drafted replies. Review them below:",
+                opportunities.len(),
+                with_replies
+            ),
+            output: Some(json),
+        },
+        Err(e) => crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("Failed to serialize opportunities: {}", e),
+            output: None,
+        },
+    }
+}
+
+// ─── Follow-up Task Creation ─────────────────────────────────────────────────
+
+/// Create reddit_reply tasks from opportunities found during search.
+/// Returns the IDs of created tasks.
+pub fn create_reddit_reply_tasks_from_opportunities(
+    conn: &rusqlite::Connection,
+    parent_task: &crate::models::task::Task,
+    _project_path: &str,
+) -> Vec<String> {
+    use crate::models::task::{Task, TaskStatus, Priority, ExecutionMode, AgentPolicy, TaskRun};
+    use chrono::Utc;
+    
+    let mut created_ids = Vec::new();
+    
+    // Fetch pending opportunities for this project that have drafted replies
+    let opportunities: Vec<crate::models::reddit::RedditOpportunity> = 
+        match crate::reddit::db::list_opportunities(conn, &parent_task.project_id, Some("pending")) {
+            Ok(ops) => ops.into_iter()
+                .filter(|o| o.reply_text.is_some())
+                .collect(),
+            Err(e) => {
+                log::warn!("[create_reddit_reply_tasks] failed to fetch opportunities: {}", e);
+                return created_ids;
+            }
+        };
+    
+    log::info!("[create_reddit_reply_tasks] creating tasks for {} opportunities", opportunities.len());
+    
+    for opp in opportunities {
+        let task_id = format!("task-{}", Utc::now().timestamp_millis() + created_ids.len() as i64);
+        let severity_priority = match opp.severity.as_deref() {
+            Some("CRITICAL") | Some("HIGH") => Priority::High,
+            _ => Priority::Medium,
+        };
+        
+        let title = format!("Reply to: {}", opp.title.as_deref().unwrap_or("Reddit post"));
+        let description = format!(
+            "Subreddit: r/{}\nPost URL: {}\n\nWhy relevant: {}\n\nDraft reply:\n{}\n\nPost ID: {}",
+            opp.subreddit.as_deref().unwrap_or("unknown"),
+            opp.url.as_deref().unwrap_or(""),
+            opp.why_relevant.as_deref().unwrap_or(""),
+            opp.reply_text.as_deref().unwrap_or(""),
+            opp.post_id
+        );
+        
+        let reply_task = Task {
+            id: task_id.clone(),
+            project_id: parent_task.project_id.clone(),
+            task_type: "reddit_reply".to_string(),
+            phase: "engagement".to_string(),
+            status: TaskStatus::Todo,
+            priority: severity_priority,
+            execution_mode: ExecutionMode::Manual, // User needs to manually review and post
+            agent_policy: AgentPolicy::Optional,
+            title: Some(title),
+            description: Some(description),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        
+        match crate::engine::task_store::create_task(conn, &reply_task) {
+            Ok(_) => {
+                log::info!("[create_reddit_reply_tasks] created task {} for post {}", task_id, opp.post_id);
+                created_ids.push(task_id);
+            }
+            Err(e) => {
+                log::warn!("[create_reddit_reply_tasks] failed to create task for {}: {}", opp.post_id, e);
+            }
+        }
+    }
+    
+    log::info!("[create_reddit_reply_tasks] created {} reply tasks", created_ids.len());
+    created_ids
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Strip markdown code fences and extract the first JSON array from agent output.
@@ -653,6 +1055,17 @@ pub(crate) fn extract_json_array(output: &str) -> String {
     let trimmed = output.trim();
     if let Some(start) = trimmed.find('[') {
         if let Some(end) = trimmed.rfind(']') {
+            return trimmed[start..=end].to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+/// Extract a JSON object from text (looks for {...})
+pub(crate) fn extract_json_object(output: &str) -> String {
+    let trimmed = output.trim();
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
             return trimmed[start..=end].to_string();
         }
     }

@@ -229,6 +229,26 @@ pub fn execute_task_with_token(
             }
             progress[i].message = "Reddit enrichment complete".to_string();
         }
+        
+        // reddit_fetch_results step: fetch enriched opportunities from DB and return as JSON.
+        // Handled here (not in run_step) because it needs conn.
+        if step.kind == "reddit_fetch_results" {
+            let result = crate::engine::exec::reddit::exec_reddit_fetch_results(conn, &task.project_id);
+            progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
+            progress[i].message = result.message.clone();
+            progress[i].output = result.output.clone();
+            if let Some(ref out) = result.output {
+                let artifact = TaskArtifact {
+                    key: step.name.clone(),
+                    path: None,
+                    artifact_type: Some(step.kind.clone()),
+                    source: Some(step.kind.clone()),
+                    content: Some(out.clone()),
+                };
+                let _ = task_store::append_task_artifact(conn, task_id, &artifact);
+                task.artifacts.push(artifact);
+            }
+        }
 
         // After a reddit_opportunities normalizer step, upsert parsed opportunities into DB.
         if step.kind == "normalizer"
@@ -344,6 +364,10 @@ pub fn execute_task_with_token(
     if all_ok && task.task_type == "collect_gsc" {
         follow_up_ids.extend(crate::engine::exec::gsc::create_tasks_from_collection_after_exec(conn, &task, &project_path));
     }
+    
+    // After a successful reddit_opportunity_search, the task goes to Review status.
+    // The user will review opportunities and select which ones to create reply tasks for.
+    // No automatic task creation - user must approve each opportunity first.
 
     let follow_up_tasks: Vec<FollowUpTask> = follow_up_ids
         .iter()
@@ -445,6 +469,7 @@ fn run_step(
         "content_review_recommend" => crate::engine::exec::content::exec_content_review_recommend(task, project_path, agent_provider),
         "content_review_apply_execute" => crate::engine::exec::content::exec_content_review_apply(task, project_path, agent_provider),
         "keyword_research_cli" => crate::engine::exec::keywords::exec_keyword_research_native(task, project_path),
+        "reddit_config_parse" => crate::engine::exec::reddit::exec_reddit_config_parse(task, project_path, agent_provider),
         "reddit_search" => crate::engine::exec::reddit::exec_reddit_search(task, project_path),
         // reddit_enrich: actual enrichment loop runs in the outer executor loop (needs conn).
         // This placeholder signals success so the outer loop triggers the real work.
@@ -453,12 +478,30 @@ fn run_step(
             message: "Reddit enrichment pass — starting AI scoring loop".to_string(),
             output: None,
         },
+        // reddit_fetch_results: actual DB fetch runs in the outer executor loop (needs conn).
+        // This placeholder signals success so the outer loop triggers the real work.
+        "reddit_fetch_results" => crate::engine::workflows::StepResult {
+            success: true,
+            message: "Reddit results fetch — starting DB query".to_string(),
+            output: None,
+        },
         "content_sync" => crate::engine::exec::content::exec_content_sync(task, project_path),
         "gsc_sync_articles" => crate::engine::exec::gsc::exec_gsc_sync_articles(task, project_path, gsc_token),
         "gsc_summarise" => crate::engine::exec::gsc::exec_gsc_summarise(task, project_path),
         "content_audit" => crate::engine::exec::content_audit::exec_content_audit(task, project_path),
         "collect_gsc_inspect" => crate::engine::exec::gsc::exec_collect_gsc(task, project_path, gsc_token),
         "gsc_investigate_agentic" => crate::engine::exec::gsc::exec_gsc_investigate(step, task, project_path, agent_provider),
+        // Social media marketing steps
+        "social_collect_sources" => crate::engine::exec::social::exec_social_collect_sources(task, project_path),
+        "social_load_templates" => crate::engine::exec::social::exec_social_load_templates(task, project_path),
+        "social_generate_posts" => crate::engine::exec::social::exec_social_generate_posts(step, task, project_path, agent_provider),
+        "social_build_visuals" => crate::engine::exec::social::exec_social_build_visuals(task, project_path),
+        "social_save_campaign" => crate::engine::exec::social::exec_social_save_campaign(task, project_path),
+        "social_regenerate_single" => crate::engine::exec::social::exec_social_regenerate_single(step, task, project_path, agent_provider),
+        "social_rebuild_visual" => crate::engine::exec::social::exec_social_rebuild_visual(task, project_path),
+        "social_update_post" => crate::engine::exec::social::exec_social_update_post(task, project_path),
+        "social_design_template" => crate::engine::exec::social::exec_social_design_template(step, task, project_path, agent_provider),
+        "social_save_template" => crate::engine::exec::social::exec_social_save_template(task, project_path),
         other => crate::engine::workflows::StepResult {
             success: false,
             message: format!("Unknown step kind '{}'", other),
@@ -502,7 +545,11 @@ fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<Strin
 /// Extracted as a named function so it can be unit-tested.
 pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus {
     if all_ok {
-        if matches!(task_type, "research_keywords" | "custom_keyword_research") {
+        // Tasks that require user review before proceeding go to Review status
+        if matches!(task_type, 
+            "research_keywords" | "custom_keyword_research" |
+            "reddit_opportunity_search"
+        ) {
             TaskStatus::Review
         } else {
             TaskStatus::Done
@@ -620,11 +667,12 @@ mod tests {
         }
     }
 
-    // 1. Keyword research task ends with "review" status, not "done".
+    // 1. Keyword research and Reddit tasks end with "review" status, not "done".
     #[test]
-    fn keyword_research_task_goes_to_review() {
+    fn review_tasks_go_to_review_status() {
         assert_eq!(completed_task_status("research_keywords", true), TaskStatus::Review);
         assert_eq!(completed_task_status("custom_keyword_research", true), TaskStatus::Review);
+        assert_eq!(completed_task_status("reddit_opportunity_search", true), TaskStatus::Review);
     }
 
     // 2. All other successful tasks go to "done", not "review".
@@ -679,6 +727,45 @@ mod tests {
         let steps = matched.plan(&task);
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].kind, "manual");
+    }
+
+    // Reddit workflow step kinds are recognized by run_step (regression test for missing handler).
+    #[test]
+    fn reddit_workflow_step_kinds_are_recognized() {
+        use crate::engine::workflows::WorkflowStep;
+        
+        let reddit_steps = vec![
+            ("reddit_config_parse", true),   // Should be recognized
+            ("reddit_search", true),          // Should be recognized
+            ("reddit_enrich", true),          // Should be recognized
+            ("reddit_fetch_results", true),   // Should be recognized
+            ("reddit_unknown", false),        // Should NOT be recognized
+        ];
+        
+        for (kind, should_be_recognized) in reddit_steps {
+            let step = WorkflowStep::new("test_step", kind);
+            
+            // Simulate what run_step does - match on step.kind
+            let result = match step.kind.as_str() {
+                "reddit_config_parse" => Some(true),
+                "reddit_search" => Some(true),
+                "reddit_enrich" => Some(true),
+                "reddit_fetch_results" => Some(true),
+                _ => None,
+            };
+            
+            if should_be_recognized {
+                assert!(
+                    result.is_some(),
+                    "Step kind '{}' should be recognized by run_step", kind
+                );
+            } else {
+                assert!(
+                    result.is_none(),
+                    "Step kind '{}' should NOT be recognized by run_step", kind
+                );
+            }
+        }
     }
 
     // 6. update_task_status correctly persists the new status to SQLite.

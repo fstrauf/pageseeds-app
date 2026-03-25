@@ -8,6 +8,7 @@ mod gsc;
 pub mod models;
 mod reddit;
 mod seo;
+mod social;
 
 use commands::{AppState, GscState, SeoState};
 use std::sync::Mutex;
@@ -83,6 +84,7 @@ pub fn run() {
             commands::run_reddit_opportunity_search,
             commands::draft_reddit_reply,
             commands::enrich_reddit_opportunities,
+            commands::create_reddit_reply_tasks,
             commands::gsc_get_auth_status,
             commands::gsc_authenticate,
             commands::gsc_oauth_start,
@@ -129,6 +131,24 @@ pub fn run() {
             commands::preflight_publish_articles,
             commands::apply_publish_articles,
             commands::resolve_year_mismatch_agent,
+            // Phase 8 — Social Media Marketing
+            commands::list_social_campaigns,
+            commands::get_social_campaign,
+            commands::create_social_campaign,
+            commands::delete_social_campaign,
+            commands::get_campaign_posts,
+            commands::get_social_post,
+            commands::update_social_post_status,
+            commands::update_social_post,
+            commands::schedule_social_post,
+            commands::mark_social_post_posted,
+            commands::delete_social_post,
+            commands::list_social_templates,
+            commands::get_social_template,
+            commands::create_social_template,
+            commands::delete_social_template,
+            commands::get_social_campaign_stats,
+            commands::get_social_posts_by_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

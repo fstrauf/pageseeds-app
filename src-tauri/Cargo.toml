@@ -38,6 +38,7 @@ csv = "1"
 urlencoding = "2"
 env_logger = "0.11"
 ts-rs = "10"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 wiremock = "0.6"

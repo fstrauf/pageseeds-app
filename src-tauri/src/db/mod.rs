@@ -113,6 +113,103 @@ CREATE TABLE IF NOT EXISTS scheduler_rules (
 );
 "#;
 
+static MIGRATION_V6: &str = r#"
+-- Social media marketing campaigns
+CREATE TABLE IF NOT EXISTS social_campaigns (
+    id                  TEXT PRIMARY KEY,
+    project_id          TEXT NOT NULL,
+    name                TEXT NOT NULL,
+    description         TEXT,
+    
+    -- Source configuration (JSON)
+    source_config       TEXT NOT NULL,
+    
+    -- Target platforms and templates (JSON arrays)
+    target_platforms    TEXT NOT NULL,
+    template_ids        TEXT NOT NULL,
+    
+    status              TEXT NOT NULL DEFAULT 'draft',
+    post_count          INTEGER DEFAULT 0,
+    
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_campaigns_project ON social_campaigns(project_id);
+CREATE INDEX IF NOT EXISTS idx_social_campaigns_status ON social_campaigns(status);
+
+-- Social media posts
+CREATE TABLE IF NOT EXISTS social_posts (
+    id                      TEXT PRIMARY KEY,
+    campaign_id             TEXT NOT NULL,
+    project_id              TEXT NOT NULL,
+    
+    source_type             TEXT NOT NULL,
+    source_id               TEXT NOT NULL,
+    source_url              TEXT,
+    
+    platform                TEXT NOT NULL,
+    format                  TEXT NOT NULL,
+    
+    hook                    TEXT NOT NULL,
+    caption                 TEXT NOT NULL,
+    hashtags                TEXT NOT NULL,        -- JSON array
+    cta                     TEXT NOT NULL,
+    
+    visual_assets           TEXT NOT NULL,       -- JSON array
+    
+    status                  TEXT NOT NULL DEFAULT 'draft',
+    
+    scheduled_at            TEXT,
+    posted_at               TEXT,
+    platform_post_id        TEXT,
+    platform_post_url       TEXT,
+    
+    metrics                 TEXT,                  -- JSON
+    
+    template_id             TEXT NOT NULL,
+    generated_by            TEXT,
+    generation_prompt_hash  TEXT,
+    
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    
+    FOREIGN KEY (campaign_id) REFERENCES social_campaigns(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_posts_campaign ON social_posts(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_social_posts_project ON social_posts(project_id);
+CREATE INDEX IF NOT EXISTS idx_social_posts_status ON social_posts(status);
+CREATE INDEX IF NOT EXISTS idx_social_posts_scheduled ON social_posts(scheduled_at) 
+    WHERE status = 'scheduled';
+
+-- Content templates (global or project-specific)
+CREATE TABLE IF NOT EXISTS social_templates (
+    id                  TEXT PRIMARY KEY,
+    project_id          TEXT,                     -- NULL for global templates
+    
+    name                TEXT NOT NULL,
+    description         TEXT,
+    platform            TEXT NOT NULL,
+    format              TEXT NOT NULL,
+    
+    creation_prompt     TEXT NOT NULL,
+    overlay_config      TEXT NOT NULL,           -- JSON
+    default_hashtags    TEXT NOT NULL,          -- JSON array
+    example_output      TEXT,                    -- JSON
+    
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_templates_project ON social_templates(project_id);
+"#;
+
 pub fn init(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -190,6 +287,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (5, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 6 {
+        conn.execute_batch(MIGRATION_V6)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (6, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

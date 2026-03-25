@@ -3,3 +3,4 @@ pub mod project;
 pub mod article;
 pub mod reddit;
 pub mod gsc;
+pub mod social;
