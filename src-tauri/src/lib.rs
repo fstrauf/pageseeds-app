@@ -149,6 +149,13 @@ pub fn run() {
             commands::delete_social_template,
             commands::get_social_campaign_stats,
             commands::get_social_posts_by_project,
+            // Task Queue
+            commands::execute_queue,
+            commands::pause_queue,
+            commands::resume_queue,
+            commands::clear_completed_queue_items,
+            // Logging
+            commands::get_log_file_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

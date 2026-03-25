@@ -214,9 +214,9 @@ pub(crate) fn exec_reddit_config_parse(
     }
 
     // Build prompt for agentic parsing
-    // Using regular string with escaped quotes instead of raw string to avoid prefix issues
+    // Simplified prompt that works - see examples/test_reddit_config_parse.rs
     let prompt = format!(
-        "Parse the Reddit configuration files and extract structured search parameters.\n\n\
+        "Extract Reddit search parameters from the config files below. Return ONLY a JSON object.\n\n\
         ## reddit_config.md\n\
         ```markdown\n\
         {reddit_config}\n\
@@ -229,27 +229,19 @@ pub(crate) fn exec_reddit_config_parse(
         ```markdown\n\
         {brandvoice}\n\
         ```\n\n\
-        ## Your Task\n\
-        Extract the following from the config files:\n\
-        1. **product_name**: The product/service name mentioned in the config\n\
-        2. **mention_stance**: One of REQUIRED, RECOMMENDED, OPTIONAL, or OMIT\n\
-        3. **trigger_topics**: List of topics (from section like 'Trigger Topics' or 'Topics')\n\
-        4. **query_keywords**: List of search queries (from section like 'Query Keywords' or 'Keywords')\n\
-        5. **seed_subreddits**: List of subreddit names (from 'Target Subreddits' or 'Seed Subreddits')\n\
-        6. **excluded_subreddits**: List of subreddit names to exclude\n\n\
-        ## Output Format\n\
-        Return ONLY a JSON object in this exact format:\n\
-        ```json\n\
-        {{\n\
-          \"product_name\": \"Product Name\",\n\
-          \"mention_stance\": \"RECOMMENDED\",\n\
-          \"trigger_topics\": [\"topic 1\", \"topic 2\"],\n\
-          \"query_keywords\": [\"keyword 1\", \"keyword 2\"],\n\
-          \"seed_subreddits\": [\"subreddit1\", \"subreddit2\"],\n\
-          \"excluded_subreddits\": [\"excluded1\"]\n\
-        }}\n\
-        ```\n\n\
-        If a field cannot be found, use empty arrays or null. Be flexible with section header names.",
+        ## Required JSON Output\n\
+        Return a JSON object with these exact keys:\n\
+        - product_name: string\n\
+        - mention_stance: string (REQUIRED, RECOMMENDED, OPTIONAL, or OMIT)\n\
+        - trigger_topics: array of strings\n\
+        - query_keywords: array of strings (use same as trigger_topics)\n\
+        - seed_subreddits: array of strings (WITHOUT r/ prefix)\n\
+        - excluded_subreddits: array of strings\n\n\
+        ## Example\n\
+        If the config has Product Name: Days to Expiry, then return:\n\
+        {{\"product_name\": \"Days to Expiry\", ...}}\n\n\
+        Do NOT return placeholder text like \"<actual product name>\".\n\
+        Return ONLY the JSON object, starting with {{ and ending with }}.",
         reddit_config = reddit_config,
         project_summary = project_summary,
         brandvoice = brandvoice
@@ -361,7 +353,7 @@ pub(crate) fn parse_config_fallback(config: &str) -> RedditSearchParams {
 /// Reads queries/subreddits from the structured search params artifact (produced by
 /// reddit_config_parse_stage), calls the Reddit API, applies the 14-day filter and
 /// MEDIUM+ score filter, deduplicates, and returns the top 10 posts by score.
-pub(crate) fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
+pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
     const MAX_AGE_DAYS: i64 = 14;
     const MAX_SEARCH_PAIRS: usize = 50;
     const MAX_RESULTS: usize = 10;
@@ -435,12 +427,9 @@ pub(crate) fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engi
         std::path::Path::new(project_path)
     );
     let handled_ids = history_manager.get_all_handled_ids();
-    let rt_handle = tokio::runtime::Handle::current();
 
     for (subreddit, query) in &search_pairs {
-        let posts = match rt_handle.block_on(
-            crate::reddit::search::search_submissions(query, subreddit, 10, "relevance", "week")
-        ) {
+        let posts = match crate::reddit::search::search_submissions(query, subreddit, 10, "relevance", "week").await {
             Ok(p) => p,
             Err(e) => {
                 log::warn!("[reddit_search] search failed sub={:?} q={:?}: {}", subreddit, query, e);

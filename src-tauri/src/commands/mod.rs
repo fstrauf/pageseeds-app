@@ -18,6 +18,7 @@ pub struct SeoState {
 pub mod articles;
 pub mod content;
 pub mod engine;
+pub mod executor;
 pub mod gsc;
 pub mod projects;
 pub mod reddit;
@@ -30,6 +31,7 @@ pub mod tasks;
 pub use articles::*;
 pub use content::*;
 pub use engine::*;
+pub use executor::*;
 pub use gsc::*;
 pub use projects::*;
 pub use reddit::*;

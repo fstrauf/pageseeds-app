@@ -78,14 +78,18 @@ pub fn init_workspace_config(
 }
 
 #[tauri::command]
-pub fn check_agent_status(
+pub async fn check_agent_status(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<agent::AgentStatus, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-    let provider = project.agent_provider.as_deref().unwrap_or("copilot");
-    Ok(agent::detect_agents(provider))
+    // Extract provider before await to avoid holding MutexGuard across await point
+    let provider = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+        project.agent_provider.unwrap_or_else(|| "copilot".to_string())
+    };
+    // Use async version with timeout to prevent UI blocking
+    Ok(agent::detect_agents_async(&provider).await)
 }
 
 #[tauri::command]
@@ -101,4 +105,19 @@ pub fn set_agent_provider(
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Get the path to the application log file
+#[tauri::command]
+pub fn get_log_file_path() -> Result<String, String> {
+    // Log directory is in the standard platform location
+    let log_dir = dirs::data_local_dir()
+        .ok_or("Could not determine log directory")?
+        .join("com.pageseeds.app")
+        .join("logs");
+    
+    // Log files are named pageseeds.log (the plugin handles rotation)
+    let log_file = log_dir.join("pageseeds.log");
+    
+    Ok(log_file.to_string_lossy().to_string())
 }

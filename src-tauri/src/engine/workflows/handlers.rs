@@ -349,7 +349,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
 /// Supported tokens in `cmd`:
 ///   {project_path}   → repo root
 ///   {automation_dir} → repo/.github/automation
-pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str) -> StepResult {
+pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let automation_dir = paths.automation_dir.to_string_lossy();
 
@@ -374,13 +374,17 @@ pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str)
 
     log::info!("[executor] deterministic step '{}' cmd: {}", step.name, cmd);
 
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .current_dir(project_path)
-        .output()
-    {
-        Ok(out) => {
+    // Run blocking subprocess in spawn_blocking
+    let step_name = step.name.clone();
+    let project_path = project_path.to_string();
+    match tokio::task::spawn_blocking(move || {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .current_dir(&project_path)
+            .output()
+    }).await {
+        Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let combined = if stderr.is_empty() {
@@ -389,18 +393,23 @@ pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str)
                 format!("{}\n[stderr]\n{}", stdout, stderr)
             };
             if out.status.success() {
-                StepResult { success: true, message: format!("Step '{}' OK", step.name), output: Some(combined) }
+                StepResult { success: true, message: format!("Step '{}' OK", step_name), output: Some(combined) }
             } else {
                 StepResult {
                     success: false,
-                    message: format!("Step '{}' failed (exit {}): {}", step.name, out.status, stderr.trim()),
+                    message: format!("Step '{}' failed (exit {}): {}", step_name, out.status, stderr.trim()),
                     output: Some(combined),
                 }
             }
         }
+        Ok(Err(e)) => StepResult {
+            success: false,
+            message: format!("Step '{}' could not launch: {}", step_name, e),
+            output: None,
+        },
         Err(e) => StepResult {
             success: false,
-            message: format!("Step '{}' could not launch: {}", step.name, e),
+            message: format!("Step '{}' task failed: {}", step.name, e),
             output: None,
         },
     }
@@ -413,7 +422,7 @@ pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str)
 ///   2. Build a prompt via `prompts::build_prompt`
 ///   3. Call `agent::run_agent(provider, prompt, project_path)`
 ///   4. Return the raw output as the step result
-pub fn exec_agentic(
+pub async fn exec_agentic(
     step: &WorkflowStep,
     task: &Task,
     project_path: &str,
@@ -603,10 +612,17 @@ pub fn exec_agentic(
         step.params.get(step_params::SKILL)
     );
 
-    // 4. Call agent
-    match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => {
-            let mut message = format!("Agentic step '{}' complete ({} chars)", step.name, output.len());
+    // 4. Call agent (blocking subprocess, run in spawn_blocking)
+    let agent_provider = agent_provider.to_string();
+    let prompt = prompt.clone();
+    let repo_root = repo_root.to_path_buf();
+    let step_name = step.name.clone();
+    
+    match tokio::task::spawn_blocking(move || {
+        agent::run_agent(&agent_provider, &prompt, &repo_root)
+    }).await {
+        Ok(Ok(output)) => {
+            let mut message = format!("Agentic step '{}' complete ({} chars)", step_name, output.len());
 
             if let Some((content_dir, before, style)) = content_context {
                 let renamed = rename_new_or_modified_md_to_mdx(&content_dir, &before);
@@ -634,11 +650,19 @@ pub fn exec_agentic(
                 output: Some(output),
             }
         }
-        Err(err) => {
-            log::warn!("[executor] agentic step '{}' failed: {}", step.name, err);
+        Ok(Err(err)) => {
+            log::warn!("[executor] agentic step '{}' failed: {}", step_name, err);
             StepResult {
                 success: false,
-                message: format!("Agentic step '{}' failed: {}", step.name, err),
+                message: format!("Agentic step '{}' failed: {}", step_name, err),
+                output: None,
+            }
+        }
+        Err(e) => {
+            log::warn!("[executor] agentic step '{}' task failed: {}", step_name, e);
+            StepResult {
+                success: false,
+                message: format!("Agentic step '{}' task failed: {}", step_name, e),
                 output: None,
             }
         }

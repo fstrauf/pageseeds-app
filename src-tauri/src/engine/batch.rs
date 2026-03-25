@@ -100,15 +100,15 @@ pub fn get_batch_summary(conn: &Connection, project_id: &str) -> Result<BatchSum
 
 // ─── Batch runner ─────────────────────────────────────────────────────────────
 
-pub fn run_batch(
+pub async fn run_batch(
     conn: &Connection,
     project_id: &str,
     config: &BatchConfig,
 ) -> Result<BatchResult, String> {
-    run_batch_with_token(conn, project_id, config, None)
+    run_batch_with_token(conn, project_id, config, None).await
 }
 
-pub fn run_batch_with_token(
+pub async fn run_batch_with_token(
     conn: &Connection,
     project_id: &str,
     config: &BatchConfig,
@@ -132,7 +132,7 @@ pub fn run_batch_with_token(
 
         log::info!("[batch] executing task {task_id} ({task_type})");
 
-        match executor::execute_task_with_token(conn, &task_id, gsc_token, None, false) {
+        match executor::execute_task_with_token(conn, &task_id, gsc_token, None, false).await {
             Ok(exec_result) => {
                 let batch_task_result = BatchTaskResult {
                     task_id: task_id.clone(),

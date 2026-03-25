@@ -9,6 +9,7 @@ import type {
   Project,
   ProjectConfigFileStatus,
   ProjectSetup,
+  QueueItem,
   RedditOpportunity,
   RedditStats,
   SecretsStatus,
@@ -411,6 +412,19 @@ export const runBatch = (
 ): Promise<BatchResult> =>
   invoke('run_batch', { projectId, maxTasks, pauseOnError })
 
+/** Execute a queue of tasks across projects. Emits events for progress tracking. */
+export const executeQueue = (items: QueueItem[]): Promise<void> =>
+  invoke('execute_queue', { items })
+
+export const pauseQueue = (): Promise<void> =>
+  invoke('pause_queue')
+
+export const resumeQueue = (): Promise<void> =>
+  invoke('resume_queue')
+
+export const clearCompletedQueueItems = (): Promise<void> =>
+  invoke('clear_completed_queue_items')
+
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
 export const listSchedulerRules = (projectId: string): Promise<SchedulerRule[]> =>
@@ -470,6 +484,9 @@ export const checkAgentStatus = (projectId: string): Promise<AgentStatus> =>
 
 export const setAgentProvider = (projectId: string, provider: string): Promise<void> =>
   invoke('set_agent_provider', { projectId, provider })
+
+export const getLogFilePath = (): Promise<string> =>
+  invoke('get_log_file_path')
 
 // ─── Overview ────────────────────────────────────────────────────────────────
 

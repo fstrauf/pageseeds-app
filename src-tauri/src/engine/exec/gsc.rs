@@ -66,19 +66,34 @@ pub(crate) fn exec_gsc_sync_articles(
         },
     };
 
-    // 2. Token
-    let rt = tokio::runtime::Handle::current();
-    let token = if let Some(token) = gsc_token {
-        token.to_string()
-    } else {
-        match rt.block_on(crate::gsc::auth::get_service_account_token(&sa_path)) {
-            Ok(t) => t.access_token,
-            Err(e) => return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("GSC auth failed: {}", e),
-                output: None,
-            },
-        }
+    // 2. Token - Spawn thread with own runtime to avoid block_on issues
+    let gsc_token_owned = gsc_token.map(|t| t.to_string());
+    let sa_path_owned = sa_path.clone();
+    let token_result = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            if let Some(token) = gsc_token_owned {
+                Ok::<_, crate::error::Error>(token)
+            } else {
+                crate::gsc::auth::get_service_account_token(&sa_path_owned)
+                    .await
+                    .map(|t| t.access_token)
+            }
+        })
+    }).join();
+    
+    let token = match token_result {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("GSC auth failed: {}", e),
+            output: None,
+        },
+        Err(_) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: "GSC auth thread panicked".to_string(),
+            output: None,
+        },
     };
 
     // 3. articles.json
@@ -128,20 +143,34 @@ pub(crate) fn exec_gsc_sync_articles(
     let base_url = base_url.trim_end_matches('/').to_string();
     let _ = &base_url;
 
-    // 5. Fetch GSC metrics (90-day window)
+    // 5. Fetch GSC metrics (90-day window) - Spawn thread with own runtime
     let days = 90i64;
     let end = chrono::Utc::now().date_naive() - chrono::Duration::days(1);
     let start = end - chrono::Duration::days(days - 1);
-    let page_rows = match rt.block_on(crate::gsc::analytics::fetch_page_rows(
-        &token, &site_url,
-        &start.format("%Y-%m-%d").to_string(),
-        &end.format("%Y-%m-%d").to_string(),
-        1000,
-    )) {
-        Ok(rows) => rows,
-        Err(e) => return crate::engine::workflows::StepResult {
+    let token_clone = token.clone();
+    let site_url_clone = site_url.clone();
+    let start_str = start.format("%Y-%m-%d").to_string();
+    let end_str = end.format("%Y-%m-%d").to_string();
+    
+    let page_rows_result = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            crate::gsc::analytics::fetch_page_rows(
+                &token_clone, &site_url_clone, &start_str, &end_str, 1000,
+            ).await
+        })
+    }).join();
+    
+    let page_rows = match page_rows_result {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => return crate::engine::workflows::StepResult {
             success: false,
             message: format!("GSC fetch failed: {}", e),
+            output: None,
+        },
+        Err(_) => return crate::engine::workflows::StepResult {
+            success: false,
+            message: "GSC fetch thread panicked".to_string(),
             output: None,
         },
     };
@@ -324,48 +353,75 @@ pub(crate) fn exec_collect_gsc(
         },
     };
 
-    let rt = tokio::runtime::Handle::current();
-    let token = if let Some(token) = gsc_token {
-        token.to_string()
-    } else {
-        match rt.block_on(crate::gsc::auth::get_service_account_token(&sa_path)) {
-            Ok(t) => t.access_token,
-            Err(e) => return crate::engine::workflows::StepResult {
+    // 2-4. Credentials + fetch sitemap + URL Inspection API - All in one thread with own runtime
+    let gsc_token_owned = gsc_token.map(|t| t.to_string());
+    let sa_path_owned = sa_path.clone();
+    let sitemap_url_owned = sitemap_url.clone();
+    let site_url_owned = site_url.clone();
+    
+    let gsc_result = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            // Get token
+            let token = if let Some(token) = gsc_token_owned {
+                token
+            } else {
+                crate::gsc::auth::get_service_account_token(&sa_path_owned)
+                    .await
+                    .map(|t| t.access_token)?
+            };
+            
+            // Fetch sitemap URLs
+            let urls = crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url_owned, 200).await?;
+            if urls.is_empty() {
+                return Err(crate::error::Error::Other(
+                    format!("Sitemap at '{}' is empty or unreachable", sitemap_url_owned)
+                ));
+            }
+            
+            // URL Inspection API
+            let records = crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls).await?;
+            
+            Ok::<_, crate::error::Error>((records, token))
+        })
+    }).join();
+    
+    let (records, token) = match gsc_result {
+        Ok(Ok((r, t))) => (r, t),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            return crate::engine::workflows::StepResult {
                 success: false,
-                message: format!("GSC auth failed: {}", e),
+                message: if msg.contains("sitemap") || msg.contains("Sitemap") {
+                    format!("Failed to fetch sitemap: {}", msg)
+                } else if msg.contains("auth") || msg.contains("token") {
+                    format!("GSC auth failed: {}", msg)
+                } else {
+                    format!("URL Inspection API failed: {}", msg)
+                },
                 output: None,
-            },
+            };
         }
-    };
-
-    // 3. Fetch sitemap URLs
-    let urls = match rt.block_on(crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url, 200)) {
-        Ok(u) if !u.is_empty() => u,
-        Ok(_) => return crate::engine::workflows::StepResult {
+        Err(_) => return crate::engine::workflows::StepResult {
             success: false,
-            message: format!("Sitemap at '{}' is empty or unreachable", sitemap_url),
-            output: None,
-        },
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Failed to fetch sitemap: {}", e),
+            message: "GSC collection thread panicked".to_string(),
             output: None,
         },
     };
 
-    log::info!("[collect_gsc] {} URLs to inspect", urls.len());
+    log::info!("[collect_gsc] {} URLs inspected", records.len());
 
-    // Fast-fail: check that sitemap domain matches gsc_site
-    let sample_size = urls.len().min(10);
+    // Fast-fail: check that records domain matches gsc_site
+    let sample_size = records.len().min(10);
     
     // Normalize for comparison (strip scheme and www.)
     let site_normalized = normalize_url_for_comparison(&site_match_prefix);
-    let sample_matches = urls.iter().take(sample_size)
-        .filter(|u| normalize_url_for_comparison(u).starts_with(&site_normalized)).count();
+    let sample_matches = records.iter().take(sample_size)
+        .filter(|r| normalize_url_for_comparison(&r.url).starts_with(&site_normalized)).count();
     
     // Debug: log the comparison
     if sample_size > 0 {
-        let first_urls: Vec<&str> = urls.iter().take(3).map(|s| s.as_str()).collect();
+        let first_urls: Vec<&str> = records.iter().take(3).map(|s| s.url.as_str()).collect();
         log::info!("[collect_gsc] site_match_prefix='{}' (normalized: '{}'), sample URLs: {:?}", 
             site_match_prefix, site_normalized, first_urls);
         log::info!("[collect_gsc] URL match check: {}/{} match normalized prefix '{}'", 
@@ -376,22 +432,12 @@ pub(crate) fn exec_collect_gsc(
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
-                "GSC site URL mismatch: 0/{} sitemap URLs match '{}'. Check 'url'/'gsc_site' in manifest.json.",
+                "GSC site URL mismatch: 0/{} inspected URLs match '{}'. Check 'url'/'gsc_site' in manifest.json.",
                 sample_size, site_match_prefix
             ),
             output: None,
         };
     }
-
-    // 4. URL Inspection API
-    let records = match rt.block_on(crate::gsc::indexing::inspect_batch(&token, &site_url, urls.clone())) {
-        Ok(r) => r,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("URL Inspection API failed: {}", e),
-            output: None,
-        },
-    };
 
     // 5. Domain validation (normalize for www. comparison)
     let site_domain_normalized = normalize_url_for_comparison(&site_match_prefix);
@@ -527,15 +573,14 @@ pub(crate) fn create_tasks_from_collection(
     parent_task: &Task,
     data: &serde_json::Value,
 ) -> Vec<String> {
-    use crate::engine::task_store;
-    use crate::models::task::{Task as TaskModel, TaskRun};
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::{ExecutionMode, Priority, AgentPolicy};
 
     let items = match data["items"].as_array() {
         Some(a) => a,
         None => return vec![],
     };
 
-    let now = chrono::Utc::now().to_rfc3339();
     let mut created_ids: Vec<String> = vec![];
     let mut seen_issues = std::collections::HashSet::<String>::new();
     let mut api_error_count = 0u32;
@@ -563,13 +608,6 @@ pub(crate) fn create_tasks_from_collection(
             _ => "fix_indexing",
         };
 
-        let existing: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type=?2 AND status IN ('todo','in_progress') AND (title LIKE ?3 OR description LIKE ?3)",
-            rusqlite::params![&parent_task.project_id, task_type, format!("%{}%", url)],
-            |r| r.get(0),
-        ).unwrap_or(0);
-        if existing > 0 { continue; }
-
         let url_slug = {
             let without_scheme = url.trim_start_matches("https://").trim_start_matches("http://");
             if let Some(slash_pos) = without_scheme.find('/') { &without_scheme[slash_pos..] } else { url }
@@ -578,63 +616,56 @@ pub(crate) fn create_tasks_from_collection(
         let title = format!("Fix {}: {}", reason_human, url_slug);
         let description = format!("URL: {}\nIssue: {}\nAction: {}\nVerdict: {}", url, reason, action, verdict);
 
-        let _priority = if priority_val <= 30 { "high" } else { "medium" };
-        let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis() + created_ids.len() as i64);
-        let priority_enum = if priority_val <= 30 { crate::models::task::Priority::High } else { crate::models::task::Priority::Medium };
+        let priority_enum = if priority_val <= 30 { Priority::High } else { Priority::Medium };
 
-        let new_task = TaskModel {
-            id: task_id,
+        // Idempotency key includes URL to prevent duplicate tasks for same URL+reason
+        let idempotency_key = format!("gsc:{}:{}", reason, url);
+
+        let spec = TaskSpec {
+            project_id: parent_task.project_id.clone(),
             task_type: task_type.to_string(),
-            phase: "implementation".to_string(),
-            status: crate::models::task::TaskStatus::Todo,
-            priority: priority_enum,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::Optional,
             title: Some(title),
             description: Some(description),
-            project_id: parent_task.project_id.clone(),
-            depends_on: vec![],
+            phase: Some("implementation".to_string()),
+            execution_mode: Some(ExecutionMode::Automatic),
+            priority: priority_enum,
+            agent_policy: AgentPolicy::Optional,
+            idempotency_key: Some(idempotency_key),
             artifacts: vec![],
-            run: TaskRun::default(),
-            created_at: now.clone(),
-            updated_at: now.clone(),
+            depends_on: vec![],
         };
 
-        match task_store::create_task(conn, &new_task) {
-            Ok(_) => created_ids.push(new_task.id.clone()),
+        match TaskSpawner::spawn(conn, spec) {
+            Ok(task) => created_ids.push(task.id.clone()),
             Err(e) => log::warn!("[collect_gsc] failed to create fix task: {}", e),
         }
     }
 
     // One batched fix_gsc_access task for all API errors
     if api_error_count > 0 {
-        let existing: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='fix_gsc_access' AND status IN ('todo','in_progress')",
-            rusqlite::params![&parent_task.project_id],
-            |r| r.get(0),
-        ).unwrap_or(0);
-        if existing == 0 {
-            let task_id = format!("task-gsc-access-{}", chrono::Utc::now().timestamp_millis());
-            let new_task = crate::models::task::Task {
-                id: task_id,
-                task_type: "fix_gsc_access".to_string(),
-                phase: "implementation".to_string(),
-                status: crate::models::task::TaskStatus::Todo,
-                priority: crate::models::task::Priority::High,
-                execution_mode: crate::models::task::ExecutionMode::Manual,
-                agent_policy: crate::models::task::AgentPolicy::Optional,
-                title: Some(format!("Fix GSC API access errors ({} URLs affected)", api_error_count)),
-                description: Some("GSC URL Inspection API returned errors. Check service account property access.".to_string()),
-                project_id: parent_task.project_id.clone(),
-                depends_on: vec![],
-                artifacts: vec![],
-                run: crate::models::task::TaskRun::default(),
-                created_at: chrono::Utc::now().to_rfc3339(),
-                updated_at: chrono::Utc::now().to_rfc3339(),
-            };
-            if task_store::create_task(conn, &new_task).is_ok() {
-                created_ids.push(new_task.id.clone());
-            }
+        let title = format!("Fix GSC API access errors ({} URLs affected)", api_error_count);
+        let description = "GSC URL Inspection API returned errors. Check service account property access.".to_string();
+
+        // Use spawn with custom idempotency key to allow specific execution_mode and agent_policy
+        let idempotency_key = format!("followup:{}:fix_gsc_access:{}", parent_task.id, title);
+
+        let spec = TaskSpec {
+            project_id: parent_task.project_id.clone(),
+            task_type: "fix_gsc_access".to_string(),
+            title: Some(title),
+            description: Some(description),
+            phase: Some("implementation".to_string()),
+            execution_mode: Some(ExecutionMode::Manual),
+            priority: Priority::High,
+            agent_policy: AgentPolicy::Optional,
+            idempotency_key: Some(idempotency_key),
+            artifacts: vec![],
+            depends_on: vec![parent_task.id.clone()],
+        };
+
+        match TaskSpawner::spawn(conn, spec) {
+            Ok(task) => created_ids.push(task.id.clone()),
+            Err(e) => log::warn!("[collect_gsc] failed to create fix_gsc_access task: {}", e),
         }
     }
 
@@ -643,33 +674,29 @@ pub(crate) fn create_tasks_from_collection(
         let all_indexed = items.iter()
             .all(|i| i["reason_code"].as_str().unwrap_or("") == "indexed_pass");
         if all_indexed {
-            let existing: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='investigate_gsc' AND status IN ('todo','in_progress')",
-                rusqlite::params![&parent_task.project_id],
-                |r| r.get(0),
-            ).unwrap_or(0);
-            if existing == 0 {
-                let task_id = format!("task-inv-gsc-{}", chrono::Utc::now().timestamp_millis());
-                let new_task = crate::models::task::Task {
-                    id: task_id,
-                    task_type: "investigate_gsc".to_string(),
-                    phase: "investigation".to_string(),
-                    status: crate::models::task::TaskStatus::Todo,
-                    priority: crate::models::task::Priority::Medium,
-                    execution_mode: crate::models::task::ExecutionMode::Automatic,
-                    agent_policy: crate::models::task::AgentPolicy::Required,
-                    title: Some("Investigate GSC — all pages indexed, look for opportunities".to_string()),
-                    description: Some("gsc_collection.json shows all pages are indexed. Run investigation to find optimization opportunities.".to_string()),
-                    project_id: parent_task.project_id.clone(),
-                    depends_on: vec![],
-                    artifacts: vec![],
-                    run: crate::models::task::TaskRun::default(),
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    updated_at: chrono::Utc::now().to_rfc3339(),
-                };
-                if task_store::create_task(conn, &new_task).is_ok() {
-                    created_ids.push(new_task.id.clone());
-                }
+            let title = "Investigate GSC — all pages indexed, look for opportunities".to_string();
+            let description = "gsc_collection.json shows all pages are indexed. Run investigation to find optimization opportunities.".to_string();
+
+            // Use spawn with custom idempotency key to allow specific execution_mode and agent_policy
+            let idempotency_key = format!("followup:{}:investigate_gsc:{}", parent_task.id, title);
+
+            let spec = TaskSpec {
+                project_id: parent_task.project_id.clone(),
+                task_type: "investigate_gsc".to_string(),
+                title: Some(title),
+                description: Some(description),
+                phase: Some("investigation".to_string()),
+                execution_mode: Some(ExecutionMode::Automatic),
+                priority: Priority::Medium,
+                agent_policy: AgentPolicy::Required,
+                idempotency_key: Some(idempotency_key),
+                artifacts: vec![],
+                depends_on: vec![parent_task.id.clone()],
+            };
+
+            match TaskSpawner::spawn(conn, spec) {
+                Ok(task) => created_ids.push(task.id.clone()),
+                Err(e) => log::warn!("[collect_gsc] failed to create investigate_gsc task: {}", e),
             }
         }
     }

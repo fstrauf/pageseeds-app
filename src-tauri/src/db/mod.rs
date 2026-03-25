@@ -113,6 +113,18 @@ CREATE TABLE IF NOT EXISTS scheduler_rules (
 );
 "#;
 
+static MIGRATION_V7: &str = r#"
+-- Idempotency tracking for task creation
+CREATE TABLE IF NOT EXISTS task_idempotency_keys (
+    key TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_task ON task_idempotency_keys(task_id);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -295,6 +307,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V6)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (6, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 7 {
+        conn.execute_batch(MIGRATION_V7)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (7, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

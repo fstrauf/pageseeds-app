@@ -230,8 +230,12 @@ pub async fn run_reddit_opportunity_search(
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task_with_token(&db, &task_id, token.as_deref(), None, false)
-            .map_err(|e| e.to_string())
+        
+        // Create a new runtime to run the async executor
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            executor::execute_task_with_token(&db, &task_id, token.as_deref(), None, false).await
+        })
     })
     .await
     .map_err(|e| e.to_string())?

@@ -207,43 +207,149 @@ pub(crate) fn exec_keyword_research_native(
     log::info!("[keyword_research_native] {} existing keywords to filter against", existing_keywords.len());
 
     // ── Bridge to tokio async runtime ─────────────────────────────────────────
-    let handle = tokio::runtime::Handle::current();
+    // Spawn a new thread with its own runtime to avoid block_on issues when called
+    // from within an async context (queue executor)
+    let capsolver_key_thread = capsolver_key.clone();
+    let themes_thread = themes.clone();
+    let existing_keywords_thread = existing_keywords.clone();
+    
+    let thread_result = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            // Step 1 — Generate keyword ideas (includes volume) for each theme.
+            let mut volume_map: HashMap<String, i64> = HashMap::new();
+            let mut all_new_keywords: Vec<String> = vec![];
+            let mut seen: HashSet<String> = HashSet::new();
 
-    // Step 1 — Generate keyword ideas (includes volume) for each theme.
-    let mut volume_map: HashMap<String, i64> = HashMap::new();
-    let mut all_new_keywords: Vec<String> = vec![];
-    let mut seen: HashSet<String> = HashSet::new();
+            for theme in &themes_thread {
+                log::info!("[keyword_research_native] fetching ideas for theme '{}'", theme);
+                match crate::seo::keywords::get_keyword_ideas(
+                    &capsolver_key_thread, theme, "us", "Google",
+                ).await {
+                    Ok(result) => {
+                        let all_ideas = result.ideas.iter().chain(result.question_ideas.iter());
+                        for idea in all_ideas {
+                            let kw_lower = idea.keyword.to_lowercase();
+                            if existing_keywords_thread.contains(&kw_lower) {
+                                continue; // already covered
+                            }
+                            if seen.contains(&kw_lower) {
+                                continue;
+                            }
+                            seen.insert(kw_lower.clone());
+                            if let Some(vol) = &idea.volume {
+                                if let Some(n) = estimate_volume(vol) {
+                                    volume_map.insert(idea.keyword.clone(), n);
+                                }
+                            }
+                            all_new_keywords.push(idea.keyword.clone());
+                        }
+                        log::info!("[keyword_research_native] theme '{}' → {} new keywords so far", theme, all_new_keywords.len());
+                    }
+                    Err(e) => {
+                        log::warn!("[keyword_research_native] keyword ideas failed for '{}': {}", theme, e);
+                    }
+                }
+            }
 
-    for theme in &themes {
-        log::info!("[keyword_research_native] fetching ideas for theme '{}'", theme);
-        match handle.block_on(crate::seo::keywords::get_keyword_ideas(
-            &capsolver_key, theme, "us", "Google",
-        )) {
-            Ok(result) => {
-                let all_ideas = result.ideas.iter().chain(result.question_ideas.iter());
-                for idea in all_ideas {
-                    let kw_lower = idea.keyword.to_lowercase();
-                    if existing_keywords.contains(&kw_lower) {
-                        continue; // already covered
-                    }
-                    if seen.contains(&kw_lower) {
-                        continue;
-                    }
-                    seen.insert(kw_lower.clone());
-                    if let Some(vol) = &idea.volume {
-                        if let Some(n) = estimate_volume(vol) {
-                            volume_map.insert(idea.keyword.clone(), n);
+            if all_new_keywords.is_empty() {
+                return Ok::<_, crate::error::Error>((
+                    HashMap::<String, i64>::new(),
+                    Vec::<serde_json::Value>::new(),
+                    Vec::<serde_json::Value>::new(),
+                    0usize,
+                    0usize,
+                    Vec::<String>::new(),
+                ));
+            }
+
+            // Step 2 — Analyse difficulty, over-sampling to fill 10 with-data results.
+            let target_with_data = 10usize;
+            let max_api_calls = 30usize;
+            log::info!(
+                "[keyword_research_native] analyzing difficulty (target {} with data, max {} calls, {} candidates)",
+                target_with_data, max_api_calls, all_new_keywords.len()
+            );
+
+            let mut with_data_results: Vec<serde_json::Value> = vec![];
+            let mut no_data_results: Vec<serde_json::Value> = vec![];
+            let mut api_calls = 0usize;
+            let mut analyzed_count = 0usize;
+
+            for kw in &all_new_keywords {
+                if with_data_results.len() >= target_with_data || api_calls >= max_api_calls {
+                    break;
+                }
+                api_calls += 1;
+                analyzed_count += 1;
+
+                match crate::seo::keywords::get_keyword_difficulty(
+                    &capsolver_key_thread, kw, "us",
+                ).await {
+                    Ok(kd) => {
+                        let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
+                        let vol = volume_map.get(kw).copied();
+                        let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
+                        let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
+                        let entry = serde_json::json!({
+                            "keyword": kw,
+                            "difficulty": kd.difficulty,
+                            "volume": vol,
+                            "traffic": top_traffic,
+                            "topVolume": top_volume,
+                            "shortage": kd.shortage,
+                            "has_data": has_data,
+                            "serp_count": kd.serp.len(),
+                            "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
+                            "last_update": kd.last_update,
+                        });
+                        log::info!(
+                            "[keyword_research_native] '{}' kd={:?} vol={:?} top_traffic={:?} has_data={}",
+                            kw, kd.difficulty, vol, top_traffic, has_data,
+                        );
+                        if has_data {
+                            with_data_results.push(entry);
+                        } else {
+                            no_data_results.push(entry);
                         }
                     }
-                    all_new_keywords.push(idea.keyword.clone());
+                    Err(e) => {
+                        log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
+                        let vol = volume_map.get(kw).copied();
+                        no_data_results.push(serde_json::json!({
+                            "keyword": kw,
+                            "difficulty": serde_json::Value::Null,
+                            "volume": vol,
+                            "has_data": false,
+                            "serp_count": 0,
+                            "top_result": "",
+                            "last_update": "",
+                        }));
+                    }
                 }
-                log::info!("[keyword_research_native] theme '{}' → {} new keywords so far", theme, all_new_keywords.len());
             }
-            Err(e) => {
-                log::warn!("[keyword_research_native] keyword ideas failed for '{}': {}", theme, e);
-            }
+
+            Ok((volume_map, with_data_results, no_data_results, api_calls, analyzed_count, all_new_keywords))
+        })
+    }).join();
+
+    let (volume_map, mut with_data_results, no_data_results, api_calls, analyzed_count, all_new_keywords) = match thread_result {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Keyword research failed: {}", e),
+                output: None,
+            };
         }
-    }
+        Err(_) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "Keyword research thread panicked".to_string(),
+                output: None,
+            };
+        }
+    };
 
     if all_new_keywords.is_empty() {
         return crate::engine::workflows::StepResult {
@@ -256,74 +362,7 @@ pub(crate) fn exec_keyword_research_native(
         };
     }
 
-    // Step 2 — Analyse difficulty, over-sampling to fill 10 with-data results.
-    // Ahrefs free tier often returns no data for long-tail keywords. Rather than
-    // analyzing exactly 10 and accepting 3 hits, iterate through candidates until
-    // we have 10 with-data results or exhaust a budget of 30 API calls.
     let target_with_data = 10usize;
-    let max_api_calls = 30usize;
-    log::info!(
-        "[keyword_research_native] analyzing difficulty (target {} with data, max {} calls, {} candidates)",
-        target_with_data, max_api_calls, all_new_keywords.len()
-    );
-
-    let mut with_data_results: Vec<serde_json::Value> = vec![];
-    let mut no_data_results: Vec<serde_json::Value> = vec![];
-    let mut api_calls = 0usize;
-    let mut analyzed_count = 0usize;
-
-    for kw in &all_new_keywords {
-        if with_data_results.len() >= target_with_data || api_calls >= max_api_calls {
-            break;
-        }
-        api_calls += 1;
-        analyzed_count += 1;
-
-        match handle.block_on(crate::seo::keywords::get_keyword_difficulty(
-            &capsolver_key, kw, "us",
-        )) {
-            Ok(kd) => {
-                let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
-                let vol = volume_map.get(kw).copied();
-                let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
-                let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
-                let entry = serde_json::json!({
-                    "keyword": kw,
-                    "difficulty": kd.difficulty,
-                    "volume": vol,
-                    "traffic": top_traffic,
-                    "topVolume": top_volume,
-                    "shortage": kd.shortage,
-                    "has_data": has_data,
-                    "serp_count": kd.serp.len(),
-                    "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
-                    "last_update": kd.last_update,
-                });
-                log::info!(
-                    "[keyword_research_native] '{}' kd={:?} vol={:?} top_traffic={:?} has_data={}",
-                    kw, kd.difficulty, vol, top_traffic, has_data,
-                );
-                if has_data {
-                    with_data_results.push(entry);
-                } else {
-                    no_data_results.push(entry);
-                }
-            }
-            Err(e) => {
-                log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
-                let vol = volume_map.get(kw).copied();
-                no_data_results.push(serde_json::json!({
-                    "keyword": kw,
-                    "difficulty": serde_json::Value::Null,
-                    "volume": vol,
-                    "has_data": false,
-                    "serp_count": 0,
-                    "top_result": "",
-                    "last_update": "",
-                }));
-            }
-        }
-    }
 
     // Present with-data results first, then pad with no-data up to 10 total.
     let mut difficulty_results = with_data_results;

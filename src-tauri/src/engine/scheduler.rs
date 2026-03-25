@@ -168,6 +168,9 @@ fn evaluate_rule(rule: &SchedulerRule, now: DateTime<Utc>) -> DueRuleResult {
 
 // ─── Cycle runner (called by background timer or manually) ────────────────────
 
+/// Run a scheduler cycle synchronously.
+/// This function is sync because SQLite connections are not Send.
+/// The batch execution inside uses its own runtime.
 pub fn run_cycle(conn: &Connection, project_id: &str) -> Result<SchedulerCycleResult, String> {
     let started_at = Utc::now().to_rfc3339();
     let now = Utc::now();
@@ -207,7 +210,11 @@ pub fn run_cycle(conn: &Connection, project_id: &str) -> Result<SchedulerCycleRe
     // Kick off batch if any tasks were created
     if tasks_created > 0 {
         log::info!("[scheduler] {tasks_created} tasks created — triggering batch for {project_id}");
-        match batch::run_batch(conn, project_id, &batch::BatchConfig::default()) {
+        // Create a new runtime for the async batch execution
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        match rt.block_on(async {
+            batch::run_batch(conn, project_id, &batch::BatchConfig::default()).await
+        }) {
             Ok(batch_result) => {
                 log::info!("[scheduler] batch complete: {} processed", batch_result.processed);
             }

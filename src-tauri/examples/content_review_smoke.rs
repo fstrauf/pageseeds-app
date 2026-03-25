@@ -96,7 +96,9 @@ fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     let start = std::time::Instant::now();
-    let result = executor::execute_task(&conn, &task_id).expect("execute_task panic");
+    let result = rt.block_on(async {
+        executor::execute_task(&conn, &task_id).await
+    }).expect("execute_task panic");
 
     println!("\n━━━━━━━━━━━━━━━━━━━  Results  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     println!("Success : {}", result.success);
@@ -113,7 +115,7 @@ fn main() {
         };
         println!("  {} [{}] {} — {}", icon, step.status, step.step_name, step.message);
         if let Some(ref out) = step.output {
-            let preview: String = out.as_str().chars().take(400).collect();
+            let preview: String = out.chars().take(400).collect();
             println!("    output: {}", preview);
             if out.len() > 400 { println!("    ... ({} chars total)", out.len()); }
         }

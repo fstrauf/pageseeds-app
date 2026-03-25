@@ -34,6 +34,7 @@ src-tauri/src/
 │   └── gsc.rs           # TokenState
 ├── engine/              # Workflow orchestration
 │   ├── task_store.rs    # CRUD against SQLite tasks/projects tables
+│   ├── spawner.rs       # CENTRALIZED task creation — idempotent follow-ups
 │   ├── executor.rs      # Runs a task: finds handler → plans steps → executes
 │   ├── batch.rs         # Autonomous batch execution loop
 │   ├── scheduler.rs     # Scheduled rule evaluation + auto task creation
@@ -97,7 +98,8 @@ src/
 2. **`commands.rs` is thin**. Each command does: validate inputs → call a module function → return result. No logic beyond that.
 3. **One error type**. Use `error::Error` and `error::Result<T>` throughout. Commands return `Result<T, String>` (Tauri requirement).
 4. **SQLite is the runtime store**. All mutable state goes through `engine/task_store.rs`. Schema changes require a new migration constant in `db/mod.rs` — never alter existing SQL migration blocks.
-5. **No subprocess calls**. All I/O uses Rust crates directly (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.).
+5. **Task creation goes through `engine::spawner::TaskSpawner`**. Never call `task_store::create_task` directly for programmatic task creation. The spawner enforces idempotency (preventing duplicate follow-up tasks) and dependency validation. Use `TaskSpawner::spawn()` for general creation or `TaskSpawner::spawn_follow_up()` for follow-up tasks.
+6. **No subprocess calls**. All I/O uses Rust crates directly (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.).
 6. **Independent but isolated codebase**. Do not share code with `pageseeds-cli`. If a Python module needs porting, re-implement it cleanly in Rust.
 7. **Choose execution mode deliberately.** Every new workflow step requires an explicit decision. Use the tests below — if you cannot answer them, go back to the design.
 
@@ -251,6 +253,68 @@ Read [docs/dev-process.md](docs/dev-process.md) before starting multi-step featu
 6. **Ship one thing at a time** — verify it works, then start the next.
 
 Feature specs live in `docs/`. Write one before writing code.
+
+---
+
+## Async Architecture
+
+### The Pattern
+
+All async task execution follows this pattern (see `engine/runtime.rs`):
+
+```rust
+#[tauri::command]
+pub async fn execute_task(...) -> Result<...> {
+    let db_path = state.db_path.clone();
+    
+    tokio::task::spawn_blocking(move || {
+        // 1. Open dedicated SQLite connection (per-thread)
+        let db = rusqlite::Connection::open(&db_path)?;
+        db.busy_timeout(Duration::from_secs(10))?;
+        
+        // 2. Create local Tokio runtime for async execution
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            executor::execute_task(&db, &task_id).await
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+```
+
+### Why This Pattern?
+
+| Constraint | Solution |
+|------------|----------|
+| SQLite connections are !Send | Each task gets its own OS thread + connection |
+| Tauri runtime is multi-threaded | Use `spawn_blocking` for SQLite operations |
+| Async HTTP calls in step handlers | Local Tokio runtime per task enables `.await` |
+
+### Key Rules
+
+1. **Never use `Handle::current().block_on()`** - Causes panic in async context
+2. **Always use `.await` for async operations** - Never block the async runtime
+3. **One connection per task** - SQLite connections cannot be shared between threads
+4. **Step handlers can be async** - Executor supports both sync and async step handlers
+
+### Runtime Helpers
+
+`engine/runtime.rs` provides helper functions:
+
+- `open_connection()` - Open SQLite connection with proper timeout
+- `create_local_runtime()` - Create Tokio runtime for async execution
+- `spawn_with_db()` - Spawn blocking task with connection
+- `spawn_async_with_db()` - Spawn async blocking task with local runtime
+
+### Future Optimization (Phase 3)
+
+Consider `deadpool-sqlite` for connection pooling if:
+- You need 10+ concurrent tasks regularly
+- Task startup latency (1-5ms) becomes a bottleneck
+- Memory usage (2-4MB per task) becomes a concern
+
+See `docs/async-architecture.md` for detailed comparison.
 
 ---
 

@@ -512,6 +512,9 @@ export interface QueueItem {
   title: string;
   taskType: string;
   projectName?: string;
+  /** Runtime status for frontend queue tracking */
+  status?: 'pending' | 'running' | 'completed' | 'failed';
+  error?: string;
 }
 
 /** Runtime item tracking a task through the queue lifecycle. */

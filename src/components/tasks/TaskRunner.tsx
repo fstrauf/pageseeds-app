@@ -8,6 +8,9 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
 import { useQueue } from '../../lib/queue-context'
 
+import { createLogger, LogTarget } from '../../lib/logging';
+const logger = createLogger(LogTarget.UI);
+
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -32,10 +35,17 @@ export function TaskRunner({
   onClose,
   onOpenTask,
 }: Props) {
+  logger.entry('TaskRunner', { itemCount: items.length, isRunning, isPaused });
+  
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [isPanelExpanded, setIsPanelExpanded] = useState(true)
   const queue = useQueue()
   const prevStatusRef = useRef<Map<string, string>>(new Map())
+  
+  useEffect(() => {
+    logger.stateChange('items', prevStatusRef.current.size, items.length);
+    prevStatusRef.current = new Map(items.map(it => [it.task.id, it.status]));
+  }, [items]);
 
   // Auto-expand items that just finished with follow-ups or failed.
   useEffect(() => {
@@ -45,6 +55,7 @@ export function TaskRunner({
       const was = prev.get(item.task.id)
       const now = item.status
       if (was && was !== now && (now === 'done' || now === 'failed')) {
+        logger.stateChange(`task ${item.task.id}`, was, now);
         const hasFollowUps = (item.result?.follow_up_tasks?.length ?? 0) > 0
         if (now === 'failed' || hasFollowUps) {
           toExpand.push(item.task.id)
@@ -52,14 +63,13 @@ export function TaskRunner({
       }
     }
     if (toExpand.length > 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      logger.debug('auto-expanding items', { ids: toExpand });
       setExpanded(prevExpanded => {
         const next = new Set(prevExpanded)
         for (const id of toExpand) next.add(id)
         return next
       })
     }
-    prevStatusRef.current = new Map(items.map(it => [it.task.id, it.status]))
   }, [items])
 
   const succeeded = items.filter(it => it.status === 'done').length

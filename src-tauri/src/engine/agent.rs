@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::process::Command as AsyncCommand;
+use tokio::time::timeout;
 
 /// Maximum time (seconds) an agent subprocess is allowed to run before being
 /// killed.  Agent tasks (keyword research, content review, etc.) typically
@@ -57,6 +59,43 @@ pub fn detect_agents(configured_provider: &str) -> AgentStatus {
     }
 }
 
+/// Check which agent CLIs are available on PATH (async version with timeout).
+/// This prevents UI blocking when binaries are slow to respond.
+pub async fn detect_agents_async(configured_provider: &str) -> AgentStatus {
+    // Run all probes concurrently with individual timeouts
+    let (copilot, claude, kimi) = tokio::join!(
+        probe_binary_async("copilot"),
+        probe_binary_async("claude"),
+        probe_binary_async("kimi"),
+    );
+
+    let available_agents = vec![
+        AgentInfo {
+            name: "copilot".to_string(),
+            binary: "copilot".to_string(),
+            available: copilot.0,
+            version: copilot.1,
+        },
+        AgentInfo {
+            name: "claude".to_string(),
+            binary: "claude".to_string(),
+            available: claude.0,
+            version: claude.1,
+        },
+        AgentInfo {
+            name: "kimi".to_string(),
+            binary: "kimi".to_string(),
+            available: kimi.0,
+            version: kimi.1,
+        },
+    ];
+
+    AgentStatus {
+        available_agents,
+        configured_provider: configured_provider.to_string(),
+    }
+}
+
 // ─── Invocation ──────────────────────────────────────────────────────────────
 
 /// Run an agent with the given prompt and return the captured stdout.
@@ -88,6 +127,10 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
         cmd.arg("--print");
         // Kimi uses --output-format text (same as copilot/claude)
         cmd.arg("--output-format").arg("text");
+        // --final-message-only gives clean output without structured wrappers
+        cmd.arg("--final-message-only");
+        // Disable thinking mode for cleaner output
+        cmd.arg("--no-thinking");
         // Kimi uses --work-dir instead of current_dir
         cmd.arg("--work-dir").arg(project_path);
     } else {
@@ -214,5 +257,30 @@ fn probe_binary(binary: &str) -> (bool, Option<String>) {
             (true, version)
         }
         Err(_) => (false, None),
+    }
+}
+
+/// Async version of probe_binary with a timeout to prevent UI blocking.
+const PROBE_TIMEOUT_MS: u64 = 2000; // 2 second timeout per binary
+
+async fn probe_binary_async(binary: &str) -> (bool, Option<String>) {
+    let result = timeout(
+        Duration::from_millis(PROBE_TIMEOUT_MS),
+        AsyncCommand::new(binary).arg("--version").output()
+    ).await;
+
+    match result {
+        Ok(Ok(out)) => {
+            // Some CLIs print version to stderr
+            let ver_str = if !out.stdout.is_empty() {
+                String::from_utf8_lossy(&out.stdout)
+            } else {
+                String::from_utf8_lossy(&out.stderr)
+            };
+            let version = ver_str.lines().next().map(|l| l.trim().to_string());
+            (true, version)
+        }
+        Ok(Err(_)) => (false, None), // Command failed to execute
+        Err(_) => (false, None),     // Timeout
     }
 }

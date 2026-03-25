@@ -442,8 +442,8 @@ pub(crate) fn exec_content_review_recommend(
 /// Skips if recommendations.json is absent (review found nothing) or if an apply
 /// task is already pending.
 pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &Task, project_path: &str) -> Option<String> {
-    use crate::engine::task_store;
-    use crate::models::task::{Task as TaskModel, TaskArtifact, TaskRun};
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::{TaskArtifact, ExecutionMode, Priority, AgentPolicy};
 
     let paths = ProjectPaths::from_path(project_path);
     let rec_path = paths.automation_dir.join("recommendations.json");
@@ -469,19 +469,6 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
         return None;
     }
 
-    let existing: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='content_review_apply' AND status IN ('todo','in_progress')",
-        rusqlite::params![&parent_task.project_id],
-        |r| r.get(0),
-    ).unwrap_or(0);
-    if existing > 0 {
-        log::info!("[create_apply_task] apply task already pending — skipping");
-        return None;
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis());
-
     let title = if article_count == 1 {
         let name = rec["articles"][0]["article_title"].as_str().unwrap_or("article");
         format!("Apply review fixes: {}", name)
@@ -502,14 +489,13 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
         content: Some(rec_str),
     };
 
-    let new_task = TaskModel {
-        id: task_id.clone(),
-        phase: "implementation".to_string(),
-        execution_mode: crate::models::task::ExecutionMode::Manual,
+    // Idempotency key: content_review_apply:{project_id}
+    // This ensures only one apply task per project is created
+    let idempotency_key = format!("content_review_apply:{}", parent_task.project_id);
+
+    let spec = TaskSpec {
+        project_id: parent_task.project_id.clone(),
         task_type: "content_review_apply".to_string(),
-        status: crate::models::task::TaskStatus::Todo,
-        priority: crate::models::task::Priority::High,
-        agent_policy: crate::models::task::AgentPolicy::Required,
         title: Some(title),
         description: Some(format!(
             "Apply SEO recommendations from recommendations.json to {} article(s). \
@@ -517,23 +503,28 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
              (title, meta description, intro, H1, internal links, etc.).",
             article_count
         )),
-        project_id: parent_task.project_id.clone(),
-        depends_on: vec![],
+        phase: Some("implementation".to_string()),
+        execution_mode: Some(ExecutionMode::Manual),
+        priority: Priority::High,
+        agent_policy: AgentPolicy::Required,
+        idempotency_key: Some(idempotency_key),
         artifacts: vec![artifact],
-        run: TaskRun::default(),
-        created_at: now.clone(),
-        updated_at: now.clone(),
+        depends_on: vec![],
     };
 
-    match task_store::create_task(conn, &new_task) {
-        Ok(_) => log::info!(
-            "[create_apply_task] created {} for {} article(s)",
-            task_id, article_count
-        ),
-        Err(e) => log::warn!("[create_apply_task] failed to create apply task: {}", e),
+    match TaskSpawner::spawn(conn, spec) {
+        Ok(task) => {
+            log::info!(
+                "[create_apply_task] created {} for {} article(s)",
+                task.id, article_count
+            );
+            Some(task.id)
+        }
+        Err(e) => {
+            log::warn!("[create_apply_task] failed to create apply task: {}", e);
+            None
+        }
     }
-
-    Some(task_id)
 }
 
 /// Native Rust scan for `cluster_and_link_scan` step.
@@ -654,31 +645,8 @@ pub(crate) fn create_cluster_and_link_task(
     parent_task: &Task,
     _project_path: &str,
 ) -> Option<String> {
-    use crate::engine::task_store;
-    use crate::models::task::{Task as TaskModel, TaskRun};
-
-    // Guard: skip if a cluster_and_link task already exists for this specific
-    // parent task (i.e. its depends_on contains the parent's ID).
-    let parent_id_json_fragment = format!("%{}%", parent_task.id);
-    let existing: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='cluster_and_link' \
-             AND depends_on LIKE ?2 AND status IN ('todo','in_progress')",
-            rusqlite::params![&parent_task.project_id, &parent_id_json_fragment],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-
-    if existing > 0 {
-        log::info!(
-            "[cluster_link] cluster_and_link task already exists for parent {} — skipping spawn",
-            parent_task.id
-        );
-        return None;
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis());
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::{ExecutionMode, Priority, AgentPolicy};
 
     let parent_title = parent_task
         .title
@@ -686,38 +654,40 @@ pub(crate) fn create_cluster_and_link_task(
         .unwrap_or("new article")
         .trim_start_matches("Write article: ");
 
-    let new_task = TaskModel {
-        id: task_id.clone(),
-        phase: "implementation".to_string(),
-        execution_mode: crate::models::task::ExecutionMode::Automatic,
-        task_type: "cluster_and_link".to_string(),
-        status: crate::models::task::TaskStatus::Todo,
-        priority: crate::models::task::Priority::Medium,
-        agent_policy: crate::models::task::AgentPolicy::Required,
-        title: Some(format!("Cluster and link: {}", parent_title)),
-        description: Some(format!(
-            "Scan internal link graph and add missing hub-to-spoke, \
-             spoke-to-hub, and cross-cluster links following the article: {}. \
-             Depends on: {}",
-            parent_title,
-            parent_task.id,
-        )),
+    let title = format!("Cluster and link: {}", parent_title);
+    let description = format!(
+        "Scan internal link graph and add missing hub-to-spoke, \
+         spoke-to-hub, and cross-cluster links following the article: {}. \
+         Depends on: {}",
+        parent_title,
+        parent_task.id,
+    );
+
+    // Use spawn with custom idempotency key to allow specific execution_mode and agent_policy
+    let idempotency_key = format!("followup:{}:cluster_and_link:{}", parent_task.id, title);
+
+    let spec = TaskSpec {
         project_id: parent_task.project_id.clone(),
-        depends_on: vec![parent_task.id.clone()],
+        task_type: "cluster_and_link".to_string(),
+        title: Some(title),
+        description: Some(description),
+        phase: Some("implementation".to_string()),
+        execution_mode: Some(ExecutionMode::Automatic),
+        priority: Priority::Medium,
+        agent_policy: AgentPolicy::Required,
+        idempotency_key: Some(idempotency_key),
         artifacts: vec![],
-        run: TaskRun::default(),
-        created_at: now.clone(),
-        updated_at: now.clone(),
+        depends_on: vec![parent_task.id.clone()],
     };
 
-    match task_store::create_task(conn, &new_task) {
-        Ok(_) => {
+    match TaskSpawner::spawn(conn, spec) {
+        Ok(task) => {
             log::info!(
                 "[cluster_link] spawned cluster_and_link task {} after write_article {}",
-                task_id,
+                task.id,
                 parent_task.id
             );
-            Some(task_id)
+            Some(task.id)
         }
         Err(e) => {
             log::warn!("[cluster_link] failed to create cluster_and_link task: {}", e);

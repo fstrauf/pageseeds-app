@@ -113,7 +113,7 @@ fn main() {
         };
         println!("  {} [{}] {} — {}", icon, step.status, step.step_name, step.message);
         if let Some(ref out) = step.output {
-            let preview: String = out.as_str().chars().take(400).collect();
+            let preview: String = out.chars().take(400).collect();
             println!("    output: {}", preview);
             if out.len() > 400 { println!("    ... ({} chars total)", out.len()); }
         }

@@ -25,6 +25,8 @@ import {
 import { TaskDetail } from './TaskDetail'
 import { TaskCreate } from './TaskCreate'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { useQueue } from '../../lib/queue-context'
+import { ListPlus } from 'lucide-react'
 
 const STATUS_TABS = ['all', 'todo', 'in_progress', 'review', 'done'] as const
 type StatusFilter = typeof STATUS_TABS[number]
@@ -84,6 +86,7 @@ export function TaskBoard({
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
   const [showCreate, setShowCreate] = useState(false)
   const [deletingSelected, setDeletingSelected] = useState(false)
+  const queue = useQueue()
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -192,6 +195,25 @@ export function TaskBoard({
     setCheckedIds(new Set())
     setSelectedTask(null)
     onRunTasks?.(toRun)
+  }
+
+  function handleAddToQueue() {
+    const toQueue = tasks.filter(t => checkedIds.has(t.id) && t.status === 'todo')
+    if (toQueue.length === 0) return
+    
+    queue.enqueue(
+      toQueue.map(t => ({
+        taskId: t.id,
+        projectId: projectId!,
+        projectName: projectName || 'Unknown',
+        title: t.title || t.type,
+        taskType: t.type,
+        status: 'pending' as const,
+      }))
+    )
+    
+    setCheckedIds(new Set())
+    setSelectedTask(null)
   }
 
   async function handleDeleteSelected() {
@@ -347,6 +369,14 @@ export function TaskBoard({
               className="bg-primary text-primary-foreground hover:bg-primary/90 text-xs"
             >
               <><Play size={12} className="mr-1" />Run {checkedIds.size} task{checkedIds.size !== 1 ? 's' : ''}</>
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={handleAddToQueue}
+              className="text-xs border-border"
+            >
+              <><ListPlus size={12} className="mr-1" />Add to queue</>
             </Button>
             <Button
               size="xs"
