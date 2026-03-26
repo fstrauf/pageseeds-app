@@ -138,6 +138,11 @@ CREATE TABLE IF NOT EXISTS task_idempotency_keys (
 CREATE INDEX IF NOT EXISTS idx_idempotency_task ON task_idempotency_keys(task_id);
 "#;
 
+static MIGRATION_V8: &str = r#"
+-- Add image_generation_prompt to social_posts for AI image generation workflow
+ALTER TABLE social_posts ADD COLUMN image_generation_prompt TEXT;
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -336,6 +341,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V7)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (7, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 8 {
+        conn.execute_batch(MIGRATION_V8)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (8, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

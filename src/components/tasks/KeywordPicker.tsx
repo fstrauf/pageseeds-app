@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CheckSquare, Square, Loader2, Sparkles } from 'lucide-react'
 import { createArticleTasksFromKeywords } from '../../lib/tauri'
+import { useQueue } from '../../lib/queue-context'
 import type { KeywordDifficultyEntry, KeywordResearchResult, Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -205,6 +206,7 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
+  const queue = useQueue()
   const artifact =
     task.artifacts.find(a => a.key === 'research_normalize_stage') ??
     task.artifacts.find(a => a.key === 'research_keywords_cli') ??
@@ -304,6 +306,20 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
         task.id,
         Array.from(selected),
       )
+      
+      // Auto-add created tasks to the queue (shopping cart pattern)
+      if (tasks.length > 0) {
+        queue.enqueueNext(
+          tasks.map(t => ({
+            taskId: t.id,
+            projectId: t.projectId ?? task.project_id,
+            title: t.title ?? 'Write article',
+            taskType: t.type ?? 'write_article',
+            projectName: task.projectName,
+          }))
+        )
+      }
+      
       onTasksCreated(tasks)
     } catch (e) {
       setError(String(e))

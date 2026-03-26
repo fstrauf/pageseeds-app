@@ -56,6 +56,11 @@ fn build_post_prompt(article: &Article, platform: &Platform) -> String {
         Platform::InstagramStory => "Instagram Stories: Quick, ephemeral, casual. Good for behind-the-scenes.",
     };
     
+    let canvas_hint = match platform {
+        Platform::TikTok | Platform::InstagramReel | Platform::InstagramStory => "9:16 vertical",
+        Platform::InstagramFeed => "1:1 square or 4:5 portrait",
+    };
+    
     format!(
         r##"Create a {} post from this article.
 
@@ -77,7 +82,8 @@ Write a scroll-stopping social media post that drives traffic to this article.
   "caption": "Main text without hashtags (engaging, conversational)",
   "hashtags": ["#relevant", "#hashtags", "#max5"],
   "cta": "Soft call to action (e.g., 'Link in bio', 'Read more')",
-  "visual_description": "Describe what image/video would work best"
+  "visual_description": "Describe what image/video would work best",
+  "image_generation_prompt": "Detailed AI image generation prompt (200-400 chars)"
 }}
 ```
 
@@ -86,12 +92,18 @@ Rules:
 - Lead with value, not "Check out this article"
 - Match the platform's tone and format
 - Hashtags: 3-5 relevant ones (mix of niche and broad)
-- CTA should be natural, not pushy"##,
+- CTA should be natural, not pushy
+- image_generation_prompt: Create a detailed prompt for AI image generators (Midjourney/DALL-E)
+  * Describe the visual style, composition, colors, mood
+  * Specify "no text in image" (text will be overlaid separately)
+  * Include aspect ratio hint: {}
+  * Keep to 200-400 characters for optimal results"##,
         platform,
         article.title,
         article.url_slug,
         article.target_keyword.as_deref().unwrap_or(""),
-        platform_guidance
+        platform_guidance,
+        canvas_hint
     )
 }
 
@@ -116,6 +128,7 @@ fn parse_post_output(
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     let cta = parsed["cta"].as_str().unwrap_or("Link in bio").to_string();
+    let image_generation_prompt = parsed["image_generation_prompt"].as_str().map(String::from);
     
     // Resolve images for this post
     let visual_assets = resolve_post_images(article, project_path, output_dir, &hook)?;
@@ -136,6 +149,7 @@ fn parse_post_output(
         hashtags,
         cta,
         visual_assets,
+        image_generation_prompt,
         status: PostStatus::Draft,
         scheduled_at: None,
         posted_at: None,

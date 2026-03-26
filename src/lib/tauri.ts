@@ -5,6 +5,7 @@ import type {
   ContentHealthResult,
   ImportResult,
   IngestOrphanResult,
+  KeywordCoverageStatus,
   MigrationResult,
   Project,
   ProjectConfigFileStatus,
@@ -676,3 +677,10 @@ export const deleteSocialTemplate = (templateId: string): Promise<void> =>
 
 export const runSocialCampaign = (campaignId: string): Promise<Task> =>
   invoke('run_social_campaign', { campaignId })
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Keyword Coverage Analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const getKeywordCoverage = (projectId: string): Promise<KeywordCoverageStatus> =>
+  invoke('get_keyword_coverage', { projectId })

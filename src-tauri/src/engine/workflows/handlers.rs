@@ -250,38 +250,57 @@ impl WorkflowHandler for RedditHandler {
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
-        if task_type(task) == "reddit_opportunity_search" {
-            vec![
+        match task_type(task) {
+            "reddit_opportunity_search" => vec![
                 // Step 1 (agentic): Parse reddit_config.md and extract structured search parameters.
-                // Cannot be deterministic: identifying trigger topics, query keywords, product name,
-                // and mention stance from free-form markdown requires semantic understanding.
-                // The agent reads the config file and outputs a structured JSON artifact with:
-                // - product_name, mention_stance, trigger_topics, query_keywords, seed_subreddits, excluded_subreddits
                 WorkflowStep::new("reddit_config_parse_stage", "reddit_config_parse"),
-                // Step 2 (deterministic): API search using the structured parameters from step 1.
-                // Reads the artifact, executes Reddit API calls, applies filters (age, exclusions, score threshold).
-                // No judgment required - pure data fetching and filtering.
+                // Step 2 (deterministic): API search using the structured parameters.
                 WorkflowStep::new("reddit_search_stage", "reddit_search"),
                 // Step 3 (agentic): relevance scoring, pain point extraction, reply drafting.
-                // Cannot be deterministic: deciding whether a post is relevant to *this*
-                // product, extracting intent, and writing a contextually appropriate reply
-                // all require understanding of project context and language.
                 WorkflowStep::new("reddit_enrich_stage", "reddit_enrich"),
-                // Step 4 (deterministic): Fetch enriched opportunities from DB and return as JSON.
-                // Returns concrete posting suggestions with drafted replies for user review.
+                // Step 4 (deterministic): Fetch enriched opportunities from DB.
                 WorkflowStep::new("reddit_results_stage", "reddit_fetch_results"),
-            ]
-        } else {
-            // Other reddit tasks (e.g. reply drafting) still use agent + optional normalizer.
-            let mut steps = vec![WorkflowStep::new("reddit_agent_stage", "agentic")];
-            steps.push(
-                WorkflowStep::new("reddit_normalize_stage", "normalizer")
-                    .with_param(step_params::NORMALIZER_ID, "reddit_opportunities")
-                    .with_param(step_params::ARTIFACT_NAME, "reddit_opportunities")
-                    .optional(),
-            );
-            steps
+            ],
+            "reddit_reply" => vec![
+                // Step 1 (deterministic): Post the reply to Reddit via API.
+                // Extracts post_id and reply_text from task description.
+                WorkflowStep::new("reddit_post_reply", "reddit_post_reply"),
+            ],
+            _ => {
+                // Other reddit tasks use agent + optional normalizer.
+                let mut steps = vec![WorkflowStep::new("reddit_agent_stage", "agentic")];
+                steps.push(
+                    WorkflowStep::new("reddit_normalize_stage", "normalizer")
+                        .with_param(step_params::NORMALIZER_ID, "reddit_opportunities")
+                        .with_param(step_params::ARTIFACT_NAME, "reddit_opportunities")
+                        .optional(),
+                );
+                steps
+            }
         }
+    }
+}
+
+// ─── Keyword Coverage ─────────────────────────────────────────────────────────
+
+pub struct CoverageHandler;
+
+impl WorkflowHandler for CoverageHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task) == "analyze_keyword_coverage"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            // Step 1 (deterministic): Load articles from articles.json
+            WorkflowStep::new("coverage_load_articles", "coverage_load_articles"),
+            // Step 2 (agentic): Cluster articles by semantic similarity
+            // Cannot be deterministic: understanding topic relationships and naming
+            // clusters requires semantic judgment about content themes.
+            WorkflowStep::new("coverage_cluster_analysis", "coverage_cluster_analysis"),
+            // Step 3 (deterministic): Save results to keyword_coverage.json
+            WorkflowStep::new("coverage_save", "coverage_save"),
+        ]
     }
 }
 
@@ -332,6 +351,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(ContentReviewHandler),
         Box::new(RedditHandler),
         Box::new(PerformanceHandler),
+        Box::new(CoverageHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
     ]
@@ -506,12 +526,18 @@ pub async fn exec_agentic(
         // Agentic theme selection step for research_keywords: produce only focused themes.
         if step.name == "research_theme_selection_agent" {
             let automation_dir = paths.automation_dir.to_string_lossy();
+            
+            // Load keyword coverage if it exists to inform gap-filling
+            let coverage_context = load_coverage_context(&paths.automation_dir);
+            
             prompt.push_str(&format!(
                 "\n\n## Theme Selection Contract (Required)\n\
                  You are selecting keyword SEED QUERIES for the Ahrefs free keyword ideas API.\n\
                  Read project context files in this repo, especially:\n\
                  - {automation_dir}/seo_content_brief.md\n\
                  - {automation_dir}/project_summary.md (if present)\n\
+                 \n\
+                 {coverage_context}\n\
                  \n\
                  Return ONLY one fenced JSON block and no extra prose:\n\
                  ```json\n\
@@ -809,6 +835,73 @@ fn snapshot_markdown_mtime(
         }
     }
     out
+}
+
+/// Load keyword coverage from the automation directory and format it for the agent prompt.
+///
+/// Returns a formatted string describing current topic clusters, or an empty string
+/// if no coverage analysis exists.
+fn load_coverage_context(automation_dir: &std::path::Path) -> String {
+    let coverage_path = automation_dir.join("keyword_coverage.json");
+    
+    let content = match std::fs::read_to_string(&coverage_path) {
+        Ok(c) => c,
+        Err(_) => return String::new(), // No coverage file yet
+    };
+    
+    let coverage: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    
+    let clusters = coverage.get("clusters").and_then(|c| c.as_array());
+    let article_count = coverage.get("article_count").and_then(|a| a.as_i64()).unwrap_or(0);
+    
+    if clusters.is_none() || clusters.unwrap().is_empty() {
+        return String::new();
+    }
+    
+    let clusters = clusters.unwrap();
+    let cluster_summaries: Vec<String> = clusters
+        .iter()
+        .filter_map(|c| {
+            let name = c.get("cluster_name").and_then(|n| n.as_str())?;
+            let keywords = c.get("primary_keywords").and_then(|k| k.as_array())?;
+            let count = c.get("article_count").and_then(|n| n.as_i64()).unwrap_or(0);
+            
+            let keyword_list: Vec<&str> = keywords
+                .iter()
+                .filter_map(|k| k.as_str())
+                .collect();
+            
+            Some(format!(
+                "- {} ({} articles): focus on {}",
+                name,
+                count,
+                keyword_list.join(", ")
+            ))
+        })
+        .collect();
+    
+    if cluster_summaries.is_empty() {
+        return String::new();
+    }
+    
+    format!(
+        "## Current Keyword Coverage (from previous analysis)\n\
+         This project has {} articles organized into {} topic clusters:\n\
+         {}\n\
+         \n\
+         ## Gap-Filling Guidance\n\
+         When selecting themes, consider:\n\
+         1. Which clusters are under-represented and need more content?\n\
+         2. What related topics are NOT yet covered by existing clusters?\n\
+         3. What sub-topics within large clusters could use dedicated articles?\n\
+         Prioritize themes that fill gaps or expand thinly-covered areas.",
+        article_count,
+        clusters.len(),
+        cluster_summaries.join("\n")
+    )
 }
 
 /// Read articles.json from `{project_path}/.github/automation/articles.json` and return

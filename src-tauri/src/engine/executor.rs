@@ -640,6 +640,44 @@ async fn run_step(
             })
         }
         "social_save_template" => crate::engine::exec::social::exec_social_save_template(task, project_path),
+        // Keyword coverage analysis steps
+        "coverage_load_articles" => crate::engine::exec::coverage::exec_coverage_load_articles(task, project_path),
+        "coverage_cluster_analysis" => {
+            let task = task.clone();
+            let project_path = project_path.to_string();
+            let agent_provider = agent_provider.to_string();
+            // Get the previous step's output (articles JSON)
+            let articles_json = latest_raw.unwrap_or("{}").to_string();
+            tokio::task::spawn_blocking(move || {
+                crate::engine::exec::coverage::exec_coverage_cluster_analysis(&task, &project_path, &agent_provider, &articles_json)
+            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Step panicked: {}", e),
+                output: None,
+            })
+        }
+        "coverage_save" => crate::engine::exec::coverage::exec_coverage_save(task, project_path),
+        "reddit_post_reply" => {
+            let task = task.clone();
+            let project_path = project_path.to_string();
+            let db_path = crate::db::default_db_path();
+            tokio::task::spawn_blocking(move || {
+                // Open a new connection for this thread
+                let conn = match rusqlite::Connection::open(&db_path) {
+                    Ok(c) => c,
+                    Err(e) => return crate::engine::workflows::StepResult {
+                        success: false,
+                        message: format!("Failed to open DB: {}", e),
+                        output: None,
+                    },
+                };
+                crate::engine::exec::reddit::exec_reddit_post_reply(&task, &project_path, &conn)
+            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Step panicked: {}", e),
+                output: None,
+            })
+        }
         other => crate::engine::workflows::StepResult {
             success: false,
             message: format!("Unknown step kind '{}'", other),

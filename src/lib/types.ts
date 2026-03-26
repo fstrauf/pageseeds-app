@@ -39,6 +39,28 @@ export interface KeywordResearchResult {
   difficulty_skipped_keywords?: string[];
 }
 
+// ─── Keyword Coverage Analysis ────────────────────────────────────────────────
+
+export interface KeywordCoverageCluster {
+  cluster_id: string;
+  cluster_name: string;
+  article_ids: number[];
+  primary_keywords: string[];
+  article_count: number;
+}
+
+export interface KeywordCoverage {
+  generated_at: string;
+  article_count: number;
+  clusters: KeywordCoverageCluster[];
+}
+
+export interface KeywordCoverageStatus {
+  exists: boolean;
+  last_analyzed: string;
+  coverage?: KeywordCoverage;
+}
+
 export interface TaskRun {
   attempts: number;
   last_error?: string;
@@ -515,6 +537,8 @@ export interface QueueItem {
   /** Runtime status for frontend queue tracking */
   status?: 'pending' | 'running' | 'completed' | 'failed';
   error?: string;
+  /** Full execution result including follow_up_tasks */
+  result?: ExecutionResult;
 }
 
 /** Runtime item tracking a task through the queue lifecycle. */
@@ -859,6 +883,8 @@ export interface SocialPost {
   hashtags: string[];
   cta: string;
   visual_assets: VisualAsset[];
+  /** AI-generated prompt for external image generation (Midjourney, DALL-E, etc.) */
+  image_generation_prompt?: string;
   status: PostStatus;
   scheduled_at?: string;
   posted_at?: string;

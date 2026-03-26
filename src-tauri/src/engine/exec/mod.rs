@@ -3,6 +3,7 @@
 
 pub mod content;
 pub mod content_audit;
+pub mod coverage;
 pub mod gsc;
 pub mod keywords;
 pub mod reddit;

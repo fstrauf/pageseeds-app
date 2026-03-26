@@ -26,6 +26,9 @@ export interface QueueProgressEvent {
     followUpCount?: number;
     error?: string;
     retryable?: boolean;
+    follow_up_tasks?: { id: string; task_type: string; title: string; status: string; execution_mode: string; priority: string }[];
+    started_at?: string;
+    finished_at?: string;
   };
 }
 
@@ -336,7 +339,19 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     logger.entry('onTaskCompleted', { taskId: event.taskId });
     set((state: QueueState) => ({
       items: state.items.map((i: QueueItem) =>
-        i.taskId === event.taskId ? { ...i, status: 'completed' as const } : i
+        i.taskId === event.taskId 
+          ? { 
+              ...i, 
+              status: 'completed' as const, 
+              result: event.payload?.follow_up_tasks 
+                ? { 
+                    follow_up_tasks: event.payload.follow_up_tasks,
+                    started_at: event.payload.started_at,
+                    finished_at: event.payload.finished_at,
+                  } as any 
+                : undefined 
+            } 
+          : i
       ),
     }));
     logger.stateChange('task status', 'running', 'completed');

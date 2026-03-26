@@ -271,7 +271,77 @@ Step: gsc_investigate_agentic (agentic)
 
 ---
 
-## 6. Reddit Opportunity Process
+## 6. Social Media Marketing Process
+
+**Purpose:** Transform content (articles, screenshots, specs) into platform-native social media posts with AI-generated image prompts.
+
+### Inputs
+- Content sources: articles, screenshots, spec files
+- Content templates defining tone and format per platform
+- Target platforms (TikTok, Instagram Feed/Reels/Stories)
+
+### Process Flow
+```
+Task: social_generate_campaign
+  ↓
+Handler: SocialHandler
+  ↓
+Step 1: social_collect_sources (deterministic)
+  ├─ Discover articles from content directory
+  ├─ Find screenshots from assets folder
+  └─ Build source manifest
+  ↓
+Step 2: social_load_templates (deterministic)
+  └─ Load platform-specific templates (TikTok hooks, IG carousels)
+  ↓
+Step 3: social_generate_posts (agentic)
+  ├─ For each source × template × platform combination:
+  ├─ Agent generates: hook, caption, hashtags, CTA
+  ├─ Agent generates: visual_description, overlay_text
+  └─ Agent generates: image_generation_prompt (for Midjourney/DALL-E)
+  ↓
+Step 4: social_build_visuals (deterministic)
+  ├─ Copy existing source images OR generate branded fallback
+  └─ Prepare assets for text overlay
+  ↓
+Step 5: social_save_campaign (deterministic)
+  └─ Persist posts to SQLite with image_generation_prompt
+  ↓
+Status: done
+```
+
+### Image Generation Workflow
+Since the app cannot generate images directly, the agent creates a detailed `image_generation_prompt` that users can:
+
+1. **Copy** from the post editor UI
+2. **Paste** into Midjourney, DALL-E, Leonardo, or any AI image generator
+3. **Download** the generated image
+4. **Upload** back to the post (manual or future automation)
+
+The prompt includes:
+- Visual style description (minimalist, professional, on-brand colors)
+- Composition guidance (aspect ratio matching the platform)
+- Mood and subject matter aligned with the post content
+- "No text in image" directive (since text will be overlaid separately)
+
+### Key Files
+- `engine/exec/social.rs` — Campaign execution logic
+- `social/prompts.rs` — Agent prompts for post generation
+- `social/generator.rs` — Simple article-to-post generator
+- `social/db.rs` — Post persistence with image_generation_prompt
+- `components/social/PostEditor.tsx` — UI with image prompt copy button
+
+### Data Model
+- `social_campaigns` table — Campaign configuration
+- `social_posts` table — Individual posts with:
+  - `hook`, `caption`, `hashtags`, `cta` — Text content
+  - `visual_assets` — Image/video paths
+  - `image_generation_prompt` — AI image prompt for external generation
+  - `overlay_text` — Text to render on the image
+
+---
+
+## 7. Reddit Opportunity Process
 
 **Purpose:** Find Reddit posts relevant to your content and engage authentically.
 
@@ -366,7 +436,14 @@ collect_gsc ──issues found──▶ fix_* tasks ──▶ (manual resolution
        └──▶ investigate_gsc (if all indexed)
 
 reddit_opportunity_search ──enriched──▶ OpportunityFeed ──▶ Reply posted
+
+write_article ──published──▶ social_generate_campaign ──▶ SocialPosts
+       │                                                           │
+       │                                                           ▼
+       └───────────────────── Image Gen Prompt (manual workflow) ─┘
 ```
+
+**Social Media Workflow Note:** Since the app cannot generate images directly, the social process produces `image_generation_prompt` fields that users copy into external AI image generators (Midjourney, DALL-E, etc.). The generated images are then manually uploaded back to complete the post.
 
 ---
 
@@ -379,9 +456,12 @@ reddit_opportunity_search ──enriched──▶ OpportunityFeed ──▶ Repl
 | Content Review | todo | done (+ spawns apply) | todo |
 | GSC Collection | todo | done (+ spawns fixes) | todo |
 | Reddit Search | todo | done | todo |
+| Social Campaign | todo | done (posts in `draft`) | todo |
 | Fix Tasks | todo | done | todo |
 
 **Critical:** Only keyword research tasks finish with `review` status. All others go to `done` or reset to `todo` on failure.
+
+**Social Post Status Flow:** `draft` → `review` → `approved` → `scheduled` → `posted`
 
 ---
 

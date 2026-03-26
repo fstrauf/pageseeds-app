@@ -148,7 +148,7 @@ async fn execute_queue_internal(
                 log::info!("[execute_queue_internal] Task {} succeeded: {}", 
                     item.task_id, exec_result.message);
                 
-                // Emit completion event
+                // Emit completion event with follow_up_tasks for review tasks
                 let event = QueueProgressEvent {
                     event_type: if exec_result.success { "completed" } else { "failed" }.to_string(),
                     task_id: item.task_id.clone(),
@@ -156,6 +156,9 @@ async fn execute_queue_internal(
                     payload: serde_json::json!({
                         "message": exec_result.message,
                         "success": exec_result.success,
+                        "started_at": exec_result.started_at,
+                        "finished_at": exec_result.finished_at,
+                        "follow_up_tasks": exec_result.follow_up_tasks,
                     }),
                 };
                 

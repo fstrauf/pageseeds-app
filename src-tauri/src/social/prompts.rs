@@ -11,6 +11,7 @@ pub fn generate_post_prompt(
     project_context: &str,
 ) -> String {
     let platform_guidance = platform_guidance(platform);
+    let canvas_dimensions = canvas_size_description(&template.overlay_config.canvas_size);
     
     format!(
         r##"You are a social media content strategist. Create a {platform} post.
@@ -38,7 +39,8 @@ Return ONLY one fenced JSON block and no extra prose:
   "hashtags": ["#relevant", "#niche", "#broad"],
   "cta": "Clear call to action",
   "visual_description": "What the image or video should show",
-  "overlay_text": "Text to render on the image (optional, max 20 words)"
+  "overlay_text": "Text to render on the image (optional, max 20 words)",
+  "image_generation_prompt": "Detailed AI image generation prompt (200-400 chars)"
 }}
 ```
 
@@ -48,6 +50,12 @@ Requirements:
 - Hashtags: 5-10 relevant tags (mix of broad and niche)
 - CTA: soft, not pushy
 - overlay_text should be punchy and fit on an image
+- image_generation_prompt: Create a detailed prompt for AI image generators (Midjourney/DALL-E/Leonardo)
+  * Describe the visual style, composition, colors, mood
+  * Specify "no text in image" (text will be overlaid separately)
+  * Include aspect ratio hint: {canvas_dimensions}
+  * Keep to 200-400 characters for optimal results
+  * Make it specific enough to get consistent, on-brand results
 "##,
         platform = format!("{:?}", platform),
         source_type = format!("{:?}", source.source_type),
@@ -55,6 +63,7 @@ Requirements:
         template_instructions = template.creation_prompt,
         platform_guidance = platform_guidance,
         project_context = project_context,
+        canvas_dimensions = canvas_dimensions,
     )
 }
 
@@ -137,11 +146,13 @@ Return ONLY one fenced JSON block:
   "hashtags": ["#revised", "#hashtags"],
   "cta": "Revised call to action",
   "visual_description": "Updated visual description",
-  "overlay_text": "Updated overlay text (optional)"
+  "overlay_text": "Updated overlay text (optional)",
+  "image_generation_prompt": "Updated AI image generation prompt (200-400 chars)"
 }}
 ```
 
 Address the feedback while maintaining the core message.
+If the feedback relates to the visual, update the image_generation_prompt accordingly.
 "##,
         hook = original_post.hook,
         caption = original_post.caption,
@@ -176,6 +187,16 @@ fn platform_guidance(platform: &Platform) -> &'static str {
              Interactive elements (polls, questions) implied. \
              More casual than Feed. Good for behind-the-scenes."
         }
+    }
+}
+
+/// Get canvas size description for image generation prompts
+fn canvas_size_description(canvas_size: &CanvasSize) -> &'static str {
+    match canvas_size {
+        CanvasSize::TikTok => "9:16 vertical (1080x1920) - TikTok/Reels format",
+        CanvasSize::Square => "1:1 square (1080x1080) - Instagram Feed",
+        CanvasSize::Portrait => "4:5 portrait (1080x1350) - Instagram Feed portrait",
+        CanvasSize::Story => "9:16 vertical (1080x1920) - Stories format",
     }
 }
 

@@ -48,20 +48,34 @@ export function TaskRunner({
   }, [items]);
 
   // Auto-expand items that just finished with follow-ups or failed.
+  // Also auto-open review tasks so user can immediately act on them.
   useEffect(() => {
     const prev = prevStatusRef.current
     const toExpand: string[] = []
+    const toOpen: string[] = []
+    
     for (const item of items) {
       const was = prev.get(item.task.id)
       const now = item.status
       if (was && was !== now && (now === 'done' || now === 'failed')) {
         logger.stateChange(`task ${item.task.id}`, was, now);
         const hasFollowUps = (item.result?.follow_up_tasks?.length ?? 0) > 0
+        // Check if this task needs review - it's in follow_up_tasks with status='review'
+        const isReviewTask = item.result?.follow_up_tasks?.some(
+          f => f.id === item.task.id && f.status === 'review'
+        )
+        
         if (now === 'failed' || hasFollowUps) {
           toExpand.push(item.task.id)
         }
+        
+        // Auto-open tasks that need review (reddit_opportunity_search, research_keywords, etc.)
+        if (now === 'done' && isReviewTask) {
+          toOpen.push(item.task.id)
+        }
       }
     }
+    
     if (toExpand.length > 0) {
       logger.debug('auto-expanding items', { ids: toExpand });
       setExpanded(prevExpanded => {
@@ -70,7 +84,13 @@ export function TaskRunner({
         return next
       })
     }
-  }, [items])
+    
+    // Auto-open the first review task (shopping cart UX pattern)
+    if (toOpen.length > 0 && onOpenTask) {
+      logger.debug('auto-opening review task', { id: toOpen[0] });
+      onOpenTask(toOpen[0])
+    }
+  }, [items, onOpenTask])
 
   const succeeded = items.filter(it => it.status === 'done').length
   const failed = items.filter(it => it.status === 'failed').length

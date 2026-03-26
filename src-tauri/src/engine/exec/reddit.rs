@@ -1062,6 +1062,155 @@ pub fn create_reddit_reply_tasks_from_opportunities(
     created_ids
 }
 
+// ─── Post Reply to Reddit ────────────────────────────────────────────────────
+
+/// Execute a reddit_reply task: post the reply to Reddit via API.
+/// 
+/// Extracts post_id and reply_text from the task description,
+/// calls the Reddit API to post the comment, and updates the database.
+pub fn exec_reddit_post_reply(
+    task: &crate::models::task::Task,
+    project_path: &str,
+    conn: &rusqlite::Connection,
+) -> crate::engine::workflows::StepResult {
+    use crate::config::env_resolver::EnvResolver;
+    
+    log::info!("[reddit_post_reply] starting for task {}", task.id);
+    
+    // Extract post_id and reply_text from task description
+    let (post_id, reply_text) = match extract_post_details_from_task(task) {
+        Some((id, text)) => (id, text),
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "Could not extract post_id and reply_text from task description".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    log::info!("[reddit_post_reply] posting to post_id={}", post_id);
+    
+    // Load Reddit credentials
+    let resolver = EnvResolver::new(std::path::Path::new(project_path));
+    
+    let client_id = match resolver.resolve("REDDIT_CLIENT_ID") {
+        Some((v, _)) => v,
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "REDDIT_CLIENT_ID not set — add it to ~/.config/automation/secrets.env".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    let client_secret = match resolver.resolve("REDDIT_CLIENT_SECRET") {
+        Some((v, _)) => v,
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "REDDIT_CLIENT_SECRET not set — add it to ~/.config/automation/secrets.env".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    let refresh_token = match resolver.resolve("REDDIT_REFRESH_TOKEN") {
+        Some((v, _)) => v,
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "REDDIT_REFRESH_TOKEN not set — add it to ~/.config/automation/secrets.env".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    // Create a local runtime for the async Reddit API call
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to create runtime: {}", e),
+                output: None,
+            };
+        }
+    };
+    
+    // Post to Reddit
+    let result = rt.block_on(async {
+        crate::reddit::post::submit_comment(&post_id, &reply_text, &client_id, &client_secret, &refresh_token).await
+    });
+    
+    match result {
+        Ok(comment_result) => {
+            let reply_url = comment_result.permalink;
+            let now = chrono::Utc::now().to_rfc3339();
+            
+            // Update database with posted status
+            if let Err(e) = crate::reddit::db::mark_posted(conn, &post_id, &reply_text, &reply_url) {
+                log::warn!("[reddit_post_reply] failed to mark posted in DB: {}", e);
+            }
+            
+            // Update history file
+            let history_manager = crate::reddit::history::RedditHistoryManager::new(
+                std::path::Path::new(project_path)
+            );
+            if let Err(e) = history_manager.mark_posted(&post_id) {
+                log::warn!("[reddit_post_reply] failed to write history: {}", e);
+            }
+            
+            log::info!("[reddit_post_reply] successfully posted comment {}", comment_result.comment_id);
+            
+            crate::engine::workflows::StepResult {
+                success: true,
+                message: format!("Posted reply to Reddit: {}", reply_url),
+                output: Some(format!("{{\"comment_id\":\"{}\",\"permalink\":\"{}\"}}", 
+                    comment_result.comment_id, reply_url)),
+            }
+        }
+        Err(e) => {
+            log::error!("[reddit_post_reply] failed to post: {}", e);
+            crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to post to Reddit: {}", e),
+                output: None,
+            }
+        }
+    }
+}
+
+/// Extract post_id and reply_text from a reddit_reply task description.
+/// The description format is:
+/// **Subreddit:** r/...
+/// **Post URL:** ...
+/// **Why Relevant:** ...
+/// **Draft Reply:**
+/// <reply text>
+/// **Post ID:** <post_id>
+fn extract_post_details_from_task(task: &crate::models::task::Task) -> Option<(String, String)> {
+    let desc = task.description.as_ref()?;
+    
+    // Extract Post ID (last line with "Post ID:")
+    let post_id = desc.lines()
+        .find(|l| l.trim().starts_with("**Post ID:**"))
+        .and_then(|l| l.split("**Post ID:**").nth(1))
+        .map(|s| s.trim().to_string())?;
+    
+    // Extract Draft Reply (everything between "**Draft Reply:**" and "**Post ID:**")
+    let reply_start = desc.find("**Draft Reply:**")? + "**Draft Reply:**".len();
+    let reply_end = desc.find("**Post ID:**")?;
+    let reply_text = desc[reply_start..reply_end].trim().to_string();
+    
+    if post_id.is_empty() || reply_text.is_empty() {
+        None
+    } else {
+        Some((post_id, reply_text))
+    }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Strip markdown code fences and extract the first JSON array from agent output.

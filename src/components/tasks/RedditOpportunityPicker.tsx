@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CheckSquare, Square, Loader2, ExternalLink, MessageSquare } from 'lucide-react'
 import { createRedditReplyTasks } from '../../lib/tauri'
+import { useQueue } from '../../lib/queue-context'
 import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -70,6 +71,7 @@ function formatDate(dateStr?: string): string {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportunityPickerProps) {
+  const queue = useQueue()
   const [rows, setRows] = useState<OpportunityRow[]>([])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -123,6 +125,20 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
 
     try {
       const newTasks = await createRedditReplyTasks(task.id, selectedIds)
+      
+      // Auto-add created tasks to the queue (shopping cart pattern)
+      if (newTasks.length > 0) {
+        queue.enqueueNext(
+          newTasks.map(t => ({
+            taskId: t.id,
+            projectId: t.projectId ?? task.project_id,
+            title: t.title ?? 'Reply to Reddit post',
+            taskType: t.type ?? 'reddit_reply',
+            projectName: task.projectName,
+          }))
+        )
+      }
+      
       onTasksCreated(newTasks)
     } catch (e: unknown) {
       setError(String(e))

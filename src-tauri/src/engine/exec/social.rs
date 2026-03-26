@@ -701,6 +701,8 @@ fn create_social_post_from_agent_output(
             description: agent_output.visual_description.clone(),
             overlay_text: agent_output.overlay_text.clone(),
         }],
+        // AI-generated prompt for external image generation (Midjourney, DALL-E, etc.)
+        image_generation_prompt: agent_output.image_generation_prompt.clone(),
         // Note: Image resolution happens in social_build_visuals step
         // where we try article images -> screenshots -> generated branded graphics
         status: PostStatus::Draft,

@@ -1,0 +1,330 @@
+/// Keyword coverage analysis execution module.
+///
+/// Analyzes existing articles to build a semantic cluster map of keyword coverage.
+
+use crate::engine::project_paths::ProjectPaths;
+use crate::engine::workflows::StepResult;
+use crate::models::task::Task;
+use std::path::Path;
+
+/// Execute the `coverage_load_articles` step.
+///
+/// Reads articles.json and returns the article metadata for clustering.
+pub(crate) fn exec_coverage_load_articles(
+    _task: &Task,
+    project_path: &str,
+) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+    let articles_path = paths.automation_dir.join("articles.json");
+
+    let articles_str = match std::fs::read_to_string(&articles_path) {
+        Ok(s) => s,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("articles.json not found: {}", e),
+                output: None,
+            }
+        }
+    };
+
+    let articles_doc: serde_json::Value = match serde_json::from_str(&articles_str) {
+        Ok(v) => v,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to parse articles.json: {}", e),
+                output: None,
+            }
+        }
+    };
+
+    let empty_vec: Vec<serde_json::Value> = Vec::new();
+    let article_values = if articles_doc.is_array() {
+        articles_doc.as_array().unwrap_or(&empty_vec)
+    } else {
+        articles_doc.get("articles").and_then(|v| v.as_array()).unwrap_or(&empty_vec)
+    };
+
+    // Extract minimal metadata for clustering
+    let article_summaries: Vec<serde_json::Value> = article_values
+        .iter()
+        .filter_map(|a| {
+            let id = a["id"].as_i64()?;
+            let title = a["title"].as_str().unwrap_or("");
+            let slug = a["url_slug"].as_str().unwrap_or("");
+            let keyword = a["target_keyword"].as_str().unwrap_or("");
+            let file = a["file"].as_str().unwrap_or("");
+            let status = a["status"].as_str().unwrap_or("draft");
+
+            // Skip draft articles that aren't published
+            if status == "draft" && !file.is_empty() {
+                // Still include drafts that have files
+            }
+
+            Some(serde_json::json!({
+                "id": id,
+                "title": title,
+                "slug": slug,
+                "target_keyword": keyword,
+                "file": file,
+                "status": status,
+            }))
+        })
+        .collect();
+
+    let output = serde_json::json!({
+        "article_count": article_summaries.len(),
+        "articles": article_summaries,
+    });
+
+    StepResult {
+        success: true,
+        message: format!("Loaded {} articles for coverage analysis", article_summaries.len()),
+        output: Some(output.to_string()),
+    }
+}
+
+/// Execute the `coverage_cluster_analysis` step.
+///
+/// Sends article metadata to the agent for semantic clustering.
+/// The agent groups articles by topic/theme and assigns human-readable cluster names.
+pub(crate) fn exec_coverage_cluster_analysis(
+    _task: &Task,
+    project_path: &str,
+    agent_provider: &str,
+    articles_json: &str,
+) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+    let repo_root = Path::new(project_path);
+
+    let articles: serde_json::Value = match serde_json::from_str(articles_json) {
+        Ok(v) => v,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to parse articles JSON: {}", e),
+                output: None,
+            }
+        }
+    };
+
+    let article_count = articles["article_count"].as_i64().unwrap_or(0);
+    if article_count == 0 {
+        return StepResult {
+            success: true,
+            message: "No articles to cluster".to_string(),
+            output: Some(articles_json.to_string()),
+        };
+    }
+
+    let prompt = build_cluster_prompt(&articles);
+
+    log::info!(
+        "[coverage_cluster] running agent ({} chars prompt, {} articles, provider={})",
+        prompt.len(),
+        article_count,
+        agent_provider
+    );
+
+    let raw_output = match crate::engine::agent::run_agent(agent_provider, &prompt, repo_root) {
+        Ok(out) => out,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Agent failed: {}", e),
+                output: None,
+            }
+        }
+    };
+
+    // Parse the agent output to extract clusters
+    let normalized = crate::engine::normalizer::normalize_agent_output(&raw_output);
+    let clusters = normalized.json_artifact.unwrap_or_else(|| {
+        serde_json::json!({
+            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "article_count": article_count,
+            "clusters": [],
+        })
+    });
+
+    // Persist to keyword_coverage.json for future reference
+    let coverage_path = paths.automation_dir.join("keyword_coverage.json");
+    let coverage_str = serde_json::to_string_pretty(&clusters).unwrap_or_default() + "\n";
+    if let Err(e) = std::fs::write(&coverage_path, &coverage_str) {
+        log::warn!("[coverage_cluster] failed to write keyword_coverage.json: {}", e);
+    }
+
+    let cluster_count = clusters["clusters"].as_array().map(|a| a.len()).unwrap_or(0);
+    StepResult {
+        success: true,
+        message: format!(
+            "Cluster analysis complete: {} clusters from {} articles",
+            cluster_count, article_count
+        ),
+        output: Some(clusters.to_string()),
+    }
+}
+
+/// Build the agent prompt for clustering articles.
+fn build_cluster_prompt(articles: &serde_json::Value) -> String {
+    let articles_json = serde_json::to_string_pretty(articles).unwrap_or_default();
+
+    format!(
+        r#"You are an SEO content strategist analyzing a website's article portfolio.
+
+Your task is to group the articles into semantic clusters based on their topics and target keywords.
+
+## Articles to Analyze
+
+{articles_json}
+
+## Clustering Instructions
+
+1. Group articles by **topic/theme similarity**, not just keyword matching.
+   - Consider the title, target_keyword, and implied topic from the slug.
+   - Articles about similar concepts should be in the same cluster.
+
+2. Create **human-readable cluster names**:
+   - Use clear, descriptive names like "React Hooks", "Budget Planning", "SEO Fundamentals"
+   - Avoid generic names like "Cluster 1" or "Group A"
+
+3. For each cluster, provide:
+   - A unique cluster_id (snake_case, e.g., "react_hooks")
+   - A human-readable cluster_name
+   - The list of article IDs in that cluster
+   - Primary keywords/topics that define this cluster
+
+4. Guidelines:
+   - Aim for 3-10 meaningful clusters (adjust based on article count and diversity)
+   - An article should belong to exactly one cluster (no duplicates)
+   - If an article doesn't fit any clear cluster, put it in a "misc" or "general" cluster
+   - Clusters should be roughly balanced — avoid one cluster with 90% of articles
+
+## Output Contract (Required)
+
+Return ONLY one valid JSON object. No markdown fences, no commentary.
+
+```json
+{{
+  "generated_at": "<ISO-8601 timestamp>",
+  "article_count": <total number of articles analyzed>,
+  "clusters": [
+    {{
+      "cluster_id": "<snake_case_id>",
+      "cluster_name": "<Human Readable Name>",
+      "article_ids": [<article id numbers>],
+      "primary_keywords": ["keyword1", "keyword2"],
+      "article_count": <number of articles in this cluster>
+    }}
+  ]
+}}
+```
+
+Requirements:
+- cluster_id: Use snake_case, no spaces (e.g., "react_hooks", "budget_planning")
+- cluster_name: Use Title Case, descriptive (e.g., "React Hooks", "Budget Planning")
+- article_ids: Array of integers matching the article "id" fields from input
+- primary_keywords: 2-5 keywords that best represent this cluster's focus
+- The sum of article_count across all clusters should equal the total article_count
+"#,
+        articles_json = articles_json
+    )
+}
+
+/// Execute the `coverage_save` step.
+///
+/// Verifies the coverage JSON was written and returns the final result.
+pub(crate) fn exec_coverage_save(
+    _task: &Task,
+    project_path: &str,
+) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+    let coverage_path = paths.automation_dir.join("keyword_coverage.json");
+
+    if !coverage_path.exists() {
+        return StepResult {
+            success: false,
+            message: "keyword_coverage.json was not created".to_string(),
+            output: None,
+        };
+    }
+
+    match std::fs::read_to_string(&coverage_path) {
+        Ok(content) => {
+            // Validate it's valid JSON
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(parsed) => {
+                    let cluster_count = parsed["clusters"].as_array().map(|a| a.len()).unwrap_or(0);
+                    let article_count = parsed["article_count"].as_i64().unwrap_or(0);
+                    StepResult {
+                        success: true,
+                        message: format!(
+                            "Keyword coverage saved: {} clusters, {} articles",
+                            cluster_count, article_count
+                        ),
+                        output: Some(content),
+                    }
+                }
+                Err(e) => StepResult {
+                    success: false,
+                    message: format!("Invalid JSON in keyword_coverage.json: {}", e),
+                    output: Some(content),
+                },
+            }
+        }
+        Err(e) => StepResult {
+            success: false,
+            message: format!("Failed to read keyword_coverage.json: {}", e),
+            output: None,
+        },
+    }
+}
+
+/// Read the existing keyword_coverage.json for a project.
+///
+/// Returns None if the file doesn't exist or is invalid.
+pub fn read_keyword_coverage(project_path: &str) -> Option<serde_json::Value> {
+    let paths = ProjectPaths::from_path(project_path);
+    let coverage_path = paths.automation_dir.join("keyword_coverage.json");
+
+    let content = std::fs::read_to_string(&coverage_path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Check if keyword coverage exists and return its age.
+///
+/// Returns (exists, age_description) where age_description is human-readable.
+pub fn get_coverage_status(project_path: &str) -> (bool, String) {
+    let paths = ProjectPaths::from_path(project_path);
+    let coverage_path = paths.automation_dir.join("keyword_coverage.json");
+
+    if !coverage_path.exists() {
+        return (false, "Never analyzed".to_string());
+    }
+
+    let metadata = match std::fs::metadata(&coverage_path) {
+        Ok(m) => m,
+        Err(_) => return (false, "Never analyzed".to_string()),
+    };
+
+    let modified = match metadata.modified() {
+        Ok(m) => m,
+        Err(_) => return (true, "Analyzed (unknown date)".to_string()),
+    };
+
+    let now = std::time::SystemTime::now();
+    let duration = now.duration_since(modified).unwrap_or_default();
+
+    let age_desc = if duration.as_secs() < 60 {
+        "Just now".to_string()
+    } else if duration.as_secs() < 3600 {
+        format!("{} minutes ago", duration.as_secs() / 60)
+    } else if duration.as_secs() < 86400 {
+        format!("{} hours ago", duration.as_secs() / 3600)
+    } else {
+        format!("{} days ago", duration.as_secs() / 86400)
+    };
+
+    (true, age_desc)
+}

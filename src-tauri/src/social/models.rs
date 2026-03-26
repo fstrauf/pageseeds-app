@@ -228,6 +228,9 @@ pub struct AgentPostOutput {
     pub cta: String,
     pub visual_description: String,
     pub overlay_text: Option<String>,
+    /// AI-generated prompt for external image generation services
+    /// (Midjourney, DALL-E, Leonardo, etc.)
+    pub image_generation_prompt: Option<String>,
 }
 
 /// Agent response for template creation

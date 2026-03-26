@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowLeft, Copy, Save } from 'lucide-react'
+import { ArrowLeft, Copy, Save, Image, Sparkles } from 'lucide-react'
 import { updateSocialPost } from '../../lib/tauri'
 import type { SocialPost } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ export function PostEditor({ post, onBack, onUpdated }: Props) {
   const [editedPost, setEditedPost] = useState<SocialPost>(post)
   const [saving, setSaving] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [imagePromptCopied, setImagePromptCopied] = useState(false)
 
   async function handleSave() {
     setSaving(true)
@@ -37,6 +38,14 @@ export function PostEditor({ post, onBack, onUpdated }: Props) {
     navigator.clipboard.writeText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  function handleCopyImagePrompt() {
+    if (editedPost.image_generation_prompt) {
+      navigator.clipboard.writeText(editedPost.image_generation_prompt)
+      setImagePromptCopied(true)
+      setTimeout(() => setImagePromptCopied(false), 2000)
+    }
   }
 
   const platformIcon = getPlatformIcon(post.platform)
@@ -138,6 +147,59 @@ export function PostEditor({ post, onBack, onUpdated }: Props) {
               ))}
             </div>
           </div>
+
+          {/* Image Generation Prompt */}
+          {editedPost.image_generation_prompt && (
+            <div className="border border-border rounded-xl p-4 bg-card">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles className="w-4 h-4 text-primary" />
+                <h4 className="text-sm font-medium text-foreground">
+                  AI Image Generation Prompt
+                </h4>
+              </div>
+              <p className="text-sm text-muted-foreground mb-3 leading-relaxed">
+                {editedPost.image_generation_prompt}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleCopyImagePrompt}
+                  className="flex-1"
+                >
+                  <Copy className="w-4 h-4 mr-2" />
+                  {imagePromptCopied ? 'Copied!' : 'Copy Prompt'}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Use this prompt in Midjourney, DALL-E, Leonardo, or any AI image generator. 
+                Then overlay the text on the generated image.
+              </p>
+            </div>
+          )}
+
+          {/* Visual Asset Info */}
+          {editedPost.visual_assets.length > 0 && editedPost.visual_assets[0].description && (
+            <div className="p-4 bg-muted rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Image className="w-4 h-4 text-muted-foreground" />
+                <h4 className="text-sm font-medium text-foreground">
+                  Visual Description
+                </h4>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {editedPost.visual_assets[0].description}
+              </p>
+              {editedPost.visual_assets[0].overlay_text && (
+                <div className="mt-2 pt-2 border-t border-border">
+                  <p className="text-xs text-muted-foreground">Suggested overlay text:</p>
+                  <p className="text-sm text-foreground font-medium">
+                    "{editedPost.visual_assets[0].overlay_text}"
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right: Editor */}

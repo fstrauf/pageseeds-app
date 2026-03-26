@@ -179,6 +179,7 @@ export default function App() {
           <SEO
             projectId={activeProject?.id ?? ''}
             project={activeProject ?? undefined}
+            onRunTasks={handleRunTasks}
           />
         )}
         {activeView === 'scheduler' && <SchedulerConfig projectId={activeProject?.id ?? ''} />}

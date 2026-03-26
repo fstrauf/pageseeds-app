@@ -56,6 +56,7 @@ export function useQueueRunner(onCompleted?: () => void) {
           : 'failed',
     error: item.error,
     liveSteps: [],
+    result: item.result,
   }));
 
   logger.exit('useQueueRunner');
