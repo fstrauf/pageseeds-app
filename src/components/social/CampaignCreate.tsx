@@ -56,7 +56,8 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
       case 'platforms':
         return selectedPlatforms.length > 0
       case 'templates':
-        return selectedTemplates.length > 0
+        // Allow proceeding if templates are selected OR if no templates exist (uses backend defaults)
+        return templates.length === 0 || selectedTemplates.length > 0
       default:
         return true
     }

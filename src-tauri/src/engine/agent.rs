@@ -194,6 +194,11 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
         stdout.len(),
         stderr.len()
     );
+    
+    // Debug: log first 500 chars of stderr if present
+    if !stderr.is_empty() {
+        log::warn!("[agent] {} stderr: {}", binary, &stderr[..stderr.len().min(500)]);
+    }
 
     // Some CLIs exit non-zero but still produce useful output
     if out.status.success() || !stdout.trim().is_empty() {
