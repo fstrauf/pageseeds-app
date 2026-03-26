@@ -115,8 +115,15 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
     // Debug: log environment to diagnose differences between test and app
     let path_env = std::env::var("PATH").unwrap_or_default();
     let home_env = std::env::var("HOME").unwrap_or_default();
-    log::debug!("[agent] PATH: {}", path_env);
-    log::debug!("[agent] HOME: {}", home_env);
+    log::info!("[agent] PATH: {}", path_env);
+    log::info!("[agent] HOME: {}", home_env);
+    
+    // Also log any KIMI_ env vars that might affect behavior
+    for (key, value) in std::env::vars() {
+        if key.starts_with("KIMI") {
+            log::info!("[agent] {}: {}", key, value);
+        }
+    }
 
     let mut cmd = std::process::Command::new(&binary);
 
@@ -142,6 +149,7 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::from_secs(0))
             .as_millis());
+        log::info!("[agent] Using fresh session: {}", session_id);
         cmd.arg("--session").arg(&session_id);
         // Kimi uses --work-dir instead of current_dir
         cmd.arg("--work-dir").arg(project_path);
