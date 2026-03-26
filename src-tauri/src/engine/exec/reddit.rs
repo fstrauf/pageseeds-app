@@ -250,8 +250,12 @@ pub(crate) fn exec_reddit_config_parse(
     // Call agent
     match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
         Ok(output) => {
+            log::info!("[reddit_config_parse] agent output ({} chars): {:?}", output.len(), &output[..output.len().min(500)]);
+            
             // Try to extract JSON object from the output
             let json_str = extract_json_object(&output);
+            log::info!("[reddit_config_parse] extracted JSON ({} chars): {:?}", json_str.len(), &json_str[..json_str.len().min(500)]);
+            
             match serde_json::from_str::<RedditSearchParams>(&json_str) {
                 Ok(params) => {
                     // Validate: we need at least some queries or topics
@@ -1053,10 +1057,33 @@ pub(crate) fn extract_json_array(output: &str) -> String {
 /// Extract a JSON object from text (looks for {...})
 pub fn extract_json_object(output: &str) -> String {
     let trimmed = output.trim();
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return trimmed[start..=end].to_string();
+    
+    // First, try to find JSON within markdown code blocks
+    // Look for ```json ... ``` or ``` ... ```
+    let patterns = ["```json\n", "```json\r\n", "```JSON\n", "```\n", "```"];
+    for pat in &patterns {
+        if let Some(start) = trimmed.find(pat) {
+            let after_open = start + pat.len();
+            let rest = &trimmed[after_open..];
+            if let Some(end) = rest.find("```") {
+                let candidate = rest[..end].trim();
+                // Check if it looks like JSON
+                if candidate.starts_with('{') || candidate.starts_with('[') {
+                    return candidate.to_string();
+                }
+            }
         }
     }
+    
+    // Fallback: look for outermost JSON object/array
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            if end > start {
+                return trimmed[start..=end].to_string();
+            }
+        }
+    }
+    
+    // Last resort: return trimmed output
     trimmed.to_string()
 }
