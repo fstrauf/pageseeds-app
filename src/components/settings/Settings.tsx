@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink } from 'lucide-react'
+import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText } from 'lucide-react'
+import { LogViewer } from './LogViewer'
 import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus } from '../../lib/tauri'
 import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -438,6 +439,22 @@ export function Settings({ projectId }: SettingsProps) {
                 </Card>
 
                 <Separator className="bg-border" />
+
+                {/* Logs section */}
+                <Card className="bg-card border-border">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <ScrollText size={14} className="text-muted-foreground" />
+                      Application Logs
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <LogViewer />
+                  </CardContent>
+                </Card>
+
+                <Separator className="bg-border" />
+
                 <Card className="bg-card border-border">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm font-semibold text-foreground">About</CardTitle>

@@ -6,10 +6,9 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { nanoid } from 'nanoid';
 
 // Generate a session ID for grouping logs
-const SESSION_ID = nanoid();
+const SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 // Log buffer for batching
 const LOG_BUFFER: LogEntry[] = [];

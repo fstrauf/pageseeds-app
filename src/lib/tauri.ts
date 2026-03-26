@@ -488,6 +488,80 @@ export const setAgentProvider = (projectId: string, provider: string): Promise<v
 export const getLogFilePath = (): Promise<string> =>
   invoke('get_log_file_path')
 
+// ─── Logging ─────────────────────────────────────────────────────────────────
+
+export const submitLog = (entry: {
+  timestamp: string
+  level: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}): Promise<number> => invoke('submit_log', { entry })
+
+export const submitLogsBatch = (entries: Array<{
+  timestamp: string
+  level: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}>): Promise<number[]> => invoke('submit_logs_batch', { entries })
+
+export const queryLogs = (
+  filters: {
+    level?: string
+    source?: string
+    component?: string
+    session_id?: string
+    search_query?: string
+  },
+  limit?: number,
+  offset?: number
+): Promise<Array<{
+  id?: number
+  timestamp: string
+  level: string
+  source: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}>> => invoke('query_logs', { filters, limit, offset })
+
+export const getRecentLogs = (limit?: number): Promise<Array<{
+  id?: number
+  timestamp: string
+  level: string
+  source: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}>> => invoke('get_recent_logs', { limit })
+
+export const getLogStats = (): Promise<{
+  total_count: number
+  error_count: number
+  warn_count: number
+  info_count: number
+  debug_count: number
+  frontend_count: number
+  backend_count: number
+  agent_count: number
+} | null> => invoke('get_log_stats')
+
+export const clearOldLogs = (daysToKeep: number): Promise<number> =>
+  invoke('clear_old_logs', { daysToKeep })
+
+export const exportLogs = (filters?: {
+  level?: string
+  source?: string
+  component?: string
+  session_id?: string
+  search_query?: string
+}): Promise<string | null> => invoke('export_logs', { filters })
+
 // ─── Overview ────────────────────────────────────────────────────────────────
 
 export const getProjectOverview = (projectId: string): Promise<ProjectOverview> =>
