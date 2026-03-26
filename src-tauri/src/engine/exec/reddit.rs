@@ -250,11 +250,11 @@ pub(crate) fn exec_reddit_config_parse(
     // Call agent
     match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
         Ok(output) => {
-            log::info!("[reddit_config_parse] agent output ({} chars): {:?}", output.len(), &output[..output.len().min(500)]);
+            log::info!("[reddit_config_parse] agent output ({} chars): {:?}", output.len(), &output[..output.len().min(2000)]);
             
             // Try to extract JSON object from the output
             let json_str = extract_json_object(&output);
-            log::info!("[reddit_config_parse] extracted JSON ({} chars): {:?}", json_str.len(), &json_str[..json_str.len().min(1000)]);
+            log::info!("[reddit_config_parse] extracted JSON ({} chars): {:?}", json_str.len(), &json_str[..json_str.len().min(2000)]);
             
             match serde_json::from_str::<RedditSearchParams>(&json_str) {
                 Ok(params) => {
@@ -279,31 +279,19 @@ pub(crate) fn exec_reddit_config_parse(
                 }
                 Err(e) => {
                     log::warn!("[reddit_config_parse] failed to parse agent output as JSON: {}", e);
-                    log::warn!("[reddit_config_parse] problematic JSON (first 2000 chars): {}", &json_str[..json_str.len().min(2000)]);
                     
-                    // Fallback: use deterministic config parsing instead of failing
-                    log::info!("[reddit_config_parse] falling back to deterministic config parsing");
-                    let fallback_params = parse_config_fallback(&reddit_config);
+                    // Save full output to temp file for debugging
+                    let debug_path = std::env::temp_dir().join("kimi_error_output.txt");
+                    let _ = std::fs::write(&debug_path, &output);
+                    log::warn!("[reddit_config_parse] full output saved to: {:?} ({} chars)", debug_path, output.len());
                     
-                    // Validate fallback results
-                    if fallback_params.query_keywords.is_empty() && fallback_params.trigger_topics.is_empty() {
-                        crate::engine::workflows::StepResult {
-                            success: false,
-                            message: format!("Agent JSON invalid ({}), and fallback parsing found no keywords — check reddit_config.md format", e),
-                            output: Some(output),
-                        }
-                    } else {
-                        let params_json = serde_json::to_string_pretty(&fallback_params).unwrap_or_default();
-                        crate::engine::workflows::StepResult {
-                            success: true,
-                            message: format!("Used fallback parsing: {} keywords, {} topics, {} subreddits (agent JSON had: {})",
-                                fallback_params.query_keywords.len(),
-                                fallback_params.trigger_topics.len(),
-                                fallback_params.seed_subreddits.len(),
-                                e
-                            ),
-                            output: Some(params_json),
-                        }
+                    // Log first 3000 chars for immediate inspection
+                    log::warn!("[reddit_config_parse] output preview (first 3000 chars): {}", &output[..output.len().min(3000)]);
+                    
+                    crate::engine::workflows::StepResult {
+                        success: false,
+                        message: format!("Agent produced invalid JSON: {}", e),
+                        output: Some(output),
                     }
                 }
             }
