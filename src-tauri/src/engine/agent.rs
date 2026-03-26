@@ -111,6 +111,12 @@ pub async fn detect_agents_async(configured_provider: &str) -> AgentStatus {
 pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<String, String> {
     let (binary, extra_args) = resolve_provider(provider);
     log::info!("[agent] running {} in {:?}", binary, project_path);
+    
+    // Debug: log environment to diagnose differences between test and app
+    let path_env = std::env::var("PATH").unwrap_or_default();
+    let home_env = std::env::var("HOME").unwrap_or_default();
+    log::debug!("[agent] PATH: {}", path_env);
+    log::debug!("[agent] HOME: {}", home_env);
 
     let mut cmd = std::process::Command::new(&binary);
 
@@ -131,6 +137,12 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
         cmd.arg("--final-message-only");
         // Disable thinking mode for cleaner output
         cmd.arg("--no-thinking");
+        // Use a fresh session to avoid accumulated context causing large outputs
+        let session_id = format!("pageseeds-{:x}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_millis());
+        cmd.arg("--session").arg(&session_id);
         // Kimi uses --work-dir instead of current_dir
         cmd.arg("--work-dir").arg(project_path);
     } else {
@@ -145,24 +157,43 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let start = std::time::Instant::now();
-    
-    // Use output() with a timeout wrapper for simpler, more reliable capture
-    let out = match cmd.output() {
-        Ok(o) => o,
+    // Spawn as a child so we can enforce a timeout instead of blocking forever.
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(format!(
                 "Agent binary '{}' not found on PATH. Install it first.",
                 binary
             ));
         }
-        Err(e) => return Err(format!("Failed to run agent '{}': {}", binary, e)),
+        Err(e) => return Err(format!("Failed to launch agent '{}': {}", binary, e)),
     };
-    
-    // Check if we exceeded timeout (soft check - process already finished)
-    if start.elapsed() > Duration::from_secs(AGENT_TIMEOUT_SECS) {
-        log::warn!("[agent] {} took longer than {}s but completed", binary, AGENT_TIMEOUT_SECS);
+
+    let timeout = Duration::from_secs(AGENT_TIMEOUT_SECS);
+    let start = std::time::Instant::now();
+
+    // Poll the child process with a sleep interval to enforce a timeout.
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap the zombie
+                    return Err(format!(
+                        "Agent '{}' timed out after {} seconds. Killed the process.",
+                        binary, AGENT_TIMEOUT_SECS
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err(e) => return Err(format!("Error waiting for agent '{}': {}", binary, e)),
+        }
     }
+
+    let out = child.wait_with_output().map_err(|e| {
+        format!("Failed to read output from agent '{}': {}", binary, e)
+    })?;
 
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
