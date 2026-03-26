@@ -685,3 +685,8 @@ export const createSocialTemplate = (template: ContentTemplate): Promise<Content
 
 export const deleteSocialTemplate = (templateId: string): Promise<void> =>
   invoke('delete_social_template', { templateId })
+
+// ─── Campaign Generation ──────────────────────────────────────────────────────
+
+export const runSocialCampaign = (campaignId: string): Promise<Task> =>
+  invoke('run_social_campaign', { campaignId })

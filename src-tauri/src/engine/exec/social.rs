@@ -319,11 +319,9 @@ pub fn exec_social_build_visuals(
 pub fn exec_social_save_campaign(
     task: &Task,
     _project_path: &str,
+    conn: &rusqlite::Connection,
 ) -> StepResult {
     use crate::social::db;
-    use rusqlite::Connection;
-    use std::sync::Arc;
-    use std::sync::Mutex;
 
     // Get the posts from previous step
     let posts = match load_posts_from_artifacts(task) {
@@ -337,23 +335,35 @@ pub fn exec_social_save_campaign(
         }
     };
 
-    // We need a database connection - this is a bit tricky from the executor
-    // For now, we'll return the posts as output and let the caller save them
-    // In a real implementation, we'd need to pass the connection through
-
     log::info!("[social_save_campaign] saving {} posts for campaign {}", posts.len(), task.id);
 
-    // Create campaign result
-    let result = CampaignSaveResult {
-        campaign_id: task.id.clone(),
-        posts_saved: posts.len(),
-        posts,
-    };
+    // Save each post to the database
+    let mut saved_count = 0;
+    for post in &posts {
+        match db::create_post(conn, post) {
+            Ok(_) => saved_count += 1,
+            Err(e) => {
+                log::warn!("[social_save_campaign] failed to save post {}: {}", post.id, e);
+            }
+        }
+    }
+
+    // Update campaign post count
+    if let Some(campaign_id) = extract_campaign_id_from_task(task) {
+        if let Err(e) = db::update_campaign_post_count(conn, &campaign_id, saved_count as u32) {
+            log::warn!("[social_save_campaign] failed to update campaign count: {}", e);
+        }
+        
+        // Update campaign status to active
+        if let Err(e) = db::update_campaign_status(conn, &campaign_id, CampaignStatus::Active) {
+            log::warn!("[social_save_campaign] failed to update campaign status: {}", e);
+        }
+    }
 
     StepResult {
-        success: true,
-        message: format!("Campaign saved with {} posts", result.posts_saved),
-        output: Some(serde_json::to_string(&result).unwrap_or_default()),
+        success: saved_count > 0,
+        message: format!("Saved {} of {} posts", saved_count, posts.len()),
+        output: Some(format!("{{\"saved\":{},\"total\":{}}}", saved_count, posts.len())),
     }
 }
 
@@ -706,4 +716,17 @@ fn parse_create_template_request(task: &Task) -> CreateTemplateRequest {
         format: PostFormat::SingleImage,
         description: "A new content template".to_string(),
     }
+}
+
+fn extract_campaign_id_from_task(task: &Task) -> Option<String> {
+    // Try to parse campaign_id from task description (JSON)
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(campaign_id) = json.get("campaign_id").and_then(|v| v.as_str()) {
+                return Some(campaign_id.to_string());
+            }
+        }
+    }
+    // Fallback: use task id as campaign id
+    Some(task.id.clone())
 }

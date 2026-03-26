@@ -188,7 +188,7 @@ pub(crate) fn compute_scores(upvotes: i64, comment_count: i64, days_old: i64)
 /// extracting trigger topics, query keywords, subreddits, product name, and stance.
 /// Cannot be deterministic: understanding markdown structure and identifying
 /// semantic sections requires language understanding.
-pub(crate) fn exec_reddit_config_parse(
+pub fn exec_reddit_config_parse(
     _task: &Task,
     project_path: &str,
     agent_provider: &str,

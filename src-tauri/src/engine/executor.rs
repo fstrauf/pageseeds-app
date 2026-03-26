@@ -160,6 +160,7 @@ pub async fn execute_task_with_token(
             &agent_provider,
             latest_raw_output.as_deref(),
             gsc_token,
+            conn,
         ).await;
 
         // Track the raw output of agentic steps for the normalizer that follows
@@ -429,6 +430,7 @@ async fn run_step(
     agent_provider: &str,
     latest_raw: Option<&str>,
     gsc_token: Option<&str>,
+    conn: &Connection,
 ) -> crate::engine::workflows::StepResult {
     match step.kind.as_str() {
         "deterministic" => exec_deterministic(step, task, project_path).await,
@@ -608,7 +610,7 @@ async fn run_step(
             })
         }
         "social_build_visuals" => crate::engine::exec::social::exec_social_build_visuals(task, project_path),
-        "social_save_campaign" => crate::engine::exec::social::exec_social_save_campaign(task, project_path),
+        "social_save_campaign" => crate::engine::exec::social::exec_social_save_campaign(task, project_path, conn),
         "social_regenerate_single" => {
             let step = step.clone();
             let task = task.clone();

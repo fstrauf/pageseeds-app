@@ -152,6 +152,7 @@ pub fn run() {
             commands::delete_social_template,
             commands::get_social_campaign_stats,
             commands::get_social_posts_by_project,
+            commands::run_social_campaign,
             // Task Queue
             commands::execute_queue,
             commands::pause_queue,

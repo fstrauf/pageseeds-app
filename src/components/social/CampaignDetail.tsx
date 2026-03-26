@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
-import { getCampaignPosts, updateSocialPostStatus, scheduleSocialPost, markSocialPostPosted, deleteSocialPost } from '../../lib/tauri'
+import { ArrowLeft, RefreshCw, Play, Loader2 } from 'lucide-react'
+import { getCampaignPosts, updateSocialPostStatus, scheduleSocialPost, markSocialPostPosted, deleteSocialPost, runSocialCampaign } from '../../lib/tauri'
 import type { SocialCampaign, SocialPost, PostStatus } from '../../lib/types'
 import { PostCard } from './PostCard'
 import { PostEditor } from './PostEditor'
@@ -21,13 +21,15 @@ const TABS: { key: PostStatus | 'all'; label: string }[] = [
   { key: 'posted', label: 'Posted' },
 ]
 
-export function CampaignDetail({ campaign, onBack }: Props) {
+export function CampaignDetail({ campaign, onBack, projectId }: Props) {
   const [posts, setPosts] = useState<SocialPost[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<PostStatus | 'all'>('all')
   const [selectedPost, setSelectedPost] = useState<SocialPost | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [generating, setGenerating] = useState(false)
+  const [generateMsg, setGenerateMsg] = useState<string | null>(null)
 
   useEffect(() => {
     loadPosts()
@@ -88,6 +90,19 @@ export function CampaignDetail({ campaign, onBack }: Props) {
     }
   }
 
+  async function handleGeneratePosts() {
+    setGenerating(true)
+    setGenerateMsg(null)
+    try {
+      const task = await runSocialCampaign(campaign.id)
+      setGenerateMsg(`Task created: ${task.title}. Check the Tasks section to monitor progress.`)
+    } catch (e) {
+      setGenerateMsg(`Error: ${String(e)}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   if (selectedPost) {
     return (
       <PostEditor
@@ -125,6 +140,17 @@ export function CampaignDetail({ campaign, onBack }: Props) {
         >
           <RefreshCw className="w-5 h-5" />
         </Button>
+        <Button
+          onClick={handleGeneratePosts}
+          disabled={generating}
+          className="gap-2"
+        >
+          {generating ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+          ) : (
+            <><Play className="w-4 h-4" /> Generate Posts</>
+          )}
+        </Button>
       </div>
 
       {/* Tabs */}
@@ -151,6 +177,18 @@ export function CampaignDetail({ campaign, onBack }: Props) {
           {error}
         </div>
       )}
+      
+      {/* Generate Message */}
+      {generateMsg && (
+        <div className={cn(
+          'p-4 rounded-lg text-sm',
+          generateMsg.startsWith('Error') 
+            ? 'bg-destructive/10 text-destructive' 
+            : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+        )}>
+          {generateMsg}
+        </div>
+      )}
 
       {/* Posts Grid */}
       {loading ? (
@@ -163,9 +201,21 @@ export function CampaignDetail({ campaign, onBack }: Props) {
             <span className="text-2xl">📝</span>
           </div>
           <h3 className="text-lg font-medium text-foreground mb-2">No posts yet</h3>
-          <p className="text-muted-foreground max-w-sm mx-auto">
-            This campaign doesn't have any posts in this status. Run the campaign workflow to generate content.
+          <p className="text-muted-foreground max-w-sm mx-auto mb-6">
+            This campaign doesn't have any posts yet. Click "Generate Posts" to create social media content from your sources.
           </p>
+          <Button 
+            onClick={handleGeneratePosts} 
+            disabled={generating}
+            size="lg"
+            className="gap-2"
+          >
+            {generating ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+            ) : (
+              <><Play className="w-4 h-4" /> Generate Posts</>
+            )}
+          </Button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
