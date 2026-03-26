@@ -209,6 +209,7 @@ impl rusqlite::types::FromSql for Priority {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TaskArtifact {
     pub key: String,
@@ -223,6 +224,7 @@ pub struct TaskArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TaskRun {
     pub attempts: u32,
@@ -231,6 +233,7 @@ pub struct TaskRun {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct Task {
     pub id: String,

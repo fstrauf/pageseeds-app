@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct RedditOpportunity {
     pub post_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,6 +55,7 @@ pub struct RedditOpportunity {
 
 /// Raw Reddit post returned from the search API (before agent scoring).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct SubmissionSummary {
     pub post_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +79,7 @@ pub struct SubmissionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ValidationResult {
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,6 +87,7 @@ pub struct ValidationResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct RedditStats {
     pub total_opportunities: i64,
     pub by_status: HashMap<String, i64>,
@@ -93,6 +97,7 @@ pub struct RedditStats {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct MigrationResult {
     pub migrated: usize,
     pub skipped: usize,

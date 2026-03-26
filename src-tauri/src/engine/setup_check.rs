@@ -56,6 +56,7 @@ pub enum ContentDirSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ContentDirResult {
     pub source: ContentDirSource,
     /// Absolute resolved path, if found.
@@ -83,6 +84,7 @@ pub enum Severity {
 
 /// One discrete check result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct SetupCheckItem {
     pub id: String,
     pub severity: Severity,

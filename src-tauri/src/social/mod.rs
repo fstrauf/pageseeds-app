@@ -13,10 +13,7 @@ pub mod content {
     pub mod sources;
 }
 
-pub mod image {
-    pub mod overlay;
-    pub mod renderer;
-}
+pub mod image;
 
 pub mod workflow {
     pub mod social_handler;

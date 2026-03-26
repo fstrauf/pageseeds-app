@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct PageMetrics {
     pub page: String,
     pub clicks: f64,
@@ -10,6 +11,7 @@ pub struct PageMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct QueryMetrics {
     pub query: String,
     pub clicks: f64,
@@ -19,6 +21,7 @@ pub struct QueryMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct MoverMetrics {
     pub key: String,
     pub current_clicks: f64,
@@ -33,6 +36,7 @@ pub struct MoverMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct InspectionRecord {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,6 +69,7 @@ pub struct InspectionRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct Coverage404Record {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +83,7 @@ pub struct Coverage404Record {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct RedirectRecord {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +97,7 @@ pub struct RedirectRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct GscAuthStatus {
     pub service_account_configured: bool,
     pub oauth_configured: bool,
@@ -104,6 +111,7 @@ pub struct GscAuthStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct TokenState {
     pub access_token: String,
     pub expires_at: i64,

@@ -10,6 +10,7 @@ use crate::models::social::*;
 use crate::models::task::Task;
 use crate::social::content::sources::{discover_sources, ensure_output_dir};
 use crate::social::db;
+use crate::social::image::assets::generate_branded_graphic;
 use crate::social::models::{AgentPostOutput, AgentTemplateOutput, ContentSource, PostGenerationJob, SourceManifest};
 use crate::social::prompts;
 use crate::social::templates::{TemplateRegistry, TemplateDef, render_prompt, validate_output};
@@ -273,14 +274,13 @@ pub fn exec_social_build_visuals(
 
     // Build visuals for each post
     for post in &mut posts {
-        // For now, just copy the source image to the output directory
-        // In a real implementation, this would apply text overlays
         if let Some(first_asset) = post.visual_assets.first() {
             let source_path = Path::new(project_path).join(&first_asset.path);
             let output_filename = format!("{}.png", post.id);
             let output_path = output_dir.join(&output_filename);
 
             if source_path.exists() {
+                // Copy existing image
                 if let Err(e) = std::fs::copy(&source_path, &output_path) {
                     log::warn!("[social_build_visuals] failed to copy image: {}", e);
                 } else {
@@ -297,6 +297,25 @@ pub fn exec_social_build_visuals(
                         description: first_asset.description.clone(),
                         overlay_text: first_asset.overlay_text.clone(),
                     }];
+                }
+            } else {
+                // Generate branded graphic as fallback
+                match generate_branded_graphic(&output_path, &post.hook) {
+                    Ok(asset) => {
+                        let relative_path = output_path
+                            .strip_prefix(project_path)
+                            .unwrap_or(&output_path)
+                            .to_string_lossy()
+                            .to_string();
+                        
+                        post.visual_assets = vec![VisualAsset {
+                            path: relative_path,
+                            ..asset
+                        }];
+                    }
+                    Err(e) => {
+                        log::warn!("[social_build_visuals] failed to generate branded graphic: {}", e);
+                    }
                 }
             }
         }
@@ -682,6 +701,8 @@ fn create_social_post_from_agent_output(
             description: agent_output.visual_description.clone(),
             overlay_text: agent_output.overlay_text.clone(),
         }],
+        // Note: Image resolution happens in social_build_visuals step
+        // where we try article images -> screenshots -> generated branded graphics
         status: PostStatus::Draft,
         scheduled_at: None,
         posted_at: None,

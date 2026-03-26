@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Play, Loader2 } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { OpportunityFeed } from './OpportunityFeed'
 import { OpportunityDetail } from './OpportunityDetail'
 import { RedditSearch } from './RedditSearch'
 import { RedditStats } from './RedditStats'
-import { runRedditOpportunitySearch } from '../../lib/tauri'
+import { createTask } from '../../lib/tauri'
+import { useQueue } from '../../lib/queue-context'
 import type { Project, RedditOpportunity } from '../../lib/types'
 
 interface Props {
@@ -13,13 +14,25 @@ interface Props {
   project?: Project
 }
 
-export function Reddit({ projectId }: Props) {
+export function Reddit({ projectId, project }: Props) {
   const [selected, setSelected] = useState<RedditOpportunity | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [searching, setSearching] = useState(false)
   const [searchMsg, setSearchMsg] = useState<string | null>(null)
   const [showContextDialog, setShowContextDialog] = useState(false)
   const [userContext, setUserContext] = useState('')
+  const queue = useQueue()
+  
+  // Listen for queue completion to refresh feed
+  const [lastQueueActive, setLastQueueActive] = useState(queue.isActive)
+  useEffect(() => {
+    if (lastQueueActive && !queue.isActive) {
+      // Queue was active and is now inactive - refresh the feed
+      setRefreshKey(k => k + 1)
+      setSearchMsg(null)
+    }
+    setLastQueueActive(queue.isActive)
+  }, [queue.isActive, lastQueueActive])
 
   function handleStatusChange() {
     setRefreshKey(k => k + 1)
@@ -37,20 +50,36 @@ export function Reddit({ projectId }: Props) {
   async function handleConfirmSearch() {
     setShowContextDialog(false)
     setSearching(true)
-    setSearchMsg(null)
+    setSearchMsg('Creating task...')
     try {
-      const result = await runRedditOpportunitySearch(projectId, userContext.trim() || undefined)
-      if (result.success) {
-        const opportunityStep = result.steps.find(s => s.step_name === 'reddit_search')
-        const msg = opportunityStep?.message ?? result.message
-        setSearchMsg(`✓ ${msg}`)
-        setRefreshKey(k => k + 1)
-      } else {
-        setSearchMsg(`✗ ${result.message}`)
-      }
+      // Create task with user context in description (JSON format expected by backend)
+      const description = userContext.trim()
+        ? JSON.stringify({ user_context: userContext.trim() })
+        : undefined
+      
+      const task = await createTask(
+        projectId,
+        'reddit_opportunity_search',
+        `Reddit Opportunity Search — ${new Date().toLocaleDateString()}`,
+        description,
+        'high',
+      )
+      
+      // Add to queue - execution happens via queue system
+      queue.enqueue([{
+        taskId: task.id,
+        projectId: task.project_id,
+        projectName: project?.name,
+        title: task.title ?? 'Reddit Opportunity Search',
+        taskType: task.type,
+        status: 'pending',
+      }])
+      
+      setSearchMsg('Added to queue...')
+      setRefreshKey(k => k + 1)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
-      setSearchMsg(`✗ ${msg}`)
+      setSearchMsg(`✗ Failed: ${msg}`)
     } finally {
       setSearching(false)
       setUserContext('')

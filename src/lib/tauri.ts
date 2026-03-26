@@ -228,7 +228,8 @@ export const postToReddit = (
   postId: string,
   replyText: string,
 ): Promise<string> =>
-  invoke('post_to_reddit', { projectId, postId, replyText })
+  // Note: Rust expects post_id, reply_text, project_id order
+  invoke('post_to_reddit', { postId, replyText, projectId })
 
 export const getRedditStatistics = (projectId: string): Promise<RedditStats> =>
   invoke('get_reddit_statistics', { projectId })
@@ -244,12 +245,6 @@ export const migrateRedditDb = (
   sourcePath: string,
 ): Promise<MigrationResult> =>
   invoke('migrate_reddit_db', { projectId, sourcePath })
-
-export const runRedditOpportunitySearch = (
-  projectId: string,
-  userContext?: string,
-): Promise<import('./types').ExecutionResult> =>
-  invoke('run_reddit_opportunity_search', { projectId, userContext: userContext ?? null })
 
 export const draftRedditReply = (
   projectId: string,
@@ -391,15 +386,6 @@ import type {
 
 export type { DueRuleResult } // re-export so components can import from tauri.ts
 
-// ── Executor ──────────────────────────────────────────────────────────────────
-
-export const executeTask = (taskId: string): Promise<ExecutionResult> =>
-  invoke('execute_task', { taskId })
-
-/** Plan steps for a task without executing anything. Returns the planned step graph. */
-export const dryRunTask = (taskId: string): Promise<ExecutionResult> =>
-  invoke('dry_run_task', { taskId })
-
 // ── Batch ─────────────────────────────────────────────────────────────────────
 
 export const getBatchSummary = (projectId: string): Promise<BatchSummary> =>
@@ -415,24 +401,6 @@ export const runBatch = (
 /** Execute a queue of tasks across projects. Emits events for progress tracking. */
 export const executeQueue = (items: QueueItem[]): Promise<void> =>
   invoke('execute_queue', { items })
-
-/** Execute a single task directly without queue. Returns the result directly. */
-export const executeTaskDirect = (args: {
-  taskId: string
-  projectId: string
-}): Promise<{
-  task_id: string
-  success: boolean
-  message: string
-  steps: Array<{
-    step_name: string
-    kind: string
-    status: string
-    message: string
-    output?: string
-  }>
-}> =>
-  invoke('execute_task_direct', { taskId: args.taskId, projectId: args.projectId })
 
 export const pauseQueue = (): Promise<void> =>
   invoke('pause_queue')

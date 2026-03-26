@@ -1,66 +1,35 @@
-import { useState } from 'react'
-import { Play, CheckCircle2, XCircle, Clock, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
-import { executeTask, listTasks } from '../../lib/tauri'
-import type { ExecutionResult, StepProgress, Task } from '../../lib/types'
+import { useState, useEffect } from 'react'
+import { Play, CheckCircle2 } from 'lucide-react'
+import { listTasks } from '../../lib/tauri'
+import { useQueue } from '../../lib/queue-context'
+import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
 
 interface WorkflowViewProps {
   projectId: string
-}
+  projectName?: string}
 
-const statusIcon = (status: StepProgress['status']) => {
-  switch (status) {
-    case 'ok': return <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-    case 'failed': return <XCircle size={14} className="text-destructive shrink-0" />
-    case 'running': return <Clock size={14} className="text-blue-600 animate-pulse shrink-0" />
-    case 'skipped': return <AlertCircle size={14} className="text-muted-foreground shrink-0" />
-    default: return <div className="w-3.5 h-3.5 rounded-full border border-border shrink-0" />
-  }
-}
-
-function StepCard({ step }: { step: StepProgress }) {
-  const [expanded, setExpanded] = useState(false)
-  return (
-    <div className={cn('rounded border px-3 py-2 text-sm',
-      step.status === 'ok' && 'border-green-500/30 bg-green-500/5',
-      step.status === 'failed' && 'border-destructive/30 bg-destructive/5',
-      step.status === 'running' && 'border-blue-400/30 bg-blue-400/5',
-      step.status === 'skipped' && 'border-border',
-      step.status === 'pending' && 'border-border opacity-50',
-    )}>
-      <div className="flex items-center gap-2">
-        {statusIcon(step.status)}
-        <span className="font-medium text-foreground">{step.step_name}</span>
-        <Badge variant="outline" className="text-xs py-0 h-4">{step.kind}</Badge>
-        <span className="ml-auto text-muted-foreground text-xs truncate max-w-xs">{step.message}</span>
-        {step.output && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="ml-1 text-muted-foreground hover:text-foreground"
-          >
-            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-          </button>
-        )}
-      </div>
-      {expanded && step.output && (
-        <pre className="mt-2 text-xs bg-muted rounded p-2 overflow-x-auto whitespace-pre-wrap text-muted-foreground max-h-40">
-          {step.output}
-        </pre>
-      )}
-    </div>
-  )
-}
-
-export function WorkflowView({ projectId }: WorkflowViewProps) {
+export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [selected, setSelected] = useState<string | null>(null)
-  const [result, setResult] = useState<ExecutionResult | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [queuedMsg, setQueuedMsg] = useState<string | null>(null)
+  const queue = useQueue()
+  
+  // Listen for queue completion to refresh task list
+  const [lastQueueActive, setLastQueueActive] = useState(queue.isActive)
+  useEffect(() => {
+    if (lastQueueActive && !queue.isActive) {
+      // Queue was active and is now inactive - refresh the list
+      load()
+      setQueuedMsg(null)
+    }
+    setLastQueueActive(queue.isActive)
+  }, [queue.isActive, lastQueueActive])
 
   async function load() {
     setError(null)
@@ -75,13 +44,23 @@ export function WorkflowView({ projectId }: WorkflowViewProps) {
 
   async function run() {
     if (!selected) return
+    const task = tasks.find(t => t.id === selected)
+    if (!task) return
+    
     setRunning(true)
-    setResult(null)
     setError(null)
+    setQueuedMsg(null)
     try {
-      const r = await executeTask(selected)
-      setResult(r)
-      await load()
+      // Add to queue instead of direct execution
+      queue.enqueue([{
+        taskId: task.id,
+        projectId: task.project_id,
+        projectName: projectName,
+        title: task.title ?? task.type ?? 'Untitled',
+        taskType: task.type ?? '',
+        status: 'pending',
+      }])
+      setQueuedMsg(`Task added to queue. Check the TaskRunner panel for progress.`)
     } catch (e: unknown) {
       setError(String(e))
     } finally {
@@ -152,25 +131,11 @@ export function WorkflowView({ projectId }: WorkflowViewProps) {
           </div>
         )}
 
-        {result && (
-          <div className="flex flex-col gap-2">
+        {queuedMsg && (
+          <div className="rounded border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-foreground">
             <div className="flex items-center gap-2">
-              {result.success ? (
-                <CheckCircle2 size={16} className="text-green-500" />
-              ) : (
-                <XCircle size={16} className="text-destructive" />
-              )}
-              <span className="text-sm font-medium text-foreground">
-                {result.success ? 'Completed' : 'Failed'}: {result.message}
-              </span>
-              <span className="ml-auto text-xs text-muted-foreground">
-                {new Date(result.started_at).toLocaleTimeString()} — {new Date(result.finished_at).toLocaleTimeString()}
-              </span>
-            </div>
-            <div className="flex flex-col gap-1">
-              {result.steps.map((step, i) => (
-                <StepCard key={i} step={step} />
-              ))}
+              <CheckCircle2 size={16} className="text-green-500" />
+              <span>{queuedMsg}</span>
             </div>
           </div>
         )}

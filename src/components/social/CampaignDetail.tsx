@@ -21,7 +21,7 @@ const TABS: { key: PostStatus | 'all'; label: string }[] = [
   { key: 'posted', label: 'Posted' },
 ]
 
-export function CampaignDetail({ campaign, onBack, projectId }: Props) {
+export function CampaignDetail({ campaign, onBack }: Props) {
   const [posts, setPosts] = useState<SocialPost[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

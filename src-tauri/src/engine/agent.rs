@@ -8,7 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::Duration;
 use tokio::process::Command as AsyncCommand;
 use tokio::time::timeout;
@@ -124,11 +125,19 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
 
     // Kimi requires --print for non-interactive mode (implicitly adds --yolo)
     if provider == "kimi" {
+        // Add no-thinking flag to reduce output verbosity
+        cmd.arg("--no-thinking");
         cmd.arg("--print");
         // Kimi uses --output-format text (same as copilot/claude)
         cmd.arg("--output-format").arg("text");
         // --final-message-only gives clean output without structured wrappers
         cmd.arg("--final-message-only");
+        // CRITICAL: Use a fresh session to avoid context accumulation from Tauri environment
+        let session_id = format!("pageseeds-{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis());
+        cmd.arg("--session").arg(&session_id);
         // Kimi uses --work-dir instead of current_dir
         cmd.arg("--work-dir").arg(project_path);
     } else {
@@ -143,64 +152,60 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    // Spawn as a child so we can enforce a timeout instead of blocking forever.
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    // DEBUG: Log the exact command being executed
+    log::info!("[agent] Executing: {:?}", cmd);
+    
+    // Run the agent in a thread with timeout
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(AGENT_TIMEOUT_SECS);
+    
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = cmd.output();
+        let _ = tx.send(result);
+    });
+    
+    let output = match rx.recv_timeout(timeout) {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(format!(
                 "Agent binary '{}' not found on PATH. Install it first.",
                 binary
             ));
         }
-        Err(e) => return Err(format!("Failed to launch agent '{}': {}", binary, e)),
+        Ok(Err(e)) => return Err(format!("Failed to run agent '{}': {}", binary, e)),
+        Err(_) => return Err(format!(
+            "Agent '{}' timed out after {} seconds.",
+            binary, AGENT_TIMEOUT_SECS
+        )),
     };
+    
+    // DEBUG: Save full output to temp file
+    let debug_file = std::env::temp_dir().join(format!("kimi_output_{}.txt", 
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
+    let _ = std::fs::write(&debug_file, &output.stdout);
+    log::info!("[agent] Full output saved to: {:?}", debug_file);
 
-    let timeout = Duration::from_secs(AGENT_TIMEOUT_SECS);
-    let start = std::time::Instant::now();
-
-    // Poll the child process with a sleep interval to enforce a timeout.
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap the zombie
-                    return Err(format!(
-                        "Agent '{}' timed out after {} seconds. Killed the process.",
-                        binary, AGENT_TIMEOUT_SECS
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-            Err(e) => return Err(format!("Error waiting for agent '{}': {}", binary, e)),
-        }
-    }
-
-    let out = child.wait_with_output().map_err(|e| {
-        format!("Failed to read output from agent '{}': {}", binary, e)
-    })?;
-
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     log::info!(
         "[agent] {} finished in {:.1}s (exit={}, stdout={}B, stderr={}B)",
         binary,
         start.elapsed().as_secs_f64(),
-        out.status,
+        output.status,
         stdout.len(),
         stderr.len()
     );
 
     // Some CLIs exit non-zero but still produce useful output
-    if out.status.success() || !stdout.trim().is_empty() {
+    if output.status.success() || !stdout.trim().is_empty() {
         Ok(stdout)
     } else {
         let msg = if stderr.trim().is_empty() { stdout } else { stderr };
         Err(format!(
             "Agent '{}' failed (exit {}): {}",
-            binary, out.status, msg.trim()
+            binary, output.status, msg.trim()
         ))
     }
 }
