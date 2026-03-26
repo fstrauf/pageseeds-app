@@ -25,10 +25,8 @@ use pageseeds_lib::{
 const PROJECT_PATH: &str = "/Users/fstrauf/01_code/learnedlate";
 const AGENT_PROVIDER: &str = "copilot"; // change to "kimi" if needed
 
-fn main() {
-    // ── Tokio runtime (executor uses Handle::current() internally) ───────────
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
+#[tokio::main]
+async fn main() {
 
     // ── Logger ──────────────────────────────────────────────────────────────
     env_logger::Builder::from_default_env()
@@ -96,7 +94,7 @@ fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     let start = std::time::Instant::now();
-    let result = executor::execute_task(&conn, &task_id).expect("execute_task panic");
+    let result = executor::execute_task(&conn, &task_id).await.expect("execute_task panic");
 
     println!("\n━━━━━━━━━━━━━━━━━━━  Results  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     println!("Success : {}", result.success);

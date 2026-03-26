@@ -1051,7 +1051,7 @@ pub(crate) fn extract_json_array(output: &str) -> String {
 }
 
 /// Extract a JSON object from text (looks for {...})
-pub(crate) fn extract_json_object(output: &str) -> String {
+pub fn extract_json_object(output: &str) -> String {
     let trimmed = output.trim();
     if let Some(start) = trimmed.find('{') {
         if let Some(end) = trimmed.rfind('}') {

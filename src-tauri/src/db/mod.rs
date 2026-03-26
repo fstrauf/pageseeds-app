@@ -233,6 +233,14 @@ pub fn init(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Initialize schema on an existing connection (for testing).
+/// This allows tests to use in-memory databases while still getting the full schema.
+pub fn init_with_conn(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    run_migrations(conn)?;
+    Ok(())
+}
+
 fn run_migrations(conn: &Connection) -> Result<()> {
     // unwrap_or(0) handles the case where schema_version doesn't exist yet
     let version: i64 = conn
