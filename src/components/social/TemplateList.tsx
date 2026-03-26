@@ -1,6 +1,8 @@
 import { Trash2, Sparkles } from 'lucide-react'
 import { deleteSocialTemplate } from '../../lib/tauri'
 import type { ContentTemplate } from '../../lib/types'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface Props {
   templates: ContentTemplate[]
@@ -12,11 +14,11 @@ export function TemplateList({ templates, onRefresh }: Props) {
   if (templates.length === 0) {
     return (
       <div className="text-center py-12">
-        <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Sparkles className="w-8 h-8 text-zinc-400" />
+        <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
+          <Sparkles className="w-8 h-8 text-muted-foreground" />
         </div>
-        <h3 className="text-lg font-medium text-zinc-900 mb-2">No custom templates</h3>
-        <p className="text-zinc-500 max-w-sm mx-auto">
+        <h3 className="text-lg font-medium text-foreground mb-2">No custom templates</h3>
+        <p className="text-muted-foreground max-w-sm mx-auto">
           Using default templates. Create custom templates to generate content in your unique style.
         </p>
       </div>
@@ -25,7 +27,7 @@ export function TemplateList({ templates, onRefresh }: Props) {
 
   return (
     <div className="space-y-6">
-      <p className="text-zinc-600 dark:text-zinc-400">
+      <p className="text-muted-foreground">
         {templates.length} template{templates.length !== 1 ? 's' : ''} available
       </p>
 
@@ -59,15 +61,15 @@ function TemplateCard({
   onDelete: () => void
 }) {
   return (
-    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors">
+    <div className="bg-card border border-border rounded-xl p-5 hover:border-border/80 transition-colors">
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <h3 className="font-medium text-zinc-900 dark:text-zinc-100">
+          <h3 className="font-medium text-foreground">
             {template.name}
           </h3>
           
           {template.description && (
-            <p className="text-sm text-zinc-500 mt-1 line-clamp-2">
+            <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
               {template.description}
             </p>
           )}
@@ -80,12 +82,12 @@ function TemplateCard({
           {template.default_hashtags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-3">
               {template.default_hashtags.slice(0, 5).map(tag => (
-                <span key={tag} className="text-xs text-blue-600">
+                <span key={tag} className="text-xs text-primary">
                   {tag}
                 </span>
               ))}
               {template.default_hashtags.length > 5 && (
-                <span className="text-xs text-zinc-400">
+                <span className="text-xs text-muted-foreground">
                   +{template.default_hashtags.length - 5}
                 </span>
               )}
@@ -93,22 +95,24 @@ function TemplateCard({
           )}
 
           {template.example_output && (
-            <div className="mt-4 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
-              <div className="text-xs text-zinc-500 mb-1">Example Hook:</div>
-              <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-2">
+            <div className="mt-4 p-3 bg-muted rounded-lg">
+              <div className="text-xs text-muted-foreground mb-1">Example Hook:</div>
+              <p className="text-sm text-foreground/80 line-clamp-2">
                 {template.example_output.hook}
               </p>
             </div>
           )}
         </div>
 
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={onDelete}
-          className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          className="text-muted-foreground hover:text-destructive"
           title="Delete template"
         >
           <Trash2 className="w-4 h-4" />
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -130,7 +134,7 @@ function PlatformBadge({ platform }: { platform: string }) {
   }
 
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs rounded-md">
+    <span className="inline-flex items-center gap-1 px-2 py-1 bg-muted text-muted-foreground text-xs rounded-md">
       <span>{icons[platform] || '📱'}</span>
       <span>{labels[platform] || platform}</span>
     </span>
@@ -145,13 +149,13 @@ function FormatBadge({ format }: { format: string }) {
   }
 
   const colors: Record<string, string> = {
-    single_image: 'bg-blue-50 text-blue-700',
-    carousel: 'bg-purple-50 text-purple-700',
-    video_hook: 'bg-amber-50 text-amber-700',
+    single_image: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
+    carousel: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
+    video_hook: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
   }
 
   return (
-    <span className={`inline-flex items-center px-2 py-1 text-xs rounded-md ${colors[format] || 'bg-zinc-100 text-zinc-700'}`}>
+    <span className={cn('inline-flex items-center px-2 py-1 text-xs rounded-md', colors[format] || 'bg-muted text-muted-foreground')}>
       {labels[format] || format}
     </span>
   )

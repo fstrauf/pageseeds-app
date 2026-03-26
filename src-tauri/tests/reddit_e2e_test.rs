@@ -389,7 +389,7 @@ fn test_json_extraction_from_kimi_output() {
     
     // Test case 1: Clean JSON
     let clean = r#"{"product_name": "Test", "mention_stance": "OPTIONAL"}"#;
-    let result = extract_json_object(clean);
+    let result = extract_json_object(clean).expect("Should extract clean JSON");
     assert!(result.contains("product_name"));
     println!("✅ Clean JSON extraction works");
     
@@ -399,8 +399,7 @@ fn test_json_extraction_from_kimi_output() {
     {"product_name": "Test", "mention_stance": "OPTIONAL"}
     ```
     "#;
-    let result = extract_json_object(wrapped);
-    // The simple extraction should still find the JSON
+    let result = extract_json_object(wrapped).expect("Should extract wrapped JSON");
     assert!(result.contains("product_name"));
     println!("✅ Wrapped JSON extraction works");
     
@@ -412,13 +411,13 @@ fn test_json_extraction_from_kimi_output() {
     
     This JSON contains the search parameters.
     "#;
-    let result = extract_json_object(with_text);
+    let result = extract_json_object(with_text).expect("Should extract JSON from text");
     assert!(result.contains("Days to Expiry"));
     println!("✅ JSON with surrounding text extraction works");
     
     // Test case 4: Realistic Kimi output (simulated)
     let kimi_like = r#"{"product_name": "Days to Expiry", "mention_stance": "OPTIONAL", "trigger_topics": ["expiration date tracking", "food waste reduction"], "query_keywords": ["expiration date tracking", "food waste reduction"], "seed_subreddits": ["personalfinance", "EatCheapAndHealthy"], "excluded_subreddits": ["politics", "news"]}"#;
-    let result = extract_json_object(kimi_like);
+    let result = extract_json_object(kimi_like).expect("Should extract Kimi-like output");
     
     // Verify it parses as valid JSON
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("Should parse as JSON");

@@ -2,6 +2,11 @@ import { useState } from 'react'
 import { ArrowLeft, Copy, Save } from 'lucide-react'
 import { updateSocialPost } from '../../lib/tauri'
 import type { SocialPost } from '../../lib/types'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
 
 interface Props {
   post: SocialPost
@@ -36,65 +41,65 @@ export function PostEditor({ post, onBack, onUpdated }: Props) {
 
   const platformIcon = getPlatformIcon(post.platform)
   const statusColors: Record<string, string> = {
-    draft: 'bg-zinc-100 text-zinc-700',
-    review: 'bg-amber-100 text-amber-700',
-    approved: 'bg-emerald-100 text-emerald-700',
-    scheduled: 'bg-blue-100 text-blue-700',
-    posted: 'bg-purple-100 text-purple-700',
+    draft: 'bg-muted text-muted-foreground',
+    review: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
+    approved: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+    scheduled: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
+    posted: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
   }
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={onBack}
-          className="p-2 text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />
-        </button>
+        </Button>
         <div className="flex-1 flex items-center gap-3">
           <span className="text-2xl">{platformIcon}</span>
           <div>
-            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+            <h2 className="text-xl font-semibold text-foreground">
               Edit Post
             </h2>
             <div className="flex items-center gap-2 mt-1">
-              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[post.status] || 'bg-zinc-100'}`}>
+              <span className={cn('px-2 py-0.5 text-xs font-medium rounded-full', statusColors[post.status] || 'bg-muted')}>
                 {post.status}
               </span>
-              <span className="text-sm text-zinc-500 capitalize">
+              <span className="text-sm text-muted-foreground capitalize">
                 {post.source_type} • {post.format}
               </span>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="secondary"
             onClick={handleCopy}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors"
           >
-            <Copy className="w-4 h-4" />
+            <Copy className="w-4 h-4 mr-2" />
             {copied ? 'Copied!' : 'Copy Text'}
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-zinc-900 hover:bg-zinc-800 rounded-lg transition-colors disabled:opacity-50"
           >
-            <Save className="w-4 h-4" />
+            <Save className="w-4 h-4 mr-2" />
             {saving ? 'Saving...' : 'Save Changes'}
-          </button>
+          </Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left: Preview */}
         <div className="space-y-4">
-          <h3 className="font-medium text-zinc-900 dark:text-zinc-100">Preview</h3>
+          <h3 className="font-medium text-foreground">Preview</h3>
           
           {/* Image Preview */}
-          <div className="aspect-square bg-zinc-100 dark:bg-zinc-800 rounded-xl overflow-hidden">
+          <div className="aspect-square bg-muted rounded-xl overflow-hidden">
             {post.visual_assets.length > 0 ? (
               <img
                 src={post.visual_assets[0].path}
@@ -105,29 +110,29 @@ export function PostEditor({ post, onBack, onUpdated }: Props) {
                 }}
               />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-zinc-400">
+              <div className="w-full h-full flex items-center justify-center text-muted-foreground">
                 <span className="text-4xl">🖼️</span>
               </div>
             )}
           </div>
 
           {/* Platform-specific preview mockup */}
-          <div className="border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 bg-white dark:bg-zinc-900">
+          <div className="border border-border rounded-xl p-4 bg-card">
             <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 bg-zinc-200 rounded-full" />
+              <div className="w-8 h-8 bg-muted rounded-full" />
               <div className="flex-1">
-                <div className="h-3 bg-zinc-200 rounded w-24" />
+                <div className="h-3 bg-muted rounded w-24" />
               </div>
             </div>
-            <p className="text-sm text-zinc-900 dark:text-zinc-100 whitespace-pre-wrap">
+            <p className="text-sm text-foreground whitespace-pre-wrap">
               {editedPost.hook}
             </p>
-            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 whitespace-pre-wrap">
+            <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
               {editedPost.caption}
             </p>
             <div className="flex flex-wrap gap-2 mt-2">
               {editedPost.hashtags.map(tag => (
-                <span key={tag} className="text-sm text-blue-600">
+                <span key={tag} className="text-sm text-primary">
                   {tag}
                 </span>
               ))}
@@ -137,75 +142,67 @@ export function PostEditor({ post, onBack, onUpdated }: Props) {
 
         {/* Right: Editor */}
         <div className="space-y-4">
-          <h3 className="font-medium text-zinc-900 dark:text-zinc-100">Edit Content</h3>
+          <h3 className="font-medium text-foreground">Edit Content</h3>
           
           {/* Hook */}
           <div>
-            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Hook (First Line)
-            </label>
-            <textarea
+            <Label htmlFor="hook">Hook (First Line)</Label>
+            <Textarea
+              id="hook"
               value={editedPost.hook}
               onChange={(e) => setEditedPost(p => ({ ...p, hook: e.target.value }))}
               rows={2}
-              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
             />
-            <p className="text-xs text-zinc-500 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               {editedPost.hook.length} characters
             </p>
           </div>
 
           {/* Caption */}
           <div>
-            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Caption
-            </label>
-            <textarea
+            <Label htmlFor="caption">Caption</Label>
+            <Textarea
+              id="caption"
               value={editedPost.caption}
               onChange={(e) => setEditedPost(p => ({ ...p, caption: e.target.value }))}
               rows={6}
-              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
             />
-            <p className="text-xs text-zinc-500 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               {editedPost.caption.length} characters
             </p>
           </div>
 
           {/* Hashtags */}
           <div>
-            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Hashtags (comma-separated)
-            </label>
-            <input
+            <Label htmlFor="hashtags">Hashtags (comma-separated)</Label>
+            <Input
+              id="hashtags"
               type="text"
               value={editedPost.hashtags.join(', ')}
               onChange={(e) => {
                 const tags = e.target.value.split(',').map(t => t.trim()).filter(Boolean)
                 setEditedPost(p => ({ ...p, hashtags: tags }))
               }}
-              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
             />
           </div>
 
           {/* CTA */}
           <div>
-            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Call to Action
-            </label>
-            <input
+            <Label htmlFor="cta">Call to Action</Label>
+            <Input
+              id="cta"
               type="text"
               value={editedPost.cta}
               onChange={(e) => setEditedPost(p => ({ ...p, cta: e.target.value }))}
-              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
             />
           </div>
 
           {/* Source Info */}
-          <div className="p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg">
-            <h4 className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+          <div className="p-4 bg-muted rounded-lg">
+            <h4 className="text-sm font-medium text-foreground mb-2">
               Source Information
             </h4>
-            <div className="text-sm text-zinc-600 dark:text-zinc-400 space-y-1">
+            <div className="text-sm text-muted-foreground space-y-1">
               <p>Type: <span className="capitalize">{post.source_type}</span></p>
               <p>ID: {post.source_id}</p>
               <p>Template: {post.template_id}</p>

@@ -2,6 +2,11 @@ import { useState } from 'react'
 import { X, ChevronRight, ChevronLeft, Check } from 'lucide-react'
 import { createSocialCampaign } from '../../lib/tauri'
 import type { ContentTemplate, SourceConfig, Platform } from '../../lib/types'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
 
 interface Props {
   projectId: string
@@ -85,30 +90,32 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+      <div className="bg-card border border-border rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 className="text-lg font-semibold text-foreground">
             Create Campaign
           </h2>
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onClose}
-            className="p-2 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
           >
             <X className="w-5 h-5" />
-          </button>
+          </Button>
         </div>
 
         {/* Progress */}
-        <div className="flex items-center px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50">
+        <div className="flex items-center px-6 py-3 border-b border-border bg-muted/50">
           {steps.map((s, i) => (
             <div key={s.key} className="flex items-center">
               <div
-                className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-medium ${
+                className={cn(
+                  'flex items-center justify-center w-7 h-7 rounded-full text-xs font-medium',
                   i <= currentStepIndex
-                    ? 'bg-zinc-900 text-white'
-                    : 'bg-zinc-200 text-zinc-600'
-                }`}
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground'
+                )}
               >
                 {i < currentStepIndex ? (
                   <Check className="w-4 h-4" />
@@ -117,16 +124,17 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
                 )}
               </div>
               <span
-                className={`ml-2 text-sm ${
+                className={cn(
+                  'ml-2 text-sm',
                   i <= currentStepIndex
-                    ? 'text-zinc-900 font-medium'
-                    : 'text-zinc-500'
-                }`}
+                    ? 'text-foreground font-medium'
+                    : 'text-muted-foreground'
+                )}
               >
                 {s.title}
               </span>
               {i < steps.length - 1 && (
-                <ChevronRight className="w-4 h-4 mx-2 text-zinc-400" />
+                <ChevronRight className="w-4 h-4 mx-2 text-muted-foreground" />
               )}
             </div>
           ))}
@@ -135,7 +143,7 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
           {error && (
-            <div className="mb-4 p-4 bg-red-50 text-red-700 rounded-lg text-sm">
+            <div className="mb-4 p-4 bg-destructive/10 text-destructive rounded-lg text-sm">
               {error}
             </div>
           )}
@@ -143,27 +151,23 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
           {step === 'basics' && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                  Campaign Name *
-                </label>
-                <input
+                <Label htmlFor="name">Campaign Name *</Label>
+                <Input
+                  id="name"
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g., March Content Push"
-                  className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-                  Description
-                </label>
-                <textarea
+                <Label htmlFor="description">Description</Label>
+                <Textarea
+                  id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="What is this campaign about?"
                   rows={3}
-                  className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
                 />
               </div>
             </div>
@@ -171,46 +175,46 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
           {step === 'sources' && (
             <div className="space-y-4">
-              <p className="text-sm text-zinc-500 mb-4">
+              <p className="text-sm text-muted-foreground mb-4">
                 Select which content sources to use for generating social media posts.
               </p>
               
-              <label className="flex items-center gap-3 p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800/50 cursor-pointer">
+              <label className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-accent cursor-pointer">
                 <input
                   type="checkbox"
                   checked={sourceConfig.include_articles}
                   onChange={(e) => setSourceConfig(c => ({ ...c, include_articles: e.target.checked }))}
-                  className="w-5 h-5 rounded border-zinc-300"
+                  className="w-5 h-5 rounded border-border"
                 />
                 <div>
-                  <div className="font-medium text-zinc-900 dark:text-zinc-100">Articles</div>
-                  <div className="text-sm text-zinc-500">Generate posts from your blog articles</div>
+                  <div className="font-medium text-foreground">Articles</div>
+                  <div className="text-sm text-muted-foreground">Generate posts from your blog articles</div>
                 </div>
               </label>
 
-              <label className="flex items-center gap-3 p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800/50 cursor-pointer">
+              <label className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-accent cursor-pointer">
                 <input
                   type="checkbox"
                   checked={sourceConfig.include_screenshots}
                   onChange={(e) => setSourceConfig(c => ({ ...c, include_screenshots: e.target.checked }))}
-                  className="w-5 h-5 rounded border-zinc-300"
+                  className="w-5 h-5 rounded border-border"
                 />
                 <div>
-                  <div className="font-medium text-zinc-900 dark:text-zinc-100">Screenshots</div>
-                  <div className="text-sm text-zinc-500">Use screenshots from your project</div>
+                  <div className="font-medium text-foreground">Screenshots</div>
+                  <div className="text-sm text-muted-foreground">Use screenshots from your project</div>
                 </div>
               </label>
 
-              <label className="flex items-center gap-3 p-4 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800/50 cursor-pointer">
+              <label className="flex items-center gap-3 p-4 border border-border rounded-lg hover:bg-accent cursor-pointer">
                 <input
                   type="checkbox"
                   checked={sourceConfig.include_specs}
                   onChange={(e) => setSourceConfig(c => ({ ...c, include_specs: e.target.checked }))}
-                  className="w-5 h-5 rounded border-zinc-300"
+                  className="w-5 h-5 rounded border-border"
                 />
                 <div>
-                  <div className="font-medium text-zinc-900 dark:text-zinc-100">Specs</div>
-                  <div className="text-sm text-zinc-500">Include landing page specs</div>
+                  <div className="font-medium text-foreground">Specs</div>
+                  <div className="text-sm text-muted-foreground">Include landing page specs</div>
                 </div>
               </label>
             </div>
@@ -218,7 +222,7 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
           {step === 'platforms' && (
             <div className="space-y-4">
-              <p className="text-sm text-zinc-500 mb-4">
+              <p className="text-sm text-muted-foreground mb-4">
                 Select which platforms to generate content for.
               </p>
               
@@ -226,11 +230,12 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
                 {PLATFORMS.map(platform => (
                   <label
                     key={platform.id}
-                    className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
+                    className={cn(
+                      'flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors',
                       selectedPlatforms.includes(platform.id)
-                        ? 'border-zinc-900 bg-zinc-50 dark:border-zinc-100 dark:bg-zinc-800'
-                        : 'border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
-                    }`}
+                        ? 'border-primary bg-accent'
+                        : 'border-border hover:bg-accent'
+                    )}
                   >
                     <input
                       type="checkbox"
@@ -242,10 +247,10 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
                           setSelectedPlatforms(selectedPlatforms.filter(p => p !== platform.id))
                         }
                       }}
-                      className="w-5 h-5 rounded border-zinc-300"
+                      className="w-5 h-5 rounded border-border"
                     />
                     <span className="text-2xl">{platform.icon}</span>
-                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                    <span className="font-medium text-foreground">
                       {platform.name}
                     </span>
                   </label>
@@ -256,24 +261,25 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
           {step === 'templates' && (
             <div className="space-y-4">
-              <p className="text-sm text-zinc-500 mb-4">
+              <p className="text-sm text-muted-foreground mb-4">
                 Select templates to use for generating posts. Each template creates different styles of content.
               </p>
               
               <div className="space-y-3">
                 {templates.length === 0 ? (
-                  <div className="text-center py-8 text-zinc-500">
+                  <div className="text-center py-8 text-muted-foreground">
                     No templates available. Using default templates.
                   </div>
                 ) : (
                   templates.map(template => (
                     <label
                       key={template.id}
-                      className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
+                      className={cn(
+                        'flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors',
                         selectedTemplates.includes(template.id)
-                          ? 'border-zinc-900 bg-zinc-50 dark:border-zinc-100 dark:bg-zinc-800'
-                          : 'border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
-                      }`}
+                          ? 'border-primary bg-accent'
+                          : 'border-border hover:bg-accent'
+                      )}
                     >
                       <input
                         type="checkbox"
@@ -285,13 +291,13 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
                             setSelectedTemplates(selectedTemplates.filter(t => t !== template.id))
                           }
                         }}
-                        className="w-5 h-5 rounded border-zinc-300 mt-0.5"
+                        className="w-5 h-5 rounded border-border mt-0.5"
                       />
                       <div className="flex-1">
-                        <div className="font-medium text-zinc-900 dark:text-zinc-100">
+                        <div className="font-medium text-foreground">
                           {template.name}
                         </div>
-                        <div className="text-sm text-zinc-500 mt-1">
+                        <div className="text-sm text-muted-foreground mt-1">
                           {template.description}
                         </div>
                         <div className="flex items-center gap-2 mt-2">
@@ -308,21 +314,21 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
           {step === 'review' && (
             <div className="space-y-6">
-              <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-lg p-4 space-y-4">
+              <div className="bg-muted rounded-lg p-4 space-y-4">
                 <div>
-                  <div className="text-sm text-zinc-500">Campaign Name</div>
-                  <div className="font-medium text-zinc-900 dark:text-zinc-100">{name}</div>
+                  <div className="text-sm text-muted-foreground">Campaign Name</div>
+                  <div className="font-medium text-foreground">{name}</div>
                 </div>
                 
                 {description && (
                   <div>
-                    <div className="text-sm text-zinc-500">Description</div>
-                    <div className="text-zinc-700 dark:text-zinc-300">{description}</div>
+                    <div className="text-sm text-muted-foreground">Description</div>
+                    <div className="text-foreground/80">{description}</div>
                   </div>
                 )}
                 
                 <div>
-                  <div className="text-sm text-zinc-500">Content Sources</div>
+                  <div className="text-sm text-muted-foreground">Content Sources</div>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {sourceConfig.include_articles && <SourceBadge label="Articles" />}
                     {sourceConfig.include_screenshots && <SourceBadge label="Screenshots" />}
@@ -331,14 +337,14 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
                 </div>
                 
                 <div>
-                  <div className="text-sm text-zinc-500">Platforms</div>
+                  <div className="text-sm text-muted-foreground">Platforms</div>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {selectedPlatforms.map(p => <PlatformBadge key={p} platform={p} />)}
                   </div>
                 </div>
                 
                 <div>
-                  <div className="text-sm text-zinc-500">Templates</div>
+                  <div className="text-sm text-muted-foreground">Templates</div>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {selectedTemplates.map(t => {
                       const template = templates.find(tm => tm.id === t)
@@ -353,7 +359,7 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
                 </div>
               </div>
 
-              <p className="text-sm text-zinc-500">
+              <p className="text-sm text-muted-foreground">
                 Click Create to start generating content. This will create a task that runs through the workflow.
               </p>
             </div>
@@ -361,32 +367,30 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-zinc-200 dark:border-zinc-800">
-          <button
+        <div className="flex items-center justify-between px-6 py-4 border-t border-border">
+          <Button
+            variant="ghost"
             onClick={step === 'basics' ? onClose : () => setStep(steps[currentStepIndex - 1].key)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 rounded-lg transition-colors"
           >
-            <ChevronLeft className="w-4 h-4" />
+            <ChevronLeft className="w-4 h-4 mr-2" />
             {step === 'basics' ? 'Cancel' : 'Back'}
-          </button>
+          </Button>
           
           {step === 'review' ? (
-            <button
+            <Button
               onClick={handleCreate}
               disabled={loading}
-              className="inline-flex items-center gap-2 px-6 py-2 bg-zinc-900 text-white text-sm font-medium rounded-lg hover:bg-zinc-800 disabled:opacity-50 transition-colors"
             >
               {loading ? 'Creating...' : 'Create Campaign'}
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button
               onClick={() => setStep(steps[currentStepIndex + 1].key)}
               disabled={!canProceed()}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white text-sm font-medium rounded-lg hover:bg-zinc-800 disabled:opacity-50 transition-colors"
             >
               Next
-              <ChevronRight className="w-4 h-4" />
-            </button>
+              <ChevronRight className="w-4 h-4 ml-2" />
+            </Button>
           )}
         </div>
       </div>
@@ -396,7 +400,7 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
 function SourceBadge({ label }: { label: string }) {
   return (
-    <span className="inline-flex items-center px-2 py-1 bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs rounded-md">
+    <span className="inline-flex items-center px-2 py-1 bg-secondary text-secondary-foreground text-xs rounded-md">
       {label}
     </span>
   )
@@ -418,7 +422,7 @@ function PlatformBadge({ platform }: { platform: string }) {
   }
 
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs rounded-md">
+    <span className="inline-flex items-center gap-1 px-2 py-1 bg-muted text-muted-foreground text-xs rounded-md">
       <span>{icons[platform] || '📱'}</span>
       <span>{labels[platform] || platform}</span>
     </span>
@@ -433,7 +437,7 @@ function FormatBadge({ format }: { format: string }) {
   }
 
   return (
-    <span className="inline-flex items-center px-2 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded-md">
+    <span className="inline-flex items-center px-2 py-1 bg-primary/10 text-primary text-xs rounded-md">
       {labels[format] || format}
     </span>
   )

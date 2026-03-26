@@ -253,8 +253,27 @@ pub(crate) fn exec_reddit_config_parse(
             log::info!("[reddit_config_parse] agent output ({} chars): {:?}", output.len(), &output[..output.len().min(2000)]);
             
             // Try to extract JSON object from the output
-            let json_str = extract_json_object(&output);
-            log::info!("[reddit_config_parse] extracted JSON ({} chars): {:?}", json_str.len(), &json_str[..json_str.len().min(2000)]);
+            let json_str = match extract_json_object(&output) {
+                Ok(json) => {
+                    log::info!("[reddit_config_parse] extracted JSON ({} chars)", json.len());
+                    json
+                }
+                Err(e) => {
+                    log::warn!("[reddit_config_parse] JSON extraction failed: {}", e);
+                    
+                    // Save full output for debugging
+                    let debug_path = std::env::temp_dir()
+                        .join(format!("kimi_error_{}.txt", chrono::Utc::now().timestamp_millis()));
+                    let _ = std::fs::write(&debug_path, &output);
+                    log::warn!("[reddit_config_parse] full output saved to: {:?}", debug_path);
+                    
+                    return crate::engine::workflows::StepResult {
+                        success: false,
+                        message: format!("Failed to extract JSON from agent output: {}", e),
+                        output: Some(output),
+                    };
+                }
+            };
             
             match serde_json::from_str::<RedditSearchParams>(&json_str) {
                 Ok(params) => {
@@ -278,20 +297,13 @@ pub(crate) fn exec_reddit_config_parse(
                     }
                 }
                 Err(e) => {
-                    log::warn!("[reddit_config_parse] failed to parse agent output as JSON: {}", e);
-                    
-                    // Save full output to temp file for debugging
-                    let debug_path = std::env::temp_dir().join("kimi_error_output.txt");
-                    let _ = std::fs::write(&debug_path, &output);
-                    log::warn!("[reddit_config_parse] full output saved to: {:?} ({} chars)", debug_path, output.len());
-                    
-                    // Log first 3000 chars for immediate inspection
-                    log::warn!("[reddit_config_parse] output preview (first 3000 chars): {}", &output[..output.len().min(3000)]);
+                    log::warn!("[reddit_config_parse] JSON parse error: {}", e);
+                    log::warn!("[reddit_config_parse] extracted content that failed to parse: {}", &json_str[..json_str.len().min(1000)]);
                     
                     crate::engine::workflows::StepResult {
                         success: false,
-                        message: format!("Agent produced invalid JSON: {}", e),
-                        output: Some(output),
+                        message: format!("Agent returned invalid JSON structure: {}", e),
+                        output: Some(json_str),
                     }
                 }
             }
@@ -1064,35 +1076,81 @@ pub(crate) fn extract_json_array(output: &str) -> String {
 }
 
 /// Extract a JSON object from text (looks for {...})
-pub fn extract_json_object(output: &str) -> String {
+/// Extract and validate JSON from agent output.
+/// 
+/// Tries multiple strategies in order:
+/// 1. Markdown code block (```json ... ```)
+/// 2. Plain code block (``` ... ```)
+/// 3. Raw JSON object ({...})
+/// 
+/// Returns Err if no valid JSON found or if extracted content isn't valid JSON.
+pub fn extract_json_object(output: &str) -> Result<String, String> {
     let trimmed = output.trim();
     
-    // First, try to find JSON within markdown code blocks
-    // Look for ```json ... ``` or ``` ... ```
-    let patterns = ["```json\n", "```json\r\n", "```JSON\n", "```\n", "```"];
-    for pat in &patterns {
-        if let Some(start) = trimmed.find(pat) {
-            let after_open = start + pat.len();
+    if trimmed.is_empty() {
+        return Err("Agent output is empty".to_string());
+    }
+    
+    // Strategy 1: Look for ```json ... ``` code block
+    for opener in ["```json\n", "```json\r\n", "```JSON\n", "```Json\n"] {
+        if let Some(start) = trimmed.find(opener) {
+            let after_open = start + opener.len();
             let rest = &trimmed[after_open..];
             if let Some(end) = rest.find("```") {
                 let candidate = rest[..end].trim();
-                // Check if it looks like JSON
-                if candidate.starts_with('{') || candidate.starts_with('[') {
-                    return candidate.to_string();
+                if is_valid_json(candidate) {
+                    return Ok(candidate.to_string());
                 }
             }
         }
     }
     
-    // Fallback: look for outermost JSON object/array
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            if end > start {
-                return trimmed[start..=end].to_string();
+    // Strategy 2: Look for plain ``` ... ``` code block
+    if let Some(start) = trimmed.find("```\n") {
+        let after_open = start + 4;
+        let rest = &trimmed[after_open..];
+        if let Some(end) = rest.find("```") {
+            let candidate = rest[..end].trim();
+            if is_valid_json(candidate) {
+                return Ok(candidate.to_string());
             }
         }
     }
     
-    // Last resort: return trimmed output
-    trimmed.to_string()
+    // Strategy 3: Look for raw JSON object (outermost braces)
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            if end > start {
+                let candidate = &trimmed[start..=end];
+                if is_valid_json(candidate) {
+                    return Ok(candidate.to_string());
+                }
+            }
+        }
+    }
+    
+    // Strategy 4: Look for raw JSON array
+    if let Some(start) = trimmed.find('[') {
+        if let Some(end) = trimmed.rfind(']') {
+            if end > start {
+                let candidate = &trimmed[start..=end];
+                if is_valid_json(candidate) {
+                    return Ok(candidate.to_string());
+                }
+            }
+        }
+    }
+    
+    // Nothing worked - provide helpful error
+    let preview = if trimmed.len() > 500 {
+        format!("{}... ({} total chars)", &trimmed[..500], trimmed.len())
+    } else {
+        trimmed.to_string()
+    };
+    Err(format!("No valid JSON found in agent output. Preview: {}", preview))
+}
+
+/// Quick validation that a string is valid JSON
+fn is_valid_json(s: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(s).is_ok()
 }

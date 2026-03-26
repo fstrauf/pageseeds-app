@@ -4,6 +4,8 @@ import { getCampaignPosts, updateSocialPostStatus, scheduleSocialPost, markSocia
 import type { SocialCampaign, SocialPost, PostStatus } from '../../lib/types'
 import { PostCard } from './PostCard'
 import { PostEditor } from './PostEditor'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface Props {
   campaign: SocialCampaign
@@ -100,40 +102,43 @@ export function CampaignDetail({ campaign, onBack }: Props) {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={onBack}
-          className="p-2 text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />
-        </button>
+        </Button>
         <div className="flex-1">
-          <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+          <h2 className="text-xl font-semibold text-foreground">
             {campaign.name}
           </h2>
           {campaign.description && (
-            <p className="text-sm text-zinc-500 mt-1">{campaign.description}</p>
+            <p className="text-sm text-muted-foreground mt-1">{campaign.description}</p>
           )}
         </div>
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={loadPosts}
-          className="p-2 text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
           title="Refresh"
         >
           <RefreshCw className="w-5 h-5" />
-        </button>
+        </Button>
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 border-b border-zinc-200 dark:border-zinc-800">
+      <div className="flex items-center gap-1 border-b border-border">
         {TABS.map(tab => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            className={cn(
+              'px-4 py-2 text-sm font-medium border-b-2 transition-colors',
               activeTab === tab.key
-                ? 'border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100'
-                : 'border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
-            }`}
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
           >
             {tab.label}
           </button>
@@ -142,23 +147,23 @@ export function CampaignDetail({ campaign, onBack }: Props) {
 
       {/* Error */}
       {error && (
-        <div className="p-4 bg-red-50 text-red-700 rounded-lg text-sm">
+        <div className="p-4 bg-destructive/10 text-destructive rounded-lg text-sm">
           {error}
         </div>
       )}
 
       {/* Posts Grid */}
       {loading ? (
-        <div className="flex items-center justify-center h-64 text-zinc-500">
+        <div className="flex items-center justify-center h-64 text-muted-foreground">
           Loading posts...
         </div>
       ) : posts.length === 0 ? (
         <div className="text-center py-12">
-          <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
             <span className="text-2xl">📝</span>
           </div>
-          <h3 className="text-lg font-medium text-zinc-900 mb-2">No posts yet</h3>
-          <p className="text-zinc-500 max-w-sm mx-auto">
+          <h3 className="text-lg font-medium text-foreground mb-2">No posts yet</h3>
+          <p className="text-muted-foreground max-w-sm mx-auto">
             This campaign doesn't have any posts in this status. Run the campaign workflow to generate content.
           </p>
         </div>
