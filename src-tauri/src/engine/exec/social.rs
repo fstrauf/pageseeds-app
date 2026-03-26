@@ -12,7 +12,7 @@ use crate::social::content::sources::{discover_sources, ensure_output_dir};
 use crate::social::db;
 use crate::social::models::{AgentPostOutput, AgentTemplateOutput, ContentSource, PostGenerationJob, SourceManifest};
 use crate::social::prompts;
-use crate::social::templates::{TemplateRegistry, render_prompt, validate_output};
+use crate::social::templates::{TemplateRegistry, TemplateDef, render_prompt, validate_output};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Collect Content Sources
@@ -542,7 +542,7 @@ fn get_site_url_from_project(task: &Task) -> String {
 fn load_templates_for_generation(
     _project_id: &str,
     template_ids: &[String],
-) -> Result<Vec<ContentTemplate>, String> {
+) -> Result<Vec<TemplateDef>, String> {
     // Use new template registry
     let registry = TemplateRegistry::default();
     let mut templates = Vec::new();
@@ -558,7 +558,7 @@ fn load_templates_for_generation(
     
     // If no templates found, use all defaults
     if templates.is_empty() {
-        templates = registry.templates.clone();
+        templates = registry.all().to_vec();
     }
 
     Ok(templates)

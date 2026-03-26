@@ -207,7 +207,7 @@ impl SourceManifest {
 #[derive(Debug, Clone)]
 pub struct PostGenerationJob {
     pub source: ContentSource,
-    pub template: crate::models::social::ContentTemplate,
+    pub template: crate::social::templates::TemplateDef,
     pub platform: crate::models::social::Platform,
 }
 
@@ -220,7 +220,7 @@ pub struct GenerationResult {
 }
 
 /// Agent response for post generation
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPostOutput {
     pub hook: String,
     pub caption: String,

@@ -235,3 +235,59 @@ pub async fn clear_completed_queue_items() -> Result<(), String> {
     log::info!("[clear_completed_queue_items] Called");
     Ok(())
 }
+
+/// Direct task execution - runs a single task immediately without queue
+/// This is for debugging/troubleshooting when the queue system isn't working
+#[tauri::command]
+pub async fn execute_task_direct(
+    task_id: String,
+    project_id: String,
+    state: tauri::State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<executor::ExecutionResult, String> {
+    log::info!("[execute_task_direct] Called for task {} in project {}", task_id, project_id);
+    
+    let db_path = state.db_path.clone();
+    
+    // Execute directly in blocking thread
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = match Connection::open(&db_path) {
+            Ok(c) => c,
+            Err(e) => return Err(format!("Failed to open DB: {}", e)),
+        };
+        
+        conn.busy_timeout(Duration::from_secs(10))
+            .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
+        
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => return Err(format!("Runtime error: {}", e)),
+        };
+        
+        rt.block_on(async {
+            executor::execute_task_with_token(
+                &conn,
+                &task_id,
+                None,
+                Some(app_handle),
+                false,
+            ).await
+        })
+    }).await;
+    
+    match result {
+        Ok(Ok(exec_result)) => {
+            log::info!("[execute_task_direct] Task completed: success={}, message={}", 
+                exec_result.success, exec_result.message);
+            Ok(exec_result)
+        }
+        Ok(Err(e)) => {
+            log::error!("[execute_task_direct] Task failed: {}", e);
+            Err(e)
+        }
+        Err(e) => {
+            log::error!("[execute_task_direct] Task panicked: {}", e);
+            Err(format!("Task execution panicked: {}", e))
+        }
+    }
+}

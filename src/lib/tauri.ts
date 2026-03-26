@@ -416,6 +416,24 @@ export const runBatch = (
 export const executeQueue = (items: QueueItem[]): Promise<void> =>
   invoke('execute_queue', { items })
 
+/** Execute a single task directly without queue. Returns the result directly. */
+export const executeTaskDirect = (args: {
+  taskId: string
+  projectId: string
+}): Promise<{
+  task_id: string
+  success: boolean
+  message: string
+  steps: Array<{
+    step_name: string
+    kind: string
+    status: string
+    message: string
+    output?: string
+  }>
+}> =>
+  invoke('execute_task_direct', { taskId: args.taskId, projectId: args.projectId })
+
 export const pauseQueue = (): Promise<void> =>
   invoke('pause_queue')
 

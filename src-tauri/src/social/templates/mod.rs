@@ -4,20 +4,23 @@
 //! - Template selection is deterministic (rule-based)
 //! - Content transformation is agentic (creative writing)
 
-use crate::models::social::{Platform, PostFormat, SourceType};
+use crate::models::social::{ContentTemplate, Platform, PostFormat, SourceType};
 use crate::social::models::ContentSource;
 
-/// A content template defines how to transform source content into a social post
+/// Output schema for validation
 #[derive(Debug, Clone)]
-pub struct ContentTemplate {
-    /// Template identifier
+pub struct OutputSchema {
+    pub required_fields: Vec<String>,
+    pub max_hook_length: usize,
+    pub max_caption_length: usize,
+    pub hashtag_count_range: (usize, usize),
+}
+
+/// Template definition with prompt and validation rules
+#[derive(Debug, Clone)]
+pub struct TemplateDef {
+    /// Template identifier (matches ContentTemplate.id)
     pub id: String,
-    /// Template identifier
-    pub id: String,
-    /// Human-readable name
-    pub name: String,
-    /// Description of when to use this template
-    pub description: String,
     /// Target platform
     pub platform: Platform,
     /// Post format
@@ -32,18 +35,9 @@ pub struct ContentTemplate {
     pub engagement_weight: u32,
 }
 
-/// Output schema for validation
-#[derive(Debug, Clone)]
-pub struct OutputSchema {
-    pub required_fields: Vec<String>,
-    pub max_hook_length: usize,
-    pub max_caption_length: usize,
-    pub hashtag_count_range: (usize, usize),
-}
-
 /// Template registry - all available templates
 pub struct TemplateRegistry {
-    pub templates: Vec<ContentTemplate>,
+    templates: Vec<TemplateDef>,
 }
 
 impl TemplateRegistry {
@@ -60,39 +54,29 @@ impl TemplateRegistry {
         }
     }
 
-    /// Select the best template for a content source (deterministic)
-    pub fn select_template(&self, source: &ContentSource) -> Option<&ContentTemplate> {
-        // First, try to match by suggested template
-        let suggested = self.templates.iter()
-            .find(|t| t.id == source.suggested_template);
-        
-        if suggested.is_some() {
-            return suggested;
-        }
-        
-        // Fallback: score all templates and pick best match
+    /// Get template definition by ID
+    pub fn get(&self, id: &str) -> Option<&TemplateDef> {
+        self.templates.iter().find(|t| t.id == id)
+    }
+
+    /// Get all templates
+    pub fn all(&self) -> &[TemplateDef] {
+        &self.templates
+    }
+
+    /// Select the best template definition for a content source (deterministic)
+    pub fn select_for_source(&self, source: &ContentSource) -> Option<&TemplateDef> {
+        // Score all templates and pick best match
         self.templates.iter()
             .filter(|t| t.source_types.contains(&source.source_type))
             .max_by_key(|t| {
                 // Score based on:
                 // 1. Source type match (already filtered)
                 // 2. Engagement weight alignment with source score
-                // 3. Platform match with suggested platform
-                let platform_bonus = if t.platform == source.suggested_platform { 20 } else { 0 };
-                t.engagement_weight + platform_bonus
+                // 3. Template ID match with suggested template
+                let suggested_bonus = if t.id == source.suggested_template { 30 } else { 0 };
+                t.engagement_weight + suggested_bonus
             })
-    }
-
-    /// Get all templates for a specific platform
-    pub fn for_platform(&self, platform: Platform) -> Vec<&ContentTemplate> {
-        self.templates.iter()
-            .filter(|t| t.platform == platform)
-            .collect()
-    }
-
-    /// Get template by ID
-    pub fn get(&self, id: &str) -> Option<&ContentTemplate> {
-        self.templates.iter().find(|t| t.id == id)
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -100,11 +84,9 @@ impl TemplateRegistry {
     // ═══════════════════════════════════════════════════════════════════════════════
 
     /// Template: Feature Hook (TikTok/Reels short-form)
-    fn feature_hook_template() -> ContentTemplate {
-        ContentTemplate {
+    fn feature_hook_template() -> TemplateDef {
+        TemplateDef {
             id: "feature_hook".to_string(),
-            name: "Feature Hook".to_string(),
-            description: "Scroll-stopping hook showcasing a feature".to_string(),
             platform: Platform::TikTok,
             format: PostFormat::SingleImage,
             prompt_template: feature_hook_prompt(),
@@ -121,11 +103,9 @@ impl TemplateRegistry {
     }
 
     /// Template: Educational Carousel (Instagram Feed)
-    fn educational_carousel_template() -> ContentTemplate {
-        ContentTemplate {
+    fn educational_carousel_template() -> TemplateDef {
+        TemplateDef {
             id: "educational_carousel".to_string(),
-            name: "Educational Carousel".to_string(),
-            description: "Multi-slide educational content".to_string(),
             platform: Platform::InstagramFeed,
             format: PostFormat::Carousel,
             prompt_template: educational_carousel_prompt(),
@@ -142,11 +122,9 @@ impl TemplateRegistry {
     }
 
     /// Template: Technical Explainer (Instagram Feed)
-    fn technical_explainer_template() -> ContentTemplate {
-        ContentTemplate {
+    fn technical_explainer_template() -> TemplateDef {
+        TemplateDef {
             id: "technical_explainer".to_string(),
-            name: "Technical Explainer".to_string(),
-            description: "Explain technical concepts with single image".to_string(),
             platform: Platform::InstagramFeed,
             format: PostFormat::SingleImage,
             prompt_template: technical_explainer_prompt(),
@@ -163,11 +141,9 @@ impl TemplateRegistry {
     }
 
     /// Template: Quick Tip (TikTok/Reels)
-    fn quick_tip_template() -> ContentTemplate {
-        ContentTemplate {
+    fn quick_tip_template() -> TemplateDef {
+        TemplateDef {
             id: "quick_tip".to_string(),
-            name: "Quick Tip".to_string(),
-            description: "Fast, actionable SEO tip".to_string(),
             platform: Platform::TikTok,
             format: PostFormat::SingleImage,
             prompt_template: quick_tip_prompt(),
@@ -184,11 +160,9 @@ impl TemplateRegistry {
     }
 
     /// Template: Behind the Scenes (Instagram Reels/Stories)
-    fn behind_scenes_template() -> ContentTemplate {
-        ContentTemplate {
+    fn behind_scenes_template() -> TemplateDef {
+        TemplateDef {
             id: "behind_scenes".to_string(),
-            name: "Behind the Scenes".to_string(),
-            description: "Build-in-public style content".to_string(),
             platform: Platform::InstagramReel,
             format: PostFormat::SingleImage,
             prompt_template: behind_scenes_prompt(),
@@ -369,12 +343,12 @@ Create authentic behind-the-scenes content.
 }
 
 /// Render a prompt template with source context
-pub fn render_prompt(template: &ContentTemplate, source: &ContentSource) -> String {
+pub fn render_prompt(template: &TemplateDef, source: &ContentSource) -> String {
     template.prompt_template.replace("{source_summary}", &source.content_summary())
 }
 
 /// Validate agent output against template schema
-pub fn validate_output(template: &ContentTemplate, output: &serde_json::Value) -> Vec<String> {
+pub fn validate_output(template: &TemplateDef, output: &serde_json::Value) -> Vec<String> {
     let mut errors = Vec::new();
     
     // Check required fields
