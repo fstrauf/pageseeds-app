@@ -235,38 +235,47 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   setupEventListeners: async () => {
     logger.entry('setupEventListeners');
+    console.log('[QueueStore] Setting up event listeners...');
     const { onTaskStarted, onTaskCompleted, onTaskFailed, onFollowUpCreated, cleanupEventListeners } = get();
     
     cleanupEventListeners();
     const unlisteners: UnlistenFn[] = [];
     
     logger.debug('setupEventListeners - registering listeners');
+    console.log('[QueueStore] Registering Tauri event listeners...');
     
     const unlistenStarted = await listen<QueueProgressEvent>('queue:task-started', (event) => {
-      logger.event('queue:task-started', { taskId: event.payload.taskId });
-      onTaskStarted(event.payload);
+      // event.payload is the QueueProgressEvent (Tauri wraps it)
+      const payload = event.payload;
+      console.log('[QueueStore] Received queue:task-started', payload);
+      logger.event('queue:task-started', { taskId: payload.taskId });
+      onTaskStarted(payload);
     });
     unlisteners.push(unlistenStarted);
     
     const unlistenCompleted = await listen<QueueProgressEvent>('queue:task-completed', (event) => {
-      logger.event('queue:task-completed', { taskId: event.payload.taskId, type: event.payload.eventType });
-      if (event.payload.eventType === 'completed') {
-        onTaskCompleted(event.payload);
+      const payload = event.payload;
+      console.log('[QueueStore] Received queue:task-completed', payload);
+      logger.event('queue:task-completed', { taskId: payload.taskId, type: payload.eventType });
+      if (payload.eventType === 'completed') {
+        onTaskCompleted(payload);
       } else {
-        onTaskFailed(event.payload);
+        onTaskFailed(payload);
       }
     });
     unlisteners.push(unlistenCompleted);
     
     const unlistenFailed = await listen<QueueProgressEvent>('queue:task-failed', (event) => {
-      logger.event('queue:task-failed', { taskId: event.payload.taskId, error: event.payload.payload.error });
-      onTaskFailed(event.payload);
+      const payload = event.payload;
+      logger.event('queue:task-failed', { taskId: payload.taskId, error: payload.payload?.error });
+      onTaskFailed(payload);
     });
     unlisteners.push(unlistenFailed);
     
     const unlistenFollowUp = await listen<FollowUpCreatedEvent>('queue:follow-up-created', (event) => {
-      logger.event('queue:follow-up-created', { taskId: event.payload.taskId, type: event.payload.taskType });
-      onFollowUpCreated(event.payload);
+      const payload = event.payload;
+      logger.event('queue:follow-up-created', { taskId: payload.taskId, type: payload.taskType });
+      onFollowUpCreated(payload);
     });
     unlisteners.push(unlistenFollowUp);
     
@@ -292,6 +301,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   },
 
   onTaskStarted: (event: QueueProgressEvent) => {
+    console.log('[QueueStore] onTaskStarted called', { taskId: event.taskId });
     logger.entry('onTaskStarted', { taskId: event.taskId, title: event.payload.title });
     set((state: QueueState) => ({
       items: state.items.map((i: QueueItem) =>
