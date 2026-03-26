@@ -22,6 +22,8 @@ pub struct QueueItem {
     pub project_id: String,
     pub title: String,
     pub task_type: String,
+    #[serde(rename = "projectName")]
+    pub project_name: Option<String>,
 }
 
 /// Progress event emitted during queue execution

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Content source discovered in a project
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContentSource {
     pub source_type: crate::models::social::SourceType,
     pub source_id: String,
@@ -168,7 +168,7 @@ fn suggest_platform(
 }
 
 /// Metadata for content sources
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ContentMetadata {
     pub title: Option<String>,
     pub description: Option<String>,
