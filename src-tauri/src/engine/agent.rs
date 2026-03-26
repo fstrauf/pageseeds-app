@@ -3,7 +3,7 @@
 /// Supported providers:
 /// - `"copilot"` — GitHub Copilot CLI (`copilot -p "<prompt>" --output-format text`)
 /// - `"claude"`  — Claude Code CLI    (`claude -p "<prompt>" --output-format text`)
-/// - `"kimi"`    — Kimi Code CLI      (`kimi -p "<prompt>" --print --output-format text`)
+/// - `"kimi"`    — Kimi Code CLI      (`kimi --print -p "<prompt>" --output-format text --final-message-only`)
 /// - `"custom:<binary>"` — Any binary that accepts `-p <prompt>` and writes to stdout
 
 use serde::{Deserialize, Serialize};
@@ -103,7 +103,7 @@ pub async fn detect_agents_async(configured_provider: &str) -> AgentStatus {
 /// Invocation pattern:
 /// - copilot: `copilot -p "<prompt>" --output-format text`
 /// - claude:  `claude  -p "<prompt>" --output-format text`
-/// - kimi:    `kimi -p "<prompt>" --print --output-format text --work-dir <project_path>`
+/// - kimi:    `kimi --print -p "<prompt>" --output-format text --final-message-only --work-dir <path>`
 /// - custom:  `<binary> [extra args] -p "<prompt>"` — binary extracted from "custom:<binary>"
 ///
 /// The prompt is passed as a direct argument to `Command::arg()` — no shell involved,
@@ -111,19 +111,6 @@ pub async fn detect_agents_async(configured_provider: &str) -> AgentStatus {
 pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<String, String> {
     let (binary, extra_args) = resolve_provider(provider);
     log::info!("[agent] running {} in {:?}", binary, project_path);
-    
-    // Debug: log environment to diagnose differences between test and app
-    let path_env = std::env::var("PATH").unwrap_or_default();
-    let home_env = std::env::var("HOME").unwrap_or_default();
-    log::info!("[agent] PATH: {}", path_env);
-    log::info!("[agent] HOME: {}", home_env);
-    
-    // Also log any KIMI_ env vars that might affect behavior
-    for (key, value) in std::env::vars() {
-        if key.starts_with("KIMI") {
-            log::info!("[agent] {}: {}", key, value);
-        }
-    }
 
     let mut cmd = std::process::Command::new(&binary);
 
@@ -142,15 +129,6 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
         cmd.arg("--output-format").arg("text");
         // --final-message-only gives clean output without structured wrappers
         cmd.arg("--final-message-only");
-        // Disable thinking mode for cleaner output
-        cmd.arg("--no-thinking");
-        // Use a fresh session to avoid accumulated context causing large outputs
-        let session_id = format!("pageseeds-{:x}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(std::time::Duration::from_secs(0))
-            .as_millis());
-        log::info!("[agent] Using fresh session: {}", session_id);
-        cmd.arg("--session").arg(&session_id);
         // Kimi uses --work-dir instead of current_dir
         cmd.arg("--work-dir").arg(project_path);
     } else {
@@ -214,11 +192,6 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
         stdout.len(),
         stderr.len()
     );
-    
-    // Debug: log first 500 chars of stderr if present
-    if !stderr.is_empty() {
-        log::warn!("[agent] {} stderr: {}", binary, &stderr[..stderr.len().min(500)]);
-    }
 
     // Some CLIs exit non-zero but still produce useful output
     if out.status.success() || !stdout.trim().is_empty() {
@@ -232,7 +205,7 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
     }
 }
 
-// ─── Private helpers ─────────────────────────────────────────────────────────
+// ─── Private helpers ─────────────────────────────────────────
 
 /// Resolve provider string to (binary, extra_args).
 fn resolve_provider(provider: &str) -> (String, Vec<String>) {
@@ -272,40 +245,33 @@ fn probe_binary(binary: &str) -> (bool, Option<String>) {
         .output()
     {
         Ok(out) => {
-            // Some CLIs print version to stderr
-            let ver_str = if !out.stdout.is_empty() {
-                String::from_utf8_lossy(&out.stdout)
-            } else {
-                String::from_utf8_lossy(&out.stderr)
-            };
-            let version = ver_str.lines().next().map(|l| l.trim().to_string());
-            (true, version)
+            let version = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .map(|s| s.trim().to_string());
+            (out.status.success(), version)
         }
         Err(_) => (false, None),
     }
 }
 
-/// Async version of probe_binary with a timeout to prevent UI blocking.
-const PROBE_TIMEOUT_MS: u64 = 2000; // 2 second timeout per binary
-
+/// Async version of probe_binary with timeout.
 async fn probe_binary_async(binary: &str) -> (bool, Option<String>) {
-    let result = timeout(
-        Duration::from_millis(PROBE_TIMEOUT_MS),
-        AsyncCommand::new(binary).arg("--version").output()
-    ).await;
-
-    match result {
+    match timeout(Duration::from_secs(5), async {
+        AsyncCommand::new(binary)
+            .arg("--version")
+            .output()
+            .await
+    })
+    .await
+    {
         Ok(Ok(out)) => {
-            // Some CLIs print version to stderr
-            let ver_str = if !out.stdout.is_empty() {
-                String::from_utf8_lossy(&out.stdout)
-            } else {
-                String::from_utf8_lossy(&out.stderr)
-            };
-            let version = ver_str.lines().next().map(|l| l.trim().to_string());
-            (true, version)
+            let version = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .map(|s| s.trim().to_string());
+            (out.status.success(), version)
         }
-        Ok(Err(_)) => (false, None), // Command failed to execute
-        Err(_) => (false, None),     // Timeout
+        _ => (false, None),
     }
 }

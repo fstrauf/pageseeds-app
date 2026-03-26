@@ -6,6 +6,7 @@
 pub mod db;
 pub mod models;
 pub mod prompts;
+pub mod templates;
 
 pub mod content {
     pub mod extractor;

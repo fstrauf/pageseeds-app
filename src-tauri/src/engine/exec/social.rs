@@ -12,6 +12,7 @@ use crate::social::content::sources::{discover_sources, ensure_output_dir};
 use crate::social::db;
 use crate::social::models::{AgentPostOutput, AgentTemplateOutput, ContentSource, PostGenerationJob, SourceManifest};
 use crate::social::prompts;
+use crate::social::templates::{TemplateRegistry, render_prompt, validate_output};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Collect Content Sources
@@ -157,22 +158,22 @@ pub fn exec_social_generate_posts(
 
     log::info!("[social_generate_posts] generating {} posts", jobs.len());
 
-    // Generate each post via agent
+    // Generate each post via agent using template system
     let mut generated_posts: Vec<SocialPost> = Vec::new();
-    let campaign_id = task.id.clone(); // Use task ID as campaign ID for now
+    let campaign_id = extract_campaign_id_from_task(task).unwrap_or_else(|| task.id.clone());
+    
+    // Use new template registry for better template selection
+    let registry = TemplateRegistry::default();
 
     for (idx, job) in jobs.iter().enumerate() {
-        let prompt = prompts::generate_post_prompt(
-            &job.source,
-            &job.template,
-            &job.platform,
-            &project_context,
-        );
+        // Use new template system to render prompt
+        let prompt = render_prompt(&job.template, &job.source);
 
-        log::info!("[social_generate_posts] job {}/{}: generating for source {:?}",
+        log::info!("[social_generate_posts] job {}/{}: generating for source {:?} using template {:?}",
             idx + 1,
             jobs.len(),
-            job.source.source_id
+            job.source.source_id,
+            job.template.id
         );
 
         // Call the agent
@@ -181,6 +182,14 @@ pub fn exec_social_generate_posts(
                 // Parse the agent output
                 match parse_agent_post_output(&output) {
                     Ok(agent_output) => {
+                        // Validate against template schema
+                        let json_output = serde_json::to_value(&agent_output).unwrap_or_default();
+                        let validation_errors = validate_output(&job.template, &json_output);
+                        
+                        if !validation_errors.is_empty() {
+                            log::warn!("[social_generate_posts] validation errors: {:?}", validation_errors);
+                        }
+                        
                         let post = create_social_post_from_agent_output(
                             &campaign_id,
                             &task.project_id,
@@ -534,13 +543,22 @@ fn load_templates_for_generation(
     _project_id: &str,
     template_ids: &[String],
 ) -> Result<Vec<ContentTemplate>, String> {
-    // For now, return default templates
-    // In real implementation, load from database
+    // Use new template registry
+    let registry = TemplateRegistry::default();
     let mut templates = Vec::new();
 
     for id in template_ids {
-        let template = create_default_template(id)?;
-        templates.push(template);
+        if let Some(template) = registry.get(id) {
+            templates.push(template.clone());
+        } else {
+            // Fallback: try to use the template ID as a platform hint
+            log::warn!("Template {} not found in registry, skipping", id);
+        }
+    }
+    
+    // If no templates found, use all defaults
+    if templates.is_empty() {
+        templates = registry.templates.clone();
     }
 
     Ok(templates)

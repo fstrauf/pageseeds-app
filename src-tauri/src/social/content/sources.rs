@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::social::models::SourceManifest;
-use crate::models::social::SourceConfig;
+use crate::social::models::{ContentMetadata, ContentSource, SourceManifest};
+use crate::models::social::{SourceConfig, SourceType};
 
 use super::extractor;
 
@@ -82,7 +82,17 @@ fn discover_articles(
             }
             
             match extractor::extract_from_article(path) {
-                Ok(source) => articles.push(source),
+                Ok(mut source) => {
+                    // Re-wrap with computed scores
+                    let source_with_scores = ContentSource::new(
+                        source.source_type,
+                        source.source_id,
+                        source.path,
+                        source.content,
+                        source.metadata,
+                    );
+                    articles.push(source_with_scores);
+                }
                 Err(e) => log::warn!("Failed to extract article {:?}: {}", path, e),
             }
         }
@@ -137,16 +147,16 @@ fn discover_screenshots(
                 .unwrap_or(&path)
                 .to_path_buf();
             
-            screenshots.push(crate::social::models::ContentSource {
-                source_type: crate::models::social::SourceType::Screenshot,
-                source_id: filename.clone(),
-                path: relative_path,
-                content: filename.clone(), // Use filename as content description
-                metadata: crate::social::models::ContentMetadata {
+            screenshots.push(ContentSource::new(
+                SourceType::Screenshot,
+                filename.clone(),
+                relative_path,
+                filename.clone(),
+                ContentMetadata {
                     description: Some(format!("Screenshot: {}", filename)),
                     ..Default::default()
                 },
-            });
+            ));
         }
     }
     
@@ -181,7 +191,16 @@ fn discover_specs(project_path: &Path) -> Result<Vec<crate::social::models::Cont
             let path = entry.path();
             
             match extractor::extract_from_spec(&path) {
-                Ok(source) => specs.push(source),
+                Ok(source) => {
+                    let source_with_scores = ContentSource::new(
+                        source.source_type,
+                        source.source_id,
+                        source.path,
+                        source.content,
+                        source.metadata,
+                    );
+                    specs.push(source_with_scores);
+                }
                 Err(e) => log::warn!("Failed to extract spec {:?}: {}", path, e),
             }
         }
