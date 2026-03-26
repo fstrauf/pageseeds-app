@@ -68,8 +68,11 @@ export function useQueueRunner(onCompleted?: () => void) {
 
     enqueue: (newItems: QueueItem[]) => {
       logger.entry('enqueue', { count: newItems.length });
+      console.log('[useQueueRunner] enqueue called with', newItems.length, 'items');
       const itemsWithStatus = newItems.map((i) => ({ ...i, status: ('pending' as const) }));
+      console.log('[useQueueRunner] calling store.enqueue...');
       store.enqueue(itemsWithStatus);
+      console.log('[useQueueRunner] store.enqueue returned');
       logger.exit('enqueue');
     },
 

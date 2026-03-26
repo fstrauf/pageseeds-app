@@ -71,9 +71,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   enqueue: (newItems: QueueItem[]) => {
     logger.entry('enqueue', { count: newItems.length });
+    console.log('[QueueStore] enqueue called with', newItems.length, 'items');
     
     if (newItems.length === 0) {
       logger.debug('enqueue - no items to add');
+      console.log('[QueueStore] enqueue - no items, returning');
       return;
     }
     
@@ -83,6 +85,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       );
       
       logger.debug('enqueue - deduped', { toAdd: deduped.length, existing: state.items.length });
+      console.log('[QueueStore] enqueue - deduped:', deduped.length, 'items to add');
       
       if (deduped.length === 0) return state;
       
@@ -96,9 +99,14 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     });
     
     const { isRunning, start } = get();
+    console.log('[QueueStore] enqueue - isRunning:', isRunning);
     if (!isRunning) {
       logger.info('enqueue - auto-starting queue');
+      console.log('[QueueStore] enqueue - auto-starting queue...');
       void start();
+      console.log('[QueueStore] enqueue - start() called');
+    } else {
+      console.log('[QueueStore] enqueue - already running, not starting');
     }
     
     logger.exit('enqueue');
@@ -178,30 +186,42 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   start: async () => {
     logger.entry('start', { itemCount: get().items.length, isRunning: get().isRunning });
+    console.log('[QueueStore] start() called');
     
     const { items, isRunning, setupEventListeners } = get();
+    console.log('[QueueStore] start - items:', items.length, 'isRunning:', isRunning);
     
     if (items.length === 0 || isRunning) {
       logger.debug('start - early return', { reason: items.length === 0 ? 'no items' : 'already running' });
+      console.log('[QueueStore] start - early return, reason:', items.length === 0 ? 'no items' : 'already running');
       return;
     }
     
     const pendingItems = items.filter((i: QueueItem) => i.status === 'pending');
     logger.info('start - pending items to execute', { count: pendingItems.length });
+    console.log('[QueueStore] start - pending items:', pendingItems.length);
     
     if (pendingItems.length === 0) {
       logger.debug('start - no pending items');
+      console.log('[QueueStore] start - no pending items, returning');
       return;
     }
     
+    console.log('[QueueStore] start - setting up event listeners...');
     await setupEventListeners();
+    console.log('[QueueStore] start - event listeners ready');
+    
     set({ isRunning: true, isPaused: false });
+    console.log('[QueueStore] start - isRunning set to true');
     
     try {
       logger.info('start - calling executeQueue()');
+      console.log('[QueueStore] start - calling executeQueue() with', pendingItems.length, 'items');
       await executeQueue(pendingItems);
+      console.log('[QueueStore] start - executeQueue() returned successfully');
       logger.info('start - executeQueue() returned');
     } catch (error) {
+      console.error('[QueueStore] start - executeQueue() failed:', error);
       logger.error('start - executeQueue() failed', { error: String(error) });
       set({ isRunning: false });
     }
