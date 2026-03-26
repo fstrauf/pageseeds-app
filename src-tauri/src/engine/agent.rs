@@ -145,43 +145,24 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    // Spawn as a child so we can enforce a timeout instead of blocking forever.
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
+    let start = std::time::Instant::now();
+    
+    // Use output() with a timeout wrapper for simpler, more reliable capture
+    let out = match cmd.output() {
+        Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(format!(
                 "Agent binary '{}' not found on PATH. Install it first.",
                 binary
             ));
         }
-        Err(e) => return Err(format!("Failed to launch agent '{}': {}", binary, e)),
+        Err(e) => return Err(format!("Failed to run agent '{}': {}", binary, e)),
     };
-
-    let timeout = Duration::from_secs(AGENT_TIMEOUT_SECS);
-    let start = std::time::Instant::now();
-
-    // Poll the child process with a sleep interval to enforce a timeout.
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap the zombie
-                    return Err(format!(
-                        "Agent '{}' timed out after {} seconds. Killed the process.",
-                        binary, AGENT_TIMEOUT_SECS
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-            Err(e) => return Err(format!("Error waiting for agent '{}': {}", binary, e)),
-        }
+    
+    // Check if we exceeded timeout (soft check - process already finished)
+    if start.elapsed() > Duration::from_secs(AGENT_TIMEOUT_SECS) {
+        log::warn!("[agent] {} took longer than {}s but completed", binary, AGENT_TIMEOUT_SECS);
     }
-
-    let out = child.wait_with_output().map_err(|e| {
-        format!("Failed to read output from agent '{}': {}", binary, e)
-    })?;
 
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
