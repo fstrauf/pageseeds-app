@@ -5,6 +5,7 @@ pub mod db;
 pub mod engine;
 mod error;
 mod gsc;
+pub mod logging;
 pub mod models;
 mod reddit;
 mod seo;
@@ -29,6 +30,8 @@ pub fn run() {
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("pageseeds.db");
             let conn = db::init(&db_path)?;
+            // Initialize logging table
+            let _ = logging::init_logs_table(&conn);
             // Reset any tasks that were left in_progress from a previous session
             // (e.g. app was closed or crashed mid-execution).
             let _ = conn.execute(
@@ -156,6 +159,13 @@ pub fn run() {
             commands::clear_completed_queue_items,
             // Logging
             commands::get_log_file_path,
+            commands::submit_log,
+            commands::submit_logs_batch,
+            commands::query_logs,
+            commands::get_recent_logs,
+            commands::get_log_stats,
+            commands::clear_old_logs,
+            commands::export_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
