@@ -6,13 +6,14 @@
 use chrono::Utc;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
+use std::sync::{Mutex, OnceLock};
 
 // Global log buffer for recent logs (in-memory cache)
-static LOG_BUFFER: Lazy<Mutex<Vec<LogEntry>>> = Lazy::new(|| {
-    Mutex::new(Vec::with_capacity(1000))
-});
+static LOG_BUFFER: OnceLock<Mutex<Vec<LogEntry>>> = OnceLock::new();
+
+fn get_log_buffer() -> &'static Mutex<Vec<LogEntry>> {
+    LOG_BUFFER.get_or_init(|| Mutex::new(Vec::with_capacity(1000)))
+}
 
 /// Log entry from any source (frontend, backend, agent)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,8 +48,8 @@ impl std::fmt::Display for LogLevel {
     }
 }
 
-impl From<&str> for LogLevel {
-    fn from(s: &str) -> Self {
+impl LogLevel {
+    pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "debug" => LogLevel::Debug,
             "warn" | "warning" => LogLevel::Warn,
@@ -78,8 +79,8 @@ impl std::fmt::Display for LogSource {
     }
 }
 
-impl From<&str> for LogSource {
-    fn from(s: &str) -> Self {
+impl LogSource {
+    pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "frontend" | "ui" => LogSource::Frontend,
             "agent" | "kimi" | "copilot" | "claude" => LogSource::Agent,
@@ -141,7 +142,7 @@ pub fn store_log(conn: &Connection, entry: &LogEntry) -> Result<i64, String> {
     let id = conn.last_insert_rowid();
     
     // Also add to in-memory buffer
-    if let Ok(mut buffer) = LOG_BUFFER.lock() {
+    if let Ok(mut buffer) = get_log_buffer().lock() {
         let mut entry_with_id = entry.clone();
         entry_with_id.id = Some(id);
         buffer.push(entry_with_id);
@@ -248,8 +249,8 @@ pub fn query_logs(
         Ok(LogEntry {
             id: Some(row.get(0)?),
             timestamp: row.get(1)?,
-            level: LogLevel::from(row.get::<_, String>(2)?.as_str()),
-            source: LogSource::from(row.get::<_, String>(3)?.as_str()),
+            level: LogLevel::from_str(row.get::<_, String>(2)?.as_str()),
+            source: LogSource::from_str(row.get::<_, String>(3)?.as_str()),
             component: row.get(4)?,
             message: row.get(5)?,
             metadata,
@@ -265,7 +266,7 @@ pub fn query_logs(
 
 /// Get recent logs from memory buffer (fast)
 pub fn get_recent_logs(limit: usize) -> Vec<LogEntry> {
-    if let Ok(buffer) = LOG_BUFFER.lock() {
+    if let Ok(buffer) = get_log_buffer().lock() {
         buffer.iter().rev().take(limit).cloned().collect()
     } else {
         vec![]
@@ -309,7 +310,7 @@ pub struct LogStats {
 }
 
 pub fn get_log_stats(conn: &Connection) -> Result<LogStats, String> {
-    let stats: (i64, i64, i64, i64, i64) = conn.query_row(
+    let stats: (i64, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = conn.query_row(
         "SELECT 
             COUNT(*),
             SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END),
@@ -322,7 +323,7 @@ pub fn get_log_stats(conn: &Connection) -> Result<LogStats, String> {
     )
     .map_err(|e| format!("Failed to get level stats: {}", e))?;
     
-    let source_stats: (i64, i64, i64) = conn.query_row(
+    let source_stats: (Option<i64>, Option<i64>, Option<i64>) = conn.query_row(
         "SELECT 
             SUM(CASE WHEN source = 'frontend' THEN 1 ELSE 0 END),
             SUM(CASE WHEN source = 'backend' THEN 1 ELSE 0 END),

@@ -15,7 +15,7 @@ pub async fn submit_log(
     let log_entry = crate::logging::LogEntry {
         id: None,
         timestamp: entry.timestamp,
-        level: entry.level.into(),
+        level: LogLevel::from_str(&entry.level),
         source: LogSource::Frontend,
         component: entry.component,
         message: entry.message,
@@ -37,8 +37,8 @@ pub async fn query_logs(
     let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
     
     let query_filters = LogQueryFilters {
-        level: filters.level.map(|l| l.into()),
-        source: filters.source.map(|s| s.into()),
+        level: filters.level.map(|l| LogLevel::from_str(&l)),
+        source: filters.source.map(|s| LogSource::from_str(&s)),
         component: filters.component,
         session_id: filters.session_id,
         search_query: filters.search_query,
@@ -105,8 +105,8 @@ pub async fn export_logs(
     let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
     
     let query_filters = LogQueryFilters {
-        level: filters.level.map(|l| l.into()),
-        source: filters.source.map(|s| s.into()),
+        level: filters.level.map(|l| LogLevel::from_str(&l)),
+        source: filters.source.map(|s| LogSource::from_str(&s)),
         component: filters.component,
         session_id: filters.session_id,
         search_query: filters.search_query,
@@ -161,7 +161,7 @@ pub async fn submit_logs_batch(
         let log_entry = crate::logging::LogEntry {
             id: None,
             timestamp: entry.timestamp,
-            level: entry.level.into(),
+            level: LogLevel::from_str(&entry.level),
             source: LogSource::Frontend,
             component: entry.component,
             message: entry.message,
