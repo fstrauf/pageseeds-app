@@ -1,0 +1,3 @@
+# ts-rs configuration
+# This tells ts-rs where to export TypeScript bindings
+output_path = "../src/lib/bindings"

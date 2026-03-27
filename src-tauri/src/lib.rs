@@ -155,6 +155,8 @@ pub fn run() {
             commands::run_social_campaign,
             // Task Queue
             commands::execute_queue,
+            commands::mark_tasks_queued,
+            commands::mark_tasks_todo,
             commands::pause_queue,
             commands::resume_queue,
             commands::clear_completed_queue_items,

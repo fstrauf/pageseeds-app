@@ -403,6 +403,14 @@ export const runBatch = (
 export const executeQueue = (items: QueueItem[]): Promise<void> =>
   invoke('execute_queue', { items })
 
+/** Mark tasks as queued in the database when added to the queue. */
+export const markTasksQueued = (taskIds: string[]): Promise<void> =>
+  invoke('mark_tasks_queued', { taskIds })
+
+/** Reset queued tasks back to todo when removed from queue. */
+export const markTasksTodo = (taskIds: string[]): Promise<void> =>
+  invoke('mark_tasks_todo', { taskIds })
+
 export const pauseQueue = (): Promise<void> =>
   invoke('pause_queue')
 

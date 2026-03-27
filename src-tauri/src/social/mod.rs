@@ -15,9 +15,5 @@ pub mod content {
 
 pub mod image;
 
-pub mod workflow {
-    pub mod social_handler;
-}
-
 // Re-export commonly used types
 pub use models::*;

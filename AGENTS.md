@@ -27,11 +27,12 @@ src-tauri/src/
 │   ├── mod.rs           # SQLite init + schema migrations (versioned SQL constants)
 │   └── export.rs        # Read/write articles.json and task_list.json in the user's repo
 ├── models/              # Pure serde structs — no logic
-│   ├── task.rs          # Task, TaskArtifact, TaskRun
-│   ├── article.rs       # Article metadata
-│   ├── project.rs       # Project config
-│   ├── reddit.rs        # RedditOpportunity, ReplyStatus
-│   └── gsc.rs           # TokenState
+│   ├── task.rs          # Task, TaskArtifact, TaskRun (#[ts(export)])
+│   ├── article.rs       # Article metadata (#[ts(export)])
+│   ├── project.rs       # Project config (#[ts(export)])
+│   ├── reddit.rs        # RedditOpportunity, ReplyStatus (#[ts(export)])
+│   ├── gsc.rs           # GSC types (#[ts(export)])
+│   └── social.rs        # Social media types (#[ts(export)])
 ├── engine/              # Workflow orchestration
 │   ├── task_store.rs    # CRUD against SQLite tasks/projects tables
 │   ├── spawner.rs       # CENTRALIZED task creation — idempotent follow-ups
@@ -75,8 +76,9 @@ src-tauri/src/
 
 src/
 ├── lib/
+│   ├── bindings/        # Auto-generated TypeScript from Rust (ts-rs)
 │   ├── tauri.ts         # All invoke() wrappers — one function per command
-│   └── types.ts         # TypeScript types that mirror Rust models exactly
+│   └── types.ts         # Re-exports bindings + frontend-only types
 └── components/          # Feature-scoped React components
     ├── ui/              # shadcn/ui primitives only
     ├── tasks/           # TaskBoard, TaskDetail, TaskCreate
@@ -175,11 +177,34 @@ src/
 ### Changing a Rust model
 
 1. Update the struct in `src-tauri/src/models/{file}.rs`.
-2. Update the matching SQLite schema (`db/mod.rs`) if stored — add a new migration.
-3. Update `export.rs` if the model is serialized to/from JSON.
-4. Update the TypeScript interface in `src/lib/types.ts`.
-5. Update any `tauri.ts` wrapper that passes the changed fields.
+2. Add or keep `#[derive(..., TS)]` and `#[ts(export)]` on the struct to auto-generate TypeScript bindings.
+3. Update the matching SQLite schema (`db/mod.rs`) if stored — add a new migration.
+4. Update `export.rs` if the model is serialized to/from JSON.
+5. Regenerate TypeScript bindings: `./scripts/sync-bindings.sh`
 6. Run `cargo check` to catch compile errors before touching the frontend.
+
+### Type Safety with ts-rs
+
+We use [ts-rs](https://github.com/Aleph-Alpha/ts-rs) to auto-generate TypeScript types from Rust structs.
+
+**How it works:**
+- Rust structs in `src-tauri/src/models/` have `#[ts(export)]` derive
+- Running `./scripts/sync-bindings.sh` exports TypeScript to `src/lib/bindings/`
+- `src/lib/types.ts` re-exports auto-generated types + defines frontend-only types
+
+**When to add `#[ts(export)]`:**
+- Any struct that crosses the Tauri IPC boundary (commands, events)
+- Any struct serialized to JSON and used by the frontend
+- Keep internal structs (DB-only, logic-only) without it
+
+**Regenerating bindings:**
+```bash
+./scripts/sync-bindings.sh
+```
+
+This runs `cargo test export_bindings --lib` and copies the generated `.ts` files to `src/lib/bindings/`.
+
+**Don't manually edit** files in `src/lib/bindings/` — they are auto-generated.
 
 ### Changing a command signature
 
@@ -324,7 +349,7 @@ See `docs/async-architecture.md` for detailed comparison.
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] No business logic added to `commands.rs`
 - [ ] `tauri.ts` wrapper added/updated for any new or changed command
-- [ ] `types.ts` updated to match Rust struct changes
+- [ ] `types.ts` updated to match Rust struct changes (or run `./scripts/sync-bindings.sh` if `#[ts(export)]` is present)
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls — use Rust crates instead
 - [ ] Reviewed `CONTRACTS.md` for any affected implicit contracts (statuses, step ordering, auto-spawned tasks, handler registry order)

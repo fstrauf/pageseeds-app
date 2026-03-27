@@ -52,7 +52,7 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
         undefined,
         'medium',
       )
-      onRunTasks?.([{ id: task.id, title: task.title ?? undefined, type: task.task_type }])
+      onRunTasks?.([{ id: task.id, title: task.title ?? undefined, type: task.type }])
       // Poll for completion
       setTimeout(() => load(), 2000)
     } catch (e) {

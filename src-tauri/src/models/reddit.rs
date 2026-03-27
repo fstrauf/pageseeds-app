@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub struct RedditOpportunity {
     pub post_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,8 +56,9 @@ pub struct RedditOpportunity {
 }
 
 /// Raw Reddit post returned from the search API (before agent scoring).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub struct SubmissionSummary {
     pub post_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,16 +81,18 @@ pub struct SubmissionSummary {
     pub selftext: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub struct ValidationResult {
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub struct RedditStats {
     pub total_opportunities: i64,
     pub by_status: HashMap<String, i64>,
@@ -96,8 +101,9 @@ pub struct RedditStats {
     pub max_score: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub struct MigrationResult {
     pub migrated: usize,
     pub skipped: usize,

@@ -505,10 +505,11 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
     ];
 
     // Build a map of task_type → last done updated_at from tasks table
+    // Include both 'done' and 'review' status - review tasks completed successfully
     let mut last_run_map: std::collections::HashMap<String, String> = {
         let mut stmt = conn.prepare(
             "SELECT type, MAX(updated_at) FROM tasks
-             WHERE project_id = ?1 AND status = 'done'
+             WHERE project_id = ?1 AND status IN ('done', 'review')
              GROUP BY type",
         )?;
         let rows = stmt.query_map([project_id], |row| {

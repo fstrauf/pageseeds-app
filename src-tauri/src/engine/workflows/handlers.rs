@@ -325,6 +325,44 @@ impl WorkflowHandler for PerformanceHandler {
     }
 }
 
+// ─── Social Media Marketing ───────────────────────────────────────────────────
+
+pub struct SocialHandler;
+
+impl WorkflowHandler for SocialHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task).starts_with("social_")
+    }
+
+    fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
+        match task_type(task) {
+            "social_generate_campaign" => vec![
+                WorkflowStep::new("social_collect_sources", "social_collect_sources"),
+                WorkflowStep::new("social_load_templates", "social_load_templates"),
+                WorkflowStep::new("social_generate_posts", "social_generate_posts"),
+                WorkflowStep::new("social_build_visuals", "social_build_visuals"),
+                WorkflowStep::new("social_save_campaign", "social_save_campaign"),
+            ],
+            "social_generate_from_article" => vec![
+                WorkflowStep::new("social_extract_article", "social_extract_article"),
+                WorkflowStep::new("social_generate_posts", "social_generate_posts"),
+                WorkflowStep::new("social_build_visuals", "social_build_visuals"),
+                WorkflowStep::new("social_save_campaign", "social_save_campaign"),
+            ],
+            "social_regenerate_post" => vec![
+                WorkflowStep::new("social_regenerate_single", "social_regenerate_single"),
+                WorkflowStep::new("social_rebuild_visual", "social_rebuild_visual"),
+                WorkflowStep::new("social_update_post", "social_update_post"),
+            ],
+            "social_create_template" => vec![
+                WorkflowStep::new("social_design_template", "social_design_template"),
+                WorkflowStep::new("social_save_template", "social_save_template"),
+            ],
+            _ => vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), "manual")],
+        }
+    }
+}
+
 // ─── Manual Fallback ─────────────────────────────────────────────────────────
 
 pub struct ManualFallbackHandler;
@@ -350,6 +388,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(ContentHandler),
         Box::new(ContentReviewHandler),
         Box::new(RedditHandler),
+        Box::new(SocialHandler),
         Box::new(PerformanceHandler),
         Box::new(CoverageHandler),
         Box::new(ImplementationHandler),

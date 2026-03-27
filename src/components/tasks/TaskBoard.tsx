@@ -39,8 +39,16 @@ const STATUS_LABELS: Record<StatusFilter, string> = {
   done: 'Done',
 }
 
+// Helper to check if a task status matches the filter
+function statusMatchesFilter(taskStatus: string, filter: StatusFilter): boolean {
+  if (filter === 'all') return taskStatus !== 'cancelled'
+  if (filter === 'todo') return taskStatus === 'todo' || taskStatus === 'queued'
+  return taskStatus === filter
+}
+
 const STATUS_BADGE: Record<string, string> = {
   todo: 'bg-secondary text-secondary-foreground border-transparent',
+  queued: 'bg-blue-100 text-blue-700 border-transparent',
   in_progress: 'bg-indigo-100 text-indigo-700 border-transparent',
   review: 'bg-amber-100 text-amber-700 border-transparent',
   done: 'bg-emerald-100 text-emerald-700 border-transparent',
@@ -488,7 +496,7 @@ export function TaskBoard({
                 </TableRow>
               ) : (
                 tasks
-                  .filter(t => statusFilter !== 'all' || t.status !== 'cancelled')
+                  .filter(t => statusMatchesFilter(t.status, statusFilter))
                   .map(task => {
                   const isSelected = selectedTask?.id === task.id
                   const isChecked = checkedIds.has(task.id)

@@ -8,6 +8,7 @@ use ts_rs::TS;
 #[ts(export)]
 pub enum TaskStatus {
     Todo,
+    Queued,
     InProgress,
     Review,
     Done,
@@ -18,6 +19,7 @@ impl TaskStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             TaskStatus::Todo => "todo",
+            TaskStatus::Queued => "queued",
             TaskStatus::InProgress => "in_progress",
             TaskStatus::Review => "review",
             TaskStatus::Done => "done",
@@ -47,6 +49,7 @@ impl rusqlite::types::FromSql for TaskStatus {
         let s = String::column_result(value)?;
         match s.as_str() {
             "todo" => Ok(TaskStatus::Todo),
+            "queued" => Ok(TaskStatus::Queued),
             "in_progress" => Ok(TaskStatus::InProgress),
             "review" => Ok(TaskStatus::Review),
             "done" => Ok(TaskStatus::Done),

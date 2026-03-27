@@ -6,7 +6,7 @@
 
 import { create } from 'zustand';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { executeQueue, pauseQueue, resumeQueue, clearCompletedQueueItems } from '@/lib/tauri';
+import { executeQueue, markTasksQueued, markTasksTodo, pauseQueue, resumeQueue, clearCompletedQueueItems } from '@/lib/tauri';
 import { createLogger, LogTarget } from '@/lib/logging';
 import type { StepProgress, QueueItem } from '@/lib/types';
 
@@ -82,6 +82,8 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       return;
     }
     
+    let addedTaskIds: string[] = [];
+    
     set((state: QueueState) => {
       const deduped = newItems.filter(
         (na: QueueItem) => !state.items.some((p: QueueItem) => p.taskId === na.taskId)
@@ -92,6 +94,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       
       if (deduped.length === 0) return state;
       
+      // Track which tasks were actually added
+      addedTaskIds = deduped.map(item => item.taskId);
+      
       // Ensure all items have pending status
       const itemsWithStatus = deduped.map(item => ({
         ...item,
@@ -100,6 +105,14 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       
       return { items: [...state.items, ...itemsWithStatus], isVisible: true };
     });
+    
+    // Mark added tasks as queued in the database
+    if (addedTaskIds.length > 0) {
+      console.log('[QueueStore] enqueue - marking tasks as queued:', addedTaskIds);
+      markTasksQueued(addedTaskIds).catch(err => {
+        console.error('[QueueStore] enqueue - failed to mark tasks as queued:', err);
+      });
+    }
     
     const { isRunning, start } = get();
     console.log('[QueueStore] enqueue - isRunning:', isRunning);
@@ -151,9 +164,21 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   removeItem: (taskId: string) => {
     logger.entry('removeItem', { taskId });
+    
+    const wasPending = get().items.find(i => i.taskId === taskId)?.status === 'pending';
+    
     set((state: QueueState) => ({
       items: state.items.filter((i: QueueItem) => !(i.taskId === taskId && i.status === 'pending')),
     }));
+    
+    // Reset task status back to todo in the database
+    if (wasPending) {
+      console.log('[QueueStore] removeItem - resetting task to todo:', taskId);
+      markTasksTodo([taskId]).catch(err => {
+        console.error('[QueueStore] removeItem - failed to reset task status:', err);
+      });
+    }
+    
     logger.exit('removeItem');
   },
 
@@ -304,8 +329,18 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     
     const unlistenFinished = await listen('queue:finished', () => {
       logger.event('queue:finished');
+      console.log('[QueueStore] Queue finished event received');
       cleanupEventListeners();
       set({ isRunning: false });
+      
+      // Check if there are any pending items that were added while queue was running
+      const { items, start } = get();
+      const pendingItems = items.filter((i: QueueItem) => i.status === 'pending');
+      if (pendingItems.length > 0) {
+        console.log('[QueueStore] Found', pendingItems.length, 'pending items after queue finished, restarting...');
+        logger.info('queue:finished - restarting for pending items', { count: pendingItems.length });
+        void start();
+      }
     });
     unlisteners.push(unlistenFinished);
     
@@ -324,7 +359,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   },
 
   onTaskStarted: (event: QueueProgressEvent) => {
-    console.log('[QueueStore] onTaskStarted called', { taskId: event.taskId });
+    console.log('[QueueStore] Task started:', event.taskId);
     logger.entry('onTaskStarted', { taskId: event.taskId, title: event.payload.title });
     set((state: QueueState) => ({
       items: state.items.map((i: QueueItem) =>
@@ -337,6 +372,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   onTaskCompleted: (event: QueueProgressEvent) => {
     logger.entry('onTaskCompleted', { taskId: event.taskId });
+    console.log('[QueueStore] Task completed:', event.taskId);
     set((state: QueueState) => ({
       items: state.items.map((i: QueueItem) =>
         i.taskId === event.taskId 

@@ -49,7 +49,7 @@ export function useQueueRunner(onCompleted?: () => void) {
     },
     status: item.status === 'pending' 
       ? 'queued' 
-      : item.status === 'completed' 
+      : item.status === 'completed'
         ? 'done' 
         : item.status === 'running' 
           ? 'running' 
