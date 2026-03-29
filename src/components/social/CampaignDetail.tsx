@@ -6,6 +6,7 @@ import { PostCard } from './PostCard'
 import { PostEditor } from './PostEditor'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useQueueStore } from '@/stores/queueStore'
 
 interface Props {
   campaign: SocialCampaign
@@ -95,7 +96,19 @@ export function CampaignDetail({ campaign, onBack }: Props) {
     setGenerateMsg(null)
     try {
       const task = await runSocialCampaign(campaign.id)
-      setGenerateMsg(`Task created: ${task.title}. Check the Tasks section to monitor progress.`)
+      
+      // Auto-queue the task for immediate execution
+      const queueItem = {
+        taskId: task.id,
+        projectId: task.project_id,
+        title: task.title || 'Generate posts',
+        taskType: task.type,
+        projectName: campaign.name,
+        status: 'pending' as const,
+      }
+      
+      useQueueStore.getState().enqueue([queueItem])
+      setGenerateMsg(`Generating posts for "${campaign.name}"... The task is now running. Check the Task Runner panel for progress.`)
     } catch (e) {
       setGenerateMsg(`Error: ${String(e)}`)
     } finally {

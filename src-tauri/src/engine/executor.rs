@@ -176,6 +176,12 @@ pub async fn execute_task_with_token(
         } else if step.kind == "normalizer" {
             // Normalizer consumed latest_raw; clear so it isn't reused
             latest_raw_output = None;
+        } else if step.name == "coverage_load_articles" {
+            // Track coverage_load_articles output for coverage_cluster_analysis
+            if let Some(ref out) = result.output {
+                log::info!("[executor] coverage_load_articles output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
         }
 
         progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
@@ -346,11 +352,11 @@ pub async fn execute_task_with_token(
 
     let mut follow_up_ids: Vec<String> = vec![];
 
-    // After a successful content review, create a single content_review_apply task from recommendations.json.
+    // After a successful content review, create individual fix_content_article tasks
+    // for each article in recommendations.json (one task per article, not one monolithic task).
     if all_ok && matches!(task.task_type.as_str(), "content_review" | "content_audit") {
-        if let Some(task_id) = crate::engine::exec::content::create_content_review_apply_task(conn, &task, &project_path) {
-            follow_up_ids.push(task_id);
-        }
+        let fix_task_ids = crate::engine::exec::content::create_content_review_apply_task(conn, &task, &project_path);
+        follow_up_ids.extend(fix_task_ids);
     }
 
     // After a successful write_article, queue a cluster_and_link task so the

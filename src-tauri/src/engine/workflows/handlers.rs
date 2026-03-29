@@ -207,6 +207,12 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("publish_content_run", "deterministic")
                     .with_param(step_params::CMD, "pageseeds content validate --workspace-dir {automation_dir}"),
             ],
+            "fix_content_article" => vec![
+                // Per-article content fix: reads the recommendations artifact embedded in the task
+                // and applies SEO improvements (title, meta, intro, internal links, FAQ, EEAT, CTA)
+                // to a single MDX file. One focused agent call per article.
+                WorkflowStep::new("fix_content_article_apply", "agentic"),
+            ],
             "cluster_and_link" => vec![
                 // Step 1 (deterministic, native Rust): scan all MDX files, build the full link
                 // map, identify orphans and coverage gaps.  Pure file I/O + regex — no judgment.

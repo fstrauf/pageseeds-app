@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::social::models::{ContentMetadata, ContentSource, SourceManifest};
 use crate::models::social::{SourceConfig, SourceType};
+use crate::content::locator;
 
 use super::extractor;
 
@@ -44,16 +45,34 @@ fn discover_articles(
 ) -> Result<Vec<crate::social::models::ContentSource>> {
     let mut articles = Vec::new();
     
-    // Common content directories
-    let content_dirs = vec![
-        project_path.join("content"),
-        project_path.join("content/blog"),
-        project_path.join("src/content"),
-        project_path.join("src/content/blog"),
-    ];
+    log::info!("[discover_articles] project_path: {:?}", project_path);
     
-    for content_dir in content_dirs {
-        if !content_dir.exists() {
+    // Use the content locator to find the actual content directory
+    let resolution = locator::resolve(project_path, None);
+    log::info!("[discover_articles] content resolution: source={}, has_markdown={}, selected={:?}",
+        resolution.source, resolution.has_markdown, resolution.selected);
+    
+    let content_dirs: Vec<PathBuf> = if let Some(selected) = resolution.selected {
+        vec![selected]
+    } else {
+        // Fallback to common locations if locator doesn't find anything
+        vec![
+            project_path.join("content"),
+            project_path.join("content/blog"),
+            project_path.join("src/content"),
+            project_path.join("src/content/blog"),
+        ]
+    };
+    
+    let mut checked_dirs = 0;
+    let mut found_dirs = 0;
+    for content_dir in &content_dirs {
+        checked_dirs += 1;
+        let exists = content_dir.exists();
+        if exists {
+            found_dirs += 1;
+            log::info!("[discover_articles] scanning dir: {:?}", content_dir);
+        } else {
             continue;
         }
         
@@ -98,6 +117,8 @@ fn discover_articles(
         }
     }
     
+    log::info!("[discover_articles] checked {} dirs, found {} existing dirs, {} articles total", 
+        checked_dirs, found_dirs, articles.len());
     Ok(articles)
 }
 
@@ -120,8 +141,18 @@ fn discover_screenshots(
         screenshot_dirs.iter().map(|d| project_path.join(d)).collect()
     };
     
-    for dir in dirs_to_search {
-        if !dir.exists() {
+    log::info!("[discover_screenshots] checking {} dirs", dirs_to_search.len());
+    
+    let mut checked_screenshot_dirs = 0;
+    let mut found_screenshot_dirs = 0;
+    for dir in &dirs_to_search {
+        checked_screenshot_dirs += 1;
+        let exists = dir.exists();
+        if exists {
+            found_screenshot_dirs += 1;
+            log::info!("[discover_screenshots] scanning dir: {:?}", dir);
+        }
+        if !exists {
             continue;
         }
         
@@ -160,6 +191,8 @@ fn discover_screenshots(
         }
     }
     
+    log::info!("[discover_screenshots] checked {} dirs, found {} existing dirs, {} screenshots total",
+        checked_screenshot_dirs, found_screenshot_dirs, screenshots.len());
     Ok(screenshots)
 }
 

@@ -110,8 +110,8 @@ impl TemplateRegistry {
             format: PostFormat::Carousel,
             prompt_template: educational_carousel_prompt(),
             output_schema: OutputSchema {
-                required_fields: vec!["slides".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string()],
+                required_fields: vec!["hook".to_string(), "caption".to_string(), 
+                    "hashtags".to_string(), "cta".to_string(), "visual_description".to_string(), "overlay_text".to_string()],
                 max_hook_length: 150,
                 max_caption_length: 500,
                 hashtag_count_range: (5, 10),
@@ -130,7 +130,7 @@ impl TemplateRegistry {
             prompt_template: technical_explainer_prompt(),
             output_schema: OutputSchema {
                 required_fields: vec!["hook".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string()],
+                    "hashtags".to_string(), "cta".to_string(), "visual_description".to_string(), "overlay_text".to_string()],
                 max_hook_length: 150,
                 max_caption_length: 800,
                 hashtag_count_range: (5, 10),
@@ -168,7 +168,7 @@ impl TemplateRegistry {
             prompt_template: behind_scenes_prompt(),
             output_schema: OutputSchema {
                 required_fields: vec!["hook".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string()],
+                    "hashtags".to_string(), "cta".to_string(), "visual_description".to_string(), "overlay_text".to_string()],
                 max_hook_length: 120,
                 max_caption_length: 400,
                 hashtag_count_range: (3, 8),
@@ -237,23 +237,20 @@ Create a 5-slide Instagram carousel that teaches one key concept.
 ## Output Contract (JSON only)
 ```json
 {
-  "slides": [
-    {"text": "Most people do X wrong", "visual": "Problem visualization"},
-    {"text": "Here's the better way", "visual": "Solution preview"},
-    {"text": "Step 1: Do this", "visual": "Action screenshot"},
-    {"text": "Step 2: Then this", "visual": "Result screenshot"},
-    {"text": "Save this + follow for more", "visual": "Branded outro"}
-  ],
-  "caption": "Longer-form caption with context",
-  "hashtags": ["#seotips", "#contentstrategy", "#digitalmarketing"],
-  "cta": "Follow for daily SEO tips"
+  "hook": "The #1 mistake costing you money (save this)",
+  "caption": "5-slide breakdown:\n\n1️⃣ The problem most people miss\n2️⃣ Why conventional wisdom fails\n3️⃣ The data-driven approach\n4️⃣ How to implement it\n5️⃣ Results you can expect\n\nSave this for your next trade 👆",
+  "hashtags": ["#optionstrading", "#investing", "#stockmarket", "#tradingtips", "#financialeducation"],
+  "cta": "Follow for daily trading insights",
+  "visual_description": "5-slide carousel with bold text, charts, and clean design",
+  "overlay_text": "Save this carousel 📌"
 }
 ```
 
 Requirements:
-- Each slide should work standalone
-- Text must be readable on mobile
-- Visual descriptions should reference actual UI/screenshots"##.to_string()
+- Hook should mention the benefit + encourage saving
+- Caption summarizes the carousel slides
+- Visual description references the carousel format
+- Overlay text is short and punchy"##.to_string()
 }
 
 fn technical_explainer_prompt() -> String {
@@ -279,18 +276,20 @@ Explain this technical concept in a single Instagram post.
   "caption": "Full explanation with formatting...",
   "hashtags": ["#rustlang", "#buildinpublic", "#systemdesign"],
   "cta": "What's your take? Comment below",
-  "key_takeaway": "One-sentence summary for image overlay"
+  "visual_description": "Clean diagram or screenshot illustrating the concept",
+  "overlay_text": "The key insight in one line"
 }
 ```
 
 Requirements:
 - Caption: 150-400 characters optimal
 - Use line breaks for readability
-- Position as educational, not promotional"##.to_string()
+- Position as educational, not promotional
+- Visual description helps create the image asset"##.to_string()
 }
 
 fn quick_tip_prompt() -> String {
-    r##"You are a short-form content creator. Share a quick SEO tip.
+    r##"You are a short-form content creator. Share a quick trading tip.
 
 ## Source
 {source_summary}
@@ -299,7 +298,7 @@ fn quick_tip_prompt() -> String {
 Create a 15-second worth of content tip.
 
 ## Rules
-1. Hook: "This one thing changed my SEO"
+1. Hook: "This one thing changed my trading"
 2. Tip must be actionable in 1 sentence
 3. Show before/after or process
 4. Make it feel like a secret
@@ -307,10 +306,11 @@ Create a 15-second worth of content tip.
 ## Output Contract (JSON only)
 ```json
 {
-  "hook": "The SEO hack nobody talks about",
+  "hook": "The trading hack nobody talks about",
   "caption": "The tip + why it works",
-  "hashtags": ["#seohack", "#quicktip"],
+  "hashtags": ["#tradingtips", "#quicktip", "#options"],
   "cta": "Follow for more",
+  "visual_description": "Before/after comparison or process screenshot",
   "overlay_text": "Do this → Get that"
 }
 ```"##.to_string()
@@ -336,8 +336,10 @@ Create authentic behind-the-scenes content.
 {
   "hook": "What went wrong this week",
   "caption": "The story + lesson learned",
-  "hashtags": ["#buildinpublic", "#indiehackers"],
-  "cta": "What would you do?"
+  "hashtags": ["#buildinpublic", "#indiehackers", "#transparency"],
+  "cta": "What would you do?",
+  "visual_description": "Behind-the-scenes photo or screenshot showing the process",
+  "overlay_text": "Real talk 💬"
 }
 ```"##.to_string()
 }

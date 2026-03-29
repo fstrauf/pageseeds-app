@@ -16,10 +16,13 @@ pub(crate) fn exec_coverage_load_articles(
 ) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let articles_path = paths.automation_dir.join("articles.json");
+    
+    log::info!("[coverage_load] Loading articles from {:?}", articles_path);
 
     let articles_str = match std::fs::read_to_string(&articles_path) {
         Ok(s) => s,
         Err(e) => {
+            log::error!("[coverage_load] articles.json not found: {}", e);
             return StepResult {
                 success: false,
                 message: format!("articles.json not found: {}", e),
@@ -27,6 +30,8 @@ pub(crate) fn exec_coverage_load_articles(
             }
         }
     };
+    
+    log::info!("[coverage_load] Read {} chars from articles.json", articles_str.len());
 
     let articles_doc: serde_json::Value = match serde_json::from_str(&articles_str) {
         Ok(v) => v,
@@ -98,9 +103,12 @@ pub(crate) fn exec_coverage_cluster_analysis(
     let paths = ProjectPaths::from_path(project_path);
     let repo_root = Path::new(project_path);
 
+    log::info!("[coverage_cluster] received articles_json ({} chars)", articles_json.len());
+    
     let articles: serde_json::Value = match serde_json::from_str(articles_json) {
         Ok(v) => v,
         Err(e) => {
+            log::error!("[coverage_cluster] Failed to parse articles JSON: {}", e);
             return StepResult {
                 success: false,
                 message: format!("Failed to parse articles JSON: {}", e),
@@ -110,7 +118,10 @@ pub(crate) fn exec_coverage_cluster_analysis(
     };
 
     let article_count = articles["article_count"].as_i64().unwrap_or(0);
+    log::info!("[coverage_cluster] article_count: {}", article_count);
+    
     if article_count == 0 {
+        log::warn!("[coverage_cluster] No articles to cluster");
         return StepResult {
             success: true,
             message: "No articles to cluster".to_string(),
@@ -156,11 +167,32 @@ pub(crate) fn exec_coverage_cluster_analysis(
     }
 
     let cluster_count = clusters["clusters"].as_array().map(|a| a.len()).unwrap_or(0);
+    
+    // Build a summary of cluster names for the message
+    let cluster_names: Vec<String> = clusters["clusters"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c["cluster_name"].as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    let summary = if cluster_names.is_empty() {
+        "No clusters identified".to_string()
+    } else if cluster_names.len() <= 3 {
+        format!("Clusters: {}", cluster_names.join(", "))
+    } else {
+        format!("Clusters: {}, ... ({} total)", cluster_names[..3].join(", "), cluster_count)
+    };
+    
+    log::info!("[coverage_cluster] Complete: {} clusters saved to {:?}", cluster_count, coverage_path);
+    
     StepResult {
         success: true,
         message: format!(
-            "Cluster analysis complete: {} clusters from {} articles",
-            cluster_count, article_count
+            "✓ Analyzed {} articles → {} clusters. {}",
+            article_count, cluster_count, summary
         ),
         output: Some(clusters.to_string()),
     }
@@ -257,11 +289,29 @@ pub(crate) fn exec_coverage_save(
                 Ok(parsed) => {
                     let cluster_count = parsed["clusters"].as_array().map(|a| a.len()).unwrap_or(0);
                     let article_count = parsed["article_count"].as_i64().unwrap_or(0);
+                    
+                    // Get cluster names for a nice summary
+                    let cluster_names: Vec<String> = parsed["clusters"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .take(5)
+                                .filter_map(|c| c["cluster_name"].as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    
+                    let names_str = if cluster_names.is_empty() {
+                        "No clusters found".to_string()
+                    } else {
+                        format!("Found: {}", cluster_names.join(", "))
+                    };
+                    
                     StepResult {
                         success: true,
                         message: format!(
-                            "Keyword coverage saved: {} clusters, {} articles",
-                            cluster_count, article_count
+                            "✓ Coverage analysis complete!\n{} articles grouped into {} clusters\n{}\n\nResults saved to keyword_coverage.json",
+                            article_count, cluster_count, names_str
                         ),
                         output: Some(content),
                     }

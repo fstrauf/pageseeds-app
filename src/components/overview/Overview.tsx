@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Zap, RefreshCw, CheckCircle2, Clock, AlertCircle,
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
-  PlayCircle, TrendingUp, Users, ArrowRight, Send,
+  PlayCircle, TrendingUp, Users, ArrowRight, Send, PieChart,
 } from 'lucide-react'
 import { createTask, getProjectOverview, listArticles } from '../../lib/tauri'
 import type { Article, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
@@ -78,6 +78,15 @@ const QUICK_ACTIONS: ActionDef[] = [
     phase: 'investigation',
     nextView: 'tasks',
     nextLabel: 'See indexing tasks',
+  },
+  {
+    task_type: 'analyze_keyword_coverage',
+    label: 'Analyze Coverage',
+    description: 'Analyze your content portfolio and identify topic clusters + coverage gaps',
+    icon: <PieChart size={16} />,
+    phase: 'research',
+    nextView: 'tasks',
+    nextLabel: 'View coverage results',
   },
 ]
 

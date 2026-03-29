@@ -27,6 +27,10 @@ pub fn exec_social_collect_sources(
     let config = parse_source_config_from_task(task);
 
     log::info!("[social_collect_sources] discovering sources for project {}", task.project_id);
+    log::info!("[social_collect_sources] project_path: {}", project_path);
+    log::info!("[social_collect_sources] config: articles={}, screenshots={}, specs={}", 
+        config.include_articles, config.include_screenshots, config.include_specs);
+    log::debug!("[social_collect_sources] task description: {:?}", task.description);
 
     let manifest = match discover_sources(Path::new(project_path), &config) {
         Ok(m) => m,
@@ -157,6 +161,13 @@ pub fn exec_social_generate_posts(
         }
     }
 
+    // Limit to max 10 posts per campaign to avoid overwhelming the user
+    const MAX_POSTS: usize = 10;
+    if jobs.len() > MAX_POSTS {
+        log::info!("[social_generate_posts] limiting from {} to {} posts", jobs.len(), MAX_POSTS);
+        jobs.truncate(MAX_POSTS);
+    }
+    
     log::info!("[social_generate_posts] generating {} posts", jobs.len());
 
     // Generate each post via agent using template system
@@ -518,8 +529,19 @@ pub fn exec_social_save_template(
 // Helper Functions
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn parse_source_config_from_task(_task: &Task) -> SourceConfig {
-    // Default config - in real implementation, parse from task description
+fn parse_source_config_from_task(task: &Task) -> SourceConfig {
+    // Parse source_config from task description JSON
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(config) = json.get("source_config") {
+                if let Ok(source_config) = serde_json::from_value::<SourceConfig>(config.clone()) {
+                    return source_config;
+                }
+            }
+        }
+    }
+    
+    // Fallback to default config if parsing fails
     SourceConfig {
         include_articles: true,
         article_slugs: vec![],
@@ -530,7 +552,19 @@ fn parse_source_config_from_task(_task: &Task) -> SourceConfig {
 }
 
 fn parse_template_ids_from_task(task: &Task) -> Vec<String> {
-    // Parse from task description
+    // Parse template_ids from task description JSON
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(template_ids) = json.get("template_ids").and_then(|v| v.as_array()) {
+                return template_ids
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+            }
+        }
+    }
+    
+    // Fallback to default templates if parsing fails
     vec![
         "article_hook".to_string(),
         "article_carousel".to_string(),
@@ -538,6 +572,29 @@ fn parse_template_ids_from_task(task: &Task) -> Vec<String> {
 }
 
 fn parse_platforms_from_task(task: &Task) -> Vec<Platform> {
+    // Parse target_platforms from task description JSON
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(platforms) = json.get("target_platforms").and_then(|v| v.as_array()) {
+                let parsed: Vec<Platform> = platforms
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter_map(|s| match s {
+                        "tiktok" => Some(Platform::TikTok),
+                        "instagram_feed" => Some(Platform::InstagramFeed),
+                        "instagram_reel" => Some(Platform::InstagramReel),
+                        "instagram_story" => Some(Platform::InstagramStory),
+                        _ => None,
+                    })
+                    .collect();
+                if !parsed.is_empty() {
+                    return parsed;
+                }
+            }
+        }
+    }
+    
+    // Fallback to default platforms if parsing fails
     vec![
         Platform::InstagramFeed,
         Platform::TikTok,
