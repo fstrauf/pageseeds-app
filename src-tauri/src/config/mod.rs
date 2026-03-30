@@ -31,11 +31,13 @@ pub const TASK_TYPES: &[&str] = &[
     "fix_gsc_access",
     "technical_seo",
     "content_cleanup",
+    "indexing_diagnostics",
 ];
 
 pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
     match task_type {
         "collect_gsc" => ExecutionMode::Automatic,
+        "indexing_diagnostics" => ExecutionMode::Automatic,
         "reddit_search" => ExecutionMode::Batchable,
         "research_keywords" | "custom_keyword_research" | "research_landing_pages" => ExecutionMode::Batchable,
         "write_article" | "optimize_article" => ExecutionMode::Spec,
@@ -47,6 +49,7 @@ pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
 pub fn default_phase(task_type: &str) -> &'static str {
     match task_type {
         "collect_gsc" => "collection",
+        "indexing_diagnostics" => "investigation",
         "investigate_gsc" => "investigation",
         "research_keywords" => "research",
         "write_article" | "optimize_article" => "implementation",

@@ -176,6 +176,12 @@ pub async fn execute_task_with_token(
         } else if step.kind == "normalizer" {
             // Normalizer consumed latest_raw; clear so it isn't reused
             latest_raw_output = None;
+        } else if step.name == "indexing_fix_context" {
+            // Pass deterministic context to the agentic step that follows
+            if let Some(ref out) = result.output {
+                log::info!("[executor] indexing_fix_context output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
         } else if step.name == "coverage_load_articles" {
             // Track coverage_load_articles output for coverage_cluster_analysis
             if let Some(ref out) = result.output {
@@ -371,6 +377,42 @@ pub async fn execute_task_with_token(
     if all_ok && task.task_type == "collect_gsc" {
         follow_up_ids.extend(crate::engine::exec::gsc::create_tasks_from_collection_after_exec(conn, &task, &project_path));
     }
+
+    // After a successful indexing_diagnostics, collect spawned fix task IDs from step output.
+    if all_ok && task.task_type == "indexing_diagnostics" {
+        if let Some(step_result) = progress.iter().find(|p| p.step_name == "indexing_diagnostics_run") {
+            if let Some(ref out) = step_result.output {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(out) {
+                    if let Some(ids) = val.get("spawned_task_ids").and_then(|v| v.as_array()) {
+                        for id in ids {
+                            if let Some(s) = id.as_str() {
+                                follow_up_ids.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // After a successful GSC fix task, record resolution so indexing_diagnostics knows the fix was applied.
+    if all_ok && matches!(task.task_type.as_str(), "fix_indexing" | "fix_technical" | "fix_content" | "fix_gsc_access") {
+        if let Some(ref desc) = task.description {
+            if let Some(url_line) = desc.lines().next() {
+                if let Some(url) = url_line.strip_prefix("URL: ") {
+                    // Get the fix summary from the indexing_fix_apply step output
+                    let fix_summary = progress
+                        .iter()
+                        .find(|p| p.step_name == "indexing_fix_apply")
+                        .and_then(|p| p.output.as_ref())
+                        .map(|o| crate::engine::text::char_prefix(o, 500).to_string())
+                        .unwrap_or_else(|| "Fix applied (no summary available)".to_string());
+                    
+                    let _ = crate::gsc::db::record_fix_resolved(conn, url, &task.project_id, &fix_summary);
+                }
+            }
+        }
+    }
     
     // After a successful reddit_opportunity_search, the task goes to Review status.
     // The user will review opportunities and select which ones to create reply tasks for.
@@ -563,6 +605,20 @@ async fn run_step(
             })
         }
         "gsc_summarise" => crate::engine::exec::gsc::exec_gsc_summarise(task, project_path),
+        "indexing_fix_context" => crate::engine::exec::indexing_fix::exec_indexing_fix_context(task, project_path),
+        "indexing_fix_apply" => {
+            let task = task.clone();
+            let project_path = project_path.to_string();
+            let agent_provider = agent_provider.to_string();
+            let context_json = latest_raw.map(|s| s.to_string());
+            tokio::task::spawn_blocking(move || {
+                crate::engine::exec::indexing_fix::exec_indexing_fix_apply(&task, &project_path, &agent_provider, context_json.as_deref())
+            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Step panicked: {}", e),
+                output: None,
+            })
+        }
         "content_audit" => {
             let task = task.clone();
             let project_path = project_path.to_string();
@@ -585,6 +641,9 @@ async fn run_step(
                 message: format!("Step panicked: {}", e),
                 output: None,
             })
+        }
+        "indexing_diagnostics_run" => {
+            crate::engine::exec::gsc_diagnostics::exec_indexing_diagnostics(task, project_path, gsc_token, conn)
         }
         "gsc_investigate_agentic" => {
             let step = step.clone();

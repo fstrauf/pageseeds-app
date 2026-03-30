@@ -1,35 +1,60 @@
 use serde_json::json;
-use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use crate::error::Result;
 use crate::gsc::client::GscClient;
 use crate::models::gsc::InspectionRecord;
 
-/// Inspect a batch of URLs (200 ms delay between requests to respect quota).
+/// Inspect a batch of URLs with limited concurrency (10 parallel requests).
+///
+/// The URL Inspection API does not support true batching, but requests are
+/// independent so we parallelise them. A concurrency limit of 10 keeps us
+/// well under GSC rate limits while cutting runtime by ~90% vs sequential.
 pub async fn inspect_batch(
     token: &str,
     site_url: &str,
     urls: Vec<String>,
 ) -> Result<Vec<InspectionRecord>> {
     let client = GscClient::new(token);
-    let mut records = Vec::with_capacity(urls.len());
+    let semaphore = Arc::new(Semaphore::new(10));
     let total = urls.len();
 
-    for (idx, url) in urls.iter().enumerate() {
-        let body = json!({
-            "inspectionUrl": url,
-            "siteUrl": site_url,
-        });
-        let resp = client.url_inspection_inspect(&body).await?;
-        records.push(parse_inspection_record(url, &resp));
+    let mut handles = Vec::with_capacity(total);
 
-        // Log coarse progress for long runs without flooding logs.
-        let n = idx + 1;
-        if n == 1 || n % 25 == 0 || n == total {
-            log::info!("[collect_gsc] URL inspection progress: {}/{}", n, total);
+    for url in urls {
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let client = client.clone();
+        let site_url = site_url.to_string();
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            let body = json!({
+                "inspectionUrl": url,
+                "siteUrl": site_url,
+            });
+            let resp = client.url_inspection_inspect(&body).await?;
+            Ok::<_, crate::error::Error>(parse_inspection_record(&url, &resp))
+        }));
+    }
+
+    let mut records = Vec::with_capacity(total);
+    for (idx, handle) in handles.into_iter().enumerate() {
+        match handle.await {
+            Ok(Ok(record)) => {
+                records.push(record);
+                let n = idx + 1;
+                if n == 1 || n % 25 == 0 || n == total {
+                    log::info!("[collect_gsc] URL inspection progress: {}/{}", n, total);
+                }
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(e) => {
+                return Err(crate::error::Error::Other(format!(
+                    "URL inspection task panicked: {}",
+                    e
+                )))
+            }
         }
-
-        sleep(Duration::from_millis(200)).await;
     }
 
     Ok(records)

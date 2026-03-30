@@ -213,6 +213,22 @@ impl WorkflowHandler for ImplementationHandler {
                 // to a single MDX file. One focused agent call per article.
                 WorkflowStep::new("fix_content_article_apply", "agentic"),
             ],
+            "indexing_diagnostics" => vec![
+                // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
+                // only re-checks stale or known-bad URLs, and spawns fix tasks for new/regressed
+                // or unresolved issues. Deterministic because it is pure API calls + DB comparison.
+                WorkflowStep::new("indexing_diagnostics_run", "indexing_diagnostics_run"),
+            ],
+            "fix_indexing" | "fix_technical" => vec![
+                // Step 1 (deterministic): load the target MDX file and extract structured context
+                // (word count, H1, title, internal links, canonical). This is obvious file I/O —
+                // no judgment required — and saves the agent from hunting around the repo.
+                WorkflowStep::new("indexing_fix_context", "indexing_fix_context"),
+                // Step 2 (agentic): apply the fix. The agent gets the GSC issue + structured
+                // context and edits the MDX file directly. Judgment is required because the fix
+                // depends on intent, content quality, and site-specific conventions.
+                WorkflowStep::new("indexing_fix_apply", "indexing_fix_apply"),
+            ],
             "cluster_and_link" => vec![
                 // Step 1 (deterministic, native Rust): scan all MDX files, build the full link
                 // map, identify orphans and coverage gaps.  Pure file I/O + regex — no judgment.

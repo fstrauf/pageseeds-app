@@ -143,6 +143,39 @@ static MIGRATION_V8: &str = r#"
 ALTER TABLE social_posts ADD COLUMN image_generation_prompt TEXT;
 "#;
 
+static MIGRATION_V9: &str = r#"
+-- Per-URL GSC indexing status for stateful diagnostics
+CREATE TABLE IF NOT EXISTS gsc_url_indexing_status (
+    url                 TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    last_inspected_at   TEXT,
+    last_reason_code    TEXT,
+    last_verdict        TEXT,
+    last_action         TEXT,
+    consecutive_passes  INTEGER NOT NULL DEFAULT 0,
+    last_task_created_at TEXT,
+    last_task_type      TEXT,
+    last_task_id        TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    PRIMARY KEY (url, project_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_project ON gsc_url_indexing_status(project_id);
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_reason ON gsc_url_indexing_status(last_reason_code);
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_inspected ON gsc_url_indexing_status(last_inspected_at);
+"#;
+
+static MIGRATION_V10: &str = r#"
+-- Track fix history per URL for better diagnostics
+ALTER TABLE gsc_url_indexing_status ADD COLUMN last_fix_summary TEXT;
+ALTER TABLE gsc_url_indexing_status ADD COLUMN fix_attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE gsc_url_indexing_status ADD COLUMN last_task_resolved_at TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_resolved ON gsc_url_indexing_status(last_task_resolved_at);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -349,6 +382,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V8)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (8, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 9 {
+        conn.execute_batch(MIGRATION_V9)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (9, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 10 {
+        conn.execute_batch(MIGRATION_V10)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (10, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }
