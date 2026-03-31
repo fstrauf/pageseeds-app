@@ -3,6 +3,7 @@ import { open as dialogOpen } from '@tauri-apps/plugin-dialog'
 import type {
   Article,
   ContentHealthResult,
+  EmbeddingStatus,
   ImportResult,
   IngestOrphanResult,
   KeywordCoverageStatus,
@@ -13,6 +14,7 @@ import type {
   QueueItem,
   RedditOpportunity,
   RedditStats,
+  ScoredSkill,
   SecretsStatus,
   SubmissionSummary,
   Task,
@@ -464,6 +466,19 @@ export const listSkills = (projectId: string): Promise<Skill[]> =>
 
 export const getSkill = (projectId: string, skillName: string): Promise<Skill> =>
   invoke('get_skill', { projectId, skillName })
+
+export const checkEmbeddingStatus = (): Promise<EmbeddingStatus> =>
+  invoke('check_embedding_status')
+
+export const indexSkills = (projectId: string): Promise<number> =>
+  invoke('index_skills', { projectId })
+
+export const searchSkills = (
+  projectId: string,
+  query: string,
+  limit?: number,
+): Promise<ScoredSkill[]> =>
+  invoke('search_skills', { projectId, query, limit })
 
 export const buildPromptPreview = (taskId: string, skillName: string): Promise<PromptContext> =>
   invoke('build_prompt_preview', { taskId, skillName })

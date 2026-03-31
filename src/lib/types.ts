@@ -478,6 +478,19 @@ export interface AgentStatus {
   configured_provider: string
 }
 
+// ─── Skill Vector Search ─────────────────────────────────────────────────────
+
+export interface EmbeddingStatus {
+  available: boolean
+  model: string
+  error?: string
+}
+
+export interface ScoredSkill {
+  skill: Skill
+  score: number
+}
+
 // ─── Overview ─────────────────────────────────────────────────────────────────
 
 export interface TaskStatusCounts {

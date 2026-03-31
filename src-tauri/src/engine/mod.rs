@@ -10,6 +10,7 @@ pub mod runtime;
 pub mod scheduler;
 pub mod setup_check;
 pub mod skills;
+pub mod skills_search;
 pub mod spawner;
 pub mod task_store;
 pub mod text;

@@ -117,6 +117,9 @@ pub fn run() {
             // Phase 7 — Skills, Prompts, and Agent Interaction
             commands::list_skills,
             commands::get_skill,
+            commands::check_embedding_status,
+            commands::index_skills,
+            commands::search_skills,
             commands::build_prompt_preview,
             commands::normalize_output,
             commands::list_task_artifacts,

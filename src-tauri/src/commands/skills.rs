@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tauri::State;
-use crate::engine::{executor, normalizer, prompts, skills, task_store};
+use crate::engine::{executor, normalizer, prompts, skills, skills_search, task_store};
 use super::{AppState, GscState};
 
 #[tauri::command]
@@ -145,6 +145,62 @@ pub async fn quick_run_workflow(
         rt.block_on(async {
             executor::execute_task_with_token(&db, &task_id, token.as_deref(), None, false).await
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ─── Vector Search Commands ───────────────────────────────────────────────────
+
+/// Check if Ollama is available for skill embeddings.
+#[tauri::command]
+pub async fn check_embedding_status() -> Result<skills_search::EmbeddingStatus, String> {
+    Ok(skills_search::check_status().await)
+}
+
+/// Index all skills for semantic search.
+/// Returns the number of skills that were indexed (or re-indexed due to changes).
+#[tauri::command]
+pub async fn index_skills(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<usize, String> {
+    let skills = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+        skills::scan_skills(std::path::Path::new(&project.path))
+    };
+
+    let db_arc = Arc::clone(&state.db);
+    tokio::task::spawn_blocking(move || {
+        let db = db_arc.lock().map_err(|e| e.to_string())?;
+        skills_search::index_skills_blocking(&db, &project_id, &skills).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Search skills by semantic similarity.
+/// Returns skills sorted by relevance to the query.
+#[tauri::command]
+pub async fn search_skills(
+    state: State<'_, AppState>,
+    project_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<skills_search::ScoredSkill>, String> {
+    let all_skills = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+        skills::scan_skills(std::path::Path::new(&project.path))
+    };
+
+    let db_arc = Arc::clone(&state.db);
+    let limit = limit.unwrap_or(5);
+    tokio::task::spawn_blocking(move || {
+        let db = db_arc.lock().map_err(|e| e.to_string())?;
+        skills_search::search_skills_blocking(&db, &project_id, &query, limit, &all_skills)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

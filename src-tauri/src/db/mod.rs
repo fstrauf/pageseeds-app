@@ -176,6 +176,38 @@ ALTER TABLE gsc_url_indexing_status ADD COLUMN last_task_resolved_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_gsc_url_status_resolved ON gsc_url_indexing_status(last_task_resolved_at);
 "#;
 
+static MIGRATION_V11: &str = r#"
+-- Skill embeddings for semantic search
+CREATE TABLE IF NOT EXISTS skill_embeddings (
+    skill_name      TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,        -- Hash of content to detect changes
+    embedding       BLOB NOT NULL,        -- Serialized vector
+    model_name      TEXT NOT NULL,        -- E.g., "nomic-embed-text"
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_embeddings_project ON skill_embeddings(project_id);
+"#;
+
+static MIGRATION_V12: &str = r#"
+-- Skill embeddings for semantic search (Rig.rs integration)
+CREATE TABLE IF NOT EXISTS skill_embeddings (
+    skill_name      TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,        -- Hash of content to detect changes
+    embedding       BLOB NOT NULL,        -- Serialized vector (f32 array)
+    model_name      TEXT NOT NULL,        -- E.g., "nomic-embed-text"
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_embeddings_project ON skill_embeddings(project_id);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -398,6 +430,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V10)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (10, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 11 {
+        conn.execute_batch(MIGRATION_V11)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (11, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 12 {
+        conn.execute_batch(MIGRATION_V12)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (12, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }
