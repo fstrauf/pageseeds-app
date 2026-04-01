@@ -139,11 +139,89 @@ function buildFromMarkdownTable(content: string): KeywordResearchResult | null {
   }
 }
 
-// ─── Parse artifact ───────────────────────────────────────────────────────────
+// ─── Parse artifact ─────────────────────────────────────────────────────────--
+
+function extractJsonFromMarkdown(content: string): string {
+  const trimmed = content.trim()
+  const codeFenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/)
+  if (codeFenceMatch) {
+    return codeFenceMatch[1].trim()
+  }
+  return trimmed
+}
 
 function parseArtifact(content: string): KeywordResearchResult | null {
   try {
-    return JSON.parse(content) as KeywordResearchResult
+    const cleanContent = extractJsonFromMarkdown(content)
+    const parsed = JSON.parse(cleanContent)
+    
+    // Handle new unified format: landing_page_candidates (from research_final_selection step)
+    if (parsed.landing_page_candidates && Array.isArray(parsed.landing_page_candidates)) {
+      return {
+        new_keywords: parsed.landing_page_candidates.map((c: any) => c.keyword),
+        total_candidates: parsed.landing_page_candidates.length,
+        filtered_out: 0,
+        difficulty: {
+          total: parsed.landing_page_candidates.length,
+          successful: parsed.landing_page_candidates.length,
+          results: parsed.landing_page_candidates.map((c: any) => ({
+            keyword: c.keyword,
+            difficulty: c.estimated_kd ?? c.difficulty ?? null,
+            volume: c.estimated_volume ?? c.volume ?? null,
+            traffic: null,
+            has_data: true,
+            // Include landing page specific fields for display
+            landing_page_type: c.landing_page_type,
+            opportunity_score: c.opportunity_score,
+            opportunity_reason: c.opportunity_reason,
+            proposed_title: c.proposed_title,
+          })),
+        },
+      }
+    }
+    
+    // Handle new unified format: difficulty.results (from research_final_selection step)
+    if (parsed.difficulty && parsed.difficulty.results && Array.isArray(parsed.difficulty.results)) {
+      return {
+        new_keywords: parsed.difficulty.results.map((r: any) => r.keyword),
+        total_candidates: parsed.difficulty.results.length,
+        filtered_out: 0,
+        difficulty: {
+          total: parsed.difficulty.total ?? parsed.difficulty.results.length,
+          successful: parsed.difficulty.successful ?? parsed.difficulty.results.length,
+          results: parsed.difficulty.results.map((r: any) => ({
+            keyword: r.keyword,
+            difficulty: r.difficulty ?? null,
+            volume: r.volume ?? null,
+            traffic: null,
+            has_data: r.difficulty != null && r.volume != null,
+          })),
+        },
+      }
+    }
+    
+    // Handle keywords array format (intermediate step output)
+    if (parsed.keywords && Array.isArray(parsed.keywords)) {
+      return {
+        new_keywords: parsed.keywords.map((k: any) => k.keyword || k),
+        total_candidates: parsed.keywords.length,
+        filtered_out: 0,
+        difficulty: {
+          total: parsed.keywords.length,
+          successful: parsed.keywords.length,
+          results: parsed.keywords.map((k: any) => ({
+            keyword: k.keyword || k,
+            difficulty: k.kd ?? k.difficulty ?? null,
+            volume: k.volume ?? null,
+            traffic: null,
+            has_data: k.kd != null || k.difficulty != null,
+          })),
+        },
+      }
+    }
+    
+    // Legacy formats
+    return parsed as KeywordResearchResult
   } catch {
     // Agentic output can be markdown tables instead of JSON. Build a compatible
     // synthetic result so the picker still works.
@@ -208,9 +286,17 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
 export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
   const queue = useQueue()
   const artifact =
+    // New unified workflow artifacts
+    task.artifacts.find(a => a.key === 'research_final_selection') ??
+    // Legacy artifacts (for backward compatibility)
     task.artifacts.find(a => a.key === 'research_normalize_stage') ??
+    task.artifacts.find(a => a.key === 'landing_page_research_agentic') ??
+    task.artifacts.find(a => a.key === 'landing_page_analyze') ??
+    task.artifacts.find(a => a.key === 'landing_page_research') ??
     task.artifacts.find(a => a.key === 'research_keywords_cli') ??
     task.artifacts.find(a => a.key === 'research_agent_stage')
+  
+  const isLandingPageResearch = task.type === 'research_landing_pages'
   const result = useMemo(
     () => (artifact?.content ? parseArtifact(artifact.content) : null),
     [artifact?.content],
@@ -312,10 +398,10 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
         queue.enqueueNext(
           tasks.map(t => ({
             taskId: t.id,
-            projectId: t.projectId ?? task.project_id,
+            projectId: t.project_id,
             title: t.title ?? 'Write article',
             taskType: t.type ?? 'write_article',
-            projectName: task.projectName,
+            projectName: undefined,
           }))
         )
       }
@@ -446,6 +532,8 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
           >
             {creating ? (
               <><Loader2 size={13} className="mr-1.5 animate-spin" />Creating…</>
+            ) : isLandingPageResearch ? (
+              <><Sparkles size={13} className="mr-1.5" />Create {selected.size} Landing Page Task{selected.size !== 1 ? 's' : ''}</>
             ) : (
               <><Sparkles size={13} className="mr-1.5" />Create {selected.size} Article Task{selected.size !== 1 ? 's' : ''}</>
             )}

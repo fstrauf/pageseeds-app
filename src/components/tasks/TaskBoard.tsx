@@ -61,7 +61,16 @@ const PRIORITY_DOT: Record<string, string> = {
   low: 'bg-slate-400',
 }
 
-const PHASE_OPTIONS = ['all', '1-foundation', '2-research', '3-creation', '4-publish', '5-promote']
+const PHASE_OPTIONS = ['all', 'collection', 'investigation', 'research', 'implementation', 'verification']
+
+const PHASE_LABELS: Record<string, string> = {
+  all: 'All phases',
+  collection: 'Collection',
+  investigation: 'Investigation',
+  research: 'Research',
+  implementation: 'Implementation',
+  verification: 'Verification',
+}
 
 interface TaskBoardProps {
   projectId?: string
@@ -424,7 +433,7 @@ export function TaskBoard({
             </SelectTrigger>
             <SelectContent className="bg-popover border-border text-popover-foreground">
               {PHASE_OPTIONS.map(p => (
-                <SelectItem key={p} value={p} className="text-xs">{p === 'all' ? 'All phases' : p}</SelectItem>
+                <SelectItem key={p} value={p} className="text-xs">{PHASE_LABELS[p]}</SelectItem>
               ))}
             </SelectContent>
           </Select>

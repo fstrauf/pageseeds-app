@@ -9,6 +9,7 @@ pub mod gsc_diagnostics;
 pub mod indexing_fix;
 pub mod keywords;
 pub mod reddit;
+pub mod research;
 pub mod social;
 pub mod utils;
 

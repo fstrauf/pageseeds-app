@@ -113,9 +113,9 @@ pub fn cancel_task(state: State<'_, AppState>, id: String) -> Result<Task, Strin
     task_store::update_task_status(&db, &id, TaskStatus::Cancelled).map_err(|e| e.to_string())
 }
 
-/// Create one `write_article` task per selected keyword and mark the research
-/// task as done.  Each keyword string becomes both the task title and the
-/// target keyword in the description so the article-writing agent has context.
+/// Create content tasks from selected keywords and mark the research task as done.
+/// Creates `create_landing_page` tasks for landing page research, `write_article` otherwise.
+/// Each keyword string becomes both the task title and the target keyword in the description.
 #[tauri::command]
 pub fn create_article_tasks_from_keywords(
     state: State<'_, AppState>,
@@ -128,6 +128,13 @@ pub fn create_article_tasks_from_keywords(
 
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let research_task = task_store::get_task(&db, &research_task_id).map_err(|e| e.to_string())?;
+    
+    // Determine content task type based on research task type
+    let content_task_type = if research_task.task_type == "research_landing_pages" {
+        "create_landing_page"
+    } else {
+        "write_article"
+    };
     if research_task.project_id != project_id {
         return Err("Research task does not belong to this project".to_string());
     }
@@ -208,9 +215,9 @@ pub fn create_article_tasks_from_keywords(
 
         let task = Task {
             id,
-            phase: default_phase("write_article").to_string(),
-            execution_mode: default_execution_mode("write_article"),
-            task_type: "write_article".to_string(),
+            phase: default_phase(content_task_type).to_string(),
+            execution_mode: default_execution_mode(content_task_type),
+            task_type: content_task_type.to_string(),
             status: TaskStatus::Todo,
             priority: priority_enum,
             agent_policy: AgentPolicy::None,
@@ -315,18 +322,27 @@ fn extract_keywords_from_markdown_table(raw: &str) -> Vec<String> {
 fn extract_selectable_keywords(task: &Task) -> Vec<String> {
     use serde_json::Value;
 
-    // Prefer normalized output, then deterministic JSON, then raw agent output.
+    // New unified workflow: research_final_selection
+    // Legacy artifacts for backward compatibility
     let artifact = task
         .artifacts
         .iter()
-        .find(|a| a.key == "research_normalize_stage")
+        .find(|a| a.key == "research_final_selection")
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_normalize_stage"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research_agentic"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_analyze"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research"))
         .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
         .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
+    
     let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
         return Vec::new();
     };
 
-    let v = match serde_json::from_str::<Value>(raw) {
+    // Strip markdown code fences if present (e.g., ```json ... ```)
+    let raw_clean = extract_json_from_markdown(raw);
+    
+    let v = match serde_json::from_str::<Value>(&raw_clean) {
         Ok(v) => v,
         Err(_) => {
             // Fallback for agent markdown-table output when JSON normalization
@@ -337,6 +353,18 @@ fn extract_selectable_keywords(task: &Task) -> Vec<String> {
 
     let mut out: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
+    
+    // New unified format: landing_page_candidates (from research_final_selection)
+    if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
+        for item in arr {
+            if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                push_unique_keyword(&mut out, &mut seen, kw);
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
 
     if let Some(arr) = v.get("difficulty").and_then(|x| x.as_array()) {
         for item in arr {
@@ -370,6 +398,18 @@ fn extract_selectable_keywords(task: &Task) -> Vec<String> {
                 push_unique_keyword(&mut out, &mut seen, kw);
             }
         }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
+    // Support landing_page_candidates from landing_page_analyze step
+    if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
+        for item in arr {
+            if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                push_unique_keyword(&mut out, &mut seen, kw);
+            }
+        }
     }
 
     out
@@ -385,10 +425,16 @@ fn extract_keyword_metrics(task: &Task) -> std::collections::HashMap<String, Key
     use serde_json::Value;
     let mut out = std::collections::HashMap::new();
 
+    // New unified workflow: research_final_selection
+    // Legacy artifacts for backward compatibility
     let artifact = task
         .artifacts
         .iter()
-        .find(|a| a.key == "research_normalize_stage")
+        .find(|a| a.key == "research_final_selection")
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_normalize_stage"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research_agentic"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_analyze"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research"))
         .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
         .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
 
@@ -396,8 +442,11 @@ fn extract_keyword_metrics(task: &Task) -> std::collections::HashMap<String, Key
         return out;
     };
 
-    let parsed_json = serde_json::from_str::<Value>(raw).ok();
+    // Strip markdown code fences if present
+    let raw_clean = extract_json_from_markdown(raw);
+    let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
     if let Some(v) = parsed_json {
+        // Standard keyword research format
         if let Some(arr) = v.get("difficulty").and_then(|x| x.get("results")).and_then(|x| x.as_array()) {
             for item in arr {
                 if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
@@ -407,6 +456,22 @@ fn extract_keyword_metrics(task: &Task) -> std::collections::HashMap<String, Key
                     let vol = item.get("volume").and_then(|x| {
                         x.as_i64().or_else(|| x.as_str().and_then(parse_range_midpoint))
                     });
+                    out.insert(normalize_keyword(kw), KeywordMetric { difficulty: kd, volume: vol });
+                }
+            }
+            return out;
+        }
+        
+        // Landing page analyze format
+        if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
+            for item in arr {
+                if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                    let kd = item.get("estimated_kd")
+                        .and_then(|x| x.as_i64())
+                        .or_else(|| item.get("difficulty").and_then(|x| x.as_i64()));
+                    let vol = item.get("estimated_volume")
+                        .and_then(|x| x.as_i64())
+                        .or_else(|| item.get("volume").and_then(|x| x.as_i64()));
                     out.insert(normalize_keyword(kw), KeywordMetric { difficulty: kd, volume: vol });
                 }
             }
@@ -437,6 +502,31 @@ fn extract_keyword_metrics(task: &Task) -> std::collections::HashMap<String, Key
     }
 
     out
+}
+
+/// Extract JSON from markdown code fences if present.
+/// Handles ```json ... ``` and ``` ... ``` wrappers.
+fn extract_json_from_markdown(content: &str) -> String {
+    // Try to find JSON in code fences
+    if let Some(start) = content.find("```json") {
+        let after_start = start + 7; // len of "```json"
+        if let Some(end) = content[after_start..].find("```") {
+            return content[after_start..after_start + end].trim().to_string();
+        }
+    }
+    
+    // Try generic code block
+    if let Some(start) = content.find("```") {
+        let after_start = start + 3; // len of "```"
+        if let Some(end) = content[after_start..].find("```") {
+            // Strip language identifier if present (e.g., "json\n{...}")
+            let block = &content[after_start..after_start + end];
+            return block.trim_start_matches("json").trim().to_string();
+        }
+    }
+    
+    // No code fences found, return as-is
+    content.trim().to_string()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

@@ -11,50 +11,64 @@ use std::collections::{HashMap, HashSet};
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
 
+// ─── Research Mode ────────────────────────────────────────────────────────────
+
+/// Research mode for the keyword pipeline.
+#[derive(Debug, Clone, Copy)]
+pub enum ResearchMode {
+    /// Informational content research (blog articles)
+    Informational,
+    /// Commercial content research (landing pages)
+    Commercial,
+}
+
+impl ResearchMode {
+    /// Determine research mode from task type string.
+    pub fn from_task_type(task_type: &str) -> Self {
+        match task_type {
+            "research_landing_pages" => ResearchMode::Commercial,
+            _ => ResearchMode::Informational,
+        }
+    }
+}
+
+/// Parse themes from the `research_seed_extraction` step artifact.
+/// 
+/// This is the output of Step 1 in the hybrid research workflow.
+/// Expects JSON with a "themes" array. Fails loudly if parsing fails
+/// (no silent fallbacks - that makes debugging impossible).
 fn parse_themes_from_agent_artifact(task: &Task) -> Vec<String> {
     let content = task
         .artifacts
         .iter()
         .rev()
-        .find(|a| a.key == "research_theme_selection_agent")
+        .find(|a| a.key == "research_seed_extraction")
         .and_then(|a| a.content.as_deref());
 
     let Some(raw) = content else {
         return vec![];
     };
 
-    // Agent output is often wrapped with prose/tool logs + fenced JSON.
-    // Normalize first, then parse direct JSON as a fallback.
-    let normalized = crate::engine::normalizer::normalize_agent_output(raw);
-    let parsed = normalized
-        .json_artifact
-        .or_else(|| serde_json::from_str::<serde_json::Value>(raw).ok());
-
-    if let Some(json) = parsed {
+    // Try to parse as JSON first - step 1 should output {"themes": [...]}
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
         let themes = themes_from_json(&json);
         if !themes.is_empty() {
             return themes;
         }
     }
 
-    // Last-resort fallback: parse bullet/numbered list text from the agent output.
-    raw.lines()
-        .filter_map(|line| {
-            let t = line.trim();
-            if let Some(rest) = t.strip_prefix("- ") {
-                return clean_theme_str(rest);
-            }
-            if let Some(rest) = t.strip_prefix("* ") {
-                return clean_theme_str(rest);
-            }
-            if let Some(dot) = t.find(". ") {
-                if t[..dot].chars().all(|c| c.is_ascii_digit()) {
-                    return clean_theme_str(&t[dot + 2..]);
-                }
-            }
-            None
-        })
-        .collect()
+    // Fallback: try normalizer output format
+    let normalized = crate::engine::normalizer::normalize_agent_output(raw);
+    if let Some(json) = normalized.json_artifact {
+        let themes = themes_from_json(&json);
+        if !themes.is_empty() {
+            return themes;
+        }
+    }
+
+    // No more fallbacks - if we can't parse, return empty.
+    // The caller should fail loudly with a clear message.
+    vec![]
 }
 
 fn themes_from_json(v: &serde_json::Value) -> Vec<String> {
@@ -79,7 +93,7 @@ fn themes_from_json(v: &serde_json::Value) -> Vec<String> {
     vec![]
 }
 
-fn estimate_volume(raw: &str) -> Option<i64> {
+pub(crate) fn estimate_volume(raw: &str) -> Option<i64> {
     let s = raw.trim();
     if s.is_empty() {
         return None;
@@ -164,7 +178,7 @@ pub(crate) fn exec_keyword_research_native(
             success: false,
             message: format!(
                 "No keyword themes available. Provide themes in task description or run agentic theme selection first. \
-                 Expected artifact key: research_theme_selection_agent. Workspace: {}.",
+                 Expected artifact key: research_seed_extraction. Workspace: {}.",
                 paths.automation_dir.display()
             ),
             output: None,
@@ -377,20 +391,27 @@ pub(crate) fn exec_keyword_research_native(
     );
 
     let total_candidates = all_new_keywords.len();
-    let skipped_keywords: Vec<String> = all_new_keywords.iter().skip(analyzed_count).cloned().collect();
-    let output = serde_json::json!({
-        "themes": themes,
-        "total_candidates": total_candidates,
-        "new_keywords": all_new_keywords,
-        "filtered_out": 0,
-        "difficulty": {
-            "total": analyzed_count,
-            "successful": difficulty_results.iter().filter(|r| r["has_data"] == true).count(),
-            "failed": difficulty_results.iter().filter(|r| r["has_data"] != true).count(),
-            "results": difficulty_results,
-        },
-        "difficulty_skipped_keywords": skipped_keywords,
-    });
+    let with_data_count = difficulty_results.iter().filter(|r| r["has_data"] == true).count();
+    
+    // Build typed output contract
+    let keywords: Vec<crate::models::research::ScoredKeyword> = difficulty_results
+        .into_iter()
+        .map(|r| crate::models::research::ScoredKeyword {
+            keyword: r["keyword"].as_str().unwrap_or("").to_string(),
+            volume: r["volume"].as_i64(),
+            kd: r["difficulty"].as_f64(),
+            intent: r.get("intent").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            traffic: r["traffic"].as_f64(),
+            has_data: r["has_data"].as_bool(),
+        })
+        .collect();
+    
+    let output = crate::models::research::KeywordPipelineOutput {
+        keywords,
+        themes: themes.clone(),
+        total_candidates,
+        with_data_count,
+    };
 
     crate::engine::workflows::StepResult {
         success: true,
@@ -982,7 +1003,7 @@ mod tests {
             project_id: "p1".to_string(),
             depends_on: vec![],
             artifacts: vec![crate::models::task::TaskArtifact {
-                key: "research_theme_selection_agent".to_string(),
+                key: "research_seed_extraction".to_string(),
                 path: None,
                 artifact_type: Some("agentic".to_string()),
                 source: Some("agentic".to_string()),
@@ -997,37 +1018,8 @@ mod tests {
         assert_eq!(themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
     }
 
-    #[test]
-    fn parse_agent_themes_handles_list_fallback() {
-        let raw = "1. Protective Put\n2. IRA Options\n3. Portfolio Hedging";
-
-        let task = crate::models::task::Task {
-            id: "t2".to_string(),
-            task_type: "research_keywords".to_string(),
-            phase: "research".to_string(),
-            status: crate::models::task::TaskStatus::Todo,
-            priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Manual,
-            agent_policy: crate::models::task::AgentPolicy::Optional,
-            title: None,
-            description: None,
-            project_id: "p1".to_string(),
-            depends_on: vec![],
-            artifacts: vec![crate::models::task::TaskArtifact {
-                key: "research_theme_selection_agent".to_string(),
-                path: None,
-                artifact_type: Some("agentic".to_string()),
-                source: Some("agentic".to_string()),
-                content: Some(raw.to_string()),
-            }],
-            run: crate::models::task::TaskRun::default(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-        };
-
-        let themes = parse_themes_from_agent_artifact(&task);
-        assert_eq!(themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
-    }
+    // Note: List fallback ("1. Theme") removed - we now require JSON output contract.
+    // The deterministic step expects {"themes": [...]} format from Step 1.
 
     #[test]
     fn parse_agent_themes_supports_array_json_contract() {
@@ -1044,7 +1036,7 @@ mod tests {
             project_id: "p1".to_string(),
             depends_on: vec![],
             artifacts: vec![crate::models::task::TaskArtifact {
-                key: "research_theme_selection_agent".to_string(),
+                key: "research_seed_extraction".to_string(),
                 path: None,
                 artifact_type: Some("agentic".to_string()),
                 source: Some("agentic".to_string()),
@@ -1692,9 +1684,9 @@ mod keyword_workflow_tests {
         }
     }
 
-    /// Test workflow planning with explicit themes (deterministic mode).
+    /// Test workflow planning - now uses 3-step agentic workflow for all research tasks.
     #[test]
-    fn workflow_with_explicit_themes_uses_single_deterministic_step() {
+    fn workflow_uses_four_step_hybrid_workflow() {
         let conn = in_memory_db();
         let temp_dir = std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
         std::fs::create_dir_all(&temp_dir.join(".github").join("automation")).unwrap();
@@ -1711,35 +1703,20 @@ mod keyword_workflow_tests {
         let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
         let steps = handler.plan(&task);
         
-        assert_eq!(steps.len(), 1, "With explicit themes, should have 1 step");
-        assert_eq!(steps[0].kind, "keyword_research_cli");
-        
-        std::fs::remove_dir_all(&temp_dir).ok();
-    }
-
-    /// Test workflow planning without themes (requires agentic theme selection).
-    #[test]
-    fn workflow_without_themes_uses_agentic_plus_deterministic_steps() {
-        let conn = in_memory_db();
-        let temp_dir = std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
-        std::fs::create_dir_all(&temp_dir.join(".github").join("automation")).unwrap();
-        
-        std::fs::write(
-            temp_dir.join(".github").join("automation").join("articles.json"),
-            r#"{"nextArticleId":1,"articles":[]}"#
-        ).unwrap();
-
-        let project_id = create_test_project(&conn, &temp_dir.to_string_lossy());
-        // Create task with empty description (no themes) - this should trigger agentic mode
-        let task = create_keyword_research_task(&project_id, &[]);
-        
-        let handlers = default_handlers();
-        let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
-        let steps = handler.plan(&task);
-        
-        assert_eq!(steps.len(), 2, "Without explicit themes, should have 2 steps");
+        // New 4-step hybrid workflow: 
+        //   1. seed extraction (agentic)
+        //   2. ahrefs pipeline (deterministic) 
+        //   3. final selection (agentic)
+        //   4. normalizer (normalizer)
+        assert_eq!(steps.len(), 4, "Should have 4 steps: agentic → deterministic → agentic → normalizer");
+        assert_eq!(steps[0].name, "research_seed_extraction");
         assert_eq!(steps[0].kind, "agentic");
-        assert_eq!(steps[1].kind, "keyword_research_cli");
+        assert_eq!(steps[1].name, "research_ahrefs_pipeline");
+        assert_eq!(steps[1].kind, "keyword_research_native");
+        assert_eq!(steps[2].name, "research_final_selection");
+        assert_eq!(steps[2].kind, "agentic");
+        assert_eq!(steps[3].name, "research_normalize");
+        assert_eq!(steps[3].kind, "normalizer");
         
         std::fs::remove_dir_all(&temp_dir).ok();
     }

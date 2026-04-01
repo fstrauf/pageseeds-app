@@ -524,12 +524,21 @@ export interface WorkflowActivity {
   interval_hours?: number
 }
 
+export interface LandingPageResearchPending {
+  id: string
+  title?: string
+  context: string
+  themes: string[]
+  updated_at: string
+}
+
 export interface ProjectOverview {
   tasks: TaskStatusCounts
   recent_tasks: RecentTask[]
   articles: ArticleStatusCounts
   ready_task_count: number
   workflow_activity: WorkflowActivity[]
+  pending_landing_page_research: LandingPageResearchPending[]
 }
 
 export interface QuickAction {

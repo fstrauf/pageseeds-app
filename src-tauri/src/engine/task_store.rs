@@ -399,6 +399,18 @@ pub struct RecentTask {
     pub updated_at: String,
 }
 
+/// Landing page research task awaiting review with user context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LandingPageResearchPending {
+    pub id: String,
+    pub title: Option<String>,
+    /// User-provided strategy context (parsed from description JSON)
+    pub context: String,
+    /// Themes being researched (parsed from description JSON or auto-derived)
+    pub themes: Vec<String>,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArticleStatusCounts {
     pub total: i64,
@@ -423,6 +435,8 @@ pub struct ProjectOverview {
     pub articles: ArticleStatusCounts,
     pub ready_task_count: i64,
     pub workflow_activity: Vec<WorkflowActivity>,
+    /// Landing page research tasks in 'review' status awaiting user selection
+    pub pending_landing_page_research: Vec<LandingPageResearchPending>,
 }
 
 pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<ProjectOverview> {
@@ -549,5 +563,64 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         })
         .collect();
 
-    Ok(ProjectOverview { tasks: counts, recent_tasks, articles, ready_task_count, workflow_activity })
+    // Pending landing page research tasks in review status
+    let pending_landing_page_research: Vec<LandingPageResearchPending> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, description, updated_at
+             FROM tasks 
+             WHERE project_id = ?1 AND type = 'research_landing_pages' AND status = 'review'
+             ORDER BY updated_at DESC LIMIT 5",
+        )?;
+        let rows = stmt.query_map([project_id], |row| {
+            let description: Option<String> = row.get(2)?;
+            let (context, themes) = parse_landing_page_description(description.as_deref());
+            Ok(LandingPageResearchPending {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                context,
+                themes,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    Ok(ProjectOverview { 
+        tasks: counts, 
+        recent_tasks, 
+        articles, 
+        ready_task_count, 
+        workflow_activity,
+        pending_landing_page_research,
+    })
+}
+
+/// Parse landing page research description JSON to extract context and themes.
+fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
+    let desc = desc.unwrap_or("");
+    
+    // Try JSON format first
+    if desc.trim().starts_with('{') {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(desc) {
+            let context = parsed
+                .get("context")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let themes = parsed
+                .get("themes")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            return (context, themes);
+        }
+    }
+    
+    // Fall back to treating entire description as context
+    (desc.to_string(), vec![])
 }

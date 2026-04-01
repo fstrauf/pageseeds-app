@@ -35,26 +35,44 @@ Each process represents a user-facing capability with a defined input, transform
 
 ---
 
-## 1. Keyword Research Process
+## 1. Keyword & Landing Page Research Process
 
-**Purpose:** Find new content opportunities with search volume and manageable difficulty.
+**Purpose:** Find new content opportunities (blog articles or landing pages) with search volume and manageable difficulty.
+
+### Two Research Modes
+
+| Mode | Task Type | Intent | Output Format |
+|------|-----------|--------|---------------|
+| **Informational** | `research_keywords` | Blog articles (how-to, guides, tutorials) | `{"difficulty": {"results": [...]}}` |
+| **Commercial** | `research_landing_pages` | Landing pages (best, vs, alternative, software) | `{"landing_page_candidates": [...]}` |
 
 ### Inputs
-- Keyword themes (comma/newline separated in task description)
+- Project context from `seo_content_brief.md` (for seed extraction)
 - Existing `articles.json` (to deduplicate against current content)
-- Optional: min volume, max KD filters
 
-### Process Flow
+### Process Flow (3-Step Agentic)
+
 ```
-Task: research_keywords or custom_keyword_research
+Task: research_keywords OR research_landing_pages
   ↓
 Handler: ResearchHandler
   ↓
-Step: keyword_research_cli (deterministic)
-  ├─ Fetch keyword ideas from Ahrefs (per theme)
-  ├─ Deduplicate against existing articles.json
-  ├─ Batch difficulty analysis for top candidates
-  └─ Output: KeywordResearchResult JSON
+Step 1: research_seed_extraction (agentic)
+  ├─ Reads project brief and context
+  ├─ Agent extracts 3-4 themes to research
+  └─ Output: {"themes": ["theme1", "theme2", ...]}
+  ↓
+Step 2: research_keyword_discovery (agentic)
+  ├─ Agent uses Ahrefs API tools:
+  │   ├─ keyword_generator → get keyword ideas from themes
+  │   └─ keyword_difficulty → get KD for top candidates
+  ├─ Iterates until 10+ qualified keywords found (max 25 API calls)
+  └─ Output: {"keywords": [...]} OR {"landing_page_keywords": [...]}
+  ↓
+Step 3: research_final_selection (agentic)
+  ├─ Filters by volume (>500), KD (<40), intent
+  ├─ Deduplicates (no cannibalization)
+  └─ Output: Final selection JSON
   ↓
 Status: review (user must select keywords)
   ↓
@@ -64,16 +82,22 @@ Creates: write_article tasks for each selected keyword
 ```
 
 ### Key Files
-- `engine/exec/keywords.rs` — native keyword pipeline
-- `seo/keywords.rs` — Ahrefs API integration
+- `engine/workflows/handlers.rs` — 3-step workflow definition
+- `engine/tool_agent/http_client.rs` — Tool calling agent
+- `engine/tools/keywords.rs` — Ahrefs API integration
+- `prompts/keyword_discovery.md` — Informational discovery prompt
+- `prompts/landing_page_discovery.md` — Commercial discovery prompt
 - `components/tasks/KeywordPicker.tsx` — selection UI
 
 ### Output Artifacts
-- `keyword_research_result` artifact on task (JSON with themes, candidates, difficulty)
+- `research_seed_extraction` — Extracted themes
+- `research_keyword_discovery` — Keywords with volume/KD data
+- `research_final_selection` — Final filtered selection
 
-### Task Types
-- `research_keywords` — standard research
-- `custom_keyword_research` — agentic theme curation (ends in review like standard)
+### Tools Required
+- `keyword_generator` — Generate keyword ideas from Ahrefs
+- `keyword_difficulty` — Get KD scores from Ahrefs
+- **Requires:** `CAPSOLVER_API_KEY` in Settings → Secrets
 
 ---
 

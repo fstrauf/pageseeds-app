@@ -83,27 +83,33 @@ impl WorkflowHandler for ResearchHandler {
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
-            "research_keywords" => {
-                // Deterministic mode when themes are explicitly provided on the task.
-                let has_explicit_themes = task
-                    .description
-                    .as_deref()
-                    .map(crate::engine::exec::keywords::parse_desc_themes)
-                    .map(|themes| !themes.is_empty())
-                    .unwrap_or(false);
-
-                if has_explicit_themes {
-                    vec![WorkflowStep::new("research_keywords_cli", "keyword_research_cli")]
-                } else {
-                    // Agentic mode for theme discovery from project context/brief,
-                    // followed by deterministic keyword API execution.
-                    vec![
-                        WorkflowStep::new("research_theme_selection_agent", "agentic"),
-                        WorkflowStep::new("research_keywords_cli", "keyword_research_cli"),
-                    ]
-                }
+            "research_keywords" | "research_landing_pages" => {
+                // Hybrid 3-step workflow: agentic → deterministic → agentic + normalizer
+                // Replaces unreliable ToolCallingAgent loop with reliable native Ahrefs calls.
+                vec![
+                    // Step 1 (agentic): LLM extracts 3-4 themes from project brief.
+                    // Cannot be deterministic: requires reading intent from free-form text.
+                    WorkflowStep::new("research_seed_extraction", "agentic"),
+                    
+                    // Step 2 (deterministic): Rust drives Ahrefs API directly — no LLM.
+                    // Deterministic: given themes, enumerates ideas + fetches KD scores.
+                    // Output: structured JSON with all keywords, volume, KD.
+                    WorkflowStep::new("research_ahrefs_pipeline", "keyword_research_native"),
+                    
+                    // Step 3 (agentic): LLM selects best candidates from structured data.
+                    // Cannot be deterministic: requires intent + semantic deduplication judgment.
+                    WorkflowStep::new("research_final_selection", "agentic"),
+                    
+                    // Step 4 (normalizer): Enforces output contract before UI parses it.
+                    WorkflowStep::new("research_normalize", "normalizer")
+                        .with_param(step_params::NORMALIZER_ID, "keyword_research")
+                        .with_param(step_params::ARTIFACT_NAME, "keyword_research"),
+                ]
             }
             _ => {
+                // TODO: migrate custom_keyword_research to 3-step agentic workflow
+                // This legacy path uses the old agentic+normalizer flow via seo-keyword-research skill.
+                // Kept for backward compatibility - migrate to the 3-step hybrid flow when ready.
                 let mut steps = vec![
                     WorkflowStep::new("research_agent_stage", "agentic")
                         .with_param(step_params::SKILL, "seo-keyword-research")
@@ -129,7 +135,7 @@ impl WorkflowHandler for ContentHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "write_article" | "optimize_article" | "create_content" | "optimize_content"
+            "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
                 | "content_review_apply"
         )
     }
@@ -509,8 +515,9 @@ pub async fn exec_agentic(
     project_path: &str,
     site_url: &str,
     agent_provider: &str,
+    latest_raw_output: Option<&str>,
 ) -> StepResult {
-    use crate::engine::{agent, prompts, skills};
+    use crate::engine::{agent, prompts, skills, tool_agent};
     use crate::engine::project_paths::ProjectPaths;
     use std::path::Path;
 
@@ -519,7 +526,7 @@ pub async fn exec_agentic(
 
     let is_content_task = matches!(
         task.task_type.as_str(),
-        "write_article" | "optimize_article" | "create_content" | "optimize_content"
+        "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
     );
 
     let content_context = if is_content_task {
@@ -584,82 +591,6 @@ pub async fn exec_agentic(
         ) + &artifact_context
     };
 
-        // Agentic theme selection step for research_keywords: produce only focused themes.
-        if step.name == "research_theme_selection_agent" {
-            let automation_dir = paths.automation_dir.to_string_lossy();
-            
-            // Load keyword coverage if it exists to inform gap-filling
-            let coverage_context = load_coverage_context(&paths.automation_dir);
-            
-            prompt.push_str(&format!(
-                "\n\n## Theme Selection Contract (Required)\n\
-                 You are selecting keyword SEED QUERIES for the Ahrefs free keyword ideas API.\n\
-                 Read project context files in this repo, especially:\n\
-                 - {automation_dir}/seo_content_brief.md\n\
-                 - {automation_dir}/project_summary.md (if present)\n\
-                 \n\
-                 {coverage_context}\n\
-                 \n\
-                 Return ONLY one fenced JSON block and no extra prose:\n\
-                 ```json\n\
-                 {{\n\
-                   \"themes\": [\"theme 1\", \"theme 2\", \"theme 3\"]\n\
-                 }}\n\
-                 ```\n\
-                 \n\
-                 ## CRITICAL: Themes are SEED QUERIES, not target keywords\n\
-                 The Ahrefs ideas API expands short seed terms into dozens of related keywords.\n\
-                 Long, specific phrases (4+ words) return ZERO ideas — they are too narrow to expand.\n\
-                 \n\
-                 GOOD seeds (1-3 words, broad enough for Ahrefs to expand):\n\
-                 - \"budget planner\", \"expense tracker\", \"savings tracker\"\n\
-                 - \"options trading\", \"wheel strategy\", \"covered calls\"\n\
-                 - \"content marketing\", \"keyword research\", \"internal linking\"\n\
-                 \n\
-                 BAD seeds (too long/specific, Ahrefs returns zero ideas):\n\
-                 - \"monthly cash flow planner spreadsheet\" → use \"cash flow planner\" instead\n\
-                 - \"variable income budget planner template\" → use \"budget planner\" instead\n\
-                 - \"small business expense categories tax\" → use \"business expenses\" instead\n\
-                 - \"savings goals tracker Google Sheets\" → use \"savings tracker\" instead\n\
-                 \n\
-                 Requirements:\n\
-                 - Return 4 to 6 themes.\n\
-                 - Each theme MUST be 1-3 words maximum.\n\
-                 - Derive topics from the content brief gaps and pillars.\n\
-                 - Pick topics that have real search volume (established, not newly-coined).\n\
-                 - Do NOT include brand names, tool names (Google Sheets, Excel), or year/date suffixes.\n\
-                 - Do NOT include job-seeker / enterprise/cybersecurity terms unless core to this project."
-            ));
-        }
-
-        // Research parity: force a machine-readable output contract so the next UI
-        // step (keyword selection) behaves like the CLI flow.
-        if matches!(task.task_type.as_str(), "research_keywords" | "custom_keyword_research")
-            && step.name != "research_theme_selection_agent"
-        {
-                prompt.push_str(
-                        "\n\n## Output Contract (Required)\n\
-                         Return ONLY one fenced JSON block and no extra prose.\n\
-                         The JSON must use this schema:\n\
-                         ```json\n\
-                         {\n\
-                             \"new_keywords\": [\"keyword 1\", \"keyword 2\"],\n\
-                             \"filtered_out\": 0,\n\
-                             \"difficulty\": {\n\
-                                 \"results\": [\n\
-                                     {\"keyword\": \"keyword 1\", \"difficulty\": 24, \"volume\": 1200},\n\
-                                     {\"keyword\": \"keyword 2\", \"difficulty\": 31, \"volume\": 700}\n\
-                                 ]\n\
-                             }\n\
-                         }\n\
-                         ```\n\
-                         Requirements:\n\
-                         - Provide 10 keyword candidates when possible.\n\
-                         - Include numeric difficulty and numeric volume when available.\n\
-                         - Do not include tool transcripts, logs, or markdown tables outside the JSON block."
-                );
-        }
-
             if is_content_task {
                 // Pre-compute the next safe publish date and inject it into the prompt.
                 // Without this, the agent defaults to today's date which conflicts with
@@ -705,6 +636,20 @@ pub async fn exec_agentic(
         agent_provider,
         step.params.get(step_params::SKILL)
     );
+
+    // Check if this is a research workflow step that uses ToolCallingAgent
+    let is_research_step = matches!(
+        step.name.as_str(),
+        "research_seed_extraction" | "research_keyword_discovery" | "research_final_selection"
+    );
+
+    if is_research_step {
+        // Use new ToolCallingAgent for research workflow
+        // Pass previous step's output to enable data flow between steps
+        return crate::engine::exec::research::exec_research_workflow_step(
+            step, task, project_path, latest_raw_output
+        ).await;
+    }
 
     // 4. Call agent (blocking subprocess, run in spawn_blocking)
     let agent_provider = agent_provider.to_string();

@@ -92,8 +92,22 @@ pub struct WorkflowStep {
 | `"manual"` | Marks user action required | Nothing | Blocks execution |
 | `"reddit_search"` | Reddit API + scoring | DB records | Triggers inline enrichment |
 | `"reddit_enrich"` | AI scoring + reply drafting | Updates DB rows | Requires DB connection |
-| `"keyword_research_cli"` | Native keyword pipeline | KeywordResearchResult | Deterministic |
 | `"content_review_recommend"` | Article selection + agent | recommendations.json | Hybrid: det + agentic |
+
+**Research Workflow Steps (3-Step Agentic Flow):**
+
+| Step Name | Kind | Handler | Output |
+|-----------|------|---------|--------|
+| `research_seed_extraction` | `"agentic"` | `exec_research_workflow_step` | `{"themes": [...]}` |
+| `research_keyword_discovery` | `"agentic"` | `exec_research_workflow_step` | `{"keywords": [...]}` or `{"landing_page_keywords": [...]}` |
+| `research_final_selection` | `"agentic"` | `exec_research_workflow_step` | `{"difficulty": {...}}` or `{"landing_page_candidates": [...]}` |
+
+**Research Flow:**
+1. Seed extraction → extracts themes from project brief
+2. Keyword discovery → uses Ahrefs API tools (`keyword_generator`, `keyword_difficulty`) to find keywords with volume/KD data
+3. Final selection → filters and selects best candidates
+
+**Data Flow:** Step 1 output → Step 2 input → Step 3 input (via `latest_raw_output`)
 
 **Critical:** Agentic → Normalizer ordering is mandatory. The executor passes `latest_raw_output` to the normalizer. If the normalizer runs without a preceding agentic step, it gets `None`.
 
