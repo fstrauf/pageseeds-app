@@ -33,11 +33,16 @@ impl ResearchMode {
 }
 
 /// Parse themes from the `research_seed_extraction` step artifact.
-/// 
-/// This is the output of Step 1 in the hybrid research workflow.
-/// Expects JSON with a "themes" array. Fails loudly if parsing fails
-/// (no silent fallbacks - that makes debugging impossible).
-fn parse_themes_from_agent_artifact(task: &Task) -> Vec<String> {
+/// Parsed result from the research_seed_extraction artifact.
+#[derive(Debug, Clone, Default)]
+struct SeedArtifact {
+    themes: Vec<String>,
+    competitors: Vec<String>,
+}
+
+/// Parse the output of Step 1 in the hybrid research workflow.
+/// Expects JSON with {"themes": [...], "competitors": [...]}.
+fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
     let content = task
         .artifacts
         .iter()
@@ -46,14 +51,15 @@ fn parse_themes_from_agent_artifact(task: &Task) -> Vec<String> {
         .and_then(|a| a.content.as_deref());
 
     let Some(raw) = content else {
-        return vec![];
+        return SeedArtifact::default();
     };
 
-    // Try to parse as JSON first - step 1 should output {"themes": [...]}
+    // Try to parse as JSON first
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
         let themes = themes_from_json(&json);
-        if !themes.is_empty() {
-            return themes;
+        let competitors = competitors_from_json(&json);
+        if !themes.is_empty() || !competitors.is_empty() {
+            return SeedArtifact { themes, competitors };
         }
     }
 
@@ -61,14 +67,13 @@ fn parse_themes_from_agent_artifact(task: &Task) -> Vec<String> {
     let normalized = crate::engine::normalizer::normalize_agent_output(raw);
     if let Some(json) = normalized.json_artifact {
         let themes = themes_from_json(&json);
-        if !themes.is_empty() {
-            return themes;
+        let competitors = competitors_from_json(&json);
+        if !themes.is_empty() || !competitors.is_empty() {
+            return SeedArtifact { themes, competitors };
         }
     }
 
-    // No more fallbacks - if we can't parse, return empty.
-    // The caller should fail loudly with a clear message.
-    vec![]
+    SeedArtifact::default()
 }
 
 fn themes_from_json(v: &serde_json::Value) -> Vec<String> {
@@ -88,6 +93,22 @@ fn themes_from_json(v: &serde_json::Value) -> Vec<String> {
         if let Some(arr) = v.get(key).and_then(|x| x.as_array()) {
             return from_array(arr);
         }
+    }
+
+    vec![]
+}
+
+fn competitors_from_json(v: &serde_json::Value) -> Vec<String> {
+    let extract = |arr: &[serde_json::Value]| {
+        arr.iter()
+            .filter_map(|x| x.as_str())
+            .map(|s| s.trim().trim_start_matches("https://").trim_start_matches("http://").split('/').next().unwrap_or(s).to_string())
+            .filter(|s| !s.is_empty() && s.contains('.'))
+            .collect::<Vec<String>>()
+    };
+
+    if let Some(arr) = v.get("competitors").and_then(|x| x.as_array()) {
+        return extract(arr);
     }
 
     vec![]
@@ -142,6 +163,82 @@ fn best_serp_metric(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     })
 }
 
+/// A keyword candidate discovered from a seed theme.
+#[derive(Debug, Clone)]
+struct Candidate {
+    keyword: String,
+    source_theme: String,
+    is_question: bool,
+    volume: Option<i64>,
+}
+
+/// Smart sampling: select a diverse subset of candidates for KD checking.
+/// Ensures coverage across themes and reserves slots for question keywords.
+fn smart_sample_candidates(candidates: Vec<Candidate>, budget: usize) -> Vec<Candidate> {
+    if candidates.len() <= budget {
+        return candidates;
+    }
+
+    use std::collections::HashMap;
+
+    // Group by source theme.
+    let mut by_theme: HashMap<String, Vec<Candidate>> = HashMap::new();
+    for c in candidates {
+        by_theme.entry(c.source_theme.clone()).or_default().push(c);
+    }
+
+    let theme_count = by_theme.len().max(1);
+    let base_per_theme = budget / theme_count;
+    let mut extra = budget % theme_count;
+
+    let mut result: Vec<Candidate> = vec![];
+    let mut remaining: Vec<Candidate> = vec![];
+
+    for (_theme, mut group) in by_theme {
+        // Sort each theme's group by volume descending.
+        group.sort_by(|a, b| {
+            let va = a.volume.unwrap_or(0);
+            let vb = b.volume.unwrap_or(0);
+            vb.cmp(&va)
+        });
+
+        let quota = base_per_theme + if extra > 0 { extra -= 1; 1 } else { 0 };
+
+        // Reserve at least 1 slot for a question keyword if available.
+        let question_idx = group.iter().position(|c| c.is_question);
+        let mut picked = 0usize;
+
+        if let Some(qidx) = question_idx {
+            if quota > 0 {
+                result.push(group.remove(qidx));
+                picked += 1;
+            }
+        }
+
+        // Fill remainder of this theme's quota with highest-volume keywords.
+        while picked < quota && !group.is_empty() {
+            result.push(group.remove(0));
+            picked += 1;
+        }
+
+        // Anything left goes into the global remaining pool.
+        remaining.extend(group);
+    }
+
+    // If we still have budget left, fill with highest-volume remaining candidates.
+    remaining.sort_by(|a, b| {
+        let va = a.volume.unwrap_or(0);
+        let vb = b.volume.unwrap_or(0);
+        vb.cmp(&va)
+    });
+
+    while result.len() < budget && !remaining.is_empty() {
+        result.push(remaining.remove(0));
+    }
+
+    result
+}
+
 pub(crate) fn exec_keyword_research_native(
     task: &Task,
     project_path: &str,
@@ -167,7 +264,10 @@ pub(crate) fn exec_keyword_research_native(
     let raw_desc = task.description.as_deref().unwrap_or("");
     let desc_themes = parse_desc_themes(raw_desc);
 
-    let agent_themes = parse_themes_from_agent_artifact(task);
+    let SeedArtifact {
+        themes: agent_themes,
+        competitors: agent_competitors,
+    } = parse_seed_extraction_artifact(task);
 
     let themes = if !desc_themes.is_empty() {
         desc_themes
@@ -186,6 +286,7 @@ pub(crate) fn exec_keyword_research_native(
     };
 
     log::info!("[keyword_research_native] {} themes: {:?}", themes.len(), themes);
+    log::info!("[keyword_research_native] {} competitors: {:?}", agent_competitors.len(), agent_competitors);
 
     // ── Pre-flight: articles.json must exist ──────────────────────────────────
     let articles_json_path = paths.automation_dir.join("articles.json");
@@ -226,24 +327,24 @@ pub(crate) fn exec_keyword_research_native(
     let capsolver_key_thread = capsolver_key.clone();
     let themes_thread = themes.clone();
     let existing_keywords_thread = existing_keywords.clone();
+    let agent_competitors_thread = agent_competitors.clone();
     
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
             // Step 1 — Generate keyword ideas (includes volume) for each theme.
-            let mut volume_map: HashMap<String, i64> = HashMap::new();
-            let mut all_new_keywords: Vec<String> = vec![];
+            let mut candidates: Vec<Candidate> = vec![];
             let mut seen: HashSet<String> = HashSet::new();
 
+            // Step 1 — Generate keyword ideas using Google Autocomplete.
+            // (Replaces broken Ahrefs get_keyword_ideas endpoint)
             for theme in &themes_thread {
-                log::info!("[keyword_research_native] fetching ideas for theme '{}'", theme);
-                match crate::seo::keywords::get_keyword_ideas(
-                    &capsolver_key_thread, theme, "us", "Google",
-                ).await {
+                log::info!("[keyword_research_native] fetching Google autocomplete ideas for theme '{}'", theme);
+                match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
                     Ok(result) => {
-                        let all_ideas = result.ideas.iter().chain(result.question_ideas.iter());
-                        for idea in all_ideas {
-                            let kw_lower = idea.keyword.to_lowercase();
+                        // Add regular suggestions
+                        for suggestion in result.ideas.iter().chain(result.question_ideas.iter()) {
+                            let kw_lower = suggestion.keyword.to_lowercase();
                             if existing_keywords_thread.contains(&kw_lower) {
                                 continue; // already covered
                             }
@@ -251,58 +352,80 @@ pub(crate) fn exec_keyword_research_native(
                                 continue;
                             }
                             seen.insert(kw_lower.clone());
-                            if let Some(vol) = &idea.volume {
-                                if let Some(n) = estimate_volume(vol) {
-                                    volume_map.insert(idea.keyword.clone(), n);
-                                }
-                            }
-                            all_new_keywords.push(idea.keyword.clone());
+                            // Google doesn't provide volume, so we leave it as None
+                            candidates.push(Candidate {
+                                keyword: suggestion.keyword.clone(),
+                                source_theme: theme.clone(),
+                                is_question: suggestion.suggestion_type == crate::seo::google_autocomplete::SuggestionType::Question,
+                                volume: None,
+                            });
                         }
-                        log::info!("[keyword_research_native] theme '{}' → {} new keywords so far", theme, all_new_keywords.len());
+                        log::info!("[keyword_research_native] theme '{}' → {} total candidates", theme, candidates.len());
                     }
                     Err(e) => {
-                        log::warn!("[keyword_research_native] keyword ideas failed for '{}': {}", theme, e);
+                        log::warn!("[keyword_research_native] Google autocomplete failed for '{}': {}", theme, e);
                     }
                 }
+                
+                // Small delay to be polite to Google
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
             }
 
-            if all_new_keywords.is_empty() {
-                return Ok::<_, crate::error::Error>((
-                    HashMap::<String, i64>::new(),
-                    Vec::<serde_json::Value>::new(),
-                    Vec::<serde_json::Value>::new(),
-                    0usize,
-                    0usize,
-                    Vec::<String>::new(),
-                ));
-            }
+            // Step 2 — Smart sampling for KD checks.
+            // We can't afford to check every candidate, so sample strategically.
+            const MIN_VOLUME: i64 = 50;
+            let pre_filter_count = candidates.len();
+            let mut candidates: Vec<Candidate> = candidates
+                .into_iter()
+                .filter(|c| {
+                    c.volume
+                        .map(|v| v >= MIN_VOLUME)
+                        .unwrap_or(true)
+                })
+                .collect();
 
-            // Step 2 — Analyse difficulty, over-sampling to fill 10 with-data results.
-            let target_with_data = 10usize;
-            let max_api_calls = 30usize;
             log::info!(
-                "[keyword_research_native] analyzing difficulty (target {} with data, max {} calls, {} candidates)",
-                target_with_data, max_api_calls, all_new_keywords.len()
+                "[keyword_research_native] volume filter: {} → {} candidates (dropped {} below {})",
+                pre_filter_count,
+                candidates.len(),
+                pre_filter_count - candidates.len(),
+                MIN_VOLUME,
             );
+
+            // Stratified sampling: ensure coverage across themes + question quota.
+            let sampled = smart_sample_candidates(candidates, 50);
+            let max_api_calls = sampled.len();
+            log::info!(
+                "[keyword_research_native] smart sample: {} keywords for KD analysis ({} question keywords)",
+                sampled.len(),
+                sampled.iter().filter(|c| c.is_question).count()
+            );
+
+            // Build volume map from all candidates for lookups during KD analysis.
+            let volume_map: HashMap<String, i64> = sampled
+                .iter()
+                .filter_map(|c| c.volume.map(|v| (c.keyword.clone(), v)))
+                .collect();
 
             let mut with_data_results: Vec<serde_json::Value> = vec![];
             let mut no_data_results: Vec<serde_json::Value> = vec![];
             let mut api_calls = 0usize;
             let mut analyzed_count = 0usize;
 
-            for kw in &all_new_keywords {
-                if with_data_results.len() >= target_with_data || api_calls >= max_api_calls {
+            for candidate in &sampled {
+                if api_calls >= max_api_calls {
                     break;
                 }
                 api_calls += 1;
                 analyzed_count += 1;
+                let kw = &candidate.keyword;
 
                 match crate::seo::keywords::get_keyword_difficulty(
                     &capsolver_key_thread, kw, "us",
                 ).await {
                     Ok(kd) => {
                         let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
-                        let vol = volume_map.get(kw).copied();
+                        let vol = candidate.volume;
                         let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
                         let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
                         let entry = serde_json::json!({
@@ -329,7 +452,7 @@ pub(crate) fn exec_keyword_research_native(
                     }
                     Err(e) => {
                         log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
-                        let vol = volume_map.get(kw).copied();
+                        let vol = candidate.volume;
                         no_data_results.push(serde_json::json!({
                             "keyword": kw,
                             "difficulty": serde_json::Value::Null,
@@ -343,11 +466,40 @@ pub(crate) fn exec_keyword_research_native(
                 }
             }
 
-            Ok((volume_map, with_data_results, no_data_results, api_calls, analyzed_count, all_new_keywords))
+            // Step 5 — Optional competitor traffic context.
+            let mut competitor_insights: Vec<crate::models::research::CompetitorInsight> = vec![];
+            for domain in &agent_competitors_thread {
+                match crate::seo::traffic::check_traffic(
+                    &capsolver_key_thread, domain, "subdomains", "None",
+                ).await {
+                    Ok(traffic) => {
+                        let top_keywords = traffic.top_keywords
+                            .into_iter()
+                            .take(5)
+                            .map(|tk| crate::models::research::CompetitorTopKeyword {
+                                keyword: tk.keyword.unwrap_or_default(),
+                                traffic: tk.traffic,
+                                position: tk.position,
+                            })
+                            .collect();
+                        competitor_insights.push(crate::models::research::CompetitorInsight {
+                            domain: traffic.domain,
+                            traffic_monthly_avg: traffic.traffic.traffic_monthly_avg,
+                            top_keywords,
+                        });
+                        log::info!("[keyword_research_native] competitor traffic fetched for {}", domain);
+                    }
+                    Err(e) => {
+                        log::warn!("[keyword_research_native] competitor traffic failed for '{}': {}", domain, e);
+                    }
+                }
+            }
+
+            Ok::<_, crate::error::Error>((with_data_results, no_data_results, api_calls, analyzed_count, pre_filter_count, competitor_insights))
         })
     }).join();
 
-    let (volume_map, mut with_data_results, no_data_results, api_calls, analyzed_count, all_new_keywords) = match thread_result {
+    let (with_data_results, no_data_results, api_calls, analyzed_count, total_candidates, competitor_insights) = match thread_result {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             return crate::engine::workflows::StepResult {
@@ -365,7 +517,7 @@ pub(crate) fn exec_keyword_research_native(
         }
     };
 
-    if all_new_keywords.is_empty() {
+    if total_candidates == 0 {
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
@@ -376,12 +528,10 @@ pub(crate) fn exec_keyword_research_native(
         };
     }
 
-    let target_with_data = 10usize;
-
-    // Present with-data results first, then pad with no-data up to 10 total.
+    // Present with-data results first, then append no-data results so the
+    // final selection agent can see the full sampled set (up to max_api_calls).
     let mut difficulty_results = with_data_results;
-    let remaining_slots = target_with_data.saturating_sub(difficulty_results.len());
-    difficulty_results.extend(no_data_results.into_iter().take(remaining_slots));
+    difficulty_results.extend(no_data_results);
 
     log::info!(
         "[keyword_research_native] {} with data, {} total shown (checked {} keywords)",
@@ -390,7 +540,7 @@ pub(crate) fn exec_keyword_research_native(
         analyzed_count,
     );
 
-    let total_candidates = all_new_keywords.len();
+    // total_candidates already captured from pre_filter_count
     let with_data_count = difficulty_results.iter().filter(|r| r["has_data"] == true).count();
     
     // Build typed output contract
@@ -409,6 +559,8 @@ pub(crate) fn exec_keyword_research_native(
     let output = crate::models::research::KeywordPipelineOutput {
         keywords,
         themes: themes.clone(),
+        competitors: agent_competitors,
+        competitor_insights,
         total_candidates,
         with_data_count,
     };
@@ -1014,8 +1166,8 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
-        let themes = parse_themes_from_agent_artifact(&task);
-        assert_eq!(themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
+        let parsed = parse_seed_extraction_artifact(&task);
+        assert_eq!(parsed.themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
     }
 
     // Note: List fallback ("1. Theme") removed - we now require JSON output contract.
@@ -1047,8 +1199,8 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
-        let themes = parse_themes_from_agent_artifact(&task);
-        assert_eq!(themes, vec!["Protective Put", "IRA Options"]);
+        let parsed = parse_seed_extraction_artifact(&task);
+        assert_eq!(parsed.themes, vec!["Protective Put", "IRA Options"]);
     }
     // ── find_file_by_suffix ──────────────────────────────────────────────────────
 
@@ -1714,10 +1866,76 @@ mod keyword_workflow_tests {
         assert_eq!(steps[1].name, "research_ahrefs_pipeline");
         assert_eq!(steps[1].kind, "keyword_research_native");
         assert_eq!(steps[2].name, "research_final_selection");
-        assert_eq!(steps[2].kind, "agentic");
+        assert_eq!(steps[2].kind, "research_final_selection");
         assert_eq!(steps[3].name, "research_normalize");
         assert_eq!(steps[3].kind, "normalizer");
         
         std::fs::remove_dir_all(&temp_dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod sampling_tests {
+    use super::{Candidate, smart_sample_candidates};
+
+    fn make(kw: &str, theme: &str, is_question: bool, volume: Option<i64>) -> Candidate {
+        Candidate {
+            keyword: kw.to_string(),
+            source_theme: theme.to_string(),
+            is_question,
+            volume,
+        }
+    }
+
+    #[test]
+    fn sampling_returns_all_when_below_budget() {
+        let candidates = vec![
+            make("a", "t1", false, Some(100)),
+            make("b", "t1", false, Some(200)),
+        ];
+        let result = smart_sample_candidates(candidates.clone(), 10);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn sampling_stratifies_across_themes() {
+        let candidates = vec![
+            make("a1", "t1", false, Some(1000)),
+            make("a2", "t1", false, Some(900)),
+            make("a3", "t1", false, Some(800)),
+            make("b1", "t2", false, Some(700)),
+            make("b2", "t2", false, Some(600)),
+            make("b3", "t2", false, Some(500)),
+        ];
+        let result = smart_sample_candidates(candidates, 4);
+        let t1_count = result.iter().filter(|c| c.source_theme == "t1").count();
+        let t2_count = result.iter().filter(|c| c.source_theme == "t2").count();
+        assert!(t1_count >= 1, "t1 should have at least 1 sample");
+        assert!(t2_count >= 1, "t2 should have at least 1 sample");
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn sampling_prioritizes_question_keywords() {
+        let candidates = vec![
+            make("a1", "t1", false, Some(1000)),
+            make("a2", "t1", true, Some(100)), // question
+            make("a3", "t1", false, Some(800)),
+        ];
+        let result = smart_sample_candidates(candidates, 2);
+        assert!(result.iter().any(|c| c.keyword == "a2" && c.is_question), "question keyword should be sampled");
+    }
+
+    #[test]
+    fn sampling_fills_remaining_with_highest_volume() {
+        let candidates = vec![
+            make("a1", "t1", false, Some(100)),
+            make("b1", "t2", false, Some(1000)),
+            make("b2", "t2", false, Some(900)),
+        ];
+        let result = smart_sample_candidates(candidates, 3);
+        assert_eq!(result.len(), 3);
+        // The highest-volume keyword should definitely be included.
+        assert!(result.iter().any(|c| c.keyword == "b1" && c.volume == Some(1000)));
     }
 }

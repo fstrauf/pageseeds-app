@@ -1,12 +1,15 @@
 /// Research workflow execution module.
 ///
 /// Contains the execution logic for the 3-step research workflow:
-/// 1. research_seed_extraction - LLM extracts themes from project brief
-/// 2. research_keyword_discovery - ToolCallingAgent fetches keyword data
-/// 3. research_final_selection - LLM selects best candidates
+/// 1. research_seed_extraction - LLM extracts themes from project brief (agentic)
+/// 2. research_ahrefs_pipeline - Deterministic Rust calls Ahrefs API directly
+/// 3. research_final_selection - Deterministic filtering/sorting of results
+///
+/// Only step 1 uses an LLM. Steps 2 and 3 are pure Rust for reliability.
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::{StepResult, WorkflowStep};
+use crate::models::research::{KeywordPipelineOutput, SelectedKeyword, LandingPageCandidate};
 use crate::models::task::Task;
 
 /// Execute a research workflow step using ToolCallingAgent
@@ -184,47 +187,252 @@ pub fn build_research_prompts(
             Ok((system.to_string(), user))
         }
 
-        "research_final_selection" => {
-            // Choose prompt based on task type
-            let is_landing_page = task.task_type == "research_landing_pages";
-
-            let system = if is_landing_page {
-                include_str!("../../prompts/final_selection_landing_pages.md")
-            } else {
-                include_str!("../../prompts/final_selection_keywords.md")
-            };
-
-            // Get keyword data from previous step output (Step 2 -> Step 3)
-            // Parse as typed KeywordPipelineOutput for structured access
-            let keyword_data = if let Some(prev) = previous_output {
-                // Try to parse as typed output first
-                match crate::models::research::parse_keyword_pipeline(prev) {
-                    Ok(pipeline) => {
-                        // Format as pretty JSON for the LLM prompt
-                        serde_json::to_string_pretty(&pipeline)
-                            .unwrap_or_else(|_| prev.to_string())
-                    }
-                    Err(_) => {
-                        // Fallback to raw if parsing fails
-                        prev.to_string()
-                    }
-                }
-            } else {
-                task.description
-                    .as_deref()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "{\"keywords\": [], \"themes\": [], \"total_candidates\": 0, \"with_data_count\": 0}".to_string())
-            };
-
-            let user = format!(
-                "## Keyword Research Data\n\n{}\n\nSelect the best candidates based on the criteria above. \
-                 Return ONLY valid JSON matching the output contract specified in the system prompt.",
-                keyword_data
-            );
-
-            Ok((system.to_string(), user))
-        }
-
         _ => Err(format!("Unknown research step: {}", step_name)),
+    }
+}
+/// Output format matching what the frontend KeywordPicker expects.
+/// 
+/// The frontend expects either:
+/// - `landing_page_candidates` for landing page research
+/// - `difficulty.results` for keyword research (wrapped in difficulty object)
+#[derive(Debug, Clone, serde::Serialize)]
+struct KeywordPickerOutput {
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub landing_page_candidates: Vec<LandingPageCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<DifficultyWrapper>,
+    pub total_candidates: usize,
+    pub filtered_out: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct DifficultyWrapper {
+    pub total: usize,
+    pub successful: usize,
+    pub results: Vec<SelectedKeyword>,
+}
+
+/// Deterministic final selection of keywords from pipeline output.
+///
+/// This replaces the agentic step with pure Rust logic:
+/// - Filters to keywords with data and KD <= target (default 10)
+/// - Sorts by volume (desc), then difficulty (asc)
+/// - Takes top N (default 10)
+/// - Generates recommended titles based on keyword
+pub fn select_keywords_deterministic(
+    pipeline_json: &str,
+    is_landing_page: bool,
+) -> Result<KeywordPickerOutput, String> {
+    // Parse pipeline output
+    let pipeline: KeywordPipelineOutput = serde_json::from_str(pipeline_json)
+        .map_err(|e| format!("Failed to parse pipeline output: {}", e))?;
+
+    let target_kd = 10i64;
+    let max_results = 10usize;
+    let total_candidates = pipeline.keywords.len();
+
+    // Filter to keywords with data and acceptable KD
+    let mut candidates: Vec<_> = pipeline
+        .keywords
+        .into_iter()
+        .filter(|k| {
+            let has_data = k.has_data.unwrap_or(false);
+            let kd_ok = k.kd.map(|d| d as i64 <= target_kd).unwrap_or(false);
+            has_data && kd_ok
+        })
+        .collect();
+
+    // Sort by volume desc, then KD asc
+    candidates.sort_by(|a, b| {
+        let vol_cmp = b.volume.unwrap_or(0).cmp(&a.volume.unwrap_or(0));
+        if vol_cmp != std::cmp::Ordering::Equal {
+            return vol_cmp;
+        }
+        let kd_a = a.kd.unwrap_or(100.0) as i64;
+        let kd_b = b.kd.unwrap_or(100.0) as i64;
+        kd_a.cmp(&kd_b)
+    });
+
+    // Take top N
+    let selected: Vec<_> = candidates.into_iter().take(max_results).collect();
+    let filtered_out = total_candidates.saturating_sub(selected.len());
+
+    if is_landing_page {
+        Ok(KeywordPickerOutput {
+            landing_page_candidates: selected
+                .into_iter()
+                .map(|k| LandingPageCandidate {
+                    keyword: k.keyword.clone(),
+                    estimated_volume: k.volume.unwrap_or(0),
+                    estimated_kd: k.kd.unwrap_or(0.0) as i64,
+                    intent: k.intent.clone().unwrap_or_else(|| "informational".to_string()),
+                    landing_page_type: infer_landing_page_type(&k.keyword),
+                    opportunity_score: "high".to_string(),
+                    opportunity_reason: format!(
+                        "KD {} with {} monthly searches",
+                        k.kd.map(|d| d as i64).unwrap_or(0),
+                        k.volume.unwrap_or(0)
+                    ),
+                    proposed_title: generate_title(&k.keyword),
+                })
+                .collect(),
+            difficulty: None,
+            total_candidates,
+            filtered_out,
+        })
+    } else {
+        let results: Vec<_> = selected
+            .into_iter()
+            .map(|k| SelectedKeyword {
+                keyword: k.keyword.clone(),
+                volume: k.volume.unwrap_or(0),
+                difficulty: k.kd.unwrap_or(0.0) as i64,
+                traffic: k.traffic.map(|t| t as i64),
+                selection_reason: format!(
+                    "Low difficulty (KD {}) with {} monthly searches",
+                    k.kd.map(|d| d as i64).unwrap_or(0),
+                    k.volume.unwrap_or(0)
+                ),
+                recommended_title: generate_title(&k.keyword),
+            })
+            .collect();
+
+        let successful = results.len();
+        Ok(KeywordPickerOutput {
+            landing_page_candidates: Vec::new(),
+            difficulty: Some(DifficultyWrapper {
+                total: successful,
+                successful,
+                results,
+            }),
+            total_candidates,
+            filtered_out,
+        })
+    }
+}
+
+/// Infer landing page type from keyword patterns
+fn infer_landing_page_type(keyword: &str) -> String {
+    let lower = keyword.to_lowercase();
+    if lower.contains("vs") || lower.contains("compare") || lower.contains("alternative") {
+        "comparison".to_string()
+    } else if lower.contains("best") || lower.contains("top") || lower.contains("review") {
+        "category".to_string()
+    } else if lower.contains("how to") || lower.contains("guide") || lower.contains("tutorial") {
+        "use_case".to_string()
+    } else if lower.contains("software") || lower.contains("tool") || lower.contains("app") {
+        "feature".to_string()
+    } else {
+        "category".to_string()
+    }
+}
+
+/// Generate a readable title from a keyword
+fn generate_title(keyword: &str) -> String {
+    // Capitalize first letter of each word
+    let words: Vec<String> = keyword
+        .split_whitespace()
+        .enumerate()
+        .map(|(i, word)| {
+            if i == 0 || !is_stop_word(word) {
+                capitalize_first(word)
+            } else {
+                word.to_lowercase()
+            }
+        })
+        .collect();
+    
+    let title = words.join(" ");
+    
+    // Add suffix based on keyword type
+    let lower = keyword.to_lowercase();
+    if lower.contains("how to") {
+        format!("{}: A Step-by-Step Guide", title)
+    } else if lower.contains("best") || lower.contains("top") {
+        format!("{} for 2025", title)
+    } else if lower.contains("vs") {
+        format!("{}: Which is Right for You?", title)
+    } else {
+        format!("{}: Complete Guide", title)
+    }
+}
+
+fn is_stop_word(word: &str) -> bool {
+    matches!(
+        word.to_lowercase().as_str(),
+        "a" | "an" | "the" | "and" | "or" | "but" | "in" | "on" | "at" | "to" | "for" | "of" | "with"
+    )
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+/// Execute the deterministic final selection step.
+///
+/// This is called by the executor when it encounters a step with kind "research_final_selection".
+/// It reads the previous step's output (keyword pipeline results) and applies deterministic
+/// filtering/sorting to select the best candidates.
+pub async fn exec_research_final_selection(
+    task: &Task,
+    project_path: &str,
+    previous_output: Option<&str>,
+) -> StepResult {
+    let pipeline_json = match previous_output {
+        Some(out) => out,
+        None => {
+            return StepResult {
+                success: false,
+                message: "No previous step output found — expected keyword pipeline results".to_string(),
+                output: None,
+            };
+        }
+    };
+
+    let is_landing_page = task.task_type == "research_landing_pages";
+
+    log::info!(
+        "[research_final_selection] Running deterministic selection for {} (landing_page={})",
+        task.task_type,
+        is_landing_page
+    );
+
+    match select_keywords_deterministic(pipeline_json, is_landing_page) {
+        Ok(output) => {
+            let json = match serde_json::to_string_pretty(&output) {
+                Ok(j) => j,
+                Err(e) => {
+                    return StepResult {
+                        success: false,
+                        message: format!("Failed to serialize output: {}", e),
+                        output: None,
+                    };
+                }
+            };
+
+            let count = if is_landing_page {
+                output.landing_page_candidates.len()
+            } else {
+                output.difficulty.as_ref().map(|d| d.results.len()).unwrap_or(0)
+            };
+
+            StepResult {
+                success: true,
+                message: format!(
+                    "Selected {} keywords deterministically (KD <= 10, sorted by volume)",
+                    count
+                ),
+                output: Some(json),
+            }
+        }
+        Err(e) => StepResult {
+            success: false,
+            message: format!("Keyword selection failed: {}", e),
+            output: None,
+        },
     }
 }

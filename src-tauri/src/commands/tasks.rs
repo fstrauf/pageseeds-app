@@ -732,6 +732,32 @@ mod tests {
     // ── to_title_case ─────────────────────────────────────────────────────────
 
     #[test]
+    fn debug_research_output_format() {
+        // Sample output from research_ahrefs_pipeline to verify format
+        let sample = r#"{
+            "keywords": [
+                {"keyword": "test", "volume": 100, "kd": 25.0, "traffic": 500.0, "has_data": true}
+            ],
+            "themes": ["test"],
+            "total_candidates": 1,
+            "with_data_count": 1
+        }"#;
+        
+        let parsed: serde_json::Value = serde_json::from_str(sample).unwrap();
+        
+        // Verify the format
+        if let Some(keywords) = parsed.get("keywords").and_then(|k| k.as_array()) {
+            if let Some(first) = keywords.first() {
+                println!("Keyword: {:?}", first.get("keyword"));
+                println!("Volume: {:?}", first.get("volume"));
+                println!("KD: {:?}", first.get("kd"));
+                println!("Traffic: {:?}", first.get("traffic"));
+                println!("Has data: {:?}", first.get("has_data"));
+            }
+        }
+    }
+
+    #[test]
     fn title_case_capitalizes_each_word() {
         assert_eq!(to_title_case("seo tools guide"), "Seo Tools Guide");
         assert_eq!(to_title_case("content"), "Content");

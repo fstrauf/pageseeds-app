@@ -96,9 +96,9 @@ impl WorkflowHandler for ResearchHandler {
                     // Output: structured JSON with all keywords, volume, KD.
                     WorkflowStep::new("research_ahrefs_pipeline", "keyword_research_native"),
                     
-                    // Step 3 (agentic): LLM selects best candidates from structured data.
-                    // Cannot be deterministic: requires intent + semantic deduplication judgment.
-                    WorkflowStep::new("research_final_selection", "agentic"),
+                    // Step 3 (deterministic): Select best candidates from structured data.
+                    // Deterministic: pure filtering/sorting by KD and volume — no judgment needed.
+                    WorkflowStep::new("research_final_selection", "research_final_selection"),
                     
                     // Step 4 (normalizer): Enforces output contract before UI parses it.
                     WorkflowStep::new("research_normalize", "normalizer")
@@ -638,9 +638,10 @@ pub async fn exec_agentic(
     );
 
     // Check if this is a research workflow step that uses ToolCallingAgent
+    // Note: research_final_selection is now deterministic, not agentic
     let is_research_step = matches!(
         step.name.as_str(),
-        "research_seed_extraction" | "research_keyword_discovery" | "research_final_selection"
+        "research_seed_extraction" | "research_keyword_discovery"
     );
 
     if is_research_step {

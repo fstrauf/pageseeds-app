@@ -188,6 +188,12 @@ pub async fn execute_task_with_token(
                 log::info!("[executor] coverage_load_articles output ({} chars)", out.len());
                 latest_raw_output = result.output.clone();
             }
+        } else if step.name == "research_ahrefs_pipeline" {
+            // Track keyword research output for research_final_selection
+            if let Some(ref out) = result.output {
+                log::info!("[executor] research_ahrefs_pipeline output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
         }
 
         progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
@@ -556,6 +562,27 @@ async fn run_step(
             let project_path = project_path.to_string();
             tokio::task::spawn_blocking(move || {
                 crate::engine::exec::keywords::exec_keyword_research_native(&task, &project_path)
+            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Step panicked: {}", e),
+                output: None,
+            })
+        }
+        "research_final_selection" => {
+            // Deterministic keyword selection — no LLM, just filter/sort
+            let task = task.clone();
+            let project_path = project_path.to_string();
+            let previous_output = latest_raw.map(|s| s.to_string());
+            tokio::task::spawn_blocking(move || {
+                // Use blocking thread since this is CPU-bound sorting/filtering
+                let rt = tokio::runtime::Handle::current();
+                rt.block_on(async {
+                    crate::engine::exec::research::exec_research_final_selection(
+                        &task,
+                        &project_path,
+                        previous_output.as_deref(),
+                    ).await
+                })
             }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
                 success: false,
                 message: format!("Step panicked: {}", e),

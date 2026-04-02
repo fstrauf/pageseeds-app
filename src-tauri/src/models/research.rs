@@ -10,14 +10,17 @@ use ts_rs::TS;
 
 /// Output from Step 1: research_seed_extraction
 /// 
-/// The LLM reads the project brief and extracts 3-4 research themes.
-/// Contract: MUST return valid JSON with {"themes": [...]}
+/// The LLM reads the project brief and extracts research themes and competitor domains.
+/// Contract: MUST return valid JSON with {"themes": [...], "competitors": [...]}
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SeedExtractionOutput {
-    /// 3-4 seed themes for Ahrefs keyword ideas API
+    /// 8-12 seed themes for Ahrefs keyword ideas API
     /// Each theme should be 1-3 words maximum
     pub themes: Vec<String>,
+    /// 2-3 competitor domains for traffic/context cross-reference
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub competitors: Vec<String>,
 }
 
 /// A scored keyword from the Ahrefs pipeline
@@ -40,6 +43,24 @@ pub struct ScoredKeyword {
     pub has_data: Option<bool>,
 }
 
+/// A competitor top keyword from Ahrefs traffic data.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CompetitorTopKeyword {
+    pub keyword: String,
+    pub traffic: Option<f64>,
+    pub position: Option<f64>,
+}
+
+/// Competitor traffic insight for the final selection agent.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CompetitorInsight {
+    pub domain: String,
+    pub traffic_monthly_avg: f64,
+    pub top_keywords: Vec<CompetitorTopKeyword>,
+}
+
 /// Output from Step 2: research_ahrefs_pipeline
 ///
 /// The deterministic step calls Ahrefs API for each theme,
@@ -51,6 +72,12 @@ pub struct KeywordPipelineOutput {
     pub keywords: Vec<ScoredKeyword>,
     /// The themes that were used for research
     pub themes: Vec<String>,
+    /// Competitor domains extracted from the seed step
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub competitors: Vec<String>,
+    /// Competitor traffic insights for context
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub competitor_insights: Vec<CompetitorInsight>,
     /// Total candidates before filtering
     pub total_candidates: usize,
     /// Number of keywords with full data (KD + volume)
@@ -67,6 +94,9 @@ pub struct SelectedKeyword {
     pub volume: i64,
     /// Keyword difficulty score 0-100
     pub difficulty: i64,
+    /// Top-ranking page traffic estimate
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traffic: Option<i64>,
     /// Why this keyword was selected
     pub selection_reason: String,
     /// Recommended article title

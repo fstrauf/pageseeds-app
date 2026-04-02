@@ -19,6 +19,16 @@ You will receive keyword research data in this exact structure:
     }
   ],
   "themes": ["theme1", "theme2"],
+  "competitors": ["competitor1.com"],
+  "competitor_insights": [
+    {
+      "domain": "competitor1.com",
+      "traffic_monthly_avg": 45000.0,
+      "top_keywords": [
+        {"keyword": "related commercial term", "traffic": 1200.0, "position": 3.5}
+      ]
+    }
+  ],
   "total_candidates": 50,
   "with_data_count": 10
 }
@@ -30,7 +40,9 @@ Each keyword has:
 - `kd`: Keyword difficulty 0-100 (may be null)
 - `intent`: Search intent classification (may be null)
 - `traffic`: Estimated traffic to top result (may be null)
-- `has_data`: Whether we have complete KD/volume data
+- `has_data`: Whether we have complete KD/volume data from Ahrefs
+
+**IMPORTANT:** Some keywords have `has_data: false` because Ahrefs free tools do not score every long-tail keyword. You MAY still select these if they show strong commercial intent and align with the project's positioning. Use competitor insights to validate demand.
 
 ## Landing Page vs Blog Article
 
@@ -47,9 +59,10 @@ Select 6-8 best commercial keywords from the provided data for landing pages.
 ## Selection Criteria
 
 - **Intent**: Transactional/Commercial (NOT informational)
-- **Keyword Difficulty (KD)**: Target LOW (ideally <30, max 40)
-- **Search Volume**: Minimum 200 monthly searches
+- **Keyword Difficulty (KD)**: Target LOW (ideally <30, max 40). If `kd` is null, judge by competitiveness of the phrase and competitor rankings.
+- **Search Volume**: Minimum 200 monthly searches. Do NOT reject keywords solely because they have no KD data.
 - **Distinct concepts**: No cannibalization (pick one per cluster)
+- **Competitor gap opportunity**: If competitor insights show a rival ranking well for a related commercial term, prioritize that angle.
 
 ## Patterns to Prioritize
 
@@ -70,9 +83,9 @@ Select 6-8 best commercial keywords from the provided data for landing pages.
 
 ## Selection Process
 
-1. Review all provided keywords in the JSON above
+1. Review all provided keywords AND competitor insights
 2. Filter for commercial/transactional intent
-3. Prioritize KD < 40 and volume > 200
+3. Prioritize KD < 40 and volume > 200 (but do not require KD data)
 4. Group by cluster (keywords sharing 2+ words = same cluster)
 5. Pick ONE best keyword per cluster
 6. Select 6-8 diverse candidates covering different landing page types
