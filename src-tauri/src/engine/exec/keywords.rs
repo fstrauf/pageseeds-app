@@ -2,14 +2,151 @@
 ///
 /// Native Rust pipeline:
 ///   1. `get_keyword_ideas` per theme → keywords WITH volume
-///   2. Dedupe against articles.json
-///   3. `get_keyword_difficulty` per top-N keyword → KD scores
-///   4. Merge into the standard output schema so KeywordPicker shows both volume and KD.
+///   2. Dedupe against articles.json + coverage analysis
+///   3. Filter/prioritize by coverage gaps (skip well-covered topics)
+///   4. `get_keyword_difficulty` per top-N keyword → KD scores
+///   5. Merge into the standard output schema so KeywordPicker shows both volume and KD.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
+
+// ─── Coverage-Aware Filtering ─────────────────────────────────────────────────
+
+/// Coverage cluster data loaded from keyword_coverage.json
+#[derive(Debug, Clone)]
+struct CoverageCluster {
+    id: String,
+    name: String,
+    primary_keywords: Vec<String>,
+    article_count: i64,
+}
+
+/// Load coverage clusters from keyword_coverage.json if available
+fn load_coverage_clusters(project_path: &str) -> Vec<CoverageCluster> {
+    let coverage = match crate::engine::exec::coverage::read_keyword_coverage(project_path) {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+    
+    coverage.get("clusters")
+        .and_then(|c| c.as_array())
+        .map(|clusters| {
+            clusters.iter().filter_map(|c| {
+                let id = c.get("cluster_id")?.as_str()?.to_string();
+                let name = c.get("cluster_name")?.as_str()?.to_string();
+                let article_count = c.get("article_count")?.as_i64()?;
+                let primary_keywords = c.get("primary_keywords")
+                    .and_then(|k| k.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|k| k.as_str().map(|s| s.to_lowercase()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                
+                Some(CoverageCluster {
+                    id,
+                    name,
+                    primary_keywords,
+                    article_count,
+                })
+            }).collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Score how well a keyword fills a coverage gap.
+/// 
+/// Returns (score, match_type, cluster_name):
+/// - score: 0-100, higher = better gap fill
+/// - match_type: "exact", "semantic", "new_topic"
+/// - cluster_name: which cluster it relates to (if any)
+/// 
+/// Scoring logic:
+/// - Keywords not matching any cluster: 100 (new topic, highest priority)
+/// - Keywords matching a cluster with < 3 articles: 80 (thin cluster, needs content)
+/// - Keywords matching a cluster with 3-5 articles: 50 (moderate coverage)
+/// - Keywords matching a cluster with > 5 articles: 20 (well covered, low priority)
+fn score_coverage_gap(
+    keyword: &str,
+    clusters: &[CoverageCluster],
+    existing_keywords: &HashSet<String>,
+) -> (u8, &'static str, Option<String>) {
+    let kw_lower = keyword.to_lowercase();
+    
+    // Exact duplicate check
+    if existing_keywords.contains(&kw_lower) {
+        return (0, "exact_duplicate", None);
+    }
+    
+    // Check for semantic match against cluster keywords
+    for cluster in clusters {
+        let is_related = cluster.primary_keywords.iter().any(|pk| {
+            // Keyword contains cluster keyword OR cluster keyword contains keyword
+            kw_lower.contains(pk) || pk.contains(&kw_lower)
+        });
+        
+        if is_related {
+            let score = match cluster.article_count {
+                0..=2 => 80,   // Thin cluster - high priority
+                3..=5 => 50,   // Moderate coverage
+                6..=10 => 30,  // Good coverage
+                _ => 20,       // Well covered - low priority
+            };
+            return (score, "semantic", Some(cluster.name.clone()));
+        }
+    }
+    
+    // No cluster match = new topic, highest priority
+    (100, "new_topic", None)
+}
+
+/// Filter and sort candidates by coverage gap score.
+/// 
+/// Removes exact duplicates and low-value keywords, prioritizes gap-filling keywords.
+fn filter_by_coverage_gap(
+    candidates: Vec<Candidate>,
+    clusters: &[CoverageCluster],
+    existing_keywords: &HashSet<String>,
+) -> Vec<Candidate> {
+    let mut scored: Vec<(Candidate, u8, &'static str)> = candidates
+        .into_iter()
+        .filter_map(|c| {
+            let (score, match_type, _) = score_coverage_gap(&c.keyword, clusters, existing_keywords);
+            
+            // Filter out exact duplicates entirely
+            if score == 0 {
+                return None;
+            }
+            
+            Some((c, score, match_type))
+        })
+        .collect();
+    
+    // Sort by gap score desc, then by volume desc
+    scored.sort_by(|a, b| {
+        let score_cmp = b.1.cmp(&a.1); // Higher gap score first
+        if score_cmp != std::cmp::Ordering::Equal {
+            return score_cmp;
+        }
+        let vol_a = a.0.volume.unwrap_or(0);
+        let vol_b = b.0.volume.unwrap_or(0);
+        vol_b.cmp(&vol_a) // Higher volume first
+    });
+    
+    // Log the distribution
+    let new_topic_count = scored.iter().filter(|(_, _, t)| *t == "new_topic").count();
+    let semantic_count = scored.iter().filter(|(_, _, t)| *t == "semantic").count();
+    log::info!(
+        "[coverage_filter] {} new topics, {} semantic matches after gap filtering",
+        new_topic_count,
+        semantic_count
+    );
+    
+    scored.into_iter().map(|(c, _, _)| c).collect()
+}
 
 // ─── Research Mode ────────────────────────────────────────────────────────────
 
@@ -321,6 +458,15 @@ pub(crate) fn exec_keyword_research_native(
 
     log::info!("[keyword_research_native] {} existing keywords to filter against", existing_keywords.len());
 
+    // ── Load coverage analysis for gap filtering ──────────────────────────────
+    let coverage_clusters = load_coverage_clusters(project_path);
+    let has_coverage = !coverage_clusters.is_empty();
+    if has_coverage {
+        log::info!("[keyword_research_native] loaded {} coverage clusters for gap analysis", coverage_clusters.len());
+    } else {
+        log::info!("[keyword_research_native] no coverage analysis found, skipping gap filtering");
+    }
+
     // ── Bridge to tokio async runtime ─────────────────────────────────────────
     // Spawn a new thread with its own runtime to avoid block_on issues when called
     // from within an async context (queue executor)
@@ -328,6 +474,7 @@ pub(crate) fn exec_keyword_research_native(
     let themes_thread = themes.clone();
     let existing_keywords_thread = existing_keywords.clone();
     let agent_competitors_thread = agent_competitors.clone();
+    let coverage_clusters_thread = coverage_clusters.clone();
     
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
@@ -346,7 +493,7 @@ pub(crate) fn exec_keyword_research_native(
                         for suggestion in result.ideas.iter().chain(result.question_ideas.iter()) {
                             let kw_lower = suggestion.keyword.to_lowercase();
                             if existing_keywords_thread.contains(&kw_lower) {
-                                continue; // already covered
+                                continue; // already covered (exact match)
                             }
                             if seen.contains(&kw_lower) {
                                 continue;
@@ -371,10 +518,31 @@ pub(crate) fn exec_keyword_research_native(
                 tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
             }
 
-            // Step 2 — Smart sampling for KD checks.
+            // Track total candidates before any filtering for reporting
+            let pre_filter_count = candidates.len();
+            
+            // Step 2 — Coverage-aware filtering BEFORE expensive KD checks.
+            // This filters out keywords that are already well-covered semantically
+            // and prioritizes keywords that fill gaps in coverage.
+            if !coverage_clusters_thread.is_empty() {
+                let pre_gap_count = candidates.len();
+                candidates = filter_by_coverage_gap(
+                    candidates,
+                    &coverage_clusters_thread,
+                    &existing_keywords_thread,
+                );
+                log::info!(
+                    "[keyword_research_native] coverage gap filter: {} → {} candidates (removed {} well-covered)",
+                    pre_gap_count,
+                    candidates.len(),
+                    pre_gap_count - candidates.len()
+                );
+            }
+
+            // Step 3 — Smart sampling for KD checks.
             // We can't afford to check every candidate, so sample strategically.
             const MIN_VOLUME: i64 = 50;
-            let pre_filter_count = candidates.len();
+            let _pre_volume_count = candidates.len();
             let mut candidates: Vec<Candidate> = candidates
                 .into_iter()
                 .filter(|c| {
@@ -386,9 +554,9 @@ pub(crate) fn exec_keyword_research_native(
 
             log::info!(
                 "[keyword_research_native] volume filter: {} → {} candidates (dropped {} below {})",
-                pre_filter_count,
+                _pre_volume_count,
                 candidates.len(),
-                pre_filter_count - candidates.len(),
+                _pre_volume_count - candidates.len(),
                 MIN_VOLUME,
             );
 
