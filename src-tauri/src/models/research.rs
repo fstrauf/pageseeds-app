@@ -41,6 +41,9 @@ pub struct ScoredKeyword {
     /// Whether we have complete data for this keyword
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_data: Option<bool>,
+    /// Search intent confidence score 0-100
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent_confidence: Option<f64>,
 }
 
 /// A competitor top keyword from Ahrefs traffic data.

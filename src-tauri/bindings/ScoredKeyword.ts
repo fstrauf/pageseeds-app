@@ -27,4 +27,8 @@ traffic: number | null,
 /**
  * Whether we have complete data for this keyword
  */
-has_data: boolean | null, };
+has_data: boolean | null, 
+/**
+ * Search intent confidence score 0-100
+ */
+intent_confidence: number | null, };

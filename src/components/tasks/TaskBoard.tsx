@@ -143,27 +143,32 @@ export function TaskBoard({
     if (tasks.length === 0) return
 
     // First try exact match (e.g. a task navigated to directly)
-    const target = tasks.find(t => t.id === initialTaskId)
+    let target = tasks.find(t => t.id === initialTaskId)
+    
+    // The target task may be in a different status than the current filter (e.g. 'review'
+    // while we're showing 'todo'). Widen to 'all' and reload so we can find it.
+    if (!target && statusFilter !== 'all') {
+      setStatusFilter('all')
+      return
+    }
+    
     if (target) {
       setSelectedTask(target)
       onTaskOpened?.()
       return
     }
-    // The target task may be in a different status than the current filter (e.g. 'review'
-    // while we're showing 'todo'). Widen to 'all' and reload so we can find it.
-    if (statusFilter !== 'all') {
-      setStatusFilter('all')
-      return
-    }
+    
     // Fallback: the initial task may be done (e.g. content_review spawns apply task).
-    // Auto-open the first content_review_apply task in the current list instead.
-    const applyTask = tasks.find(t => t.type === 'content_review_apply')
-    if (applyTask) {
-      setSelectedTask(applyTask)
-      onTaskOpened?.()
+    // Only fall back if we've already widened the filter and still can't find the original task.
+    if (statusFilter === 'all') {
+      const applyTask = tasks.find(t => t.type === 'content_review_apply')
+      if (applyTask) {
+        setSelectedTask(applyTask)
+        onTaskOpened?.()
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTaskId, tasks])
+  }, [initialTaskId, tasks, statusFilter])
 
   function handleTaskUpdated(updated: Task) {
     setTasks(prev => prev.map(t => t.id === updated.id ? updated : t))
@@ -512,6 +517,7 @@ export function TaskBoard({
                   return (
                     <TableRow
                       key={task.id}
+                      data-task-id={task.id}
                       className={cn(
                         'border-border cursor-pointer',
                         isChecked ? 'bg-primary/5' : isSelected ? 'bg-accent/40' : 'hover:bg-accent/20',
@@ -520,7 +526,9 @@ export function TaskBoard({
                         if (checkedIds.size > 0) {
                           toggleCheck(task.id, { stopPropagation: () => {} } as React.MouseEvent)
                         } else {
-                          setSelectedTask(isSelected ? null : task)
+                          // Always select the clicked task by ID to avoid stale closure issues
+                          const clickedTask = tasks.find(t => t.id === task.id)
+                          setSelectedTask(prev => prev?.id === task.id ? null : (clickedTask ?? task))
                         }
                       }}
                     >

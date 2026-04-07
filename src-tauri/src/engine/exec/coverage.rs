@@ -5,6 +5,7 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Execute the `coverage_load_articles` step.
@@ -90,6 +91,200 @@ pub(crate) fn exec_coverage_load_articles(
     }
 }
 
+/// Authority level classification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuthorityLevel {
+    Strong,
+    Moderate,
+    Weak,
+    Minimal,
+}
+
+impl AuthorityLevel {
+    pub fn from_score(score: u8) -> Self {
+        match score {
+            75..=100 => AuthorityLevel::Strong,
+            50..=74 => AuthorityLevel::Moderate,
+            25..=49 => AuthorityLevel::Weak,
+            _ => AuthorityLevel::Minimal,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuthorityLevel::Strong => "Strong",
+            AuthorityLevel::Moderate => "Moderate",
+            AuthorityLevel::Weak => "Weak",
+            AuthorityLevel::Minimal => "Minimal",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            AuthorityLevel::Strong => "Maintain and expand",
+            AuthorityLevel::Moderate => "Strengthen coverage",
+            AuthorityLevel::Weak => "Build comprehensive cluster",
+            AuthorityLevel::Minimal => "Major opportunity",
+        }
+    }
+
+    pub fn color_hint(&self) -> &'static str {
+        match self {
+            AuthorityLevel::Strong => "emerald",
+            AuthorityLevel::Moderate => "sky",
+            AuthorityLevel::Weak => "amber",
+            AuthorityLevel::Minimal => "red",
+        }
+    }
+}
+
+/// Calculate authority score for a cluster
+/// 
+/// Formula: Coverage (50%) + Position (30%) + Demand (20%)
+pub fn calculate_authority_score(
+    keyword_count: usize,
+    avg_position: f64,
+    total_impressions: i64,
+) -> u8 {
+    // Coverage score (50% weight)
+    let coverage_score = match keyword_count {
+        n if n >= 50 => 100,
+        n if n >= 30 => 80,
+        n if n >= 15 => 60,
+        n if n >= 8 => 40,
+        n if n >= 4 => 20,
+        _ => 10,
+    };
+
+    // Position score (30% weight)
+    let position_score = if avg_position <= 5.0 {
+        100
+    } else if avg_position <= 10.0 {
+        80
+    } else if avg_position <= 20.0 {
+        60
+    } else if avg_position <= 30.0 {
+        40
+    } else if avg_position <= 50.0 {
+        20
+    } else {
+        10
+    };
+
+    // Demand score (20% weight)
+    let demand_score = if total_impressions >= 10000 {
+        100
+    } else if total_impressions >= 5000 {
+        80
+    } else if total_impressions >= 2000 {
+        60
+    } else if total_impressions >= 1000 {
+        40
+    } else if total_impressions >= 500 {
+        20
+    } else {
+        10
+    };
+
+    // Weighted total
+    let final_score = (
+        coverage_score as f64 * 0.50 +
+        position_score as f64 * 0.30 +
+        demand_score as f64 * 0.20
+    ) as u8;
+
+    final_score.min(100)
+}
+
+/// Enhance clusters with authority scores and gap detection
+pub fn enhance_clusters_with_authority(
+    clusters: &mut serde_json::Value,
+    articles: &serde_json::Value,
+) {
+    // Get the clusters array, return early if not found
+    let clusters_array = match clusters.get_mut("clusters").and_then(|v| v.as_array_mut()) {
+        Some(arr) => arr,
+        None => return,
+    };
+
+    for cluster in clusters_array.iter_mut() {
+        // Get article IDs in this cluster
+        let article_ids: Vec<i64> = cluster.get("article_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter()
+                .filter_map(|id| id.as_i64())
+                .collect())
+            .unwrap_or_default();
+
+        // Get GSC data for articles in this cluster
+        let (avg_position, total_impressions) = calculate_cluster_metrics(&article_ids, articles);
+
+        // Calculate authority score
+        let authority_score = calculate_authority_score(
+            article_ids.len(),
+            avg_position,
+            total_impressions,
+        );
+
+        let authority_level = AuthorityLevel::from_score(authority_score);
+
+        // Add to cluster
+        if let Some(obj) = cluster.as_object_mut() {
+            obj.insert("authority_score".to_string(), serde_json::json!(authority_score));
+            obj.insert("authority_level".to_string(), serde_json::json!(authority_level.as_str()));
+            obj.insert("authority_description".to_string(), serde_json::json!(authority_level.description()));
+            obj.insert("avg_position".to_string(), serde_json::json!(avg_position));
+            obj.insert("total_impressions".to_string(), serde_json::json!(total_impressions));
+            obj.insert("recommended_action".to_string(), serde_json::json!(authority_level.description()));
+        }
+    }
+}
+
+/// Calculate cluster metrics from GSC data
+fn calculate_cluster_metrics(
+    article_ids: &[i64],
+    articles: &serde_json::Value,
+) -> (f64, i64) {
+    let articles_array = match articles.get("articles").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return (100.0, 0),
+    };
+
+    let mut total_position = 0.0;
+    let mut total_impressions: i64 = 0;
+    let mut count = 0;
+
+    for article in articles_array {
+        let id = article.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        
+        if article_ids.contains(&id) {
+            // Try to get GSC data
+            if let Some(gsc) = article.get("gsc") {
+                if !gsc.is_null() {
+                    let position = gsc.get("position")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(100.0);
+                    let impressions = gsc.get("impressions")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+
+                    total_position += position;
+                    total_impressions += impressions;
+                    count += 1;
+                }
+            }
+        }
+    }
+
+    let avg_position = if count > 0 {
+        total_position / count as f64
+    } else {
+        100.0 // Default if no GSC data
+    };
+
+    (avg_position, total_impressions)
+}
+
 /// Execute the `coverage_cluster_analysis` step.
 ///
 /// Sends article metadata to the agent for semantic clustering.
@@ -151,13 +346,17 @@ pub(crate) fn exec_coverage_cluster_analysis(
 
     // Parse the agent output to extract clusters
     let normalized = crate::engine::normalizer::normalize_agent_output(&raw_output);
-    let clusters = normalized.json_artifact.unwrap_or_else(|| {
+    let mut clusters = normalized.json_artifact.unwrap_or_else(|| {
         serde_json::json!({
             "generated_at": chrono::Utc::now().to_rfc3339(),
             "article_count": article_count,
             "clusters": [],
         })
     });
+
+    // NEW: Enhance clusters with authority scores and gap detection
+    log::info!("[coverage_cluster] Enhancing clusters with authority scores");
+    enhance_clusters_with_authority(&mut clusters, &articles);
 
     // Persist to keyword_coverage.json for future reference
     let coverage_path = paths.automation_dir.join("keyword_coverage.json");

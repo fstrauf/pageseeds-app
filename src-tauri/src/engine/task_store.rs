@@ -321,6 +321,11 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
                 content_gaps_addressed: gaps,
                 estimated_traffic_monthly: row.get(11)?,
                 project_id: project_id.to_string(),
+                quality_score: None,
+                quality_grade: None,
+                quality_rated_at: None,
+                publishing_ready: None,
+                quality_breakdown: None,
             })
         })?
         .filter_map(|r| r.ok())

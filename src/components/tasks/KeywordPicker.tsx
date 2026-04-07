@@ -16,6 +16,8 @@ interface KeywordRow {
   shortage: number | null
   has_data: boolean
   serp_count?: number
+  intent?: string | null
+  intent_confidence?: number | null
 }
 
 interface KeywordPickerProps {
@@ -83,6 +85,45 @@ function opportunityTierClass(tier: 'High' | 'Medium' | 'Low'): string {
   if (tier === 'High') return 'bg-emerald-100 text-emerald-700 border-transparent'
   if (tier === 'Medium') return 'bg-amber-100 text-amber-700 border-transparent'
   return 'bg-slate-100 text-slate-700 border-transparent'
+}
+
+// ─── Intent helpers ───────────────────────────────────────────────────────────
+
+function intentColor(intent: string | null | undefined): string {
+  if (!intent) return 'bg-secondary text-secondary-foreground border-transparent'
+  switch (intent.toLowerCase()) {
+    case 'informational':
+      return 'bg-blue-100 text-blue-700 border-transparent'
+    case 'commercial':
+      return 'bg-green-100 text-green-700 border-transparent'
+    case 'transactional':
+      return 'bg-orange-100 text-orange-700 border-transparent'
+    case 'navigational':
+      return 'bg-gray-100 text-gray-700 border-transparent'
+    default:
+      return 'bg-secondary text-secondary-foreground border-transparent'
+  }
+}
+
+function intentLabel(intent: string | null | undefined): string {
+  if (!intent) return '—'
+  return intent.charAt(0).toUpperCase() + intent.slice(1).toLowerCase()
+}
+
+function intentDescription(intent: string | null | undefined): string {
+  if (!intent) return ''
+  switch (intent.toLowerCase()) {
+    case 'informational':
+      return 'Blog post, guide, or tutorial'
+    case 'commercial':
+      return 'Comparison or review page'
+    case 'transactional':
+      return 'Landing or product page'
+    case 'navigational':
+      return 'Brand/navigation query'
+    default:
+      return ''
+  }
 }
 
 function parseRangeMidpoint(raw: string): number | null {
@@ -195,6 +236,8 @@ function parseArtifact(content: string): KeywordResearchResult | null {
             volume: r.volume ?? null,
             traffic: r.traffic ?? null,
             has_data: r.difficulty != null && r.volume != null,
+            intent: r.intent,
+            intent_confidence: r.intent_confidence,
           })),
         },
       }
@@ -210,6 +253,8 @@ function parseArtifact(content: string): KeywordResearchResult | null {
         volume: r.volume ?? null,
         traffic: r.traffic ?? null,
         has_data: r.difficulty != null && r.volume != null,
+        intent: r.intent,
+        intent_confidence: r.intent_confidence,
       }))
       console.log('[KeywordPicker] Mapped results:', results.slice(0, 3))
       return {
@@ -236,6 +281,8 @@ function parseArtifact(content: string): KeywordResearchResult | null {
         volume: k.volume ?? null,
         traffic: k.traffic ?? null,
         has_data: k.kd != null || k.difficulty != null,
+        intent: k.intent,
+        intent_confidence: k.intent_confidence,
       }))
       console.log('[KeywordPicker] Parsed results with traffic:', results.slice(0, 3))
       return {
@@ -307,6 +354,8 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
       shortage,
       has_data: has_data ?? false,
       serp_count: entry?.serp_count,
+      intent: entry?.intent,
+      intent_confidence: entry?.intent_confidence,
     }
   })
 }
@@ -336,10 +385,19 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
     if (!result) return []
     return extractRows(result).sort((a, b) => opportunityScore(b) - opportunityScore(a))
   }, [result])
+  
+  // Intent filter state
+  const [intentFilter, setIntentFilter] = useState<string>('all')
+  
+  // Filter rows by intent
+  const filteredRows = useMemo(() => {
+    if (intentFilter === 'all') return rows
+    return rows.filter(row => row.intent?.toLowerCase() === intentFilter)
+  }, [rows, intentFilter])
 
   const defaultSelected = useMemo(
-    () => new Set(rows.filter(r => r.has_data && opportunityTier(r) !== 'Low').map(r => r.keyword)),
-    [rows],
+    () => new Set(filteredRows.filter(r => r.has_data && opportunityTier(r) !== 'Low').map(r => r.keyword)),
+    [filteredRows],
   )
 
   const [selected, setSelected] = useState<Set<string>>(defaultSelected)
@@ -348,6 +406,15 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
   }, [defaultSelected])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  
+  // Get unique intents for filter dropdown
+  const availableIntents = useMemo(() => {
+    const intents = new Set<string>()
+    rows.forEach(row => {
+      if (row.intent) intents.add(row.intent.toLowerCase())
+    })
+    return Array.from(intents).sort()
+  }, [rows])
 
   if (!artifact?.content) {
     return (
@@ -405,7 +472,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
   }
 
   function selectAll() {
-    setSelected(new Set(rows.map(r => r.keyword)))
+    setSelected(new Set(filteredRows.map(r => r.keyword)))
   }
 
   function selectNone() {
@@ -448,7 +515,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
       {/* Summary */}
       <div className="flex items-start justify-between gap-2 text-xs text-muted-foreground min-w-0">
         <span className="min-w-0">
-          Showing top {rows.length} keyword{rows.length !== 1 ? 's' : ''} for selection
+          Showing {filteredRows.length} of {rows.length} keyword{rows.length !== 1 ? 's' : ''} for selection
           {result.filtered_out ? ` · ${result.filtered_out} already covered` : ''}
           {analyzedCount > 0 ? ` · ${analyzedCount} analyzed` : ''}
         </span>
@@ -461,6 +528,35 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
           </Button>
         </div>
       </div>
+      
+      {/* Intent Filter */}
+      {availableIntents.length > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Filter by intent:</span>
+          <select
+            value={intentFilter}
+            onChange={(e) => setIntentFilter(e.target.value)}
+            className="text-xs border border-border rounded px-2 py-1 bg-background"
+          >
+            <option value="all">All intents</option>
+            {availableIntents.map(intent => (
+              <option key={intent} value={intent}>
+                {intentLabel(intent)}
+              </option>
+            ))}
+          </select>
+          {intentFilter !== 'all' && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setIntentFilter('all')}
+              className="h-auto py-0 text-xs text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Keyword rows */}
       {rows.length === 0 ? (
@@ -485,7 +581,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
         )}
         <div className="max-h-[min(44vh,22rem)] rounded-md border border-border min-w-0 overflow-y-auto overflow-x-hidden">
           <div className="space-y-0.5 p-1">
-          {rows.map(row => {
+          {filteredRows.map(row => {
             const isSelected = selected.has(row.keyword)
             const kd = row.difficulty
             // Traffic is only real SERP organic traffic — never falls back to shortage
@@ -507,6 +603,15 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
                   : <Square size={13} className="text-muted-foreground shrink-0" />
                 }
                 <span className="flex-1 min-w-0 truncate text-foreground">{row.keyword}</span>
+                {row.intent && (
+                  <Badge 
+                    variant="outline" 
+                    className={cn('text-[10px] px-1.5 py-0', intentColor(row.intent))}
+                    title={intentDescription(row.intent)}
+                  >
+                    {intentLabel(row.intent)}
+                  </Badge>
+                )}
                 <div className="flex items-center gap-1.5 shrink-0 max-w-[48%]">
                   {!row.has_data && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-50 text-amber-600 border-amber-200">

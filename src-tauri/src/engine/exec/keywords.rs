@@ -711,16 +711,24 @@ pub(crate) fn exec_keyword_research_native(
     // total_candidates already captured from pre_filter_count
     let with_data_count = difficulty_results.iter().filter(|r| r["has_data"] == true).count();
     
-    // Build typed output contract
+    // Build typed output contract with intent classification
     let keywords: Vec<crate::models::research::ScoredKeyword> = difficulty_results
         .into_iter()
-        .map(|r| crate::models::research::ScoredKeyword {
-            keyword: r["keyword"].as_str().unwrap_or("").to_string(),
-            volume: r["volume"].as_i64(),
-            kd: r["difficulty"].as_f64(),
-            intent: r.get("intent").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            traffic: r["traffic"].as_f64(),
-            has_data: r["has_data"].as_bool(),
+        .map(|r| {
+            let keyword = r["keyword"].as_str().unwrap_or("").to_string();
+            
+            // Classify search intent for this keyword
+            let (intent, confidence) = crate::engine::exec::intent_classifier::classify_intent(&keyword);
+            
+            crate::models::research::ScoredKeyword {
+                keyword,
+                volume: r["volume"].as_i64(),
+                kd: r["difficulty"].as_f64(),
+                intent: Some(intent.as_str().to_string()),
+                intent_confidence: Some(confidence),
+                traffic: r["traffic"].as_f64(),
+                has_data: r["has_data"].as_bool(),
+            }
         })
         .collect();
     

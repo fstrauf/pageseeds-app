@@ -111,6 +111,13 @@ export interface KeywordCoverageCluster {
   article_ids: number[]
   primary_keywords: string[]
   article_count: number
+  // Authority scoring (new)
+  authority_score?: number
+  authority_level?: 'Strong' | 'Moderate' | 'Weak' | 'Minimal'
+  authority_description?: string
+  recommended_action?: string
+  avg_position?: number
+  total_impressions?: number
 }
 
 export interface KeywordCoverage {

@@ -8,6 +8,13 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '../../lib/utils'
 
+const AUTHORITY_BADGE: Record<string, string> = {
+  Strong: 'bg-emerald-100 text-emerald-700 border-transparent',
+  Moderate: 'bg-sky-100 text-sky-700 border-transparent',
+  Weak: 'bg-amber-100 text-amber-700 border-transparent',
+  Minimal: 'bg-red-100 text-red-700 border-transparent',
+}
+
 interface KeywordCoverageProps {
   project: Project | null
   onRunTasks?: (tasks: { id: string; title?: string; type: string }[]) => void
@@ -156,6 +163,25 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
                   <div className="text-xs text-muted-foreground">Avg per Cluster</div>
                 </div>
               </div>
+              
+              {/* Authority Level Distribution */}
+              {coverage.clusters.some(c => c.authority_level) && (
+                <>
+                  <Separator className="my-3" />
+                  <div className="text-xs text-muted-foreground mb-2">Authority Distribution</div>
+                  <div className="flex flex-wrap gap-2">
+                    {['Strong', 'Moderate', 'Weak', 'Minimal'].map(level => {
+                      const count = coverage.clusters.filter(c => c.authority_level === level).length
+                      if (count === 0) return null
+                      return (
+                        <Badge key={level} className={cn('text-xs', AUTHORITY_BADGE[level])}>
+                          {level}: {count}
+                        </Badge>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
         )}
@@ -204,6 +230,8 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
 }
 
 function ClusterCard({ cluster }: { cluster: KeywordCoverageCluster }) {
+  const hasAuthority = cluster.authority_score !== undefined
+
   return (
     <Card className="bg-card border-border">
       <CardHeader className="pb-2">
@@ -211,12 +239,43 @@ function ClusterCard({ cluster }: { cluster: KeywordCoverageCluster }) {
           <CardTitle className="text-sm font-semibold text-foreground">
             {cluster.cluster_name}
           </CardTitle>
-          <Badge variant="secondary" className="text-xs">
-            {cluster.article_count} articles
-          </Badge>
+          <div className="flex items-center gap-2">
+            {hasAuthority && (
+              <Badge 
+                className={cn('text-xs', AUTHORITY_BADGE[cluster.authority_level ?? ''] ?? 'bg-secondary text-secondary-foreground')}
+                title={cluster.authority_description}
+              >
+                {cluster.authority_level} ({cluster.authority_score})
+              </Badge>
+            )}
+            <Badge variant="secondary" className="text-xs">
+              {cluster.article_count} articles
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="pb-4">
+        {hasAuthority && (
+          <div className="mb-3 p-2 bg-secondary/40 rounded-md">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Recommended Action:</span>
+              <span className="font-medium text-foreground">{cluster.recommended_action}</span>
+            </div>
+            {cluster.avg_position !== undefined && (
+              <div className="flex items-center justify-between text-xs mt-1">
+                <span className="text-muted-foreground">Avg Position:</span>
+                <span className="font-medium text-foreground">
+                  {cluster.avg_position.toFixed(1)}
+                  {cluster.total_impressions !== undefined && (
+                    <span className="text-muted-foreground ml-2">
+                      ({cluster.total_impressions.toLocaleString()} impressions)
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap gap-1.5 mb-3">
           {cluster.primary_keywords.map((keyword) => (
             <Badge key={keyword} variant="outline" className="text-xs font-normal">
