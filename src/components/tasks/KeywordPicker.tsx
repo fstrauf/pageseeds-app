@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CheckSquare, Square, Loader2, Sparkles } from 'lucide-react'
 import { createArticleTasksFromKeywords } from '../../lib/tauri'
+import { useQueue } from '../../lib/queue-context'
 import type { KeywordDifficultyEntry, KeywordResearchResult, Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +16,8 @@ interface KeywordRow {
   shortage: number | null
   has_data: boolean
   serp_count?: number
+  intent?: string | null
+  intent_confidence?: number | null
 }
 
 interface KeywordPickerProps {
@@ -84,6 +87,45 @@ function opportunityTierClass(tier: 'High' | 'Medium' | 'Low'): string {
   return 'bg-slate-100 text-slate-700 border-transparent'
 }
 
+// ─── Intent helpers ───────────────────────────────────────────────────────────
+
+function intentColor(intent: string | null | undefined): string {
+  if (!intent) return 'bg-secondary text-secondary-foreground border-transparent'
+  switch (intent.toLowerCase()) {
+    case 'informational':
+      return 'bg-blue-100 text-blue-700 border-transparent'
+    case 'commercial':
+      return 'bg-green-100 text-green-700 border-transparent'
+    case 'transactional':
+      return 'bg-orange-100 text-orange-700 border-transparent'
+    case 'navigational':
+      return 'bg-gray-100 text-gray-700 border-transparent'
+    default:
+      return 'bg-secondary text-secondary-foreground border-transparent'
+  }
+}
+
+function intentLabel(intent: string | null | undefined): string {
+  if (!intent) return '—'
+  return intent.charAt(0).toUpperCase() + intent.slice(1).toLowerCase()
+}
+
+function intentDescription(intent: string | null | undefined): string {
+  if (!intent) return ''
+  switch (intent.toLowerCase()) {
+    case 'informational':
+      return 'Blog post, guide, or tutorial'
+    case 'commercial':
+      return 'Comparison or review page'
+    case 'transactional':
+      return 'Landing or product page'
+    case 'navigational':
+      return 'Brand/navigation query'
+    default:
+      return ''
+  }
+}
+
 function parseRangeMidpoint(raw: string): number | null {
   const nums = (raw.match(/\d[\d,]*/g) ?? [])
     .map(s => Number.parseInt(s.replace(/,/g, ''), 10))
@@ -138,11 +180,125 @@ function buildFromMarkdownTable(content: string): KeywordResearchResult | null {
   }
 }
 
-// ─── Parse artifact ───────────────────────────────────────────────────────────
+// ─── Parse artifact ─────────────────────────────────────────────────────────--
+
+function extractJsonFromMarkdown(content: string): string {
+  const trimmed = content.trim()
+  const codeFenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/)
+  if (codeFenceMatch) {
+    return codeFenceMatch[1].trim()
+  }
+  return trimmed
+}
 
 function parseArtifact(content: string): KeywordResearchResult | null {
   try {
-    return JSON.parse(content) as KeywordResearchResult
+    const cleanContent = extractJsonFromMarkdown(content)
+    const parsed = JSON.parse(cleanContent)
+    
+    // Handle new unified format: landing_page_candidates (from research_final_selection step)
+    if (parsed.landing_page_candidates && Array.isArray(parsed.landing_page_candidates)) {
+      return {
+        new_keywords: parsed.landing_page_candidates.map((c: any) => c.keyword),
+        total_candidates: parsed.landing_page_candidates.length,
+        filtered_out: 0,
+        difficulty: {
+          total: parsed.landing_page_candidates.length,
+          successful: parsed.landing_page_candidates.length,
+          results: parsed.landing_page_candidates.map((c: any) => ({
+            keyword: c.keyword,
+            difficulty: c.estimated_kd ?? c.difficulty ?? null,
+            volume: c.estimated_volume ?? c.volume ?? null,
+            traffic: null,
+            has_data: true,
+            // Include landing page specific fields for display
+            landing_page_type: c.landing_page_type,
+            opportunity_score: c.opportunity_score,
+            opportunity_reason: c.opportunity_reason,
+            proposed_title: c.proposed_title,
+          })),
+        },
+      }
+    }
+    
+    // Handle new unified format: difficulty.results (from research_final_selection step)
+    if (parsed.difficulty && parsed.difficulty.results && Array.isArray(parsed.difficulty.results)) {
+      return {
+        new_keywords: parsed.difficulty.results.map((r: any) => r.keyword),
+        total_candidates: parsed.difficulty.results.length,
+        filtered_out: 0,
+        difficulty: {
+          total: parsed.difficulty.total ?? parsed.difficulty.results.length,
+          successful: parsed.difficulty.successful ?? parsed.difficulty.results.length,
+          results: parsed.difficulty.results.map((r: any) => ({
+            keyword: r.keyword,
+            difficulty: r.difficulty ?? null,
+            volume: r.volume ?? null,
+            traffic: r.traffic ?? null,
+            has_data: r.difficulty != null && r.volume != null,
+            intent: r.intent,
+            intent_confidence: r.intent_confidence,
+          })),
+        },
+      }
+    }
+    
+    // Handle ResearchFinalOutput format: results array from research_final_selection step
+    if (parsed.results && Array.isArray(parsed.results)) {
+      console.log('[KeywordPicker] ResearchFinalOutput format - first item:', parsed.results[0])
+      console.log('[KeywordPicker] Traffic field:', parsed.results[0]?.traffic)
+      const results = parsed.results.map((r: any) => ({
+        keyword: r.keyword,
+        difficulty: r.difficulty ?? null,
+        volume: r.volume ?? null,
+        traffic: r.traffic ?? null,
+        has_data: r.difficulty != null && r.volume != null,
+        intent: r.intent,
+        intent_confidence: r.intent_confidence,
+      }))
+      console.log('[KeywordPicker] Mapped results:', results.slice(0, 3))
+      return {
+        new_keywords: parsed.results.map((r: any) => r.keyword),
+        total_candidates: parsed.results.length,
+        filtered_out: 0,
+        difficulty: {
+          total: parsed.results.length,
+          successful: parsed.results.length,
+          results,
+        },
+      }
+    }
+    
+    // Handle keywords array format (intermediate step output)
+    if (parsed.keywords && Array.isArray(parsed.keywords)) {
+      // Debug: log first keyword to verify traffic data
+      if (parsed.keywords.length > 0) {
+        console.log('[KeywordPicker] First keyword data:', parsed.keywords[0])
+      }
+      const results = parsed.keywords.map((k: any) => ({
+        keyword: k.keyword || k,
+        difficulty: k.kd ?? k.difficulty ?? null,
+        volume: k.volume ?? null,
+        traffic: k.traffic ?? null,
+        has_data: k.kd != null || k.difficulty != null,
+        intent: k.intent,
+        intent_confidence: k.intent_confidence,
+      }))
+      console.log('[KeywordPicker] Parsed results with traffic:', results.slice(0, 3))
+      return {
+        new_keywords: parsed.keywords.map((k: any) => k.keyword || k),
+        total_candidates: parsed.keywords.length,
+        filtered_out: 0,
+        difficulty: {
+          total: parsed.keywords.length,
+          successful: parsed.keywords.length,
+          results,
+        },
+      }
+    }
+    
+    // Legacy formats
+    return parsed as KeywordResearchResult
   } catch {
     // Agentic output can be markdown tables instead of JSON. Build a compatible
     // synthetic result so the picker still works.
@@ -198,6 +354,8 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
       shortage,
       has_data: has_data ?? false,
       serp_count: entry?.serp_count,
+      intent: entry?.intent,
+      intent_confidence: entry?.intent_confidence,
     }
   })
 }
@@ -205,10 +363,19 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
+  const queue = useQueue()
   const artifact =
+    // New unified workflow artifacts
+    task.artifacts.find(a => a.key === 'research_final_selection') ??
+    // Legacy artifacts (for backward compatibility)
     task.artifacts.find(a => a.key === 'research_normalize_stage') ??
+    task.artifacts.find(a => a.key === 'landing_page_research_agentic') ??
+    task.artifacts.find(a => a.key === 'landing_page_analyze') ??
+    task.artifacts.find(a => a.key === 'landing_page_research') ??
     task.artifacts.find(a => a.key === 'research_keywords_cli') ??
     task.artifacts.find(a => a.key === 'research_agent_stage')
+  
+  const isLandingPageResearch = task.type === 'research_landing_pages'
   const result = useMemo(
     () => (artifact?.content ? parseArtifact(artifact.content) : null),
     [artifact?.content],
@@ -218,10 +385,19 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
     if (!result) return []
     return extractRows(result).sort((a, b) => opportunityScore(b) - opportunityScore(a))
   }, [result])
+  
+  // Intent filter state
+  const [intentFilter, setIntentFilter] = useState<string>('all')
+  
+  // Filter rows by intent
+  const filteredRows = useMemo(() => {
+    if (intentFilter === 'all') return rows
+    return rows.filter(row => row.intent?.toLowerCase() === intentFilter)
+  }, [rows, intentFilter])
 
   const defaultSelected = useMemo(
-    () => new Set(rows.filter(r => r.has_data && opportunityTier(r) !== 'Low').map(r => r.keyword)),
-    [rows],
+    () => new Set(filteredRows.filter(r => r.has_data && opportunityTier(r) !== 'Low').map(r => r.keyword)),
+    [filteredRows],
   )
 
   const [selected, setSelected] = useState<Set<string>>(defaultSelected)
@@ -230,6 +406,15 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
   }, [defaultSelected])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  
+  // Get unique intents for filter dropdown
+  const availableIntents = useMemo(() => {
+    const intents = new Set<string>()
+    rows.forEach(row => {
+      if (row.intent) intents.add(row.intent.toLowerCase())
+    })
+    return Array.from(intents).sort()
+  }, [rows])
 
   if (!artifact?.content) {
     return (
@@ -287,7 +472,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
   }
 
   function selectAll() {
-    setSelected(new Set(rows.map(r => r.keyword)))
+    setSelected(new Set(filteredRows.map(r => r.keyword)))
   }
 
   function selectNone() {
@@ -304,6 +489,20 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
         task.id,
         Array.from(selected),
       )
+      
+      // Auto-add created tasks to the queue (shopping cart pattern)
+      if (tasks.length > 0) {
+        queue.enqueueNext(
+          tasks.map(t => ({
+            taskId: t.id,
+            projectId: t.project_id,
+            title: t.title ?? 'Write article',
+            taskType: t.type ?? 'write_article',
+            projectName: undefined,
+          }))
+        )
+      }
+      
       onTasksCreated(tasks)
     } catch (e) {
       setError(String(e))
@@ -316,7 +515,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
       {/* Summary */}
       <div className="flex items-start justify-between gap-2 text-xs text-muted-foreground min-w-0">
         <span className="min-w-0">
-          Showing top {rows.length} keyword{rows.length !== 1 ? 's' : ''} for selection
+          Showing {filteredRows.length} of {rows.length} keyword{rows.length !== 1 ? 's' : ''} for selection
           {result.filtered_out ? ` · ${result.filtered_out} already covered` : ''}
           {analyzedCount > 0 ? ` · ${analyzedCount} analyzed` : ''}
         </span>
@@ -329,6 +528,35 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
           </Button>
         </div>
       </div>
+      
+      {/* Intent Filter */}
+      {availableIntents.length > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Filter by intent:</span>
+          <select
+            value={intentFilter}
+            onChange={(e) => setIntentFilter(e.target.value)}
+            className="text-xs border border-border rounded px-2 py-1 bg-background"
+          >
+            <option value="all">All intents</option>
+            {availableIntents.map(intent => (
+              <option key={intent} value={intent}>
+                {intentLabel(intent)}
+              </option>
+            ))}
+          </select>
+          {intentFilter !== 'all' && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setIntentFilter('all')}
+              className="h-auto py-0 text-xs text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Keyword rows */}
       {rows.length === 0 ? (
@@ -353,7 +581,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
         )}
         <div className="max-h-[min(44vh,22rem)] rounded-md border border-border min-w-0 overflow-y-auto overflow-x-hidden">
           <div className="space-y-0.5 p-1">
-          {rows.map(row => {
+          {filteredRows.map(row => {
             const isSelected = selected.has(row.keyword)
             const kd = row.difficulty
             // Traffic is only real SERP organic traffic — never falls back to shortage
@@ -375,6 +603,15 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
                   : <Square size={13} className="text-muted-foreground shrink-0" />
                 }
                 <span className="flex-1 min-w-0 truncate text-foreground">{row.keyword}</span>
+                {row.intent && (
+                  <Badge 
+                    variant="outline" 
+                    className={cn('text-[10px] px-1.5 py-0', intentColor(row.intent))}
+                    title={intentDescription(row.intent)}
+                  >
+                    {intentLabel(row.intent)}
+                  </Badge>
+                )}
                 <div className="flex items-center gap-1.5 shrink-0 max-w-[48%]">
                   {!row.has_data && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-50 text-amber-600 border-amber-200">
@@ -430,6 +667,8 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
           >
             {creating ? (
               <><Loader2 size={13} className="mr-1.5 animate-spin" />Creating…</>
+            ) : isLandingPageResearch ? (
+              <><Sparkles size={13} className="mr-1.5" />Create {selected.size} Landing Page Task{selected.size !== 1 ? 's' : ''}</>
             ) : (
               <><Sparkles size={13} className="mr-1.5" />Create {selected.size} Article Task{selected.size !== 1 ? 's' : ''}</>
             )}

@@ -29,6 +29,14 @@ const STATUS_BADGE: Record<string, string> = {
   draft: 'bg-secondary text-secondary-foreground border-transparent',
 }
 
+const GRADE_BADGE: Record<string, string> = {
+  A: 'bg-emerald-100 text-emerald-700 border-transparent',
+  B: 'bg-sky-100 text-sky-700 border-transparent',
+  C: 'bg-amber-100 text-amber-700 border-transparent',
+  D: 'bg-orange-100 text-orange-700 border-transparent',
+  F: 'bg-red-100 text-red-700 border-transparent',
+}
+
 const STATUS_OPTIONS = ['all', 'published', 'ready_to_publish', 'draft']
 
 interface ArticleTableProps {
@@ -206,19 +214,20 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
               <TableHead className="text-xs text-muted-foreground w-28">Status</TableHead>
               <TableHead className="text-xs text-muted-foreground w-28">Date</TableHead>
               <TableHead className="text-xs text-muted-foreground w-20 text-right">Words</TableHead>
+              <TableHead className="text-xs text-muted-foreground w-16 text-center">Quality</TableHead>
               <TableHead className="text-xs text-muted-foreground w-24">Traffic</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading && filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-10 text-center text-xs text-muted-foreground">
+                <TableCell colSpan={9} className="py-10 text-center text-xs text-muted-foreground">
                   Loading…
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-10 text-center">
+                <TableCell colSpan={9} className="py-10 text-center">
                   {syncing ? (
                     <p className="text-sm text-muted-foreground">Syncing articles from repo…</p>
                   ) : (
@@ -281,6 +290,23 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
                   <TableCell className="text-xs text-muted-foreground text-right">
                     {article.word_count > 0 ? article.word_count.toLocaleString() : '—'}
                   </TableCell>
+                  <TableCell className="text-center">
+                    {article.quality_score ? (
+                      <div className="flex flex-col items-center">
+                        <Badge 
+                          className={cn('text-[10px] px-1.5 py-0', GRADE_BADGE[article.quality_grade ?? ''] ?? 'bg-secondary text-secondary-foreground')}
+                          title={`Quality Score: ${article.quality_score}/100${article.publishing_ready ? ' • Ready to publish' : ''}`}
+                        >
+                          {article.quality_grade}
+                        </Badge>
+                        <span className="text-[9px] text-muted-foreground mt-0.5">
+                          {article.quality_score}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {article.estimated_traffic_monthly ?? '—'}
                   </TableCell>
@@ -291,7 +317,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
           {filtered.length > 0 && (
             <TableFooter className="bg-card border-border">
               <TableRow>
-                <TableCell colSpan={8} className="py-2.5 text-xs text-muted-foreground">
+                <TableCell colSpan={9} className="py-2.5 text-xs text-muted-foreground">
                   {filtered.length} article{filtered.length !== 1 ? 's' : ''}
                   {articles.length !== filtered.length && ` (${articles.length} total)`}
                 </TableCell>

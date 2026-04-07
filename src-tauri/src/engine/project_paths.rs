@@ -76,6 +76,16 @@ impl ProjectPaths {
     pub fn in_automation(&self, rel: &str) -> PathBuf {
         self.automation_dir.join(rel)
     }
+
+    /// Return the project directory (alias for repo_root).
+    pub fn project_dir(&self) -> &Path {
+        &self.repo_root
+    }
+
+    /// Return the social media output directory.
+    pub fn social_output_dir(&self) -> PathBuf {
+        self.automation_dir.join("social")
+    }
 }
 
 /// Apply standard path substitutions to a command template string.

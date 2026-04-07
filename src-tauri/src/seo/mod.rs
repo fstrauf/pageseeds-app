@@ -1,4 +1,5 @@
 pub mod backlinks;
+pub mod google_autocomplete;
 pub mod keywords;
 pub mod traffic;
 

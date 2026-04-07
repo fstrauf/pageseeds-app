@@ -6,20 +6,14 @@
 pub mod db;
 pub mod models;
 pub mod prompts;
+pub mod templates;
 
 pub mod content {
     pub mod extractor;
     pub mod sources;
 }
 
-pub mod image {
-    pub mod overlay;
-    pub mod renderer;
-}
-
-pub mod workflow {
-    pub mod social_handler;
-}
+pub mod image;
 
 // Re-export commonly used types
 pub use models::*;

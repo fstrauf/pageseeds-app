@@ -44,13 +44,18 @@ pub async fn execute_task(
         }
     }
 
+    // Use spawn_blocking for SQLite operations, but run executor async within it
     tauri::async_runtime::spawn_blocking(move || {
         // Use a dedicated connection for long-running task execution so UI
         // reads (e.g., list_tasks filter switches) are not blocked on AppState.db.
         let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
         db.busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
-        executor::execute_task_with_token(&db, &task_id, token.as_deref(), Some(app_handle), false)
-            .map_err(|e| e.to_string())
+        
+        // Create a new runtime to run the async executor
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            executor::execute_task_with_token(&db, &task_id, token.as_deref(), Some(app_handle), false).await
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -66,7 +71,12 @@ pub async fn dry_run_task(
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
-        executor::dry_run_task(&db, &task_id).map_err(|e| e.to_string())
+        
+        // Create a new runtime to run the async executor
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            executor::dry_run_task(&db, &task_id).await
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -131,8 +141,12 @@ pub async fn run_batch(
         // same reason as execute_task: keep AppState.db responsive for reads.
         let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
         db.busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
-        batch::run_batch_with_token(&db, &project_id, &config, token.as_deref())
-            .map_err(|e| e.to_string())
+        
+        // Create a new runtime to run the async batch
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            batch::run_batch_with_token(&db, &project_id, &config, token.as_deref()).await
+        })
     })
     .await
     .map_err(|e| e.to_string())?

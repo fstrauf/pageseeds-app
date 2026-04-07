@@ -219,3 +219,25 @@ pub fn resolve_year_mismatch_agent(
         &all_articles,
     )
 }
+
+#[tauri::command]
+pub fn get_keyword_coverage(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let (exists, last_analyzed) = crate::engine::exec::coverage::get_coverage_status(&project.path);
+    
+    let coverage = if exists {
+        crate::engine::exec::coverage::read_keyword_coverage(&project.path)
+    } else {
+        None
+    };
+    
+    Ok(serde_json::json!({
+        "exists": exists,
+        "last_analyzed": last_analyzed,
+        "coverage": coverage,
+    }))
+}

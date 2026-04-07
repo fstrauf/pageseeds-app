@@ -1,8 +1,10 @@
 /// Prompt builder — combines a Skill's SKILL.md content with project context
 /// and task metadata to construct a complete agent prompt string.
 
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use crate::engine::skills::Skill;
+use crate::logging::{LogQueryFilters, LogSource, query_logs};
 use crate::models::task::Task;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -138,5 +140,201 @@ fn build_task_section(task: &Task) -> String {
         }
     }
 
+    lines.join("\n")
+}
+
+/// Build diagnostic context from recent logs for AI analysis.
+/// This allows the AI to see what happened before it was invoked,
+/// enabling self-diagnosis of issues.
+/// 
+/// This version opens the database directly using the project path.
+pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, max_entries: usize) -> String {
+    // Open database connection using default path
+    let db_path = crate::db::default_db_path();
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[diagnostic_context] Failed to open DB: {}", e);
+            return String::new(); // Silently fail if DB not available
+        }
+    };
+    
+    let mut lines = vec!["## Diagnostic Context (Recent System Logs)".to_string()];
+    
+    // Query recent logs from all sources, filtering by task if possible
+    let filters = LogQueryFilters {
+        level: None,
+        source: None,
+        component: Some(task_id.to_string()), // Try to find logs related to this task
+        session_id: None,
+        search_query: None,
+    };
+    
+    log::debug!("[diagnostic_context] Querying logs for task_id: {}", task_id);
+    
+    // First try: search for logs mentioning this task ID
+    let mut logs = match query_logs(&conn, &filters, max_entries, 0) {
+        Ok(l) => {
+            log::debug!("[diagnostic_context] Found {} task-specific logs", l.len());
+            l
+        }
+        Err(e) => {
+            log::warn!("[diagnostic_context] Failed to query task logs: {}", e);
+            Vec::new()
+        }
+    };
+    
+    // If not enough task-specific logs, get general recent logs
+    if logs.len() < 10 {
+        log::debug!("[diagnostic_context] Only {} task logs, fetching general logs", logs.len());
+        let general_filters = LogQueryFilters {
+            level: Some(crate::logging::LogLevel::Info),
+            source: None,
+            component: None,
+            session_id: None,
+            search_query: None,
+        };
+        match query_logs(&conn, &general_filters, max_entries, 0) {
+            Ok(general_logs) => {
+                log::debug!("[diagnostic_context] Found {} general logs", general_logs.len());
+                // Merge and deduplicate
+                for log_entry in general_logs {
+                    if !logs.iter().any(|l| l.id == log_entry.id) {
+                        logs.push(log_entry);
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[diagnostic_context] Failed to query general logs: {}", e);
+            }
+        }
+    }
+    
+    if logs.is_empty() {
+        log::debug!("[diagnostic_context] No logs found");
+        lines.push("No recent logs available.".to_string());
+    } else {
+        lines.push(format!("Showing last {} log entries:\n", logs.len().min(max_entries)));
+        
+        for (i, log) in logs.iter().take(max_entries).rev().enumerate() {
+            let source_icon = match log.source {
+                LogSource::Frontend => "[UI]",
+                LogSource::Backend => "[SYS]",
+                LogSource::Agent => "[AI]",
+                LogSource::System => "[SYS]",
+            };
+            lines.push(format!(
+                "{}. {} {} | {} | {}: {}",
+                i + 1,
+                &log.timestamp[11..19], // HH:MM:SS
+                source_icon,
+                log.level,
+                log.component,
+                log.message.lines().next().unwrap_or(&log.message)
+            ));
+            // Include metadata if present (truncated)
+            if let Some(ref meta) = log.metadata {
+                let meta_str = serde_json::to_string(meta).unwrap_or_default();
+                if !meta_str.is_empty() && meta_str != "null" {
+                    let preview = if meta_str.len() > 100 {
+                        format!("{}…", &meta_str[..100])
+                    } else {
+                        meta_str
+                    };
+                    lines.push(format!("   └─ {}", preview));
+                }
+            }
+        }
+        
+        lines.push("\n".to_string());
+        lines.push("Analyze these logs to understand:".to_string());
+        lines.push("- What steps have already been executed".to_string());
+        lines.push("- Any errors or warnings that occurred".to_string());
+        lines.push("- The current state of the task".to_string());
+        lines.push("- What action should be taken next".to_string());
+    }
+    
+    lines.join("\n")
+}
+
+/// Build diagnostic context from recent logs for AI analysis.
+/// This allows the AI to see what happened before it was invoked,
+/// enabling self-diagnosis of issues.
+pub fn build_diagnostic_context(conn: &Connection, task: &Task, max_entries: usize) -> String {
+    let mut lines = vec!["## Diagnostic Context (Recent System Logs)".to_string()];
+    
+    // Query recent logs from all sources, filtering by task if possible
+    let filters = LogQueryFilters {
+        level: None,
+        source: None,
+        component: Some(format!("{}", task.id)), // Try to find logs related to this task
+        session_id: None,
+        search_query: None,
+    };
+    
+    // First try: search for logs mentioning this task ID
+    let mut logs = query_logs(conn, &filters, max_entries, 0).unwrap_or_default();
+    
+    // If not enough task-specific logs, get general recent logs
+    if logs.len() < 10 {
+        let general_filters = LogQueryFilters {
+            level: Some(crate::logging::LogLevel::Info),
+            source: None,
+            component: None,
+            session_id: None,
+            search_query: None,
+        };
+        let general_logs = query_logs(conn, &general_filters, max_entries, 0).unwrap_or_default();
+        // Merge and deduplicate
+        for log in general_logs {
+            if !logs.iter().any(|l| l.id == log.id) {
+                logs.push(log);
+            }
+        }
+    }
+    
+    if logs.is_empty() {
+        lines.push("No recent logs available.".to_string());
+    } else {
+        lines.push(format!("Showing last {} log entries:\n", logs.len().min(max_entries)));
+        
+        for (i, log) in logs.iter().take(max_entries).rev().enumerate() {
+            let source_icon = match log.source {
+                LogSource::Frontend => "[UI]",
+                LogSource::Backend => "[SYS]",
+                LogSource::Agent => "[AI]",
+                LogSource::System => "[SYS]",
+            };
+            lines.push(format!(
+                "{}. {} {} | {} | {}: {}",
+                i + 1,
+                &log.timestamp[11..19], // HH:MM:SS
+                source_icon,
+                log.level,
+                log.component,
+                log.message.lines().next().unwrap_or(&log.message)
+            ));
+            // Include metadata if present (truncated)
+            if let Some(ref meta) = log.metadata {
+                let meta_str = serde_json::to_string(meta).unwrap_or_default();
+                if !meta_str.is_empty() && meta_str != "null" {
+                    let preview = if meta_str.len() > 100 {
+                        format!("{}…", &meta_str[..100])
+                    } else {
+                        meta_str
+                    };
+                    lines.push(format!("   └─ {}", preview));
+                }
+            }
+        }
+        
+        lines.push("\n".to_string());
+        lines.push("Analyze these logs to understand:".to_string());
+        lines.push("- What steps have already been executed".to_string());
+        lines.push("- Any errors or warnings that occurred".to_string());
+        lines.push("- The current state of the task".to_string());
+        lines.push("- What action should be taken next".to_string());
+    }
+    
     lines.join("\n")
 }

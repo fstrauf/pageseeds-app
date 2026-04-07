@@ -2,14 +2,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { KeywordResearch } from './KeywordResearch'
 import { BacklinkView } from './BacklinkView'
 import { TrafficOverview } from './TrafficOverview'
-import type { Project } from '../../lib/types'
+import { KeywordCoveragePanel } from './KeywordCoverage'
+import type { Project, Task } from '../../lib/types'
 
 interface Props {
   projectId: string
   project?: Project
+  onRunTasks?: (tasks: Task[]) => void
 }
 
-export function SEO({ projectId }: Props) {
+export function SEO({ projectId, project, onRunTasks }: Props) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <Tabs defaultValue="keywords" className="flex flex-col h-full">
@@ -20,6 +22,7 @@ export function SEO({ projectId }: Props) {
           <TabsList className="bg-card border border-border">
             {[
               { value: 'keywords', label: 'Keywords' },
+              { value: 'coverage', label: 'Coverage' },
               { value: 'backlinks', label: 'Backlinks' },
               { value: 'traffic', label: 'Traffic' },
             ].map(tab => (
@@ -38,6 +41,10 @@ export function SEO({ projectId }: Props) {
           <KeywordResearch projectId={projectId} />
         </TabsContent>
 
+        <TabsContent value="coverage" className="flex-1 overflow-hidden mt-0 p-0">
+          <KeywordCoveragePanel project={project ?? null} onRunTasks={onRunTasks} />
+        </TabsContent>
+
         <TabsContent value="backlinks" className="flex-1 overflow-hidden mt-0 p-0">
           <BacklinkView projectId={projectId} />
         </TabsContent>
@@ -47,5 +54,4 @@ export function SEO({ projectId }: Props) {
         </TabsContent>
       </Tabs>
     </div>
-  )
-}
+  )}

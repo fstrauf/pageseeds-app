@@ -436,14 +436,16 @@ pub(crate) fn exec_content_review_recommend(
     }
 }
 
-/// After a successful content review, create a single `content_review_apply` task
-/// pointing at the recommendations.json written by `exec_content_review_recommend`.
+/// After a successful content review, create individual `fix_content_article` tasks
+/// for each article in recommendations.json.
 ///
-/// Skips if recommendations.json is absent (review found nothing) or if an apply
-/// task is already pending.
-pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &Task, project_path: &str) -> Option<String> {
-    use crate::engine::task_store;
-    use crate::models::task::{Task as TaskModel, TaskArtifact, TaskRun};
+/// This replaces the previous monolithic `content_review_apply` approach with
+/// per-article tasks that can be run independently.
+///
+/// Skips if recommendations.json is absent (review found nothing).
+pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &Task, project_path: &str) -> Vec<String> {
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::{TaskArtifact, ExecutionMode, Priority, AgentPolicy};
 
     let paths = ProjectPaths::from_path(project_path);
     let rec_path = paths.automation_dir.join("recommendations.json");
@@ -451,89 +453,110 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
     let rec_str = match std::fs::read_to_string(&rec_path) {
         Ok(s) => s,
         Err(_) => {
-            log::info!("[create_apply_task] recommendations.json not found — no apply task created");
-            return None;
+            log::info!("[create_apply_task] recommendations.json not found — no apply tasks created");
+            return Vec::new();
         }
     };
     let rec: serde_json::Value = match serde_json::from_str(&rec_str) {
         Ok(v) => v,
         Err(e) => {
             log::warn!("[create_apply_task] failed to parse recommendations.json: {}", e);
-            return None;
+            return Vec::new();
         }
     };
 
-    let article_count = rec["articles"].as_array().map(|a| a.len()).unwrap_or(0);
-    if article_count == 0 {
-        log::info!("[create_apply_task] no articles in recommendations — skipping");
-        return None;
-    }
-
-    let existing: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='content_review_apply' AND status IN ('todo','in_progress')",
-        rusqlite::params![&parent_task.project_id],
-        |r| r.get(0),
-    ).unwrap_or(0);
-    if existing > 0 {
-        log::info!("[create_apply_task] apply task already pending — skipping");
-        return None;
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis());
-
-    let title = if article_count == 1 {
-        let name = rec["articles"][0]["article_title"].as_str().unwrap_or("article");
-        format!("Apply review fixes: {}", name)
-    } else {
-        format!("Apply review fixes: {} articles", article_count)
+    let articles = match rec["articles"].as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => {
+            log::info!("[create_apply_task] no articles in recommendations — skipping");
+            return Vec::new();
+        }
     };
 
-    let rec_rel = rec_path
-        .strip_prefix(project_path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| rec_path.to_string_lossy().to_string());
+    let mut created_task_ids = Vec::new();
 
-    let artifact = TaskArtifact {
-        key: "recommendations".to_string(),
-        path: Some(rec_rel),
-        artifact_type: Some("json".to_string()),
-        source: Some("content_review".to_string()),
-        content: Some(rec_str),
-    };
+    for (idx, article) in articles.iter().enumerate() {
+        let article_id = article["article_id"].as_str().unwrap_or("");
+        let article_title = article["article_title"].as_str().unwrap_or("article");
+        let article_file = article["article_file"].as_str().unwrap_or("");
 
-    let new_task = TaskModel {
-        id: task_id.clone(),
-        phase: "implementation".to_string(),
-        execution_mode: crate::models::task::ExecutionMode::Manual,
-        task_type: "content_review_apply".to_string(),
-        status: crate::models::task::TaskStatus::Todo,
-        priority: crate::models::task::Priority::High,
-        agent_policy: crate::models::task::AgentPolicy::Required,
-        title: Some(title),
-        description: Some(format!(
-            "Apply SEO recommendations from recommendations.json to {} article(s). \
-             The recommendations artifact contains specific suggestions per article \
-             (title, meta description, intro, H1, internal links, etc.).",
-            article_count
-        )),
-        project_id: parent_task.project_id.clone(),
-        depends_on: vec![],
-        artifacts: vec![artifact],
-        run: TaskRun::default(),
-        created_at: now.clone(),
-        updated_at: now.clone(),
-    };
+        // Extract specific recommendations for this article
+        let article_rec = serde_json::json!({
+            "article_id": article_id,
+            "article_title": article_title,
+            "article_file": article_file,
+            "suggestions": article["suggestions"],
+        });
+        let article_rec_str = serde_json::to_string_pretty(&article_rec).unwrap_or_default();
 
-    match task_store::create_task(conn, &new_task) {
-        Ok(_) => log::info!(
-            "[create_apply_task] created {} for {} article(s)",
-            task_id, article_count
-        ),
-        Err(e) => log::warn!("[create_apply_task] failed to create apply task: {}", e),
+        let title = format!("Fix: {}", article_title);
+
+        // Create individual artifact for this article
+        let artifact = TaskArtifact {
+            key: format!("recommendations_{}", article_id),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("content_review".to_string()),
+            content: Some(article_rec_str),
+        };
+
+        // Idempotency key per article: content_review_apply:{project_id}:{article_id}
+        let idempotency_key = format!("content_review_apply:{}:{}", parent_task.project_id, article_id);
+
+        // Calculate priority based on issue count
+        let issue_count = article["suggestions"].as_array().map(|s| s.len()).unwrap_or(0);
+        let priority = if issue_count >= 5 {
+            Priority::High
+        } else if issue_count >= 2 {
+            Priority::Medium
+        } else {
+            Priority::Low
+        };
+
+        let spec = TaskSpec {
+            project_id: parent_task.project_id.clone(),
+            task_type: "fix_content_article".to_string(),
+            title: Some(title),
+            description: Some(format!(
+                "Apply SEO recommendations to '{}' ({} issue{}). \
+                 File: {}",
+                article_title,
+                issue_count,
+                if issue_count == 1 { "" } else { "s" },
+                article_file
+            )),
+            phase: Some("implementation".to_string()),
+            execution_mode: Some(ExecutionMode::Batchable),
+            priority,
+            agent_policy: AgentPolicy::Required,
+            idempotency_key: Some(idempotency_key),
+            artifacts: vec![artifact],
+            depends_on: vec![],
+        };
+
+        match TaskSpawner::spawn(conn, spec) {
+            Ok(task) => {
+                log::info!(
+                    "[create_apply_task] created {} for article '{}' ({} issues)",
+                    task.id, article_title, issue_count
+                );
+                created_task_ids.push(task.id);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[create_apply_task] failed to create task for article '{}': {}",
+                    article_title, e
+                );
+            }
+        }
     }
 
-    Some(task_id)
+    log::info!(
+        "[create_apply_task] created {} individual fix task(s) from content review",
+        created_task_ids.len()
+    );
+
+    created_task_ids
 }
 
 /// Native Rust scan for `cluster_and_link_scan` step.
@@ -654,31 +677,8 @@ pub(crate) fn create_cluster_and_link_task(
     parent_task: &Task,
     _project_path: &str,
 ) -> Option<String> {
-    use crate::engine::task_store;
-    use crate::models::task::{Task as TaskModel, TaskRun};
-
-    // Guard: skip if a cluster_and_link task already exists for this specific
-    // parent task (i.e. its depends_on contains the parent's ID).
-    let parent_id_json_fragment = format!("%{}%", parent_task.id);
-    let existing: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE project_id=?1 AND type='cluster_and_link' \
-             AND depends_on LIKE ?2 AND status IN ('todo','in_progress')",
-            rusqlite::params![&parent_task.project_id, &parent_id_json_fragment],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-
-    if existing > 0 {
-        log::info!(
-            "[cluster_link] cluster_and_link task already exists for parent {} — skipping spawn",
-            parent_task.id
-        );
-        return None;
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let task_id = format!("task-{}", chrono::Utc::now().timestamp_millis());
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::{ExecutionMode, Priority, AgentPolicy};
 
     let parent_title = parent_task
         .title
@@ -686,38 +686,40 @@ pub(crate) fn create_cluster_and_link_task(
         .unwrap_or("new article")
         .trim_start_matches("Write article: ");
 
-    let new_task = TaskModel {
-        id: task_id.clone(),
-        phase: "implementation".to_string(),
-        execution_mode: crate::models::task::ExecutionMode::Automatic,
-        task_type: "cluster_and_link".to_string(),
-        status: crate::models::task::TaskStatus::Todo,
-        priority: crate::models::task::Priority::Medium,
-        agent_policy: crate::models::task::AgentPolicy::Required,
-        title: Some(format!("Cluster and link: {}", parent_title)),
-        description: Some(format!(
-            "Scan internal link graph and add missing hub-to-spoke, \
-             spoke-to-hub, and cross-cluster links following the article: {}. \
-             Depends on: {}",
-            parent_title,
-            parent_task.id,
-        )),
+    let title = format!("Cluster and link: {}", parent_title);
+    let description = format!(
+        "Scan internal link graph and add missing hub-to-spoke, \
+         spoke-to-hub, and cross-cluster links following the article: {}. \
+         Depends on: {}",
+        parent_title,
+        parent_task.id,
+    );
+
+    // Use spawn with custom idempotency key to allow specific execution_mode and agent_policy
+    let idempotency_key = format!("followup:{}:cluster_and_link:{}", parent_task.id, title);
+
+    let spec = TaskSpec {
         project_id: parent_task.project_id.clone(),
-        depends_on: vec![parent_task.id.clone()],
+        task_type: "cluster_and_link".to_string(),
+        title: Some(title),
+        description: Some(description),
+        phase: Some("implementation".to_string()),
+        execution_mode: Some(ExecutionMode::Automatic),
+        priority: Priority::Medium,
+        agent_policy: AgentPolicy::Required,
+        idempotency_key: Some(idempotency_key),
         artifacts: vec![],
-        run: TaskRun::default(),
-        created_at: now.clone(),
-        updated_at: now.clone(),
+        depends_on: vec![parent_task.id.clone()],
     };
 
-    match task_store::create_task(conn, &new_task) {
-        Ok(_) => {
+    match TaskSpawner::spawn(conn, spec) {
+        Ok(task) => {
             log::info!(
                 "[cluster_link] spawned cluster_and_link task {} after write_article {}",
-                task_id,
+                task.id,
                 parent_task.id
             );
-            Some(task_id)
+            Some(task.id)
         }
         Err(e) => {
             log::warn!("[cluster_link] failed to create cluster_and_link task: {}", e);

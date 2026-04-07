@@ -16,9 +16,11 @@ import {
 
 const TASK_TYPES = [
   'write_article',
+  'create_landing_page',
   'collect_gsc',
   'collect_posthog',
   'research_keywords',
+  'research_landing_pages',
   'reddit_search',
   'reddit_reply',
   'analyse_gsc',
@@ -28,7 +30,7 @@ const TASK_TYPES = [
   'implementation',
 ]
 
-const KEYWORD_RESEARCH_TYPES = new Set(['research_keywords', 'custom_keyword_research'])
+const KEYWORD_RESEARCH_TYPES = new Set(['research_keywords', 'custom_keyword_research', 'research_landing_pages'])
 
 interface TaskCreateProps {
   projectId: string
@@ -41,12 +43,14 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
   const [customType, setCustomType] = useState('')
   const [title, setTitle] = useState('')
   const [themes, setThemes] = useState('')
+  const [landingPageContext, setLandingPageContext] = useState('')
   const [priority, setPriority] = useState('medium')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const resolvedType = taskType === '__custom__' ? customType.trim() : taskType
   const isKeywordResearch = KEYWORD_RESEARCH_TYPES.has(resolvedType)
+  const isLandingPageResearch = resolvedType === 'research_landing_pages'
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
@@ -54,7 +58,24 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
     setSaving(true)
     setError(null)
     try {
-      const description = isKeywordResearch && themes.trim() ? themes.trim() : undefined
+      // Build description based on task type
+      let description: string | undefined
+      if (isLandingPageResearch) {
+        // Landing page research: JSON format with context and optional themes
+        const themesList = themes.trim()
+          ? themes.split('\n').map(t => t.trim()).filter(Boolean)
+          : undefined
+        if (landingPageContext.trim() || themesList) {
+          description = JSON.stringify({
+            context: landingPageContext.trim(),
+            themes: themesList,
+          })
+        }
+      } else if (isKeywordResearch && themes.trim()) {
+        // Regular keyword research: plain text themes
+        description = themes.trim()
+      }
+      
       const task = await createTask(projectId, resolvedType, title || undefined, description, priority)
       onCreated(task)
     } catch (e: unknown) {
@@ -89,7 +110,7 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
             {/* Task type */}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Type</Label>
-              <Select value={taskType} onValueChange={v => { setTaskType(v); setThemes('') }}>
+              <Select value={taskType} onValueChange={v => { setTaskType(v); setThemes(''); setLandingPageContext('') }}>
                 <SelectTrigger className="bg-background border-border text-foreground text-sm">
                   <SelectValue />
                 </SelectTrigger>
@@ -110,6 +131,25 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
                 />
               )}
             </div>
+
+            {/* Landing page strategy context — shown only for landing page research */}
+            {isLandingPageResearch && (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  Landing Page Strategy Context <span className="text-muted-foreground/50">(optional)</span>
+                </Label>
+                <Textarea
+                  value={landingPageContext}
+                  onChange={e => setLandingPageContext(e.target.value)}
+                  placeholder={'Describe your landing page goals, target audience, and what makes your offering unique.\n\nExamples:\n• "Enterprise CRM for real estate agents"\n• "Looking for high-intent comparison terms"\n• "Target: CTOs at Series A startups"'}
+                  rows={5}
+                  className="bg-background border-border text-foreground text-sm resize-none"
+                />
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  This context helps guide keyword selection for conversion-focused landing pages.
+                </p>
+              </div>
+            )}
 
             {/* Keyword themes — shown for research task types */}
             {isKeywordResearch && (

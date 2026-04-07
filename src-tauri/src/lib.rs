@@ -5,6 +5,7 @@ pub mod db;
 pub mod engine;
 mod error;
 mod gsc;
+pub mod logging;
 pub mod models;
 mod reddit;
 mod seo;
@@ -29,6 +30,8 @@ pub fn run() {
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("pageseeds.db");
             let conn = db::init(&db_path)?;
+            // Initialize logging table
+            let _ = logging::init_logs_table(&conn);
             // Reset any tasks that were left in_progress from a previous session
             // (e.g. app was closed or crashed mid-execution).
             let _ = conn.execute(
@@ -81,7 +84,6 @@ pub fn run() {
             commands::get_reddit_statistics,
             commands::validate_reddit_reply,
             commands::migrate_reddit_db,
-            commands::run_reddit_opportunity_search,
             commands::draft_reddit_reply,
             commands::enrich_reddit_opportunities,
             commands::create_reddit_reply_tasks,
@@ -115,6 +117,9 @@ pub fn run() {
             // Phase 7 — Skills, Prompts, and Agent Interaction
             commands::list_skills,
             commands::get_skill,
+            commands::check_embedding_status,
+            commands::index_skills,
+            commands::search_skills,
             commands::build_prompt_preview,
             commands::normalize_output,
             commands::list_task_artifacts,
@@ -128,6 +133,7 @@ pub fn run() {
             commands::get_content_health,
             commands::fix_date_mismatches,
             commands::ingest_orphan_articles,
+            commands::get_keyword_coverage,
             commands::preflight_publish_articles,
             commands::apply_publish_articles,
             commands::resolve_year_mismatch_agent,
@@ -149,6 +155,23 @@ pub fn run() {
             commands::delete_social_template,
             commands::get_social_campaign_stats,
             commands::get_social_posts_by_project,
+            commands::run_social_campaign,
+            // Task Queue
+            commands::execute_queue,
+            commands::mark_tasks_queued,
+            commands::mark_tasks_todo,
+            commands::pause_queue,
+            commands::resume_queue,
+            commands::clear_completed_queue_items,
+            // Logging
+            commands::get_log_file_path,
+            commands::submit_log,
+            commands::submit_logs_batch,
+            commands::query_logs,
+            commands::get_recent_logs,
+            commands::get_log_stats,
+            commands::clear_old_logs,
+            commands::export_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

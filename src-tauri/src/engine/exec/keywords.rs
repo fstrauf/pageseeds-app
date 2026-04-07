@@ -2,59 +2,215 @@
 ///
 /// Native Rust pipeline:
 ///   1. `get_keyword_ideas` per theme → keywords WITH volume
-///   2. Dedupe against articles.json
-///   3. `get_keyword_difficulty` per top-N keyword → KD scores
-///   4. Merge into the standard output schema so KeywordPicker shows both volume and KD.
+///   2. Dedupe against articles.json + coverage analysis
+///   3. Filter/prioritize by coverage gaps (skip well-covered topics)
+///   4. `get_keyword_difficulty` per top-N keyword → KD scores
+///   5. Merge into the standard output schema so KeywordPicker shows both volume and KD.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
 
-fn parse_themes_from_agent_artifact(task: &Task) -> Vec<String> {
+// ─── Coverage-Aware Filtering ─────────────────────────────────────────────────
+
+/// Coverage cluster data loaded from keyword_coverage.json
+#[derive(Debug, Clone)]
+struct CoverageCluster {
+    id: String,
+    name: String,
+    primary_keywords: Vec<String>,
+    article_count: i64,
+}
+
+/// Load coverage clusters from keyword_coverage.json if available
+fn load_coverage_clusters(project_path: &str) -> Vec<CoverageCluster> {
+    let coverage = match crate::engine::exec::coverage::read_keyword_coverage(project_path) {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+    
+    coverage.get("clusters")
+        .and_then(|c| c.as_array())
+        .map(|clusters| {
+            clusters.iter().filter_map(|c| {
+                let id = c.get("cluster_id")?.as_str()?.to_string();
+                let name = c.get("cluster_name")?.as_str()?.to_string();
+                let article_count = c.get("article_count")?.as_i64()?;
+                let primary_keywords = c.get("primary_keywords")
+                    .and_then(|k| k.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|k| k.as_str().map(|s| s.to_lowercase()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                
+                Some(CoverageCluster {
+                    id,
+                    name,
+                    primary_keywords,
+                    article_count,
+                })
+            }).collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Score how well a keyword fills a coverage gap.
+/// 
+/// Returns (score, match_type, cluster_name):
+/// - score: 0-100, higher = better gap fill
+/// - match_type: "exact", "semantic", "new_topic"
+/// - cluster_name: which cluster it relates to (if any)
+/// 
+/// Scoring logic:
+/// - Keywords not matching any cluster: 100 (new topic, highest priority)
+/// - Keywords matching a cluster with < 3 articles: 80 (thin cluster, needs content)
+/// - Keywords matching a cluster with 3-5 articles: 50 (moderate coverage)
+/// - Keywords matching a cluster with > 5 articles: 20 (well covered, low priority)
+fn score_coverage_gap(
+    keyword: &str,
+    clusters: &[CoverageCluster],
+    existing_keywords: &HashSet<String>,
+) -> (u8, &'static str, Option<String>) {
+    let kw_lower = keyword.to_lowercase();
+    
+    // Exact duplicate check
+    if existing_keywords.contains(&kw_lower) {
+        return (0, "exact_duplicate", None);
+    }
+    
+    // Check for semantic match against cluster keywords
+    for cluster in clusters {
+        let is_related = cluster.primary_keywords.iter().any(|pk| {
+            // Keyword contains cluster keyword OR cluster keyword contains keyword
+            kw_lower.contains(pk) || pk.contains(&kw_lower)
+        });
+        
+        if is_related {
+            let score = match cluster.article_count {
+                0..=2 => 80,   // Thin cluster - high priority
+                3..=5 => 50,   // Moderate coverage
+                6..=10 => 30,  // Good coverage
+                _ => 20,       // Well covered - low priority
+            };
+            return (score, "semantic", Some(cluster.name.clone()));
+        }
+    }
+    
+    // No cluster match = new topic, highest priority
+    (100, "new_topic", None)
+}
+
+/// Filter and sort candidates by coverage gap score.
+/// 
+/// Removes exact duplicates and low-value keywords, prioritizes gap-filling keywords.
+fn filter_by_coverage_gap(
+    candidates: Vec<Candidate>,
+    clusters: &[CoverageCluster],
+    existing_keywords: &HashSet<String>,
+) -> Vec<Candidate> {
+    let mut scored: Vec<(Candidate, u8, &'static str)> = candidates
+        .into_iter()
+        .filter_map(|c| {
+            let (score, match_type, _) = score_coverage_gap(&c.keyword, clusters, existing_keywords);
+            
+            // Filter out exact duplicates entirely
+            if score == 0 {
+                return None;
+            }
+            
+            Some((c, score, match_type))
+        })
+        .collect();
+    
+    // Sort by gap score desc, then by volume desc
+    scored.sort_by(|a, b| {
+        let score_cmp = b.1.cmp(&a.1); // Higher gap score first
+        if score_cmp != std::cmp::Ordering::Equal {
+            return score_cmp;
+        }
+        let vol_a = a.0.volume.unwrap_or(0);
+        let vol_b = b.0.volume.unwrap_or(0);
+        vol_b.cmp(&vol_a) // Higher volume first
+    });
+    
+    // Log the distribution
+    let new_topic_count = scored.iter().filter(|(_, _, t)| *t == "new_topic").count();
+    let semantic_count = scored.iter().filter(|(_, _, t)| *t == "semantic").count();
+    log::info!(
+        "[coverage_filter] {} new topics, {} semantic matches after gap filtering",
+        new_topic_count,
+        semantic_count
+    );
+    
+    scored.into_iter().map(|(c, _, _)| c).collect()
+}
+
+// ─── Research Mode ────────────────────────────────────────────────────────────
+
+/// Research mode for the keyword pipeline.
+#[derive(Debug, Clone, Copy)]
+pub enum ResearchMode {
+    /// Informational content research (blog articles)
+    Informational,
+    /// Commercial content research (landing pages)
+    Commercial,
+}
+
+impl ResearchMode {
+    /// Determine research mode from task type string.
+    pub fn from_task_type(task_type: &str) -> Self {
+        match task_type {
+            "research_landing_pages" => ResearchMode::Commercial,
+            _ => ResearchMode::Informational,
+        }
+    }
+}
+
+/// Parse themes from the `research_seed_extraction` step artifact.
+/// Parsed result from the research_seed_extraction artifact.
+#[derive(Debug, Clone, Default)]
+struct SeedArtifact {
+    themes: Vec<String>,
+    competitors: Vec<String>,
+}
+
+/// Parse the output of Step 1 in the hybrid research workflow.
+/// Expects JSON with {"themes": [...], "competitors": [...]}.
+fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
     let content = task
         .artifacts
         .iter()
         .rev()
-        .find(|a| a.key == "research_theme_selection_agent")
+        .find(|a| a.key == "research_seed_extraction")
         .and_then(|a| a.content.as_deref());
 
     let Some(raw) = content else {
-        return vec![];
+        return SeedArtifact::default();
     };
 
-    // Agent output is often wrapped with prose/tool logs + fenced JSON.
-    // Normalize first, then parse direct JSON as a fallback.
-    let normalized = crate::engine::normalizer::normalize_agent_output(raw);
-    let parsed = normalized
-        .json_artifact
-        .or_else(|| serde_json::from_str::<serde_json::Value>(raw).ok());
-
-    if let Some(json) = parsed {
+    // Try to parse as JSON first
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
         let themes = themes_from_json(&json);
-        if !themes.is_empty() {
-            return themes;
+        let competitors = competitors_from_json(&json);
+        if !themes.is_empty() || !competitors.is_empty() {
+            return SeedArtifact { themes, competitors };
         }
     }
 
-    // Last-resort fallback: parse bullet/numbered list text from the agent output.
-    raw.lines()
-        .filter_map(|line| {
-            let t = line.trim();
-            if let Some(rest) = t.strip_prefix("- ") {
-                return clean_theme_str(rest);
-            }
-            if let Some(rest) = t.strip_prefix("* ") {
-                return clean_theme_str(rest);
-            }
-            if let Some(dot) = t.find(". ") {
-                if t[..dot].chars().all(|c| c.is_ascii_digit()) {
-                    return clean_theme_str(&t[dot + 2..]);
-                }
-            }
-            None
-        })
-        .collect()
+    // Fallback: try normalizer output format
+    let normalized = crate::engine::normalizer::normalize_agent_output(raw);
+    if let Some(json) = normalized.json_artifact {
+        let themes = themes_from_json(&json);
+        let competitors = competitors_from_json(&json);
+        if !themes.is_empty() || !competitors.is_empty() {
+            return SeedArtifact { themes, competitors };
+        }
+    }
+
+    SeedArtifact::default()
 }
 
 fn themes_from_json(v: &serde_json::Value) -> Vec<String> {
@@ -79,7 +235,23 @@ fn themes_from_json(v: &serde_json::Value) -> Vec<String> {
     vec![]
 }
 
-fn estimate_volume(raw: &str) -> Option<i64> {
+fn competitors_from_json(v: &serde_json::Value) -> Vec<String> {
+    let extract = |arr: &[serde_json::Value]| {
+        arr.iter()
+            .filter_map(|x| x.as_str())
+            .map(|s| s.trim().trim_start_matches("https://").trim_start_matches("http://").split('/').next().unwrap_or(s).to_string())
+            .filter(|s| !s.is_empty() && s.contains('.'))
+            .collect::<Vec<String>>()
+    };
+
+    if let Some(arr) = v.get("competitors").and_then(|x| x.as_array()) {
+        return extract(arr);
+    }
+
+    vec![]
+}
+
+pub(crate) fn estimate_volume(raw: &str) -> Option<i64> {
     let s = raw.trim();
     if s.is_empty() {
         return None;
@@ -128,6 +300,82 @@ fn best_serp_metric(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
     })
 }
 
+/// A keyword candidate discovered from a seed theme.
+#[derive(Debug, Clone)]
+struct Candidate {
+    keyword: String,
+    source_theme: String,
+    is_question: bool,
+    volume: Option<i64>,
+}
+
+/// Smart sampling: select a diverse subset of candidates for KD checking.
+/// Ensures coverage across themes and reserves slots for question keywords.
+fn smart_sample_candidates(candidates: Vec<Candidate>, budget: usize) -> Vec<Candidate> {
+    if candidates.len() <= budget {
+        return candidates;
+    }
+
+    use std::collections::HashMap;
+
+    // Group by source theme.
+    let mut by_theme: HashMap<String, Vec<Candidate>> = HashMap::new();
+    for c in candidates {
+        by_theme.entry(c.source_theme.clone()).or_default().push(c);
+    }
+
+    let theme_count = by_theme.len().max(1);
+    let base_per_theme = budget / theme_count;
+    let mut extra = budget % theme_count;
+
+    let mut result: Vec<Candidate> = vec![];
+    let mut remaining: Vec<Candidate> = vec![];
+
+    for (_theme, mut group) in by_theme {
+        // Sort each theme's group by volume descending.
+        group.sort_by(|a, b| {
+            let va = a.volume.unwrap_or(0);
+            let vb = b.volume.unwrap_or(0);
+            vb.cmp(&va)
+        });
+
+        let quota = base_per_theme + if extra > 0 { extra -= 1; 1 } else { 0 };
+
+        // Reserve at least 1 slot for a question keyword if available.
+        let question_idx = group.iter().position(|c| c.is_question);
+        let mut picked = 0usize;
+
+        if let Some(qidx) = question_idx {
+            if quota > 0 {
+                result.push(group.remove(qidx));
+                picked += 1;
+            }
+        }
+
+        // Fill remainder of this theme's quota with highest-volume keywords.
+        while picked < quota && !group.is_empty() {
+            result.push(group.remove(0));
+            picked += 1;
+        }
+
+        // Anything left goes into the global remaining pool.
+        remaining.extend(group);
+    }
+
+    // If we still have budget left, fill with highest-volume remaining candidates.
+    remaining.sort_by(|a, b| {
+        let va = a.volume.unwrap_or(0);
+        let vb = b.volume.unwrap_or(0);
+        vb.cmp(&va)
+    });
+
+    while result.len() < budget && !remaining.is_empty() {
+        result.push(remaining.remove(0));
+    }
+
+    result
+}
+
 pub(crate) fn exec_keyword_research_native(
     task: &Task,
     project_path: &str,
@@ -153,7 +401,10 @@ pub(crate) fn exec_keyword_research_native(
     let raw_desc = task.description.as_deref().unwrap_or("");
     let desc_themes = parse_desc_themes(raw_desc);
 
-    let agent_themes = parse_themes_from_agent_artifact(task);
+    let SeedArtifact {
+        themes: agent_themes,
+        competitors: agent_competitors,
+    } = parse_seed_extraction_artifact(task);
 
     let themes = if !desc_themes.is_empty() {
         desc_themes
@@ -164,7 +415,7 @@ pub(crate) fn exec_keyword_research_native(
             success: false,
             message: format!(
                 "No keyword themes available. Provide themes in task description or run agentic theme selection first. \
-                 Expected artifact key: research_theme_selection_agent. Workspace: {}.",
+                 Expected artifact key: research_seed_extraction. Workspace: {}.",
                 paths.automation_dir.display()
             ),
             output: None,
@@ -172,6 +423,7 @@ pub(crate) fn exec_keyword_research_native(
     };
 
     log::info!("[keyword_research_native] {} themes: {:?}", themes.len(), themes);
+    log::info!("[keyword_research_native] {} competitors: {:?}", agent_competitors.len(), agent_competitors);
 
     // ── Pre-flight: articles.json must exist ──────────────────────────────────
     let articles_json_path = paths.automation_dir.join("articles.json");
@@ -206,46 +458,234 @@ pub(crate) fn exec_keyword_research_native(
 
     log::info!("[keyword_research_native] {} existing keywords to filter against", existing_keywords.len());
 
-    // ── Bridge to tokio async runtime ─────────────────────────────────────────
-    let handle = tokio::runtime::Handle::current();
-
-    // Step 1 — Generate keyword ideas (includes volume) for each theme.
-    let mut volume_map: HashMap<String, i64> = HashMap::new();
-    let mut all_new_keywords: Vec<String> = vec![];
-    let mut seen: HashSet<String> = HashSet::new();
-
-    for theme in &themes {
-        log::info!("[keyword_research_native] fetching ideas for theme '{}'", theme);
-        match handle.block_on(crate::seo::keywords::get_keyword_ideas(
-            &capsolver_key, theme, "us", "Google",
-        )) {
-            Ok(result) => {
-                let all_ideas = result.ideas.iter().chain(result.question_ideas.iter());
-                for idea in all_ideas {
-                    let kw_lower = idea.keyword.to_lowercase();
-                    if existing_keywords.contains(&kw_lower) {
-                        continue; // already covered
-                    }
-                    if seen.contains(&kw_lower) {
-                        continue;
-                    }
-                    seen.insert(kw_lower.clone());
-                    if let Some(vol) = &idea.volume {
-                        if let Some(n) = estimate_volume(vol) {
-                            volume_map.insert(idea.keyword.clone(), n);
-                        }
-                    }
-                    all_new_keywords.push(idea.keyword.clone());
-                }
-                log::info!("[keyword_research_native] theme '{}' → {} new keywords so far", theme, all_new_keywords.len());
-            }
-            Err(e) => {
-                log::warn!("[keyword_research_native] keyword ideas failed for '{}': {}", theme, e);
-            }
-        }
+    // ── Load coverage analysis for gap filtering ──────────────────────────────
+    let coverage_clusters = load_coverage_clusters(project_path);
+    let has_coverage = !coverage_clusters.is_empty();
+    if has_coverage {
+        log::info!("[keyword_research_native] loaded {} coverage clusters for gap analysis", coverage_clusters.len());
+    } else {
+        log::info!("[keyword_research_native] no coverage analysis found, skipping gap filtering");
     }
 
-    if all_new_keywords.is_empty() {
+    // ── Bridge to tokio async runtime ─────────────────────────────────────────
+    // Spawn a new thread with its own runtime to avoid block_on issues when called
+    // from within an async context (queue executor)
+    let capsolver_key_thread = capsolver_key.clone();
+    let themes_thread = themes.clone();
+    let existing_keywords_thread = existing_keywords.clone();
+    let agent_competitors_thread = agent_competitors.clone();
+    let coverage_clusters_thread = coverage_clusters.clone();
+    
+    let thread_result = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            // Step 1 — Generate keyword ideas (includes volume) for each theme.
+            let mut candidates: Vec<Candidate> = vec![];
+            let mut seen: HashSet<String> = HashSet::new();
+
+            // Step 1 — Generate keyword ideas using Google Autocomplete.
+            // (Replaces broken Ahrefs get_keyword_ideas endpoint)
+            for theme in &themes_thread {
+                log::info!("[keyword_research_native] fetching Google autocomplete ideas for theme '{}'", theme);
+                match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
+                    Ok(result) => {
+                        // Add regular suggestions
+                        for suggestion in result.ideas.iter().chain(result.question_ideas.iter()) {
+                            let kw_lower = suggestion.keyword.to_lowercase();
+                            if existing_keywords_thread.contains(&kw_lower) {
+                                continue; // already covered (exact match)
+                            }
+                            if seen.contains(&kw_lower) {
+                                continue;
+                            }
+                            seen.insert(kw_lower.clone());
+                            // Google doesn't provide volume, so we leave it as None
+                            candidates.push(Candidate {
+                                keyword: suggestion.keyword.clone(),
+                                source_theme: theme.clone(),
+                                is_question: suggestion.suggestion_type == crate::seo::google_autocomplete::SuggestionType::Question,
+                                volume: None,
+                            });
+                        }
+                        log::info!("[keyword_research_native] theme '{}' → {} total candidates", theme, candidates.len());
+                    }
+                    Err(e) => {
+                        log::warn!("[keyword_research_native] Google autocomplete failed for '{}': {}", theme, e);
+                    }
+                }
+                
+                // Small delay to be polite to Google
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            }
+
+            // Track total candidates before any filtering for reporting
+            let pre_filter_count = candidates.len();
+            
+            // Step 2 — Coverage-aware filtering BEFORE expensive KD checks.
+            // This filters out keywords that are already well-covered semantically
+            // and prioritizes keywords that fill gaps in coverage.
+            if !coverage_clusters_thread.is_empty() {
+                let pre_gap_count = candidates.len();
+                candidates = filter_by_coverage_gap(
+                    candidates,
+                    &coverage_clusters_thread,
+                    &existing_keywords_thread,
+                );
+                log::info!(
+                    "[keyword_research_native] coverage gap filter: {} → {} candidates (removed {} well-covered)",
+                    pre_gap_count,
+                    candidates.len(),
+                    pre_gap_count - candidates.len()
+                );
+            }
+
+            // Step 3 — Smart sampling for KD checks.
+            // We can't afford to check every candidate, so sample strategically.
+            const MIN_VOLUME: i64 = 50;
+            let _pre_volume_count = candidates.len();
+            let mut candidates: Vec<Candidate> = candidates
+                .into_iter()
+                .filter(|c| {
+                    c.volume
+                        .map(|v| v >= MIN_VOLUME)
+                        .unwrap_or(true)
+                })
+                .collect();
+
+            log::info!(
+                "[keyword_research_native] volume filter: {} → {} candidates (dropped {} below {})",
+                _pre_volume_count,
+                candidates.len(),
+                _pre_volume_count - candidates.len(),
+                MIN_VOLUME,
+            );
+
+            // Stratified sampling: ensure coverage across themes + question quota.
+            let sampled = smart_sample_candidates(candidates, 50);
+            let max_api_calls = sampled.len();
+            log::info!(
+                "[keyword_research_native] smart sample: {} keywords for KD analysis ({} question keywords)",
+                sampled.len(),
+                sampled.iter().filter(|c| c.is_question).count()
+            );
+
+            // Build volume map from all candidates for lookups during KD analysis.
+            let volume_map: HashMap<String, i64> = sampled
+                .iter()
+                .filter_map(|c| c.volume.map(|v| (c.keyword.clone(), v)))
+                .collect();
+
+            let mut with_data_results: Vec<serde_json::Value> = vec![];
+            let mut no_data_results: Vec<serde_json::Value> = vec![];
+            let mut api_calls = 0usize;
+            let mut analyzed_count = 0usize;
+
+            for candidate in &sampled {
+                if api_calls >= max_api_calls {
+                    break;
+                }
+                api_calls += 1;
+                analyzed_count += 1;
+                let kw = &candidate.keyword;
+
+                match crate::seo::keywords::get_keyword_difficulty(
+                    &capsolver_key_thread, kw, "us",
+                ).await {
+                    Ok(kd) => {
+                        let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
+                        let vol = candidate.volume;
+                        let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
+                        let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
+                        let entry = serde_json::json!({
+                            "keyword": kw,
+                            "difficulty": kd.difficulty,
+                            "volume": vol,
+                            "traffic": top_traffic,
+                            "topVolume": top_volume,
+                            "shortage": kd.shortage,
+                            "has_data": has_data,
+                            "serp_count": kd.serp.len(),
+                            "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
+                            "last_update": kd.last_update,
+                        });
+                        log::info!(
+                            "[keyword_research_native] '{}' kd={:?} vol={:?} top_traffic={:?} has_data={}",
+                            kw, kd.difficulty, vol, top_traffic, has_data,
+                        );
+                        if has_data {
+                            with_data_results.push(entry);
+                        } else {
+                            no_data_results.push(entry);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
+                        let vol = candidate.volume;
+                        no_data_results.push(serde_json::json!({
+                            "keyword": kw,
+                            "difficulty": serde_json::Value::Null,
+                            "volume": vol,
+                            "has_data": false,
+                            "serp_count": 0,
+                            "top_result": "",
+                            "last_update": "",
+                        }));
+                    }
+                }
+            }
+
+            // Step 5 — Optional competitor traffic context.
+            let mut competitor_insights: Vec<crate::models::research::CompetitorInsight> = vec![];
+            for domain in &agent_competitors_thread {
+                match crate::seo::traffic::check_traffic(
+                    &capsolver_key_thread, domain, "subdomains", "None",
+                ).await {
+                    Ok(traffic) => {
+                        let top_keywords = traffic.top_keywords
+                            .into_iter()
+                            .take(5)
+                            .map(|tk| crate::models::research::CompetitorTopKeyword {
+                                keyword: tk.keyword.unwrap_or_default(),
+                                traffic: tk.traffic,
+                                position: tk.position,
+                            })
+                            .collect();
+                        competitor_insights.push(crate::models::research::CompetitorInsight {
+                            domain: traffic.domain,
+                            traffic_monthly_avg: traffic.traffic.traffic_monthly_avg,
+                            top_keywords,
+                        });
+                        log::info!("[keyword_research_native] competitor traffic fetched for {}", domain);
+                    }
+                    Err(e) => {
+                        log::warn!("[keyword_research_native] competitor traffic failed for '{}': {}", domain, e);
+                    }
+                }
+            }
+
+            Ok::<_, crate::error::Error>((with_data_results, no_data_results, api_calls, analyzed_count, pre_filter_count, competitor_insights))
+        })
+    }).join();
+
+    let (with_data_results, no_data_results, api_calls, analyzed_count, total_candidates, competitor_insights) = match thread_result {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Keyword research failed: {}", e),
+                output: None,
+            };
+        }
+        Err(_) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "Keyword research thread panicked".to_string(),
+                output: None,
+            };
+        }
+    };
+
+    if total_candidates == 0 {
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
@@ -256,79 +696,10 @@ pub(crate) fn exec_keyword_research_native(
         };
     }
 
-    // Step 2 — Analyse difficulty, over-sampling to fill 10 with-data results.
-    // Ahrefs free tier often returns no data for long-tail keywords. Rather than
-    // analyzing exactly 10 and accepting 3 hits, iterate through candidates until
-    // we have 10 with-data results or exhaust a budget of 30 API calls.
-    let target_with_data = 10usize;
-    let max_api_calls = 30usize;
-    log::info!(
-        "[keyword_research_native] analyzing difficulty (target {} with data, max {} calls, {} candidates)",
-        target_with_data, max_api_calls, all_new_keywords.len()
-    );
-
-    let mut with_data_results: Vec<serde_json::Value> = vec![];
-    let mut no_data_results: Vec<serde_json::Value> = vec![];
-    let mut api_calls = 0usize;
-    let mut analyzed_count = 0usize;
-
-    for kw in &all_new_keywords {
-        if with_data_results.len() >= target_with_data || api_calls >= max_api_calls {
-            break;
-        }
-        api_calls += 1;
-        analyzed_count += 1;
-
-        match handle.block_on(crate::seo::keywords::get_keyword_difficulty(
-            &capsolver_key, kw, "us",
-        )) {
-            Ok(kd) => {
-                let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
-                let vol = volume_map.get(kw).copied();
-                let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
-                let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
-                let entry = serde_json::json!({
-                    "keyword": kw,
-                    "difficulty": kd.difficulty,
-                    "volume": vol,
-                    "traffic": top_traffic,
-                    "topVolume": top_volume,
-                    "shortage": kd.shortage,
-                    "has_data": has_data,
-                    "serp_count": kd.serp.len(),
-                    "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
-                    "last_update": kd.last_update,
-                });
-                log::info!(
-                    "[keyword_research_native] '{}' kd={:?} vol={:?} top_traffic={:?} has_data={}",
-                    kw, kd.difficulty, vol, top_traffic, has_data,
-                );
-                if has_data {
-                    with_data_results.push(entry);
-                } else {
-                    no_data_results.push(entry);
-                }
-            }
-            Err(e) => {
-                log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
-                let vol = volume_map.get(kw).copied();
-                no_data_results.push(serde_json::json!({
-                    "keyword": kw,
-                    "difficulty": serde_json::Value::Null,
-                    "volume": vol,
-                    "has_data": false,
-                    "serp_count": 0,
-                    "top_result": "",
-                    "last_update": "",
-                }));
-            }
-        }
-    }
-
-    // Present with-data results first, then pad with no-data up to 10 total.
+    // Present with-data results first, then append no-data results so the
+    // final selection agent can see the full sampled set (up to max_api_calls).
     let mut difficulty_results = with_data_results;
-    let remaining_slots = target_with_data.saturating_sub(difficulty_results.len());
-    difficulty_results.extend(no_data_results.into_iter().take(remaining_slots));
+    difficulty_results.extend(no_data_results);
 
     log::info!(
         "[keyword_research_native] {} with data, {} total shown (checked {} keywords)",
@@ -337,21 +708,38 @@ pub(crate) fn exec_keyword_research_native(
         analyzed_count,
     );
 
-    let total_candidates = all_new_keywords.len();
-    let skipped_keywords: Vec<String> = all_new_keywords.iter().skip(analyzed_count).cloned().collect();
-    let output = serde_json::json!({
-        "themes": themes,
-        "total_candidates": total_candidates,
-        "new_keywords": all_new_keywords,
-        "filtered_out": 0,
-        "difficulty": {
-            "total": analyzed_count,
-            "successful": difficulty_results.iter().filter(|r| r["has_data"] == true).count(),
-            "failed": difficulty_results.iter().filter(|r| r["has_data"] != true).count(),
-            "results": difficulty_results,
-        },
-        "difficulty_skipped_keywords": skipped_keywords,
-    });
+    // total_candidates already captured from pre_filter_count
+    let with_data_count = difficulty_results.iter().filter(|r| r["has_data"] == true).count();
+    
+    // Build typed output contract with intent classification
+    let keywords: Vec<crate::models::research::ScoredKeyword> = difficulty_results
+        .into_iter()
+        .map(|r| {
+            let keyword = r["keyword"].as_str().unwrap_or("").to_string();
+            
+            // Classify search intent for this keyword
+            let (intent, confidence) = crate::engine::exec::intent_classifier::classify_intent(&keyword);
+            
+            crate::models::research::ScoredKeyword {
+                keyword,
+                volume: r["volume"].as_i64(),
+                kd: r["difficulty"].as_f64(),
+                intent: Some(intent.as_str().to_string()),
+                intent_confidence: Some(confidence),
+                traffic: r["traffic"].as_f64(),
+                has_data: r["has_data"].as_bool(),
+            }
+        })
+        .collect();
+    
+    let output = crate::models::research::KeywordPipelineOutput {
+        keywords,
+        themes: themes.clone(),
+        competitors: agent_competitors,
+        competitor_insights,
+        total_candidates,
+        with_data_count,
+    };
 
     crate::engine::workflows::StepResult {
         success: true,
@@ -943,7 +1331,7 @@ mod tests {
             project_id: "p1".to_string(),
             depends_on: vec![],
             artifacts: vec![crate::models::task::TaskArtifact {
-                key: "research_theme_selection_agent".to_string(),
+                key: "research_seed_extraction".to_string(),
                 path: None,
                 artifact_type: Some("agentic".to_string()),
                 source: Some("agentic".to_string()),
@@ -954,41 +1342,12 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
-        let themes = parse_themes_from_agent_artifact(&task);
-        assert_eq!(themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
+        let parsed = parse_seed_extraction_artifact(&task);
+        assert_eq!(parsed.themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
     }
 
-    #[test]
-    fn parse_agent_themes_handles_list_fallback() {
-        let raw = "1. Protective Put\n2. IRA Options\n3. Portfolio Hedging";
-
-        let task = crate::models::task::Task {
-            id: "t2".to_string(),
-            task_type: "research_keywords".to_string(),
-            phase: "research".to_string(),
-            status: crate::models::task::TaskStatus::Todo,
-            priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Manual,
-            agent_policy: crate::models::task::AgentPolicy::Optional,
-            title: None,
-            description: None,
-            project_id: "p1".to_string(),
-            depends_on: vec![],
-            artifacts: vec![crate::models::task::TaskArtifact {
-                key: "research_theme_selection_agent".to_string(),
-                path: None,
-                artifact_type: Some("agentic".to_string()),
-                source: Some("agentic".to_string()),
-                content: Some(raw.to_string()),
-            }],
-            run: crate::models::task::TaskRun::default(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-        };
-
-        let themes = parse_themes_from_agent_artifact(&task);
-        assert_eq!(themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
-    }
+    // Note: List fallback ("1. Theme") removed - we now require JSON output contract.
+    // The deterministic step expects {"themes": [...]} format from Step 1.
 
     #[test]
     fn parse_agent_themes_supports_array_json_contract() {
@@ -1005,7 +1364,7 @@ mod tests {
             project_id: "p1".to_string(),
             depends_on: vec![],
             artifacts: vec![crate::models::task::TaskArtifact {
-                key: "research_theme_selection_agent".to_string(),
+                key: "research_seed_extraction".to_string(),
                 path: None,
                 artifact_type: Some("agentic".to_string()),
                 source: Some("agentic".to_string()),
@@ -1016,8 +1375,8 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
-        let themes = parse_themes_from_agent_artifact(&task);
-        assert_eq!(themes, vec!["Protective Put", "IRA Options"]);
+        let parsed = parse_seed_extraction_artifact(&task);
+        assert_eq!(parsed.themes, vec!["Protective Put", "IRA Options"]);
     }
     // ── find_file_by_suffix ──────────────────────────────────────────────────────
 
@@ -1261,6 +1620,327 @@ mod volume_tests {
     }
 }
 
+/// Auto-create `write_article` tasks from keyword research results.
+///
+/// This function extracts keywords from the research task's artifacts and creates
+/// corresponding write_article tasks. It mirrors the behavior of the frontend
+/// KeywordPicker + createArticleTasksFromKeywords, but runs automatically on the backend.
+///
+/// # Arguments
+/// * `conn` - SQLite connection
+/// * `research_task` - The completed research_keywords task
+/// * `max_tasks` - Maximum number of article tasks to create (default: 5)
+///
+/// # Returns
+/// The number of article tasks created, or 0 if no suitable keywords were found.
+pub fn auto_create_article_tasks_from_research(
+    conn: &rusqlite::Connection,
+    research_task: &crate::models::task::Task,
+    max_tasks: Option<usize>,
+) -> crate::error::Result<usize> {
+    use crate::config::{default_execution_mode, default_phase};
+    use crate::engine::task_store;
+    use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
+    use std::collections::HashSet;
+
+    let max_tasks = max_tasks.unwrap_or(5);
+    if max_tasks == 0 {
+        return Ok(0);
+    }
+
+    // Extract keywords with their metrics from the research artifact
+    let keyword_data = extract_keywords_with_metrics(research_task);
+    if keyword_data.is_empty() {
+        log::info!(
+            "[auto_create_articles] No keywords found in research task {}",
+            research_task.id
+        );
+        return Ok(0);
+    }
+
+    // Sort by opportunity score (higher = better)
+    // Opportunity score: lower difficulty + higher volume/traffic
+    let mut keyword_data = keyword_data;
+    keyword_data.sort_by(|a, b| {
+        let score_a = calculate_opportunity_score(a);
+        let score_b = calculate_opportunity_score(b);
+        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Take top N keywords
+    let selected = keyword_data.into_iter().take(max_tasks).collect::<Vec<_>>();
+
+    let mut created_count = 0usize;
+    for (idx, kw_data) in selected.iter().enumerate() {
+        let now = chrono::Utc::now().to_rfc3339();
+        let id = format!("task-{}-{}", chrono::Utc::now().timestamp_millis(), idx);
+        let title = to_title_case(&kw_data.keyword);
+
+        // Determine priority based on difficulty
+        let priority_enum = match kw_data.difficulty {
+            Some(kd) if kd <= 30 => Priority::High,
+            Some(kd) if kd <= 45 => Priority::Medium,
+            Some(_) => Priority::Low,
+            None => match kw_data.volume {
+                Some(v) if v >= 1000 => Priority::High,
+                Some(v) if v >= 250 => Priority::Medium,
+                _ => Priority::Medium,
+            },
+        };
+
+        // Build description with keyword metadata
+        let mut description = format!("Target keyword: {}", kw_data.keyword);
+        if let Some(kd) = kw_data.difficulty {
+            description.push_str(&format!("\nKD: {}", kd));
+        }
+        if let Some(vol) = kw_data.volume {
+            description.push_str(&format!("\nVolume: {}", vol));
+        }
+
+        // Create provenance artifact linking back to research
+        let provenance = TaskArtifact {
+            key: "keyword_research".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some(research_task.id.clone()),
+            content: Some(format!(
+                "{{\"keyword\":\"{}\"}}",
+                kw_data.keyword.replace('"', "\\\"")
+            )),
+        };
+
+        let task = Task {
+            id,
+            phase: default_phase("write_article").to_string(),
+            execution_mode: default_execution_mode("write_article"),
+            task_type: "write_article".to_string(),
+            status: TaskStatus::Todo,
+            priority: priority_enum,
+            agent_policy: AgentPolicy::None,
+            title: Some(title),
+            description: Some(description),
+            project_id: research_task.project_id.clone(),
+            depends_on: vec![research_task.id.clone()],
+            artifacts: vec![provenance],
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+
+        match task_store::create_task(conn, &task) {
+            Ok(_) => {
+                log::info!(
+                    "[auto_create_articles] Created write_article task {} for keyword '{}'",
+                    task.id,
+                    kw_data.keyword
+                );
+                created_count += 1;
+            }
+            Err(e) => {
+                log::warn!(
+                    "[auto_create_articles] Failed to create task for keyword '{}': {}",
+                    kw_data.keyword,
+                    e
+                );
+            }
+        }
+    }
+
+    log::info!(
+        "[auto_create_articles] Created {} article tasks from research task {}",
+        created_count,
+        research_task.id
+    );
+
+    Ok(created_count)
+}
+
+/// Helper struct for keyword data with metrics
+struct KeywordData {
+    keyword: String,
+    difficulty: Option<i64>,
+    volume: Option<i64>,
+    traffic: Option<i64>,
+    has_data: bool,
+}
+
+/// Extract keywords with their metrics from a research task's artifacts.
+fn extract_keywords_with_metrics(task: &crate::models::task::Task) -> Vec<KeywordData> {
+    use serde_json::Value;
+
+    // Find the research artifact - prefer normalized/deterministic output
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "research_normalize_stage")
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
+
+    let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
+        return Vec::new();
+    };
+
+    // Try to parse as JSON
+    let v: Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => {
+            // If JSON parsing fails, try markdown table fallback
+            return extract_keywords_from_markdown_table_auto(raw);
+        }
+    };
+
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+
+    // Try difficulty.results first (preferred format from CLI research)
+    if let Some(arr) = v
+        .get("difficulty")
+        .and_then(|x| x.get("results"))
+        .and_then(|x| x.as_array())
+    {
+        for item in arr {
+            if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                if seen.insert(kw.to_lowercase()) {
+                    results.push(KeywordData {
+                        keyword: kw.to_string(),
+                        difficulty: item.get("difficulty").and_then(|x| x.as_i64()),
+                        volume: item.get("volume").and_then(|x| x.as_i64()),
+                        traffic: item.get("traffic").and_then(|x| x.as_i64()),
+                        has_data: item.get("has_data").and_then(|x| x.as_bool()).unwrap_or(true),
+                    });
+                }
+            }
+        }
+        if !results.is_empty() {
+            return results;
+        }
+    }
+
+    // Fallback to difficulty as direct array
+    if let Some(arr) = v.get("difficulty").and_then(|x| x.as_array()) {
+        for item in arr {
+            if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                if seen.insert(kw.to_lowercase()) {
+                    results.push(KeywordData {
+                        keyword: kw.to_string(),
+                        difficulty: item.get("difficulty").and_then(|x| x.as_i64()),
+                        volume: item.get("volume").and_then(|x| x.as_i64()),
+                        traffic: item.get("traffic").and_then(|x| x.as_i64()),
+                        has_data: item.get("has_data").and_then(|x| x.as_bool()).unwrap_or(true),
+                    });
+                }
+            }
+        }
+        if !results.is_empty() {
+            return results;
+        }
+    }
+
+    // Fallback to new_keywords (no metrics available)
+    if let Some(arr) = v.get("new_keywords").and_then(|x| x.as_array()) {
+        for item in arr.iter().take(10) {
+            if let Some(kw) = item.as_str() {
+                if seen.insert(kw.to_lowercase()) {
+                    results.push(KeywordData {
+                        keyword: kw.to_string(),
+                        difficulty: None,
+                        volume: None,
+                        traffic: None,
+                        has_data: false,
+                    });
+                }
+            }
+        }
+    }
+
+    results
+}
+
+/// Parse a range like "100-1,000" or "1,000" and return the midpoint or single value.
+fn parse_range_midpoint(raw: &str) -> Option<i64> {
+    let nums: Vec<i64> = raw
+        .split(|c: char| !c.is_ascii_digit() && c != ',')
+        .filter(|s| !s.trim().is_empty())
+        .filter_map(|s| s.replace(',', "").parse::<i64>().ok())
+        .collect();
+
+    match nums.len() {
+        0 => None,
+        1 => Some(nums[0]),
+        _ => Some((nums[0] + nums[1]) / 2),
+    }
+}
+
+/// Extract keywords from markdown table (fallback for agent output).
+fn extract_keywords_from_markdown_table_auto(raw: &str) -> Vec<KeywordData> {
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+
+    for line in raw.lines() {
+        if !line.contains('|') || line.contains("---") {
+            continue;
+        }
+
+        let cols: Vec<String> = line
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+
+        // Expected shape: Priority | Keyword | Vol | KD
+        if cols.len() < 4 {
+            continue;
+        }
+        if cols[0].eq_ignore_ascii_case("priority") || cols[1].eq_ignore_ascii_case("keyword") {
+            continue;
+        }
+
+        let keyword = &cols[1];
+        if seen.insert(keyword.to_lowercase()) {
+            let volume = parse_range_midpoint(&cols[2]);
+            let difficulty = parse_range_midpoint(&cols[3]);
+            results.push(KeywordData {
+                keyword: keyword.clone(),
+                difficulty,
+                volume,
+                traffic: None,
+                has_data: difficulty.is_some(),
+            });
+        }
+    }
+
+    results
+}
+
+/// Calculate opportunity score for a keyword.
+/// Higher score = better opportunity (lower difficulty, higher volume).
+fn calculate_opportunity_score(kw: &KeywordData) -> f64 {
+    let kd_score = match kw.difficulty {
+        None => 40.0, // Default when no data
+        Some(kd) => (100.0 - kd as f64).max(0.0),
+    };
+
+    let traffic_signal = kw.traffic.unwrap_or(0).max(kw.volume.unwrap_or(0)) as f64;
+    let traffic_score = (traffic_signal + 1.0).log10() * 25.0;
+    let traffic_score = traffic_score.min(100.0);
+
+    kd_score * 0.6 + traffic_score * 0.4
+}
+
+/// Simple title-case: capitalise the first letter of each word.
+fn to_title_case(s: &str) -> String {
+    s.split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // Integration tests for keyword research workflow
 #[cfg(test)]
 mod keyword_workflow_tests {
@@ -1332,9 +2012,9 @@ mod keyword_workflow_tests {
         }
     }
 
-    /// Test workflow planning with explicit themes (deterministic mode).
+    /// Test workflow planning - now uses 3-step agentic workflow for all research tasks.
     #[test]
-    fn workflow_with_explicit_themes_uses_single_deterministic_step() {
+    fn workflow_uses_four_step_hybrid_workflow() {
         let conn = in_memory_db();
         let temp_dir = std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
         std::fs::create_dir_all(&temp_dir.join(".github").join("automation")).unwrap();
@@ -1351,36 +2031,87 @@ mod keyword_workflow_tests {
         let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
         let steps = handler.plan(&task);
         
-        assert_eq!(steps.len(), 1, "With explicit themes, should have 1 step");
-        assert_eq!(steps[0].kind, "keyword_research_cli");
+        // New 4-step hybrid workflow: 
+        //   1. seed extraction (agentic)
+        //   2. ahrefs pipeline (deterministic) 
+        //   3. final selection (agentic)
+        //   4. normalizer (normalizer)
+        assert_eq!(steps.len(), 4, "Should have 4 steps: agentic → deterministic → agentic → normalizer");
+        assert_eq!(steps[0].name, "research_seed_extraction");
+        assert_eq!(steps[0].kind, "agentic");
+        assert_eq!(steps[1].name, "research_ahrefs_pipeline");
+        assert_eq!(steps[1].kind, "keyword_research_native");
+        assert_eq!(steps[2].name, "research_final_selection");
+        assert_eq!(steps[2].kind, "research_final_selection");
+        assert_eq!(steps[3].name, "research_normalize");
+        assert_eq!(steps[3].kind, "normalizer");
         
         std::fs::remove_dir_all(&temp_dir).ok();
     }
+}
 
-    /// Test workflow planning without themes (requires agentic theme selection).
+#[cfg(test)]
+mod sampling_tests {
+    use super::{Candidate, smart_sample_candidates};
+
+    fn make(kw: &str, theme: &str, is_question: bool, volume: Option<i64>) -> Candidate {
+        Candidate {
+            keyword: kw.to_string(),
+            source_theme: theme.to_string(),
+            is_question,
+            volume,
+        }
+    }
+
     #[test]
-    fn workflow_without_themes_uses_agentic_plus_deterministic_steps() {
-        let conn = in_memory_db();
-        let temp_dir = std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
-        std::fs::create_dir_all(&temp_dir.join(".github").join("automation")).unwrap();
-        
-        std::fs::write(
-            temp_dir.join(".github").join("automation").join("articles.json"),
-            r#"{"nextArticleId":1,"articles":[]}"#
-        ).unwrap();
+    fn sampling_returns_all_when_below_budget() {
+        let candidates = vec![
+            make("a", "t1", false, Some(100)),
+            make("b", "t1", false, Some(200)),
+        ];
+        let result = smart_sample_candidates(candidates.clone(), 10);
+        assert_eq!(result.len(), 2);
+    }
 
-        let project_id = create_test_project(&conn, &temp_dir.to_string_lossy());
-        // Create task with empty description (no themes) - this should trigger agentic mode
-        let task = create_keyword_research_task(&project_id, &[]);
-        
-        let handlers = default_handlers();
-        let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
-        let steps = handler.plan(&task);
-        
-        assert_eq!(steps.len(), 2, "Without explicit themes, should have 2 steps");
-        assert_eq!(steps[0].kind, "agentic");
-        assert_eq!(steps[1].kind, "keyword_research_cli");
-        
-        std::fs::remove_dir_all(&temp_dir).ok();
+    #[test]
+    fn sampling_stratifies_across_themes() {
+        let candidates = vec![
+            make("a1", "t1", false, Some(1000)),
+            make("a2", "t1", false, Some(900)),
+            make("a3", "t1", false, Some(800)),
+            make("b1", "t2", false, Some(700)),
+            make("b2", "t2", false, Some(600)),
+            make("b3", "t2", false, Some(500)),
+        ];
+        let result = smart_sample_candidates(candidates, 4);
+        let t1_count = result.iter().filter(|c| c.source_theme == "t1").count();
+        let t2_count = result.iter().filter(|c| c.source_theme == "t2").count();
+        assert!(t1_count >= 1, "t1 should have at least 1 sample");
+        assert!(t2_count >= 1, "t2 should have at least 1 sample");
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn sampling_prioritizes_question_keywords() {
+        let candidates = vec![
+            make("a1", "t1", false, Some(1000)),
+            make("a2", "t1", true, Some(100)), // question
+            make("a3", "t1", false, Some(800)),
+        ];
+        let result = smart_sample_candidates(candidates, 2);
+        assert!(result.iter().any(|c| c.keyword == "a2" && c.is_question), "question keyword should be sampled");
+    }
+
+    #[test]
+    fn sampling_fills_remaining_with_highest_volume() {
+        let candidates = vec![
+            make("a1", "t1", false, Some(100)),
+            make("b1", "t2", false, Some(1000)),
+            make("b2", "t2", false, Some(900)),
+        ];
+        let result = smart_sample_candidates(candidates, 3);
+        assert_eq!(result.len(), 3);
+        // The highest-volume keyword should definitely be included.
+        assert!(result.iter().any(|c| c.keyword == "b1" && c.volume == Some(1000)));
     }
 }

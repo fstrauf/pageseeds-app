@@ -128,10 +128,16 @@ pub async fn check_traffic(
         .send()
         .await?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let body_preview = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+        log::warn!(
+            "[check_traffic] Ahrefs returned {} for domain '{}'. Body preview: {}",
+            status, domain_or_url, body_preview
+        );
         return Err(Error::Other(format!(
-            "Ahrefs traffic overview returned status {}",
-            resp.status()
+            "Ahrefs traffic overview returned status {}. Body: {}",
+            status, body_preview
         )));
     }
 

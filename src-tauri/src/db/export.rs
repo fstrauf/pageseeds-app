@@ -430,6 +430,11 @@ fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()
                 content_gaps_addressed: vec![],
                 estimated_traffic_monthly: None,
                 project_id: project_id.to_string(),
+                quality_score: None,
+                quality_grade: None,
+                quality_rated_at: None,
+                publishing_ready: None,
+                quality_breakdown: None,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

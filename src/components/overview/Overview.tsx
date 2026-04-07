@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Zap, RefreshCw, CheckCircle2, Clock, AlertCircle,
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
-  PlayCircle, TrendingUp, Users, ArrowRight, Send,
+  PlayCircle, TrendingUp, Users, ArrowRight, Send, PieChart, Target,
 } from 'lucide-react'
 import { createTask, getProjectOverview, listArticles } from '../../lib/tauri'
-import type { Article, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
+import type { Article, LandingPageResearchPending, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '../../lib/utils'
@@ -33,6 +33,15 @@ const QUICK_ACTIONS: ActionDef[] = [
     phase: 'research',
     nextView: 'tasks',
     nextLabel: 'Select keywords & create articles',
+  },
+  {
+    task_type: 'research_landing_pages',
+    label: 'Landing Page Research',
+    description: 'Research high-intent keywords for conversion-focused landing pages with strategic context',
+    icon: <Target size={16} />,
+    phase: 'research',
+    nextView: 'tasks',
+    nextLabel: 'Select keywords & create landing pages',
   },
   {
     task_type: 'content_review',
@@ -78,6 +87,15 @@ const QUICK_ACTIONS: ActionDef[] = [
     phase: 'investigation',
     nextView: 'tasks',
     nextLabel: 'See indexing tasks',
+  },
+  {
+    task_type: 'analyze_keyword_coverage',
+    label: 'Analyze Coverage',
+    description: 'Analyze your content portfolio and identify topic clusters + coverage gaps',
+    icon: <PieChart size={16} />,
+    phase: 'research',
+    nextView: 'tasks',
+    nextLabel: 'View coverage results',
   },
 ]
 
@@ -198,6 +216,77 @@ const PHASE_BADGE: Record<string, string> = {
   verification: 'bg-pink-100 text-pink-700',
 }
 
+// ─── Pending Landing Page Research Card ───────────────────────────────────────
+
+function PendingLandingPageCard({ 
+  items, 
+  onViewTask 
+}: { 
+  items: LandingPageResearchPending[]
+  onViewTask: (taskId: string) => void 
+}) {
+  if (!items || items.length === 0) return null
+  
+  return (
+    <Card className="bg-card border-border border-amber-200">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+          <Target size={13} className="text-amber-600" />
+          Landing Page Research Awaiting Review
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pb-3">
+        <div className="space-y-3">
+          {items.map(item => (
+            <div key={item.id} className="space-y-2">
+              <button
+                onClick={() => onViewTask(item.id)}
+                className="w-full text-left group"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-foreground group-hover:text-amber-600 transition-colors">
+                    {item.title || 'Landing Page Research'}
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+                    review
+                  </span>
+                  <ArrowRight size={11} className="ml-auto text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </button>
+              
+              {item.context && (
+                <p className="text-xs text-muted-foreground pl-2 border-l-2 border-amber-200">
+                  {item.context.length > 120 
+                    ? item.context.slice(0, 120) + '...' 
+                    : item.context}
+                </p>
+              )}
+              
+              {item.themes.length > 0 && (
+                <div className="flex flex-wrap gap-1 pl-2">
+                  {item.themes.slice(0, 4).map((theme, idx) => (
+                    <span 
+                      key={idx}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground"
+                    >
+                      {theme}
+                    </span>
+                  ))}
+                  {item.themes.length > 4 && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
+                      +{item.themes.length - 4} more
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface OverviewProps {
@@ -221,6 +310,12 @@ export function Overview({
   const [publishOpen, setPublishOpen] = useState(false)
   const [publishCandidates, setPublishCandidates] = useState<Article[]>([])
   const [loadingPublish, setLoadingPublish] = useState(false)
+  
+  // Landing page research dialog state
+  const [lpDialogOpen, setLpDialogOpen] = useState(false)
+  const [lpContext, setLpContext] = useState('')
+  const [lpThemes, setLpThemes] = useState('')
+  const [lpCreating, setLpCreating] = useState(false)
 
   const load = useCallback(async () => {
     if (!project) return
@@ -264,6 +359,13 @@ export function Overview({
 
   async function handleQuickAction(action: ActionDef) {
     if (!project || runningActionLabel !== null) return
+    
+    // Landing page research needs a dialog for context input
+    if (action.task_type === 'research_landing_pages') {
+      setLpDialogOpen(true)
+      return
+    }
+    
     setRunningActionLabel(action.label)
     setQuickActionError(null)
     try {
@@ -463,6 +565,12 @@ export function Overview({
           {/* Right column: workflow activity + recent tasks + jump nav */}
           <div className="space-y-4">
 
+            {/* Pending landing page research tasks */}
+            <PendingLandingPageCard 
+              items={overview?.pending_landing_page_research ?? []}
+              onViewTask={(taskId) => onViewChange('tasks', taskId)}
+            />
+
             {/* Workflow activity timeline */}
             <WorkflowActivityCard
               items={overview?.workflow_activity ?? []}
@@ -535,6 +643,109 @@ export function Overview({
         </div>
       </div>
     </div>
+    {/* Landing Page Research Dialog */}
+    {lpDialogOpen && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center"
+        style={{ background: 'rgba(0,0,0,0.5)' }}
+        onClick={e => { if (e.target === e.currentTarget) setLpDialogOpen(false) }}
+      >
+        <div className="bg-card border border-border rounded-lg shadow-xl w-[450px]">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+            <h2 className="text-sm font-semibold text-foreground">Landing Page Research</h2>
+            <button 
+              onClick={() => setLpDialogOpen(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              ✕
+            </button>
+          </div>
+          
+          <div className="px-5 py-5 space-y-4">
+            {quickActionError && (
+              <div className="px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
+                {quickActionError}
+              </div>
+            )}
+            
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">
+                Strategy Context <span className="text-muted-foreground/50">(optional)</span>
+              </label>
+              <textarea
+                value={lpContext}
+                onChange={e => setLpContext(e.target.value)}
+                placeholder={'Describe your landing page goals, target audience, and what makes your offering unique.\n\nExamples:\n• "Enterprise CRM for real estate agents"\n• "Looking for high-intent comparison terms"\n• "Target: CTOs at Series A startups"'}
+                rows={5}
+                className="w-full bg-background border border-border text-foreground text-sm resize-none rounded-md px-3 py-2"
+              />
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                This context helps guide keyword selection for conversion-focused landing pages.
+              </p>
+            </div>
+            
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">
+                Keyword Themes <span className="text-muted-foreground/50">(optional — auto-derived if blank)</span>
+              </label>
+              <textarea
+                value={lpThemes}
+                onChange={e => setLpThemes(e.target.value)}
+                placeholder={'Enter topics, one per line\nExample:\ncoffee brewing methods\nespresso guides'}
+                rows={3}
+                className="w-full bg-background border border-border text-foreground text-sm resize-none rounded-md px-3 py-2"
+              />
+            </div>
+          </div>
+          
+          <div className="px-5 pb-5 flex items-center justify-end gap-2">
+            <button
+              onClick={() => setLpDialogOpen(false)}
+              className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={async () => {
+                if (!project) return
+                setLpCreating(true)
+                setQuickActionError(null)
+                try {
+                  const themesList = lpThemes.trim()
+                    ? lpThemes.split('\n').map(t => t.trim()).filter(Boolean)
+                    : undefined
+                  const description = JSON.stringify({
+                    context: lpContext.trim(),
+                    themes: themesList,
+                  })
+                  const task = await createTask(
+                    project.id,
+                    'research_landing_pages',
+                    `Landing Page Research — ${new Date().toLocaleDateString()}`,
+                    description,
+                    'medium',
+                  )
+                  setLpDialogOpen(false)
+                  setLpContext('')
+                  setLpThemes('')
+                  onRunTasks?.([task])
+                  await load()
+                } catch (e: unknown) {
+                  setQuickActionError(String(e))
+                } finally {
+                  setLpCreating(false)
+                }
+              }}
+              disabled={lpCreating}
+              className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {lpCreating ? 'Creating...' : 'Start Research'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     <PublishPanel
       open={publishOpen}
       onOpenChange={setPublishOpen}

@@ -83,27 +83,33 @@ impl WorkflowHandler for ResearchHandler {
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
-            "research_keywords" => {
-                // Deterministic mode when themes are explicitly provided on the task.
-                let has_explicit_themes = task
-                    .description
-                    .as_deref()
-                    .map(crate::engine::exec::keywords::parse_desc_themes)
-                    .map(|themes| !themes.is_empty())
-                    .unwrap_or(false);
-
-                if has_explicit_themes {
-                    vec![WorkflowStep::new("research_keywords_cli", "keyword_research_cli")]
-                } else {
-                    // Agentic mode for theme discovery from project context/brief,
-                    // followed by deterministic keyword API execution.
-                    vec![
-                        WorkflowStep::new("research_theme_selection_agent", "agentic"),
-                        WorkflowStep::new("research_keywords_cli", "keyword_research_cli"),
-                    ]
-                }
+            "research_keywords" | "research_landing_pages" => {
+                // Hybrid 3-step workflow: agentic → deterministic → agentic + normalizer
+                // Replaces unreliable ToolCallingAgent loop with reliable native Ahrefs calls.
+                vec![
+                    // Step 1 (agentic): LLM extracts 3-4 themes from project brief.
+                    // Cannot be deterministic: requires reading intent from free-form text.
+                    WorkflowStep::new("research_seed_extraction", "agentic"),
+                    
+                    // Step 2 (deterministic): Rust drives Ahrefs API directly — no LLM.
+                    // Deterministic: given themes, enumerates ideas + fetches KD scores.
+                    // Output: structured JSON with all keywords, volume, KD.
+                    WorkflowStep::new("research_ahrefs_pipeline", "keyword_research_native"),
+                    
+                    // Step 3 (deterministic): Select best candidates from structured data.
+                    // Deterministic: pure filtering/sorting by KD and volume — no judgment needed.
+                    WorkflowStep::new("research_final_selection", "research_final_selection"),
+                    
+                    // Step 4 (normalizer): Enforces output contract before UI parses it.
+                    WorkflowStep::new("research_normalize", "normalizer")
+                        .with_param(step_params::NORMALIZER_ID, "keyword_research")
+                        .with_param(step_params::ARTIFACT_NAME, "keyword_research"),
+                ]
             }
             _ => {
+                // TODO: migrate custom_keyword_research to 3-step agentic workflow
+                // This legacy path uses the old agentic+normalizer flow via seo-keyword-research skill.
+                // Kept for backward compatibility - migrate to the 3-step hybrid flow when ready.
                 let mut steps = vec![
                     WorkflowStep::new("research_agent_stage", "agentic")
                         .with_param(step_params::SKILL, "seo-keyword-research")
@@ -129,7 +135,7 @@ impl WorkflowHandler for ContentHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "write_article" | "optimize_article" | "create_content" | "optimize_content"
+            "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
                 | "content_review_apply"
         )
     }
@@ -207,6 +213,28 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("publish_content_run", "deterministic")
                     .with_param(step_params::CMD, "pageseeds content validate --workspace-dir {automation_dir}"),
             ],
+            "fix_content_article" => vec![
+                // Per-article content fix: reads the recommendations artifact embedded in the task
+                // and applies SEO improvements (title, meta, intro, internal links, FAQ, EEAT, CTA)
+                // to a single MDX file. One focused agent call per article.
+                WorkflowStep::new("fix_content_article_apply", "agentic"),
+            ],
+            "indexing_diagnostics" => vec![
+                // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
+                // only re-checks stale or known-bad URLs, and spawns fix tasks for new/regressed
+                // or unresolved issues. Deterministic because it is pure API calls + DB comparison.
+                WorkflowStep::new("indexing_diagnostics_run", "indexing_diagnostics_run"),
+            ],
+            "fix_indexing" | "fix_technical" => vec![
+                // Step 1 (deterministic): load the target MDX file and extract structured context
+                // (word count, H1, title, internal links, canonical). This is obvious file I/O —
+                // no judgment required — and saves the agent from hunting around the repo.
+                WorkflowStep::new("indexing_fix_context", "indexing_fix_context"),
+                // Step 2 (agentic): apply the fix. The agent gets the GSC issue + structured
+                // context and edits the MDX file directly. Judgment is required because the fix
+                // depends on intent, content quality, and site-specific conventions.
+                WorkflowStep::new("indexing_fix_apply", "indexing_fix_apply"),
+            ],
             "cluster_and_link" => vec![
                 // Step 1 (deterministic, native Rust): scan all MDX files, build the full link
                 // map, identify orphans and coverage gaps.  Pure file I/O + regex — no judgment.
@@ -250,38 +278,57 @@ impl WorkflowHandler for RedditHandler {
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
-        if task_type(task) == "reddit_opportunity_search" {
-            vec![
+        match task_type(task) {
+            "reddit_opportunity_search" => vec![
                 // Step 1 (agentic): Parse reddit_config.md and extract structured search parameters.
-                // Cannot be deterministic: identifying trigger topics, query keywords, product name,
-                // and mention stance from free-form markdown requires semantic understanding.
-                // The agent reads the config file and outputs a structured JSON artifact with:
-                // - product_name, mention_stance, trigger_topics, query_keywords, seed_subreddits, excluded_subreddits
                 WorkflowStep::new("reddit_config_parse_stage", "reddit_config_parse"),
-                // Step 2 (deterministic): API search using the structured parameters from step 1.
-                // Reads the artifact, executes Reddit API calls, applies filters (age, exclusions, score threshold).
-                // No judgment required - pure data fetching and filtering.
+                // Step 2 (deterministic): API search using the structured parameters.
                 WorkflowStep::new("reddit_search_stage", "reddit_search"),
                 // Step 3 (agentic): relevance scoring, pain point extraction, reply drafting.
-                // Cannot be deterministic: deciding whether a post is relevant to *this*
-                // product, extracting intent, and writing a contextually appropriate reply
-                // all require understanding of project context and language.
                 WorkflowStep::new("reddit_enrich_stage", "reddit_enrich"),
-                // Step 4 (deterministic): Fetch enriched opportunities from DB and return as JSON.
-                // Returns concrete posting suggestions with drafted replies for user review.
+                // Step 4 (deterministic): Fetch enriched opportunities from DB.
                 WorkflowStep::new("reddit_results_stage", "reddit_fetch_results"),
-            ]
-        } else {
-            // Other reddit tasks (e.g. reply drafting) still use agent + optional normalizer.
-            let mut steps = vec![WorkflowStep::new("reddit_agent_stage", "agentic")];
-            steps.push(
-                WorkflowStep::new("reddit_normalize_stage", "normalizer")
-                    .with_param(step_params::NORMALIZER_ID, "reddit_opportunities")
-                    .with_param(step_params::ARTIFACT_NAME, "reddit_opportunities")
-                    .optional(),
-            );
-            steps
+            ],
+            "reddit_reply" => vec![
+                // Step 1 (deterministic): Post the reply to Reddit via API.
+                // Extracts post_id and reply_text from task description.
+                WorkflowStep::new("reddit_post_reply", "reddit_post_reply"),
+            ],
+            _ => {
+                // Other reddit tasks use agent + optional normalizer.
+                let mut steps = vec![WorkflowStep::new("reddit_agent_stage", "agentic")];
+                steps.push(
+                    WorkflowStep::new("reddit_normalize_stage", "normalizer")
+                        .with_param(step_params::NORMALIZER_ID, "reddit_opportunities")
+                        .with_param(step_params::ARTIFACT_NAME, "reddit_opportunities")
+                        .optional(),
+                );
+                steps
+            }
         }
+    }
+}
+
+// ─── Keyword Coverage ─────────────────────────────────────────────────────────
+
+pub struct CoverageHandler;
+
+impl WorkflowHandler for CoverageHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task) == "analyze_keyword_coverage"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            // Step 1 (deterministic): Load articles from articles.json
+            WorkflowStep::new("coverage_load_articles", "coverage_load_articles"),
+            // Step 2 (agentic): Cluster articles by semantic similarity
+            // Cannot be deterministic: understanding topic relationships and naming
+            // clusters requires semantic judgment about content themes.
+            WorkflowStep::new("coverage_cluster_analysis", "coverage_cluster_analysis"),
+            // Step 3 (deterministic): Save results to keyword_coverage.json
+            WorkflowStep::new("coverage_save", "coverage_save"),
+        ]
     }
 }
 
@@ -303,6 +350,44 @@ impl WorkflowHandler for PerformanceHandler {
         // agent receives no artifact and produces generic filler. Use manual until
         // the deterministic data-fetch step exists.
         vec![WorkflowStep::new("performance_manual", "manual")]
+    }
+}
+
+// ─── Social Media Marketing ───────────────────────────────────────────────────
+
+pub struct SocialHandler;
+
+impl WorkflowHandler for SocialHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task).starts_with("social_")
+    }
+
+    fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
+        match task_type(task) {
+            "social_generate_campaign" => vec![
+                WorkflowStep::new("social_collect_sources", "social_collect_sources"),
+                WorkflowStep::new("social_load_templates", "social_load_templates"),
+                WorkflowStep::new("social_generate_posts", "social_generate_posts"),
+                WorkflowStep::new("social_build_visuals", "social_build_visuals"),
+                WorkflowStep::new("social_save_campaign", "social_save_campaign"),
+            ],
+            "social_generate_from_article" => vec![
+                WorkflowStep::new("social_extract_article", "social_extract_article"),
+                WorkflowStep::new("social_generate_posts", "social_generate_posts"),
+                WorkflowStep::new("social_build_visuals", "social_build_visuals"),
+                WorkflowStep::new("social_save_campaign", "social_save_campaign"),
+            ],
+            "social_regenerate_post" => vec![
+                WorkflowStep::new("social_regenerate_single", "social_regenerate_single"),
+                WorkflowStep::new("social_rebuild_visual", "social_rebuild_visual"),
+                WorkflowStep::new("social_update_post", "social_update_post"),
+            ],
+            "social_create_template" => vec![
+                WorkflowStep::new("social_design_template", "social_design_template"),
+                WorkflowStep::new("social_save_template", "social_save_template"),
+            ],
+            _ => vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), "manual")],
+        }
     }
 }
 
@@ -331,7 +416,9 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(ContentHandler),
         Box::new(ContentReviewHandler),
         Box::new(RedditHandler),
+        Box::new(SocialHandler),
         Box::new(PerformanceHandler),
+        Box::new(CoverageHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
     ]
@@ -349,7 +436,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
 /// Supported tokens in `cmd`:
 ///   {project_path}   → repo root
 ///   {automation_dir} → repo/.github/automation
-pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str) -> StepResult {
+pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let automation_dir = paths.automation_dir.to_string_lossy();
 
@@ -374,13 +461,17 @@ pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str)
 
     log::info!("[executor] deterministic step '{}' cmd: {}", step.name, cmd);
 
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .current_dir(project_path)
-        .output()
-    {
-        Ok(out) => {
+    // Run blocking subprocess in spawn_blocking
+    let step_name = step.name.clone();
+    let project_path = project_path.to_string();
+    match tokio::task::spawn_blocking(move || {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .current_dir(&project_path)
+            .output()
+    }).await {
+        Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let combined = if stderr.is_empty() {
@@ -389,18 +480,23 @@ pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str)
                 format!("{}\n[stderr]\n{}", stdout, stderr)
             };
             if out.status.success() {
-                StepResult { success: true, message: format!("Step '{}' OK", step.name), output: Some(combined) }
+                StepResult { success: true, message: format!("Step '{}' OK", step_name), output: Some(combined) }
             } else {
                 StepResult {
                     success: false,
-                    message: format!("Step '{}' failed (exit {}): {}", step.name, out.status, stderr.trim()),
+                    message: format!("Step '{}' failed (exit {}): {}", step_name, out.status, stderr.trim()),
                     output: Some(combined),
                 }
             }
         }
+        Ok(Err(e)) => StepResult {
+            success: false,
+            message: format!("Step '{}' could not launch: {}", step_name, e),
+            output: None,
+        },
         Err(e) => StepResult {
             success: false,
-            message: format!("Step '{}' could not launch: {}", step.name, e),
+            message: format!("Step '{}' task failed: {}", step.name, e),
             output: None,
         },
     }
@@ -413,14 +509,15 @@ pub fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str)
 ///   2. Build a prompt via `prompts::build_prompt`
 ///   3. Call `agent::run_agent(provider, prompt, project_path)`
 ///   4. Return the raw output as the step result
-pub fn exec_agentic(
+pub async fn exec_agentic(
     step: &WorkflowStep,
     task: &Task,
     project_path: &str,
     site_url: &str,
     agent_provider: &str,
+    latest_raw_output: Option<&str>,
 ) -> StepResult {
-    use crate::engine::{agent, prompts, skills};
+    use crate::engine::{agent, prompts, skills, tool_agent};
     use crate::engine::project_paths::ProjectPaths;
     use std::path::Path;
 
@@ -429,7 +526,7 @@ pub fn exec_agentic(
 
     let is_content_task = matches!(
         task.task_type.as_str(),
-        "write_article" | "optimize_article" | "create_content" | "optimize_content"
+        "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
     );
 
     let content_context = if is_content_task {
@@ -494,76 +591,6 @@ pub fn exec_agentic(
         ) + &artifact_context
     };
 
-        // Agentic theme selection step for research_keywords: produce only focused themes.
-        if step.name == "research_theme_selection_agent" {
-            let automation_dir = paths.automation_dir.to_string_lossy();
-            prompt.push_str(&format!(
-                "\n\n## Theme Selection Contract (Required)\n\
-                 You are selecting keyword SEED QUERIES for the Ahrefs free keyword ideas API.\n\
-                 Read project context files in this repo, especially:\n\
-                 - {automation_dir}/seo_content_brief.md\n\
-                 - {automation_dir}/project_summary.md (if present)\n\
-                 \n\
-                 Return ONLY one fenced JSON block and no extra prose:\n\
-                 ```json\n\
-                 {{\n\
-                   \"themes\": [\"theme 1\", \"theme 2\", \"theme 3\"]\n\
-                 }}\n\
-                 ```\n\
-                 \n\
-                 ## CRITICAL: Themes are SEED QUERIES, not target keywords\n\
-                 The Ahrefs ideas API expands short seed terms into dozens of related keywords.\n\
-                 Long, specific phrases (4+ words) return ZERO ideas — they are too narrow to expand.\n\
-                 \n\
-                 GOOD seeds (1-3 words, broad enough for Ahrefs to expand):\n\
-                 - \"budget planner\", \"expense tracker\", \"savings tracker\"\n\
-                 - \"options trading\", \"wheel strategy\", \"covered calls\"\n\
-                 - \"content marketing\", \"keyword research\", \"internal linking\"\n\
-                 \n\
-                 BAD seeds (too long/specific, Ahrefs returns zero ideas):\n\
-                 - \"monthly cash flow planner spreadsheet\" → use \"cash flow planner\" instead\n\
-                 - \"variable income budget planner template\" → use \"budget planner\" instead\n\
-                 - \"small business expense categories tax\" → use \"business expenses\" instead\n\
-                 - \"savings goals tracker Google Sheets\" → use \"savings tracker\" instead\n\
-                 \n\
-                 Requirements:\n\
-                 - Return 4 to 6 themes.\n\
-                 - Each theme MUST be 1-3 words maximum.\n\
-                 - Derive topics from the content brief gaps and pillars.\n\
-                 - Pick topics that have real search volume (established, not newly-coined).\n\
-                 - Do NOT include brand names, tool names (Google Sheets, Excel), or year/date suffixes.\n\
-                 - Do NOT include job-seeker / enterprise/cybersecurity terms unless core to this project."
-            ));
-        }
-
-        // Research parity: force a machine-readable output contract so the next UI
-        // step (keyword selection) behaves like the CLI flow.
-        if matches!(task.task_type.as_str(), "research_keywords" | "custom_keyword_research")
-            && step.name != "research_theme_selection_agent"
-        {
-                prompt.push_str(
-                        "\n\n## Output Contract (Required)\n\
-                         Return ONLY one fenced JSON block and no extra prose.\n\
-                         The JSON must use this schema:\n\
-                         ```json\n\
-                         {\n\
-                             \"new_keywords\": [\"keyword 1\", \"keyword 2\"],\n\
-                             \"filtered_out\": 0,\n\
-                             \"difficulty\": {\n\
-                                 \"results\": [\n\
-                                     {\"keyword\": \"keyword 1\", \"difficulty\": 24, \"volume\": 1200},\n\
-                                     {\"keyword\": \"keyword 2\", \"difficulty\": 31, \"volume\": 700}\n\
-                                 ]\n\
-                             }\n\
-                         }\n\
-                         ```\n\
-                         Requirements:\n\
-                         - Provide 10 keyword candidates when possible.\n\
-                         - Include numeric difficulty and numeric volume when available.\n\
-                         - Do not include tool transcripts, logs, or markdown tables outside the JSON block."
-                );
-        }
-
             if is_content_task {
                 // Pre-compute the next safe publish date and inject it into the prompt.
                 // Without this, the agent defaults to today's date which conflicts with
@@ -603,10 +630,39 @@ pub fn exec_agentic(
         step.params.get(step_params::SKILL)
     );
 
-    // 4. Call agent
-    match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => {
-            let mut message = format!("Agentic step '{}' complete ({} chars)", step.name, output.len());
+    log::info!(
+        "[executor] agentic step '{}' with provider '{}' (skill: {:?})",
+        step.name,
+        agent_provider,
+        step.params.get(step_params::SKILL)
+    );
+
+    // Check if this is a research workflow step that uses ToolCallingAgent
+    // Note: research_final_selection is now deterministic, not agentic
+    let is_research_step = matches!(
+        step.name.as_str(),
+        "research_seed_extraction" | "research_keyword_discovery"
+    );
+
+    if is_research_step {
+        // Use new ToolCallingAgent for research workflow
+        // Pass previous step's output to enable data flow between steps
+        return crate::engine::exec::research::exec_research_workflow_step(
+            step, task, project_path, latest_raw_output
+        ).await;
+    }
+
+    // 4. Call agent (blocking subprocess, run in spawn_blocking)
+    let agent_provider = agent_provider.to_string();
+    let prompt = prompt.clone();
+    let repo_root = repo_root.to_path_buf();
+    let step_name = step.name.clone();
+    
+    match tokio::task::spawn_blocking(move || {
+        agent::run_agent(&agent_provider, &prompt, &repo_root)
+    }).await {
+        Ok(Ok(output)) => {
+            let mut message = format!("Agentic step '{}' complete ({} chars)", step_name, output.len());
 
             if let Some((content_dir, before, style)) = content_context {
                 let renamed = rename_new_or_modified_md_to_mdx(&content_dir, &before);
@@ -634,11 +690,19 @@ pub fn exec_agentic(
                 output: Some(output),
             }
         }
-        Err(err) => {
-            log::warn!("[executor] agentic step '{}' failed: {}", step.name, err);
+        Ok(Err(err)) => {
+            log::warn!("[executor] agentic step '{}' failed: {}", step_name, err);
             StepResult {
                 success: false,
-                message: format!("Agentic step '{}' failed: {}", step.name, err),
+                message: format!("Agentic step '{}' failed: {}", step_name, err),
+                output: None,
+            }
+        }
+        Err(e) => {
+            log::warn!("[executor] agentic step '{}' task failed: {}", step_name, e);
+            StepResult {
+                success: false,
+                message: format!("Agentic step '{}' task failed: {}", step_name, e),
                 output: None,
             }
         }
@@ -778,6 +842,73 @@ fn snapshot_markdown_mtime(
         }
     }
     out
+}
+
+/// Load keyword coverage from the automation directory and format it for the agent prompt.
+///
+/// Returns a formatted string describing current topic clusters, or an empty string
+/// if no coverage analysis exists.
+fn load_coverage_context(automation_dir: &std::path::Path) -> String {
+    let coverage_path = automation_dir.join("keyword_coverage.json");
+    
+    let content = match std::fs::read_to_string(&coverage_path) {
+        Ok(c) => c,
+        Err(_) => return String::new(), // No coverage file yet
+    };
+    
+    let coverage: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    
+    let clusters = coverage.get("clusters").and_then(|c| c.as_array());
+    let article_count = coverage.get("article_count").and_then(|a| a.as_i64()).unwrap_or(0);
+    
+    if clusters.is_none() || clusters.unwrap().is_empty() {
+        return String::new();
+    }
+    
+    let clusters = clusters.unwrap();
+    let cluster_summaries: Vec<String> = clusters
+        .iter()
+        .filter_map(|c| {
+            let name = c.get("cluster_name").and_then(|n| n.as_str())?;
+            let keywords = c.get("primary_keywords").and_then(|k| k.as_array())?;
+            let count = c.get("article_count").and_then(|n| n.as_i64()).unwrap_or(0);
+            
+            let keyword_list: Vec<&str> = keywords
+                .iter()
+                .filter_map(|k| k.as_str())
+                .collect();
+            
+            Some(format!(
+                "- {} ({} articles): focus on {}",
+                name,
+                count,
+                keyword_list.join(", ")
+            ))
+        })
+        .collect();
+    
+    if cluster_summaries.is_empty() {
+        return String::new();
+    }
+    
+    format!(
+        "## Current Keyword Coverage (from previous analysis)\n\
+         This project has {} articles organized into {} topic clusters:\n\
+         {}\n\
+         \n\
+         ## Gap-Filling Guidance\n\
+         When selecting themes, consider:\n\
+         1. Which clusters are under-represented and need more content?\n\
+         2. What related topics are NOT yet covered by existing clusters?\n\
+         3. What sub-topics within large clusters could use dedicated articles?\n\
+         Prioritize themes that fill gaps or expand thinly-covered areas.",
+        article_count,
+        clusters.len(),
+        cluster_summaries.join("\n")
+    )
 }
 
 /// Read articles.json from `{project_path}/.github/automation/articles.json` and return

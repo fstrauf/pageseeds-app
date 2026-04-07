@@ -1,5 +1,7 @@
 import { CheckCircle, Clock, Trash2, ExternalLink, Calendar } from 'lucide-react'
 import type { SocialPost } from '../../lib/types'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 interface Props {
   post: SocialPost
@@ -13,33 +15,33 @@ interface Props {
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   draft: {
     label: 'Draft',
-    color: 'bg-zinc-100 text-zinc-700',
-    icon: <span className="w-2 h-2 bg-zinc-400 rounded-full" />,
+    color: 'bg-muted text-muted-foreground',
+    icon: <span className="w-2 h-2 bg-muted-foreground rounded-full" />,
   },
   review: {
     label: 'Review',
-    color: 'bg-amber-100 text-amber-700',
+    color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
     icon: <Clock className="w-3 h-3" />,
   },
   approved: {
     label: 'Approved',
-    color: 'bg-emerald-100 text-emerald-700',
+    color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
     icon: <CheckCircle className="w-3 h-3" />,
   },
   scheduled: {
     label: 'Scheduled',
-    color: 'bg-blue-100 text-blue-700',
+    color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
     icon: <Calendar className="w-3 h-3" />,
   },
   posted: {
     label: 'Posted',
-    color: 'bg-purple-100 text-purple-700',
+    color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
     icon: <ExternalLink className="w-3 h-3" />,
   },
   failed: {
     label: 'Failed',
-    color: 'bg-red-100 text-red-700',
-    icon: <span className="w-2 h-2 bg-red-400 rounded-full" />,
+    color: 'bg-destructive/10 text-destructive',
+    icon: <span className="w-2 h-2 bg-destructive rounded-full" />,
   },
 }
 
@@ -49,11 +51,11 @@ export function PostCard({ post, onClick, onApprove, onSchedule, onMarkPosted, o
   const formatLabel = getFormatLabel(post.format)
 
   return (
-    <div className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:shadow-md transition-shadow">
+    <div className="group bg-card border border-border rounded-xl overflow-hidden hover:shadow-md transition-shadow">
       {/* Image Preview */}
       <div
         onClick={onClick}
-        className="aspect-square bg-zinc-100 dark:bg-zinc-800 relative cursor-pointer overflow-hidden"
+        className="aspect-square bg-muted relative cursor-pointer overflow-hidden"
       >
         {post.visual_assets.length > 0 ? (
           <img
@@ -65,18 +67,18 @@ export function PostCard({ post, onClick, onApprove, onSchedule, onMarkPosted, o
             }}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-zinc-400">
+          <div className="w-full h-full flex items-center justify-center text-muted-foreground">
             <span className="text-4xl">🖼️</span>
           </div>
         )}
         
         {/* Platform Badge */}
-        <div className="absolute top-2 left-2 w-8 h-8 bg-white/90 backdrop-blur rounded-full flex items-center justify-center text-lg shadow-sm">
+        <div className="absolute top-2 left-2 w-8 h-8 bg-card/90 backdrop-blur rounded-full flex items-center justify-center text-lg shadow-sm">
           {platformIcon}
         </div>
         
         {/* Status Badge */}
-        <div className={`absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${status.color}`}>
+        <div className={cn('absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium', status.color)}>
           {status.icon}
           <span>{status.label}</span>
         </div>
@@ -85,19 +87,19 @@ export function PostCard({ post, onClick, onApprove, onSchedule, onMarkPosted, o
       {/* Content */}
       <div className="p-4">
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs text-zinc-500">{formatLabel}</span>
-          <span className="text-zinc-300">•</span>
-          <span className="text-xs text-zinc-500 capitalize">{post.source_type}</span>
+          <span className="text-xs text-muted-foreground">{formatLabel}</span>
+          <span className="text-border">•</span>
+          <span className="text-xs text-muted-foreground capitalize">{post.source_type}</span>
         </div>
         
         <p
           onClick={onClick}
-          className="font-medium text-zinc-900 dark:text-zinc-100 line-clamp-2 cursor-pointer hover:text-zinc-600 transition-colors"
+          className="font-medium text-foreground line-clamp-2 cursor-pointer hover:text-foreground/70 transition-colors"
         >
           {post.hook}
         </p>
         
-        <p className="text-sm text-zinc-500 mt-2 line-clamp-2">
+        <p className="text-sm text-muted-foreground mt-2 line-clamp-2">
           {post.caption}
         </p>
 
@@ -105,76 +107,89 @@ export function PostCard({ post, onClick, onApprove, onSchedule, onMarkPosted, o
         {post.hashtags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-3">
             {post.hashtags.slice(0, 3).map(tag => (
-              <span key={tag} className="text-xs text-blue-600">
+              <span key={tag} className="text-xs text-primary">
                 {tag}
               </span>
             ))}
             {post.hashtags.length > 3 && (
-              <span className="text-xs text-zinc-400">+{post.hashtags.length - 3}</span>
+              <span className="text-xs text-muted-foreground">+{post.hashtags.length - 3}</span>
             )}
           </div>
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-2 mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+        <div className="flex items-center gap-2 mt-4 pt-3 border-t border-border">
           {post.status === 'draft' && (
-            <button
+            <Button
               onClick={(e) => {
                 e.stopPropagation()
                 onApprove()
               }}
-              className="flex-1 px-3 py-1.5 bg-zinc-900 text-white text-sm font-medium rounded-lg hover:bg-zinc-800 transition-colors"
+              className="flex-1"
+              size="sm"
             >
               Approve
-            </button>
+            </Button>
           )}
           
           {post.status === 'approved' && (
-            <button
+            <Button
               onClick={(e) => {
                 e.stopPropagation()
                 onSchedule()
               }}
-              className="flex-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              className="flex-1"
+              size="sm"
+              variant="secondary"
             >
               Schedule
-            </button>
+            </Button>
           )}
           
           {post.status === 'scheduled' && (
-            <button
+            <Button
               onClick={(e) => {
                 e.stopPropagation()
                 onMarkPosted()
               }}
-              className="flex-1 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition-colors"
+              className="flex-1"
+              size="sm"
+              variant="secondary"
             >
               Mark Posted
-            </button>
+            </Button>
           )}
           
           {post.status === 'posted' && post.platform_post_url && (
-            <a
-              href={post.platform_post_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="flex-1 px-3 py-1.5 bg-zinc-100 text-zinc-700 text-sm font-medium rounded-lg hover:bg-zinc-200 transition-colors text-center"
+            <Button
+              asChild
+              className="flex-1"
+              size="sm"
+              variant="secondary"
             >
-              View Live
-            </a>
+              <a
+                href={post.platform_post_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                View Live
+              </a>
+            </Button>
           )}
           
-          <button
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={(e) => {
               e.stopPropagation()
               onDelete()
             }}
-            className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            className="text-muted-foreground hover:text-destructive"
             title="Delete"
           >
             <Trash2 className="w-4 h-4" />
-          </button>
+          </Button>
         </div>
       </div>
     </div>

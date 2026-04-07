@@ -188,7 +188,7 @@ pub(crate) fn compute_scores(upvotes: i64, comment_count: i64, days_old: i64)
 /// extracting trigger topics, query keywords, subreddits, product name, and stance.
 /// Cannot be deterministic: understanding markdown structure and identifying
 /// semantic sections requires language understanding.
-pub(crate) fn exec_reddit_config_parse(
+pub fn exec_reddit_config_parse(
     _task: &Task,
     project_path: &str,
     agent_provider: &str,
@@ -214,9 +214,9 @@ pub(crate) fn exec_reddit_config_parse(
     }
 
     // Build prompt for agentic parsing
-    // Using regular string with escaped quotes instead of raw string to avoid prefix issues
+    // Simplified prompt that works - see examples/test_reddit_config_parse.rs
     let prompt = format!(
-        "Parse the Reddit configuration files and extract structured search parameters.\n\n\
+        "Extract Reddit search parameters from the config files below. Return ONLY a JSON object.\n\n\
         ## reddit_config.md\n\
         ```markdown\n\
         {reddit_config}\n\
@@ -229,27 +229,19 @@ pub(crate) fn exec_reddit_config_parse(
         ```markdown\n\
         {brandvoice}\n\
         ```\n\n\
-        ## Your Task\n\
-        Extract the following from the config files:\n\
-        1. **product_name**: The product/service name mentioned in the config\n\
-        2. **mention_stance**: One of REQUIRED, RECOMMENDED, OPTIONAL, or OMIT\n\
-        3. **trigger_topics**: List of topics (from section like 'Trigger Topics' or 'Topics')\n\
-        4. **query_keywords**: List of search queries (from section like 'Query Keywords' or 'Keywords')\n\
-        5. **seed_subreddits**: List of subreddit names (from 'Target Subreddits' or 'Seed Subreddits')\n\
-        6. **excluded_subreddits**: List of subreddit names to exclude\n\n\
-        ## Output Format\n\
-        Return ONLY a JSON object in this exact format:\n\
-        ```json\n\
-        {{\n\
-          \"product_name\": \"Product Name\",\n\
-          \"mention_stance\": \"RECOMMENDED\",\n\
-          \"trigger_topics\": [\"topic 1\", \"topic 2\"],\n\
-          \"query_keywords\": [\"keyword 1\", \"keyword 2\"],\n\
-          \"seed_subreddits\": [\"subreddit1\", \"subreddit2\"],\n\
-          \"excluded_subreddits\": [\"excluded1\"]\n\
-        }}\n\
-        ```\n\n\
-        If a field cannot be found, use empty arrays or null. Be flexible with section header names.",
+        ## Required JSON Output\n\
+        Return a JSON object with these exact keys:\n\
+        - product_name: string\n\
+        - mention_stance: string (REQUIRED, RECOMMENDED, OPTIONAL, or OMIT)\n\
+        - trigger_topics: array of strings\n\
+        - query_keywords: array of strings (use same as trigger_topics)\n\
+        - seed_subreddits: array of strings (WITHOUT r/ prefix)\n\
+        - excluded_subreddits: array of strings\n\n\
+        ## Example\n\
+        If the config has Product Name: Days to Expiry, then return:\n\
+        {{\"product_name\": \"Days to Expiry\", ...}}\n\n\
+        Do NOT return placeholder text like \"<actual product name>\".\n\
+        Return ONLY the JSON object, starting with {{ and ending with }}.",
         reddit_config = reddit_config,
         project_summary = project_summary,
         brandvoice = brandvoice
@@ -258,8 +250,31 @@ pub(crate) fn exec_reddit_config_parse(
     // Call agent
     match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
         Ok(output) => {
+            log::info!("[reddit_config_parse] agent output ({} chars): {:?}", output.len(), &output[..output.len().min(2000)]);
+            
             // Try to extract JSON object from the output
-            let json_str = extract_json_object(&output);
+            let json_str = match extract_json_object(&output) {
+                Ok(json) => {
+                    log::info!("[reddit_config_parse] extracted JSON ({} chars)", json.len());
+                    json
+                }
+                Err(e) => {
+                    log::warn!("[reddit_config_parse] JSON extraction failed: {}", e);
+                    
+                    // Save full output for debugging
+                    let debug_path = std::env::temp_dir()
+                        .join(format!("kimi_error_{}.txt", chrono::Utc::now().timestamp_millis()));
+                    let _ = std::fs::write(&debug_path, &output);
+                    log::warn!("[reddit_config_parse] full output saved to: {:?}", debug_path);
+                    
+                    return crate::engine::workflows::StepResult {
+                        success: false,
+                        message: format!("Failed to extract JSON from agent output: {}", e),
+                        output: Some(output),
+                    };
+                }
+            };
+            
             match serde_json::from_str::<RedditSearchParams>(&json_str) {
                 Ok(params) => {
                     // Validate: we need at least some queries or topics
@@ -282,11 +297,13 @@ pub(crate) fn exec_reddit_config_parse(
                     }
                 }
                 Err(e) => {
-                    log::warn!("[reddit_config_parse] failed to parse agent output as JSON: {}", e);
+                    log::warn!("[reddit_config_parse] JSON parse error: {}", e);
+                    log::warn!("[reddit_config_parse] extracted content that failed to parse: {}", &json_str[..json_str.len().min(1000)]);
+                    
                     crate::engine::workflows::StepResult {
                         success: false,
-                        message: format!("Agent produced invalid JSON: {}", e),
-                        output: Some(output),
+                        message: format!("Agent returned invalid JSON structure: {}", e),
+                        output: Some(json_str),
                     }
                 }
             }
@@ -361,7 +378,7 @@ pub(crate) fn parse_config_fallback(config: &str) -> RedditSearchParams {
 /// Reads queries/subreddits from the structured search params artifact (produced by
 /// reddit_config_parse_stage), calls the Reddit API, applies the 14-day filter and
 /// MEDIUM+ score filter, deduplicates, and returns the top 10 posts by score.
-pub(crate) fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
+pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
     const MAX_AGE_DAYS: i64 = 14;
     const MAX_SEARCH_PAIRS: usize = 50;
     const MAX_RESULTS: usize = 10;
@@ -435,12 +452,9 @@ pub(crate) fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engi
         std::path::Path::new(project_path)
     );
     let handled_ids = history_manager.get_all_handled_ids();
-    let rt_handle = tokio::runtime::Handle::current();
 
     for (subreddit, query) in &search_pairs {
-        let posts = match rt_handle.block_on(
-            crate::reddit::search::search_submissions(query, subreddit, 10, "relevance", "week")
-        ) {
+        let posts = match crate::reddit::search::search_submissions(query, subreddit, 10, "relevance", "week").await {
             Ok(p) => p,
             Err(e) => {
                 log::warn!("[reddit_search] search failed sub={:?} q={:?}: {}", subreddit, query, e);
@@ -1048,6 +1062,155 @@ pub fn create_reddit_reply_tasks_from_opportunities(
     created_ids
 }
 
+// ─── Post Reply to Reddit ────────────────────────────────────────────────────
+
+/// Execute a reddit_reply task: post the reply to Reddit via API.
+/// 
+/// Extracts post_id and reply_text from the task description,
+/// calls the Reddit API to post the comment, and updates the database.
+pub fn exec_reddit_post_reply(
+    task: &crate::models::task::Task,
+    project_path: &str,
+    conn: &rusqlite::Connection,
+) -> crate::engine::workflows::StepResult {
+    use crate::config::env_resolver::EnvResolver;
+    
+    log::info!("[reddit_post_reply] starting for task {}", task.id);
+    
+    // Extract post_id and reply_text from task description
+    let (post_id, reply_text) = match extract_post_details_from_task(task) {
+        Some((id, text)) => (id, text),
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "Could not extract post_id and reply_text from task description".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    log::info!("[reddit_post_reply] posting to post_id={}", post_id);
+    
+    // Load Reddit credentials
+    let resolver = EnvResolver::new(std::path::Path::new(project_path));
+    
+    let client_id = match resolver.resolve("REDDIT_CLIENT_ID") {
+        Some((v, _)) => v,
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "REDDIT_CLIENT_ID not set — add it to ~/.config/automation/secrets.env".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    let client_secret = match resolver.resolve("REDDIT_CLIENT_SECRET") {
+        Some((v, _)) => v,
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "REDDIT_CLIENT_SECRET not set — add it to ~/.config/automation/secrets.env".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    let refresh_token = match resolver.resolve("REDDIT_REFRESH_TOKEN") {
+        Some((v, _)) => v,
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "REDDIT_REFRESH_TOKEN not set — add it to ~/.config/automation/secrets.env".to_string(),
+                output: None,
+            };
+        }
+    };
+    
+    // Create a local runtime for the async Reddit API call
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to create runtime: {}", e),
+                output: None,
+            };
+        }
+    };
+    
+    // Post to Reddit
+    let result = rt.block_on(async {
+        crate::reddit::post::submit_comment(&post_id, &reply_text, &client_id, &client_secret, &refresh_token).await
+    });
+    
+    match result {
+        Ok(comment_result) => {
+            let reply_url = comment_result.permalink;
+            let now = chrono::Utc::now().to_rfc3339();
+            
+            // Update database with posted status
+            if let Err(e) = crate::reddit::db::mark_posted(conn, &post_id, &reply_text, &reply_url) {
+                log::warn!("[reddit_post_reply] failed to mark posted in DB: {}", e);
+            }
+            
+            // Update history file
+            let history_manager = crate::reddit::history::RedditHistoryManager::new(
+                std::path::Path::new(project_path)
+            );
+            if let Err(e) = history_manager.mark_posted(&post_id) {
+                log::warn!("[reddit_post_reply] failed to write history: {}", e);
+            }
+            
+            log::info!("[reddit_post_reply] successfully posted comment {}", comment_result.comment_id);
+            
+            crate::engine::workflows::StepResult {
+                success: true,
+                message: format!("Posted reply to Reddit: {}", reply_url),
+                output: Some(format!("{{\"comment_id\":\"{}\",\"permalink\":\"{}\"}}", 
+                    comment_result.comment_id, reply_url)),
+            }
+        }
+        Err(e) => {
+            log::error!("[reddit_post_reply] failed to post: {}", e);
+            crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to post to Reddit: {}", e),
+                output: None,
+            }
+        }
+    }
+}
+
+/// Extract post_id and reply_text from a reddit_reply task description.
+/// The description format is:
+/// **Subreddit:** r/...
+/// **Post URL:** ...
+/// **Why Relevant:** ...
+/// **Draft Reply:**
+/// <reply text>
+/// **Post ID:** <post_id>
+fn extract_post_details_from_task(task: &crate::models::task::Task) -> Option<(String, String)> {
+    let desc = task.description.as_ref()?;
+    
+    // Extract Post ID (last line with "Post ID:")
+    let post_id = desc.lines()
+        .find(|l| l.trim().starts_with("**Post ID:**"))
+        .and_then(|l| l.split("**Post ID:**").nth(1))
+        .map(|s| s.trim().to_string())?;
+    
+    // Extract Draft Reply (everything between "**Draft Reply:**" and "**Post ID:**")
+    let reply_start = desc.find("**Draft Reply:**")? + "**Draft Reply:**".len();
+    let reply_end = desc.find("**Post ID:**")?;
+    let reply_text = desc[reply_start..reply_end].trim().to_string();
+    
+    if post_id.is_empty() || reply_text.is_empty() {
+        None
+    } else {
+        Some((post_id, reply_text))
+    }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Strip markdown code fences and extract the first JSON array from agent output.
@@ -1062,12 +1225,81 @@ pub(crate) fn extract_json_array(output: &str) -> String {
 }
 
 /// Extract a JSON object from text (looks for {...})
-pub(crate) fn extract_json_object(output: &str) -> String {
+/// Extract and validate JSON from agent output.
+/// 
+/// Tries multiple strategies in order:
+/// 1. Markdown code block (```json ... ```)
+/// 2. Plain code block (``` ... ```)
+/// 3. Raw JSON object ({...})
+/// 
+/// Returns Err if no valid JSON found or if extracted content isn't valid JSON.
+pub fn extract_json_object(output: &str) -> Result<String, String> {
     let trimmed = output.trim();
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return trimmed[start..=end].to_string();
+    
+    if trimmed.is_empty() {
+        return Err("Agent output is empty".to_string());
+    }
+    
+    // Strategy 1: Look for ```json ... ``` code block
+    for opener in ["```json\n", "```json\r\n", "```JSON\n", "```Json\n"] {
+        if let Some(start) = trimmed.find(opener) {
+            let after_open = start + opener.len();
+            let rest = &trimmed[after_open..];
+            if let Some(end) = rest.find("```") {
+                let candidate = rest[..end].trim();
+                if is_valid_json(candidate) {
+                    return Ok(candidate.to_string());
+                }
+            }
         }
     }
-    trimmed.to_string()
+    
+    // Strategy 2: Look for plain ``` ... ``` code block
+    if let Some(start) = trimmed.find("```\n") {
+        let after_open = start + 4;
+        let rest = &trimmed[after_open..];
+        if let Some(end) = rest.find("```") {
+            let candidate = rest[..end].trim();
+            if is_valid_json(candidate) {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+    
+    // Strategy 3: Look for raw JSON object (outermost braces)
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            if end > start {
+                let candidate = &trimmed[start..=end];
+                if is_valid_json(candidate) {
+                    return Ok(candidate.to_string());
+                }
+            }
+        }
+    }
+    
+    // Strategy 4: Look for raw JSON array
+    if let Some(start) = trimmed.find('[') {
+        if let Some(end) = trimmed.rfind(']') {
+            if end > start {
+                let candidate = &trimmed[start..=end];
+                if is_valid_json(candidate) {
+                    return Ok(candidate.to_string());
+                }
+            }
+        }
+    }
+    
+    // Nothing worked - provide helpful error
+    let preview = if trimmed.len() > 500 {
+        format!("{}... ({} total chars)", &trimmed[..500], trimmed.len())
+    } else {
+        trimmed.to_string()
+    };
+    Err(format!("No valid JSON found in agent output. Preview: {}", preview))
+}
+
+/// Quick validation that a string is valid JSON
+fn is_valid_json(s: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(s).is_ok()
 }

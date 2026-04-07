@@ -3,14 +3,18 @@ import { open as dialogOpen } from '@tauri-apps/plugin-dialog'
 import type {
   Article,
   ContentHealthResult,
+  EmbeddingStatus,
   ImportResult,
   IngestOrphanResult,
+  KeywordCoverageStatus,
   MigrationResult,
   Project,
   ProjectConfigFileStatus,
   ProjectSetup,
+  QueueItem,
   RedditOpportunity,
   RedditStats,
+  ScoredSkill,
   SecretsStatus,
   SubmissionSummary,
   Task,
@@ -227,7 +231,8 @@ export const postToReddit = (
   postId: string,
   replyText: string,
 ): Promise<string> =>
-  invoke('post_to_reddit', { projectId, postId, replyText })
+  // Note: Rust expects post_id, reply_text, project_id order
+  invoke('post_to_reddit', { postId, replyText, projectId })
 
 export const getRedditStatistics = (projectId: string): Promise<RedditStats> =>
   invoke('get_reddit_statistics', { projectId })
@@ -243,12 +248,6 @@ export const migrateRedditDb = (
   sourcePath: string,
 ): Promise<MigrationResult> =>
   invoke('migrate_reddit_db', { projectId, sourcePath })
-
-export const runRedditOpportunitySearch = (
-  projectId: string,
-  userContext?: string,
-): Promise<import('./types').ExecutionResult> =>
-  invoke('run_reddit_opportunity_search', { projectId, userContext: userContext ?? null })
 
 export const draftRedditReply = (
   projectId: string,
@@ -390,15 +389,6 @@ import type {
 
 export type { DueRuleResult } // re-export so components can import from tauri.ts
 
-// ── Executor ──────────────────────────────────────────────────────────────────
-
-export const executeTask = (taskId: string): Promise<ExecutionResult> =>
-  invoke('execute_task', { taskId })
-
-/** Plan steps for a task without executing anything. Returns the planned step graph. */
-export const dryRunTask = (taskId: string): Promise<ExecutionResult> =>
-  invoke('dry_run_task', { taskId })
-
 // ── Batch ─────────────────────────────────────────────────────────────────────
 
 export const getBatchSummary = (projectId: string): Promise<BatchSummary> =>
@@ -410,6 +400,27 @@ export const runBatch = (
   pauseOnError?: boolean,
 ): Promise<BatchResult> =>
   invoke('run_batch', { projectId, maxTasks, pauseOnError })
+
+/** Execute a queue of tasks across projects. Emits events for progress tracking. */
+export const executeQueue = (items: QueueItem[]): Promise<void> =>
+  invoke('execute_queue', { items })
+
+/** Mark tasks as queued in the database when added to the queue. */
+export const markTasksQueued = (taskIds: string[]): Promise<void> =>
+  invoke('mark_tasks_queued', { taskIds })
+
+/** Reset queued tasks back to todo when removed from queue. */
+export const markTasksTodo = (taskIds: string[]): Promise<void> =>
+  invoke('mark_tasks_todo', { taskIds })
+
+export const pauseQueue = (): Promise<void> =>
+  invoke('pause_queue')
+
+export const resumeQueue = (): Promise<void> =>
+  invoke('resume_queue')
+
+export const clearCompletedQueueItems = (): Promise<void> =>
+  invoke('clear_completed_queue_items')
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
@@ -456,6 +467,19 @@ export const listSkills = (projectId: string): Promise<Skill[]> =>
 export const getSkill = (projectId: string, skillName: string): Promise<Skill> =>
   invoke('get_skill', { projectId, skillName })
 
+export const checkEmbeddingStatus = (): Promise<EmbeddingStatus> =>
+  invoke('check_embedding_status')
+
+export const indexSkills = (projectId: string): Promise<number> =>
+  invoke('index_skills', { projectId })
+
+export const searchSkills = (
+  projectId: string,
+  query: string,
+  limit?: number,
+): Promise<ScoredSkill[]> =>
+  invoke('search_skills', { projectId, query, limit })
+
 export const buildPromptPreview = (taskId: string, skillName: string): Promise<PromptContext> =>
   invoke('build_prompt_preview', { taskId, skillName })
 
@@ -470,6 +494,83 @@ export const checkAgentStatus = (projectId: string): Promise<AgentStatus> =>
 
 export const setAgentProvider = (projectId: string, provider: string): Promise<void> =>
   invoke('set_agent_provider', { projectId, provider })
+
+export const getLogFilePath = (): Promise<string> =>
+  invoke('get_log_file_path')
+
+// ─── Logging ─────────────────────────────────────────────────────────────────
+
+export const submitLog = (entry: {
+  timestamp: string
+  level: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}): Promise<number> => invoke('submit_log', { entry })
+
+export const submitLogsBatch = (entries: Array<{
+  timestamp: string
+  level: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}>): Promise<number[]> => invoke('submit_logs_batch', { entries })
+
+export const queryLogs = (
+  filters: {
+    level?: string
+    source?: string
+    component?: string
+    session_id?: string
+    search_query?: string
+  },
+  limit?: number,
+  offset?: number
+): Promise<Array<{
+  id?: number
+  timestamp: string
+  level: string
+  source: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}>> => invoke('query_logs', { filters, limit, offset })
+
+export const getRecentLogs = (limit?: number): Promise<Array<{
+  id?: number
+  timestamp: string
+  level: string
+  source: string
+  component: string
+  message: string
+  metadata?: Record<string, unknown>
+  session_id: string
+}>> => invoke('get_recent_logs', { limit })
+
+export const getLogStats = (): Promise<{
+  total_count: number
+  error_count: number
+  warn_count: number
+  info_count: number
+  debug_count: number
+  frontend_count: number
+  backend_count: number
+  agent_count: number
+} | null> => invoke('get_log_stats')
+
+export const clearOldLogs = (daysToKeep: number): Promise<number> =>
+  invoke('clear_old_logs', { daysToKeep })
+
+export const exportLogs = (filters?: {
+  level?: string
+  source?: string
+  component?: string
+  session_id?: string
+  search_query?: string
+}): Promise<string | null> => invoke('export_logs', { filters })
 
 // ─── Overview ────────────────────────────────────────────────────────────────
 
@@ -594,3 +695,15 @@ export const createSocialTemplate = (template: ContentTemplate): Promise<Content
 
 export const deleteSocialTemplate = (templateId: string): Promise<void> =>
   invoke('delete_social_template', { templateId })
+
+// ─── Campaign Generation ──────────────────────────────────────────────────────
+
+export const runSocialCampaign = (campaignId: string): Promise<Task> =>
+  invoke('run_social_campaign', { campaignId })
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Keyword Coverage Analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const getKeywordCoverage = (projectId: string): Promise<KeywordCoverageStatus> =>
+  invoke('get_keyword_coverage', { projectId })

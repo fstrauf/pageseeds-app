@@ -25,6 +25,8 @@ import {
 import { TaskDetail } from './TaskDetail'
 import { TaskCreate } from './TaskCreate'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { useQueue } from '../../lib/queue-context'
+import { ListPlus } from 'lucide-react'
 
 const STATUS_TABS = ['all', 'todo', 'in_progress', 'review', 'done'] as const
 type StatusFilter = typeof STATUS_TABS[number]
@@ -37,8 +39,16 @@ const STATUS_LABELS: Record<StatusFilter, string> = {
   done: 'Done',
 }
 
+// Helper to check if a task status matches the filter
+function statusMatchesFilter(taskStatus: string, filter: StatusFilter): boolean {
+  if (filter === 'all') return taskStatus !== 'cancelled'
+  if (filter === 'todo') return taskStatus === 'todo' || taskStatus === 'queued'
+  return taskStatus === filter
+}
+
 const STATUS_BADGE: Record<string, string> = {
   todo: 'bg-secondary text-secondary-foreground border-transparent',
+  queued: 'bg-blue-100 text-blue-700 border-transparent',
   in_progress: 'bg-indigo-100 text-indigo-700 border-transparent',
   review: 'bg-amber-100 text-amber-700 border-transparent',
   done: 'bg-emerald-100 text-emerald-700 border-transparent',
@@ -51,7 +61,16 @@ const PRIORITY_DOT: Record<string, string> = {
   low: 'bg-slate-400',
 }
 
-const PHASE_OPTIONS = ['all', '1-foundation', '2-research', '3-creation', '4-publish', '5-promote']
+const PHASE_OPTIONS = ['all', 'collection', 'investigation', 'research', 'implementation', 'verification']
+
+const PHASE_LABELS: Record<string, string> = {
+  all: 'All phases',
+  collection: 'Collection',
+  investigation: 'Investigation',
+  research: 'Research',
+  implementation: 'Implementation',
+  verification: 'Verification',
+}
 
 interface TaskBoardProps {
   projectId?: string
@@ -84,6 +103,7 @@ export function TaskBoard({
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
   const [showCreate, setShowCreate] = useState(false)
   const [deletingSelected, setDeletingSelected] = useState(false)
+  const queue = useQueue()
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -123,27 +143,32 @@ export function TaskBoard({
     if (tasks.length === 0) return
 
     // First try exact match (e.g. a task navigated to directly)
-    const target = tasks.find(t => t.id === initialTaskId)
+    let target = tasks.find(t => t.id === initialTaskId)
+    
+    // The target task may be in a different status than the current filter (e.g. 'review'
+    // while we're showing 'todo'). Widen to 'all' and reload so we can find it.
+    if (!target && statusFilter !== 'all') {
+      setStatusFilter('all')
+      return
+    }
+    
     if (target) {
       setSelectedTask(target)
       onTaskOpened?.()
       return
     }
-    // The target task may be in a different status than the current filter (e.g. 'review'
-    // while we're showing 'todo'). Widen to 'all' and reload so we can find it.
-    if (statusFilter !== 'all') {
-      setStatusFilter('all')
-      return
-    }
+    
     // Fallback: the initial task may be done (e.g. content_review spawns apply task).
-    // Auto-open the first content_review_apply task in the current list instead.
-    const applyTask = tasks.find(t => t.type === 'content_review_apply')
-    if (applyTask) {
-      setSelectedTask(applyTask)
-      onTaskOpened?.()
+    // Only fall back if we've already widened the filter and still can't find the original task.
+    if (statusFilter === 'all') {
+      const applyTask = tasks.find(t => t.type === 'content_review_apply')
+      if (applyTask) {
+        setSelectedTask(applyTask)
+        onTaskOpened?.()
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTaskId, tasks])
+  }, [initialTaskId, tasks, statusFilter])
 
   function handleTaskUpdated(updated: Task) {
     setTasks(prev => prev.map(t => t.id === updated.id ? updated : t))
@@ -192,6 +217,25 @@ export function TaskBoard({
     setCheckedIds(new Set())
     setSelectedTask(null)
     onRunTasks?.(toRun)
+  }
+
+  function handleAddToQueue() {
+    const toQueue = tasks.filter(t => checkedIds.has(t.id) && t.status === 'todo')
+    if (toQueue.length === 0) return
+    
+    queue.enqueue(
+      toQueue.map(t => ({
+        taskId: t.id,
+        projectId: projectId!,
+        projectName: projectName || 'Unknown',
+        title: t.title || t.type,
+        taskType: t.type,
+        status: 'pending' as const,
+      }))
+    )
+    
+    setCheckedIds(new Set())
+    setSelectedTask(null)
   }
 
   async function handleDeleteSelected() {
@@ -350,6 +394,14 @@ export function TaskBoard({
             </Button>
             <Button
               size="xs"
+              variant="outline"
+              onClick={handleAddToQueue}
+              className="text-xs border-border"
+            >
+              <><ListPlus size={12} className="mr-1" />Add to queue</>
+            </Button>
+            <Button
+              size="xs"
               variant="destructive"
               onClick={handleDeleteSelected}
               disabled={deletingSelected}
@@ -386,7 +438,7 @@ export function TaskBoard({
             </SelectTrigger>
             <SelectContent className="bg-popover border-border text-popover-foreground">
               {PHASE_OPTIONS.map(p => (
-                <SelectItem key={p} value={p} className="text-xs">{p === 'all' ? 'All phases' : p}</SelectItem>
+                <SelectItem key={p} value={p} className="text-xs">{PHASE_LABELS[p]}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -458,13 +510,14 @@ export function TaskBoard({
                 </TableRow>
               ) : (
                 tasks
-                  .filter(t => statusFilter !== 'all' || t.status !== 'cancelled')
+                  .filter(t => statusMatchesFilter(t.status, statusFilter))
                   .map(task => {
                   const isSelected = selectedTask?.id === task.id
                   const isChecked = checkedIds.has(task.id)
                   return (
                     <TableRow
                       key={task.id}
+                      data-task-id={task.id}
                       className={cn(
                         'border-border cursor-pointer',
                         isChecked ? 'bg-primary/5' : isSelected ? 'bg-accent/40' : 'hover:bg-accent/20',
@@ -473,7 +526,9 @@ export function TaskBoard({
                         if (checkedIds.size > 0) {
                           toggleCheck(task.id, { stopPropagation: () => {} } as React.MouseEvent)
                         } else {
-                          setSelectedTask(isSelected ? null : task)
+                          // Always select the clicked task by ID to avoid stale closure issues
+                          const clickedTask = tasks.find(t => t.id === task.id)
+                          setSelectedTask(prev => prev?.id === task.id ? null : (clickedTask ?? task))
                         }
                       }}
                     >

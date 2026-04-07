@@ -3,8 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::social::models::SourceManifest;
-use crate::models::social::SourceConfig;
+use crate::social::models::{ContentMetadata, ContentSource, SourceManifest};
+use crate::models::social::{SourceConfig, SourceType};
+use crate::content::locator;
 
 use super::extractor;
 
@@ -44,16 +45,34 @@ fn discover_articles(
 ) -> Result<Vec<crate::social::models::ContentSource>> {
     let mut articles = Vec::new();
     
-    // Common content directories
-    let content_dirs = vec![
-        project_path.join("content"),
-        project_path.join("content/blog"),
-        project_path.join("src/content"),
-        project_path.join("src/content/blog"),
-    ];
+    log::info!("[discover_articles] project_path: {:?}", project_path);
     
-    for content_dir in content_dirs {
-        if !content_dir.exists() {
+    // Use the content locator to find the actual content directory
+    let resolution = locator::resolve(project_path, None);
+    log::info!("[discover_articles] content resolution: source={}, has_markdown={}, selected={:?}",
+        resolution.source, resolution.has_markdown, resolution.selected);
+    
+    let content_dirs: Vec<PathBuf> = if let Some(selected) = resolution.selected {
+        vec![selected]
+    } else {
+        // Fallback to common locations if locator doesn't find anything
+        vec![
+            project_path.join("content"),
+            project_path.join("content/blog"),
+            project_path.join("src/content"),
+            project_path.join("src/content/blog"),
+        ]
+    };
+    
+    let mut checked_dirs = 0;
+    let mut found_dirs = 0;
+    for content_dir in &content_dirs {
+        checked_dirs += 1;
+        let exists = content_dir.exists();
+        if exists {
+            found_dirs += 1;
+            log::info!("[discover_articles] scanning dir: {:?}", content_dir);
+        } else {
             continue;
         }
         
@@ -82,12 +101,24 @@ fn discover_articles(
             }
             
             match extractor::extract_from_article(path) {
-                Ok(source) => articles.push(source),
+                Ok(mut source) => {
+                    // Re-wrap with computed scores
+                    let source_with_scores = ContentSource::new(
+                        source.source_type,
+                        source.source_id,
+                        source.path,
+                        source.content,
+                        source.metadata,
+                    );
+                    articles.push(source_with_scores);
+                }
                 Err(e) => log::warn!("Failed to extract article {:?}: {}", path, e),
             }
         }
     }
     
+    log::info!("[discover_articles] checked {} dirs, found {} existing dirs, {} articles total", 
+        checked_dirs, found_dirs, articles.len());
     Ok(articles)
 }
 
@@ -110,8 +141,18 @@ fn discover_screenshots(
         screenshot_dirs.iter().map(|d| project_path.join(d)).collect()
     };
     
-    for dir in dirs_to_search {
-        if !dir.exists() {
+    log::info!("[discover_screenshots] checking {} dirs", dirs_to_search.len());
+    
+    let mut checked_screenshot_dirs = 0;
+    let mut found_screenshot_dirs = 0;
+    for dir in &dirs_to_search {
+        checked_screenshot_dirs += 1;
+        let exists = dir.exists();
+        if exists {
+            found_screenshot_dirs += 1;
+            log::info!("[discover_screenshots] scanning dir: {:?}", dir);
+        }
+        if !exists {
             continue;
         }
         
@@ -137,19 +178,21 @@ fn discover_screenshots(
                 .unwrap_or(&path)
                 .to_path_buf();
             
-            screenshots.push(crate::social::models::ContentSource {
-                source_type: crate::models::social::SourceType::Screenshot,
-                source_id: filename.clone(),
-                path: relative_path,
-                content: filename.clone(), // Use filename as content description
-                metadata: crate::social::models::ContentMetadata {
+            screenshots.push(ContentSource::new(
+                SourceType::Screenshot,
+                filename.clone(),
+                relative_path,
+                filename.clone(),
+                ContentMetadata {
                     description: Some(format!("Screenshot: {}", filename)),
                     ..Default::default()
                 },
-            });
+            ));
         }
     }
     
+    log::info!("[discover_screenshots] checked {} dirs, found {} existing dirs, {} screenshots total",
+        checked_screenshot_dirs, found_screenshot_dirs, screenshots.len());
     Ok(screenshots)
 }
 
@@ -181,7 +224,16 @@ fn discover_specs(project_path: &Path) -> Result<Vec<crate::social::models::Cont
             let path = entry.path();
             
             match extractor::extract_from_spec(&path) {
-                Ok(source) => specs.push(source),
+                Ok(source) => {
+                    let source_with_scores = ContentSource::new(
+                        source.source_type,
+                        source.source_id,
+                        source.path,
+                        source.content,
+                        source.metadata,
+                    );
+                    specs.push(source_with_scores);
+                }
                 Err(e) => log::warn!("Failed to extract spec {:?}: {}", path, e),
             }
         }

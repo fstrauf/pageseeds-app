@@ -112,6 +112,20 @@ pub(crate) fn audit_one_article(
     // Read source file
     let source = read_source_file(repo_root, &file_ref);
     let (fm, body) = parse_frontmatter(source.as_deref().unwrap_or(""));
+    
+    // NEW: Run comprehensive quality rating
+    let meta_title = fm.get("title").map(String::as_str).or(Some(title.as_str()));
+    let meta_description = fm.get("description").map(String::as_str);
+    let full_content = format!("# {}\n\n{}", meta_title.unwrap_or(""), body);
+    
+    let content_to_analyze = crate::engine::exec::quality_rater::ContentToAnalyze {
+        content: &full_content,
+        target_keyword: if keyword.is_empty() { "podcast" } else { &keyword },
+        meta_title,
+        meta_description,
+    };
+    
+    let quality_rating = crate::engine::exec::quality_rater::rate_content(&content_to_analyze);
 
     let meta_description = fm.get("description").map(String::as_str).unwrap_or("").trim().to_string();
 
@@ -244,5 +258,13 @@ pub(crate) fn audit_one_article(
         "checks_passed": checks_passed,
         "checks_failed": checks_failed,
         "checks_total": weights.len(),
+        // NEW: Quality rating data
+        "quality_score": quality_rating.overall_score,
+        "quality_grade": quality_rating.grade,
+        "publishing_ready": quality_rating.publishing_ready,
+        "quality_breakdown": quality_rating.category_scores,
+        "quality_critical": quality_rating.critical_issues,
+        "quality_warnings": quality_rating.warnings,
+        "quality_suggestions": quality_rating.suggestions,
     })
 }

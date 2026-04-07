@@ -10,8 +10,16 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("Image error: {0}")]
+    Image(String),
     #[error("{0}")]
     Other(String),
+}
+
+impl From<image::ImageError> for Error {
+    fn from(e: image::ImageError) -> Self {
+        Error::Image(e.to_string())
+    }
 }
 
 impl Serialize for Error {

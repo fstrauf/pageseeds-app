@@ -104,10 +104,16 @@ async fn acquire_signature(
         .send()
         .await?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let body_preview = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+        log::warn!(
+            "[acquire_signature] Ahrefs returned {} for domain '{}'. Body preview: {}",
+            status, domain, body_preview
+        );
         return Err(Error::Other(format!(
-            "Ahrefs backlinks overview returned status {}",
-            resp.status()
+            "Ahrefs backlinks overview returned status {}. Body: {}",
+            status, body_preview
         )));
     }
 
@@ -165,7 +171,13 @@ async fn fetch_backlinks_list(
         .send()
         .await?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let body_preview = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+        log::warn!(
+            "[fetch_backlinks_list] Ahrefs returned {} for domain '{}'. Body preview: {}",
+            status, domain, body_preview
+        );
         return Ok(vec![]);
     }
 

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::social::models::{ContentMetadata, ContentSource};
-use crate::models::social::SourceType;
+use crate::models::social::{SourceType, Platform};
 
 /// Extract content from an MDX article file
 pub fn extract_from_article(path: &Path) -> Result<ContentSource> {
@@ -28,13 +28,13 @@ pub fn extract_from_article(path: &Path) -> Result<ContentSource> {
         .or_else(|| path.file_stem()?.to_str().map(String::from))
         .unwrap_or_else(|| "unknown".to_string());
     
-    Ok(ContentSource {
-        source_type: SourceType::Article,
+    Ok(ContentSource::new(
+        SourceType::Article,
         source_id,
-        path: path.to_path_buf(),
-        content: body,
+        path.to_path_buf(),
+        body,
         metadata,
-    })
+    ))
 }
 
 /// Extract content from a spec document
@@ -47,16 +47,16 @@ pub fn extract_from_spec(path: &Path) -> Result<ContentSource> {
         .unwrap_or("spec")
         .to_string();
     
-    Ok(ContentSource {
-        source_type: SourceType::Spec,
+    Ok(ContentSource::new(
+        SourceType::Spec,
         source_id,
-        path: path.to_path_buf(),
+        path.to_path_buf(),
         content,
-        metadata: ContentMetadata {
+        ContentMetadata {
             title: Some("Landing Page Spec".to_string()),
             ..Default::default()
         },
-    })
+    ))
 }
 
 /// Parse YAML frontmatter from markdown content

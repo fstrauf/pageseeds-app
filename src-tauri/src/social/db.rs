@@ -122,10 +122,10 @@ pub fn create_post(conn: &Connection, post: &SocialPost) -> Result<()> {
         r#"INSERT INTO social_posts (
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,
-            status, scheduled_at, posted_at, platform_post_id, platform_post_url,
-            metrics, template_id, generated_by, generation_prompt_hash,
-            created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)"#,
+            image_generation_prompt, status, scheduled_at, posted_at, 
+            platform_post_id, platform_post_url, metrics, template_id, 
+            generated_by, generation_prompt_hash, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"#,
         params![
             post.id,
             post.campaign_id,
@@ -140,6 +140,7 @@ pub fn create_post(conn: &Connection, post: &SocialPost) -> Result<()> {
             serde_json::to_string(&post.hashtags)?,
             post.cta,
             serde_json::to_string(&post.visual_assets)?,
+            post.image_generation_prompt,
             post.status.as_str(),
             post.scheduled_at,
             post.posted_at,
@@ -163,9 +164,9 @@ pub fn get_post(conn: &Connection, post_id: &str) -> Result<Option<SocialPost>> 
         r#"SELECT 
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,
-            status, scheduled_at, posted_at, platform_post_id, platform_post_url,
-            metrics, template_id, generated_by, generation_prompt_hash,
-            created_at, updated_at
+            image_generation_prompt, status, scheduled_at, posted_at, 
+            platform_post_id, platform_post_url, metrics, template_id, 
+            generated_by, generation_prompt_hash, created_at, updated_at
         FROM social_posts WHERE id = ?1"#,
     )?;
     
@@ -183,9 +184,9 @@ pub fn get_posts_by_campaign(
         r#"SELECT 
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,
-            status, scheduled_at, posted_at, platform_post_id, platform_post_url,
-            metrics, template_id, generated_by, generation_prompt_hash,
-            created_at, updated_at
+            image_generation_prompt, status, scheduled_at, posted_at, 
+            platform_post_id, platform_post_url, metrics, template_id, 
+            generated_by, generation_prompt_hash, created_at, updated_at
         FROM social_posts 
         WHERE campaign_id = ?1 AND status = ?2
         ORDER BY created_at DESC"#
@@ -193,9 +194,9 @@ pub fn get_posts_by_campaign(
         r#"SELECT 
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,
-            status, scheduled_at, posted_at, platform_post_id, platform_post_url,
-            metrics, template_id, generated_by, generation_prompt_hash,
-            created_at, updated_at
+            image_generation_prompt, status, scheduled_at, posted_at, 
+            platform_post_id, platform_post_url, metrics, template_id, 
+            generated_by, generation_prompt_hash, created_at, updated_at
         FROM social_posts 
         WHERE campaign_id = ?1
         ORDER BY created_at DESC"#
@@ -224,9 +225,9 @@ pub fn get_posts_by_project(
         r#"SELECT 
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,
-            status, scheduled_at, posted_at, platform_post_id, platform_post_url,
-            metrics, template_id, generated_by, generation_prompt_hash,
-            created_at, updated_at
+            image_generation_prompt, status, scheduled_at, posted_at, 
+            platform_post_id, platform_post_url, metrics, template_id, 
+            generated_by, generation_prompt_hash, created_at, updated_at
         FROM social_posts 
         WHERE project_id = ?1 AND status = ?2
         ORDER BY created_at DESC"#
@@ -234,9 +235,9 @@ pub fn get_posts_by_project(
         r#"SELECT 
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,
-            status, scheduled_at, posted_at, platform_post_id, platform_post_url,
-            metrics, template_id, generated_by, generation_prompt_hash,
-            created_at, updated_at
+            image_generation_prompt, status, scheduled_at, posted_at, 
+            platform_post_id, platform_post_url, metrics, template_id, 
+            generated_by, generation_prompt_hash, created_at, updated_at
         FROM social_posts 
         WHERE project_id = ?1
         ORDER BY created_at DESC"#
@@ -319,14 +320,16 @@ pub fn update_post(conn: &Connection, post: &SocialPost) -> Result<()> {
             hashtags = ?3,
             cta = ?4,
             visual_assets = ?5,
-            updated_at = ?6
-        WHERE id = ?7"#,
+            image_generation_prompt = ?6,
+            updated_at = ?7
+        WHERE id = ?8"#,
         params![
             post.hook,
             post.caption,
             serde_json::to_string(&post.hashtags)?,
             post.cta,
             serde_json::to_string(&post.visual_assets)?,
+            post.image_generation_prompt,
             now,
             post.id,
         ],
@@ -567,6 +570,7 @@ fn row_to_post(row: &rusqlite::Row<'_>) -> rusqlite::Result<SocialPost> {
         hashtags,
         cta: row.get("cta")?,
         visual_assets,
+        image_generation_prompt: row.get("image_generation_prompt")?,
         status: row.get("status")?,
         scheduled_at: row.get("scheduled_at")?,
         posted_at: row.get("posted_at")?,

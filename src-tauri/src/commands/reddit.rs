@@ -6,7 +6,7 @@ use crate::models::reddit::{
     MigrationResult, RedditOpportunity, RedditStats, SubmissionSummary, ValidationResult,
 };
 use crate::reddit;
-use super::{AppState, GscState};
+use super::AppState;
 
 #[tauri::command]
 pub async fn search_reddit(
@@ -159,82 +159,6 @@ pub fn get_reddit_statistics(
 ) -> Result<RedditStats, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     reddit::db::get_statistics(&db, &project_id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn run_reddit_opportunity_search(
-    state: State<'_, AppState>,
-    gsc_state: State<'_, GscState>,
-    project_id: String,
-    user_context: Option<String>,
-) -> Result<executor::ExecutionResult, String> {
-    use crate::config::{default_execution_mode, default_phase};
-    use crate::models::task::{AgentPolicy, Priority, TaskStatus};
-    use crate::reddit::config as reddit_cfg;
-    use std::path::Path;
-
-    let project_path = {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-        project.path.clone()
-    };
-    let automation_dir = Path::new(&project_path).join(".github").join("automation");
-    let missing = reddit_cfg::missing_config_files(&automation_dir);
-    if !missing.is_empty() {
-        return Err(format!(
-            "Missing required config files: {}. Create them in .github/automation/ first.",
-            missing.join(", ")
-        ));
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let id = format!("task-{}", chrono::Utc::now().timestamp_millis());
-
-    let description = user_context.as_ref().filter(|s| !s.trim().is_empty()).map(|ctx| {
-        serde_json::json!({ "user_context": ctx }).to_string()
-    });
-
-    let task = crate::models::task::Task {
-        id,
-        phase: default_phase("reddit_opportunity_search").to_string(),
-        execution_mode: default_execution_mode("reddit_opportunity_search"),
-        task_type: "reddit_opportunity_search".to_string(),
-        status: TaskStatus::Todo,
-        priority: Priority::High,
-        agent_policy: AgentPolicy::Optional,
-        title: Some("Reddit Opportunity Search".to_string()),
-        description,
-        project_id,
-        depends_on: vec![],
-        artifacts: vec![],
-        run: crate::models::task::TaskRun::default(),
-        created_at: now.clone(),
-        updated_at: now,
-    };
-
-    let task_id = {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        task_store::create_task(&db, &task)
-            .map_err(|e| e.to_string())?
-            .id
-    };
-
-    let token = gsc_state
-        .token
-        .lock()
-        .map_err(|e| e.to_string())?
-        .as_ref()
-        .filter(|t| !t.is_expired())
-        .map(|t| t.access_token.clone());
-
-    let db_arc = Arc::clone(&state.db);
-    tauri::async_runtime::spawn_blocking(move || {
-        let db = db_arc.lock().map_err(|e| e.to_string())?;
-        executor::execute_task_with_token(&db, &task_id, token.as_deref(), None, false)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

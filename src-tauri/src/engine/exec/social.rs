@@ -10,8 +10,10 @@ use crate::models::social::*;
 use crate::models::task::Task;
 use crate::social::content::sources::{discover_sources, ensure_output_dir};
 use crate::social::db;
+use crate::social::image::assets::generate_branded_graphic;
 use crate::social::models::{AgentPostOutput, AgentTemplateOutput, ContentSource, PostGenerationJob, SourceManifest};
 use crate::social::prompts;
+use crate::social::templates::{TemplateRegistry, TemplateDef, render_prompt, validate_output};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Collect Content Sources
@@ -25,6 +27,10 @@ pub fn exec_social_collect_sources(
     let config = parse_source_config_from_task(task);
 
     log::info!("[social_collect_sources] discovering sources for project {}", task.project_id);
+    log::info!("[social_collect_sources] project_path: {}", project_path);
+    log::info!("[social_collect_sources] config: articles={}, screenshots={}, specs={}", 
+        config.include_articles, config.include_screenshots, config.include_specs);
+    log::debug!("[social_collect_sources] task description: {:?}", task.description);
 
     let manifest = match discover_sources(Path::new(project_path), &config) {
         Ok(m) => m,
@@ -155,24 +161,31 @@ pub fn exec_social_generate_posts(
         }
     }
 
+    // Limit to max 10 posts per campaign to avoid overwhelming the user
+    const MAX_POSTS: usize = 10;
+    if jobs.len() > MAX_POSTS {
+        log::info!("[social_generate_posts] limiting from {} to {} posts", jobs.len(), MAX_POSTS);
+        jobs.truncate(MAX_POSTS);
+    }
+    
     log::info!("[social_generate_posts] generating {} posts", jobs.len());
 
-    // Generate each post via agent
+    // Generate each post via agent using template system
     let mut generated_posts: Vec<SocialPost> = Vec::new();
-    let campaign_id = task.id.clone(); // Use task ID as campaign ID for now
+    let campaign_id = extract_campaign_id_from_task(task).unwrap_or_else(|| task.id.clone());
+    
+    // Use new template registry for better template selection
+    let registry = TemplateRegistry::default();
 
     for (idx, job) in jobs.iter().enumerate() {
-        let prompt = prompts::generate_post_prompt(
-            &job.source,
-            &job.template,
-            &job.platform,
-            &project_context,
-        );
+        // Use new template system to render prompt
+        let prompt = render_prompt(&job.template, &job.source);
 
-        log::info!("[social_generate_posts] job {}/{}: generating for source {:?}",
+        log::info!("[social_generate_posts] job {}/{}: generating for source {:?} using template {:?}",
             idx + 1,
             jobs.len(),
-            job.source.source_id
+            job.source.source_id,
+            job.template.id
         );
 
         // Call the agent
@@ -181,6 +194,14 @@ pub fn exec_social_generate_posts(
                 // Parse the agent output
                 match parse_agent_post_output(&output) {
                     Ok(agent_output) => {
+                        // Validate against template schema
+                        let json_output = serde_json::to_value(&agent_output).unwrap_or_default();
+                        let validation_errors = validate_output(&job.template, &json_output);
+                        
+                        if !validation_errors.is_empty() {
+                            log::warn!("[social_generate_posts] validation errors: {:?}", validation_errors);
+                        }
+                        
                         let post = create_social_post_from_agent_output(
                             &campaign_id,
                             &task.project_id,
@@ -264,14 +285,13 @@ pub fn exec_social_build_visuals(
 
     // Build visuals for each post
     for post in &mut posts {
-        // For now, just copy the source image to the output directory
-        // In a real implementation, this would apply text overlays
         if let Some(first_asset) = post.visual_assets.first() {
             let source_path = Path::new(project_path).join(&first_asset.path);
             let output_filename = format!("{}.png", post.id);
             let output_path = output_dir.join(&output_filename);
 
             if source_path.exists() {
+                // Copy existing image
                 if let Err(e) = std::fs::copy(&source_path, &output_path) {
                     log::warn!("[social_build_visuals] failed to copy image: {}", e);
                 } else {
@@ -288,6 +308,25 @@ pub fn exec_social_build_visuals(
                         description: first_asset.description.clone(),
                         overlay_text: first_asset.overlay_text.clone(),
                     }];
+                }
+            } else {
+                // Generate branded graphic as fallback
+                match generate_branded_graphic(&output_path, &post.hook) {
+                    Ok(asset) => {
+                        let relative_path = output_path
+                            .strip_prefix(project_path)
+                            .unwrap_or(&output_path)
+                            .to_string_lossy()
+                            .to_string();
+                        
+                        post.visual_assets = vec![VisualAsset {
+                            path: relative_path,
+                            ..asset
+                        }];
+                    }
+                    Err(e) => {
+                        log::warn!("[social_build_visuals] failed to generate branded graphic: {}", e);
+                    }
                 }
             }
         }
@@ -319,11 +358,9 @@ pub fn exec_social_build_visuals(
 pub fn exec_social_save_campaign(
     task: &Task,
     _project_path: &str,
+    conn: &rusqlite::Connection,
 ) -> StepResult {
     use crate::social::db;
-    use rusqlite::Connection;
-    use std::sync::Arc;
-    use std::sync::Mutex;
 
     // Get the posts from previous step
     let posts = match load_posts_from_artifacts(task) {
@@ -337,23 +374,35 @@ pub fn exec_social_save_campaign(
         }
     };
 
-    // We need a database connection - this is a bit tricky from the executor
-    // For now, we'll return the posts as output and let the caller save them
-    // In a real implementation, we'd need to pass the connection through
-
     log::info!("[social_save_campaign] saving {} posts for campaign {}", posts.len(), task.id);
 
-    // Create campaign result
-    let result = CampaignSaveResult {
-        campaign_id: task.id.clone(),
-        posts_saved: posts.len(),
-        posts,
-    };
+    // Save each post to the database
+    let mut saved_count = 0;
+    for post in &posts {
+        match db::create_post(conn, post) {
+            Ok(_) => saved_count += 1,
+            Err(e) => {
+                log::warn!("[social_save_campaign] failed to save post {}: {}", post.id, e);
+            }
+        }
+    }
+
+    // Update campaign post count
+    if let Some(campaign_id) = extract_campaign_id_from_task(task) {
+        if let Err(e) = db::update_campaign_post_count(conn, &campaign_id, saved_count as u32) {
+            log::warn!("[social_save_campaign] failed to update campaign count: {}", e);
+        }
+        
+        // Update campaign status to active
+        if let Err(e) = db::update_campaign_status(conn, &campaign_id, CampaignStatus::Active) {
+            log::warn!("[social_save_campaign] failed to update campaign status: {}", e);
+        }
+    }
 
     StepResult {
-        success: true,
-        message: format!("Campaign saved with {} posts", result.posts_saved),
-        output: Some(serde_json::to_string(&result).unwrap_or_default()),
+        success: saved_count > 0,
+        message: format!("Saved {} of {} posts", saved_count, posts.len()),
+        output: Some(format!("{{\"saved\":{},\"total\":{}}}", saved_count, posts.len())),
     }
 }
 
@@ -480,8 +529,19 @@ pub fn exec_social_save_template(
 // Helper Functions
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn parse_source_config_from_task(_task: &Task) -> SourceConfig {
-    // Default config - in real implementation, parse from task description
+fn parse_source_config_from_task(task: &Task) -> SourceConfig {
+    // Parse source_config from task description JSON
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(config) = json.get("source_config") {
+                if let Ok(source_config) = serde_json::from_value::<SourceConfig>(config.clone()) {
+                    return source_config;
+                }
+            }
+        }
+    }
+    
+    // Fallback to default config if parsing fails
     SourceConfig {
         include_articles: true,
         article_slugs: vec![],
@@ -492,7 +552,19 @@ fn parse_source_config_from_task(_task: &Task) -> SourceConfig {
 }
 
 fn parse_template_ids_from_task(task: &Task) -> Vec<String> {
-    // Parse from task description
+    // Parse template_ids from task description JSON
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(template_ids) = json.get("template_ids").and_then(|v| v.as_array()) {
+                return template_ids
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+            }
+        }
+    }
+    
+    // Fallback to default templates if parsing fails
     vec![
         "article_hook".to_string(),
         "article_carousel".to_string(),
@@ -500,6 +572,29 @@ fn parse_template_ids_from_task(task: &Task) -> Vec<String> {
 }
 
 fn parse_platforms_from_task(task: &Task) -> Vec<Platform> {
+    // Parse target_platforms from task description JSON
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(platforms) = json.get("target_platforms").and_then(|v| v.as_array()) {
+                let parsed: Vec<Platform> = platforms
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter_map(|s| match s {
+                        "tiktok" => Some(Platform::TikTok),
+                        "instagram_feed" => Some(Platform::InstagramFeed),
+                        "instagram_reel" => Some(Platform::InstagramReel),
+                        "instagram_story" => Some(Platform::InstagramStory),
+                        _ => None,
+                    })
+                    .collect();
+                if !parsed.is_empty() {
+                    return parsed;
+                }
+            }
+        }
+    }
+    
+    // Fallback to default platforms if parsing fails
     vec![
         Platform::InstagramFeed,
         Platform::TikTok,
@@ -523,14 +618,23 @@ fn get_site_url_from_project(task: &Task) -> String {
 fn load_templates_for_generation(
     _project_id: &str,
     template_ids: &[String],
-) -> Result<Vec<ContentTemplate>, String> {
-    // For now, return default templates
-    // In real implementation, load from database
+) -> Result<Vec<TemplateDef>, String> {
+    // Use new template registry
+    let registry = TemplateRegistry::default();
     let mut templates = Vec::new();
 
     for id in template_ids {
-        let template = create_default_template(id)?;
-        templates.push(template);
+        if let Some(template) = registry.get(id) {
+            templates.push(template.clone());
+        } else {
+            // Fallback: try to use the template ID as a platform hint
+            log::warn!("Template {} not found in registry, skipping", id);
+        }
+    }
+    
+    // If no templates found, use all defaults
+    if templates.is_empty() {
+        templates = registry.all().to_vec();
     }
 
     Ok(templates)
@@ -654,6 +758,10 @@ fn create_social_post_from_agent_output(
             description: agent_output.visual_description.clone(),
             overlay_text: agent_output.overlay_text.clone(),
         }],
+        // AI-generated prompt for external image generation (Midjourney, DALL-E, etc.)
+        image_generation_prompt: agent_output.image_generation_prompt.clone(),
+        // Note: Image resolution happens in social_build_visuals step
+        // where we try article images -> screenshots -> generated branded graphics
         status: PostStatus::Draft,
         scheduled_at: None,
         posted_at: None,
@@ -706,4 +814,17 @@ fn parse_create_template_request(task: &Task) -> CreateTemplateRequest {
         format: PostFormat::SingleImage,
         description: "A new content template".to_string(),
     }
+}
+
+fn extract_campaign_id_from_task(task: &Task) -> Option<String> {
+    // Try to parse campaign_id from task description (JSON)
+    if let Some(desc) = &task.description {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(desc) {
+            if let Some(campaign_id) = json.get("campaign_id").and_then(|v| v.as_str()) {
+                return Some(campaign_id.to_string());
+            }
+        }
+    }
+    // Fallback: use task id as campaign id
+    Some(task.id.clone())
 }

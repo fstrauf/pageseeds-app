@@ -3,9 +3,15 @@
 
 pub mod content;
 pub mod content_audit;
+pub mod coverage;
 pub mod gsc;
+pub mod gsc_diagnostics;
+pub mod indexing_fix;
+pub mod intent_classifier;
 pub mod keywords;
+pub mod quality_rater;
 pub mod reddit;
+pub mod research;
 pub mod social;
 pub mod utils;
 

@@ -32,13 +32,19 @@ log = "0.4"
 regex = "1"
 walkdir = "2"
 reqwest = { version = "0.12", features = ["json"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "process", "macros"] }
 jsonwebtoken = "9"
 csv = "1"
 urlencoding = "2"
 env_logger = "0.11"
 ts-rs = "10"
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+agent-wrapper = { git = "https://github.com/fstrauf/agent-wrapper", tag = "v0.1.0" }
+rig-core = "0.5"
+async-trait = "0.1"
+
 
 [dev-dependencies]
 wiremock = "0.6"

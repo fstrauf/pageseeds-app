@@ -18,7 +18,9 @@ pub const PRIORITIES: &[&str] = &["high", "medium", "low"];
 pub const TASK_TYPES: &[&str] = &[
     "write_article",
     "optimize_article",
+    "create_landing_page",
     "research_keywords",
+    "research_landing_pages",
     "collect_gsc",
     "investigate_gsc",
     "reddit_search",
@@ -31,14 +33,16 @@ pub const TASK_TYPES: &[&str] = &[
     "fix_gsc_access",
     "technical_seo",
     "content_cleanup",
+    "indexing_diagnostics",
 ];
 
 pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
     match task_type {
         "collect_gsc" => ExecutionMode::Automatic,
+        "indexing_diagnostics" => ExecutionMode::Automatic,
         "reddit_search" => ExecutionMode::Batchable,
         "research_keywords" | "custom_keyword_research" | "research_landing_pages" => ExecutionMode::Batchable,
-        "write_article" | "optimize_article" => ExecutionMode::Spec,
+        "write_article" | "optimize_article" | "create_landing_page" => ExecutionMode::Spec,
         "reddit_reply" => ExecutionMode::Manual,
         _ => ExecutionMode::Manual,
     }
@@ -47,9 +51,10 @@ pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
 pub fn default_phase(task_type: &str) -> &'static str {
     match task_type {
         "collect_gsc" => "collection",
+        "indexing_diagnostics" => "investigation",
         "investigate_gsc" => "investigation",
         "research_keywords" => "research",
-        "write_article" | "optimize_article" => "implementation",
+        "write_article" | "optimize_article" | "create_landing_page" => "implementation",
         "reddit_search" | "reddit_reply" => "implementation",
         "fix_404s" | "fix_redirects" | "technical_seo" => "implementation",
         "fix_indexing" | "fix_technical" | "fix_content" | "fix_gsc_access" => "implementation",

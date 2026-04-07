@@ -472,6 +472,7 @@ pub async fn get_keyword_ideas(
 
     let resp = client
         .post(ahrefs_url("v4/stGetFreeKeywordIdeas"))
+        .header("referer", &site_url)
         .json(&serde_json::json!({
             "withQuestionIdeas": true,
             "captcha": token,
@@ -482,10 +483,16 @@ pub async fn get_keyword_ideas(
         .send()
         .await?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let body_preview = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+        log::warn!(
+            "[get_keyword_ideas] Ahrefs returned {} for keyword '{}'. Body preview: {}",
+            status, keyword, body_preview
+        );
         return Err(Error::Other(format!(
-            "Ahrefs keyword ideas API returned status {}",
-            resp.status()
+            "Ahrefs keyword ideas API returned status {}. Body: {}",
+            status, body_preview
         )));
     }
 
@@ -536,10 +543,16 @@ pub async fn get_keyword_difficulty(
         .send()
         .await?;
 
-    if !resp.status().is_success() {
+    let status = resp.status();
+    if !status.is_success() {
+        let body_preview = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+        log::warn!(
+            "[get_keyword_difficulty] Ahrefs returned {} for keyword '{}'. Body preview: {}",
+            status, keyword, body_preview
+        );
         return Err(Error::Other(format!(
-            "Ahrefs keyword difficulty API returned status {}",
-            resp.status()
+            "Ahrefs keyword difficulty API returned status {}. Body: {}",
+            status, body_preview
         )));
     }
 

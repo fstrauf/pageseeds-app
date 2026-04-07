@@ -304,13 +304,17 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
           )}
 
           {/* Keyword picker — shown when keyword research task is in review status */}
-          {(task.type === 'research_keywords' || task.type === 'custom_keyword_research') && task.status === 'review' && (
+          {(task.type === 'research_keywords' || task.type === 'custom_keyword_research' || task.type === 'research_landing_pages') && task.status === 'review' && (
             <>
               <Separator className="bg-border" />
               <div className="space-y-2">
-                <div className="text-xs text-muted-foreground font-medium">Keyword Results</div>
+                <div className="text-xs text-muted-foreground font-medium">
+                  {task.type === 'research_landing_pages' ? 'Landing Page Keyword Results' : 'Keyword Results'}
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Select the keywords you want to write articles for, then click "Create Article Tasks".
+                  {task.type === 'research_landing_pages' 
+                    ? 'Select the keywords you want to create landing pages for, then click "Create Landing Page Tasks".'
+                    : 'Select the keywords you want to write articles for, then click "Create Article Tasks".'}
                 </p>
                 <KeywordPicker
                   task={task}

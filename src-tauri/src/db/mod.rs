@@ -5,6 +5,19 @@ use crate::error::Result;
 
 pub mod export;
 
+/// Get the default database path based on platform conventions.
+/// Used when we need to access the DB without having the AppState.
+pub fn default_db_path() -> std::path::PathBuf {
+    let app_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        .join("com.pageseeds.app");
+    
+    // Ensure directory exists
+    let _ = std::fs::create_dir_all(&app_dir);
+    
+    app_dir.join("pageseeds.db")
+}
+
 static MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -111,6 +124,88 @@ CREATE TABLE IF NOT EXISTS scheduler_rules (
     last_run_at     TEXT,
     FOREIGN KEY (project_id) REFERENCES projects(id)
 );
+"#;
+
+static MIGRATION_V7: &str = r#"
+-- Idempotency tracking for task creation
+CREATE TABLE IF NOT EXISTS task_idempotency_keys (
+    key TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_task ON task_idempotency_keys(task_id);
+"#;
+
+static MIGRATION_V8: &str = r#"
+-- Add image_generation_prompt to social_posts for AI image generation workflow
+ALTER TABLE social_posts ADD COLUMN image_generation_prompt TEXT;
+"#;
+
+static MIGRATION_V9: &str = r#"
+-- Per-URL GSC indexing status for stateful diagnostics
+CREATE TABLE IF NOT EXISTS gsc_url_indexing_status (
+    url                 TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    last_inspected_at   TEXT,
+    last_reason_code    TEXT,
+    last_verdict        TEXT,
+    last_action         TEXT,
+    consecutive_passes  INTEGER NOT NULL DEFAULT 0,
+    last_task_created_at TEXT,
+    last_task_type      TEXT,
+    last_task_id        TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    PRIMARY KEY (url, project_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_project ON gsc_url_indexing_status(project_id);
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_reason ON gsc_url_indexing_status(last_reason_code);
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_inspected ON gsc_url_indexing_status(last_inspected_at);
+"#;
+
+static MIGRATION_V10: &str = r#"
+-- Track fix history per URL for better diagnostics
+ALTER TABLE gsc_url_indexing_status ADD COLUMN last_fix_summary TEXT;
+ALTER TABLE gsc_url_indexing_status ADD COLUMN fix_attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE gsc_url_indexing_status ADD COLUMN last_task_resolved_at TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_gsc_url_status_resolved ON gsc_url_indexing_status(last_task_resolved_at);
+"#;
+
+static MIGRATION_V11: &str = r#"
+-- Skill embeddings for semantic search
+CREATE TABLE IF NOT EXISTS skill_embeddings (
+    skill_name      TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,        -- Hash of content to detect changes
+    embedding       BLOB NOT NULL,        -- Serialized vector
+    model_name      TEXT NOT NULL,        -- E.g., "nomic-embed-text"
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_embeddings_project ON skill_embeddings(project_id);
+"#;
+
+static MIGRATION_V12: &str = r#"
+-- Skill embeddings for semantic search (Rig.rs integration)
+CREATE TABLE IF NOT EXISTS skill_embeddings (
+    skill_name      TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,        -- Hash of content to detect changes
+    embedding       BLOB NOT NULL,        -- Serialized vector (f32 array)
+    model_name      TEXT NOT NULL,        -- E.g., "nomic-embed-text"
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_embeddings_project ON skill_embeddings(project_id);
 "#;
 
 static MIGRATION_V6: &str = r#"
@@ -221,6 +316,14 @@ pub fn init(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Initialize schema on an existing connection (for testing).
+/// This allows tests to use in-memory databases while still getting the full schema.
+pub fn init_with_conn(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    run_migrations(conn)?;
+    Ok(())
+}
+
 fn run_migrations(conn: &Connection) -> Result<()> {
     // unwrap_or(0) handles the case where schema_version doesn't exist yet
     let version: i64 = conn
@@ -295,6 +398,54 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V6)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (6, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 7 {
+        conn.execute_batch(MIGRATION_V7)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (7, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 8 {
+        conn.execute_batch(MIGRATION_V8)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (8, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 9 {
+        conn.execute_batch(MIGRATION_V9)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (9, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 10 {
+        conn.execute_batch(MIGRATION_V10)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (10, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 11 {
+        conn.execute_batch(MIGRATION_V11)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (11, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 12 {
+        conn.execute_batch(MIGRATION_V12)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (12, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

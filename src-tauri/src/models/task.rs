@@ -3,11 +3,13 @@ use ts_rs::TS;
 
 // ─── Status / mode enums ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum TaskStatus {
+    #[default]
     Todo,
+    Queued,
     InProgress,
     Review,
     Done,
@@ -18,6 +20,7 @@ impl TaskStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             TaskStatus::Todo => "todo",
+            TaskStatus::Queued => "queued",
             TaskStatus::InProgress => "in_progress",
             TaskStatus::Review => "review",
             TaskStatus::Done => "done",
@@ -47,6 +50,7 @@ impl rusqlite::types::FromSql for TaskStatus {
         let s = String::column_result(value)?;
         match s.as_str() {
             "todo" => Ok(TaskStatus::Todo),
+            "queued" => Ok(TaskStatus::Queued),
             "in_progress" => Ok(TaskStatus::InProgress),
             "review" => Ok(TaskStatus::Review),
             "done" => Ok(TaskStatus::Done),
@@ -60,10 +64,11 @@ impl rusqlite::types::FromSql for TaskStatus {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ExecutionMode {
+    #[default]
     Automatic,
     Batchable,
     Manual,
@@ -113,10 +118,11 @@ impl rusqlite::types::FromSql for ExecutionMode {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum AgentPolicy {
+    #[default]
     #[serde(rename = "none")]
     None,
     Required,
@@ -162,12 +168,13 @@ impl rusqlite::types::FromSql for AgentPolicy {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum Priority {
     High,
     Medium,
+    #[default]
     Low,
 }
 
@@ -209,6 +216,7 @@ impl rusqlite::types::FromSql for Priority {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TaskArtifact {
     pub key: String,
@@ -223,6 +231,7 @@ pub struct TaskArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TaskRun {
     pub attempts: u32,
@@ -230,7 +239,8 @@ pub struct TaskRun {
     pub provider: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct Task {
     pub id: String,
