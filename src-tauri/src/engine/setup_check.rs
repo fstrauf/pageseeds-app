@@ -201,30 +201,6 @@ pub fn collect_config_file_statuses(
     }
 
     {
-        let path = automation_dir.join("seo_content_brief.md");
-        let (full_path, full_link) = path_strings(&path);
-        let configured = path.exists() && file_has_non_whitespace_content(&path);
-        files.push(ProjectConfigFileStatus {
-            id: "seo_content_brief".to_string(),
-            category: "seo".to_string(),
-            label: "SEO content brief".to_string(),
-            relative_path: ".github/automation/seo_content_brief.md".to_string(),
-            full_path,
-            full_link,
-            used_by: "Keyword theme discovery".to_string(),
-            required: false,
-            configured,
-            detail: if !path.exists() {
-                "Optional file missing".to_string()
-            } else if configured {
-                "Present".to_string()
-            } else {
-                "File is empty".to_string()
-            },
-        });
-    }
-
-    {
         let path = automation_dir.join("task_list.json");
         let (full_path, full_link) = path_strings(&path);
         files.push(ProjectConfigFileStatus {
@@ -264,52 +240,38 @@ pub fn collect_config_file_statuses(
         });
     }
 
-    // Shared context / sentiment style files
+    // Shared context / sentiment style files (consolidated project.md)
     {
-        let path = automation_dir.join("project_summary.md");
+        let path = automation_dir.join("project.md");
         let (full_path, full_link) = path_strings(&path);
-        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        let has_project_md = path.exists() && file_has_non_whitespace_content(&path);
+
+        // Check for legacy files as fallback
+        let legacy_summary = automation_dir.join("project_summary.md");
+        let legacy_brand = automation_dir.join("brandvoice.md");
+        let has_legacy = (legacy_summary.exists() && file_has_non_whitespace_content(&legacy_summary))
+            || (legacy_brand.exists() && file_has_non_whitespace_content(&legacy_brand));
+
+        let configured = has_project_md || has_legacy;
+        let detail = if has_project_md {
+            "Present (consolidated)".to_string()
+        } else if has_legacy {
+            "Legacy files detected — consider migrating to project.md".to_string()
+        } else {
+            "Optional file missing".to_string()
+        };
+
         files.push(ProjectConfigFileStatus {
-            id: "project_summary".to_string(),
+            id: "project".to_string(),
             category: "context".to_string(),
-            label: "Project summary".to_string(),
-            relative_path: ".github/automation/project_summary.md".to_string(),
+            label: "Project context".to_string(),
+            relative_path: ".github/automation/project.md".to_string(),
             full_path,
             full_link,
             used_by: "SEO + Reddit prompt context".to_string(),
             required: false,
             configured,
-            detail: if !path.exists() {
-                "Optional file missing".to_string()
-            } else if configured {
-                "Present".to_string()
-            } else {
-                "File is empty".to_string()
-            },
-        });
-    }
-
-    {
-        let path = automation_dir.join("brandvoice.md");
-        let (full_path, full_link) = path_strings(&path);
-        let configured = path.exists() && file_has_non_whitespace_content(&path);
-        files.push(ProjectConfigFileStatus {
-            id: "brandvoice".to_string(),
-            category: "sentiment".to_string(),
-            label: "Brand voice / tone".to_string(),
-            relative_path: ".github/automation/brandvoice.md".to_string(),
-            full_path,
-            full_link,
-            used_by: "Reddit reply sentiment and writing tone".to_string(),
-            required: false,
-            configured,
-            detail: if !path.exists() {
-                "Optional file missing".to_string()
-            } else if configured {
-                "Present".to_string()
-            } else {
-                "File is empty".to_string()
-            },
+            detail,
         });
     }
 

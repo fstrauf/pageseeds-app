@@ -23,7 +23,10 @@ pub struct KeywordIdea {
     pub keyword: String,
     pub idea_type: String, // "regular" | "question"
     pub difficulty: Option<String>,
-    pub volume: Option<String>,
+    pub volume: Option<String>,       // categorical (Ahrefs) — keep for backward compat
+    pub volume_exact: Option<i64>,    // NEW: precise number (DataForSEO)
+    pub cpc: Option<f64>,             // NEW: cost per click (DataForSEO)
+    pub competition: Option<f64>,     // NEW: competition score 0–1 (DataForSEO)
     pub country: Option<String>,
 }
 
@@ -192,6 +195,34 @@ fn get_field_as_f64(obj: &Value, keys: &[&str]) -> Option<f64> {
     None
 }
 
+fn get_field_as_i64(obj: &Value, keys: &[&str]) -> Option<i64> {
+    for &key in keys {
+        if let Some(v) = obj.get(key) {
+            let unwrapped = unwrap_variant(v);
+            // Ahrefs sometimes wraps values in single-element arrays
+            let inner = match unwrapped {
+                Value::Array(arr) if arr.len() == 1 => &arr[0],
+                other => other,
+            };
+            match inner {
+                Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        return Some(i);
+                    }
+                }
+                Value::String(s) => {
+                    let trimmed = s.trim();
+                    if let Ok(i) = trimmed.parse::<i64>() {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 fn normalise_idea(raw: &Value, idea_type: &str) -> Option<KeywordIdea> {
     let idea = unwrap_variant(raw);
 
@@ -257,6 +288,36 @@ fn normalise_idea(raw: &Value, idea_type: &str) -> Option<KeywordIdea> {
             }
         });
 
+    // Extract precise volume for DataForSEO (numeric value)
+    let volume_exact = get_field_as_i64(idea, &["search_volume", "searchVolumeExact", "volume_exact"])
+        .or_else(|| {
+            if metrics.is_object() {
+                get_field_as_i64(metrics, &["search_volume", "searchVolumeExact", "volume_exact"])
+            } else {
+                None
+            }
+        });
+
+    // Extract CPC for DataForSEO
+    let cpc = get_field_as_f64(idea, &["cpc", "CPC"])
+        .or_else(|| {
+            if metrics.is_object() {
+                get_field_as_f64(metrics, &["cpc", "CPC"])
+            } else {
+                None
+            }
+        });
+
+    // Extract competition score for DataForSEO (0-1 range)
+    let competition = get_field_as_f64(idea, &["competition", "competition_index", "competitionIndex"])
+        .or_else(|| {
+            if metrics.is_object() {
+                get_field_as_f64(metrics, &["competition", "competition_index", "competitionIndex"])
+            } else {
+                None
+            }
+        });
+
     let country =
         get_field_as_string(idea, &["country", "countryCode", "location"]);
 
@@ -265,6 +326,9 @@ fn normalise_idea(raw: &Value, idea_type: &str) -> Option<KeywordIdea> {
         idea_type: idea_type.to_string(),
         difficulty,
         volume,
+        volume_exact,
+        cpc,
+        competition,
         country,
     })
 }

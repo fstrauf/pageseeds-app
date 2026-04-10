@@ -805,10 +805,27 @@ pub(crate) fn parse_desc_themes(raw: &str) -> Vec<String> {
 /// Try to derive keyword themes from existing project configuration files.
 ///
 /// Priority order:
-///   1. `*seo_content_brief*.md` — PLANNED cluster topics (🎯) and gap cluster names
-///   2. `*project_summary*.md`   — Content Pillar names
-///   3. `articles.json`          — unique existing target_keywords (as baseline coverage)
+///   1. `project.md` — consolidated project config (PLANNED clusters, Identity)
+///   2. `*seo_content_brief*.md` — legacy: PLANNED cluster topics (🎯) and gap cluster names
+///   3. `*project_summary*.md`   — legacy: Content Pillar names
+///   4. `articles.json`          — unique existing target_keywords (as baseline coverage)
 pub(crate) fn derive_themes_from_project(automation_dir: &std::path::Path) -> Vec<String> {
+    // Primary: consolidated project.md
+    let project_md = automation_dir.join("project.md");
+    if project_md.exists() {
+        log::info!("[keyword_research] using project.md: {:?}", project_md);
+        let themes = extract_from_brief(&project_md);
+        if !themes.is_empty() {
+            return themes;
+        }
+        // Also try summary extraction (for Content Clusters & Identity sections)
+        let themes = extract_from_summary(&project_md);
+        if !themes.is_empty() {
+            return themes;
+        }
+    }
+
+    // Legacy fallbacks
     if let Some(brief) = find_file_by_suffix(automation_dir, "seo_content_brief.md") {
         log::info!("[keyword_research] using brief: {:?}", brief);
         let themes = extract_from_brief(&brief);

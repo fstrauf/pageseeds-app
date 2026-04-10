@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText } from 'lucide-react'
+import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText, Globe } from 'lucide-react'
 import { LogViewer } from './LogViewer'
-import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus } from '../../lib/tauri'
-import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus } from '../../lib/types'
+import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus, getSeoProvider, setSeoProvider } from '../../lib/tauri'
+import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus, SeoProvider } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -41,6 +41,13 @@ export function Settings({ projectId }: SettingsProps) {
 
   const [configFiles, setConfigFiles] = useState<ProjectConfigFileStatus[]>([])
   const [configLoading, setConfigLoading] = useState(false)
+
+  // SEO Provider state
+  const [seoProvider, setSeoProviderState] = useState<SeoProvider>('ahrefs')
+  const [seoLoading, setSeoLoading] = useState(false)
+  const [seoSaving, setSeoSaving] = useState(false)
+  const [seoSaved, setSeoSaved] = useState(false)
+  const [seoError, setSeoError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -107,13 +114,45 @@ export function Settings({ projectId }: SettingsProps) {
     }
   }, [projectId, selectedProvider])
 
+  // Load SEO provider
+  const loadSeoProvider = useCallback(async () => {
+    if (!projectId) return
+    setSeoLoading(true)
+    setSeoError(null)
+    try {
+      const provider = await getSeoProvider(projectId)
+      setSeoProviderState(provider as SeoProvider)
+    } catch (e) {
+      setSeoError(String(e))
+    } finally {
+      setSeoLoading(false)
+    }
+  }, [projectId])
+
+  // Save SEO provider
+  const saveSeoProvider = useCallback(async () => {
+    if (!projectId) return
+    setSeoSaving(true)
+    setSeoError(null)
+    try {
+      await setSeoProvider(projectId, seoProvider)
+      setSeoSaved(true)
+      setTimeout(() => setSeoSaved(false), 2000)
+    } catch (e) {
+      setSeoError(String(e))
+    } finally {
+      setSeoSaving(false)
+    }
+  }, [projectId, seoProvider])
+
   useEffect(() => {
     // Reset unsaved change tracking when project changes
     hasUnsavedProviderChange.current = false
     load()
     loadConfigFiles()
     loadAgentStatus()
-  }, [load, loadConfigFiles, loadAgentStatus, projectId])
+    loadSeoProvider()
+  }, [load, loadConfigFiles, loadAgentStatus, loadSeoProvider, projectId])
 
   const copyPath = useCallback(async () => {
     if (!secretsPath) return
@@ -340,6 +379,94 @@ export function Settings({ projectId }: SettingsProps) {
                       <p className="text-sm text-muted-foreground">
                         {configLoading ? 'Checking configuration files…' : 'No project config files detected.'}
                       </p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Separator className="bg-border" />
+
+                {/* SEO Provider section */}
+                <Card className="bg-card border-border">
+                  <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <Globe size={14} className="text-muted-foreground" />
+                      SEO Data Provider
+                    </CardTitle>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={loadSeoProvider}
+                      disabled={seoLoading}
+                      className="text-muted-foreground"
+                    >
+                      <RefreshCw size={13} className={seoLoading ? 'animate-spin' : ''} />
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-3">
+                      <label className="flex items-start gap-3 p-3 rounded-lg border border-border bg-secondary/30 cursor-pointer hover:bg-secondary/50 transition-colors">
+                        <input
+                          type="radio"
+                          name="seo-provider"
+                          value="ahrefs"
+                          checked={seoProvider === 'ahrefs'}
+                          onChange={(e) => setSeoProviderState(e.target.value as SeoProvider)}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-foreground">Ahrefs (Free)</span>
+                            <Badge variant="outline" className="border-transparent bg-emerald-100 text-emerald-700 text-[10px] px-1.5 py-0">
+                              Free
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Uses Ahrefs free tier with CapSolver. Returns categorical volume labels (e.g., "MoreThanThousand").
+                            Requires CAPSOLVER_API_KEY.
+                          </p>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-3 p-3 rounded-lg border border-border bg-secondary/30 cursor-pointer hover:bg-secondary/50 transition-colors">
+                        <input
+                          type="radio"
+                          name="seo-provider"
+                          value="dataforseo"
+                          checked={seoProvider === 'dataforseo'}
+                          onChange={(e) => setSeoProviderState(e.target.value as SeoProvider)}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-foreground">DataForSEO (Paid)</span>
+                            <Badge variant="outline" className="border-transparent bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0">
+                              Paid
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Pay-as-you-go API with precise numeric volumes, CPC data, and competition scores.
+                            Requires DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-2">
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={saveSeoProvider}
+                        disabled={seoSaving}
+                        className="border-border text-foreground"
+                      >
+                        {seoSaved ? 'Saved!' : seoSaving ? 'Saving…' : 'Save Provider'}
+                      </Button>
+                    </div>
+
+                    {seoError && (
+                      <div className="px-3 py-2 rounded-md text-xs bg-destructive/15 text-destructive">
+                        Error: {seoError}
+                      </div>
                     )}
                   </CardContent>
                 </Card>

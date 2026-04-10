@@ -37,6 +37,7 @@ pub fn create_project(
         site_id: None,
         active: true,
         agent_provider: None,
+        seo_provider: Some("ahrefs".to_string()),
     };
 
     let db = state.db.lock().map_err(|e| e.to_string())?;

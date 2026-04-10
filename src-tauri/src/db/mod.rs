@@ -450,5 +450,16 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 13 {
+        // Add seo_provider column for dual SEO provider support (Ahrefs / DataForSEO)
+        let _ = conn.execute_batch(
+            "ALTER TABLE projects ADD COLUMN seo_provider TEXT NOT NULL DEFAULT 'ahrefs';",
+        );
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (13, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }

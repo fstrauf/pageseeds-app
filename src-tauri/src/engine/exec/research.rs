@@ -133,10 +133,14 @@ pub fn build_research_prompts(
         "research_seed_extraction" => {
             let system = include_str!("../../prompts/seed_extraction.md");
 
-            // Build context from project files - use pattern matching for brief file
-            let brief_content = find_file(&paths.automation_dir, "seo_content_brief.md")
-                .and_then(|p| std::fs::read_to_string(&p).ok())
-                .unwrap_or_else(|| "(no brief found)".to_string());
+            // Build context from project files - primary: project.md, fallback: seo_content_brief.md
+            let brief_content = std::fs::read_to_string(paths.automation_dir.join("project.md"))
+                .or_else(|_| {
+                    find_file(&paths.automation_dir, "seo_content_brief.md")
+                        .and_then(|p| std::fs::read_to_string(&p).ok())
+                        .ok_or(std::io::Error::new(std::io::ErrorKind::NotFound, ""))
+                })
+                .unwrap_or_else(|_| "(no brief found)".to_string());
 
             let user = format!(
                 "## Project Context\n\n{}\n\n## Task Description\n\n{}\n\n## Project Path\n\n{}",

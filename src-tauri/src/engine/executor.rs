@@ -903,8 +903,8 @@ mod tests {
     fn setup_dummy_keyword_project(dir: &std::path::Path, theme: &str) {
         let automation = dir.join(".github").join("automation");
         std::fs::create_dir_all(&automation).unwrap();
-        let brief = format!("## Clusters\n\n### Cluster 1: {theme} (PLANNED)\n");
-        std::fs::write(automation.join("seo_content_brief.md"), brief).unwrap();
+        let brief = format!("# Test Project\n\n## Content Clusters & Status\n\n### Cluster 1: {theme} (PLANNED)\n");
+        std::fs::write(automation.join("project.md"), brief).unwrap();
         std::fs::write(automation.join("articles.json"), "[]").unwrap();
     }
 

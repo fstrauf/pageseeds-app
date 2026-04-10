@@ -191,12 +191,20 @@ pub async fn draft_reddit_reply(
         ));
     }
 
-    let project_summary = std::fs::read_to_string(automation_dir.join("project_summary.md"))
-        .map_err(|e| format!("Failed to read project_summary.md: {}", e))?;
+    // Primary: project.md (consolidated). Fallback: legacy files.
+    let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
+        .or_else(|_| {
+            let summary = std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
+            let brand = std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
+            if summary.is_empty() && brand.is_empty() {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no project context"))
+            } else {
+                Ok(format!("{}\n\n{}", summary, brand))
+            }
+        })
+        .map_err(|e| format!("Failed to read project.md: {}", e))?;
     let reddit_config_raw = std::fs::read_to_string(automation_dir.join("reddit_config.md"))
         .map_err(|e| format!("Failed to read reddit_config.md: {}", e))?;
-    let brandvoice = std::fs::read_to_string(automation_dir.join("brandvoice.md"))
-        .map_err(|e| format!("Failed to read brandvoice.md: {}", e))?;
     let guardrails = std::fs::read_to_string(
         automation_dir.join("reddit").join("_reply_guardrails.md")
     ).map_err(|e| format!("Failed to read _reply_guardrails.md: {}", e))?;
@@ -207,8 +215,7 @@ pub async fn draft_reddit_reply(
 
     let cfg = reddit_cfg::parse_reddit_config(&reddit_config_raw);
     let prompt = crate::reddit::prompts::build_draft_reply_prompt(
-        &project_summary,
-        &brandvoice,
+        &project_context,
         &guardrails,
         &skill_content,
         &cfg,

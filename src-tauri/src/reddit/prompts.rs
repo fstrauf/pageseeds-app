@@ -8,15 +8,13 @@ use crate::models::reddit::RedditOpportunity;
 /// Build the full draft-reply prompt from project config and opportunity data.
 ///
 /// # Arguments
-/// * `project_summary` — contents of `automation/project_summary.md`
-/// * `brandvoice`       — contents of `automation/brandvoice.md`
-/// * `guardrails`       — contents of `automation/reddit/_reply_guardrails.md`
-/// * `skill_content`    — SKILL.md text for `reddit-reply-drafting` (empty string if not found)
-/// * `cfg`              — parsed reddit_config
-/// * `opp`              — the opportunity being drafted for
+/// * `project_context` — contents of `automation/project.md` (identity + brand voice + clusters)
+/// * `guardrails`      — contents of `automation/reddit/_reply_guardrails.md`
+/// * `skill_content`   — SKILL.md text for `reddit-reply-drafting` (empty string if not found)
+/// * `cfg`             — parsed reddit_config
+/// * `opp`             — the opportunity being drafted for
 pub fn build_draft_reply_prompt(
-    project_summary: &str,
-    brandvoice: &str,
+    project_context: &str,
     guardrails: &str,
     skill_content: &str,
     cfg: &RedditProjectConfig,
@@ -69,11 +67,8 @@ Mention stance: {mention_stance}
 {stance_instruction}
 {vague_phrases_block}
 
-## PROJECT SUMMARY
-{project_summary}
-
-## BRAND VOICE
-{brandvoice}
+## PROJECT CONTEXT
+{project_context}
 
 ## REPLY GUARDRAILS
 {guardrails}

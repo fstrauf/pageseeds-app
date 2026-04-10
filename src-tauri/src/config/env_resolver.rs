@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 /// Known secrets required by various modules.
 pub const REQUIRED_SECRETS: &[(&str, &str)] = &[
     ("CAPSOLVER_API_KEY", "Ahrefs keyword research (CapSolver)"),
+    ("DATAFORSEO_LOGIN", "DataForSEO API login (optional - use instead of Ahrefs)"),
+    ("DATAFORSEO_PASSWORD", "DataForSEO API password (optional - use instead of Ahrefs)"),
     ("GSC_SERVICE_ACCOUNT_PATH", "Google Search Console (service account)"),
     (
         "GSC_REPORT_OAUTH_CLIENT_SECRETS",

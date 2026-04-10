@@ -197,18 +197,23 @@ pub fn exec_reddit_config_parse(
 
     let automation_dir = Path::new(project_path).join(".github").join("automation");
     
-    // Read config files
+    // Primary: project.md (consolidated). Fallback: legacy files.
+    let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
+        .or_else(|_| {
+            // Legacy fallback: stitch old files together
+            let summary = std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
+            let brand = std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
+            let brief = std::fs::read_to_string(automation_dir.join("seo_content_brief.md")).unwrap_or_default();
+            Ok::<String, std::io::Error>(format!("{}\n\n{}\n\n{}", summary, brand, brief))
+        })
+        .unwrap_or_default();
     let reddit_config = std::fs::read_to_string(automation_dir.join("reddit_config.md"))
         .unwrap_or_default();
-    let project_summary = std::fs::read_to_string(automation_dir.join("project_summary.md"))
-        .unwrap_or_default();
-    let brandvoice = std::fs::read_to_string(automation_dir.join("brandvoice.md"))
-        .unwrap_or_default();
 
-    if reddit_config.is_empty() && project_summary.is_empty() {
+    if reddit_config.is_empty() && project_context.is_empty() {
         return crate::engine::workflows::StepResult {
             success: false,
-            message: "No reddit_config.md or project_summary.md found — create config files first".to_string(),
+            message: "No reddit_config.md or project.md found — create config files first".to_string(),
             output: None,
         };
     }
@@ -221,13 +226,9 @@ pub fn exec_reddit_config_parse(
         ```markdown\n\
         {reddit_config}\n\
         ```\n\n\
-        ## project_summary.md\n\
+        ## Project Context\n\
         ```markdown\n\
-        {project_summary}\n\
-        ```\n\n\
-        ## brandvoice.md\n\
-        ```markdown\n\
-        {brandvoice}\n\
+        {project_context}\n\
         ```\n\n\
         ## Required JSON Output\n\
         Return a JSON object with these exact keys:\n\
@@ -243,8 +244,7 @@ pub fn exec_reddit_config_parse(
         Do NOT return placeholder text like \"<actual product name>\".\n\
         Return ONLY the JSON object, starting with {{ and ending with }}.",
         reddit_config = reddit_config,
-        project_summary = project_summary,
-        brandvoice = brandvoice
+        project_context = project_context
     );
 
     // Call agent
@@ -712,14 +712,22 @@ pub fn exec_reddit_enrich(
     log::info!("[reddit_enrich] {} posts to enrich", rows.len());
 
     let automation_dir = Path::new(project_path).join(".github").join("automation");
-    let project_summary = std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
+    // Primary: project.md (consolidated). Fallback: legacy files.
+    let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
+        .or_else(|_| {
+            // Legacy fallback: stitch old files together
+            let summary = std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
+            let brand = std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
+            let brief = std::fs::read_to_string(automation_dir.join("seo_content_brief.md")).unwrap_or_default();
+            Ok::<String, std::io::Error>(format!("{}\n\n{}\n\n{}", summary, brand, brief))
+        })
+        .unwrap_or_default();
     let reddit_config_raw = std::fs::read_to_string(automation_dir.join("reddit_config.md")).unwrap_or_default();
-    let brandvoice = std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
     let guardrails = std::fs::read_to_string(
         automation_dir.join("reddit").join("_reply_guardrails.md")
     ).unwrap_or_default();
 
-    if project_summary.is_empty() && reddit_config_raw.is_empty() {
+    if project_context.is_empty() && reddit_config_raw.is_empty() {
         log::warn!("[reddit_enrich] no project context — skipping");
         return;
     }
@@ -759,14 +767,11 @@ pub fn exec_reddit_enrich(
 
 DO NOT run any shell commands. DO NOT fetch any URLs. Work ONLY from the post titles and subreddits provided.
 
-## PRODUCT CONTEXT
-{project_summary}
+## PROJECT CONTEXT
+{project_context}
 
 ## REDDIT CONFIG
 {reddit_config_raw}
-
-## BRAND VOICE
-{brandvoice}
 
 ## REPLY GUARDRAILS
 {guardrails}
@@ -794,9 +799,8 @@ Return a JSON array with exactly {count} objects:
 
 reply_text: plain text only, no markdown, no bullets, no URLs.
 Return ONLY the raw JSON array."#,
-        project_summary = project_summary,
+        project_context = project_context,
         reddit_config_raw = reddit_config_raw,
-        brandvoice = brandvoice,
         guardrails = guardrails,
         product_name = product_name,
         mention_stance_str = mention_stance_str,

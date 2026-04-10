@@ -374,6 +374,19 @@ export const seoCheckTraffic = (
 ): Promise<TrafficResult> =>
   invoke('seo_check_traffic', { projectId, domain, mode, country })
 
+export const seoBatchKeywordDifficulty = (
+  projectId: string,
+  keywords: string[],
+  country?: string,
+): Promise<KeywordDifficultyResult[]> =>
+  invoke('seo_batch_keyword_difficulty', { projectId, keywords, country })
+
+export const getSeoProvider = (projectId: string): Promise<string> =>
+  invoke('get_seo_provider', { projectId })
+
+export const setSeoProvider = (projectId: string, provider: string): Promise<void> =>
+  invoke('set_seo_provider', { projectId, provider })
+
 // ─── Phase 6: Workflow Engine + Batch + Scheduler + Ledger ───────────────────
 
 import type {
@@ -707,3 +720,44 @@ export const runSocialCampaign = (campaignId: string): Promise<Task> =>
 
 export const getKeywordCoverage = (projectId: string): Promise<KeywordCoverageStatus> =>
   invoke('get_keyword_coverage', { projectId })
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Readability Analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import type { 
+  ReadabilityReport, 
+  IntentClassification, 
+  OpportunityScore, 
+  KeywordIdea,
+  WordCountComparison,
+  KeywordDensityReport,
+} from './bindings'
+
+export const analyzeArticleReadability = (projectId: string, slug: string): Promise<ReadabilityReport> =>
+  invoke('analyze_article_readability', { projectId, slug })
+
+export const classifySearchIntent = (projectId: string, keywords: string[]): Promise<IntentClassification[]> =>
+  invoke('classify_search_intent', { projectId, keywords })
+
+export const scoreKeywordOpportunities = (
+  projectId: string,
+  keywords: KeywordIdea[],
+  intents: IntentClassification[],
+  existingSlugs: string[],
+): Promise<OpportunityScore[]> =>
+  invoke('score_keyword_opportunities', { projectId, keywords, intents, existingSlugs: existingSlugs })
+
+export const compareCompetitorContent = (
+  keyword: string,
+  competitorUrls: string[],
+  userUrl?: string,
+): Promise<WordCountComparison> =>
+  invoke('compare_competitor_content', { keyword, competitorUrls, userUrl })
+
+export const analyzeKeywordDensity = (
+  projectId: string,
+  slug: string,
+  targetKeyword: string,
+): Promise<KeywordDensityReport> =>
+  invoke('analyze_keyword_density', { projectId, slug, targetKeyword })

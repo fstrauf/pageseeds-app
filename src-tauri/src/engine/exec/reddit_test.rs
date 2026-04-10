@@ -202,9 +202,7 @@ mod tests {
             automation.join("reddit_config.md"),
             r#"# Reddit Config: Test Product
 
-## Product Information
-- **Product Name**: TestProduct
-- **Description**: A test product for automation
+> Full project context: see `project.md` in this directory
 
 ## Mention Stance
 **RECOMMENDED** - Include product name when it adds value naturally
@@ -224,16 +222,33 @@ mod tests {
 "#
         ).unwrap();
         
-        // Create project_summary.md
+        // Create consolidated project.md (replaces project_summary.md + brandvoice.md)
         std::fs::write(
-            automation.join("project_summary.md"),
-            "# Test Product\n\nA test product for Reddit automation testing."
-        ).unwrap();
-        
-        // Create brandvoice.md
-        std::fs::write(
-            automation.join("brandvoice.md"),
-            "# Brand Voice\n\nHelpful, technical, and concise."
+            automation.join("project.md"),
+            r#"# Test Product
+
+## Identity
+
+- **URL:** https://example.com
+- **Description:** A test product for Reddit automation testing.
+
+### Key Differentiators
+- Fast and reliable automation
+- Developer-friendly API
+
+### Search Keywords
+- "test automation"
+- "developer tools"
+
+## Brand Voice
+
+Helpful, technical, and concise.
+
+## Content Clusters & Status
+
+- [ ] 🎯 Test Automation Basics (PLANNED)
+- [ ] 🎯 Developer Productivity (PLANNED)
+"#
         ).unwrap();
         
         // Create _reply_guardrails.md

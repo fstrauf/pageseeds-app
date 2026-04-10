@@ -241,3 +241,87 @@ pub fn get_keyword_coverage(
         "coverage": coverage,
     }))
 }
+
+#[tauri::command]
+pub fn analyze_article_readability(
+    state: State<'_, AppState>,
+    project_id: String,
+    slug: String,
+) -> Result<crate::content::readability::ReadabilityReport, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::PathBuf::from(&project.path);
+    let resolution = crate::content::locator::resolve(&repo_root, project.content_dir.as_deref());
+    let content_dir = resolution
+        .selected
+        .ok_or_else(|| "Content directory not found".to_string())?;
+    
+    // Find the article file by slug
+    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    let article = articles
+        .iter()
+        .find(|a| a.url_slug == slug)
+        .ok_or_else(|| format!("Article with slug '{}' not found", slug))?;
+    
+    // Read the article file
+    let file_path = content_dir.join(&article.file);
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read article file: {}", e))?;
+    
+    // Clean the content for readability analysis
+    let cleaned = crate::content::readability::clean_mdx_for_readability(&content);
+    
+    // Analyze readability
+    crate::content::readability::analyze_readability(&cleaned)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn compare_competitor_content(
+    _state: State<'_, AppState>,
+    keyword: String,
+    competitor_urls: Vec<String>,
+    user_url: Option<String>,
+) -> Result<crate::content::competitor::WordCountComparison, String> {
+    crate::content::competitor::compare_word_counts(
+        &keyword,
+        &competitor_urls,
+        user_url.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn analyze_keyword_density(
+    state: State<'_, AppState>,
+    project_id: String,
+    slug: String,
+    target_keyword: String,
+) -> Result<crate::content::keyword_density::KeywordDensityReport, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::PathBuf::from(&project.path);
+    let resolution = crate::content::locator::resolve(&repo_root, project.content_dir.as_deref());
+    let content_dir = resolution
+        .selected
+        .ok_or_else(|| "Content directory not found".to_string())?;
+    
+    // Find the article file by slug
+    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    let article = articles
+        .iter()
+        .find(|a| a.url_slug == slug)
+        .ok_or_else(|| format!("Article with slug '{}' not found", slug))?;
+    
+    // Read the article file
+    let file_path = content_dir.join(&article.file);
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read article file: {}", e))?;
+    
+    // Strip frontmatter to get body content
+    let (_, body) = crate::engine::exec::utils::parse_frontmatter(&content);
+    
+    // Analyze keyword density
+    Ok(crate::content::keyword_density::analyze_keyword_density(&body, &target_keyword))
+}

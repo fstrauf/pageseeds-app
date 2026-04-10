@@ -51,28 +51,55 @@ pub struct RedditProjectConfig {
 
 // ─── Required config files ────────────────────────────────────────────────────
 
-/// The four config files required to run Reddit opportunity search.
+/// The config files required to run Reddit opportunity search.
+/// Uses consolidated project.md (primary) with fallback to legacy files.
 pub fn required_config_files(automation_dir: &Path) -> Vec<std::path::PathBuf> {
     vec![
-        automation_dir.join("project_summary.md"),
+        automation_dir.join("project.md"), // consolidated
         automation_dir.join("reddit_config.md"),
-        automation_dir.join("brandvoice.md"),
         automation_dir.join("reddit").join("_reply_guardrails.md"),
     ]
 }
 
 /// Returns names of any missing required config files.
+/// If project.md is missing, checks for legacy files before reporting missing.
 pub fn missing_config_files(automation_dir: &Path) -> Vec<String> {
-    required_config_files(automation_dir)
-        .into_iter()
-        .filter(|p| !p.exists())
-        .map(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string()
-        })
-        .collect()
+    let mut missing = Vec::new();
+
+    // Check for consolidated project.md first
+    let project_md = automation_dir.join("project.md");
+    let has_project_md = project_md.exists();
+
+    // If no project.md, check for legacy files as fallback
+    if !has_project_md {
+        let legacy_files = [
+            automation_dir.join("project_summary.md"),
+            automation_dir.join("brandvoice.md"),
+        ];
+        let has_legacy = legacy_files.iter().any(|p| p.exists());
+
+        if !has_legacy {
+            // Neither consolidated nor legacy files exist
+            missing.push("project.md (or legacy project_summary.md + brandvoice.md)".to_string());
+        }
+    }
+
+    // Check other required files
+    for path in [
+        automation_dir.join("reddit_config.md"),
+        automation_dir.join("reddit").join("_reply_guardrails.md"),
+    ] {
+        if !path.exists() {
+            missing.push(
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+            );
+        }
+    }
+
+    missing
 }
 
 // ─── Parser ───────────────────────────────────────────────────────────────────

@@ -127,6 +127,12 @@ pub(crate) fn audit_one_article(
     
     let quality_rating = crate::engine::exec::quality_rater::rate_content(&content_to_analyze);
 
+    // NEW: Run readability analysis
+    let cleaned_body = crate::content::readability::clean_mdx_for_readability(&body);
+    let readability = crate::content::readability::analyze_readability(&cleaned_body).ok();
+    let flesch_score = readability.as_ref().map(|r| r.flesch_reading_ease).unwrap_or(0.0);
+    let passive_voice_pct = readability.as_ref().map(|r| r.passive_voice_percentage).unwrap_or(0.0);
+
     let meta_description = fm.get("description").map(String::as_str).unwrap_or("").trim().to_string();
 
     // Parse headings + structure
@@ -199,6 +205,8 @@ pub(crate) fn audit_one_article(
         "broken_links":         serde_json::json!({ "pass": broken_links.is_empty(), "value": broken_links.len(), "issues": broken_links, "label": "No broken/placeholder links" }),
         "gsc_data":             check_pass(Some(!gsc.is_null()), "GSC data synced"),
         "source_file_found":    check_pass(Some(source.is_some()), "Source file readable"),
+        "readability":          check_val(readability.as_ref().map(|_| flesch_score >= 30.0), serde_json::json!(format!("{:.1}", flesch_score)), "Flesch Reading Ease ≥ 30"),
+        "passive_voice":        check_val(readability.as_ref().map(|_| passive_voice_pct <= 20.0), serde_json::json!(format!("{:.1}%", passive_voice_pct)), "Passive voice ≤ 20%"),
     });
 
     // ─── Scoring ─────────────────────────────────────────────────────────────
@@ -207,6 +215,7 @@ pub(crate) fn audit_one_article(
         ("h1_keyword", 10), ("meta_desc_keyword", 10), ("keyword_first_para", 8),
         ("keyword_density", 8), ("meta_desc_present", 7), ("meta_desc_length", 5),
         ("word_count", 5), ("h2_structure", 3), ("internal_links", 3), ("gsc_data", 1),
+        ("readability", 8), ("passive_voice", 5),
     ];
     let penalty: i64 = weights.iter().map(|(k, w)| {
         if checks[k]["pass"].as_bool() == Some(false) { *w } else { 0 }
@@ -266,5 +275,18 @@ pub(crate) fn audit_one_article(
         "quality_critical": quality_rating.critical_issues,
         "quality_warnings": quality_rating.warnings,
         "quality_suggestions": quality_rating.suggestions,
+        // NEW: Readability data
+        "readability": readability.map(|r| serde_json::json!({
+            "flesch_reading_ease": r.flesch_reading_ease,
+            "flesch_kincaid_grade": r.flesch_kincaid_grade,
+            "smog_index": r.smog_index,
+            "coleman_liau_index": r.coleman_liau_index,
+            "automated_readability_index": r.automated_readability_index,
+            "passive_voice_percentage": r.passive_voice_percentage,
+            "sentence_variety_score": r.sentence_variety_score,
+            "avg_sentence_length": r.avg_sentence_length,
+            "cliche_count": r.cliche_count,
+            "filter_word_percentage": r.filter_word_percentage,
+        })),
     })
 }
