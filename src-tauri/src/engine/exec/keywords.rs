@@ -423,30 +423,27 @@ pub(crate) fn exec_keyword_research_native(
         None
     };
 
-    // ── Parse themes from task description ───────────────────────────────────
-    let raw_desc = task.description.as_deref().unwrap_or("");
-    let desc_themes = parse_desc_themes(raw_desc);
-
+    // ── Extract themes from Step 1 (agentic seed extraction) ────────────────
+    // Theme extraction is always agentic — deterministic parsing of free-form
+    // descriptions produces garbage (sentence fragments → bad API queries).
+    // Step 1 (research_seed_extraction) must run first and produce themes.
     let SeedArtifact {
-        themes: agent_themes,
+        themes,
         competitors: agent_competitors,
     } = parse_seed_extraction_artifact(task);
 
-    let themes = if !desc_themes.is_empty() {
-        desc_themes
-    } else if !agent_themes.is_empty() {
-        agent_themes
-    } else {
+    if themes.is_empty() {
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
-                "No keyword themes available. Provide themes in task description or run agentic theme selection first. \
+                "No keyword themes found in seed extraction artifact. \
+                 Step 1 (research_seed_extraction) must run first. \
                  Expected artifact key: research_seed_extraction. Workspace: {}.",
                 paths.automation_dir.display()
             ),
             output: None,
         };
-    };
+    }
 
     log::info!("[keyword_research_native] {} themes: {:?}", themes.len(), themes);
     log::info!("[keyword_research_native] {} competitors: {:?}", agent_competitors.len(), agent_competitors);
@@ -919,6 +916,10 @@ fn clean_theme_str(raw: &str) -> Option<String> {
 /// applying the same cleaning rules as brief parsing.
 ///
 /// Returns an empty vec when the description contains only junk cluster labels.
+///
+/// NOTE: No longer used in production — theme extraction is fully agentic now.
+/// Kept for tests only.
+#[cfg(test)]
 pub(crate) fn parse_desc_themes(raw: &str) -> Vec<String> {
     raw.lines()
         .flat_map(|line| line.split(','))

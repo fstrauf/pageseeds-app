@@ -241,15 +241,29 @@ impl SeoDataProvider for DataForSeoProvider {
         };
 
         // DataForSEO expects a bare JSON array, not wrapped in {"data": [...]}
+        // Server-side filters: volume > 50, KD ≤ 30, no navigational intent,
+        // no "near me" queries.  ignore_synonyms deduplicates word-order
+        // permutations ("coffee roaster" vs "roaster coffee").  depth=3
+        // surfaces deeper long-tail phrases.
         let payload = serde_json::json!([
             {
                 "keyword": keyword,
                 "location_code": location_code.parse::<i64>().unwrap_or(2840),
                 "language_code": "en",
                 "include_seed_keyword": true,
-                "depth": 2,
+                "ignore_synonyms": true,
+                "depth": 3,
                 "limit": 100,
-                "filters": ["keyword_info.search_volume", ">", 50]
+                "filters": [
+                    ["keyword_info.search_volume", ">", 50],
+                    "and",
+                    ["keyword_properties.keyword_difficulty", "<=", 30],
+                    "and",
+                    ["search_intent_info.main_intent", "<>", "navigational"],
+                    "and",
+                    ["keyword", "not_like", "%near me%"]
+                ],
+                "order_by": ["keyword_info.search_volume,desc"]
             }
         ]);
 

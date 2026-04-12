@@ -603,6 +603,17 @@ async fn run_step(
                 output: None,
             })
         }
+        "landing_page_spec_write" => {
+            let task = task.clone();
+            let project_path = project_path.to_string();
+            tokio::task::spawn_blocking(move || {
+                crate::engine::exec::research::exec_landing_page_spec_write(&task, &project_path)
+            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Step panicked: {}", e),
+                output: None,
+            })
+        }
         "reddit_config_parse" => {
             let task = task.clone();
             let project_path = project_path.to_string();

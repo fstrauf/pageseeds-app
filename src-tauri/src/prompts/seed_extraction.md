@@ -10,11 +10,12 @@ Read the full project context and extract:
 
 ## Seed Requirements
 
-- 1-3 words maximum (broad enough to generate ideas)
+- 3-5 words each — specific topical phrases, NOT generic 2-word head terms
+- The keyword suggestion API does substring matching, so each seed must be specific enough to avoid returning brand names, "near me" queries, and word-order noise
 - Cover different angles of the offering
-- Specific enough to be relevant, broad enough to generate variations
-- Include a mix of head terms and question-based seeds
-- Examples of good seeds: "coffee roaster", "budget planner", "options trading", "how to roast coffee"
+- Include a mix of informational and commercial intent seeds
+- BAD seeds (too generic): "coffee roasting", "green beans", "budget planner"
+- GOOD seeds (specific enough): "home coffee roasting equipment", "green coffee beans for roasting", "how to roast coffee beans", "coffee roasting temperature guide", "budget planner for freelancers"
 
 ## Competitor Requirements
 

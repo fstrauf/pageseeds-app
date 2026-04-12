@@ -135,7 +135,7 @@ impl WorkflowHandler for ContentHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
+            "write_article" | "optimize_article" | "create_content" | "optimize_content"
                 | "content_review_apply"
         )
     }
@@ -200,6 +200,7 @@ impl WorkflowHandler for ImplementationHandler {
                 | "content_strategy"
                 | "technical_fix"
                 | "landing_page_spec"
+                | "create_landing_page"
         ) || t.starts_with("fix_")
     }
 
@@ -253,6 +254,12 @@ impl WorkflowHandler for ImplementationHandler {
                 // Skips files that already have a Related Articles section or already link
                 // to the target slug.
                 WorkflowStep::new("cluster_and_link_apply", "cluster_link_apply"),
+            ],
+            "create_landing_page" | "landing_page_spec" => vec![
+                // Deterministic: build a structured spec file from keyword metadata
+                // already on the task. No LLM needed — the spec is a structured template
+                // populated with keyword, page type, intent, volume, and KD.
+                WorkflowStep::new("landing_page_spec_write", "landing_page_spec_write"),
             ],
             // fix_* and other implementation types: agentic for now.
             //
@@ -526,7 +533,7 @@ pub async fn exec_agentic(
 
     let is_content_task = matches!(
         task.task_type.as_str(),
-        "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
+        "write_article" | "optimize_article" | "create_content" | "optimize_content"
     );
 
     let content_context = if is_content_task {

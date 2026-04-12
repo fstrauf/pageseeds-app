@@ -176,6 +176,11 @@ pub fn create_article_tasks_from_keywords(
     let mut created = Vec::new();
 
     let metrics = extract_keyword_metrics(&research_task);
+    let lp_meta = if content_task_type == "create_landing_page" {
+        extract_landing_page_meta(&research_task)
+    } else {
+        std::collections::HashMap::new()
+    };
 
     for (idx, keyword) in requested_keywords.iter().enumerate() {
         let now = chrono::Utc::now().to_rfc3339();
@@ -202,6 +207,21 @@ pub fn create_article_tasks_from_keywords(
             }
             if let Some(vol) = m.volume {
                 description.push_str(&format!("\nVolume: {}", vol));
+            }
+        }
+        // Append landing page metadata so the spec writer can use it.
+        if let Some(lp) = lp_meta.get(&normalize_keyword(keyword)) {
+            if let Some(ref intent) = lp.intent {
+                description.push_str(&format!("\nIntent: {}", intent));
+            }
+            if let Some(ref page_type) = lp.landing_page_type {
+                description.push_str(&format!("\nPage type: {}", page_type));
+            }
+            if let Some(ref proposed_title) = lp.proposed_title {
+                description.push_str(&format!("\nProposed title: {}", proposed_title));
+            }
+            if let Some(ref reason) = lp.opportunity_reason {
+                description.push_str(&format!("\nOpportunity: {}", reason));
             }
         }
 
@@ -499,6 +519,55 @@ fn extract_keyword_metrics(task: &Task) -> std::collections::HashMap<String, Key
         let vol = parse_range_midpoint(&cols[2]);
         let kd = parse_range_midpoint(&cols[3]);
         out.insert(normalize_keyword(&kw), KeywordMetric { difficulty: kd, volume: vol });
+    }
+
+    out
+}
+
+/// Metadata for a landing page candidate from the research output.
+#[derive(Debug, Clone)]
+struct LandingPageCandidateMeta {
+    intent: Option<String>,
+    landing_page_type: Option<String>,
+    proposed_title: Option<String>,
+    opportunity_reason: Option<String>,
+}
+
+/// Extract landing page candidate metadata (intent, page type, proposed title,
+/// opportunity reason) keyed by normalized keyword. Used to enrich the task
+/// description for `create_landing_page` tasks so the spec writer has full context.
+fn extract_landing_page_meta(task: &Task) -> std::collections::HashMap<String, LandingPageCandidateMeta> {
+    use serde_json::Value;
+    let mut out = std::collections::HashMap::new();
+
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "research_final_selection")
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_normalize_stage"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research_agentic"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_analyze"))
+        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research"));
+
+    let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
+        return out;
+    };
+
+    let raw_clean = extract_json_from_markdown(raw);
+    let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
+    if let Some(v) = parsed_json {
+        if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
+            for item in arr {
+                if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
+                    out.insert(normalize_keyword(kw), LandingPageCandidateMeta {
+                        intent: item.get("intent").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                        landing_page_type: item.get("landing_page_type").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                        proposed_title: item.get("proposed_title").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                        opportunity_reason: item.get("opportunity_reason").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                    });
+                }
+            }
+        }
     }
 
     out
