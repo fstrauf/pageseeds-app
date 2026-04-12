@@ -436,7 +436,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
 /// Supported tokens in `cmd`:
 ///   {project_path}   → repo root
 ///   {automation_dir} → repo/.github/automation
-pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str) -> StepResult {
+pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str, _seo_provider: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let automation_dir = paths.automation_dir.to_string_lossy();
 

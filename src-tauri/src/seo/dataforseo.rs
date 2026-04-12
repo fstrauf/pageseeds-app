@@ -51,8 +51,10 @@ impl DataForSeoProvider {
                 .unwrap_or(&empty_vec);
 
             for item in result {
+                // keyword_suggestions returns items at the top level with
+                // seed_keyword_data + items array structure
                 let empty_keywords = vec![];
-                let keywords = item.get("keywords")
+                let keywords = item.get("items")
                     .and_then(|k| k.as_array())
                     .unwrap_or(&empty_keywords);
 
@@ -66,40 +68,56 @@ impl DataForSeoProvider {
                         continue;
                     }
 
-                    let is_question = keyword_text.to_lowercase().starts_with("how ") 
-                        || keyword_text.to_lowercase().starts_with("what ")
-                        || keyword_text.to_lowercase().starts_with("why ")
-                        || keyword_text.to_lowercase().starts_with("when ")
-                        || keyword_text.to_lowercase().starts_with("where ")
-                        || keyword_text.to_lowercase().starts_with("who ")
-                        || keyword_text.to_lowercase().starts_with("can ")
-                        || keyword_text.to_lowercase().starts_with("is ")
-                        || keyword_text.to_lowercase().starts_with("are ")
-                        || keyword_text.to_lowercase().starts_with("does ");
+                    let kw_lower = keyword_text.to_lowercase();
+                    let is_question = kw_lower.starts_with("how ") 
+                        || kw_lower.starts_with("what ")
+                        || kw_lower.starts_with("why ")
+                        || kw_lower.starts_with("when ")
+                        || kw_lower.starts_with("where ")
+                        || kw_lower.starts_with("who ")
+                        || kw_lower.starts_with("can ")
+                        || kw_lower.starts_with("is ")
+                        || kw_lower.starts_with("are ")
+                        || kw_lower.starts_with("does ");
 
-                    let search_volume = kw.get("search_volume")
+                    // keyword_info sub-object contains volume, cpc, competition
+                    let keyword_info = kw.get("keyword_info");
+                    let search_volume = keyword_info
+                        .and_then(|ki| ki.get("search_volume"))
                         .and_then(|v| v.as_i64());
 
-                    let cpc = kw.get("cpc")
+                    let cpc = keyword_info
+                        .and_then(|ki| ki.get("cpc"))
                         .and_then(|v| v.as_f64());
 
-                    let competition = kw.get("competition")
+                    let competition = keyword_info
+                        .and_then(|ki| ki.get("competition"))
                         .and_then(|v| v.as_f64());
 
-                    // Get difficulty label from competition_index if available
-                    let competition_index = kw.get("competition_index")
+                    // keyword_properties.keyword_difficulty is the 0-100 KD score
+                    let kd = kw.get("keyword_properties")
+                        .and_then(|kp| kp.get("keyword_difficulty"))
                         .and_then(|v| v.as_f64());
 
-                    let difficulty_label = competition_index.map(|idx| {
-                        if idx < 20.0 { "Low".to_string() }
-                        else if idx < 50.0 { "Medium".to_string() }
+                    let difficulty_label = kd.map(|d| {
+                        if d < 15.0 { "Easy".to_string() }
+                        else if d < 30.0 { "Low".to_string() }
+                        else if d < 50.0 { "Medium".to_string() }
                         else { "Hard".to_string() }
                     });
+
+                    // search_intent_info.main_intent
+                    let intent = kw.get("search_intent_info")
+                        .and_then(|si| si.get("main_intent"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
 
                     let idea = KeywordIdea {
                         keyword: keyword_text,
                         idea_type: if is_question { "question".to_string() } else { "regular".to_string() },
                         difficulty: difficulty_label,
+                        kd,
+                        intent,
                         volume: search_volume.map(|v| format!("{}", v)),
                         volume_exact: search_volume,
                         cpc,
@@ -222,17 +240,18 @@ impl SeoDataProvider for DataForSeoProvider {
             _ => "google",
         };
 
-        let payload = serde_json::json!({
-            "data": [
-                {
-                    "keyword": keyword,
-                    "location_code": location_code.parse::<i64>().unwrap_or(2840),
-                    "language_code": "en",
-                    "search_engine": se_code,
-                    "depth": 100
-                }
-            ]
-        });
+        // DataForSEO expects a bare JSON array, not wrapped in {"data": [...]}
+        let payload = serde_json::json!([
+            {
+                "keyword": keyword,
+                "location_code": location_code.parse::<i64>().unwrap_or(2840),
+                "language_code": "en",
+                "include_seed_keyword": true,
+                "depth": 2,
+                "limit": 100,
+                "filters": ["keyword_info.search_volume", ">", 50]
+            }
+        ]);
 
         let resp = self.client
             .post(self.api_url("/v3/dataforseo_labs/google/keyword_suggestions/live"))
@@ -282,15 +301,13 @@ impl SeoDataProvider for DataForSeoProvider {
             _ => "2840", // Default to US
         };
 
-        let payload = serde_json::json!({
-            "data": [
-                {
-                    "keyword": keyword,
-                    "location_code": location_code.parse::<i64>().unwrap_or(2840),
-                    "language_code": "en"
-                }
-            ]
-        });
+        let payload = serde_json::json!([
+            {
+                "keywords": [keyword],
+                "location_code": location_code.parse::<i64>().unwrap_or(2840),
+                "language_code": "en"
+            }
+        ]);
 
         let resp = self.client
             .post(self.api_url("/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"))
@@ -352,21 +369,18 @@ impl SeoDataProvider for DataForSeoProvider {
         let mut results = Vec::with_capacity(keywords.len());
 
         for chunk in keywords.chunks(1000) {
-            let payload_data: Vec<_> = chunk.iter().map(|kw| {
-                serde_json::json!({
-                    "keyword": kw,
-                    "location_code": location_code,
-                    "language_code": "en"
-                })
-            }).collect();
-
-            let payload = serde_json::json!({ "data": payload_data });
+            let kw_list: Vec<&str> = chunk.iter().map(|s| s.as_str()).collect();
+            let payload_data = serde_json::json!([{
+                "keywords": kw_list,
+                "location_code": location_code,
+                "language_code": "en"
+            }]);
 
             let resp = self.client
                 .post(self.api_url("/v3/dataforseo_labs/google/bulk_keyword_difficulty/live"))
                 .header("Authorization", self.auth_header())
                 .header("Content-Type", "application/json")
-                .json(&payload)
+                .json(&payload_data)
                 .send()
                 .await
                 .map_err(Error::Http)?;

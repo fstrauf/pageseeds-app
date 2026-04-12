@@ -23,6 +23,8 @@ pub struct KeywordIdea {
     pub keyword: String,
     pub idea_type: String, // "regular" | "question"
     pub difficulty: Option<String>,
+    pub kd: Option<f64>,              // NEW: numeric KD 0-100 (DataForSEO)
+    pub intent: Option<String>,       // NEW: search intent (DataForSEO)
     pub volume: Option<String>,       // categorical (Ahrefs) — keep for backward compat
     pub volume_exact: Option<i64>,    // NEW: precise number (DataForSEO)
     pub cpc: Option<f64>,             // NEW: cost per click (DataForSEO)
@@ -325,6 +327,8 @@ fn normalise_idea(raw: &Value, idea_type: &str) -> Option<KeywordIdea> {
         keyword,
         idea_type: idea_type.to_string(),
         difficulty,
+        kd: None,
+        intent: None,
         volume,
         volume_exact,
         cpc,

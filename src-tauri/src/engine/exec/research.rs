@@ -231,18 +231,22 @@ pub fn select_keywords_deterministic(
     let pipeline: KeywordPipelineOutput = serde_json::from_str(pipeline_json)
         .map_err(|e| format!("Failed to parse pipeline output: {}", e))?;
 
-    let target_kd = 10i64;
+    let target_kd = 30i64; // 0-100 scale (DataForSEO/Ahrefs unified)
     let max_results = 10usize;
     let total_candidates = pipeline.keywords.len();
 
-    // Filter to keywords with data and acceptable KD
+    // Filter to keywords with data, acceptable KD, and non-navigational intent
     let mut candidates: Vec<_> = pipeline
         .keywords
         .into_iter()
         .filter(|k| {
             let has_data = k.has_data.unwrap_or(false);
             let kd_ok = k.kd.map(|d| d as i64 <= target_kd).unwrap_or(false);
-            has_data && kd_ok
+            // Reject navigational intent (brand searches like "nike air force 1")
+            let intent_ok = k.intent.as_deref()
+                .map(|i| !i.eq_ignore_ascii_case("navigational"))
+                .unwrap_or(true);
+            has_data && kd_ok && intent_ok
         })
         .collect();
 

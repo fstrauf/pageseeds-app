@@ -12,10 +12,10 @@ pub fn upsert_opportunity(conn: &Connection, opp: &RedditOpportunity) -> Result<
         r#"INSERT INTO reddit_opportunities (
             post_id, title, url, subreddit, author, posted_date, upvotes, comment_count,
             relevance_score, engagement_score, accessibility_score, final_score,
-            severity, why_relevant, key_pain_points, website_fit, mention_stance,
+            severity, why_relevant, key_pain_points, website_fit, mention_stance, product_name,
             reply_status, reply_text, reply_url, reply_upvotes, reply_replies, posted_at,
             project_id, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)
         ON CONFLICT(post_id) DO UPDATE SET
             title               = excluded.title,
             url                 = excluded.url,
@@ -32,13 +32,14 @@ pub fn upsert_opportunity(conn: &Connection, opp: &RedditOpportunity) -> Result<
             key_pain_points     = excluded.key_pain_points,
             website_fit         = excluded.website_fit,
             mention_stance      = excluded.mention_stance,
+            product_name        = excluded.product_name,
             reply_text          = excluded.reply_text,
             updated_at          = excluded.updated_at"#,
         params![
             opp.post_id, opp.title, opp.url, opp.subreddit, opp.author,
             opp.posted_date, opp.upvotes, opp.comment_count,
             opp.relevance_score, opp.engagement_score, opp.accessibility_score, opp.final_score,
-            opp.severity, opp.why_relevant, pain_points_json, opp.website_fit, opp.mention_stance,
+            opp.severity, opp.why_relevant, pain_points_json, opp.website_fit, opp.mention_stance, opp.product_name,
             opp.reply_status, opp.reply_text, opp.reply_url,
             opp.reply_upvotes, opp.reply_replies, opp.posted_at,
             opp.project_id, now.clone(), now,
@@ -222,6 +223,7 @@ pub fn migrate_from_client_ops(
                 .unwrap_or_default(),
             website_fit: r.15,
             mention_stance: None,
+            product_name: None,
             reply_status: r.16.unwrap_or_else(|| "pending".to_string()),
             reply_text: r.17, reply_url: r.18,
             reply_upvotes: r.19, reply_replies: r.20, posted_at: r.21,
@@ -263,6 +265,7 @@ fn row_to_opportunity(row: &rusqlite::Row<'_>) -> rusqlite::Result<RedditOpportu
         key_pain_points,
         website_fit: row.get("website_fit")?,
         mention_stance: row.get("mention_stance").unwrap_or(None),
+        product_name: row.get("product_name").unwrap_or(None),
         reply_status: row.get("reply_status")?,
         reply_text: row.get("reply_text")?,
         reply_url: row.get("reply_url")?,

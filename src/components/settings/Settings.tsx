@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText, Globe } from 'lucide-react'
 import { LogViewer } from './LogViewer'
-import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus, getSeoProvider, setSeoProvider } from '../../lib/tauri'
+import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus, getSeoProvider, setSeoProvider, getGlobalAgentProvider } from '../../lib/tauri'
 import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus, SeoProvider } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -34,10 +34,10 @@ export function Settings({ projectId }: SettingsProps) {
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null)
   const [agentLoading, setAgentLoading] = useState(false)
   const [agentSaving, setAgentSaving] = useState(false)
-  const [selectedProvider, setSelectedProvider] = useState<string>('copilot')
+  const [selectedProvider, setSelectedProvider] = useState<string>('kimi')
   const [agentSaved, setAgentSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const hasUnsavedProviderChange = useRef(false)
+  const [hasUnsavedProviderChange, setHasUnsavedProviderChange] = useState(false)
 
   const [configFiles, setConfigFiles] = useState<ProjectConfigFileStatus[]>([])
   const [configLoading, setConfigLoading] = useState(false)
@@ -81,38 +81,38 @@ export function Settings({ projectId }: SettingsProps) {
     }
   }, [projectId])
 
-  const loadAgentStatus = useCallback(async () => {
-    if (!projectId) return
+  const loadAgentStatus = useCallback(async (force = false) => {
     setAgentLoading(true)
     try {
-      const status = await checkAgentStatus(projectId)
+      const status = await checkAgentStatus()
       setAgentStatus(status)
-      // Only update selected provider if user hasn't made unsaved changes
-      if (!hasUnsavedProviderChange.current) {
+      // Only update selected provider if user hasn't made unsaved changes (unless forced)
+      if (force || !hasUnsavedProviderChange) {
         setSelectedProvider(status.configured_provider)
       }
-    } catch {
-      // agent check is best-effort
+    } catch (e) {
+      console.error('[Settings] Failed to load agent status:', e)
     } finally {
       setAgentLoading(false)
     }
-  }, [projectId])
+  }, [hasUnsavedProviderChange])
 
   const saveProvider = useCallback(async () => {
-    if (!projectId) return
     setAgentSaving(true)
     setSaveError(null)
     try {
-      await setAgentProvider(projectId, selectedProvider)
+      await setAgentProvider(selectedProvider)
       setAgentSaved(true)
-      hasUnsavedProviderChange.current = false
+      setHasUnsavedProviderChange(false)
+      // Reload to verify the save persisted (force refresh)
+      await loadAgentStatus(true)
       setTimeout(() => setAgentSaved(false), 2000)
     } catch (e) {
       setSaveError(String(e))
     } finally {
       setAgentSaving(false)
     }
-  }, [projectId, selectedProvider])
+  }, [selectedProvider, loadAgentStatus])
 
   // Load SEO provider
   const loadSeoProvider = useCallback(async () => {
@@ -137,22 +137,29 @@ export function Settings({ projectId }: SettingsProps) {
     try {
       await setSeoProvider(projectId, seoProvider)
       setSeoSaved(true)
+      // Reload to verify the save persisted
+      await loadSeoProvider()
       setTimeout(() => setSeoSaved(false), 2000)
     } catch (e) {
       setSeoError(String(e))
     } finally {
       setSeoSaving(false)
     }
-  }, [projectId, seoProvider])
+  }, [projectId, seoProvider, loadSeoProvider])
 
+  // Load global settings once on mount
+  useEffect(() => {
+    loadAgentStatus()
+  }, [])
+
+  // Load project-specific settings when project changes
   useEffect(() => {
     // Reset unsaved change tracking when project changes
-    hasUnsavedProviderChange.current = false
+    setHasUnsavedProviderChange(false)
     load()
     loadConfigFiles()
-    loadAgentStatus()
     loadSeoProvider()
-  }, [load, loadConfigFiles, loadAgentStatus, loadSeoProvider, projectId])
+  }, [load, loadConfigFiles, loadSeoProvider, projectId])
 
   const copyPath = useCallback(async () => {
     if (!secretsPath) return
@@ -534,7 +541,7 @@ export function Settings({ projectId }: SettingsProps) {
                         value={selectedProvider}
                         onChange={e => {
                           setSelectedProvider(e.target.value)
-                          hasUnsavedProviderChange.current = true
+                          setHasUnsavedProviderChange(true)
                         }}
                         className="flex-1 text-sm bg-secondary border border-border rounded-md px-3 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                       >

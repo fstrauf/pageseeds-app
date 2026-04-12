@@ -95,12 +95,23 @@ pub async fn execute_task_with_token(
         task_store::update_task_status(conn, task_id, TaskStatus::InProgress).map_err(|e| e.to_string())?;
     }
 
-    let (project_path, site_url, agent_provider) = {
+    let (project_path, site_url, agent_provider, seo_provider) = {
+        use crate::db::global_settings;
         let project = task_store::get_project(conn, &task.project_id).map_err(|e| e.to_string())?;
+        
+        // Agent provider is now global (user preference), but check for legacy project-specific setting
+        let agent_provider = if let Some(legacy) = &project.agent_provider {
+            log::debug!("[executor] Using legacy project agent_provider: {}", legacy);
+            legacy.clone()
+        } else {
+            global_settings::get_agent_provider(conn)
+        };
+        
         (
             project.path.clone(),
             project.site_url.clone().unwrap_or_default(),
-            project.agent_provider.clone().unwrap_or_else(|| "copilot".to_string()),
+            agent_provider,
+            project.seo_provider.clone().unwrap_or_else(|| "ahrefs".to_string()),
         )
     };
 
@@ -158,6 +169,7 @@ pub async fn execute_task_with_token(
             &project_path,
             &site_url,
             &agent_provider,
+            &seo_provider,
             latest_raw_output.as_deref(),
             gsc_token,
             conn,
@@ -244,7 +256,7 @@ pub async fn execute_task_with_token(
                 ).unwrap_or(0);
                 if pending == 0 { break; }
                 log::info!("[reddit_enrich] {} posts still pending enrichment — running batch", pending);
-                crate::engine::exec::reddit::exec_reddit_enrich(conn, &task.project_id, &project_path, &agent_provider);
+                crate::engine::exec::reddit::exec_reddit_enrich(conn, &task, &project_path, &agent_provider);
             }
             progress[i].message = "Reddit enrichment complete".to_string();
         }
@@ -482,12 +494,13 @@ async fn run_step(
     project_path: &str,
     site_url: &str,
     agent_provider: &str,
+    seo_provider: &str,
     latest_raw: Option<&str>,
     gsc_token: Option<&str>,
     conn: &Connection,
 ) -> crate::engine::workflows::StepResult {
     match step.kind.as_str() {
-        "deterministic" => exec_deterministic(step, task, project_path).await,
+        "deterministic" => exec_deterministic(step, task, project_path, seo_provider).await,
         "agentic" => exec_agentic(step, task, project_path, site_url, agent_provider, latest_raw).await,
         "manual" => crate::engine::workflows::StepResult {
             success: true,
@@ -560,8 +573,9 @@ async fn run_step(
         "keyword_research_native" => {
             let task = task.clone();
             let project_path = project_path.to_string();
+            let seo_provider = seo_provider.to_string();
             tokio::task::spawn_blocking(move || {
-                crate::engine::exec::keywords::exec_keyword_research_native(&task, &project_path)
+                crate::engine::exec::keywords::exec_keyword_research_native(&task, &project_path, &seo_provider)
             }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
                 success: false,
                 message: format!("Step panicked: {}", e),

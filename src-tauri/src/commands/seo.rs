@@ -119,7 +119,9 @@ pub async fn set_seo_provider(
     state: State<'_, AppState>,
     project_id: String,
     provider: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
+    log::info!("[set_seo_provider] Saving provider '{}' for project '{}'", provider, project_id);
+    
     let mut db = state.db.lock().map_err(|e| e.to_string())?;
     let mut project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     
@@ -130,8 +132,29 @@ pub async fn set_seo_provider(
     };
     
     project.seo_provider = Some(valid_provider.to_string());
-    task_store::update_project(&mut db, &project).map_err(|e| e.to_string())?;
-    Ok(())
+    task_store::update_project(&mut db, &project).map_err(|e| {
+        log::error!("[set_seo_provider] Database error: {}", e);
+        e.to_string()
+    })?;
+    
+    // Verify the update was persisted
+    let saved_project = task_store::get_project(&db, &project_id).map_err(|e| {
+        log::error!("[set_seo_provider] Failed to verify save: {}", e);
+        e.to_string()
+    })?;
+    
+    let saved_provider = saved_project.seo_provider.unwrap_or_default();
+    if saved_provider != valid_provider {
+        log::error!(
+            "[set_seo_provider] Verification failed: expected '{}', got '{}'",
+            valid_provider, saved_provider
+        );
+        return Err(format!("Verification failed: expected '{}', got '{}'", valid_provider, saved_provider));
+    }
+    
+    log::info!("[set_seo_provider] Successfully saved provider '{}' for project '{}'", 
+        valid_provider, project_id);
+    Ok(valid_provider.to_string())
 }
 
 #[tauri::command]

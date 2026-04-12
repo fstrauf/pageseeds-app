@@ -204,10 +204,18 @@ pub fn resolve_year_mismatch_agent(
     title_year: i32,
     publish_year: i32,
 ) -> Result<crate::content::publish::YearMismatchResolution, String> {
+    use crate::db::global_settings;
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::PathBuf::from(&project.path);
-    let provider = project.agent_provider.as_deref().unwrap_or("copilot");
+    
+    // Agent provider is global (user preference), check for legacy project setting
+    let provider = if let Some(legacy) = &project.agent_provider {
+        legacy.as_str()
+    } else {
+        &global_settings::get_agent_provider(&db)
+    };
+    
     let all_articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
     crate::content::publish::resolve_year_mismatch_with_agent(
         provider,

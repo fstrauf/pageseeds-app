@@ -39,6 +39,8 @@ pub struct RedditOpportunity {
     pub website_fit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mention_stance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_name: Option<String>,
     pub reply_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_text: Option<String>,

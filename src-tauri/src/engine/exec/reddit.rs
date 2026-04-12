@@ -634,6 +634,7 @@ pub(crate) fn persist_reddit_opportunities(conn: &Connection, project_id: &str, 
                 .unwrap_or_default(),
             website_fit: item.get("website_fit").and_then(|v| v.as_str()).map(str::to_string),
             mention_stance: item.get("mention_stance").and_then(|v| v.as_str()).map(str::to_string),
+            product_name: None, // Will be set during enrichment from artifact
             reply_status: item.get("reply_status").and_then(|v| v.as_str()).unwrap_or("pending").to_string(),
             reply_text: item.get("reply_text").and_then(|v| v.as_str()).map(str::to_string),
             reply_url: item.get("reply_url").and_then(|v| v.as_str()).map(str::to_string),
@@ -663,15 +664,20 @@ pub(crate) fn persist_reddit_opportunities(conn: &Connection, project_id: &str, 
 /// and draft `reply_text`, and recalculates `relevance_score` / `final_score`.
 ///
 /// Fetches up to 5 un-enriched posts per call; silently returns if none pending.
+///
+/// Reads product_name and mention_stance from the reddit_config_parse_stage artifact
+/// (produced by the agentic config parse step). Falls back to deterministic parsing
+/// only if no artifact is found.
 pub fn exec_reddit_enrich(
     conn: &Connection,
-    project_id: &str,
+    task: &Task,
     project_path: &str,
     agent_provider: &str,
 ) {
     use crate::engine::agent;
     use std::path::Path;
 
+    let project_id = &task.project_id;
     log::info!("[reddit_enrich] starting for project={}", project_id);
 
     let rows: Vec<(String, Option<String>, Option<String>, Option<f64>, Option<f64>)> = {
@@ -732,24 +738,43 @@ pub fn exec_reddit_enrich(
         return;
     }
 
-    let cfg = crate::reddit::config::parse_reddit_config(&reddit_config_raw);
-    let product_name = cfg.product_name.as_deref().unwrap_or("the product").to_string();
-    let mention_stance_str = cfg.mention_stance.as_str().to_string();
-    let stance_instruction = match cfg.mention_stance {
-        crate::reddit::config::MentionStance::Required => format!(
+    // Try to load structured params from the artifact (produced by reddit_config_parse_stage)
+    let (product_name, mention_stance_str) = match load_search_params_from_artifact(task, project_path) {
+        Some(params) => {
+            let name = params.product_name.unwrap_or_else(|| "the product".to_string());
+            let stance = params.mention_stance.to_uppercase();
+            log::info!("[reddit_enrich] using artifact params: product_name='{}', stance='{}'", name, stance);
+            (name, stance)
+        }
+        None => {
+            // Fallback: deterministic parse from reddit_config.md
+            log::info!("[reddit_enrich] no artifact found, falling back to deterministic parse");
+            let cfg = crate::reddit::config::parse_reddit_config(&reddit_config_raw);
+            let name = cfg.product_name.unwrap_or_else(|| "the product".to_string());
+            let stance = cfg.mention_stance.as_str().to_string();
+            (name, stance)
+        }
+    };
+
+    let stance_instruction = match mention_stance_str.as_str() {
+        "REQUIRED" => format!(
             "REQUIRED: The reply MUST contain the exact product name \"{}\" — no vague substitutes.",
             product_name
         ),
-        crate::reddit::config::MentionStance::Recommended => format!(
+        "RECOMMENDED" => format!(
             "RECOMMENDED: Mention \"{}\" by name if the topic is a natural fit.",
             product_name
         ),
-        crate::reddit::config::MentionStance::Optional => format!(
+        "OPTIONAL" => format!(
             "OPTIONAL: You may mention \"{}\" if it fits naturally.",
             product_name
         ),
-        crate::reddit::config::MentionStance::Omit =>
+        "OMIT" =>
             "OMIT: Do NOT mention any product name in this reply.".to_string(),
+        _ => format!(
+            "OPTIONAL: You may mention \"{}\" if it fits naturally.",
+            product_name
+        ),
     };
 
     let posts_block: String = rows.iter().enumerate().map(|(i, (pid, title, sub, _, _))| {
@@ -864,13 +889,14 @@ Return ONLY the raw JSON array."#,
         match conn.execute(
             "UPDATE reddit_opportunities \
              SET relevance_score=?1, why_relevant=?2, key_pain_points=?3, website_fit=?4, \
-                 final_score=?5, severity=?6, reply_text=?7, mention_stance=?8, updated_at=?9 \
-             WHERE post_id=?10 AND project_id=?11",
+                 final_score=?5, severity=?6, reply_text=?7, mention_stance=?8, product_name=?9, updated_at=?10 \
+             WHERE post_id=?11 AND project_id=?12",
             rusqlite::params![
                 relevance_score, why_relevant, pain_points_json, website_fit,
                 final_score, severity,
                 if reply_text.is_empty() { None } else { Some(reply_text) },
                 &mention_stance_str,
+                &product_name,
                 now, post_id, project_id
             ],
         ) {
@@ -899,7 +925,7 @@ pub fn exec_reddit_fetch_results(
     match conn.prepare(
         "SELECT post_id, title, url, subreddit, author, posted_date, upvotes, comment_count,
                 relevance_score, engagement_score, accessibility_score, final_score, severity,
-                why_relevant, key_pain_points, website_fit, mention_stance, reply_status,
+                why_relevant, key_pain_points, website_fit, mention_stance, product_name, reply_status,
                 reply_text, reply_url, reply_upvotes, reply_replies, posted_at,
                 project_id, created_at, updated_at
          FROM reddit_opportunities
@@ -930,15 +956,16 @@ pub fn exec_reddit_fetch_results(
                     key_pain_points: pain_points,
                     website_fit: row.get(15).ok(),
                     mention_stance: row.get(16).ok(),
-                    reply_status: row.get(17).unwrap_or_else(|_| "pending".to_string()),
-                    reply_text: row.get(18).ok(),
-                    reply_url: row.get(19).ok(),
-                    reply_upvotes: row.get(20).ok(),
-                    reply_replies: row.get(21).ok(),
-                    posted_at: row.get(22).ok(),
-                    project_id: row.get(23)?,
-                    created_at: row.get(24)?,
-                    updated_at: row.get(25)?,
+                    product_name: row.get(17).ok(),
+                    reply_status: row.get(18).unwrap_or_else(|_| "pending".to_string()),
+                    reply_text: row.get(19).ok(),
+                    reply_url: row.get(20).ok(),
+                    reply_upvotes: row.get(21).ok(),
+                    reply_replies: row.get(22).ok(),
+                    posted_at: row.get(23).ok(),
+                    project_id: row.get(24)?,
+                    created_at: row.get(25)?,
+                    updated_at: row.get(26)?,
                 })
             }) {
                 Ok(rows) => {

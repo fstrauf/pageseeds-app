@@ -41,7 +41,7 @@ pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
         "collect_gsc" => ExecutionMode::Automatic,
         "indexing_diagnostics" => ExecutionMode::Automatic,
         "reddit_search" => ExecutionMode::Batchable,
-        "research_keywords" | "custom_keyword_research" | "research_landing_pages" => ExecutionMode::Batchable,
+        "research_keywords" | "custom_keyword_research" | "research_landing_pages" => ExecutionMode::Manual,
         "write_article" | "optimize_article" | "create_landing_page" => ExecutionMode::Spec,
         "reddit_reply" => ExecutionMode::Manual,
         _ => ExecutionMode::Manual,

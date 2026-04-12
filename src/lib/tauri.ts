@@ -384,7 +384,7 @@ export const seoBatchKeywordDifficulty = (
 export const getSeoProvider = (projectId: string): Promise<string> =>
   invoke('get_seo_provider', { projectId })
 
-export const setSeoProvider = (projectId: string, provider: string): Promise<void> =>
+export const setSeoProvider = (projectId: string, provider: string): Promise<string> =>
   invoke('set_seo_provider', { projectId, provider })
 
 // ─── Phase 6: Workflow Engine + Batch + Scheduler + Ledger ───────────────────
@@ -502,11 +502,17 @@ export const normalizeOutput = (raw: string): Promise<NormalizedArtifact> =>
 export const listTaskArtifacts = (taskId: string): Promise<TaskArtifact[]> =>
   invoke('list_task_artifacts', { taskId })
 
-export const checkAgentStatus = (projectId: string): Promise<AgentStatus> =>
-  invoke('check_agent_status', { projectId })
+export const checkAgentStatus = (): Promise<AgentStatus> =>
+  invoke('check_agent_status')
 
-export const setAgentProvider = (projectId: string, provider: string): Promise<void> =>
-  invoke('set_agent_provider', { projectId, provider })
+export const setAgentProvider = (provider: string): Promise<string> =>
+  invoke('set_agent_provider', { provider })
+
+export const getGlobalAgentProvider = (): Promise<string> =>
+  invoke('get_global_agent_provider')
+
+export const getGlobalSettings = (): Promise<Array<{ key: string; value: string }>> =>
+  invoke('get_global_settings')
 
 export const getLogFilePath = (): Promise<string> =>
   invoke('get_log_file_path')
