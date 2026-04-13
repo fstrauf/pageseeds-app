@@ -141,6 +141,7 @@ pub fn run() {
             commands::check_project_setup,
             commands::get_project_config_files_status,
             commands::init_workspace_config,
+            commands::initialize_project_workspace,
             commands::get_content_health,
             commands::fix_date_mismatches,
             commands::ingest_orphan_articles,

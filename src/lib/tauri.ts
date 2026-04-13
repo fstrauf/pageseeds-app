@@ -627,6 +627,14 @@ export const initWorkspaceConfig = (
 ): Promise<string> =>
   invoke('init_workspace_config', { projectId, contentDir, siteUrl })
 
+/**
+ * Initialize a complete project workspace with all required files.
+ * This creates .github/automation/, seo_workspace.json, and articles.json.
+ * Returns a list of files that were created.
+ */
+export const initializeProjectWorkspace = (projectId: string): Promise<string[]> =>
+  invoke('initialize_project_workspace', { projectId })
+
 /** Read-only check of date consistency between articles.json and frontmatter. */
 export const getContentHealth = (projectId: string): Promise<ContentHealthResult> =>
   invoke('get_content_health', { projectId })

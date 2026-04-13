@@ -78,6 +78,37 @@ pub fn init_workspace_config(
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Initialize a complete project workspace with all required files.
+/// This is called automatically when a project is created or when
+/// the user clicks "Initialize Project" from setup warnings.
+/// 
+/// Creates:
+/// - .github/automation/ directory structure
+/// - seo_workspace.json (with auto-discovered content_dir)
+/// - articles.json (empty)
+/// - project.md (template)
+/// - reddit_config.md (template)
+/// - reddit/_reply_guardrails.md (template)
+/// - artifacts/, task_results/ directories
+/// - Updates .gitignore
+/// 
+/// Returns a list of files that were created.
+#[tauri::command]
+pub fn initialize_project_workspace(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<String>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::Path::new(&project.path);
+    
+    let site_url_hint = project.site_url.as_deref();
+    let project_name = Some(project.name.as_str());
+    
+    crate::engine::setup_check::initialize_project_workspace(repo_root, site_url_hint, project_name)
+        .map_err(|e| e.to_string())
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // GLOBAL AGENT PROVIDER SETTINGS
 // ═══════════════════════════════════════════════════════════════════════════════
