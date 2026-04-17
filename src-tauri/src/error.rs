@@ -12,6 +12,21 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("Image error: {0}")]
     Image(String),
+
+    // Domain-specific variants
+    #[error("Project not found: {0}")]
+    ProjectNotFound(String),
+    #[error("Task not found: {0}")]
+    TaskNotFound(String),
+    #[error("Auth required: {0}")]
+    AuthRequired(String),
+    #[error("Invalid task type: {0}")]
+    InvalidTaskType(String),
+    #[error("Config missing: {0}")]
+    ConfigMissing(String),
+    #[error("Validation error: {0}")]
+    Validation(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -31,4 +46,14 @@ impl Serialize for Error {
     }
 }
 
+/// Every `Error` can be turned into a `String` for Tauri command results.
+impl From<Error> for String {
+    fn from(e: Error) -> Self {
+        e.to_string()
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Convenience alias for Tauri commands that return `Result<T, String>`.
+pub type CmdResult<T> = std::result::Result<T, String>;

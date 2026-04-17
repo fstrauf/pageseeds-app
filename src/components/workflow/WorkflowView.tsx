@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Play, CheckCircle2 } from 'lucide-react'
 import { listTasks } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -15,10 +16,10 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [queuedMsg, setQueuedMsg] = useState<string | null>(null)
   const queue = useQueue()
+  const { showError } = useErrorHandler()
   
   // Listen for queue completion to refresh task list
   const [lastQueueActive, setLastQueueActive] = useState(queue.isActive)
@@ -32,13 +33,12 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
   }, [queue.isActive, lastQueueActive])
 
   async function load() {
-    setError(null)
     try {
       const data = await listTasks(projectId, 'todo')
       setTasks(data)
       setLoaded(true)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     }
   }
 
@@ -48,7 +48,6 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
     if (!task) return
     
     setRunning(true)
-    setError(null)
     setQueuedMsg(null)
     try {
       // Add to queue instead of direct execution
@@ -62,7 +61,7 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
       }])
       setQueuedMsg(`Task added to queue. Check the TaskRunner panel for progress.`)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setRunning(false)
     }
@@ -124,12 +123,6 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
           <Play size={14} className="mr-1.5" />
           {running ? 'Running…' : 'Execute Task'}
         </Button>
-
-        {error && (
-          <div className="rounded border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
 
         {queuedMsg && (
           <div className="rounded border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-foreground">

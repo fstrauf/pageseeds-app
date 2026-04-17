@@ -178,23 +178,15 @@ CREATE INDEX IF NOT EXISTS idx_gsc_url_status_resolved ON gsc_url_indexing_statu
 "#;
 
 static MIGRATION_V11: &str = r#"
--- Skill embeddings for semantic search
-CREATE TABLE IF NOT EXISTS skill_embeddings (
-    skill_name      TEXT PRIMARY KEY,
-    project_id      TEXT NOT NULL,
-    content_hash    TEXT NOT NULL,        -- Hash of content to detect changes
-    embedding       BLOB NOT NULL,        -- Serialized vector
-    model_name      TEXT NOT NULL,        -- E.g., "nomic-embed-text"
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_skill_embeddings_project ON skill_embeddings(project_id);
+-- NO-OP: V11 was an incomplete skill_embeddings migration.
+-- V12 supersedes it with the final schema. This no-op remains so
+-- existing databases that already applied V11 do not re-run it.
 "#;
 
 static MIGRATION_V12: &str = r#"
 -- Skill embeddings for semantic search (Rig.rs integration)
+-- SUPersedes V11: V11 was an incomplete/leftover migration with the same
+-- table name but a slightly different comment. V12 is the canonical schema.
 CREATE TABLE IF NOT EXISTS skill_embeddings (
     skill_name      TEXT PRIMARY KEY,
     project_id      TEXT NOT NULL,

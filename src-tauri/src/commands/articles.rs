@@ -11,7 +11,7 @@ pub fn list_articles(
     project_id: String,
 ) -> Result<Vec<Article>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())
+    Ok(task_store::list_articles(&db, &project_id)?)
 }
 
 #[derive(serde::Serialize)]
@@ -26,16 +26,14 @@ pub fn import_from_repo(
     project_id: String,
 ) -> Result<ImportResult, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id)?;
     let project_path = std::path::PathBuf::from(&project.path);
 
     let tasks_imported =
-        export::read_task_list_from_repo(&db, &project_id, &project_path)
-            .map_err(|e| e.to_string())?;
+        export::read_task_list_from_repo(&db, &project_id, &project_path)?;
 
     let articles_imported =
-        export::read_articles_from_repo(&db, &project_id, &project_path)
-            .map_err(|e| e.to_string())?;
+        export::read_articles_from_repo(&db, &project_id, &project_path)?;
 
     Ok(ImportResult {
         tasks_imported,
@@ -49,7 +47,7 @@ pub fn export_to_repo(
     project_id: String,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    let articles = task_store::list_articles(&db, &project_id)?;
     let report = date_policy::validate_no_future_dates(&articles);
     if !report.is_valid() {
         let detail = report
@@ -65,13 +63,11 @@ pub fn export_to_repo(
             detail
         ));
     }
-    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id)?;
     let project_path = std::path::PathBuf::from(&project.path);
 
-    export::write_task_list_to_repo(&db, &project_id, &project_path)
-        .map_err(|e| e.to_string())?;
-    export::write_articles_to_repo(&db, &project_id, &project_path)
-        .map_err(|e| e.to_string())?;
+    export::write_task_list_to_repo(&db, &project_id, &project_path)?;
+    export::write_articles_to_repo(&db, &project_id, &project_path)?;
 
     Ok(())
 }

@@ -438,6 +438,8 @@ function StepRow({ step }: { step: StepProgress }) {
     step.status === 'skipped' ? '–' :
     step.status === 'running' ? '⟳' : '○'
 
+  const isFailed = step.status === 'failed'
+
   return (
     <div className="flex items-start gap-2 text-xs">
       <span className={cn(
@@ -451,25 +453,36 @@ function StepRow({ step }: { step: StepProgress }) {
         {icon}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2 flex-wrap">
           <span className="font-mono text-foreground">{step.step_name}</span>
           {step.message && (
-            <span className="text-muted-foreground truncate">{step.message}</span>
+            <span className={cn(
+              isFailed ? 'text-red-600 font-medium' : 'text-muted-foreground truncate'
+            )}>
+              {step.message}
+            </span>
           )}
           {step.output && (
             <button
               onClick={() => setDialogOpen(true)}
               className="text-muted-foreground underline underline-offset-2 hover:text-foreground flex-shrink-0"
             >
-              show output
+              {isFailed ? 'show details' : 'show output'}
             </button>
           )}
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className={cn('max-w-2xl', isFailed && 'border-red-200')}>
             <DialogHeader>
-              <DialogTitle className="font-mono text-sm">{step.step_name}</DialogTitle>
+              <DialogTitle className={cn('font-mono text-sm', isFailed && 'text-red-600')}>
+                {step.step_name}{isFailed ? ' — failed' : ''}
+              </DialogTitle>
             </DialogHeader>
+            {isFailed && step.message && (
+              <div className="text-xs text-red-600 font-medium mb-2">
+                {step.message}
+              </div>
+            )}
             <ScrollArea className="h-[60vh] w-full rounded border">
               <pre className="p-3 text-[11px] font-mono whitespace-pre-wrap break-words text-muted-foreground">
                 {step.output}

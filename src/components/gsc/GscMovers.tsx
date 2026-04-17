@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { gscComputeMovers } from '../../lib/tauri'
 import type { MoverMetrics } from '../../lib/types'
 
@@ -27,17 +28,16 @@ export function GscMovers({ siteUrl: defaultSite }: Props) {
 
   const [movers, setMovers] = useState<MoverMetrics[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
 
   async function compute() {
     if (!site) return
     setLoading(true)
-    setError(null)
     try {
       const rows = await gscComputeMovers(site, currStart, currEnd, prevStart, prevEnd, limit)
       setMovers(rows)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -125,8 +125,6 @@ export function GscMovers({ siteUrl: defaultSite }: Props) {
           {loading ? 'Computing…' : 'Compute'}
         </button>
       </div>
-
-      {error && <p className="text-xs text-destructive px-3 py-2">{error}</p>}
 
       {/* Table */}
       <div className="flex-1 overflow-auto">

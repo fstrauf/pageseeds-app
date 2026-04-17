@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { seoGetKeywordIdeas, seoGetKeywordDifficulty, classifySearchIntent, scoreKeywordOpportunities, listArticles } from '../../lib/tauri'
 import type { KeywordIdea, KeywordIdeasResult, KeywordDifficultyResult, SerpEntry, IntentClassification, OpportunityScore, Article } from '../../lib/types'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
@@ -188,7 +189,7 @@ export function KeywordResearch({ projectId }: Props) {
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [loadingDiff, setLoadingDiff] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   
   // Load existing article slugs for opportunity scoring
   useEffect(() => {
@@ -204,7 +205,6 @@ export function KeywordResearch({ projectId }: Props) {
     if (!keyword.trim()) return
     setLoadingIdeas(true)
     setAnalyzing(true)
-    setError(null)
     setIdeasResult(null)
     setIntents(new Map())
     setScores(new Map())
@@ -237,7 +237,7 @@ export function KeywordResearch({ projectId }: Props) {
         }
       }
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoadingIdeas(false)
       setAnalyzing(false)
@@ -247,13 +247,12 @@ export function KeywordResearch({ projectId }: Props) {
   async function fetchDifficulty() {
     if (!keyword.trim()) return
     setLoadingDiff(true)
-    setError(null)
     setDiffResult(null)
     try {
       const result = await seoGetKeywordDifficulty(projectId, keyword, country)
       setDiffResult(result)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoadingDiff(false)
     }
@@ -311,12 +310,6 @@ export function KeywordResearch({ projectId }: Props) {
         </button>
       </div>
 
-      {error && (
-        <div className="mx-3 mt-3 rounded border border-red-200 bg-red-100 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-      
       {analyzing && (
         <div className="mx-3 mt-3 rounded border border-blue-200 bg-blue-100 px-3 py-2 text-sm text-blue-700">
           Analyzing intents and opportunities…

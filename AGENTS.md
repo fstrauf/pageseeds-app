@@ -181,6 +181,45 @@ Settings are split into **Global** (user preferences) and **Project** (project-s
 
 ---
 
+## Layer Responsibilities
+
+There are four places backend logic can live. Knowing which to use removes guesswork when adding features.
+
+| Layer | File Pattern | Responsibility | What goes here |
+|-------|--------------|----------------|----------------|
+| **Commands** | `commands/{domain}.rs` | IPC boundary | Validate inputs, lock DB, call a module function, return result. **No business logic.** |
+| **Domain modules** | `{domain}/` | Business logic, data access, external API calls | Ahrefs client, Reddit search, GSC auth, content parsing, etc. |
+| **Engine exec** | `engine/exec/{domain}.rs` | Deterministic step implementations | Code called by the executor during workflow runs. One function per `StepKind`. |
+| **Workflow handlers** | `engine/workflows/handlers.rs` | Orchestration / planning | Returns `Vec<WorkflowStep>` for a task. Never executes. |
+
+### Decision Tree: Where Does My Logic Go?
+
+```
+I have new logic — where does it go?
+│
+├─ Is it reading request inputs and returning a Tauri response?
+│  └─→ commands/{domain}.rs (thin wrapper)
+│
+├─ Is it building a step graph for a task type?
+│  └─→ engine/workflows/handlers.rs
+│
+├─ Is it executing a single workflow step?
+│  └─→ engine/exec/{domain}.rs
+│
+└─ Everything else (API clients, parsers, DB access, algorithms)
+   └─→ {domain}/
+```
+
+### Reference Implementation
+
+The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/social.rs`) is the canonical example of a fully modularized domain:
+- `social/` — models, DB access, templates, prompts, image generation
+- `engine/exec/social.rs` — one `exec_social_*` function per step kind
+- `engine/workflows/handlers.rs` — `SocialHandler` plans the step sequence
+- `commands/social.rs` — thin command wrappers that validate and delegate
+
+---
+
 ## How to Add a Feature
 
 ### New Rust module (e.g. a new data source)
@@ -389,6 +428,7 @@ See `docs/async-architecture.md` for detailed comparison.
 - [ ] No business logic added to `commands/*.rs` — only thin wrappers
 - [ ] `tauri.ts` wrapper added/updated for any new or changed command
 - [ ] `types.ts` updated to match Rust struct changes (or run `./scripts/sync-bindings.sh` if `#[ts(export)]` is present)
+- [ ] `./scripts/check-bindings.sh` passes if a Rust model with `#[ts(export)]` was changed
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls — use Rust crates instead
 - [ ] Reviewed `CONTRACTS.md` for any affected implicit contracts (statuses, step ordering, auto-spawned tasks, handler registry order)

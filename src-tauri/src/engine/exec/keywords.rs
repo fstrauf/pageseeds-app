@@ -2090,6 +2090,7 @@ fn to_title_case(s: &str) -> String {
 mod keyword_workflow_tests {
     use super::*;
     use crate::engine::workflows::handlers::default_handlers;
+    use crate::engine::workflows::StepKind;
     use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
     use chrono::Utc;
 
@@ -2182,13 +2183,13 @@ mod keyword_workflow_tests {
         //   4. normalizer (normalizer)
         assert_eq!(steps.len(), 4, "Should have 4 steps: agentic → deterministic → agentic → normalizer");
         assert_eq!(steps[0].name, "research_seed_extraction");
-        assert_eq!(steps[0].kind, "agentic");
+        assert_eq!(steps[0].kind, StepKind::Agentic);
         assert_eq!(steps[1].name, "research_ahrefs_pipeline");
-        assert_eq!(steps[1].kind, "keyword_research_native");
+        assert_eq!(steps[1].kind, StepKind::KeywordResearchNative);
         assert_eq!(steps[2].name, "research_final_selection");
-        assert_eq!(steps[2].kind, "research_final_selection");
+        assert_eq!(steps[2].kind, StepKind::ResearchFinalSelection);
         assert_eq!(steps[3].name, "research_normalize");
-        assert_eq!(steps[3].kind, "normalizer");
+        assert_eq!(steps[3].kind, StepKind::Normalizer);
         
         std::fs::remove_dir_all(&temp_dir).ok();
     }
@@ -2204,6 +2205,8 @@ mod sampling_tests {
             source_theme: theme.to_string(),
             is_question,
             volume,
+            kd: None,
+            intent: None,
         }
     }
 

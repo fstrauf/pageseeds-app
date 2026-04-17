@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { gscGetAuthStatus, gscAuthenticate, gscOAuthStart } from '../../lib/tauri'
 import type { GscAuthStatus } from '../../lib/types'
 
@@ -10,7 +11,7 @@ interface Props {
 export function GscAuth({ projectId, onAuthenticated }: Props) {
   const [status, setStatus] = useState<GscAuthStatus | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [message, setMessage] = useState<string | null>(null)
 
   useEffect(() => {
@@ -22,13 +23,12 @@ export function GscAuth({ projectId, onAuthenticated }: Props) {
       const s = await gscGetAuthStatus(projectId)
       setStatus(s)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     }
   }
 
   async function handleSaAuth() {
     setLoading(true)
-    setError(null)
     setMessage(null)
     try {
       await gscAuthenticate(projectId)
@@ -36,7 +36,7 @@ export function GscAuth({ projectId, onAuthenticated }: Props) {
       onAuthenticated?.()
       await loadStatus()
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -44,7 +44,6 @@ export function GscAuth({ projectId, onAuthenticated }: Props) {
 
   async function handleOAuth() {
     setLoading(true)
-    setError(null)
     setMessage(null)
     try {
       setMessage('Opening browser… waiting for OAuth callback (3 min timeout).')
@@ -53,7 +52,7 @@ export function GscAuth({ projectId, onAuthenticated }: Props) {
       onAuthenticated?.()
       await loadStatus()
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
       setMessage(null)
     } finally {
       setLoading(false)
@@ -79,9 +78,6 @@ export function GscAuth({ projectId, onAuthenticated }: Props) {
         </div>
       )}
 
-      {error && (
-        <p className="text-xs text-destructive bg-destructive/10 rounded px-3 py-2">{error}</p>
-      )}
       {message && (
         <p className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-2">{message}</p>
       )}

@@ -2,33 +2,32 @@ import { useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { getRedditStatistics } from '../../lib/tauri'
 import type { RedditStats } from '../../lib/types'
+import { useQuery } from '../../hooks/useQuery'
+import { useErrorHandler } from '../../lib/toast-context'
 
 interface Props {
   projectId: string
-  refreshKey?: number
 }
 
-export function RedditStats({ projectId, refreshKey }: Props) {
+export function RedditStats({ projectId }: Props) {
+  const { showError } = useErrorHandler()
   const [stats, setStats] = useState<RedditStats | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+
+  const { data: fetchedStats, isLoading: loading, refetch, error: queryError } = useQuery(
+    `reddit-stats-${projectId}`,
+    () => getRedditStatistics(projectId),
+    { enabled: !!projectId, staleTime: 0 }
+  )
 
   useEffect(() => {
-    load()
-  }, [projectId, refreshKey])
+    setStats(fetchedStats || null)
+  }, [fetchedStats])
 
-  async function load() {
-    if (!projectId) return
-    setLoading(true)
-    setError(null)
-    try {
-      setStats(await getRedditStatistics(projectId))
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    if (queryError) {
+      showError(queryError.message)
     }
-  }
+  }, [queryError, showError])
 
   const pending = stats?.by_status?.['pending'] ?? 0
   const posted  = stats?.by_status?.['posted']  ?? 0
@@ -42,17 +41,13 @@ export function RedditStats({ projectId, refreshKey }: Props) {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>Statistics</h3>
         <button
-          onClick={load}
+          onClick={refetch}
           disabled={loading}
           className="p-1 rounded hover:bg-white/5 transition-colors"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} style={{ color: 'var(--color-text-muted)' }} />
         </button>
       </div>
-
-      {error && (
-        <div className="px-3 py-2 rounded text-xs bg-red-100 text-red-700">{error}</div>
-      )}
 
       {stats && (
         <>
@@ -95,7 +90,7 @@ export function RedditStats({ projectId, refreshKey }: Props) {
         </>
       )}
 
-      {!stats && !loading && !error && (
+      {!stats && !loading && !queryError && (
         <div className="flex items-center justify-center h-24 text-sm" style={{ color: 'var(--color-text-muted)' }}>
           No data yet.
         </div>

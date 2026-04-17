@@ -20,6 +20,35 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from './components/ui/tabs'
 import { QueueContext } from './lib/queue-context'
 import { useQueueRunner } from './hooks/useQueueRunner'
 
+const VALID_VIEWS: View[] = [
+  'overview',
+  'tasks',
+  'articles',
+  'settings',
+  'reddit',
+  'gsc',
+  'seo',
+  'scheduler',
+  'history',
+  'social',
+]
+
+function parseUrlHash(): { view: View | null; projectId: string | null } {
+  const hash = window.location.hash.replace(/^#/, '')
+  const [path, search] = hash.split('?')
+  const params = new URLSearchParams(search || '')
+  const rawView = path || params.get('view')
+  const view = VALID_VIEWS.includes(rawView as View) ? (rawView as View) : null
+  return { view, projectId: params.get('project') }
+}
+
+function writeUrlHash(view: View, projectId: string | null) {
+  const hash = projectId ? `#/${view}?project=${projectId}` : `#/${view}`
+  if (window.location.hash !== hash) {
+    window.history.replaceState(null, '', hash)
+  }
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState<View>('overview')
   const [projects, setProjects] = useState<Project[]>([])
@@ -36,16 +65,39 @@ export default function App() {
   const [modalProject, setModalProject] = useState<Project | null | undefined>(undefined)
   const [ready, setReady] = useState(false)
 
+  // Restore state from URL on initial load
   useEffect(() => {
+    const { view, projectId } = parseUrlHash()
+    if (view) setActiveView(view)
+    // project selection happens after projects load
+    if (projectId) {
+      // stash it temporarily so loadProjects can use it
+      ;(window as any).__pendingProjectId = projectId
+    }
     loadProjects()
   }, [])
+
+  // Sync URL whenever view or project changes
+  useEffect(() => {
+    if (ready) {
+      writeUrlHash(activeView, activeProject?.id ?? null)
+    }
+  }, [activeView, activeProject, ready])
 
   async function loadProjects() {
     try {
       const data = await listProjects()
       setProjects(data)
-      if (data.length > 0 && !activeProject) {
-        setActiveProject(data[0])
+      const pendingId = (window as any).__pendingProjectId as string | undefined
+      delete (window as any).__pendingProjectId
+
+      if (data.length > 0) {
+        const match = pendingId ? data.find(p => p.id === pendingId) : null
+        if (match) {
+          setActiveProject(match)
+        } else if (!activeProject) {
+          setActiveProject(data[0])
+        }
       }
       if (data.length === 0) {
         setModalProject(null)

@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/sheet'
 import { KeywordPicker } from './KeywordPicker'
 import { RedditOpportunityPicker } from './RedditOpportunityPicker'
+import { ErrorExplainer } from './error-explainer'
 
 const STATUS_BADGE: Record<string, string> = {
   todo: 'bg-secondary text-secondary-foreground border-transparent',
@@ -280,10 +281,12 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
                     </div>
                   )}
                   {task.run.last_error && (
-                    <div className="mt-1 space-y-1.5">
-                      <div className="px-2 py-1.5 rounded bg-destructive/10 text-destructive text-xs font-mono wrap-break-word whitespace-pre-wrap">
-                        {task.run.last_error}
-                      </div>
+                    <div className="mt-2 space-y-2">
+                      <ErrorExplainer
+                        error={task.run.last_error}
+                        taskType={task.type}
+                        onRetry={task.status === 'todo' || task.status === 'in_progress' ? handleEnqueue : undefined}
+                      />
                       {task.status === 'todo' && (
                         <Button
                           variant="ghost"

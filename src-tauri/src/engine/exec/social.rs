@@ -16,6 +16,40 @@ use crate::social::prompts;
 use crate::social::templates::{TemplateRegistry, TemplateDef, render_prompt, validate_output};
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Step 0: Extract Article (for social_generate_from_article workflow)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub fn exec_social_extract_article(task: &Task, project_path: &str) -> StepResult {
+    // For now, this is a pass-through step that discovers the article source
+    // The actual article extraction happens in social_generate_posts which rediscovers sources
+    let config = parse_source_config_from_task(task);
+    let manifest = match discover_sources(Path::new(project_path), &config) {
+        Ok(m) => m,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to discover article source: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    if manifest.is_empty() {
+        return StepResult {
+            success: false,
+            message: "No article source found. Check your source configuration.".to_string(),
+            output: None,
+        };
+    }
+
+    StepResult {
+        success: true,
+        message: format!("Extracted {} article sources", manifest.articles.len()),
+        output: Some(format!("{{\"article_count\":{}}}", manifest.articles.len())),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Collect Content Sources
 // ═══════════════════════════════════════════════════════════════════════════════
 

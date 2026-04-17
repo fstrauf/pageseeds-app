@@ -6,7 +6,7 @@ use super::AppState;
 #[tauri::command]
 pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    task_store::list_projects(&db).map_err(|e| e.to_string())
+    Ok(task_store::list_projects(&db)?)
 }
 
 #[tauri::command]
@@ -44,7 +44,7 @@ pub fn create_project(
     };
 
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    task_store::create_project(&db, &project).map_err(|e| e.to_string())?;
+    task_store::create_project(&db, &project)?;
     
     // Auto-initialize the project workspace with required files
     // This creates .github/automation/, seo_workspace.json, articles.json, etc.
@@ -64,11 +64,11 @@ pub fn create_project(
 #[tauri::command]
 pub fn update_project(state: State<'_, AppState>, project: Project) -> Result<Project, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    task_store::update_project(&db, &project).map_err(|e| e.to_string())
+    Ok(task_store::update_project(&db, &project)?)
 }
 
 #[tauri::command]
 pub fn delete_project(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    task_store::delete_project(&db, &id).map_err(|e| e.to_string())
+    Ok(task_store::delete_project(&db, &id)?)
 }

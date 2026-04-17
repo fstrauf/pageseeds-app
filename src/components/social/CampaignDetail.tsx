@@ -7,6 +7,8 @@ import { PostEditor } from './PostEditor'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useQueueStore } from '@/stores/queueStore'
+import { useQuery } from '../../hooks/useQuery'
+import { useErrorHandler } from '../../lib/toast-context'
 
 interface Props {
   campaign: SocialCampaign
@@ -23,37 +25,33 @@ const TABS: { key: PostStatus | 'all'; label: string }[] = [
 ]
 
 export function CampaignDetail({ campaign, onBack }: Props) {
+  const { showError } = useErrorHandler()
   const [posts, setPosts] = useState<SocialPost[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<PostStatus | 'all'>('all')
   const [selectedPost, setSelectedPost] = useState<SocialPost | null>(null)
-  const [refreshKey, setRefreshKey] = useState(0)
   const [generating, setGenerating] = useState(false)
   const [generateMsg, setGenerateMsg] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadPosts()
-  }, [campaign.id, activeTab, refreshKey])
+  const { data: fetchedPosts = [], isLoading: loading, refetch, error: queryError } = useQuery(
+    `campaign-posts-${campaign.id}-${activeTab}`,
+    () => getCampaignPosts(campaign.id, activeTab === 'all' ? undefined : activeTab),
+    { enabled: !!campaign.id, staleTime: 0 }
+  )
 
-  async function loadPosts() {
-    setLoading(true)
-    setError(null)
-    try {
-      const status = activeTab === 'all' ? undefined : activeTab
-      const data = await getCampaignPosts(campaign.id, status)
-      setPosts(data)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    setPosts(fetchedPosts)
+  }, [fetchedPosts])
+
+  useEffect(() => {
+    if (queryError) {
+      showError(queryError.message)
     }
-  }
+  }, [queryError, showError])
 
   async function handleApprove(post: SocialPost) {
     try {
       await updateSocialPostStatus(post.id, 'approved')
-      setRefreshKey(k => k + 1)
+      refetch()
     } catch (e) {
       alert(String(e))
     }
@@ -64,7 +62,7 @@ export function CampaignDetail({ campaign, onBack }: Props) {
     if (!date) return
     try {
       await scheduleSocialPost(post.id, new Date(date).toISOString())
-      setRefreshKey(k => k + 1)
+      refetch()
     } catch (e) {
       alert(String(e))
     }
@@ -75,7 +73,7 @@ export function CampaignDetail({ campaign, onBack }: Props) {
     if (!url) return
     try {
       await markSocialPostPosted(post.id, url)
-      setRefreshKey(k => k + 1)
+      refetch()
     } catch (e) {
       alert(String(e))
     }
@@ -85,7 +83,7 @@ export function CampaignDetail({ campaign, onBack }: Props) {
     if (!confirm('Are you sure you want to delete this post?')) return
     try {
       await deleteSocialPost(post.id)
-      setRefreshKey(k => k + 1)
+      refetch()
     } catch (e) {
       alert(String(e))
     }
@@ -121,7 +119,7 @@ export function CampaignDetail({ campaign, onBack }: Props) {
       <PostEditor
         post={selectedPost}
         onBack={() => setSelectedPost(null)}
-        onUpdated={() => setRefreshKey(k => k + 1)}
+        onUpdated={() => refetch()}
       />
     )
   }
@@ -148,7 +146,7 @@ export function CampaignDetail({ campaign, onBack }: Props) {
         <Button
           variant="ghost"
           size="icon"
-          onClick={loadPosts}
+          onClick={refetch}
           title="Refresh"
         >
           <RefreshCw className="w-5 h-5" />
@@ -183,13 +181,6 @@ export function CampaignDetail({ campaign, onBack }: Props) {
           </button>
         ))}
       </div>
-
-      {/* Error */}
-      {error && (
-        <div className="p-4 bg-destructive/10 text-destructive rounded-lg text-sm">
-          {error}
-        </div>
-      )}
       
       {/* Generate Message */}
       {generateMsg && (

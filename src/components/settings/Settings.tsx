@@ -14,29 +14,28 @@ import {
   TableCell,
   TableRow,
 } from '@/components/ui/table'
+import { useErrorHandler } from '../../lib/toast-context'
 
 interface SettingsProps {
   projectId?: string
 }
 
 export function Settings({ projectId }: SettingsProps) {
+  const { showError } = useErrorHandler()
   const [secrets, setSecrets] = useState<SecretsStatus | null>(null)
   const [secretsPath, setSecretsPath] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   const [importPath, setImportPath] = useState('')
   const [importWorking, setImportWorking] = useState(false)
   const [importResult, setImportResult] = useState<string | null>(null)
-  const [importError, setImportError] = useState<string | null>(null)
 
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null)
   const [agentLoading, setAgentLoading] = useState(false)
   const [agentSaving, setAgentSaving] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState<string>('kimi')
   const [agentSaved, setAgentSaved] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
   const [hasUnsavedProviderChange, setHasUnsavedProviderChange] = useState(false)
 
   const [configFiles, setConfigFiles] = useState<ProjectConfigFileStatus[]>([])
@@ -47,12 +46,10 @@ export function Settings({ projectId }: SettingsProps) {
   const [seoLoading, setSeoLoading] = useState(false)
   const [seoSaving, setSeoSaving] = useState(false)
   const [seoSaved, setSeoSaved] = useState(false)
-  const [seoError, setSeoError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!projectId) return
     setLoading(true)
-    setError(null)
     try {
       const [s, p] = await Promise.all([
         getSecretsStatus(projectId),
@@ -61,11 +58,11 @@ export function Settings({ projectId }: SettingsProps) {
       setSecrets(s)
       setSecretsPath(p)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   const loadConfigFiles = useCallback(async () => {
     if (!projectId) return
@@ -99,7 +96,6 @@ export function Settings({ projectId }: SettingsProps) {
 
   const saveProvider = useCallback(async () => {
     setAgentSaving(true)
-    setSaveError(null)
     try {
       await setAgentProvider(selectedProvider)
       setAgentSaved(true)
@@ -108,32 +104,30 @@ export function Settings({ projectId }: SettingsProps) {
       await loadAgentStatus(true)
       setTimeout(() => setAgentSaved(false), 2000)
     } catch (e) {
-      setSaveError(String(e))
+      showError(String(e))
     } finally {
       setAgentSaving(false)
     }
-  }, [selectedProvider, loadAgentStatus])
+  }, [selectedProvider, loadAgentStatus, showError])
 
   // Load SEO provider
   const loadSeoProvider = useCallback(async () => {
     if (!projectId) return
     setSeoLoading(true)
-    setSeoError(null)
     try {
       const provider = await getSeoProvider(projectId)
       setSeoProviderState(provider as SeoProvider)
     } catch (e) {
-      setSeoError(String(e))
+      showError(String(e))
     } finally {
       setSeoLoading(false)
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   // Save SEO provider
   const saveSeoProvider = useCallback(async () => {
     if (!projectId) return
     setSeoSaving(true)
-    setSeoError(null)
     try {
       await setSeoProvider(projectId, seoProvider)
       setSeoSaved(true)
@@ -141,11 +135,11 @@ export function Settings({ projectId }: SettingsProps) {
       await loadSeoProvider()
       setTimeout(() => setSeoSaved(false), 2000)
     } catch (e) {
-      setSeoError(String(e))
+      showError(String(e))
     } finally {
       setSeoSaving(false)
     }
-  }, [projectId, seoProvider, loadSeoProvider])
+  }, [projectId, seoProvider, loadSeoProvider, showError])
 
   // Load global settings once on mount
   useEffect(() => {
@@ -177,7 +171,6 @@ export function Settings({ projectId }: SettingsProps) {
     if (!importPath.trim()) return
     setImportWorking(true)
     setImportResult(null)
-    setImportError(null)
     try {
       const keys = await importEnvFile(importPath.trim())
       setImportResult(
@@ -187,11 +180,11 @@ export function Settings({ projectId }: SettingsProps) {
       )
       await load() // refresh secrets status
     } catch (e) {
-      setImportError(String(e))
+      showError(String(e))
     } finally {
       setImportWorking(false)
     }
-  }, [importPath, load])
+  }, [importPath, load, showError])
 
   const SOURCE_LABELS: Record<string, string> = {
     'secrets_env': 'secrets.env',
@@ -224,12 +217,6 @@ export function Settings({ projectId }: SettingsProps) {
                     </Button>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    {error && (
-                      <div className="px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
-                        {error}
-                      </div>
-                    )}
-
                     {secretsPath && (
                       <div className="flex items-center gap-2 px-3 py-2.5 rounded-md border border-border bg-secondary">
                         <div className="flex-1 min-w-0">
@@ -279,7 +266,7 @@ export function Settings({ projectId }: SettingsProps) {
                       </div>
                     )}
 
-                    {!loading && !secrets && !error && (
+                    {!loading && !secrets && (
                       <p className="text-sm text-muted-foreground">No secrets data available.</p>
                     )}
 
@@ -313,9 +300,6 @@ export function Settings({ projectId }: SettingsProps) {
                       </div>
                       {importResult && (
                         <div className="px-3 py-1.5 rounded-md text-xs bg-emerald-100 text-emerald-700">{importResult}</div>
-                      )}
-                      {importError && (
-                        <div className="px-3 py-1.5 rounded-md text-xs bg-destructive/15 text-destructive">{importError}</div>
                       )}
                     </div>
                   </CardContent>
@@ -469,12 +453,6 @@ export function Settings({ projectId }: SettingsProps) {
                         {seoSaved ? 'Saved!' : seoSaving ? 'Saving…' : 'Save Provider'}
                       </Button>
                     </div>
-
-                    {seoError && (
-                      <div className="px-3 py-2 rounded-md text-xs bg-destructive/15 text-destructive">
-                        Error: {seoError}
-                      </div>
-                    )}
                   </CardContent>
                 </Card>
 
@@ -559,12 +537,6 @@ export function Settings({ projectId }: SettingsProps) {
                         {agentSaved ? 'Saved!' : agentSaving ? 'Saving…' : 'Save'}
                       </Button>
                     </div>
-
-                    {saveError && (
-                      <div className="px-3 py-2 rounded-md text-xs bg-destructive/15 text-destructive">
-                        Error: {saveError}
-                      </div>
-                    )}
 
                     {!agentLoading && !agentStatus && (
                       <p className="text-sm text-muted-foreground">Unable to detect agents. Select a project first.</p>

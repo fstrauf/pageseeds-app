@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Search, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
 import { listSkills } from '../../lib/tauri'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { Skill } from '../../lib/types'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
@@ -42,8 +43,8 @@ function SkillCard({ skill }: { skill: Skill }) {
 export function SkillBrowser({ projectId }: SkillBrowserProps) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const { showError } = useErrorHandler()
 
   useEffect(() => {
     if (projectId) load()
@@ -51,12 +52,11 @@ export function SkillBrowser({ projectId }: SkillBrowserProps) {
 
   async function load() {
     setLoading(true)
-    setError(null)
     try {
       const data = await listSkills(projectId)
       setSkills(data)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -100,12 +100,6 @@ export function SkillBrowser({ projectId }: SkillBrowserProps) {
             onChange={e => setQuery(e.target.value)}
           />
         </div>
-
-        {error && (
-          <div className="rounded border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
 
         {!loading && filtered.length === 0 && (
           <p className="text-sm text-muted-foreground">

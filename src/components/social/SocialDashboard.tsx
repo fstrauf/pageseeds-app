@@ -8,6 +8,8 @@ import { TemplateList } from './TemplateList'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { useQuery } from '../../hooks/useQuery'
+import { useErrorHandler } from '../../lib/toast-context'
 
 interface Props {
   projectId: string
@@ -16,30 +18,20 @@ interface Props {
 type View = 'campaigns' | 'templates' | 'stats'
 
 export function SocialDashboard({ projectId }: Props) {
+  const { showError } = useErrorHandler()
   const [view, setView] = useState<View>('campaigns')
   const [campaigns, setCampaigns] = useState<SocialCampaign[]>([])
   const [templates, setTemplates] = useState<ContentTemplate[]>([])
   const [stats, setStats] = useState<Record<string, CampaignStats>>({})
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
 
-  useEffect(() => {
-    loadData()
-  }, [projectId, refreshKey])
-
-  async function loadData() {
-    if (!projectId) return
-    setLoading(true)
-    setError(null)
-    try {
+  const { data, isLoading: loading, refetch, error: queryError } = useQuery(
+    `social-dashboard-${projectId}`,
+    async () => {
       const [campaignsData, templatesData] = await Promise.all([
         listSocialCampaigns(projectId),
         listSocialTemplates(projectId),
       ])
-      setCampaigns(campaignsData)
-      setTemplates(templatesData)
 
       // Load stats for each campaign
       const statsMap: Record<string, CampaignStats> = {}
@@ -51,13 +43,24 @@ export function SocialDashboard({ projectId }: Props) {
           console.warn(`Failed to load stats for campaign ${campaign.id}:`, e)
         }
       }
-      setStats(statsMap)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
+      return { campaigns: campaignsData, templates: templatesData, stats: statsMap }
+    },
+    { enabled: !!projectId, staleTime: 0 }
+  )
+
+  useEffect(() => {
+    if (data) {
+      setCampaigns(data.campaigns)
+      setTemplates(data.templates)
+      setStats(data.stats)
     }
-  }
+  }, [data])
+
+  useEffect(() => {
+    if (queryError) {
+      showError(queryError.message)
+    }
+  }, [queryError, showError])
 
   const totalPosts = Object.values(stats).reduce((sum, s) => sum + s.total_posts, 0)
   const totalDrafts = Object.values(stats).reduce(
@@ -123,12 +126,6 @@ export function SocialDashboard({ projectId }: Props) {
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
-        {error && (
-          <div className="mb-4 p-4 bg-destructive/10 text-destructive rounded-lg text-sm">
-            {error}
-          </div>
-        )}
-
         {loading && campaigns.length === 0 ? (
           <div className="flex items-center justify-center h-64 text-muted-foreground">
             Loading...
@@ -139,7 +136,7 @@ export function SocialDashboard({ projectId }: Props) {
               <CampaignList
                 campaigns={campaigns}
                 stats={stats}
-                onRefresh={loadData}
+                onRefresh={refetch}
                 projectId={projectId}
               />
             )}
@@ -147,7 +144,7 @@ export function SocialDashboard({ projectId }: Props) {
               <TemplateList
                 templates={templates}
                 projectId={projectId}
-                onRefresh={loadData}
+                onRefresh={refetch}
               />
             )}
             {view === 'stats' && (
@@ -168,7 +165,7 @@ export function SocialDashboard({ projectId }: Props) {
           onClose={() => setShowCreate(false)}
           onCreated={() => {
             setShowCreate(false)
-            setRefreshKey(k => k + 1)
+            refetch()
           }}
         />
       )}
