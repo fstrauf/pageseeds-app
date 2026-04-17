@@ -12,9 +12,10 @@ cargo test export_bindings --lib --quiet
 cd ..
 
 echo "[check-bindings] Comparing generated bindings against src/lib/bindings/..."
-if ! diff -r src-tauri/bindings/ src/lib/bindings/ > /dev/null 2>&1; then
+# Exclude index.ts — it's generated only in src/lib/bindings/ by sync-bindings.sh
+if ! diff -r --exclude="index.ts" src-tauri/bindings/ src/lib/bindings/ > /dev/null 2>&1; then
     echo "[check-bindings] FAIL: Bindings are stale. Run ./scripts/sync-bindings.sh and commit the changes."
-    diff -r src-tauri/bindings/ src/lib/bindings/ || true
+    diff -r --exclude="index.ts" src-tauri/bindings/ src/lib/bindings/ || true
     exit 1
 fi
 
