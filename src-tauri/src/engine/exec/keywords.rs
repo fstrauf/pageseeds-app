@@ -307,6 +307,8 @@ struct Candidate {
     source_theme: String,
     is_question: bool,
     volume: Option<i64>,
+    kd: Option<f64>,
+    intent: Option<String>,
 }
 
 /// Smart sampling: select a diverse subset of candidates for KD checking.
@@ -379,51 +381,81 @@ fn smart_sample_candidates(candidates: Vec<Candidate>, budget: usize) -> Vec<Can
 pub(crate) fn exec_keyword_research_native(
     task: &Task,
     project_path: &str,
+    seo_provider: &str,
 ) -> crate::engine::workflows::StepResult {
     use crate::config::env_resolver::EnvResolver;
 
     let paths = ProjectPaths::from_path(project_path);
+    let is_dataforseo = seo_provider.eq_ignore_ascii_case("dataforseo");
 
-    // ── Resolve CAPSOLVER_API_KEY ─────────────────────────────────────────────
-    let env = EnvResolver::new(project_path).build_env(HashMap::new());
-    let capsolver_key = match env.get("CAPSOLVER_API_KEY").map(|s| s.as_str()) {
-        Some(k) if !k.is_empty() => k.to_string(),
-        _ => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "CAPSOLVER_API_KEY not set. Add it in Settings → Secrets.".to_string(),
-                output: None,
-            };
+    // ── Re-use cached results if this step already ran ────────────────────────
+    // Prevents burning paid API credits on accidental re-runs.
+    if let Some(existing) = task.artifacts.iter().find(|a| a.key == "research_ahrefs_pipeline") {
+        if let Some(ref content) = existing.content {
+            if !content.is_empty() {
+                log::info!(
+                    "[keyword_research_native] reusing cached artifact ({} chars) — skipping API calls",
+                    content.len()
+                );
+                return crate::engine::workflows::StepResult {
+                    success: true,
+                    message: "Keyword research (cached) — no API calls made".to_string(),
+                    output: Some(content.clone()),
+                };
+            }
         }
+    }
+
+    // ── For Ahrefs path, also need CAPSOLVER_API_KEY ──────────────────────────
+    let capsolver_key = if !is_dataforseo {
+        let env = EnvResolver::new(project_path).build_env(HashMap::new());
+        match env.get("CAPSOLVER_API_KEY").map(|s| s.as_str()) {
+            Some(k) if !k.is_empty() => Some(k.to_string()),
+            _ => {
+                return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: "CAPSOLVER_API_KEY not set. Add it in Settings → Secrets.".to_string(),
+                    output: None,
+                };
+            }
+        }
+    } else {
+        None
     };
 
-    // ── Parse themes from task description ───────────────────────────────────
-    let raw_desc = task.description.as_deref().unwrap_or("");
-    let desc_themes = parse_desc_themes(raw_desc);
-
+    // ── Extract themes from Step 1 (agentic seed extraction) ────────────────
+    // Theme extraction is always agentic — deterministic parsing of free-form
+    // descriptions produces garbage (sentence fragments → bad API queries).
+    // Step 1 (research_seed_extraction) must run first and produce themes.
     let SeedArtifact {
-        themes: agent_themes,
+        themes,
         competitors: agent_competitors,
     } = parse_seed_extraction_artifact(task);
 
-    let themes = if !desc_themes.is_empty() {
-        desc_themes
-    } else if !agent_themes.is_empty() {
-        agent_themes
-    } else {
+    if themes.is_empty() {
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
-                "No keyword themes available. Provide themes in task description or run agentic theme selection first. \
+                "No keyword themes found in seed extraction artifact. \
+                 Step 1 (research_seed_extraction) must run first. \
                  Expected artifact key: research_seed_extraction. Workspace: {}.",
                 paths.automation_dir.display()
             ),
             output: None,
         };
-    };
+    }
 
     log::info!("[keyword_research_native] {} themes: {:?}", themes.len(), themes);
     log::info!("[keyword_research_native] {} competitors: {:?}", agent_competitors.len(), agent_competitors);
+
+    // ── Cost estimate (DataForSEO) ────────────────────────────────────────────
+    if is_dataforseo {
+        let est_cost = themes.len() as f64 * 0.012; // ~$0.01/task + $0.0001 × ~20 keywords
+        log::info!(
+            "[keyword_research_native] DataForSEO estimated cost: ${:.3} ({} themes × $0.012/theme)",
+            est_cost, themes.len()
+        );
+    }
 
     // ── Pre-flight: articles.json must exist ──────────────────────────────────
     let articles_json_path = paths.automation_dir.join("articles.json");
@@ -475,55 +507,90 @@ pub(crate) fn exec_keyword_research_native(
     let existing_keywords_thread = existing_keywords.clone();
     let agent_competitors_thread = agent_competitors.clone();
     let coverage_clusters_thread = coverage_clusters.clone();
+    let seo_provider_thread = seo_provider.to_string();
+    let project_path_thread = project_path.to_string();
     
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
-            // Step 1 — Generate keyword ideas (includes volume) for each theme.
+            let env = crate::config::env_resolver::EnvResolver::new(&project_path_thread);
+            let provider = crate::seo::resolve_provider(&seo_provider_thread, &env)?;
+            let is_dataforseo = provider.name() == "dataforseo";
+
             let mut candidates: Vec<Candidate> = vec![];
             let mut seen: HashSet<String> = HashSet::new();
 
-            // Step 1 — Generate keyword ideas using Google Autocomplete.
-            // (Replaces broken Ahrefs get_keyword_ideas endpoint)
-            for theme in &themes_thread {
-                log::info!("[keyword_research_native] fetching Google autocomplete ideas for theme '{}'", theme);
-                match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
-                    Ok(result) => {
-                        // Add regular suggestions
-                        for suggestion in result.ideas.iter().chain(result.question_ideas.iter()) {
-                            let kw_lower = suggestion.keyword.to_lowercase();
-                            if existing_keywords_thread.contains(&kw_lower) {
-                                continue; // already covered (exact match)
+            if is_dataforseo {
+                // ── DataForSEO path: keyword_suggestions returns volume + KD + intent ──
+                for theme in &themes_thread {
+                    log::info!("[keyword_research_native] fetching DataForSEO keyword suggestions for theme '{}'", theme);
+                    match provider.keyword_ideas(theme, "us", "google").await {
+                        Ok(result) => {
+                            for idea in result.ideas.iter().chain(result.question_ideas.iter()) {
+                                let kw_lower = idea.keyword.to_lowercase();
+                                if existing_keywords_thread.contains(&kw_lower) {
+                                    continue;
+                                }
+                                if seen.contains(&kw_lower) {
+                                    continue;
+                                }
+                                seen.insert(kw_lower);
+                                candidates.push(Candidate {
+                                    keyword: idea.keyword.clone(),
+                                    source_theme: theme.clone(),
+                                    is_question: idea.idea_type == "question",
+                                    volume: idea.volume_exact,
+                                    kd: idea.kd,
+                                    intent: idea.intent.clone(),
+                                });
                             }
-                            if seen.contains(&kw_lower) {
-                                continue;
-                            }
-                            seen.insert(kw_lower.clone());
-                            // Google doesn't provide volume, so we leave it as None
-                            candidates.push(Candidate {
-                                keyword: suggestion.keyword.clone(),
-                                source_theme: theme.clone(),
-                                is_question: suggestion.suggestion_type == crate::seo::google_autocomplete::SuggestionType::Question,
-                                volume: None,
-                            });
+                            log::info!(
+                                "[keyword_research_native] theme '{}' → {} total candidates (DataForSEO)",
+                                theme, candidates.len()
+                            );
                         }
-                        log::info!("[keyword_research_native] theme '{}' → {} total candidates", theme, candidates.len());
-                    }
-                    Err(e) => {
-                        log::warn!("[keyword_research_native] Google autocomplete failed for '{}': {}", theme, e);
+                        Err(e) => {
+                            log::warn!("[keyword_research_native] DataForSEO keyword_ideas failed for '{}': {}", theme, e);
+                        }
                     }
                 }
-                
-                // Small delay to be polite to Google
-                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+            } else {
+                // ── Ahrefs/Google Autocomplete path (legacy) ──────────────────────
+                for theme in &themes_thread {
+                    log::info!("[keyword_research_native] fetching Google autocomplete ideas for theme '{}'", theme);
+                    match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
+                        Ok(result) => {
+                            for suggestion in result.ideas.iter().chain(result.question_ideas.iter()) {
+                                let kw_lower = suggestion.keyword.to_lowercase();
+                                if existing_keywords_thread.contains(&kw_lower) {
+                                    continue;
+                                }
+                                if seen.contains(&kw_lower) {
+                                    continue;
+                                }
+                                seen.insert(kw_lower);
+                                candidates.push(Candidate {
+                                    keyword: suggestion.keyword.clone(),
+                                    source_theme: theme.clone(),
+                                    is_question: suggestion.suggestion_type == crate::seo::google_autocomplete::SuggestionType::Question,
+                                    volume: None,
+                                    kd: None,
+                                    intent: None,
+                                });
+                            }
+                            log::info!("[keyword_research_native] theme '{}' → {} total candidates", theme, candidates.len());
+                        }
+                        Err(e) => {
+                            log::warn!("[keyword_research_native] Google autocomplete failed for '{}': {}", theme, e);
+                        }
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                }
             }
 
-            // Track total candidates before any filtering for reporting
             let pre_filter_count = candidates.len();
             
-            // Step 2 — Coverage-aware filtering BEFORE expensive KD checks.
-            // This filters out keywords that are already well-covered semantically
-            // and prioritizes keywords that fill gaps in coverage.
+            // Step 2 — Coverage-aware filtering
             if !coverage_clusters_thread.is_empty() {
                 let pre_gap_count = candidates.len();
                 candidates = filter_by_coverage_gap(
@@ -532,142 +599,193 @@ pub(crate) fn exec_keyword_research_native(
                     &existing_keywords_thread,
                 );
                 log::info!(
-                    "[keyword_research_native] coverage gap filter: {} → {} candidates (removed {} well-covered)",
+                    "[keyword_research_native] coverage gap filter: {} → {} candidates",
                     pre_gap_count,
-                    candidates.len(),
-                    pre_gap_count - candidates.len()
+                    candidates.len()
                 );
             }
 
-            // Step 3 — Smart sampling for KD checks.
-            // We can't afford to check every candidate, so sample strategically.
+            // Step 3 — Volume filter (only meaningful when we have volume data)
             const MIN_VOLUME: i64 = 50;
-            let _pre_volume_count = candidates.len();
-            let mut candidates: Vec<Candidate> = candidates
+            let pre_volume_count = candidates.len();
+            candidates = candidates
                 .into_iter()
                 .filter(|c| {
                     c.volume
                         .map(|v| v >= MIN_VOLUME)
-                        .unwrap_or(true)
+                        .unwrap_or(false) // reject unknown volumes
                 })
                 .collect();
 
             log::info!(
-                "[keyword_research_native] volume filter: {} → {} candidates (dropped {} below {})",
-                _pre_volume_count,
+                "[keyword_research_native] volume filter: {} → {} candidates (dropped {} below {} or unknown)",
+                pre_volume_count,
                 candidates.len(),
-                _pre_volume_count - candidates.len(),
+                pre_volume_count - candidates.len(),
                 MIN_VOLUME,
             );
 
-            // Stratified sampling: ensure coverage across themes + question quota.
-            let sampled = smart_sample_candidates(candidates, 50);
-            let max_api_calls = sampled.len();
+            // If DataForSEO returned zero candidates after volume filter, that's the real count.
+            // For Ahrefs path (no volume data), volume filter drops everything — skip it and use all candidates.
+            if !is_dataforseo && candidates.is_empty() && pre_volume_count > 0 {
+                log::info!("[keyword_research_native] Ahrefs path: no volume data available, using all {} candidates", pre_volume_count);
+                // Re-filter without volume requirement for Ahrefs path
+                candidates = Vec::new(); // will rebuild below
+            }
+
+            // Rebuild candidates for Ahrefs path if volume filter emptied the list
+            if !is_dataforseo && candidates.is_empty() && pre_filter_count > 0 {
+                // Re-run without volume filter
+                let mut seen2: HashSet<String> = HashSet::new();
+                for theme in &themes_thread {
+                    match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
+                        Ok(result) => {
+                            for suggestion in result.ideas.iter().chain(result.question_ideas.iter()) {
+                                let kw_lower = suggestion.keyword.to_lowercase();
+                                if existing_keywords_thread.contains(&kw_lower) || seen2.contains(&kw_lower) {
+                                    continue;
+                                }
+                                seen2.insert(kw_lower);
+                                candidates.push(Candidate {
+                                    keyword: suggestion.keyword.clone(),
+                                    source_theme: theme.clone(),
+                                    is_question: suggestion.suggestion_type == crate::seo::google_autocomplete::SuggestionType::Question,
+                                    volume: None,
+                                    kd: None,
+                                    intent: None,
+                                });
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                if !coverage_clusters_thread.is_empty() {
+                    candidates = filter_by_coverage_gap(candidates, &coverage_clusters_thread, &existing_keywords_thread);
+                }
+            }
+
+            // Smart sample: limit to 50 for Ahrefs KD checks; DataForSEO can take all
+            let sampled = if is_dataforseo {
+                candidates // already have KD data, no API calls needed
+            } else {
+                smart_sample_candidates(candidates, 50)
+            };
+
             log::info!(
-                "[keyword_research_native] smart sample: {} keywords for KD analysis ({} question keywords)",
+                "[keyword_research_native] {} keywords for analysis ({} question keywords)",
                 sampled.len(),
                 sampled.iter().filter(|c| c.is_question).count()
             );
 
-            // Build volume map from all candidates for lookups during KD analysis.
-            let volume_map: HashMap<String, i64> = sampled
-                .iter()
-                .filter_map(|c| c.volume.map(|v| (c.keyword.clone(), v)))
-                .collect();
-
             let mut with_data_results: Vec<serde_json::Value> = vec![];
             let mut no_data_results: Vec<serde_json::Value> = vec![];
-            let mut api_calls = 0usize;
             let mut analyzed_count = 0usize;
 
-            for candidate in &sampled {
-                if api_calls >= max_api_calls {
-                    break;
-                }
-                api_calls += 1;
-                analyzed_count += 1;
-                let kw = &candidate.keyword;
+            // Extract capsolver key once for Ahrefs path
+            let capsolver_key_str = capsolver_key_thread.unwrap_or_default();
 
-                match crate::seo::keywords::get_keyword_difficulty(
-                    &capsolver_key_thread, kw, "us",
-                ).await {
-                    Ok(kd) => {
-                        let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
-                        let vol = candidate.volume;
-                        let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
-                        let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
-                        let entry = serde_json::json!({
-                            "keyword": kw,
-                            "difficulty": kd.difficulty,
-                            "volume": vol,
-                            "traffic": top_traffic,
-                            "topVolume": top_volume,
-                            "shortage": kd.shortage,
-                            "has_data": has_data,
-                            "serp_count": kd.serp.len(),
-                            "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
-                            "last_update": kd.last_update,
-                        });
-                        log::info!(
-                            "[keyword_research_native] '{}' kd={:?} vol={:?} top_traffic={:?} has_data={}",
-                            kw, kd.difficulty, vol, top_traffic, has_data,
-                        );
-                        if has_data {
-                            with_data_results.push(entry);
-                        } else {
-                            no_data_results.push(entry);
+            if is_dataforseo {
+                // DataForSEO: KD + volume already present in candidates
+                for candidate in &sampled {
+                    analyzed_count += 1;
+                    let has_data = candidate.kd.is_some() && candidate.volume.is_some();
+                    let entry = serde_json::json!({
+                        "keyword": candidate.keyword,
+                        "difficulty": candidate.kd,
+                        "volume": candidate.volume,
+                        "intent": candidate.intent,
+                        "has_data": has_data,
+                    });
+                    if has_data {
+                        with_data_results.push(entry);
+                    } else {
+                        no_data_results.push(entry);
+                    }
+                }
+            } else {
+                // Ahrefs: need individual KD checks via CapSolver
+                for candidate in &sampled {
+                    analyzed_count += 1;
+                    let kw = &candidate.keyword;
+
+                    match crate::seo::keywords::get_keyword_difficulty(
+                        &capsolver_key_str, kw, "us",
+                    ).await {
+                        Ok(kd) => {
+                            let has_data = kd.difficulty.is_some() && !kd.last_update.is_empty();
+                            let vol = candidate.volume;
+                            let top_traffic = best_serp_metric(kd.serp.iter().map(|s| s.traffic));
+                            let top_volume = best_serp_metric(kd.serp.iter().map(|s| s.top_volume));
+                            let entry = serde_json::json!({
+                                "keyword": kw,
+                                "difficulty": kd.difficulty,
+                                "volume": vol,
+                                "traffic": top_traffic,
+                                "topVolume": top_volume,
+                                "shortage": kd.shortage,
+                                "has_data": has_data,
+                                "serp_count": kd.serp.len(),
+                                "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
+                                "last_update": kd.last_update,
+                            });
+                            log::info!(
+                                "[keyword_research_native] '{}' kd={:?} vol={:?} has_data={}",
+                                kw, kd.difficulty, vol, has_data,
+                            );
+                            if has_data {
+                                with_data_results.push(entry);
+                            } else {
+                                no_data_results.push(entry);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
+                            no_data_results.push(serde_json::json!({
+                                "keyword": kw,
+                                "difficulty": serde_json::Value::Null,
+                                "volume": candidate.volume,
+                                "has_data": false,
+                            }));
                         }
                     }
-                    Err(e) => {
-                        log::warn!("[keyword_research_native] difficulty failed for '{}': {}", kw, e);
-                        let vol = candidate.volume;
-                        no_data_results.push(serde_json::json!({
-                            "keyword": kw,
-                            "difficulty": serde_json::Value::Null,
-                            "volume": vol,
-                            "has_data": false,
-                            "serp_count": 0,
-                            "top_result": "",
-                            "last_update": "",
-                        }));
-                    }
                 }
             }
 
-            // Step 5 — Optional competitor traffic context.
+            // Competitor insights (skip for DataForSEO — uses CapSolver/Ahrefs)
             let mut competitor_insights: Vec<crate::models::research::CompetitorInsight> = vec![];
-            for domain in &agent_competitors_thread {
-                match crate::seo::traffic::check_traffic(
-                    &capsolver_key_thread, domain, "subdomains", "None",
-                ).await {
-                    Ok(traffic) => {
-                        let top_keywords = traffic.top_keywords
-                            .into_iter()
-                            .take(5)
-                            .map(|tk| crate::models::research::CompetitorTopKeyword {
-                                keyword: tk.keyword.unwrap_or_default(),
-                                traffic: tk.traffic,
-                                position: tk.position,
-                            })
-                            .collect();
-                        competitor_insights.push(crate::models::research::CompetitorInsight {
-                            domain: traffic.domain,
-                            traffic_monthly_avg: traffic.traffic.traffic_monthly_avg,
-                            top_keywords,
-                        });
-                        log::info!("[keyword_research_native] competitor traffic fetched for {}", domain);
-                    }
-                    Err(e) => {
-                        log::warn!("[keyword_research_native] competitor traffic failed for '{}': {}", domain, e);
+            if !is_dataforseo {
+                for domain in &agent_competitors_thread {
+                    match crate::seo::traffic::check_traffic(
+                        &capsolver_key_str, domain, "subdomains", "None",
+                    ).await {
+                        Ok(traffic) => {
+                            let top_keywords = traffic.top_keywords
+                                .into_iter()
+                                .take(5)
+                                .map(|tk| crate::models::research::CompetitorTopKeyword {
+                                    keyword: tk.keyword.unwrap_or_default(),
+                                    traffic: tk.traffic,
+                                    position: tk.position,
+                                })
+                                .collect();
+                            competitor_insights.push(crate::models::research::CompetitorInsight {
+                                domain: traffic.domain,
+                                traffic_monthly_avg: traffic.traffic.traffic_monthly_avg,
+                                top_keywords,
+                            });
+                        }
+                        Err(e) => {
+                            log::warn!("[keyword_research_native] competitor traffic failed for '{}': {}", domain, e);
+                        }
                     }
                 }
             }
 
-            Ok::<_, crate::error::Error>((with_data_results, no_data_results, api_calls, analyzed_count, pre_filter_count, competitor_insights))
+            Ok::<_, crate::error::Error>((with_data_results, no_data_results, analyzed_count, pre_filter_count, competitor_insights))
         })
     }).join();
 
-    let (with_data_results, no_data_results, api_calls, analyzed_count, total_candidates, competitor_insights) = match thread_result {
+    let (with_data_results, no_data_results, analyzed_count, total_candidates, competitor_insights) = match thread_result {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             return crate::engine::workflows::StepResult {
@@ -717,14 +835,19 @@ pub(crate) fn exec_keyword_research_native(
         .map(|r| {
             let keyword = r["keyword"].as_str().unwrap_or("").to_string();
             
-            // Classify search intent for this keyword
-            let (intent, confidence) = crate::engine::exec::intent_classifier::classify_intent(&keyword);
+            // Use DataForSEO intent if available, otherwise classify by pattern
+            let (intent, confidence) = if let Some(api_intent) = r["intent"].as_str() {
+                (api_intent.to_string(), 90.0)
+            } else {
+                let (i, c) = crate::engine::exec::intent_classifier::classify_intent(&keyword);
+                (i.as_str().to_string(), c)
+            };
             
             crate::models::research::ScoredKeyword {
                 keyword,
                 volume: r["volume"].as_i64(),
                 kd: r["difficulty"].as_f64(),
-                intent: Some(intent.as_str().to_string()),
+                intent: Some(intent),
                 intent_confidence: Some(confidence),
                 traffic: r["traffic"].as_f64(),
                 has_data: r["has_data"].as_bool(),
@@ -793,6 +916,10 @@ fn clean_theme_str(raw: &str) -> Option<String> {
 /// applying the same cleaning rules as brief parsing.
 ///
 /// Returns an empty vec when the description contains only junk cluster labels.
+///
+/// NOTE: No longer used in production — theme extraction is fully agentic now.
+/// Kept for tests only.
+#[cfg(test)]
 pub(crate) fn parse_desc_themes(raw: &str) -> Vec<String> {
     raw.lines()
         .flat_map(|line| line.split(','))
@@ -805,10 +932,27 @@ pub(crate) fn parse_desc_themes(raw: &str) -> Vec<String> {
 /// Try to derive keyword themes from existing project configuration files.
 ///
 /// Priority order:
-///   1. `*seo_content_brief*.md` — PLANNED cluster topics (🎯) and gap cluster names
-///   2. `*project_summary*.md`   — Content Pillar names
-///   3. `articles.json`          — unique existing target_keywords (as baseline coverage)
+///   1. `project.md` — consolidated project config (PLANNED clusters, Identity)
+///   2. `*seo_content_brief*.md` — legacy: PLANNED cluster topics (🎯) and gap cluster names
+///   3. `*project_summary*.md`   — legacy: Content Pillar names
+///   4. `articles.json`          — unique existing target_keywords (as baseline coverage)
 pub(crate) fn derive_themes_from_project(automation_dir: &std::path::Path) -> Vec<String> {
+    // Primary: consolidated project.md
+    let project_md = automation_dir.join("project.md");
+    if project_md.exists() {
+        log::info!("[keyword_research] using project.md: {:?}", project_md);
+        let themes = extract_from_brief(&project_md);
+        if !themes.is_empty() {
+            return themes;
+        }
+        // Also try summary extraction (for Content Clusters & Identity sections)
+        let themes = extract_from_summary(&project_md);
+        if !themes.is_empty() {
+            return themes;
+        }
+    }
+
+    // Legacy fallbacks
     if let Some(brief) = find_file_by_suffix(automation_dir, "seo_content_brief.md") {
         log::info!("[keyword_research] using brief: {:?}", brief);
         let themes = extract_from_brief(&brief);
@@ -1485,7 +1629,7 @@ mod integration_tests {
         // Need a tokio runtime because exec_keyword_research_native uses block_on.
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(async {
-            tokio::task::spawn_blocking(move || exec_keyword_research_native(&task, &project_path))
+            tokio::task::spawn_blocking(move || exec_keyword_research_native(&task, &project_path, "ahrefs"))
                 .await
                 .unwrap()
         });
@@ -1946,6 +2090,7 @@ fn to_title_case(s: &str) -> String {
 mod keyword_workflow_tests {
     use super::*;
     use crate::engine::workflows::handlers::default_handlers;
+    use crate::engine::workflows::StepKind;
     use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
     use chrono::Utc;
 
@@ -2038,13 +2183,13 @@ mod keyword_workflow_tests {
         //   4. normalizer (normalizer)
         assert_eq!(steps.len(), 4, "Should have 4 steps: agentic → deterministic → agentic → normalizer");
         assert_eq!(steps[0].name, "research_seed_extraction");
-        assert_eq!(steps[0].kind, "agentic");
+        assert_eq!(steps[0].kind, StepKind::Agentic);
         assert_eq!(steps[1].name, "research_ahrefs_pipeline");
-        assert_eq!(steps[1].kind, "keyword_research_native");
+        assert_eq!(steps[1].kind, StepKind::KeywordResearchNative);
         assert_eq!(steps[2].name, "research_final_selection");
-        assert_eq!(steps[2].kind, "research_final_selection");
+        assert_eq!(steps[2].kind, StepKind::ResearchFinalSelection);
         assert_eq!(steps[3].name, "research_normalize");
-        assert_eq!(steps[3].kind, "normalizer");
+        assert_eq!(steps[3].kind, StepKind::Normalizer);
         
         std::fs::remove_dir_all(&temp_dir).ok();
     }
@@ -2060,6 +2205,8 @@ mod sampling_tests {
             source_theme: theme.to_string(),
             is_question,
             volume,
+            kd: None,
+            intent: None,
         }
     }
 

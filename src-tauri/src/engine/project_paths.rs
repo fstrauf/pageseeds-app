@@ -15,8 +15,8 @@
 ///       task_results/
 ///       reddit/
 ///       manifest.json
-///       brandvoice.md
-///       project_summary.md
+///       project.md
+///       reddit_config.md
 /// ```
 
 use std::path::{Path, PathBuf};

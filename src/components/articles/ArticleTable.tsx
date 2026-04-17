@@ -22,6 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useErrorHandler } from '../../lib/toast-context'
+import { useQuery } from '../../hooks/useQuery'
 
 const STATUS_BADGE: Record<string, string> = {
   published: 'bg-emerald-100 text-emerald-700 border-transparent',
@@ -47,31 +49,25 @@ interface ArticleTableProps {
 }
 
 export function ArticleTable({ projectId, project, onEditProject, onSelect }: ArticleTableProps) {
+  const { showError } = useErrorHandler()
   const [articles, setArticles] = useState<Article[]>([])
-  const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [nextSafeDate, setNextSafeDate] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('all')
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [publishOpen, setPublishOpen] = useState(false)
   const autoSyncDone = useRef(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await listArticles(projectId)
-      setArticles(data)
-      return data.length
-    } catch (e: unknown) {
-      setError(String(e))
-      return -1
-    } finally {
-      setLoading(false)
-    }
-  }, [projectId])
+  const { data: fetchedArticles = [], isLoading: loading, refetch } = useQuery(
+    `articles-${projectId}`,
+    () => listArticles(projectId),
+    { enabled: !!projectId, staleTime: 0 }
+  )
+
+  useEffect(() => {
+    setArticles(fetchedArticles)
+  }, [fetchedArticles])
 
   const loadNextSafeDate = useCallback(async () => {
     try {
@@ -86,10 +82,9 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
     if (!projectId) return
     setSyncing(true)
     setSyncMsg(null)
-    setError(null)
     try {
       const result = await importFromRepo(projectId)
-      await load()
+      await refetch()
       await loadNextSafeDate()
       setSyncMsg(
         result.articles_imported === 0
@@ -97,23 +92,25 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
           : `Synced ${result.articles_imported} article${result.articles_imported !== 1 ? 's' : ''}.`
       )
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setSyncing(false)
     }
-  }, [projectId, project, load, loadNextSafeDate])
+  }, [projectId, project, refetch, loadNextSafeDate, showError])
 
   useEffect(() => {
     if (!projectId) return
     autoSyncDone.current = false
-    load().then(count => {
-      if (count === 0 && !autoSyncDone.current) {
-        autoSyncDone.current = true
-        sync()
-      }
-    })
     loadNextSafeDate()
-  }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, loadNextSafeDate])
+
+  useEffect(() => {
+    if (!projectId || loading || autoSyncDone.current) return
+    if (articles.length === 0) {
+      autoSyncDone.current = true
+      sync()
+    }
+  }, [projectId, loading, articles.length, sync])
 
   const filtered = statusFilter === 'all'
     ? articles
@@ -179,7 +176,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
             variant="ghost"
             size="icon-sm"
             onClick={() => {
-              load()
+              refetch()
               loadNextSafeDate()
             }}
             disabled={loading}
@@ -190,12 +187,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
         </div>
       </div>
 
-      {error && (
-        <div className="mx-6 mt-4 px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
-          {error}
-        </div>
-      )}
-      {syncMsg && !error && (
+      {syncMsg && (
         <div className={`mx-6 mt-4 px-3 py-2 rounded-md text-sm ${
           syncMsg.startsWith('No articles') ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
         }`}>
@@ -333,7 +325,7 @@ export function ArticleTable({ projectId, project, onEditProject, onSelect }: Ar
       projectId={projectId}
       candidates={publishCandidates}
       onPublished={() => {
-        load()
+        refetch()
         loadNextSafeDate()
       }}
     />

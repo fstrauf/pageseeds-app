@@ -2,49 +2,48 @@
 ///
 /// Business logic extracted from `commands/reddit.rs` so the command layer stays thin.
 
-use crate::reddit::config::{MentionStance, RedditProjectConfig};
 use crate::models::reddit::RedditOpportunity;
 
 /// Build the full draft-reply prompt from project config and opportunity data.
 ///
 /// # Arguments
-/// * `project_summary` — contents of `automation/project_summary.md`
-/// * `brandvoice`       — contents of `automation/brandvoice.md`
-/// * `guardrails`       — contents of `automation/reddit/_reply_guardrails.md`
-/// * `skill_content`    — SKILL.md text for `reddit-reply-drafting` (empty string if not found)
-/// * `cfg`              — parsed reddit_config
-/// * `opp`              — the opportunity being drafted for
+/// * `project_context` — contents of `automation/project.md` (identity + brand voice + clusters)
+/// * `guardrails`      — contents of `automation/reddit/_reply_guardrails.md`
+/// * `skill_content`   — SKILL.md text for `reddit-reply-drafting` (empty string if not found)
+/// * `product_name`    — product name to mention (e.g., "PageSeeds")
+/// * `mention_stance`  — one of: REQUIRED, RECOMMENDED, OPTIONAL, OMIT
+/// * `opp`             — the opportunity being drafted for
 pub fn build_draft_reply_prompt(
-    project_summary: &str,
-    brandvoice: &str,
+    project_context: &str,
     guardrails: &str,
     skill_content: &str,
-    cfg: &RedditProjectConfig,
+    product_name: &str,
+    mention_stance: &str,
     opp: &RedditOpportunity,
 ) -> String {
-    let product_name = cfg.product_name.as_deref().unwrap_or("the product");
-    let mention_stance = cfg.mention_stance.as_str();
-
-    let stance_instruction = match cfg.mention_stance {
-        MentionStance::Required => format!(
+    let stance_instruction = match mention_stance {
+        "REQUIRED" => format!(
             "REQUIRED: The reply MUST contain the exact product name \"{}\" — no vague substitutes like 'a tool' or 'the app'.",
             product_name
         ),
-        MentionStance::Recommended => format!(
+        "RECOMMENDED" => format!(
             "RECOMMENDED: Mention \"{}\" by name if the topic is a natural fit.",
             product_name
         ),
-        MentionStance::Optional => format!(
+        "OPTIONAL" => format!(
             "OPTIONAL: You may mention \"{}\" if it fits naturally. Not required.",
             product_name
         ),
-        MentionStance::Omit => {
+        "OMIT" => {
             "OMIT: Do NOT mention any product name in this reply.".to_string()
         }
+        _ => format!(
+            "OPTIONAL: You may mention \"{}\" if it fits naturally. Not required.",
+            product_name
+        ),
     };
 
-    let vague_phrases_block = if cfg.mention_stance == MentionStance::Required
-        || cfg.mention_stance == MentionStance::Recommended
+    let vague_phrases_block = if mention_stance == "REQUIRED" || mention_stance == "RECOMMENDED"
     {
         format!(
             "FORBIDDEN VAGUE PHRASES (replace all with \"{}\"): 'a dedicated tool', 'a platform', 'the app', 'a tracker', 'my tool', 'a tool I built'",
@@ -69,11 +68,8 @@ Mention stance: {mention_stance}
 {stance_instruction}
 {vague_phrases_block}
 
-## PROJECT SUMMARY
-{project_summary}
-
-## BRAND VOICE
-{brandvoice}
+## PROJECT CONTEXT
+{project_context}
 
 ## REPLY GUARDRAILS
 {guardrails}

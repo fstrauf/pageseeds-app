@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { gscParseRedirectCsv } from '../../lib/tauri'
 import type { RedirectRecord } from '../../lib/types'
 
@@ -14,17 +15,16 @@ const TYPE_COLORS: Record<string, string> = {
 export function GscRedirects() {
   const [csvText, setCsvText] = useState('')
   const [records, setRecords] = useState<RedirectRecord[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [filter, setFilter] = useState('ALL')
 
   async function parse() {
     if (!csvText.trim()) return
-    setError(null)
     try {
       const rows = await gscParseRedirectCsv(csvText)
       setRecords(rows)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     }
   }
 
@@ -64,8 +64,6 @@ export function GscRedirects() {
           </button>
         )}
       </div>
-
-      {error && <p className="text-xs text-destructive">{error}</p>}
 
       {records.length > 0 && (
         <>

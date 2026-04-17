@@ -201,30 +201,6 @@ pub fn collect_config_file_statuses(
     }
 
     {
-        let path = automation_dir.join("seo_content_brief.md");
-        let (full_path, full_link) = path_strings(&path);
-        let configured = path.exists() && file_has_non_whitespace_content(&path);
-        files.push(ProjectConfigFileStatus {
-            id: "seo_content_brief".to_string(),
-            category: "seo".to_string(),
-            label: "SEO content brief".to_string(),
-            relative_path: ".github/automation/seo_content_brief.md".to_string(),
-            full_path,
-            full_link,
-            used_by: "Keyword theme discovery".to_string(),
-            required: false,
-            configured,
-            detail: if !path.exists() {
-                "Optional file missing".to_string()
-            } else if configured {
-                "Present".to_string()
-            } else {
-                "File is empty".to_string()
-            },
-        });
-    }
-
-    {
         let path = automation_dir.join("task_list.json");
         let (full_path, full_link) = path_strings(&path);
         files.push(ProjectConfigFileStatus {
@@ -264,52 +240,38 @@ pub fn collect_config_file_statuses(
         });
     }
 
-    // Shared context / sentiment style files
+    // Shared context / sentiment style files (consolidated project.md)
     {
-        let path = automation_dir.join("project_summary.md");
+        let path = automation_dir.join("project.md");
         let (full_path, full_link) = path_strings(&path);
-        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        let has_project_md = path.exists() && file_has_non_whitespace_content(&path);
+
+        // Check for legacy files as fallback
+        let legacy_summary = automation_dir.join("project_summary.md");
+        let legacy_brand = automation_dir.join("brandvoice.md");
+        let has_legacy = (legacy_summary.exists() && file_has_non_whitespace_content(&legacy_summary))
+            || (legacy_brand.exists() && file_has_non_whitespace_content(&legacy_brand));
+
+        let configured = has_project_md || has_legacy;
+        let detail = if has_project_md {
+            "Present (consolidated)".to_string()
+        } else if has_legacy {
+            "Legacy files detected — consider migrating to project.md".to_string()
+        } else {
+            "Optional file missing".to_string()
+        };
+
         files.push(ProjectConfigFileStatus {
-            id: "project_summary".to_string(),
+            id: "project".to_string(),
             category: "context".to_string(),
-            label: "Project summary".to_string(),
-            relative_path: ".github/automation/project_summary.md".to_string(),
+            label: "Project context".to_string(),
+            relative_path: ".github/automation/project.md".to_string(),
             full_path,
             full_link,
             used_by: "SEO + Reddit prompt context".to_string(),
             required: false,
             configured,
-            detail: if !path.exists() {
-                "Optional file missing".to_string()
-            } else if configured {
-                "Present".to_string()
-            } else {
-                "File is empty".to_string()
-            },
-        });
-    }
-
-    {
-        let path = automation_dir.join("brandvoice.md");
-        let (full_path, full_link) = path_strings(&path);
-        let configured = path.exists() && file_has_non_whitespace_content(&path);
-        files.push(ProjectConfigFileStatus {
-            id: "brandvoice".to_string(),
-            category: "sentiment".to_string(),
-            label: "Brand voice / tone".to_string(),
-            relative_path: ".github/automation/brandvoice.md".to_string(),
-            full_path,
-            full_link,
-            used_by: "Reddit reply sentiment and writing tone".to_string(),
-            required: false,
-            configured,
-            detail: if !path.exists() {
-                "Optional file missing".to_string()
-            } else if configured {
-                "Present".to_string()
-            } else {
-                "File is empty".to_string()
-            },
+            detail,
         });
     }
 
@@ -436,6 +398,7 @@ pub fn resolve(
     check_content_dir(&content_dir, workspace_config_exists, &mut checks);
     check_clis(&mut checks);
     check_secrets(&repo_root, &mut checks);
+    check_optional_config_files(&automation_dir, &mut checks);
 
     let is_valid = checks.iter().all(|c| c.severity != Severity::Error);
 
@@ -551,9 +514,9 @@ fn check_automation_dir(automation_dir: &Path, checks: &mut Vec<SetupCheckItem>)
                 automation_dir.display()
             ),
             fix_hint: Some(
-                "Run: mkdir -p .github/automation && pageseeds automation repo init".into(),
+                "Click 'Initialize Project' to create the workspace automatically".into(),
             ),
-            auto_fixable: false,
+            auto_fixable: true, // Now fixable via initialize_project_workspace
         });
     }
 }
@@ -573,9 +536,9 @@ fn check_articles_json(
                 path.display()
             ),
             fix_hint: Some(
-                "Import articles.json via the Articles tab, or copy it into .github/automation/".into(),
+                "Click 'Initialize Project' to create an empty articles.json".into(),
             ),
-            auto_fixable: false,
+            auto_fixable: true, // Now fixable via initialize_project_workspace
         });
     }
 }
@@ -658,6 +621,56 @@ fn check_content_dir(content_dir: &ContentDirResult, workspace_config_exists: bo
             });
         }
         _ => {}
+    }
+}
+
+/// Check for optional but recommended config files
+fn check_optional_config_files(automation_dir: &Path, checks: &mut Vec<SetupCheckItem>) {
+    // Only check if automation dir exists - otherwise these checks don't make sense
+    if !automation_dir.exists() {
+        return;
+    }
+    
+    // Check for project.md (or legacy files)
+    let project_md = automation_dir.join("project.md");
+    let legacy_summary = automation_dir.join("project_summary.md");
+    let legacy_brand = automation_dir.join("brandvoice.md");
+    
+    if !project_md.exists() && !legacy_summary.exists() && !legacy_brand.exists() {
+        checks.push(SetupCheckItem {
+            id: "project_md_missing".into(),
+            severity: Severity::Warn,
+            title: "Project context not configured".into(),
+            detail: "project.md is missing — AI prompts won't have project context".into(),
+            fix_hint: Some("Click 'Initialize Project' to create a project.md template".into()),
+            auto_fixable: true,
+        });
+    }
+    
+    // Check for reddit_config.md
+    let reddit_config = automation_dir.join("reddit_config.md");
+    if !reddit_config.exists() {
+        checks.push(SetupCheckItem {
+            id: "reddit_config_missing".into(),
+            severity: Severity::Warn,
+            title: "Reddit not configured".into(),
+            detail: "reddit_config.md is missing — Reddit features won't work".into(),
+            fix_hint: Some("Click 'Initialize Project' to create a reddit_config.md template".into()),
+            auto_fixable: true,
+        });
+    }
+    
+    // Check for reddit/_reply_guardrails.md
+    let guardrails = automation_dir.join("reddit").join("_reply_guardrails.md");
+    if !guardrails.exists() {
+        checks.push(SetupCheckItem {
+            id: "reply_guardrails_missing".into(),
+            severity: Severity::Warn,
+            title: "Reply guardrails not configured".into(),
+            detail: "reddit/_reply_guardrails.md is missing — reply safety guidelines not set".into(),
+            fix_hint: Some("Click 'Initialize Project' to create guardrails template".into()),
+            auto_fixable: true,
+        });
     }
 }
 
@@ -848,4 +861,254 @@ pub fn write_workspace_config(
     std::fs::write(&path, content)
         .map_err(|e| format!("Cannot write seo_workspace.json: {}", e))?;
     Ok(path)
+}
+
+/// Auto-discover content directory by scanning standard candidate paths.
+/// Returns the first candidate that contains markdown files, or the first candidate
+/// that exists (even if empty), or a default path if none exist.
+pub fn auto_discover_content_dir(repo_root: &Path) -> Option<PathBuf> {
+    // First pass: find candidate with markdown files
+    for candidate in CANDIDATES {
+        let p = repo_root.join(candidate);
+        let count = count_markdown(&p);
+        if count > 0 {
+            return Some(p);
+        }
+    }
+    
+    // Second pass: find any candidate that exists (even if empty)
+    for candidate in CANDIDATES {
+        let p = repo_root.join(candidate);
+        if p.exists() && p.is_dir() {
+            return Some(p);
+        }
+    }
+    
+    // No candidates found - return None
+    None
+}
+
+/// Template for project.md
+fn project_md_template(project_name: &str) -> String {
+    format!(r#"# {}
+
+## Project Summary
+<!-- Describe your project, target audience, and main value proposition -->
+
+## Brand Voice
+<!-- Describe your brand personality, tone, and style guidelines -->
+- Professional but approachable
+- Technical accuracy with clarity
+- Helpful and educational
+
+## Key Topics
+<!-- List main content topics and themes -->
+- 
+
+## Target Audience
+<!-- Describe your ideal reader/customer -->
+
+## Competitive Differentiation
+<!-- What makes your content/product unique -->
+"#, project_name)
+}
+
+/// Template for reddit_config.md
+fn reddit_config_template() -> &'static str {
+    r#"# Reddit Configuration
+
+## Product Name
+<!-- Your product or service name -->
+- 
+
+## Mention Stance
+<!-- REQUIRED, RECOMMENDED, OPTIONAL, or OMIT -->
+- OPTIONAL
+
+## Trigger Topics
+<!-- Topics to search for on Reddit -->
+- topic 1
+- topic 2
+- topic 3
+
+## Seed Subreddits
+<!-- Subreddits to monitor (without r/ prefix) -->
+- subreddit1
+- subreddit2
+
+## Excluded Subreddits
+<!-- Subreddits to ignore -->
+- 
+"#
+}
+
+/// Template for _reply_guardrails.md
+fn reply_guardrails_template() -> &'static str {
+    r#"# Reddit Reply Guardrails
+
+## Safety Rules
+- Never spam or post low-effort replies
+- Always provide genuine value
+- Disclose affiliation when mentioning the product
+- Follow subreddit rules and reddiquette
+
+## Tone Guidelines
+- Be helpful and authentic
+- Avoid overly promotional language
+- Match the community's tone and style
+- Use proper grammar and formatting
+
+## Prohibited Content
+- Direct sales pitches
+- Off-topic mentions
+- Copy-paste responses
+- Multiple posts to the same thread
+"#
+}
+
+/// Initialize a complete project workspace with all required files.
+/// This creates:
+/// 1. .github/automation/ directory structure
+/// 2. seo_workspace.json with auto-discovered content_dir
+/// 3. articles.json (empty with nextArticleId: 1)
+/// 4. project.md template
+/// 5. reddit_config.md template
+/// 6. reddit/_reply_guardrails.md template
+/// 7. artifacts/, task_results/ directories
+/// 8. Updates .gitignore
+/// 
+/// Returns a summary of what was created.
+pub fn initialize_project_workspace(
+    repo_root: &Path,
+    site_url_hint: Option<&str>,
+    project_name: Option<&str>,
+) -> std::result::Result<Vec<String>, String> {
+    let automation_dir = repo_root.join(".github").join("automation");
+    let reddit_dir = automation_dir.join("reddit");
+    let mut created = Vec::new();
+    
+    // Create directory structure
+    std::fs::create_dir_all(&automation_dir)
+        .map_err(|e| format!("Cannot create automation directory: {}", e))?;
+    std::fs::create_dir_all(&reddit_dir)
+        .map_err(|e| format!("Cannot create reddit directory: {}", e))?;
+    std::fs::create_dir_all(automation_dir.join("artifacts"))
+        .map_err(|e| format!("Cannot create artifacts directory: {}", e))?;
+    std::fs::create_dir_all(automation_dir.join("task_results"))
+        .map_err(|e| format!("Cannot create task_results directory: {}", e))?;
+    
+    // Auto-discover content directory
+    let content_dir = auto_discover_content_dir(repo_root);
+    let content_dir_str = content_dir
+        .as_ref()
+        .and_then(|p| p.strip_prefix(repo_root).ok())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "content".to_string());
+    
+    // Create seo_workspace.json if it doesn't exist
+    let workspace_config_path = automation_dir.join("seo_workspace.json");
+    if !workspace_config_path.exists() {
+        let site_url = site_url_hint.unwrap_or("");
+        write_workspace_config(&automation_dir, &content_dir_str, site_url)?;
+        created.push(format!(
+            "seo_workspace.json (content_dir: {})",
+            content_dir_str
+        ));
+    }
+    
+    // Create articles.json if it doesn't exist
+    let articles_json_path = automation_dir.join("articles.json");
+    if !articles_json_path.exists() {
+        let empty_articles = r#"{
+  "nextArticleId": 1,
+  "articles": []
+}"#;
+        std::fs::write(&articles_json_path, empty_articles)
+            .map_err(|e| format!("Cannot write articles.json: {}", e))?;
+        created.push("articles.json".to_string());
+    }
+    
+    // Create project.md if it doesn't exist (and no legacy files)
+    let project_md_path = automation_dir.join("project.md");
+    let legacy_summary = automation_dir.join("project_summary.md");
+    let legacy_brand = automation_dir.join("brandvoice.md");
+    if !project_md_path.exists() && !legacy_summary.exists() && !legacy_brand.exists() {
+        let name = project_name.unwrap_or("My Project");
+        std::fs::write(&project_md_path, project_md_template(name))
+            .map_err(|e| format!("Cannot write project.md: {}", e))?;
+        created.push("project.md".to_string());
+    }
+    
+    // Create reddit_config.md if it doesn't exist
+    let reddit_config_path = automation_dir.join("reddit_config.md");
+    if !reddit_config_path.exists() {
+        std::fs::write(&reddit_config_path, reddit_config_template())
+            .map_err(|e| format!("Cannot write reddit_config.md: {}", e))?;
+        created.push("reddit_config.md".to_string());
+    }
+    
+    // Create reddit/_reply_guardrails.md if it doesn't exist
+    let guardrails_path = reddit_dir.join("_reply_guardrails.md");
+    if !guardrails_path.exists() {
+        std::fs::write(&guardrails_path, reply_guardrails_template())
+            .map_err(|e| format!("Cannot write _reply_guardrails.md: {}", e))?;
+        created.push("reddit/_reply_guardrails.md".to_string());
+    }
+    
+    // Update .gitignore
+    if let Err(e) = update_gitignore(repo_root, &automation_dir) {
+        log::warn!("[initialize_project_workspace] Failed to update .gitignore: {}", e);
+        // Don't fail initialization if gitignore update fails
+    }
+    
+    Ok(created)
+}
+
+/// Update the project's .gitignore to exclude automation files that shouldn't be committed.
+/// Adds entries for:
+/// - artifacts/ (generated files)
+/// - task_results/ (generated files)
+fn update_gitignore(repo_root: &Path, automation_dir: &Path) -> std::result::Result<(), String> {
+    let gitignore_path = repo_root.join(".gitignore");
+    
+    // Entries to add
+    let entries = vec![
+        "# PageSeeds automation - generated artifacts",
+        ".github/automation/artifacts/",
+        ".github/automation/task_results/",
+    ];
+    
+    // Read existing content
+    let existing = if gitignore_path.exists() {
+        std::fs::read_to_string(&gitignore_path)
+            .map_err(|e| format!("Cannot read .gitignore: {}", e))?
+    } else {
+        String::new()
+    };
+    
+    // Check which entries are missing
+    let missing: Vec<&str> = entries.iter()
+        .filter(|entry| !existing.contains(**entry))
+        .copied()
+        .collect();
+    
+    if missing.is_empty() {
+        return Ok(());
+    }
+    
+    // Append missing entries
+    let mut new_content = existing;
+    if !new_content.is_empty() && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+    new_content.push('\n');
+    for entry in missing {
+        new_content.push_str(entry);
+        new_content.push('\n');
+    }
+    
+    std::fs::write(&gitignore_path, new_content)
+        .map_err(|e| format!("Cannot write .gitignore: {}", e))?;
+    
+    Ok(())
 }

@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText } from 'lucide-react'
+import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText, Globe } from 'lucide-react'
 import { LogViewer } from './LogViewer'
-import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus } from '../../lib/tauri'
-import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus } from '../../lib/types'
+import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus, getSeoProvider, setSeoProvider, getGlobalAgentProvider } from '../../lib/tauri'
+import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus, SeoProvider } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,38 +14,42 @@ import {
   TableCell,
   TableRow,
 } from '@/components/ui/table'
+import { useErrorHandler } from '../../lib/toast-context'
 
 interface SettingsProps {
   projectId?: string
 }
 
 export function Settings({ projectId }: SettingsProps) {
+  const { showError } = useErrorHandler()
   const [secrets, setSecrets] = useState<SecretsStatus | null>(null)
   const [secretsPath, setSecretsPath] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   const [importPath, setImportPath] = useState('')
   const [importWorking, setImportWorking] = useState(false)
   const [importResult, setImportResult] = useState<string | null>(null)
-  const [importError, setImportError] = useState<string | null>(null)
 
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null)
   const [agentLoading, setAgentLoading] = useState(false)
   const [agentSaving, setAgentSaving] = useState(false)
-  const [selectedProvider, setSelectedProvider] = useState<string>('copilot')
+  const [selectedProvider, setSelectedProvider] = useState<string>('kimi')
   const [agentSaved, setAgentSaved] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const hasUnsavedProviderChange = useRef(false)
+  const [hasUnsavedProviderChange, setHasUnsavedProviderChange] = useState(false)
 
   const [configFiles, setConfigFiles] = useState<ProjectConfigFileStatus[]>([])
   const [configLoading, setConfigLoading] = useState(false)
 
+  // SEO Provider state
+  const [seoProvider, setSeoProviderState] = useState<SeoProvider>('ahrefs')
+  const [seoLoading, setSeoLoading] = useState(false)
+  const [seoSaving, setSeoSaving] = useState(false)
+  const [seoSaved, setSeoSaved] = useState(false)
+
   const load = useCallback(async () => {
     if (!projectId) return
     setLoading(true)
-    setError(null)
     try {
       const [s, p] = await Promise.all([
         getSecretsStatus(projectId),
@@ -54,11 +58,11 @@ export function Settings({ projectId }: SettingsProps) {
       setSecrets(s)
       setSecretsPath(p)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   const loadConfigFiles = useCallback(async () => {
     if (!projectId) return
@@ -74,46 +78,82 @@ export function Settings({ projectId }: SettingsProps) {
     }
   }, [projectId])
 
-  const loadAgentStatus = useCallback(async () => {
-    if (!projectId) return
+  const loadAgentStatus = useCallback(async (force = false) => {
     setAgentLoading(true)
     try {
-      const status = await checkAgentStatus(projectId)
+      const status = await checkAgentStatus()
       setAgentStatus(status)
-      // Only update selected provider if user hasn't made unsaved changes
-      if (!hasUnsavedProviderChange.current) {
+      // Only update selected provider if user hasn't made unsaved changes (unless forced)
+      if (force || !hasUnsavedProviderChange) {
         setSelectedProvider(status.configured_provider)
       }
-    } catch {
-      // agent check is best-effort
+    } catch (e) {
+      console.error('[Settings] Failed to load agent status:', e)
     } finally {
       setAgentLoading(false)
     }
-  }, [projectId])
+  }, [hasUnsavedProviderChange])
 
   const saveProvider = useCallback(async () => {
-    if (!projectId) return
     setAgentSaving(true)
-    setSaveError(null)
     try {
-      await setAgentProvider(projectId, selectedProvider)
+      await setAgentProvider(selectedProvider)
       setAgentSaved(true)
-      hasUnsavedProviderChange.current = false
+      setHasUnsavedProviderChange(false)
+      // Reload to verify the save persisted (force refresh)
+      await loadAgentStatus(true)
       setTimeout(() => setAgentSaved(false), 2000)
     } catch (e) {
-      setSaveError(String(e))
+      showError(String(e))
     } finally {
       setAgentSaving(false)
     }
-  }, [projectId, selectedProvider])
+  }, [selectedProvider, loadAgentStatus, showError])
 
+  // Load SEO provider
+  const loadSeoProvider = useCallback(async () => {
+    if (!projectId) return
+    setSeoLoading(true)
+    try {
+      const provider = await getSeoProvider(projectId)
+      setSeoProviderState(provider as SeoProvider)
+    } catch (e) {
+      showError(String(e))
+    } finally {
+      setSeoLoading(false)
+    }
+  }, [projectId, showError])
+
+  // Save SEO provider
+  const saveSeoProvider = useCallback(async () => {
+    if (!projectId) return
+    setSeoSaving(true)
+    try {
+      await setSeoProvider(projectId, seoProvider)
+      setSeoSaved(true)
+      // Reload to verify the save persisted
+      await loadSeoProvider()
+      setTimeout(() => setSeoSaved(false), 2000)
+    } catch (e) {
+      showError(String(e))
+    } finally {
+      setSeoSaving(false)
+    }
+  }, [projectId, seoProvider, loadSeoProvider, showError])
+
+  // Load global settings once on mount
+  useEffect(() => {
+    loadAgentStatus()
+  }, [])
+
+  // Load project-specific settings when project changes
   useEffect(() => {
     // Reset unsaved change tracking when project changes
-    hasUnsavedProviderChange.current = false
+    setHasUnsavedProviderChange(false)
     load()
     loadConfigFiles()
-    loadAgentStatus()
-  }, [load, loadConfigFiles, loadAgentStatus, projectId])
+    loadSeoProvider()
+  }, [load, loadConfigFiles, loadSeoProvider, projectId])
 
   const copyPath = useCallback(async () => {
     if (!secretsPath) return
@@ -131,7 +171,6 @@ export function Settings({ projectId }: SettingsProps) {
     if (!importPath.trim()) return
     setImportWorking(true)
     setImportResult(null)
-    setImportError(null)
     try {
       const keys = await importEnvFile(importPath.trim())
       setImportResult(
@@ -141,11 +180,11 @@ export function Settings({ projectId }: SettingsProps) {
       )
       await load() // refresh secrets status
     } catch (e) {
-      setImportError(String(e))
+      showError(String(e))
     } finally {
       setImportWorking(false)
     }
-  }, [importPath, load])
+  }, [importPath, load, showError])
 
   const SOURCE_LABELS: Record<string, string> = {
     'secrets_env': 'secrets.env',
@@ -178,12 +217,6 @@ export function Settings({ projectId }: SettingsProps) {
                     </Button>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    {error && (
-                      <div className="px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
-                        {error}
-                      </div>
-                    )}
-
                     {secretsPath && (
                       <div className="flex items-center gap-2 px-3 py-2.5 rounded-md border border-border bg-secondary">
                         <div className="flex-1 min-w-0">
@@ -233,7 +266,7 @@ export function Settings({ projectId }: SettingsProps) {
                       </div>
                     )}
 
-                    {!loading && !secrets && !error && (
+                    {!loading && !secrets && (
                       <p className="text-sm text-muted-foreground">No secrets data available.</p>
                     )}
 
@@ -267,9 +300,6 @@ export function Settings({ projectId }: SettingsProps) {
                       </div>
                       {importResult && (
                         <div className="px-3 py-1.5 rounded-md text-xs bg-emerald-100 text-emerald-700">{importResult}</div>
-                      )}
-                      {importError && (
-                        <div className="px-3 py-1.5 rounded-md text-xs bg-destructive/15 text-destructive">{importError}</div>
                       )}
                     </div>
                   </CardContent>
@@ -346,6 +376,88 @@ export function Settings({ projectId }: SettingsProps) {
 
                 <Separator className="bg-border" />
 
+                {/* SEO Provider section */}
+                <Card className="bg-card border-border">
+                  <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <Globe size={14} className="text-muted-foreground" />
+                      SEO Data Provider
+                    </CardTitle>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={loadSeoProvider}
+                      disabled={seoLoading}
+                      className="text-muted-foreground"
+                    >
+                      <RefreshCw size={13} className={seoLoading ? 'animate-spin' : ''} />
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-3">
+                      <label className="flex items-start gap-3 p-3 rounded-lg border border-border bg-secondary/30 cursor-pointer hover:bg-secondary/50 transition-colors">
+                        <input
+                          type="radio"
+                          name="seo-provider"
+                          value="ahrefs"
+                          checked={seoProvider === 'ahrefs'}
+                          onChange={(e) => setSeoProviderState(e.target.value as SeoProvider)}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-foreground">Ahrefs (Free)</span>
+                            <Badge variant="outline" className="border-transparent bg-emerald-100 text-emerald-700 text-[10px] px-1.5 py-0">
+                              Free
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Uses Ahrefs free tier with CapSolver. Returns categorical volume labels (e.g., "MoreThanThousand").
+                            Requires CAPSOLVER_API_KEY.
+                          </p>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-3 p-3 rounded-lg border border-border bg-secondary/30 cursor-pointer hover:bg-secondary/50 transition-colors">
+                        <input
+                          type="radio"
+                          name="seo-provider"
+                          value="dataforseo"
+                          checked={seoProvider === 'dataforseo'}
+                          onChange={(e) => setSeoProviderState(e.target.value as SeoProvider)}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-foreground">DataForSEO (Paid)</span>
+                            <Badge variant="outline" className="border-transparent bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0">
+                              Paid
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Pay-as-you-go API with precise numeric volumes, CPC data, and competition scores.
+                            Requires DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-2">
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={saveSeoProvider}
+                        disabled={seoSaving}
+                        className="border-border text-foreground"
+                      >
+                        {seoSaved ? 'Saved!' : seoSaving ? 'Saving…' : 'Save Provider'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Separator className="bg-border" />
+
                 {/* Agent configuration section */}
                 <Card className="bg-card border-border">
                   <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -407,7 +519,7 @@ export function Settings({ projectId }: SettingsProps) {
                         value={selectedProvider}
                         onChange={e => {
                           setSelectedProvider(e.target.value)
-                          hasUnsavedProviderChange.current = true
+                          setHasUnsavedProviderChange(true)
                         }}
                         className="flex-1 text-sm bg-secondary border border-border rounded-md px-3 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                       >
@@ -425,12 +537,6 @@ export function Settings({ projectId }: SettingsProps) {
                         {agentSaved ? 'Saved!' : agentSaving ? 'Saving…' : 'Save'}
                       </Button>
                     </div>
-
-                    {saveError && (
-                      <div className="px-3 py-2 rounded-md text-xs bg-destructive/15 text-destructive">
-                        Error: {saveError}
-                      </div>
-                    )}
 
                     {!agentLoading && !agentStatus && (
                       <p className="text-sm text-muted-foreground">Unable to detect agents. Select a project first.</p>

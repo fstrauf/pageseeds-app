@@ -7,6 +7,7 @@ import { RedditSearch } from './RedditSearch'
 import { RedditStats } from './RedditStats'
 import { createTask } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
+import { invalidateQueries } from '../../hooks/useQuery'
 import type { Project, RedditOpportunity } from '../../lib/types'
 
 interface Props {
@@ -16,7 +17,6 @@ interface Props {
 
 export function Reddit({ projectId, project }: Props) {
   const [selected, setSelected] = useState<RedditOpportunity | null>(null)
-  const [refreshKey, setRefreshKey] = useState(0)
   const [searching, setSearching] = useState(false)
   const [searchMsg, setSearchMsg] = useState<string | null>(null)
   const [showContextDialog, setShowContextDialog] = useState(false)
@@ -28,22 +28,22 @@ export function Reddit({ projectId, project }: Props) {
   useEffect(() => {
     if (lastQueueActive && !queue.isActive) {
       // Queue was active and is now inactive - refresh the feed
-      setRefreshKey(k => k + 1)
+      invalidateQueries('reddit')
       setSearchMsg(null)
     }
     setLastQueueActive(queue.isActive)
   }, [queue.isActive, lastQueueActive])
 
   function handleStatusChange() {
-    setRefreshKey(k => k + 1)
+    invalidateQueries('reddit')
     setSelected(null)
   }
 
   function handleSearchSaved() {
-    setRefreshKey(k => k + 1)
+    invalidateQueries('reddit')
   }
 
-  async function handleRunSearch() {
+  function handleRunSearch() {
     setShowContextDialog(true)
   }
 
@@ -76,7 +76,6 @@ export function Reddit({ projectId, project }: Props) {
       }])
       
       setSearchMsg('Added to queue...')
-      setRefreshKey(k => k + 1)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setSearchMsg(`✗ Failed: ${msg}`)
@@ -194,7 +193,6 @@ export function Reddit({ projectId, project }: Props) {
               selectedId={selected?.post_id}
               onSelect={setSelected}
               onStatusChange={handleStatusChange}
-              refreshKey={refreshKey}
             />
           </TabsContent>
 
@@ -203,7 +201,7 @@ export function Reddit({ projectId, project }: Props) {
           </TabsContent>
 
           <TabsContent value="stats" className="flex-1 overflow-y-auto mt-0 p-0">
-            <RedditStats projectId={projectId} refreshKey={refreshKey} />
+            <RedditStats projectId={projectId} />
           </TabsContent>
         </Tabs>
       </div>

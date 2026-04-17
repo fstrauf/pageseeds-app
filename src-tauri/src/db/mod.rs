@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::error::Result;
 
 pub mod export;
+pub mod global_settings;
 
 /// Get the default database path based on platform conventions.
 /// Used when we need to access the DB without having the AppState.
@@ -177,23 +178,15 @@ CREATE INDEX IF NOT EXISTS idx_gsc_url_status_resolved ON gsc_url_indexing_statu
 "#;
 
 static MIGRATION_V11: &str = r#"
--- Skill embeddings for semantic search
-CREATE TABLE IF NOT EXISTS skill_embeddings (
-    skill_name      TEXT PRIMARY KEY,
-    project_id      TEXT NOT NULL,
-    content_hash    TEXT NOT NULL,        -- Hash of content to detect changes
-    embedding       BLOB NOT NULL,        -- Serialized vector
-    model_name      TEXT NOT NULL,        -- E.g., "nomic-embed-text"
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_skill_embeddings_project ON skill_embeddings(project_id);
+-- NO-OP: V11 was an incomplete skill_embeddings migration.
+-- V12 supersedes it with the final schema. This no-op remains so
+-- existing databases that already applied V11 do not re-run it.
 "#;
 
 static MIGRATION_V12: &str = r#"
 -- Skill embeddings for semantic search (Rig.rs integration)
+-- SUPersedes V11: V11 was an incomplete/leftover migration with the same
+-- table name but a slightly different comment. V12 is the canonical schema.
 CREATE TABLE IF NOT EXISTS skill_embeddings (
     skill_name      TEXT PRIMARY KEY,
     project_id      TEXT NOT NULL,
@@ -374,8 +367,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 4 {
         // Add agent_provider to projects; ignore error if column already exists
+        // Note: This is legacy - agent_provider is now global. Default to 'kimi'.
         let _ = conn.execute_batch(
-            "ALTER TABLE projects ADD COLUMN agent_provider TEXT DEFAULT 'copilot';",
+            "ALTER TABLE projects ADD COLUMN agent_provider TEXT DEFAULT 'kimi';",
         );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (4, ?1)",
@@ -446,6 +440,63 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V12)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (12, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 13 {
+        // Add seo_provider column for dual SEO provider support (Ahrefs / DataForSEO)
+        let _ = conn.execute_batch(
+            "ALTER TABLE projects ADD COLUMN seo_provider TEXT NOT NULL DEFAULT 'ahrefs';",
+        );
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (13, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    // Repair: V13 migration silently failed on some databases (let _ = swallowed the error).
+    // Ensure seo_provider column exists regardless of recorded schema version.
+    {
+        let has_col: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='seo_provider'")?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) > 0;
+        if !has_col {
+            conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN seo_provider TEXT NOT NULL DEFAULT 'ahrefs';",
+            )?;
+        }
+    }
+
+    if version < 14 {
+        // Add global_settings table for application-wide settings
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS global_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )?;
+        // Default to 'kimi' as the preferred agent
+        conn.execute(
+            "INSERT OR IGNORE INTO global_settings (key, value, updated_at) VALUES ('agent_provider', 'kimi', ?1)",
+            [&now],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (14, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 15 {
+        // Add product_name column to reddit_opportunities for agentic config consumption
+        let _ = conn.execute_batch(
+            "ALTER TABLE reddit_opportunities ADD COLUMN product_name TEXT;",
+        );
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (15, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

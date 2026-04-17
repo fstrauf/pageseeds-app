@@ -6,7 +6,7 @@
 ///
 /// Step execution happens in `executor.rs`; handlers only describe the plan.
 
-use super::{step_params, StepResult, WorkflowStep};
+use super::{step_params, StepKind, StepResult, WorkflowStep};
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
 
@@ -35,10 +35,10 @@ impl WorkflowHandler for CollectionHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "collect_gsc" => vec![
-                WorkflowStep::new("collect_gsc_inspect", "collect_gsc_inspect"),
+                WorkflowStep::new("collect_gsc_inspect", StepKind::CollectGscInspect.as_ref()),
             ],
             // collect_posthog has no CLI implementation yet — fall back to agent.
-            _ => vec![WorkflowStep::new("collect_agent_stage", "agentic")],
+            _ => vec![WorkflowStep::new("collect_agent_stage", StepKind::Agentic.as_ref())],
         }
     }
 }
@@ -57,14 +57,14 @@ impl WorkflowHandler for InvestigationHandler {
             "investigate_gsc" => vec![
                 // Step 1 (deterministic): group reason_codes, count occurrences, pick example URLs.
                 // Writes gsc_summary.json. Grouping and counting cannot require judgment.
-                WorkflowStep::new("investigate_gsc_summarise", "gsc_summarise"),
+                WorkflowStep::new("investigate_gsc_summarise", StepKind::GscSummarise.as_ref()),
                 // Step 2 (agentic): interpret the grouped summary, identify patterns, recommend
                 // corrective actions. Cannot be deterministic: interpreting *why* a cluster of
                 // pages is not indexed and what to do about it requires intent-level judgment.
-                WorkflowStep::new("investigate_gsc_agent", "gsc_investigate_agentic"),
+                WorkflowStep::new("investigate_gsc_agent", StepKind::GscInvestigateAgentic.as_ref()),
             ],
             // investigate_posthog has no CLI implementation yet — fall back to agent.
-            _ => vec![WorkflowStep::new("investigate_agent_stage", "agentic")],
+            _ => vec![WorkflowStep::new("investigate_agent_stage", StepKind::Agentic.as_ref())],
         }
     }
 }
@@ -89,19 +89,19 @@ impl WorkflowHandler for ResearchHandler {
                 vec![
                     // Step 1 (agentic): LLM extracts 3-4 themes from project brief.
                     // Cannot be deterministic: requires reading intent from free-form text.
-                    WorkflowStep::new("research_seed_extraction", "agentic"),
+                    WorkflowStep::new("research_seed_extraction", StepKind::Agentic.as_ref()),
                     
                     // Step 2 (deterministic): Rust drives Ahrefs API directly — no LLM.
                     // Deterministic: given themes, enumerates ideas + fetches KD scores.
                     // Output: structured JSON with all keywords, volume, KD.
-                    WorkflowStep::new("research_ahrefs_pipeline", "keyword_research_native"),
+                    WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative.as_ref()),
                     
                     // Step 3 (deterministic): Select best candidates from structured data.
                     // Deterministic: pure filtering/sorting by KD and volume — no judgment needed.
-                    WorkflowStep::new("research_final_selection", "research_final_selection"),
+                    WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection.as_ref()),
                     
                     // Step 4 (normalizer): Enforces output contract before UI parses it.
-                    WorkflowStep::new("research_normalize", "normalizer")
+                    WorkflowStep::new("research_normalize", StepKind::Normalizer.as_ref())
                         .with_param(step_params::NORMALIZER_ID, "keyword_research")
                         .with_param(step_params::ARTIFACT_NAME, "keyword_research"),
                 ]
@@ -111,12 +111,12 @@ impl WorkflowHandler for ResearchHandler {
                 // This legacy path uses the old agentic+normalizer flow via seo-keyword-research skill.
                 // Kept for backward compatibility - migrate to the 3-step hybrid flow when ready.
                 let mut steps = vec![
-                    WorkflowStep::new("research_agent_stage", "agentic")
+                    WorkflowStep::new("research_agent_stage", StepKind::Agentic.as_ref())
                         .with_param(step_params::SKILL, "seo-keyword-research")
                 ];
                 if task_type(task) == "custom_keyword_research" {
                     steps.push(
-                        WorkflowStep::new("research_normalize_stage", "normalizer")
+                        WorkflowStep::new("research_normalize_stage", StepKind::Normalizer.as_ref())
                             .with_param(step_params::NORMALIZER_ID, "keyword_research")
                             .with_param(step_params::ARTIFACT_NAME, "keyword_research"),
                     );
@@ -135,7 +135,7 @@ impl WorkflowHandler for ContentHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
+            "write_article" | "optimize_article" | "create_content" | "optimize_content"
                 | "content_review_apply"
         )
     }
@@ -144,10 +144,10 @@ impl WorkflowHandler for ContentHandler {
         if task_type(task) == "content_review_apply" {
             // Dedicated step runner that reads the recommendations artifact and
             // builds a structured apply prompt — not a generic skill/agentic call.
-            return vec![WorkflowStep::new("content_review_apply_execute", "content_review_apply_execute")];
+            return vec![WorkflowStep::new("content_review_apply_execute", StepKind::ContentReviewApplyExecute.as_ref())];
         }
         // Agentic: the agent reads the article spec and writes the MDX file.
-        vec![WorkflowStep::new("content_write_stage", "agentic")]
+        vec![WorkflowStep::new("content_write_stage", StepKind::Agentic.as_ref())]
     }
 }
 
@@ -164,18 +164,18 @@ impl WorkflowHandler for ContentReviewHandler {
         vec![
             // Step 1: fetch GSC page metrics and write into articles.json.
             // Optional — a missing service account skips gracefully rather than aborting.
-            WorkflowStep::new("content_review_gsc_sync", "gsc_sync_articles")
+            WorkflowStep::new("content_review_gsc_sync", StepKind::GscSyncArticles.as_ref())
                 .optional(),
             // Step 2: deterministic multi-check audit → writes content_audit.json.
             // Optional — still valuable even without GSC data.
-            WorkflowStep::new("content_review_audit", "content_audit")
+            WorkflowStep::new("content_review_audit", StepKind::ContentAudit.as_ref())
                 .optional(),
             // Step 3: native sync — validates articles.json ↔ content files, dates.
-            WorkflowStep::new("content_review_sync", "content_sync")
+            WorkflowStep::new("content_review_sync", StepKind::ContentSync.as_ref())
                 .optional(),
             // Step 4: select priority articles, build structured context, get agent recommendations.
             // One focused agent call (not N calls). Writes recommendations.json.
-            WorkflowStep::new("content_review_recommend", "content_review_recommend"),
+            WorkflowStep::new("content_review_recommend", StepKind::ContentReviewRecommend.as_ref()),
         ]
     }
 }
@@ -199,47 +199,49 @@ impl WorkflowHandler for ImplementationHandler {
                 | "indexing_diagnostics"
                 | "content_strategy"
                 | "technical_fix"
+                | "technical_seo"
                 | "landing_page_spec"
+                | "create_landing_page"
         ) || t.starts_with("fix_")
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "content_cleanup" => vec![
-                WorkflowStep::new("content_cleanup_run", "deterministic")
+                WorkflowStep::new("content_cleanup_run", StepKind::Deterministic.as_ref())
                     .with_param(step_params::CMD, "pageseeds content clean --workspace-dir {automation_dir}"),
             ],
             "publish_content" => vec![
-                WorkflowStep::new("publish_content_run", "deterministic")
+                WorkflowStep::new("publish_content_run", StepKind::Deterministic.as_ref())
                     .with_param(step_params::CMD, "pageseeds content validate --workspace-dir {automation_dir}"),
             ],
             "fix_content_article" => vec![
                 // Per-article content fix: reads the recommendations artifact embedded in the task
                 // and applies SEO improvements (title, meta, intro, internal links, FAQ, EEAT, CTA)
                 // to a single MDX file. One focused agent call per article.
-                WorkflowStep::new("fix_content_article_apply", "agentic"),
+                WorkflowStep::new("fix_content_article_apply", StepKind::Agentic.as_ref()),
             ],
             "indexing_diagnostics" => vec![
                 // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
                 // only re-checks stale or known-bad URLs, and spawns fix tasks for new/regressed
                 // or unresolved issues. Deterministic because it is pure API calls + DB comparison.
-                WorkflowStep::new("indexing_diagnostics_run", "indexing_diagnostics_run"),
+                WorkflowStep::new("indexing_diagnostics_run", StepKind::IndexingDiagnosticsRun.as_ref()),
             ],
             "fix_indexing" | "fix_technical" => vec![
                 // Step 1 (deterministic): load the target MDX file and extract structured context
                 // (word count, H1, title, internal links, canonical). This is obvious file I/O —
                 // no judgment required — and saves the agent from hunting around the repo.
-                WorkflowStep::new("indexing_fix_context", "indexing_fix_context"),
+                WorkflowStep::new("indexing_fix_context", StepKind::IndexingFixContext.as_ref()),
                 // Step 2 (agentic): apply the fix. The agent gets the GSC issue + structured
                 // context and edits the MDX file directly. Judgment is required because the fix
                 // depends on intent, content quality, and site-specific conventions.
-                WorkflowStep::new("indexing_fix_apply", "indexing_fix_apply"),
+                WorkflowStep::new("indexing_fix_apply", StepKind::IndexingFixApply.as_ref()),
             ],
             "cluster_and_link" => vec![
                 // Step 1 (deterministic, native Rust): scan all MDX files, build the full link
                 // map, identify orphans and coverage gaps.  Pure file I/O + regex — no judgment.
                 // Writes link_scan.json to the automation dir for the next step to consume.
-                WorkflowStep::new("cluster_and_link_scan", "cluster_link_scan"),
+                WorkflowStep::new("cluster_and_link_scan", StepKind::ClusterLinkScan.as_ref()),
                 // Step 2 (agentic): interpret the scan output, determine pillar/cluster
                 // structure, and recommend specific missing links to add.
                 // Cannot be deterministic: deciding which articles are pillars vs supports,
@@ -247,12 +249,18 @@ impl WorkflowHandler for ImplementationHandler {
                 // business priorities — not just graph connectivity.
                 // Writes links_to_add.json (output contract: {links_to_add:[{source_article_id,
                 // source_file, target_article_id, target_title, target_slug, reason}]}).
-                WorkflowStep::new("cluster_and_link_strategy", "cluster_link_strategy"),
+                WorkflowStep::new("cluster_and_link_strategy", StepKind::ClusterLinkStrategy.as_ref()),
                 // Step 3 (deterministic): read links_to_add.json and append "Related Articles"
                 // sections to the MDX files that are missing them.
                 // Skips files that already have a Related Articles section or already link
                 // to the target slug.
-                WorkflowStep::new("cluster_and_link_apply", "cluster_link_apply"),
+                WorkflowStep::new("cluster_and_link_apply", StepKind::ClusterLinkApply.as_ref()),
+            ],
+            "create_landing_page" | "landing_page_spec" => vec![
+                // Deterministic: build a structured spec file from keyword metadata
+                // already on the task. No LLM needed — the spec is a structured template
+                // populated with keyword, page type, intent, volume, and KD.
+                WorkflowStep::new("landing_page_spec_write", StepKind::LandingPageSpecWrite.as_ref()),
             ],
             // fix_* and other implementation types: agentic for now.
             //
@@ -263,7 +271,7 @@ impl WorkflowHandler for ImplementationHandler {
             //
             // An agentic step alone for fix_404s will ask the LLM to generate redirect
             // rules for patterns that a regex would handle reliably.
-            _ => vec![WorkflowStep::new("implementation_agent_stage", "agentic")],
+            _ => vec![WorkflowStep::new("implementation_agent_stage", StepKind::Agentic.as_ref())],
         }
     }
 }
@@ -281,24 +289,24 @@ impl WorkflowHandler for RedditHandler {
         match task_type(task) {
             "reddit_opportunity_search" => vec![
                 // Step 1 (agentic): Parse reddit_config.md and extract structured search parameters.
-                WorkflowStep::new("reddit_config_parse_stage", "reddit_config_parse"),
+                WorkflowStep::new("reddit_config_parse_stage", StepKind::RedditConfigParse.as_ref()),
                 // Step 2 (deterministic): API search using the structured parameters.
-                WorkflowStep::new("reddit_search_stage", "reddit_search"),
+                WorkflowStep::new("reddit_search_stage", StepKind::RedditSearch.as_ref()),
                 // Step 3 (agentic): relevance scoring, pain point extraction, reply drafting.
-                WorkflowStep::new("reddit_enrich_stage", "reddit_enrich"),
+                WorkflowStep::new("reddit_enrich_stage", StepKind::RedditEnrich.as_ref()),
                 // Step 4 (deterministic): Fetch enriched opportunities from DB.
-                WorkflowStep::new("reddit_results_stage", "reddit_fetch_results"),
+                WorkflowStep::new("reddit_results_stage", StepKind::RedditFetchResults.as_ref()),
             ],
             "reddit_reply" => vec![
                 // Step 1 (deterministic): Post the reply to Reddit via API.
                 // Extracts post_id and reply_text from task description.
-                WorkflowStep::new("reddit_post_reply", "reddit_post_reply"),
+                WorkflowStep::new("reddit_post_reply", StepKind::RedditPostReply.as_ref()),
             ],
             _ => {
                 // Other reddit tasks use agent + optional normalizer.
-                let mut steps = vec![WorkflowStep::new("reddit_agent_stage", "agentic")];
+                let mut steps = vec![WorkflowStep::new("reddit_agent_stage", StepKind::Agentic.as_ref())];
                 steps.push(
-                    WorkflowStep::new("reddit_normalize_stage", "normalizer")
+                    WorkflowStep::new("reddit_normalize_stage", StepKind::Normalizer.as_ref())
                         .with_param(step_params::NORMALIZER_ID, "reddit_opportunities")
                         .with_param(step_params::ARTIFACT_NAME, "reddit_opportunities")
                         .optional(),
@@ -321,13 +329,13 @@ impl WorkflowHandler for CoverageHandler {
     fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
         vec![
             // Step 1 (deterministic): Load articles from articles.json
-            WorkflowStep::new("coverage_load_articles", "coverage_load_articles"),
+            WorkflowStep::new("coverage_load_articles", StepKind::CoverageLoadArticles.as_ref()),
             // Step 2 (agentic): Cluster articles by semantic similarity
             // Cannot be deterministic: understanding topic relationships and naming
             // clusters requires semantic judgment about content themes.
-            WorkflowStep::new("coverage_cluster_analysis", "coverage_cluster_analysis"),
+            WorkflowStep::new("coverage_cluster_analysis", StepKind::CoverageClusterAnalysis.as_ref()),
             // Step 3 (deterministic): Save results to keyword_coverage.json
-            WorkflowStep::new("coverage_save", "coverage_save"),
+            WorkflowStep::new("coverage_save", StepKind::CoverageSave.as_ref()),
         ]
     }
 }
@@ -349,7 +357,7 @@ impl WorkflowHandler for PerformanceHandler {
         // An empty agentic step with no data context is fake intelligence — the
         // agent receives no artifact and produces generic filler. Use manual until
         // the deterministic data-fetch step exists.
-        vec![WorkflowStep::new("performance_manual", "manual")]
+        vec![WorkflowStep::new("performance_manual", StepKind::Manual.as_ref())]
     }
 }
 
@@ -365,28 +373,28 @@ impl WorkflowHandler for SocialHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "social_generate_campaign" => vec![
-                WorkflowStep::new("social_collect_sources", "social_collect_sources"),
-                WorkflowStep::new("social_load_templates", "social_load_templates"),
-                WorkflowStep::new("social_generate_posts", "social_generate_posts"),
-                WorkflowStep::new("social_build_visuals", "social_build_visuals"),
-                WorkflowStep::new("social_save_campaign", "social_save_campaign"),
+                WorkflowStep::new("social_collect_sources", StepKind::SocialCollectSources.as_ref()),
+                WorkflowStep::new("social_load_templates", StepKind::SocialLoadTemplates.as_ref()),
+                WorkflowStep::new("social_generate_posts", StepKind::SocialGeneratePosts.as_ref()),
+                WorkflowStep::new("social_build_visuals", StepKind::SocialBuildVisuals.as_ref()),
+                WorkflowStep::new("social_save_campaign", StepKind::SocialSaveCampaign.as_ref()),
             ],
             "social_generate_from_article" => vec![
-                WorkflowStep::new("social_extract_article", "social_extract_article"),
+                WorkflowStep::new("social_extract_article", StepKind::SocialExtractArticle.as_ref()),
                 WorkflowStep::new("social_generate_posts", "social_generate_posts"),
                 WorkflowStep::new("social_build_visuals", "social_build_visuals"),
                 WorkflowStep::new("social_save_campaign", "social_save_campaign"),
             ],
             "social_regenerate_post" => vec![
-                WorkflowStep::new("social_regenerate_single", "social_regenerate_single"),
-                WorkflowStep::new("social_rebuild_visual", "social_rebuild_visual"),
-                WorkflowStep::new("social_update_post", "social_update_post"),
+                WorkflowStep::new("social_regenerate_single", StepKind::SocialRegenerateSingle.as_ref()),
+                WorkflowStep::new("social_rebuild_visual", StepKind::SocialRebuildVisual.as_ref()),
+                WorkflowStep::new("social_update_post", StepKind::SocialUpdatePost.as_ref()),
             ],
             "social_create_template" => vec![
-                WorkflowStep::new("social_design_template", "social_design_template"),
-                WorkflowStep::new("social_save_template", "social_save_template"),
+                WorkflowStep::new("social_design_template", StepKind::SocialDesignTemplate.as_ref()),
+                WorkflowStep::new("social_save_template", StepKind::SocialSaveTemplate.as_ref()),
             ],
-            _ => vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), "manual")],
+            _ => vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), StepKind::Manual.as_ref())],
         }
     }
 }
@@ -401,7 +409,7 @@ impl WorkflowHandler for ManualFallbackHandler {
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
-        vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), "manual")]
+        vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), StepKind::Manual.as_ref())]
     }
 }
 
@@ -436,7 +444,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
 /// Supported tokens in `cmd`:
 ///   {project_path}   → repo root
 ///   {automation_dir} → repo/.github/automation
-pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str) -> StepResult {
+pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str, _seo_provider: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let automation_dir = paths.automation_dir.to_string_lossy();
 
@@ -526,7 +534,7 @@ pub async fn exec_agentic(
 
     let is_content_task = matches!(
         task.task_type.as_str(),
-        "write_article" | "optimize_article" | "create_landing_page" | "create_content" | "optimize_content"
+        "write_article" | "optimize_article" | "create_content" | "optimize_content"
     );
 
     let content_context = if is_content_task {
@@ -991,4 +999,72 @@ fn rename_new_or_modified_md_to_mdx(
     }
 
     renamed
+}
+
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use crate::config::TASK_TYPES;
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+
+    fn make_task(task_type: &str) -> Task {
+        Task {
+            id: format!("test-{task_type}"),
+            task_type: task_type.to_string(),
+            phase: "research".to_string(),
+            status: TaskStatus::Todo,
+            priority: Priority::Medium,
+            execution_mode: ExecutionMode::Manual,
+            agent_policy: AgentPolicy::Optional,
+            title: Some(format!("{task_type} test")),
+            description: None,
+            project_id: "proj1".to_string(),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    /// Every task type in config::TASK_TYPES must match a non-fallback handler.
+    /// This catches silent registration failures where a new task type is added
+    /// to the config but not to the handler registry.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn all_task_types_have_non_fallback_handler() {
+        let handlers = default_handlers();
+        // The last handler is always ManualFallbackHandler
+        let non_fallback_handlers: Vec<&Box<dyn WorkflowHandler>> = handlers
+            .iter()
+            .filter(|h| {
+                // ManualFallbackHandler matches everything, so we skip it
+                !h.supports(&make_task("__manual_fallback_probe__"))
+            })
+            .collect();
+
+        for task_type in TASK_TYPES {
+            let task = make_task(task_type);
+            let matched = handlers.iter().find(|h| h.supports(&task));
+            assert!(
+                matched.is_some(),
+                "Task type '{}' has no handler at all",
+                task_type
+            );
+            // Ensure it's not the fallback handler
+            let steps = matched.unwrap().plan(&task);
+            let is_fallback = steps.len() == 1 && steps[0].kind == StepKind::Manual;
+            assert!(
+                !is_fallback,
+                "Task type '{}' falls through to ManualFallbackHandler. Add a real handler.",
+                task_type
+            );
+        }
+
+        log::info!(
+            "[registry_test] All {} task types have non-fallback handlers",
+            TASK_TYPES.len()
+        );
+    }
 }

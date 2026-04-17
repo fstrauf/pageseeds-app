@@ -9,9 +9,11 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter as _;
 
+use crate::engine::step_registry::{StepContext, StepRegistry};
 use crate::engine::workflows::{
-    handlers::{default_handlers, exec_agentic, exec_deterministic},
+    handlers::default_handlers,
     step_params,
+    StepKind, StepResult,
     WorkflowStep,
 };
 use crate::engine::task_store;
@@ -95,12 +97,23 @@ pub async fn execute_task_with_token(
         task_store::update_task_status(conn, task_id, TaskStatus::InProgress).map_err(|e| e.to_string())?;
     }
 
-    let (project_path, site_url, agent_provider) = {
+    let (project_path, site_url, agent_provider, seo_provider) = {
+        use crate::db::global_settings;
         let project = task_store::get_project(conn, &task.project_id).map_err(|e| e.to_string())?;
+        
+        // Agent provider is now global (user preference), but check for legacy project-specific setting
+        let agent_provider = if let Some(legacy) = &project.agent_provider {
+            log::debug!("[executor] Using legacy project agent_provider: {}", legacy);
+            legacy.clone()
+        } else {
+            global_settings::get_agent_provider(conn)
+        };
+        
         (
             project.path.clone(),
             project.site_url.clone().unwrap_or_default(),
-            project.agent_provider.clone().unwrap_or_else(|| "copilot".to_string()),
+            agent_provider,
+            project.seo_provider.clone().unwrap_or_else(|| "ahrefs".to_string()),
         )
     };
 
@@ -125,7 +138,7 @@ pub async fn execute_task_with_token(
         .iter()
         .map(|s| StepProgress {
             step_name: s.name.clone(),
-            kind: s.kind.clone(),
+            kind: s.kind.to_string(),
             status: "pending".to_string(),
             message: String::new(),
             output: None,
@@ -158,13 +171,14 @@ pub async fn execute_task_with_token(
             &project_path,
             &site_url,
             &agent_provider,
+            &seo_provider,
             latest_raw_output.as_deref(),
             gsc_token,
             conn,
         ).await;
 
         // Track the raw output of agentic steps for the normalizer that follows
-        if step.kind == "agentic" {
+        if step.kind == StepKind::Agentic {
             if let Some(ref out) = result.output {
                 let preview = crate::engine::text::char_prefix(out, 300);
                 log::info!("[executor] agentic step '{}' output ({} chars): {:?}",
@@ -173,7 +187,7 @@ pub async fn execute_task_with_token(
                 log::warn!("[executor] agentic step '{}' produced no output", step.name);
             }
             latest_raw_output = result.output.clone();
-        } else if step.kind == "normalizer" {
+        } else if step.kind == StepKind::Normalizer {
             // Normalizer consumed latest_raw; clear so it isn't reused
             latest_raw_output = None;
         } else if step.name == "indexing_fix_context" {
@@ -215,8 +229,8 @@ pub async fn execute_task_with_token(
             let artifact = TaskArtifact {
                 key: step.name.clone(),
                 path: None,
-                artifact_type: Some(step.kind.clone()),
-                source: Some(step.kind.clone()),
+                artifact_type: Some(step.kind.to_string()),
+                source: Some(step.kind.to_string()),
                 content: Some(out.clone()),
             };
             let _ = task_store::append_task_artifact(conn, task_id, &artifact);
@@ -225,7 +239,7 @@ pub async fn execute_task_with_token(
 
         // After a reddit_search step, upsert posts from the JSON output into SQLite.
         // Enrichment (AI pass) is a separate step — see reddit_enrich block below.
-        if step.kind == "reddit_search" && result.success {
+        if step.kind == StepKind::RedditSearch && result.success {
             if let Some(ref out) = result.output {
                 crate::engine::exec::reddit::persist_reddit_opportunities(conn, &task.project_id, out);
             }
@@ -233,7 +247,7 @@ pub async fn execute_task_with_token(
 
         // reddit_enrich step: AI enrichment batches — fills why_relevant, key_pain_points,
         // website_fit, reply_text. Handled here (not in run_step) because it needs conn.
-        if step.kind == "reddit_enrich" {
+        if step.kind == StepKind::RedditEnrich {
             loop {
                 let pending: i64 = conn.query_row(
                     "SELECT COUNT(*) FROM reddit_opportunities \
@@ -244,14 +258,14 @@ pub async fn execute_task_with_token(
                 ).unwrap_or(0);
                 if pending == 0 { break; }
                 log::info!("[reddit_enrich] {} posts still pending enrichment — running batch", pending);
-                crate::engine::exec::reddit::exec_reddit_enrich(conn, &task.project_id, &project_path, &agent_provider);
+                crate::engine::exec::reddit::exec_reddit_enrich(conn, &task, &project_path, &agent_provider);
             }
             progress[i].message = "Reddit enrichment complete".to_string();
         }
         
         // reddit_fetch_results step: fetch enriched opportunities from DB and return as JSON.
         // Handled here (not in run_step) because it needs conn.
-        if step.kind == "reddit_fetch_results" {
+        if step.kind == StepKind::RedditFetchResults {
             let result = crate::engine::exec::reddit::exec_reddit_fetch_results(conn, &task.project_id);
             progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
             progress[i].message = result.message.clone();
@@ -260,8 +274,8 @@ pub async fn execute_task_with_token(
                 let artifact = TaskArtifact {
                     key: step.name.clone(),
                     path: None,
-                    artifact_type: Some(step.kind.clone()),
-                    source: Some(step.kind.clone()),
+                    artifact_type: Some(step.kind.to_string()),
+                    source: Some(step.kind.to_string()),
                     content: Some(out.clone()),
                 };
                 let _ = task_store::append_task_artifact(conn, task_id, &artifact);
@@ -270,7 +284,7 @@ pub async fn execute_task_with_token(
         }
 
         // After a reddit_opportunities normalizer step, upsert parsed opportunities into DB.
-        if step.kind == "normalizer"
+        if step.kind == StepKind::Normalizer
             && step.params.get(step_params::NORMALIZER_ID).map(|s| s.as_str()) == Some("reddit_opportunities")
         {
             log::info!("[reddit] normalizer step complete — success={} output_len={}",
@@ -482,299 +496,31 @@ async fn run_step(
     project_path: &str,
     site_url: &str,
     agent_provider: &str,
+    seo_provider: &str,
     latest_raw: Option<&str>,
     gsc_token: Option<&str>,
     conn: &Connection,
 ) -> crate::engine::workflows::StepResult {
-    match step.kind.as_str() {
-        "deterministic" => exec_deterministic(step, task, project_path).await,
-        "agentic" => exec_agentic(step, task, project_path, site_url, agent_provider, latest_raw).await,
-        "manual" => crate::engine::workflows::StepResult {
-            success: true,
-            message: format!("Manual step '{}' — requires user action", step.name),
-            output: None,
-        },
-        "normalizer" => {
-            if let Some(raw) = latest_raw {
-                let normalized = crate::engine::normalizer::normalize_agent_output(raw);
-                let msg = if normalized.success {
-                    format!("Normalized via '{}' — {} chars", normalized.extraction_method, normalized.raw_output.len())
-                } else {
-                    format!("Normalizer recorded raw output ({} chars)", normalized.raw_output.len())
-                };
-                let output_str = normalized.json_artifact
-                    .as_ref()
-                    .and_then(|v| serde_json::to_string_pretty(v).ok())
-                    .unwrap_or_else(|| normalized.raw_output.clone());
-                crate::engine::workflows::StepResult {
-                    success: true,
-                    message: msg,
-                    output: Some(output_str),
-                }
-            } else {
-                crate::engine::workflows::StepResult {
-                    success: true,
-                    message: format!("Normalizer step '{}' — no raw output to normalize", step.name),
-                    output: None,
-                }
-            }
-        }
-        "cluster_link_scan" => crate::engine::exec::content::exec_cluster_link_scan(task, project_path),
-        "cluster_link_strategy" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::content::exec_cluster_link_strategy(&task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "cluster_link_apply" => crate::engine::exec::content::exec_cluster_link_apply(task, project_path),
-        "content_review_recommend" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::content::exec_content_review_recommend(&task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "content_review_apply_execute" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::content::exec_content_review_apply(&task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "keyword_research_native" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::keywords::exec_keyword_research_native(&task, &project_path)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "research_final_selection" => {
-            // Deterministic keyword selection — no LLM, just filter/sort
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let previous_output = latest_raw.map(|s| s.to_string());
-            tokio::task::spawn_blocking(move || {
-                // Use blocking thread since this is CPU-bound sorting/filtering
-                let rt = tokio::runtime::Handle::current();
-                rt.block_on(async {
-                    crate::engine::exec::research::exec_research_final_selection(
-                        &task,
-                        &project_path,
-                        previous_output.as_deref(),
-                    ).await
-                })
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "reddit_config_parse" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::reddit::exec_reddit_config_parse(&task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "reddit_search" => {
-            crate::engine::exec::reddit::exec_reddit_search(task, project_path).await
-        }
-        // reddit_enrich: actual enrichment loop runs in the outer executor loop (needs conn).
-        // This placeholder signals success so the outer loop triggers the real work.
-        "reddit_enrich" => crate::engine::workflows::StepResult {
-            success: true,
-            message: "Reddit enrichment pass — starting AI scoring loop".to_string(),
-            output: None,
-        },
-        // reddit_fetch_results: actual DB fetch runs in the outer executor loop (needs conn).
-        // This placeholder signals success so the outer loop triggers the real work.
-        "reddit_fetch_results" => crate::engine::workflows::StepResult {
-            success: true,
-            message: "Reddit results fetch — starting DB query".to_string(),
-            output: None,
-        },
-        "content_sync" => crate::engine::exec::content::exec_content_sync(task, project_path),
-        "gsc_sync_articles" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let gsc_token = gsc_token.map(|s| s.to_string());
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::gsc::exec_gsc_sync_articles(&task, &project_path, gsc_token.as_deref())
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "gsc_summarise" => crate::engine::exec::gsc::exec_gsc_summarise(task, project_path),
-        "indexing_fix_context" => crate::engine::exec::indexing_fix::exec_indexing_fix_context(task, project_path),
-        "indexing_fix_apply" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            let context_json = latest_raw.map(|s| s.to_string());
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::indexing_fix::exec_indexing_fix_apply(&task, &project_path, &agent_provider, context_json.as_deref())
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "content_audit" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::content_audit::exec_content_audit(&task, &project_path)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "collect_gsc_inspect" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let gsc_token = gsc_token.map(|s| s.to_string());
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::gsc::exec_collect_gsc(&task, &project_path, gsc_token.as_deref())
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "indexing_diagnostics_run" => {
-            crate::engine::exec::gsc_diagnostics::exec_indexing_diagnostics(task, project_path, gsc_token, conn)
-        }
-        "gsc_investigate_agentic" => {
-            let step = step.clone();
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::gsc::exec_gsc_investigate(&step, &task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        // Social media marketing steps
-        "social_collect_sources" => crate::engine::exec::social::exec_social_collect_sources(task, project_path),
-        "social_load_templates" => crate::engine::exec::social::exec_social_load_templates(task, project_path),
-        "social_generate_posts" => {
-            let step = step.clone();
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::social::exec_social_generate_posts(&step, &task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "social_build_visuals" => crate::engine::exec::social::exec_social_build_visuals(task, project_path),
-        "social_save_campaign" => crate::engine::exec::social::exec_social_save_campaign(task, project_path, conn),
-        "social_regenerate_single" => {
-            let step = step.clone();
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::social::exec_social_regenerate_single(&step, &task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "social_rebuild_visual" => crate::engine::exec::social::exec_social_rebuild_visual(task, project_path),
-        "social_update_post" => crate::engine::exec::social::exec_social_update_post(task, project_path),
-        "social_design_template" => {
-            let step = step.clone();
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::social::exec_social_design_template(&step, &task, &project_path, &agent_provider)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "social_save_template" => crate::engine::exec::social::exec_social_save_template(task, project_path),
-        // Keyword coverage analysis steps
-        "coverage_load_articles" => crate::engine::exec::coverage::exec_coverage_load_articles(task, project_path),
-        "coverage_cluster_analysis" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let agent_provider = agent_provider.to_string();
-            // Get the previous step's output (articles JSON)
-            let articles_json = latest_raw.unwrap_or("{}").to_string();
-            tokio::task::spawn_blocking(move || {
-                crate::engine::exec::coverage::exec_coverage_cluster_analysis(&task, &project_path, &agent_provider, &articles_json)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        "coverage_save" => crate::engine::exec::coverage::exec_coverage_save(task, project_path),
-        "reddit_post_reply" => {
-            let task = task.clone();
-            let project_path = project_path.to_string();
-            let db_path = crate::db::default_db_path();
-            tokio::task::spawn_blocking(move || {
-                // Open a new connection for this thread
-                let conn = match rusqlite::Connection::open(&db_path) {
-                    Ok(c) => c,
-                    Err(e) => return crate::engine::workflows::StepResult {
-                        success: false,
-                        message: format!("Failed to open DB: {}", e),
-                        output: None,
-                    },
-                };
-                crate::engine::exec::reddit::exec_reddit_post_reply(&task, &project_path, &conn)
-            }).await.unwrap_or_else(|e| crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Step panicked: {}", e),
-                output: None,
-            })
-        }
-        other => crate::engine::workflows::StepResult {
+    let registry = StepRegistry::new();
+    let ctx = StepContext {
+        task,
+        project_path,
+        site_url,
+        agent_provider,
+        seo_provider,
+        latest_raw,
+        gsc_token,
+        conn,
+    };
+
+    if let Some(handler) = registry.get(&step.kind) {
+        handler(step, &ctx).await
+    } else {
+        StepResult {
             success: false,
-            message: format!("Unknown step kind '{}'", other),
+            message: format!("Unknown step kind '{}'", step.kind),
             output: None,
-        },
+        }
     }
 }
 
@@ -903,8 +649,8 @@ mod tests {
     fn setup_dummy_keyword_project(dir: &std::path::Path, theme: &str) {
         let automation = dir.join(".github").join("automation");
         std::fs::create_dir_all(&automation).unwrap();
-        let brief = format!("## Clusters\n\n### Cluster 1: {theme} (PLANNED)\n");
-        std::fs::write(automation.join("seo_content_brief.md"), brief).unwrap();
+        let brief = format!("# Test Project\n\n## Content Clusters & Status\n\n### Cluster 1: {theme} (PLANNED)\n");
+        std::fs::write(automation.join("project.md"), brief).unwrap();
         std::fs::write(automation.join("articles.json"), "[]").unwrap();
     }
 
@@ -978,7 +724,7 @@ mod tests {
             );
             // ManualFallbackHandler would produce a "manual" step; ImplementationHandler
             // produces specific step kinds (not "manual").
-            let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_str()).collect();
+            let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_ref()).collect();
             assert!(
                 !kinds.contains(&"manual"),
                 "Expected ImplementationHandler steps for '{tt}', got manual: {:?}",
@@ -995,43 +741,43 @@ mod tests {
         let matched = handlers.iter().find(|h| h.supports(&task)).unwrap();
         let steps = matched.plan(&task);
         assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].kind, "manual");
+        assert_eq!(steps[0].kind, StepKind::Manual);
     }
 
     // Reddit workflow step kinds are recognized by run_step (regression test for missing handler).
     #[test]
     fn reddit_workflow_step_kinds_are_recognized() {
-        use crate::engine::workflows::WorkflowStep;
+        use crate::engine::workflows::{StepKind, WorkflowStep};
         
         let reddit_steps = vec![
-            ("reddit_config_parse", true),   // Should be recognized
-            ("reddit_search", true),          // Should be recognized
-            ("reddit_enrich", true),          // Should be recognized
-            ("reddit_fetch_results", true),   // Should be recognized
-            ("reddit_unknown", false),        // Should NOT be recognized
+            (StepKind::RedditConfigParse, true),   // Should be recognized
+            (StepKind::RedditSearch, true),          // Should be recognized
+            (StepKind::RedditEnrich, true),          // Should be recognized
+            (StepKind::RedditFetchResults, true),   // Should be recognized
+            (StepKind::Unknown, false),        // Should NOT be recognized
         ];
         
         for (kind, should_be_recognized) in reddit_steps {
-            let step = WorkflowStep::new("test_step", kind);
+            let step = WorkflowStep::new_with_kind("test_step", kind);
             
             // Simulate what run_step does - match on step.kind
-            let result = match step.kind.as_str() {
-                "reddit_config_parse" => Some(true),
-                "reddit_search" => Some(true),
-                "reddit_enrich" => Some(true),
-                "reddit_fetch_results" => Some(true),
+            let result = match step.kind {
+                StepKind::RedditConfigParse => Some(true),
+                StepKind::RedditSearch => Some(true),
+                StepKind::RedditEnrich => Some(true),
+                StepKind::RedditFetchResults => Some(true),
                 _ => None,
             };
             
             if should_be_recognized {
                 assert!(
                     result.is_some(),
-                    "Step kind '{}' should be recognized by run_step", kind
+                    "Step kind '{:?}' should be recognized by run_step", kind
                 );
             } else {
                 assert!(
                     result.is_none(),
-                    "Step kind '{}' should NOT be recognized by run_step", kind
+                    "Step kind '{:?}' should NOT be recognized by run_step", kind
                 );
             }
         }

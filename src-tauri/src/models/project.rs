@@ -17,6 +17,8 @@ pub struct Project {
     pub active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seo_provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

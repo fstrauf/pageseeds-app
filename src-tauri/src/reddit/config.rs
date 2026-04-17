@@ -51,28 +51,55 @@ pub struct RedditProjectConfig {
 
 // ─── Required config files ────────────────────────────────────────────────────
 
-/// The four config files required to run Reddit opportunity search.
+/// The config files required to run Reddit opportunity search.
+/// Uses consolidated project.md (primary) with fallback to legacy files.
 pub fn required_config_files(automation_dir: &Path) -> Vec<std::path::PathBuf> {
     vec![
-        automation_dir.join("project_summary.md"),
+        automation_dir.join("project.md"), // consolidated
         automation_dir.join("reddit_config.md"),
-        automation_dir.join("brandvoice.md"),
         automation_dir.join("reddit").join("_reply_guardrails.md"),
     ]
 }
 
 /// Returns names of any missing required config files.
+/// If project.md is missing, checks for legacy files before reporting missing.
 pub fn missing_config_files(automation_dir: &Path) -> Vec<String> {
-    required_config_files(automation_dir)
-        .into_iter()
-        .filter(|p| !p.exists())
-        .map(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string()
-        })
-        .collect()
+    let mut missing = Vec::new();
+
+    // Check for consolidated project.md first
+    let project_md = automation_dir.join("project.md");
+    let has_project_md = project_md.exists();
+
+    // If no project.md, check for legacy files as fallback
+    if !has_project_md {
+        let legacy_files = [
+            automation_dir.join("project_summary.md"),
+            automation_dir.join("brandvoice.md"),
+        ];
+        let has_legacy = legacy_files.iter().any(|p| p.exists());
+
+        if !has_legacy {
+            // Neither consolidated nor legacy files exist
+            missing.push("project.md (or legacy project_summary.md + brandvoice.md)".to_string());
+        }
+    }
+
+    // Check other required files
+    for path in [
+        automation_dir.join("reddit_config.md"),
+        automation_dir.join("reddit").join("_reply_guardrails.md"),
+    ] {
+        if !path.exists() {
+            missing.push(
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+            );
+        }
+    }
+
+    missing
 }
 
 // ─── Parser ───────────────────────────────────────────────────────────────────
@@ -99,6 +126,7 @@ pub fn parse_reddit_config(content: &str) -> RedditProjectConfig {
 // ─── Section extractors ───────────────────────────────────────────────────────
 
 /// Extract product name from `## Product Name` section or inline `Product:` line.
+/// Base parser - kept simple as agentic parsing is the primary path.
 fn extract_product_name(content: &str) -> Option<String> {
     // Try "## Product Name" section first
     let mut in_section = false;
@@ -137,6 +165,7 @@ fn extract_product_name(content: &str) -> Option<String> {
 }
 
 /// Extract mention stance from `## Mention Stance` section or inline `Mention Stance:` line.
+/// Base parser - kept simple as agentic parsing is the primary path.
 fn extract_mention_stance(content: &str) -> MentionStance {
     // Try "## Mention Stance" section
     let mut in_section = false;
@@ -297,5 +326,31 @@ mod tests {
     fn inline_product_name_fallback() {
         let cfg = parse_reddit_config("Product Name: MyApp\n## Trigger Topics\n- foo\n");
         assert_eq!(cfg.product_name, Some("MyApp".to_string()));
+    }
+
+    /// Deterministic parser doesn't handle H1 titles — agentic parse is the primary path.
+    #[test]
+    fn product_name_none_when_only_h1_title() {
+        let cfg = parse_reddit_config("# Reddit Config: PageSeeds\n\n## Trigger Topics\n- foo\n");
+        assert_eq!(cfg.product_name, None);
+    }
+
+    /// Deterministic parser doesn't strip bold markdown — agentic parse is the primary path.
+    #[test]
+    fn mention_stance_defaults_with_bold_markdown() {
+        let cfg = parse_reddit_config(
+            "## Mention Stance\n**RECOMMENDED** - Include product name when natural\n\n## Trigger Topics\n- foo\n"
+        );
+        // Bold markers cause no match → falls back to Optional
+        assert_eq!(cfg.mention_stance, MentionStance::Optional);
+    }
+
+    /// Plain text (no markdown) works fine with the deterministic parser.
+    #[test]
+    fn mention_stance_plain_text() {
+        let cfg = parse_reddit_config(
+            "## Mention Stance\n- REQUIRED\n"
+        );
+        assert_eq!(cfg.mention_stance, MentionStance::Required);
     }
 }

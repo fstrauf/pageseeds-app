@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { seoGetBacklinks } from '../../lib/tauri'
 import type { BacklinksResult, BacklinkItem, DomainOverview } from '../../lib/types'
 
@@ -91,19 +92,18 @@ export function BacklinkView({ projectId }: Props) {
   const [domain, setDomain] = useState('')
   const [result, setResult] = useState<BacklinksResult | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
 
   async function fetch() {
     const d = domain.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')
     if (!d) return
     setLoading(true)
-    setError(null)
     setResult(null)
     try {
       const data = await seoGetBacklinks(projectId, d)
       setResult(data)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -134,12 +134,6 @@ export function BacklinkView({ projectId }: Props) {
           {loading ? 'Solving CAPTCHA…' : 'Get Backlinks'}
         </button>
       </div>
-
-      {error && (
-        <div className="mx-3 mt-3 rounded border border-red-200 bg-red-100 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
 
       <div className="flex-1 overflow-y-auto p-3">
         {result && (

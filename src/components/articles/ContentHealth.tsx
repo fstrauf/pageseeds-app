@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { AlertCircle, CheckCircle, RefreshCw, Wrench } from 'lucide-react'
-import { scanContentHealth, fixContentDates, analyzeArticleDatePolicy } from '../../lib/tauri'
-import type { CleaningResult, DateFixResult, DatePolicyReport } from '../../lib/types'
+import { AlertCircle, CheckCircle, RefreshCw, Wrench, BookOpen } from 'lucide-react'
+import { scanContentHealth, fixContentDates, analyzeArticleDatePolicy, analyzeArticleReadability, listArticles } from '../../lib/tauri'
+import type { CleaningResult, DateFixResult, DatePolicyReport, ReadabilityReport, Article } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -33,8 +33,12 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
   const [cleaning, setCleaning] = useState<CleaningResult | null>(null)
   const [dateResult, setDateResult] = useState<DateFixResult | null>(null)
   const [datePolicy, setDatePolicy] = useState<DatePolicyReport | null>(null)
+  const [readability, setReadability] = useState<ReadabilityReport | null>(null)
+  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null)
+  const [articles, setArticles] = useState<Article[]>([])
   const [scanLoading, setScanLoading] = useState(false)
   const [dateLoading, setDateLoading] = useState(false)
+  const [readabilityLoading, setReadabilityLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState('structural')
 
@@ -67,6 +71,29 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
       setDateLoading(false)
     }
   }
+  
+  async function loadArticles() {
+    try {
+      const articleList = await listArticles(projectId)
+      setArticles(articleList)
+    } catch (e: unknown) {
+      setError(String(e))
+    }
+  }
+  
+  async function handleAnalyzeReadability(article: Article) {
+    setReadabilityLoading(true)
+    setError(null)
+    setSelectedArticle(article)
+    try {
+      const result = await analyzeArticleReadability(projectId, article.url_slug)
+      setReadability(result)
+    } catch (e: unknown) {
+      setError(String(e))
+    } finally {
+      setReadabilityLoading(false)
+    }
+  }
 
   return (
     <div className="p-6 space-y-6 overflow-y-auto">
@@ -86,6 +113,9 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
           </TabsTrigger>
           <TabsTrigger value="dates" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
             Dates
+          </TabsTrigger>
+          <TabsTrigger value="readability" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+            Readability
           </TabsTrigger>
         </TabsList>
 
@@ -281,6 +311,137 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
                       <li>...and {datePolicy.issues.length - 5} more</li>
                     )}
                   </ul>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+        
+        {/* ── Readability Analysis ─── */}
+        <TabsContent value="readability" className="mt-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={loadArticles}
+              disabled={readabilityLoading}
+              className="border-border text-muted-foreground hover:text-foreground"
+            >
+              <BookOpen size={13} />
+              Load Articles
+            </Button>
+          </div>
+          
+          {articles.length > 0 && (
+            <Card className="bg-card border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-foreground">
+                  Select Article to Analyze
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {articles.map(article => (
+                    <Button
+                      key={article.id}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleAnalyzeReadability(article)}
+                      className={`w-full justify-start text-left ${
+                        selectedArticle?.id === article.id ? 'bg-primary/10' : ''
+                      }`}
+                    >
+                      <span className="truncate">{article.title || article.url_slug}</span>
+                    </Button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          
+          {readability && selectedArticle && (
+            <Card className="bg-card border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-semibold text-foreground flex items-center justify-between">
+                  <span>Readability: {selectedArticle.title || selectedArticle.url_slug}</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded border border-border bg-secondary/30 p-3">
+                    <div className="text-xs text-muted-foreground mb-1">Flesch Reading Ease</div>
+                    <div className={`text-lg font-semibold ${
+                      readability.flesch_reading_ease >= 60 ? 'text-green-600' : 
+                      readability.flesch_reading_ease >= 30 ? 'text-amber-600' : 'text-red-600'
+                    }`}>
+                      {readability.flesch_reading_ease.toFixed(1)}
+                    </div>
+                  </div>
+                  <div className="rounded border border-border bg-secondary/30 p-3">
+                    <div className="text-xs text-muted-foreground mb-1">Grade Level</div>
+                    <div className="text-lg font-semibold text-foreground">
+                      {readability.flesch_kincaid_grade.toFixed(1)}
+                    </div>
+                  </div>
+                  <div className="rounded border border-border bg-secondary/30 p-3">
+                    <div className="text-xs text-muted-foreground mb-1">Passive Voice</div>
+                    <div className={`text-lg font-semibold ${
+                      readability.passive_voice_percentage <= 10 ? 'text-green-600' : 
+                      readability.passive_voice_percentage <= 20 ? 'text-amber-600' : 'text-red-600'
+                    }`}>
+                      {readability.passive_voice_percentage.toFixed(1)}%
+                    </div>
+                  </div>
+                  <div className="rounded border border-border bg-secondary/30 p-3">
+                    <div className="text-xs text-muted-foreground mb-1">Avg Sentence Length</div>
+                    <div className="text-lg font-semibold text-foreground">
+                      {readability.avg_sentence_length.toFixed(1)}
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="rounded border border-border bg-secondary/30 p-3 space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">Additional Metrics</div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">SMOG Index:</span>
+                      <span className="font-medium">{readability.smog_index.toFixed(1)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Coleman-Liau:</span>
+                      <span className="font-medium">{readability.coleman_liau_index.toFixed(1)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">ARI:</span>
+                      <span className="font-medium">{readability.automated_readability_index.toFixed(1)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Sentence Variety:</span>
+                      <span className="font-medium">{readability.sentence_variety_score.toFixed(1)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Clichés:</span>
+                      <span className="font-medium">{readability.cliche_count}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Filter Words:</span>
+                      <span className="font-medium">{readability.filter_word_percentage.toFixed(1)}%</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {readability.flesch_reading_ease < 30 && (
+                  <div className="flex items-start gap-2 text-sm text-amber-600 bg-amber-50 p-3 rounded border border-amber-200">
+                    <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                    <span>Flesch Reading Ease below 30 indicates very difficult reading level. Consider simplifying the content.</span>
+                  </div>
+                )}
+                
+                {readability.passive_voice_percentage > 20 && (
+                  <div className="flex items-start gap-2 text-sm text-amber-600 bg-amber-50 p-3 rounded border border-amber-200">
+                    <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                    <span>Passive voice exceeds 20%. Consider using more active voice for better engagement.</span>
+                  </div>
                 )}
               </CardContent>
             </Card>

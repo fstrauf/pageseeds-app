@@ -21,11 +21,26 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 src-tauri/src/
 ├── main.rs              # entry point — no logic here
 ├── lib.rs               # Tauri setup, plugin registration, state management
-├── commands.rs          # ALL #[tauri::command] bindings — IPC surface
+├── commands/            # #[tauri::command] bindings — organized by domain
+│   ├── mod.rs           # AppState, GscState, SeoState definitions
+│   ├── settings.rs      # Global + project settings commands
+│   ├── projects.rs      # Project CRUD
+│   ├── tasks.rs         # Task CRUD
+│   ├── articles.rs      # Article queries
+│   ├── engine.rs        # Workflow execution commands
+│   ├── executor.rs      # Task execution
+│   ├── gsc.rs           # Google Search Console commands
+│   ├── reddit.rs        # Reddit opportunity commands
+│   ├── seo.rs           # SEO research commands
+│   ├── content.rs       # Content health commands
+│   ├── social.rs        # Social media commands
+│   ├── skills.rs        # Skill management
+│   └── logging.rs       # Logging commands
 ├── error.rs             # Central Error enum + Result<T> alias
 ├── db/
 │   ├── mod.rs           # SQLite init + schema migrations (versioned SQL constants)
-│   └── export.rs        # Read/write articles.json and task_list.json in the user's repo
+│   ├── export.rs        # Read/write articles.json and task_list.json in the user's repo
+│   └── global_settings.rs # Global app settings (agent_provider, etc.)
 ├── models/              # Pure serde structs — no logic
 │   ├── task.rs          # Task, TaskArtifact, TaskRun (#[ts(export)])
 │   ├── article.rs       # Article metadata (#[ts(export)])
@@ -142,6 +157,67 @@ src/
 - Managed by `config/env_resolver.rs` (`EnvResolver`). Use it everywhere; don't read env vars directly.
 - Never embed keys or paths in code. Settings UI writes to the secrets file via `import_env_file` command.
 
+### Settings Architecture
+
+Settings are split into **Global** (user preferences) and **Project** (project-specific config):
+
+| Type | Table/Module | Examples | Access |
+|------|--------------|----------|--------|
+| **Global** | `global_settings` table | `agent_provider` (kimi/copilot/claude), future: theme, defaults | `db::global_settings` |
+| **Project** | `projects` table | `seo_provider`, `content_dir`, `site_url` | `engine::task_store` |
+
+**Global Settings:**
+- Apply to ALL projects (user tool preference)
+- Stored in `global_settings` table (key/value)
+- Default `agent_provider` is `"kimi"`
+- Use `db::global_settings::get_agent_provider()` / `set_agent_provider()`
+
+**Project Settings:**
+- Each project has independent values
+- Stored in `projects` table
+- Legacy `agent_provider` column exists but is ignored (backward compatibility)
+
+**Migration Note:** Migration V14 creates `global_settings` and initializes `agent_provider` to `"kimi"`. Legacy project `agent_provider` values are preserved but ignored.
+
+---
+
+## Layer Responsibilities
+
+There are four places backend logic can live. Knowing which to use removes guesswork when adding features.
+
+| Layer | File Pattern | Responsibility | What goes here |
+|-------|--------------|----------------|----------------|
+| **Commands** | `commands/{domain}.rs` | IPC boundary | Validate inputs, lock DB, call a module function, return result. **No business logic.** |
+| **Domain modules** | `{domain}/` | Business logic, data access, external API calls | Ahrefs client, Reddit search, GSC auth, content parsing, etc. |
+| **Engine exec** | `engine/exec/{domain}.rs` | Deterministic step implementations | Code called by the executor during workflow runs. One function per `StepKind`. |
+| **Workflow handlers** | `engine/workflows/handlers.rs` | Orchestration / planning | Returns `Vec<WorkflowStep>` for a task. Never executes. |
+
+### Decision Tree: Where Does My Logic Go?
+
+```
+I have new logic — where does it go?
+│
+├─ Is it reading request inputs and returning a Tauri response?
+│  └─→ commands/{domain}.rs (thin wrapper)
+│
+├─ Is it building a step graph for a task type?
+│  └─→ engine/workflows/handlers.rs
+│
+├─ Is it executing a single workflow step?
+│  └─→ engine/exec/{domain}.rs
+│
+└─ Everything else (API clients, parsers, DB access, algorithms)
+   └─→ {domain}/
+```
+
+### Reference Implementation
+
+The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/social.rs`) is the canonical example of a fully modularized domain:
+- `social/` — models, DB access, templates, prompts, image generation
+- `engine/exec/social.rs` — one `exec_social_*` function per step kind
+- `engine/workflows/handlers.rs` — `SocialHandler` plans the step sequence
+- `commands/social.rs` — thin command wrappers that validate and delegate
+
 ---
 
 ## How to Add a Feature
@@ -233,6 +309,7 @@ This runs `cargo test export_bindings --lib` and copies the generated `.ts` file
 | SEO research | `seo/` | Ahrefs keyword difficulty + backlink data + traffic estimates |
 | Secrets | `config/env_resolver.rs` | Unified credential resolution across all modules |
 | Persistence | `db/mod.rs` | SQLite schema migrations; `db/export.rs` for JSON repo interchange |
+| Global Settings | `db/global_settings.rs` | Application-wide settings (agent_provider, defaults) |
 
 ---
 
@@ -347,9 +424,11 @@ See `docs/async-architecture.md` for detailed comparison.
 
 - [ ] `cargo check` passes before touching the frontend
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
-- [ ] No business logic added to `commands.rs`
+- [ ] **Settings placed correctly**: User preferences → `global_settings`; Project config → `projects` table
+- [ ] No business logic added to `commands/*.rs` — only thin wrappers
 - [ ] `tauri.ts` wrapper added/updated for any new or changed command
 - [ ] `types.ts` updated to match Rust struct changes (or run `./scripts/sync-bindings.sh` if `#[ts(export)]` is present)
+- [ ] `./scripts/check-bindings.sh` passes if a Rust model with `#[ts(export)]` was changed
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls — use Rust crates instead
 - [ ] Reviewed `CONTRACTS.md` for any affected implicit contracts (statuses, step ordering, auto-spawned tasks, handler registry order)

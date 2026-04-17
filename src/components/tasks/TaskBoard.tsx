@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw, Upload, Download, Plus, Play, Trash2, X } from 'lucide-react'
+import { RefreshCw, Upload, Download, Plus, Play, Trash2, X, AlertCircle } from 'lucide-react'
+import { useRef } from 'react'
 import { cn, formatDate } from '../../lib/utils'
-import { listTasks, importFromRepo, exportToRepo, analyzeArticleDatePolicy, deleteTask } from '../../lib/tauri'
+import { listTasks, getTask, importFromRepo, exportToRepo, analyzeArticleDatePolicy, deleteTask } from '../../lib/tauri'
 import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +28,8 @@ import { TaskCreate } from './TaskCreate'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { useQueue } from '../../lib/queue-context'
 import { ListPlus } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
+import { useQuery, useMutation } from '../../hooks/useQuery'
 
 const STATUS_TABS = ['all', 'todo', 'in_progress', 'review', 'done'] as const
 type StatusFilter = typeof STATUS_TABS[number]
@@ -93,9 +96,8 @@ export function TaskBoard({
   onRunTasks,
   runCompletedTick = 0,
 }: TaskBoardProps) {
+  const { showError } = useErrorHandler()
   const [tasks, setTasks] = useState<Task[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('todo')
   const [phaseFilter, setPhaseFilter] = useState('all')
   const [importExportMsg, setImportExportMsg] = useState<string | null>(null)
@@ -105,67 +107,63 @@ export function TaskBoard({
   const [deletingSelected, setDeletingSelected] = useState(false)
   const queue = useQueue()
 
-  const load = useCallback(async () => {
-    if (!projectId) return
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await listTasks(
-        projectId,
-        statusFilter !== 'all' ? statusFilter : undefined,
-        phaseFilter !== 'all' ? phaseFilter : undefined,
-      )
-      setTasks(data)
-    } catch (e: unknown) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [projectId, statusFilter, phaseFilter])
+  const { data: fetchedTasks = [], error, isLoading: loading, refetch } = useQuery(
+    `tasks-${projectId}-${statusFilter}-${phaseFilter}`,
+    () => projectId ? listTasks(
+      projectId,
+      statusFilter !== 'all' ? statusFilter : undefined,
+      phaseFilter !== 'all' ? phaseFilter : undefined,
+    ) : Promise.resolve([]),
+    { enabled: !!projectId, staleTime: 0 }
+  )
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    setTasks(fetchedTasks)
+  }, [fetchedTasks])
+
+  useEffect(() => {
+    if (error) {
+      showError(error.message)
+    }
+  }, [error, showError])
 
   useEffect(() => {
     if (!projectId || runCompletedTick === 0) return
-    load()
-  }, [projectId, runCompletedTick, load])
+    refetch()
+  }, [projectId, runCompletedTick, refetch])
 
-  // Auto-open a specific task when navigated here from Overview (e.g. after running a workflow).
+  // Track the last initialTaskId we directly fetched so we don't loop.
+  const fetchedTaskIdRef = useRef<string | null>(null)
+
+  // Auto-open a specific task when navigated here from Overview or the task runner.
   useEffect(() => {
     if (!initialTaskId) return
 
-    // If the current filtered list is empty and we're not already on 'all',
-    // widen the filter first so the next load can find the task.
-    if (tasks.length === 0 && statusFilter !== 'all') {
-      setStatusFilter('all')
-      return
-    }
-    if (tasks.length === 0) return
-
-    // First try exact match (e.g. a task navigated to directly)
-    let target = tasks.find(t => t.id === initialTaskId)
-    
-    // The target task may be in a different status than the current filter (e.g. 'review'
-    // while we're showing 'todo'). Widen to 'all' and reload so we can find it.
-    if (!target && statusFilter !== 'all') {
-      setStatusFilter('all')
-      return
-    }
-    
+    // Already in the current list? Open immediately.
+    const target = tasks.find(t => t.id === initialTaskId)
     if (target) {
       setSelectedTask(target)
       onTaskOpened?.()
+      fetchedTaskIdRef.current = null
       return
     }
-    
-    // Fallback: the initial task may be done (e.g. content_review spawns apply task).
-    // Only fall back if we've already widened the filter and still can't find the original task.
-    if (statusFilter === 'all') {
-      const applyTask = tasks.find(t => t.type === 'content_review_apply')
-      if (applyTask) {
-        setSelectedTask(applyTask)
-        onTaskOpened?.()
-      }
+
+    // Not in current filtered list. Widen to 'all' so the background list reloads,
+    // and also fetch the task directly so the panel opens right away.
+    if (statusFilter !== 'all') {
+      setStatusFilter('all')
+    }
+
+    if (fetchedTaskIdRef.current !== initialTaskId) {
+      fetchedTaskIdRef.current = initialTaskId
+      getTask(initialTaskId)
+        .then(task => {
+          setSelectedTask(task)
+          onTaskOpened?.()
+        })
+        .catch(() => {
+          // Direct fetch failed; the background list reload may still pick it up.
+        })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTaskId, tasks, statusFilter])
@@ -238,6 +236,22 @@ export function TaskBoard({
     setSelectedTask(null)
   }
 
+  const deleteMutation = useMutation(
+    async (ids: string[]) => {
+      await Promise.all(ids.map(id => deleteTask(id)))
+    },
+    {
+      invalidateQueries: 'tasks-',
+      onSuccess: (_, ids) => {
+        setImportExportMsg(`Deleted ${ids.length} to-do/review task${ids.length !== 1 ? 's' : ''}.`)
+      },
+      onError: (error) => {
+        showError(`Bulk delete failed: ${error.message}`)
+        refetch()
+      },
+    }
+  )
+
   async function handleDeleteSelected() {
     if (deletingSelected) return
 
@@ -246,7 +260,7 @@ export function TaskBoard({
     const nonDeletableCount = selected.length - deletableSelected.length
 
     if (deletableSelected.length === 0) {
-      setImportExportMsg('Only to-do or review tasks can be bulk deleted.')
+      showError('Only to-do or review tasks can be bulk deleted.')
       return
     }
 
@@ -260,23 +274,15 @@ export function TaskBoard({
     setDeletingSelected(true)
     setImportExportMsg(null)
     try {
-      await Promise.all(deletableSelected.map(t => deleteTask(t.id)))
-      const deletedIds = new Set(deletableSelected.map(t => t.id))
-      setTasks(prev => prev.filter(t => !deletedIds.has(t.id)))
+      await deleteMutation.mutate(deletableSelected.map(t => t.id))
       setCheckedIds(prev => {
         const next = new Set(prev)
-        for (const id of deletedIds) next.delete(id)
+        for (const id of deletableSelected.map(t => t.id)) next.delete(id)
         return next
       })
-      if (selectedTask && deletedIds.has(selectedTask.id)) {
+      if (selectedTask && deletableSelected.some(t => t.id === selectedTask.id)) {
         setSelectedTask(null)
       }
-      setImportExportMsg(
-        `Deleted ${deletableSelected.length} to-do/review task${deletableSelected.length !== 1 ? 's' : ''}.`
-      )
-    } catch (e: unknown) {
-      setImportExportMsg(`Bulk delete failed: ${String(e)}`)
-      await load()
     } finally {
       setDeletingSelected(false)
     }
@@ -293,16 +299,26 @@ export function TaskBoard({
     setSelectedTask(task)
   }
 
+  const importMutation = useMutation(
+    async () => {
+      if (!projectId) throw new Error('No project selected')
+      return await importFromRepo(projectId)
+    },
+    {
+      invalidateQueries: 'tasks-',
+      onSuccess: (result) => {
+        setImportExportMsg(`Imported: ${result.tasks_imported} tasks, ${result.articles_imported} articles`)
+      },
+      onError: (error) => {
+        showError(`Import failed: ${error.message}`)
+      },
+    }
+  )
+
   async function handleImport() {
     if (!projectId) return
     setImportExportMsg(null)
-    try {
-      const result = await importFromRepo(projectId)
-      setImportExportMsg(`Imported: ${result.tasks_imported} tasks, ${result.articles_imported} articles`)
-      await load()
-    } catch (e: unknown) {
-      setImportExportMsg(`Import failed: ${String(e)}`)
-    }
+    await importMutation.mutate()
   }
 
   async function handleExport() {
@@ -320,7 +336,7 @@ export function TaskBoard({
       await exportToRepo(projectId)
       setImportExportMsg('Exported successfully')
     } catch (e: unknown) {
-      setImportExportMsg(`Export failed: ${String(e)}`)
+      showError(`Export failed: ${String(e)}`)
     }
   }
 
@@ -356,7 +372,7 @@ export function TaskBoard({
               <Upload size={14} />
               Export JSON
             </Button>
-            <Button variant="ghost" size="icon-sm" onClick={load} disabled={loading} className="text-muted-foreground">
+            <Button variant="ghost" size="icon-sm" onClick={refetch} disabled={loading} className="text-muted-foreground">
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
             </Button>
             <Button
@@ -443,12 +459,6 @@ export function TaskBoard({
             </SelectContent>
           </Select>
         </div>
-
-        {error && (
-          <div className="mb-4 px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
-            {error}
-          </div>
-        )}
 
         {/* Task table */}
         <div className="rounded-lg border border-border overflow-hidden">
@@ -562,9 +572,16 @@ export function TaskBoard({
                         <span className={cn('inline-block w-2 h-2 rounded-full', PRIORITY_DOT[task.priority ?? 'medium'])} />
                       </TableCell>
                       <TableCell>
-                        <Badge className={cn('text-xs', STATUS_BADGE[task.status])}>
-                          {task.status.replace('_', ' ')}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge className={cn('text-xs', STATUS_BADGE[task.status])}>
+                            {task.status.replace('_', ' ')}
+                          </Badge>
+                          {task.run.attempts > 0 && task.run.last_error && (
+                            <span title="Last run failed">
+                              <AlertCircle size={12} className="text-destructive shrink-0" />
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {formatDate(task.updated_at)}
@@ -595,7 +612,7 @@ export function TaskBoard({
           if (!open) {
             // Reload when closing a completed content_review so spawned tasks appear.
             if (selectedTask?.type === 'content_review' && selectedTask?.status === 'done') {
-              load()
+              refetch()
             }
             setSelectedTask(null)
           }

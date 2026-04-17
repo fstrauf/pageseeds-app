@@ -1,7 +1,10 @@
 pub mod cleaner;
+pub mod competitor;
 pub mod date_policy;
 pub mod dates;
+pub mod keyword_density;
 pub mod linking;
 pub mod locator;
 pub mod ops;
 pub mod publish;
+pub mod readability;

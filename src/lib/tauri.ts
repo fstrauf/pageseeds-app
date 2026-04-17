@@ -374,6 +374,19 @@ export const seoCheckTraffic = (
 ): Promise<TrafficResult> =>
   invoke('seo_check_traffic', { projectId, domain, mode, country })
 
+export const seoBatchKeywordDifficulty = (
+  projectId: string,
+  keywords: string[],
+  country?: string,
+): Promise<KeywordDifficultyResult[]> =>
+  invoke('seo_batch_keyword_difficulty', { projectId, keywords, country })
+
+export const getSeoProvider = (projectId: string): Promise<string> =>
+  invoke('get_seo_provider', { projectId })
+
+export const setSeoProvider = (projectId: string, provider: string): Promise<string> =>
+  invoke('set_seo_provider', { projectId, provider })
+
 // ─── Phase 6: Workflow Engine + Batch + Scheduler + Ledger ───────────────────
 
 import type {
@@ -489,11 +502,17 @@ export const normalizeOutput = (raw: string): Promise<NormalizedArtifact> =>
 export const listTaskArtifacts = (taskId: string): Promise<TaskArtifact[]> =>
   invoke('list_task_artifacts', { taskId })
 
-export const checkAgentStatus = (projectId: string): Promise<AgentStatus> =>
-  invoke('check_agent_status', { projectId })
+export const checkAgentStatus = (): Promise<AgentStatus> =>
+  invoke('check_agent_status')
 
-export const setAgentProvider = (projectId: string, provider: string): Promise<void> =>
-  invoke('set_agent_provider', { projectId, provider })
+export const setAgentProvider = (provider: string): Promise<string> =>
+  invoke('set_agent_provider', { provider })
+
+export const getGlobalAgentProvider = (): Promise<string> =>
+  invoke('get_global_agent_provider')
+
+export const getGlobalSettings = (): Promise<Array<{ key: string; value: string }>> =>
+  invoke('get_global_settings')
 
 export const getLogFilePath = (): Promise<string> =>
   invoke('get_log_file_path')
@@ -608,6 +627,14 @@ export const initWorkspaceConfig = (
 ): Promise<string> =>
   invoke('init_workspace_config', { projectId, contentDir, siteUrl })
 
+/**
+ * Initialize a complete project workspace with all required files.
+ * This creates .github/automation/, seo_workspace.json, and articles.json.
+ * Returns a list of files that were created.
+ */
+export const initializeProjectWorkspace = (projectId: string): Promise<string[]> =>
+  invoke('initialize_project_workspace', { projectId })
+
 /** Read-only check of date consistency between articles.json and frontmatter. */
 export const getContentHealth = (projectId: string): Promise<ContentHealthResult> =>
   invoke('get_content_health', { projectId })
@@ -707,3 +734,44 @@ export const runSocialCampaign = (campaignId: string): Promise<Task> =>
 
 export const getKeywordCoverage = (projectId: string): Promise<KeywordCoverageStatus> =>
   invoke('get_keyword_coverage', { projectId })
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Readability Analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import type { 
+  ReadabilityReport, 
+  IntentClassification, 
+  OpportunityScore, 
+  KeywordIdea,
+  WordCountComparison,
+  KeywordDensityReport,
+} from './bindings'
+
+export const analyzeArticleReadability = (projectId: string, slug: string): Promise<ReadabilityReport> =>
+  invoke('analyze_article_readability', { projectId, slug })
+
+export const classifySearchIntent = (projectId: string, keywords: string[]): Promise<IntentClassification[]> =>
+  invoke('classify_search_intent', { projectId, keywords })
+
+export const scoreKeywordOpportunities = (
+  projectId: string,
+  keywords: KeywordIdea[],
+  intents: IntentClassification[],
+  existingSlugs: string[],
+): Promise<OpportunityScore[]> =>
+  invoke('score_keyword_opportunities', { projectId, keywords, intents, existingSlugs: existingSlugs })
+
+export const compareCompetitorContent = (
+  keyword: string,
+  competitorUrls: string[],
+  userUrl?: string,
+): Promise<WordCountComparison> =>
+  invoke('compare_competitor_content', { keyword, competitorUrls, userUrl })
+
+export const analyzeKeywordDensity = (
+  projectId: string,
+  slug: string,
+  targetKeyword: string,
+): Promise<KeywordDensityReport> =>
+  invoke('analyze_keyword_density', { projectId, slug, targetKeyword })

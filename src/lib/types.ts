@@ -69,6 +69,20 @@ export type {
   TextPosition,
   VisualAsset,
   
+  // Content Models
+  ReadabilityReport,
+  CompetitorWordCount,
+  CompetitorStructure,
+  CompetitorSection,
+  WordCountComparison,
+  KeywordDensityReport,
+  SectionPresence,
+  ConsecutiveViolation,
+  
+  // SEO Models
+  IntentClassification,
+  OpportunityScore,
+  
   // Workflow
   ExecutionResult,
   FollowUpTask,
@@ -132,13 +146,28 @@ export interface KeywordCoverageStatus {
   coverage?: KeywordCoverage
 }
 
+// ─── SEO Provider Types ───────────────────────────────────────────────────────
+
+export type SeoProvider = 'ahrefs' | 'dataforseo'
+
+export interface SeoProviderConfig {
+  provider: SeoProvider
+  name: string
+  description: string
+  requiresCapSolver: boolean
+  requiresDataForSeo: boolean
+}
+
 // ─── SEO / Ahrefs Types ───────────────────────────────────────────────────────
 
 export interface KeywordIdea {
   keyword: string
   idea_type: 'regular' | 'question'
   difficulty?: string
-  volume?: string
+  volume?: string           // categorical (Ahrefs)
+  volume_exact?: number     // precise number (DataForSEO)
+  cpc?: number              // cost per click (DataForSEO)
+  competition?: number      // competition score 0-1 (DataForSEO)
   country?: string
 }
 

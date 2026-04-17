@@ -167,14 +167,21 @@ pub async fn draft_reddit_reply(
     project_id: String,
     post_id: String,
 ) -> Result<String, String> {
-    use crate::engine::{agent as agent_mod, skills};
+    use crate::db::global_settings;
+    use crate::engine::agent as agent_mod;
+    use crate::engine::skills;
     use crate::reddit::config as reddit_cfg;
     use std::path::Path;
 
     let (project_path, agent_provider, opp) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-        let provider = project.agent_provider.clone().unwrap_or_else(|| "copilot".to_string());
+        // Agent provider is global (user preference), check for legacy project setting
+        let provider = if let Some(legacy) = &project.agent_provider {
+            legacy.clone()
+        } else {
+            global_settings::get_agent_provider(&db)
+        };
         let opp = crate::reddit::db::get_opportunity(&db, &post_id)
             .map_err(|e| e.to_string())?;
         (project.path.clone(), provider, opp)
@@ -191,27 +198,50 @@ pub async fn draft_reddit_reply(
         ));
     }
 
-    let project_summary = std::fs::read_to_string(automation_dir.join("project_summary.md"))
-        .map_err(|e| format!("Failed to read project_summary.md: {}", e))?;
+    // Primary: project.md (consolidated). Fallback: legacy files.
+    let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
+        .or_else(|_| {
+            let summary = std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
+            let brand = std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
+            if summary.is_empty() && brand.is_empty() {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no project context"))
+            } else {
+                Ok(format!("{}\n\n{}", summary, brand))
+            }
+        })
+        .map_err(|e| format!("Failed to read project.md: {}", e))?;
     let reddit_config_raw = std::fs::read_to_string(automation_dir.join("reddit_config.md"))
-        .map_err(|e| format!("Failed to read reddit_config.md: {}", e))?;
-    let brandvoice = std::fs::read_to_string(automation_dir.join("brandvoice.md"))
-        .map_err(|e| format!("Failed to read brandvoice.md: {}", e))?;
+        .unwrap_or_default();
     let guardrails = std::fs::read_to_string(
         automation_dir.join("reddit").join("_reply_guardrails.md")
-    ).map_err(|e| format!("Failed to read _reply_guardrails.md: {}", e))?;
+    ).unwrap_or_default();
 
     let skill_content = skills::load_skill(repo_root, "reddit-reply-drafting")
         .map(|s| s.content)
         .unwrap_or_default();
 
-    let cfg = reddit_cfg::parse_reddit_config(&reddit_config_raw);
+    // Read product_name and mention_stance from the opportunity row (stored during enrichment)
+    // Fall back to deterministic parsing only for pre-migration rows
+    let (product_name, mention_stance) = match (&opp.product_name, &opp.mention_stance) {
+        (Some(name), Some(stance)) if !name.is_empty() => {
+            log::info!("[draft_reddit_reply] using DB-stored params: name='{}', stance='{}'", name, stance);
+            (name.clone(), stance.clone())
+        }
+        _ => {
+            log::info!("[draft_reddit_reply] DB values missing, falling back to deterministic parse");
+            let cfg = reddit_cfg::parse_reddit_config(&reddit_config_raw);
+            let name = cfg.product_name.unwrap_or_else(|| "the product".to_string());
+            let stance = cfg.mention_stance.as_str().to_string();
+            (name, stance)
+        }
+    };
+
     let prompt = crate::reddit::prompts::build_draft_reply_prompt(
-        &project_summary,
-        &brandvoice,
+        &project_context,
         &guardrails,
         &skill_content,
-        &cfg,
+        &product_name,
+        &mention_stance,
         &opp,
     );
 
@@ -305,17 +335,45 @@ pub async fn enrich_reddit_opportunities(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<String, String> {
+    use crate::db::global_settings;
+    use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
+    use chrono::Utc;
+
     let (project_path, agent_provider) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-        let provider = project.agent_provider.clone().unwrap_or_else(|| "copilot".to_string());
+        // Agent provider is global (user preference), check for legacy project setting
+        let provider = if let Some(legacy) = &project.agent_provider {
+            legacy.clone()
+        } else {
+            global_settings::get_agent_provider(&db)
+        };
         (project.path.clone(), provider)
+    };
+
+    // Create a synthetic task for enrichment (no artifact - will use fallback parsing)
+    let synthetic_task = Task {
+        id: format!("enrich-{}", Utc::now().timestamp_millis()),
+        project_id: project_id.clone(),
+        task_type: "reddit_enrich".to_string(),
+        phase: "research".to_string(),
+        status: TaskStatus::InProgress,
+        priority: Priority::Medium,
+        execution_mode: ExecutionMode::Automatic,
+        agent_policy: AgentPolicy::Optional,
+        title: Some("Reddit Enrichment".to_string()),
+        description: None,
+        depends_on: vec![],
+        artifacts: vec![], // Empty - will fall back to deterministic parsing
+        run: TaskRun { attempts: 0, last_error: None, provider: None },
+        created_at: Utc::now().to_rfc3339(),
+        updated_at: Utc::now().to_rfc3339(),
     };
 
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        crate::engine::exec::reddit::exec_reddit_enrich(&db, &project_id, &project_path, &agent_provider);
+        crate::engine::exec::reddit::exec_reddit_enrich(&db, &synthetic_task, &project_path, &agent_provider);
         Ok::<String, String>("Enrichment complete".to_string())
     })
     .await

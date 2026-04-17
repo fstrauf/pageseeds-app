@@ -38,6 +38,13 @@ pub fn run() {
                 "UPDATE tasks SET status='todo', updated_at=?1 WHERE status='in_progress'",
                 rusqlite::params![chrono::Utc::now().to_rfc3339()],
             );
+            // Startup self-check: log registry counts for debugging silent misconfigurations
+            let handlers = engine::workflows::handlers::default_handlers();
+            log::info!(
+                "[startup] Registered {} workflow handlers, {} Tauri commands",
+                handlers.len(),
+                85 // Approximate count; hard-coded because tauri::generate_handler! is macro-generated
+            );
             app.manage(AppState {
                 db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
                 db_path: db_path.clone(),
@@ -74,6 +81,9 @@ pub fn run() {
             commands::analyze_article_date_policy,
             commands::suggest_next_article_publish_date,
             commands::scan_content_links,
+            commands::analyze_article_readability,
+            commands::compare_competitor_content,
+            commands::analyze_keyword_density,
             commands::search_reddit,
             commands::list_reddit_opportunities,
             commands::upsert_reddit_opportunity,
@@ -99,8 +109,13 @@ pub fn run() {
             commands::gsc_parse_redirect_csv,
             commands::seo_get_keyword_ideas,
             commands::seo_get_keyword_difficulty,
+            commands::seo_batch_keyword_difficulty,
             commands::seo_get_backlinks,
             commands::seo_check_traffic,
+            commands::get_seo_provider,
+            commands::set_seo_provider,
+            commands::classify_search_intent,
+            commands::score_keyword_opportunities,
             // Phase 6 — Workflow Engine + Batch + Scheduler + Ledger
             commands::execute_task,
             commands::dry_run_task,
@@ -127,9 +142,13 @@ pub fn run() {
             commands::quick_run_workflow,
             commands::check_agent_status,
             commands::set_agent_provider,
+            commands::get_global_agent_provider,
+            commands::get_global_settings,
+            commands::check_agent_status_for_project,
             commands::check_project_setup,
             commands::get_project_config_files_status,
             commands::init_workspace_config,
+            commands::initialize_project_workspace,
             commands::get_content_health,
             commands::fix_date_mismatches,
             commands::ingest_orphan_articles,

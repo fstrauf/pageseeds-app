@@ -2,13 +2,14 @@ import { useEffect, useState, useCallback } from 'react'
 import { ChevronUp, ChevronDown, RefreshCw } from 'lucide-react'
 import { listRedditOpportunities, markRedditSkipped, postToReddit } from '../../lib/tauri'
 import type { RedditOpportunity } from '../../lib/types'
+import { useQuery } from '../../hooks/useQuery'
+import { useErrorHandler } from '../../lib/toast-context'
 
 interface Props {
   projectId: string
   selectedId?: string
   onSelect: (opp: RedditOpportunity) => void
   onStatusChange?: () => void
-  refreshKey?: number
 }
 
 type SortKey = 'final_score' | 'upvotes' | 'subreddit' | 'reply_status' | 'created_at'
@@ -36,10 +37,9 @@ const SEVERITY_COLORS: Record<string, string> = {
   low: 'text-zinc-500',
 }
 
-export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChange, refreshKey }: Props) {
+export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChange }: Props) {
+  const { showError } = useErrorHandler()
   const [opps, setOpps] = useState<RedditOpportunity[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>('pending')
   const [sortKey, setSortKey] = useState<SortKey>('final_score')
   const [sortAsc, setSortAsc] = useState(false)
@@ -47,24 +47,22 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
   const [bulkWorking, setBulkWorking] = useState(false)
   const [bulkMsg, setBulkMsg] = useState<string | null>(null)
 
-  useEffect(() => {
-    load()
-    setSelectedIds(new Set())
-  }, [projectId, statusFilter, refreshKey])
+  const { data: fetchedOpps = [], isLoading: loading, refetch, error: queryError } = useQuery(
+    `reddit-opps-${projectId}-${statusFilter}`,
+    () => listRedditOpportunities(projectId, statusFilter || undefined),
+    { enabled: !!projectId, staleTime: 0 }
+  )
 
-  async function load() {
-    if (!projectId) return
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await listRedditOpportunities(projectId, statusFilter || undefined)
-      setOpps(data)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    setOpps(fetchedOpps)
+    setSelectedIds(new Set())
+  }, [fetchedOpps])
+
+  useEffect(() => {
+    if (queryError) {
+      showError(queryError.message)
     }
-  }
+  }, [queryError, showError])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortAsc(a => !a)
@@ -114,10 +112,10 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
     }
     setBulkMsg(`Skipped ${done} of ${selectedIds.size}`)
     setSelectedIds(new Set())
-    await load()
+    await refetch()
     onStatusChange?.()
     setBulkWorking(false)
-  }, [selectedIds, bulkWorking])
+  }, [selectedIds, bulkWorking, refetch, onStatusChange])
 
   const handleBulkPostToReddit = useCallback(async () => {
     if (selectedIds.size === 0 || bulkWorking) return
@@ -147,10 +145,10 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
       setBulkMsg(`Posted ${done} of ${withReply.length} to Reddit`)
     }
     setSelectedIds(new Set())
-    await load()
+    await refetch()
     onStatusChange?.()
     setBulkWorking(false)
-  }, [selectedIds, sorted, bulkWorking, projectId])
+  }, [selectedIds, sorted, bulkWorking, projectId, refetch, onStatusChange])
 
   function SortIcon({ col }: { col: SortKey }) {
     if (sortKey !== col) return null
@@ -185,7 +183,7 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
           {opps.length} result{opps.length !== 1 ? 's' : ''}
         </span>
         <button
-          onClick={load}
+          onClick={refetch}
           disabled={loading}
           className="p-1 rounded hover:bg-white/5 transition-colors"
           title="Refresh"
@@ -232,10 +230,6 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
 
       {bulkMsg && (
         <div className="mx-4 my-1 px-3 py-1.5 rounded text-xs bg-blue-100 text-blue-700">{bulkMsg}</div>
-      )}
-
-      {error && (
-        <div className="mx-4 my-2 px-3 py-2 rounded text-xs bg-red-100 text-red-700">{error}</div>
       )}
 
       {/* table */}
@@ -332,4 +326,3 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
     </div>
   )
 }
-
