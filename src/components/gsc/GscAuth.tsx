@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useErrorHandler } from '../../lib/toast-context'
 import { gscGetAuthStatus, gscAuthenticate, gscOAuthStart } from '../../lib/tauri'
 import type { GscAuthStatus } from '../../lib/types'
@@ -14,18 +14,18 @@ export function GscAuth({ projectId, onAuthenticated }: Props) {
   const { showError } = useErrorHandler()
   const [message, setMessage] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadStatus()
-  }, [projectId])
-
-  async function loadStatus() {
+  const loadStatus = useCallback(async () => {
     try {
       const s = await gscGetAuthStatus(projectId)
       setStatus(s)
     } catch (e) {
       showError(String(e))
     }
-  }
+  }, [projectId, showError])
+
+  useEffect(() => {
+    loadStatus()
+  }, [loadStatus])
 
   async function handleSaAuth() {
     setLoading(true)

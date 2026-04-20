@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Eye, Copy, Check } from 'lucide-react'
 import { listTasks, listSkills, buildPromptPreview } from '../../lib/tauri'
 import type { PromptContext, Skill, Task } from '../../lib/types'
@@ -21,11 +21,7 @@ export function PromptPreview({ projectId }: PromptPreviewProps) {
   const [copied, setCopied] = useState(false)
   const [activeSection, setActiveSection] = useState<number | null>(null)
 
-  useEffect(() => {
-    if (projectId) init()
-  }, [projectId])
-
-  async function init() {
+  const init = useCallback(async () => {
     setLoadingInit(true)
     setError(null)
     try {
@@ -37,7 +33,11 @@ export function PromptPreview({ projectId }: PromptPreviewProps) {
     } finally {
       setLoadingInit(false)
     }
-  }
+  }, [projectId])
+
+  useEffect(() => {
+    if (projectId) init()
+  }, [projectId, init])
 
   async function build() {
     if (!selectedTask || !selectedSkill) return

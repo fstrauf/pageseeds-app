@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, Wand2, Copy, Check } from 'lucide-react'
 import { listTaskArtifacts, normalizeOutput, listTasks } from '../../lib/tauri'
 import type { NormalizedArtifact, Task, TaskArtifact } from '../../lib/types'
@@ -134,15 +134,7 @@ export function AgentLog({ projectId }: AgentLogProps) {
   const [normalizeResult, setNormalizeResult] = useState<NormalizedArtifact | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (projectId) loadTasks()
-  }, [projectId])
-
-  useEffect(() => {
-    if (selectedTask) loadArtifacts(selectedTask)
-  }, [selectedTask])
-
-  async function loadTasks() {
+  const loadTasks = useCallback(async () => {
     setLoadingTasks(true)
     try {
       const data = await listTasks(projectId)
@@ -152,7 +144,15 @@ export function AgentLog({ projectId }: AgentLogProps) {
     } finally {
       setLoadingTasks(false)
     }
-  }
+  }, [projectId])
+
+  useEffect(() => {
+    if (projectId) loadTasks()
+  }, [projectId, loadTasks])
+
+  useEffect(() => {
+    if (selectedTask) loadArtifacts(selectedTask)
+  }, [selectedTask])
 
   async function loadArtifacts(taskId: string) {
     setLoadingArtifacts(true)

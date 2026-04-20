@@ -119,7 +119,7 @@ export function logEvent<T>(
  */
 export function createLogger(target: LogTargetType) {
   const component = getComponent(target);
-  const logger = createBridgeLogger(component);
+  void createBridgeLogger(component);
   
   return {
     trace: (msg: string, ctx?: Record<string, unknown>) => {

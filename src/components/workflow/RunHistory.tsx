@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, ChevronDown, ChevronUp, CheckCircle2, XCircle } from 'lucide-react'
 import { listLedgerRuns, getLedgerRunSummary, getLedgerRunEvents } from '../../lib/tauri'
 import type { LedgerEvent, RunSummary } from '../../lib/types'
@@ -115,11 +115,7 @@ export function RunHistory({ projectId }: RunHistoryProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (projectId) load()
-  }, [projectId])
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -130,7 +126,11 @@ export function RunHistory({ projectId }: RunHistoryProps) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId])
+
+  useEffect(() => {
+    if (projectId) load()
+  }, [projectId, load])
 
   return (
     <ScrollArea className="h-full">

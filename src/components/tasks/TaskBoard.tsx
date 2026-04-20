@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { RefreshCw, Upload, Download, Plus, Play, Trash2, X, AlertCircle } from 'lucide-react'
 import { useRef } from 'react'
 import { cn, formatDate } from '../../lib/utils'
@@ -75,6 +75,8 @@ const PHASE_LABELS: Record<string, string> = {
   verification: 'Verification',
 }
 
+const EMPTY_TASKS: Task[] = []
+
 interface TaskBoardProps {
   projectId?: string
   projectName?: string
@@ -97,7 +99,6 @@ export function TaskBoard({
   runCompletedTick = 0,
 }: TaskBoardProps) {
   const { showError } = useErrorHandler()
-  const [tasks, setTasks] = useState<Task[]>([])
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('todo')
   const [phaseFilter, setPhaseFilter] = useState('all')
   const [importExportMsg, setImportExportMsg] = useState<string | null>(null)
@@ -107,7 +108,7 @@ export function TaskBoard({
   const [deletingSelected, setDeletingSelected] = useState(false)
   const queue = useQueue()
 
-  const { data: fetchedTasks = [], error, isLoading: loading, refetch } = useQuery(
+  const { data: fetchedTasks, error, isLoading: loading, refetch } = useQuery(
     `tasks-${projectId}-${statusFilter}-${phaseFilter}`,
     () => projectId ? listTasks(
       projectId,
@@ -117,9 +118,7 @@ export function TaskBoard({
     { enabled: !!projectId, staleTime: 0 }
   )
 
-  useEffect(() => {
-    setTasks(fetchedTasks)
-  }, [fetchedTasks])
+  const tasks = fetchedTasks ?? EMPTY_TASKS
 
   useEffect(() => {
     if (error) {
@@ -169,7 +168,6 @@ export function TaskBoard({
   }, [initialTaskId, tasks, statusFilter])
 
   function handleTaskUpdated(updated: Task) {
-    setTasks(prev => prev.map(t => t.id === updated.id ? updated : t))
     // Only update selectedTask / switch tabs if this task's panel is currently open.
     // This prevents a stale async getTask from re-opening a panel the user already closed.
     if (selectedTask?.id === updated.id) {
@@ -183,6 +181,7 @@ export function TaskBoard({
         setStatusFilter(updated.status as StatusFilter)
       }
     }
+    refetch()
   }
 
   function toggleCheck(id: string, e: React.MouseEvent) {
@@ -288,15 +287,16 @@ export function TaskBoard({
     }
   }
 
-  function handleTaskDeleted(id: string) {
-    setTasks(prev => prev.filter(t => t.id !== id))
+  function handleTaskDeleted(_id: string) {
+    void _id
     setSelectedTask(null)
+    refetch()
   }
 
   function handleTaskCreated(task: Task) {
-    setTasks(prev => [task, ...prev])
     setShowCreate(false)
     setSelectedTask(task)
+    refetch()
   }
 
   const importMutation = useMutation(
@@ -629,14 +629,6 @@ export function TaskBoard({
               onArticleTasksCreated={(newTasks) => {
                 setStatusFilter('todo')
                 setPhaseFilter('all')
-
-                // Ensure newly created write_article tasks are visible immediately,
-                // then pre-select them so the user can run them right away.
-                setTasks(prev => {
-                  const byId = new Map(prev.map(t => [t.id, t]))
-                  for (const t of newTasks) byId.set(t.id, t)
-                  return Array.from(byId.values())
-                })
                 setCheckedIds(new Set(newTasks.map(t => t.id)))
               }}
             />

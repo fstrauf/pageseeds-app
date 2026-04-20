@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { getRedditStatistics } from '../../lib/tauri'
 import type { RedditStats } from '../../lib/types'
@@ -11,17 +11,11 @@ interface Props {
 
 export function RedditStats({ projectId }: Props) {
   const { showError } = useErrorHandler()
-  const [stats, setStats] = useState<RedditStats | null>(null)
-
-  const { data: fetchedStats, isLoading: loading, refetch, error: queryError } = useQuery(
+  const { data: stats, isLoading: loading, refetch, error: queryError } = useQuery(
     `reddit-stats-${projectId}`,
     () => getRedditStatistics(projectId),
     { enabled: !!projectId, staleTime: 0 }
   )
-
-  useEffect(() => {
-    setStats(fetchedStats || null)
-  }, [fetchedStats])
 
   useEffect(() => {
     if (queryError) {

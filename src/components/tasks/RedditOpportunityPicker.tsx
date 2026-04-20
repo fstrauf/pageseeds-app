@@ -90,7 +90,7 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
       // Sort by final_score descending
       const sorted = opportunities.sort((a, b) => (b.final_score || 0) - (a.final_score || 0))
       setRows(sorted.map(opp => ({ opportunity: opp, selected: false })))
-    } catch (e) {
+    } catch {
       setError('Failed to parse search results. The data may be corrupted.')
     }
   }, [task])

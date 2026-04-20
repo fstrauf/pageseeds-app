@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Search, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
 import { listSkills } from '../../lib/tauri'
 import { useErrorHandler } from '../../lib/toast-context'
@@ -46,11 +46,7 @@ export function SkillBrowser({ projectId }: SkillBrowserProps) {
   const [query, setQuery] = useState('')
   const { showError } = useErrorHandler()
 
-  useEffect(() => {
-    if (projectId) load()
-  }, [projectId])
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const data = await listSkills(projectId)
@@ -60,7 +56,11 @@ export function SkillBrowser({ projectId }: SkillBrowserProps) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId, showError])
+
+  useEffect(() => {
+    if (projectId) load()
+  }, [projectId, load])
 
   const filtered = query.trim()
     ? skills.filter(s =>

@@ -8,16 +8,23 @@ Read the full project context and extract:
 1. **8-12 seed keyword themes** that represent what this project should target
 2. **2-3 competitor domains** whose traffic/keyword profiles would be useful for context
 
+## Coverage Awareness
+
+You will receive a summary of existing content coverage below. Use it to:
+- AVOID themes where coverage is already strong (6+ articles)
+- PREFER themes where coverage is thin (1-2 articles) or nonexistent
+- Do NOT repeat exact keywords already targeted — find adjacent angles instead
+
 ## Seed Requirements
 
-- **2-4 words each** — specific topical phrases, NOT generic 1-2 word head terms
-- The keyword suggestion API does substring matching, so each seed must be specific enough to avoid returning "near me" queries and word-order noise
+- **2-3 words each** — the API expands seeds into long-tail variations, so seeds must be broad enough to have search volume themselves but specific enough to stay on-topic
+- Seeds must be phrases that real people actually type into Google — if nobody searches for the seed, the API returns nothing
 - Brand names are fine when they are deliberate targets (e.g., a specific tool, platform, or competitor you want to rank for)
 - Cover different angles of the offering
 - Include a mix of informational and commercial intent seeds
-- Prefer phrases that real people actually type into Google
-- BAD seeds (too generic): "coffee roasting", "green beans", "budget planner", "seo"
-- GOOD seeds (specific enough): "home coffee roasting equipment", "green coffee beans for roasting", "how to roast coffee beans", "coffee roasting temperature guide", "budget planner for freelancers"
+- BAD seeds (too long/niche — nobody searches these): "options income tracker software", "covered call roll calculator", "IBKR flex query tutorial"
+- BAD seeds (too generic): "options", "trading", "investing", "seo"
+- GOOD seeds (2-3 words, real search volume): "covered call screener", "options wheel strategy", "options income", "selling put options", "options backtesting"
 
 ## Competitor Requirements
 
@@ -48,4 +55,4 @@ Requirements:
 - Return ONLY JSON, no extra prose
 - 8-12 themes maximum
 - 2-3 competitors maximum
-- Each theme MUST be 2-4 words
+- Each theme MUST be 2-3 words

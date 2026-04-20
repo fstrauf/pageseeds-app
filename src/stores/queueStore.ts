@@ -8,7 +8,7 @@ import { create } from 'zustand';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { executeQueue, markTasksQueued, markTasksTodo, pauseQueue, resumeQueue, clearCompletedQueueItems } from '@/lib/tauri';
 import { createLogger, LogTarget } from '@/lib/logging';
-import type { StepProgress, QueueItem } from '@/lib/types';
+import type { StepProgress, QueueItem, ExecutionResult } from '@/lib/types';
 
 const logger = createLogger(LogTarget.QUEUE);
 
@@ -384,7 +384,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
                     follow_up_tasks: event.payload.follow_up_tasks,
                     started_at: event.payload.started_at,
                     finished_at: event.payload.finished_at,
-                  } as any 
+                  } as unknown as ExecutionResult 
                 : undefined 
             } 
           : i

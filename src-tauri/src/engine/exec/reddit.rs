@@ -218,10 +218,11 @@ pub fn exec_reddit_config_parse(
         };
     }
 
-    // Build prompt for agentic parsing
-    // Simplified prompt that works - see examples/test_reddit_config_parse.rs
+    // Build prompt for agentic parsing.
+    // reddit_config.md remains the primary source for Reddit-specific constraints,
+    // while project context expands topic coverage and helps infer missing or weak search inputs.
     let prompt = format!(
-        "Extract Reddit search parameters from the config files below. Return ONLY a JSON object.\n\n\
+        "Extract and improve Reddit search parameters from the config files below. Return ONLY a JSON object.\n\n\
         ## reddit_config.md\n\
         ```markdown\n\
         {reddit_config}\n\
@@ -230,14 +231,26 @@ pub fn exec_reddit_config_parse(
         ```markdown\n\
         {project_context}\n\
         ```\n\n\
+        ## How To Use The Inputs\n\
+        - Treat reddit_config.md as the PRIMARY source for Reddit-specific guidance, constraints, exclusions, and any explicitly provided search themes or subreddit targets.\n\
+        - Use Project Context to EXPAND and REFINE the search plan so it better matches the product, audience, pain points, terminology, and adjacent use cases.\n\
+        - If reddit_config.md is sparse, generic, or missing detail, infer stronger trigger_topics, query_keywords, and seed_subreddits from Project Context.\n\
+        - Prefer concrete search phrases real Reddit users would post about, not abstract category labels.\n\
+        - Prefer subreddits where the target audience actually discusses the underlying problem, not just the product category in the abstract.\n\
+        - Avoid generic, low-signal, or off-topic queries and avoid subreddits that are too broad unless they are clearly relevant.\n\n\
         ## Required JSON Output\n\
         Return a JSON object with these exact keys:\n\
         - product_name: string\n\
         - mention_stance: string (REQUIRED, RECOMMENDED, OPTIONAL, or OMIT)\n\
-        - trigger_topics: array of strings\n\
-        - query_keywords: array of strings (use same as trigger_topics)\n\
+        - trigger_topics: array of strings (high-level Reddit problem themes)\n\
+        - query_keywords: array of strings (specific Reddit search phrases; do NOT just copy trigger_topics unless that is genuinely best)\n\
         - seed_subreddits: array of strings (WITHOUT r/ prefix)\n\
         - excluded_subreddits: array of strings\n\n\
+        ## Output Quality Rules\n\
+        - trigger_topics should represent the core problems, moments, or intents that would lead someone to post on Reddit.\n\
+        - query_keywords should be more search-oriented than trigger_topics and can include pain-point phrasing, question phrasing, and outcome phrasing.\n\
+        - seed_subreddits should include communities where those problems are discussed, even if the subreddit is adjacent rather than an exact category match.\n\
+        - Keep excluded_subreddits if they are explicitly specified; otherwise return an empty array when none are clear.\n\
         ## Example\n\
         If the config has Product Name: Days to Expiry, then return:\n\
         {{\"product_name\": \"Days to Expiry\", ...}}\n\n\
@@ -377,11 +390,10 @@ pub(crate) fn parse_config_fallback(config: &str) -> RedditSearchParams {
 ///
 /// Reads queries/subreddits from the structured search params artifact (produced by
 /// reddit_config_parse_stage), calls the Reddit API, applies the 14-day filter and
-/// MEDIUM+ score filter, deduplicates, and returns the top 10 posts by score.
+/// MEDIUM+ score filter, deduplicates, and returns the full filtered candidate pool.
 pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
     const MAX_AGE_DAYS: i64 = 14;
     const MAX_SEARCH_PAIRS: usize = 50;
-    const MAX_RESULTS: usize = 10;
 
     log::info!("[reddit_search] starting for project={} path={}", task.project_id, project_path);
 
@@ -524,7 +536,6 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
         let fb = b["final_score"].as_f64().unwrap_or(0.0);
         fb.partial_cmp(&fa).unwrap_or(std::cmp::Ordering::Equal)
     });
-    all_posts.truncate(MAX_RESULTS);
 
     log::info!(
         "[reddit_search] done — kept={} too_old={} excluded_sub={} below_threshold={} history_filtered={}",

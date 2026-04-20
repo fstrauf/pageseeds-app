@@ -12,12 +12,75 @@ use crate::engine::workflows::{StepResult, WorkflowStep};
 use crate::models::research::{KeywordPipelineOutput, SelectedKeyword, LandingPageCandidate};
 use crate::models::task::Task;
 
-/// Execute a research workflow step using ToolCallingAgent
+/// Build a deterministic text summary from keyword_coverage.json for the seed
+/// extraction prompt.  Groups clusters by article count so the LLM can avoid
+/// over-covered topics and prioritise thin gaps.
+fn build_coverage_summary(coverage: &serde_json::Value) -> String {
+    let empty_clusters: Vec<serde_json::Value> = vec![];
+    let clusters = coverage
+        .get("clusters")
+        .and_then(|c| c.as_array())
+        .unwrap_or(&empty_clusters);
+
+    let mut strong: Vec<(String, i64)> = vec![];
+    let mut moderate: Vec<(String, i64)> = vec![];
+    let mut thin: Vec<(String, i64)> = vec![];
+
+    for c in clusters {
+        let name = c
+            .get("cluster_name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let count = c.get("article_count").and_then(|n| n.as_i64()).unwrap_or(0);
+        match count {
+            0..=2 => thin.push((name, count)),
+            3..=5 => moderate.push((name, count)),
+            _ => strong.push((name, count)),
+        }
+    }
+
+    let mut lines: Vec<String> = vec![];
+
+    if !strong.is_empty() {
+        lines.push("Strong coverage (skip these):".to_string());
+        for (name, count) in strong {
+            lines.push(format!("- {} ({} articles)", name, count));
+        }
+    }
+
+    if !moderate.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Moderate coverage (ok to supplement):".to_string());
+        for (name, count) in moderate {
+            lines.push(format!("- {} ({} articles)", name, count));
+        }
+    }
+
+    if !thin.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Thin coverage (good candidates to deepen):".to_string());
+        for (name, count) in thin {
+            lines.push(format!("- {} ({} articles)", name, count));
+        }
+    }
+
+    if lines.is_empty() {
+        "No existing content coverage found.".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Execute a research workflow step using the configured CLI agent.
 ///
-/// This handles the 3-step unified workflow:
-/// 1. research_seed_extraction
-/// 2. research_keyword_discovery
-/// 3. research_final_selection
+/// This handles the research steps that need an LLM (currently only
+/// `research_seed_extraction`). It builds the prompt and delegates to
+/// `agent::run_agent` — the same path used by every other agentic step.
 ///
 /// The `previous_output` parameter contains the output from the previous step,
 /// used to pass data between steps (e.g., themes from step 1 to step 2).
@@ -25,26 +88,12 @@ pub async fn exec_research_workflow_step(
     step: &WorkflowStep,
     task: &Task,
     project_path: &str,
+    agent_provider: &str,
     previous_output: Option<&str>,
 ) -> StepResult {
-    use crate::engine::tool_agent::{AgentConfig, ToolCallingAgent};
-    use crate::engine::tools::{ToolRegistry, KeywordDifficultyTool, KeywordGeneratorTool};
+    use std::path::Path;
 
     let paths = ProjectPaths::from_path(project_path);
-
-    // Create tool registry with keyword tools
-    let mut tools = ToolRegistry::new();
-    tools.register(KeywordGeneratorTool);
-    tools.register(KeywordDifficultyTool);
-
-    // Create agent config (bridge to kimi-acp-openai-bridge)
-    let config = AgentConfig {
-        base_url: "http://localhost:8080/v1".to_string(),
-        model: "kimi-k2.5".to_string(),
-        api_key: "not-needed-for-bridge".to_string(),
-    };
-
-    let agent = ToolCallingAgent::new(config, tools);
 
     // Build prompts based on step name, passing previous step's output
     let (system_prompt, user_prompt) = match build_research_prompts(
@@ -64,38 +113,55 @@ pub async fn exec_research_workflow_step(
         }
     };
 
+    // Combine system and user prompts for the CLI agent
+    let prompt = format!("{}\n\n---\n\n{}", system_prompt, user_prompt);
+
     log::info!(
-        "[research_workflow] Executing '{}' with ToolCallingAgent",
-        step.name
+        "[research_workflow] Executing '{}' with provider '{}'",
+        step.name,
+        agent_provider
     );
 
-    // Run the agent
-    match agent.run(&system_prompt, &user_prompt, 10).await {
-        Ok(result) => {
+    let provider = agent_provider.to_string();
+    let repo_root = Path::new(project_path).to_path_buf();
+    let step_name = step.name.clone();
+
+    // Run the agent via the standard CLI wrapper (same as all other agentic steps)
+    match tokio::task::spawn_blocking(move || {
+        crate::engine::agent::run_agent(&provider, &prompt, &repo_root)
+    }).await {
+        Ok(Ok(output)) => {
             log::info!(
-                "[research_workflow] '{}' complete ({} chars, {} tool calls)",
-                step.name,
-                result.content.len(),
-                result.tool_calls_executed
+                "[research_workflow] '{}' complete ({} chars)",
+                step_name,
+                output.len()
             );
 
             StepResult {
                 success: true,
                 message: format!(
-                    "Research step '{}' complete ({} chars, {} tool calls)",
-                    step.name,
-                    result.content.len(),
-                    result.tool_calls_executed
+                    "Research step '{}' complete ({} chars)",
+                    step_name,
+                    output.len()
                 ),
-                output: Some(result.content),
+                output: Some(output),
             }
         }
-        Err(e) => {
-            log::error!("[research_workflow] '{}' failed: {}", step.name, e);
+        Ok(Err(e)) => {
+            log::error!("[research_workflow] '{}' failed: {}", step_name, e);
 
             StepResult {
                 success: false,
-                message: format!("Research step '{}' failed: {}", step.name, e),
+                message: format!("Research step '{}' failed: {}", step_name, e),
+                output: None,
+            }
+        }
+        Err(e) => {
+            log::error!("[research_workflow] '{}' task failed: {}", step_name, e);
+
+            StepResult {
+                success: false,
+                message: format!("Research step '{}' task failed: {}", step_name, e),
                 output: None,
             }
         }
@@ -142,9 +208,21 @@ pub fn build_research_prompts(
                 })
                 .unwrap_or_else(|_| "(no brief found)".to_string());
 
+            // ── Coverage summary for smarter seed generation ──────────────────────
+            let coverage_summary = match crate::engine::exec::coverage::read_keyword_coverage(project_path) {
+                Some(coverage) => build_coverage_summary(&coverage),
+                None => {
+                    return Err(
+                        "keyword_coverage.json not found. Run 'Analyze Keyword Coverage' first."
+                            .to_string(),
+                    );
+                }
+            };
+
             let user = format!(
-                "## Project Context\n\n{}\n\n## Task Description\n\n{}\n\n## Project Path\n\n{}",
+                "## Project Context\n\n{}\n\n## Existing Content Coverage\n\n{}\n\n## Task Description\n\n{}\n\n## Project Path\n\n{}",
                 brief_content,
+                coverage_summary,
                 task.description.as_deref().unwrap_or("(no description)"),
                 project_path
             );
@@ -191,9 +269,144 @@ pub fn build_research_prompts(
             Ok((system.to_string(), user))
         }
 
+        "research_seed_validation" => {
+            // Agentic: LLM filters autocomplete suggestions for domain relevance.
+            //
+            // Why agentic: "is 'options benefits' relevant to an options income tool?"
+            // requires understanding the site's domain and user intent. Hard-coding a
+            // relevance rule would silently fail on any input it wasn't tested against.
+            //
+            // Input: research_autocomplete artifact — [{theme, suggestions: [...]}]
+            // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
+            // Each theme should produce 1-3 validated seeds that are clearly on-topic.
+
+            let system = include_str!("../../prompts/seed_validation.md");
+
+            // Read the autocomplete artifact from the task
+            let autocomplete_json = task
+                .artifacts
+                .iter()
+                .rev()
+                .find(|a| a.key == "research_autocomplete")
+                .and_then(|a| a.content.as_deref())
+                .unwrap_or_else(|| previous_output.unwrap_or("(no autocomplete data)"));
+
+            // Also load the project brief so the LLM has domain context
+            let brief_content = std::fs::read_to_string(paths.automation_dir.join("project.md"))
+                .unwrap_or_else(|_| "(no brief found)".to_string());
+
+            let user = format!(
+                "## Project Context\n\n{}\n\n## Autocomplete Results\n\n{}\n\n## Task\n\nFilter each theme's suggestions to only those clearly relevant to this site. Output JSON only.",
+                brief_content,
+                autocomplete_json,
+            );
+
+            Ok((system.to_string(), user))
+        }
+
         _ => Err(format!("Unknown research step: {}", step_name)),
     }
 }
+
+/// Deterministic Step 2: fetch Google Autocomplete suggestions for all themes.
+///
+/// Reads the `research_seed_extraction` artifact from the task, calls Google
+/// Autocomplete (free, no auth) for each theme, and outputs structured JSON:
+/// `[{theme: string, suggestions: [string]}]`
+///
+/// This output is consumed by the agentic Step 3 (research_seed_validation).
+pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult {
+    use crate::engine::exec::keywords::parse_seed_extraction_artifact;
+
+    let seed_artifact = parse_seed_extraction_artifact(task);
+
+    if seed_artifact.themes.is_empty() {
+        return StepResult {
+            success: false,
+            message: "No themes found in research_seed_extraction artifact. Step 1 must run first.".to_string(),
+            output: None,
+        };
+    }
+
+    log::info!(
+        "[research_autocomplete] Fetching Google Autocomplete for {} themes",
+        seed_artifact.themes.len()
+    );
+
+    let themes = seed_artifact.themes.clone();
+    let project_path = project_path.to_string();
+
+    let thread_result = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("Failed to create runtime: {}", e))?;
+
+        rt.block_on(async move {
+            let mut results: Vec<serde_json::Value> = Vec::new();
+
+            for theme in &themes {
+                tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+                let suggestions = match crate::seo::google_autocomplete::fetch_suggestions(theme, "us", "en").await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("[research_autocomplete] Autocomplete failed for '{}': {}", theme, e);
+                        vec![]
+                    }
+                };
+
+                let suggestion_list: Vec<String> = suggestions
+                    .iter()
+                    .take(6)
+                    .map(|s| s.keyword.clone())
+                    .collect();
+
+                log::info!(
+                    "[research_autocomplete] theme '{}' → {} suggestions: {:?}",
+                    theme,
+                    suggestion_list.len(),
+                    suggestion_list
+                );
+
+                results.push(serde_json::json!({
+                    "theme": theme,
+                    "suggestions": suggestion_list,
+                }));
+            }
+
+            Ok::<Vec<serde_json::Value>, String>(results)
+        })
+    })
+    .join()
+    .map_err(|_| "Autocomplete thread panicked".to_string());
+
+    match thread_result {
+        Ok(Ok(results)) => {
+            let json = serde_json::to_string_pretty(&results)
+                .unwrap_or_else(|_| "[]".to_string());
+            log::info!(
+                "[research_autocomplete] Complete — {} theme entries ({} chars)",
+                results.len(),
+                json.len()
+            );
+            StepResult {
+                success: true,
+                message: format!("Google Autocomplete fetched for {} themes", results.len()),
+                output: Some(json),
+            }
+        }
+        Ok(Err(e)) => StepResult {
+            success: false,
+            message: format!("Autocomplete failed: {}", e),
+            output: None,
+        },
+        Err(e) => StepResult {
+            success: false,
+            message: format!("Autocomplete thread error: {}", e),
+            output: None,
+        },
+    }
+}
+
 /// Output format matching what the frontend KeywordPicker expects.
 /// 
 /// The frontend expects either:

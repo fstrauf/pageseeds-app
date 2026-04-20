@@ -226,6 +226,22 @@ impl StepRegistry {
             })
         }));
 
+        handlers.insert(StepKind::ResearchAutocomplete, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::research::exec_research_autocomplete(&task, &project_path)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
         handlers.insert(StepKind::RedditConfigParse, Box::new(|_step, ctx| {
             let task = ctx.task.clone();
             let project_path = ctx.project_path.to_string();

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, LayoutGrid, BarChart3, Settings } from 'lucide-react'
 import { listSocialCampaigns, getSocialCampaignStats, listSocialTemplates } from '../../lib/tauri'
-import type { SocialCampaign, CampaignStats, ContentTemplate } from '../../lib/types'
+import type { CampaignStats } from '../../lib/types'
 import { CampaignList } from './CampaignList'
 import { CampaignCreate } from './CampaignCreate'
 import { TemplateList } from './TemplateList'
@@ -20,9 +20,6 @@ type View = 'campaigns' | 'templates' | 'stats'
 export function SocialDashboard({ projectId }: Props) {
   const { showError } = useErrorHandler()
   const [view, setView] = useState<View>('campaigns')
-  const [campaigns, setCampaigns] = useState<SocialCampaign[]>([])
-  const [templates, setTemplates] = useState<ContentTemplate[]>([])
-  const [stats, setStats] = useState<Record<string, CampaignStats>>({})
   const [showCreate, setShowCreate] = useState(false)
 
   const { data, isLoading: loading, refetch, error: queryError } = useQuery(
@@ -49,18 +46,14 @@ export function SocialDashboard({ projectId }: Props) {
   )
 
   useEffect(() => {
-    if (data) {
-      setCampaigns(data.campaigns)
-      setTemplates(data.templates)
-      setStats(data.stats)
-    }
-  }, [data])
-
-  useEffect(() => {
     if (queryError) {
       showError(queryError.message)
     }
   }, [queryError, showError])
+
+  const campaigns = data?.campaigns ?? []
+  const templates = data?.templates ?? []
+  const stats = data?.stats ?? {}
 
   const totalPosts = Object.values(stats).reduce((sum, s) => sum + s.total_posts, 0)
   const totalDrafts = Object.values(stats).reduce(

@@ -84,23 +84,33 @@ impl WorkflowHandler for ResearchHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "research_keywords" | "research_landing_pages" => {
-                // Hybrid 3-step workflow: agentic → deterministic → agentic + normalizer
-                // Replaces unreliable ToolCallingAgent loop with reliable native Ahrefs calls.
+                // 6-step workflow:
+                // agentic → deterministic → agentic → deterministic → deterministic → normalizer
                 vec![
                     // Step 1 (agentic): LLM extracts 3-4 themes from project brief.
                     // Cannot be deterministic: requires reading intent from free-form text.
                     WorkflowStep::new("research_seed_extraction", StepKind::Agentic.as_ref()),
-                    
-                    // Step 2 (deterministic): Rust drives Ahrefs API directly — no LLM.
-                    // Deterministic: given themes, enumerates ideas + fetches KD scores.
-                    // Output: structured JSON with all keywords, volume, KD.
+
+                    // Step 2 (deterministic): fetch Google Autocomplete for all themes.
+                    // Free API, always returns results. Outputs structured JSON: [{theme, suggestions}].
+                    WorkflowStep::new("research_autocomplete", StepKind::ResearchAutocomplete.as_ref()),
+
+                    // Step 3 (agentic): LLM filters autocomplete suggestions for domain relevance.
+                    // Cannot be deterministic: requires understanding what is on-topic for this
+                    // specific product/site. Hard-coding a relevance rule would produce silent errors
+                    // on any input it was not tested against.
+                    // Input contract: [{theme, suggestions: [string]}]
+                    // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
+                    WorkflowStep::new("research_seed_validation", StepKind::Agentic.as_ref()),
+
+                    // Step 4 (deterministic): DataForSEO related_keywords per validated seed.
+                    // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative.as_ref()),
-                    
-                    // Step 3 (deterministic): Select best candidates from structured data.
-                    // Deterministic: pure filtering/sorting by KD and volume — no judgment needed.
+
+                    // Step 5 (deterministic): Select best candidates from structured data.
                     WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection.as_ref()),
-                    
-                    // Step 4 (normalizer): Enforces output contract before UI parses it.
+
+                    // Step 6 (normalizer): Enforces output contract before UI parses it.
                     WorkflowStep::new("research_normalize", StepKind::Normalizer.as_ref())
                         .with_param(step_params::NORMALIZER_ID, "keyword_research")
                         .with_param(step_params::ARTIFACT_NAME, "keyword_research"),
@@ -525,7 +535,7 @@ pub async fn exec_agentic(
     agent_provider: &str,
     latest_raw_output: Option<&str>,
 ) -> StepResult {
-    use crate::engine::{agent, prompts, skills, tool_agent};
+    use crate::engine::{agent, prompts, skills};
     use crate::engine::project_paths::ProjectPaths;
     use std::path::Path;
 
@@ -649,14 +659,13 @@ pub async fn exec_agentic(
     // Note: research_final_selection is now deterministic, not agentic
     let is_research_step = matches!(
         step.name.as_str(),
-        "research_seed_extraction" | "research_keyword_discovery"
+        "research_seed_extraction" | "research_keyword_discovery" | "research_seed_validation"
     );
 
     if is_research_step {
-        // Use new ToolCallingAgent for research workflow
-        // Pass previous step's output to enable data flow between steps
+        // Research steps use the same CLI agent path as all other agentic steps
         return crate::engine::exec::research::exec_research_workflow_step(
-            step, task, project_path, latest_raw_output
+            step, task, project_path, agent_provider, latest_raw_output
         ).await;
     }
 

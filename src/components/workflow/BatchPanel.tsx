@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Zap, RefreshCw, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 import { getBatchSummary, runBatch } from '../../lib/tauri'
 import type { BatchResult, BatchSummary } from '../../lib/types'
@@ -19,18 +19,18 @@ export function BatchPanel({ projectId }: BatchPanelProps) {
   const [maxTasks, setMaxTasks] = useState(20)
   const [pauseOnError, setPauseOnError] = useState(true)
 
-  useEffect(() => {
-    if (projectId) loadSummary()
-  }, [projectId])
-
-  async function loadSummary() {
+  const loadSummary = useCallback(async () => {
     try {
       const s = await getBatchSummary(projectId)
       setSummary(s)
     } catch (e: unknown) {
       setError(String(e))
     }
-  }
+  }, [projectId])
+
+  useEffect(() => {
+    if (projectId) loadSummary()
+  }, [projectId, loadSummary])
 
   async function startBatch() {
     setRunning(true)

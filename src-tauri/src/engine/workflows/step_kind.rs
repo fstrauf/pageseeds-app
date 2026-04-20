@@ -45,6 +45,10 @@ pub enum StepKind {
     CoverageSave,
     RedditPostReply,
     SocialExtractArticle,
+    /// Fetch Google Autocomplete suggestions per theme (deterministic).
+    ResearchAutocomplete,
+    /// LLM filters autocomplete suggestions for domain relevance (agentic).
+    ResearchSeedValidation,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -92,6 +96,8 @@ impl StepKind {
             Self::CoverageSave => "coverage_save",
             Self::RedditPostReply => "reddit_post_reply",
             Self::SocialExtractArticle => "social_extract_article",
+            Self::ResearchAutocomplete => "research_autocomplete",
+            Self::ResearchSeedValidation => "research_seed_validation",
             Self::Unknown => "unknown",
         }
     }
@@ -153,6 +159,8 @@ impl FromStr for StepKind {
             "coverage_save" => Ok(Self::CoverageSave),
             "reddit_post_reply" => Ok(Self::RedditPostReply),
             "social_extract_article" => Ok(Self::SocialExtractArticle),
+            "research_autocomplete" => Ok(Self::ResearchAutocomplete),
+            "research_seed_validation" => Ok(Self::ResearchSeedValidation),
             _ => Err(()),
         }
     }

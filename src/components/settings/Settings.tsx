@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText, Globe } from 'lucide-react'
 import { LogViewer } from './LogViewer'
-import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus, getSeoProvider, setSeoProvider, getGlobalAgentProvider } from '../../lib/tauri'
+import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus, getSeoProvider, setSeoProvider } from '../../lib/tauri'
 import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus, SeoProvider } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -144,7 +144,7 @@ export function Settings({ projectId }: SettingsProps) {
   // Load global settings once on mount
   useEffect(() => {
     loadAgentStatus()
-  }, [])
+  }, [loadAgentStatus])
 
   // Load project-specific settings when project changes
   useEffect(() => {

@@ -36,6 +36,9 @@ impl DataForSeoProvider {
     }
 
     /// Parse a DataForSEO keyword ideas response into our internal format.
+    ///
+    /// Supports both `keyword_suggestions` (items flat) and `related_keywords`
+    /// (items nested under `keyword_data`) response shapes.
     fn parse_keyword_ideas_response(&self, data: &Value, seed_keyword: &str, country: &str, search_engine: &str) -> Result<KeywordIdeasResult> {
         let tasks = data.get("tasks")
             .and_then(|t| t.as_array())
@@ -51,15 +54,16 @@ impl DataForSeoProvider {
                 .unwrap_or(&empty_vec);
 
             for item in result {
-                // keyword_suggestions returns items at the top level with
-                // seed_keyword_data + items array structure
                 let empty_keywords = vec![];
                 let keywords = item.get("items")
                     .and_then(|k| k.as_array())
                     .unwrap_or(&empty_keywords);
 
                 for kw in keywords {
-                    let keyword_text = kw.get("keyword")
+                    // related_keywords nests data under `keyword_data`; keyword_suggestions is flat.
+                    let data_node = kw.get("keyword_data").unwrap_or(kw);
+
+                    let keyword_text = data_node.get("keyword")
                         .and_then(|k| k.as_str())
                         .unwrap_or("")
                         .to_string();
@@ -81,7 +85,7 @@ impl DataForSeoProvider {
                         || kw_lower.starts_with("does ");
 
                     // keyword_info sub-object contains volume, cpc, competition
-                    let keyword_info = kw.get("keyword_info");
+                    let keyword_info = data_node.get("keyword_info");
                     let search_volume = keyword_info
                         .and_then(|ki| ki.get("search_volume"))
                         .and_then(|v| v.as_i64());
@@ -95,7 +99,7 @@ impl DataForSeoProvider {
                         .and_then(|v| v.as_f64());
 
                     // keyword_properties.keyword_difficulty is the 0-100 KD score
-                    let kd = kw.get("keyword_properties")
+                    let kd = data_node.get("keyword_properties")
                         .and_then(|kp| kp.get("keyword_difficulty"))
                         .and_then(|v| v.as_f64());
 
@@ -107,7 +111,7 @@ impl DataForSeoProvider {
                     });
 
                     // search_intent_info.main_intent
-                    let intent = kw.get("search_intent_info")
+                    let intent = data_node.get("search_intent_info")
                         .and_then(|si| si.get("main_intent"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
@@ -218,60 +222,66 @@ impl DataForSeoProvider {
             serp,
         })
     }
-}
 
-#[async_trait]
-impl SeoDataProvider for DataForSeoProvider {
-    async fn keyword_ideas(&self, keyword: &str, country: &str, search_engine: &str) -> Result<KeywordIdeasResult> {
-        // Map country code to DataForSEO location code
-        let location_code = match country.to_lowercase().as_str() {
-            "us" | "usa" => "2840",
-            "uk" | "gb" => "2826",
-            "ca" => "2124",
-            "au" => "2036",
-            "de" => "2276",
-            "fr" => "2250",
-            _ => "2840", // Default to US
-        };
+    /// Call the `related_keywords` endpoint (semantic discovery via Google "searches related to").
+    async fn fetch_related_keywords(&self, keyword: &str, location_code: &str) -> Result<KeywordIdeasResult> {
+        let payload = serde_json::json!([{
+            "keyword": keyword,
+            "location_code": location_code.parse::<i64>().unwrap_or(2840),
+            "language_code": "en",
+            "include_seed_keyword": true,
+            "ignore_synonyms": true,
+            "depth": 2,
+            "limit": 100,
+            "filters": [
+                ["keyword_data.keyword_info.search_volume", ">", 50],
+                "and",
+                ["keyword_data.keyword_properties.keyword_difficulty", "<=", 30],
+                "and",
+                ["keyword_data.search_intent_info.main_intent", "<>", "navigational"],
+                "and",
+                ["keyword_data.keyword", "not_like", "%near me%"]
+            ],
+            "order_by": ["keyword_data.keyword_info.search_volume,desc"]
+        }]);
 
-        // Map search engine to DataForSEO search engine code
-        let se_code = match search_engine.to_lowercase().as_str() {
-            "google" => "google",
-            _ => "google",
-        };
+        let data = self.post_dataforseo("/v3/dataforseo_labs/google/related_keywords/live", &payload).await?;
+        self.parse_keyword_ideas_response(&data, keyword, "us", "google")
+    }
 
-        // DataForSEO expects a bare JSON array, not wrapped in {"data": [...]}
-        // Server-side filters: volume > 50, KD ≤ 30, no navigational intent,
-        // no "near me" queries.  ignore_synonyms deduplicates word-order
-        // permutations ("coffee roaster" vs "roaster coffee").  depth=3
-        // surfaces deeper long-tail phrases.
-        let payload = serde_json::json!([
-            {
-                "keyword": keyword,
-                "location_code": location_code.parse::<i64>().unwrap_or(2840),
-                "language_code": "en",
-                "include_seed_keyword": true,
-                "ignore_synonyms": true,
-                "depth": 3,
-                "limit": 100,
-                "filters": [
-                    ["keyword_info.search_volume", ">", 50],
-                    "and",
-                    ["keyword_properties.keyword_difficulty", "<=", 30],
-                    "and",
-                    ["search_intent_info.main_intent", "<>", "navigational"],
-                    "and",
-                    ["keyword", "not_like", "%near me%"]
-                ],
-                "order_by": ["keyword_info.search_volume,desc"]
-            }
-        ]);
+    /// Call the `keyword_suggestions` endpoint (substring matching against keyword database).
+    async fn fetch_keyword_suggestions(&self, keyword: &str, location_code: &str) -> Result<KeywordIdeasResult> {
+        let payload = serde_json::json!([{
+            "keyword": keyword,
+            "location_code": location_code.parse::<i64>().unwrap_or(2840),
+            "language_code": "en",
+            "include_seed_keyword": true,
+            "ignore_synonyms": true,
+            "depth": 3,
+            "limit": 100,
+            "filters": [
+                ["keyword_info.search_volume", ">", 50],
+                "and",
+                ["keyword_properties.keyword_difficulty", "<=", 30],
+                "and",
+                ["search_intent_info.main_intent", "<>", "navigational"],
+                "and",
+                ["keyword", "not_like", "%near me%"]
+            ],
+            "order_by": ["keyword_info.search_volume,desc"]
+        }]);
 
+        let data = self.post_dataforseo("/v3/dataforseo_labs/google/keyword_suggestions/live", &payload).await?;
+        self.parse_keyword_ideas_response(&data, keyword, "us", "google")
+    }
+
+    /// Shared POST + error handling for DataForSEO Labs endpoints.
+    async fn post_dataforseo(&self, path: &str, payload: &Value) -> Result<Value> {
         let resp = self.client
-            .post(self.api_url("/v3/dataforseo_labs/google/keyword_suggestions/live"))
+            .post(self.api_url(path))
             .header("Authorization", self.auth_header())
             .header("Content-Type", "application/json")
-            .json(&payload)
+            .json(payload)
             .send()
             .await
             .map_err(Error::Http)?;
@@ -280,14 +290,13 @@ impl SeoDataProvider for DataForSeoProvider {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(Error::Other(format!(
-                "DataForSEO keyword ideas API returned status {}: {}",
+                "DataForSEO API returned status {}: {}",
                 status, body
             )));
         }
 
         let data: Value = resp.json().await.map_err(Error::Http)?;
-        
-        // Check for API-level errors
+
         if let Some(status_code) = data.get("status_code").and_then(|v| v.as_i64()) {
             if status_code != 20000 {
                 let status_msg = data.get("status_message")
@@ -300,7 +309,28 @@ impl SeoDataProvider for DataForSeoProvider {
             }
         }
 
-        self.parse_keyword_ideas_response(&data, keyword, country, search_engine)
+        Ok(data)
+    }
+}
+
+#[async_trait]
+impl SeoDataProvider for DataForSeoProvider {
+    async fn keyword_ideas(&self, keyword: &str, country: &str, _search_engine: &str) -> Result<KeywordIdeasResult> {
+        // Map country code to DataForSEO location code
+        let location_code = match country.to_lowercase().as_str() {
+            "us" | "usa" => "2840",
+            "uk" | "gb" => "2826",
+            "ca" => "2124",
+            "au" => "2036",
+            "de" => "2276",
+            "fr" => "2250",
+            _ => "2840", // Default to US
+        };
+
+        // Call related_keywords directly. The caller (exec/keywords.rs) is responsible
+        // for seed selection via Phase 1 (Google Autocomplete) and will retry with the
+        // next autocomplete seed if this returns 0 results. No fallback here.
+        self.fetch_related_keywords(keyword, location_code).await
     }
 
     async fn keyword_difficulty(&self, keyword: &str, country: &str) -> Result<KeywordDifficultyResult> {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Shell } from './components/layout/Shell'
 import { TaskBoard } from './components/tasks/TaskBoard'
 import { ArticleTable } from './components/articles/ArticleTable'
@@ -19,6 +19,12 @@ import type { Project, Task, View } from './lib/types'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './components/ui/tabs'
 import { QueueContext } from './lib/queue-context'
 import { useQueueRunner } from './hooks/useQueueRunner'
+
+declare global {
+  interface Window {
+    __pendingProjectId?: string
+  }
+}
 
 const VALID_VIEWS: View[] = [
   'overview',
@@ -67,14 +73,40 @@ export default function App() {
 
   // Restore state from URL on initial load
   useEffect(() => {
+    async function loadProjects() {
+      try {
+        const data = await listProjects()
+        setProjects(data)
+        const pendingId = window.__pendingProjectId
+        delete window.__pendingProjectId
+
+        if (data.length > 0) {
+          const match = pendingId ? data.find(p => p.id === pendingId) : null
+          if (match) {
+            setActiveProject(match)
+          } else if (!activeProject) {
+            setActiveProject(data[0])
+          }
+        }
+        if (data.length === 0) {
+          setModalProject(null)
+        }
+      } catch {
+        setModalProject(null)
+      } finally {
+        setReady(true)
+      }
+    }
+
     const { view, projectId } = parseUrlHash()
     if (view) setActiveView(view)
     // project selection happens after projects load
     if (projectId) {
       // stash it temporarily so loadProjects can use it
-      ;(window as any).__pendingProjectId = projectId
+      window.__pendingProjectId = projectId
     }
     loadProjects()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Sync URL whenever view or project changes
@@ -84,12 +116,12 @@ export default function App() {
     }
   }, [activeView, activeProject, ready])
 
-  async function loadProjects() {
+  const loadProjects = useCallback(async () => {
     try {
       const data = await listProjects()
       setProjects(data)
-      const pendingId = (window as any).__pendingProjectId as string | undefined
-      delete (window as any).__pendingProjectId
+      const pendingId = window.__pendingProjectId
+      delete window.__pendingProjectId
 
       if (data.length > 0) {
         const match = pendingId ? data.find(p => p.id === pendingId) : null
@@ -107,20 +139,20 @@ export default function App() {
     } finally {
       setReady(true)
     }
-  }
+  }, [activeProject])
 
-  function handleProjectSaved(project: Project) {
+  const handleProjectSaved = useCallback((project: Project) => {
     setActiveProject(project)
     setModalProject(undefined)
     loadProjects()
-  }
+  }, [loadProjects])
 
-  function handleCloseModal() {
+  const handleCloseModal = useCallback(() => {
     // Only allow closing if there's already an active project
     if (activeProject) setModalProject(undefined)
-  }
+  }, [activeProject])
 
-  function handleRunTasks(tasks: Task[]) {
+  const handleRunTasks = useCallback((tasks: Task[]) => {
     if (tasks.length === 0) return
     queue.enqueue(
       tasks.map(t => ({
@@ -131,7 +163,38 @@ export default function App() {
         projectName: activeProject?.name,
       })),
     )
-  }
+  }, [queue, activeProject?.name])
+
+  const queueContextValue = useMemo(
+    () => ({
+      enqueue: queue.enqueue,
+      enqueueNext: queue.enqueueNext,
+      isActive: queue.isVisible,
+    }),
+    [queue.enqueue, queue.enqueueNext, queue.isVisible],
+  )
+
+  const handleViewChange = useCallback((view: View, taskId?: string) => {
+    setActiveView(view)
+    if (taskId) setPendingTaskId(taskId)
+  }, [])
+
+  const handleTaskOpened = useCallback(() => {
+    setPendingTaskId(undefined)
+  }, [])
+
+  const handleAddProject = useCallback(() => {
+    setModalProject(null)
+  }, [])
+
+  const handleEditProject = useCallback((p: Project) => {
+    setModalProject(p)
+  }, [])
+
+  const handleOpenTask = useCallback((taskId: string) => {
+    setActiveView('tasks')
+    setPendingTaskId(taskId)
+  }, [])
 
   if (!ready) {
     return (
@@ -145,29 +208,20 @@ export default function App() {
   }
 
   return (
-    <QueueContext.Provider
-      value={{
-        enqueue: queue.enqueue,
-        enqueueNext: queue.enqueueNext,
-        isActive: queue.isVisible,
-      }}
-    >
+    <QueueContext.Provider value={queueContextValue}>
       <Shell
         activeView={activeView}
         onViewChange={setActiveView}
         projects={projects}
         activeProjectId={activeProject?.id}
         onProjectSelect={setActiveProject}
-        onAddProject={() => setModalProject(null)}
-        onEditProject={(p) => setModalProject(p)}
+        onAddProject={handleAddProject}
+        onEditProject={handleEditProject}
       >
         {activeView === 'overview' && (
           <Overview
             project={activeProject}
-            onViewChange={(view, taskId) => {
-              setActiveView(view)
-              if (taskId) setPendingTaskId(taskId)
-            }}
+            onViewChange={handleViewChange}
             onRunTasks={handleRunTasks}
             runCompletedTick={runCompletedTick}
           />
@@ -177,7 +231,7 @@ export default function App() {
             projectId={activeProject?.id}
             projectName={activeProject?.name}
             initialTaskId={pendingTaskId}
-            onTaskOpened={() => setPendingTaskId(undefined)}
+            onTaskOpened={handleTaskOpened}
             onRunTasks={handleRunTasks}
             runCompletedTick={runCompletedTick}
           />
@@ -252,10 +306,7 @@ export default function App() {
           onResume={queue.resume}
           onRemove={queue.removeItem}
           onClose={queue.close}
-          onOpenTask={(taskId) => {
-            setActiveView('tasks')
-            setPendingTaskId(taskId)
-          }}
+          onOpenTask={handleOpenTask}
         />
       )}
 

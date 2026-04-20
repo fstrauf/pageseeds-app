@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 // Lightweight query cache for tauri.ts calls
 
@@ -48,7 +48,9 @@ export function useQuery<T>(
   const { enabled = true, staleTime = 0, refetchInterval } = options || {}
   const key = getCacheKey(queryKey)
   const fetcherRef = useRef(fetcher)
-  fetcherRef.current = fetcher
+  useEffect(() => {
+    fetcherRef.current = fetcher
+  })
 
   const [, forceRender] = useState(0)
 

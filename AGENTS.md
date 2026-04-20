@@ -358,6 +358,186 @@ Feature specs live in `docs/`. Write one before writing code.
 
 ---
 
+## Frontend Development, Testing & Tooling
+
+### Commands you must run before finishing any frontend change
+
+```bash
+# 1. Lint — catches hooks errors, missing deps, setState in effects, etc.
+pnpm run lint
+
+# 2. Typecheck — catches TS errors that Vite might miss in dev
+pnpm exec tsc -b
+
+# 3. Tests — run the suite
+pnpm test
+
+# 4. Build — verifies the production bundle compiles
+pnpm run build
+```
+
+**CI enforces all of the above** on every PR/push (see `.github/workflows/ci.yml`).
+
+### Testing stack
+
+| Tool | Purpose |
+|---|---|
+| **Vitest** | Test runner (replaces Jest) |
+| **@testing-library/react** | Component/hook testing utilities |
+| **@testing-library/jest-dom** | DOM matchers (`toBeInTheDocument`, etc.) |
+| **jsdom** | Browser environment for tests |
+
+**Test files** live next to the code they test: `src/hooks/useQueueRunner.test.ts`, `src/components/tasks/TaskRunner.test.tsx`, etc.
+
+**Writing a hook test:**
+```tsx
+import { renderHook } from '@testing-library/react'
+import { useQueueRunner } from './useQueueRunner'
+
+it('returns stable items between renders', () => {
+  const { result, rerender } = renderHook(() => useQueueRunner())
+  const first = result.current.items
+  rerender()
+  expect(result.current.items).toBe(first) // same reference
+})
+```
+
+**Writing a component test:**
+```tsx
+import { render, screen } from '@testing-library/react'
+import { TaskRunner } from './TaskRunner'
+
+it('shows completed count', () => {
+  render(<TaskRunner items={mockItems} isRunning={false} ... />)
+  expect(screen.getByText('1 / 2 complete')).toBeInTheDocument()
+})
+```
+
+### Dev guard: why-did-you-render
+
+In development, `why-did-you-render` is active. If a component re-renders because of an unstable prop or reference, the console prints exactly which prop changed.
+
+**Example output:**
+```
+[why-did-you-render] TaskRunner
+Re-rendered because of props changes:
+- items changed from === to !== (new reference)
+- onOpenTask changed from === to !== (new reference)
+```
+
+If you see this, the fix is usually:
+- Wrap the array in `useMemo`
+- Wrap the callback in `useCallback`
+- Use Zustand selectors instead of subscribing to the whole store
+
+---
+
+## React Patterns & Pitfalls
+
+### Zustand: always use selectors
+
+**Bad** — subscribes to the ENTIRE store; any mutation re-renders the component:
+```tsx
+const store = useQueueStore()
+const items = store.items
+```
+
+**Good** — only re-renders when `items` changes:
+```tsx
+const items = useQueueStore(s => s.items)
+const isRunning = useQueueStore(s => s.isRunning)
+```
+
+### Memoize mapped arrays
+
+**Bad** — new array reference on every render:
+```tsx
+const items = store.items.map(item => ({ ...item, status: 'queued' }))
+```
+
+**Good** — stable reference when source hasn't changed:
+```tsx
+const items = useMemo(() =>
+  store.items.map(item => ({ ...item, status: 'queued' })),
+  [store.items]
+)
+```
+
+### Memoize callbacks passed as props
+
+**Bad** — new function reference on every parent render:
+```tsx
+<TaskRunner onOpenTask={(taskId) => { setActiveView('tasks'); setPendingTaskId(taskId) }} />
+```
+
+**Good** — stable reference:
+```tsx
+const handleOpenTask = useCallback((taskId: string) => {
+  setActiveView('tasks')
+  setPendingTaskId(taskId)
+}, [])
+
+<TaskRunner onOpenTask={handleOpenTask} />
+```
+
+### Never copy `useQuery` data into local state via `useEffect`
+
+**Bad** — creates an unnecessary render cycle and triggers `react-hooks/set-state-in-effect`:
+```tsx
+const { data: fetchedOpps } = useQuery(...)
+const [opps, setOpps] = useState([])
+
+useEffect(() => {
+  setOpps(fetchedOpps) // ← lint error + extra render
+}, [fetchedOpps])
+```
+
+**Good** — use the query data directly:
+```tsx
+const { data: opps = [] } = useQuery(...)
+```
+
+### Do not define components inside render
+
+**Bad** — `react-hooks/static-components` error + state resets every render:
+```tsx
+function OpportunityFeed() {
+  function SortIcon({ col }) { ... } // ← lint error
+  return <th>Score<SortIcon col="score" /></th>
+}
+```
+
+**Good** — define at module scope:
+```tsx
+function SortIcon({ col, sortKey, sortAsc }: SortIconProps) { ... }
+
+function OpportunityFeed() {
+  return <th>Score<SortIcon col="score" sortKey={sortKey} sortAsc={sortAsc} /></th>
+}
+```
+
+### ESLint rules that catch infinite loops
+
+The project uses `eslint-plugin-react-hooks` v7.0.1. These rules are set to **error** and will block CI:
+
+| Rule | What it catches |
+|---|---|
+| `react-hooks/exhaustive-deps` | Missing dependencies in `useEffect` / `useCallback` / `useMemo` |
+| `react-hooks/set-state-in-effect` | `setState` called directly inside `useEffect` (can cascade) |
+| `react-hooks/refs` | Reading or writing `ref.current` during render |
+| `react-hooks/static-components` | Component definitions inside other components |
+| `react-hooks/rules-of-hooks` | Hooks called conditionally or in loops |
+
+**If you hit `set-state-in-effect` legitimately** (e.g. tracking previous prop values for derived state), add an `eslint-disable-next-line` comment with a justification explaining why the effect is bounded:
+```tsx
+// eslint-disable-next-line react-hooks/set-state-in-effect
+setPrevStatusMap(new Map(items.map(it => [it.task.id, it.status])))
+```
+
+---
+
+---
+
 ## Async Architecture
 
 ### The Pattern
@@ -422,6 +602,7 @@ See `docs/async-architecture.md` for detailed comparison.
 
 ## Pre-Change Checklist
 
+### Rust backend
 - [ ] `cargo check` passes before touching the frontend
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] **Settings placed correctly**: User preferences → `global_settings`; Project config → `projects` table
@@ -434,3 +615,14 @@ See `docs/async-architecture.md` for detailed comparison.
 - [ ] Reviewed `CONTRACTS.md` for any affected implicit contracts (statuses, step ordering, auto-spawned tasks, handler registry order)
 - [ ] Every new agentic step has: (a) specific input context, (b) an output contract in a code comment, (c) a comment explaining why it cannot be deterministic
 - [ ] Every new deterministic step does not contain a hard-coded heuristic that substitutes for judgment (that is fake intelligence — use an agentic step for the selection)
+
+### Frontend
+- [ ] `pnpm run lint` passes — no `exhaustive-deps`, `set-state-in-effect`, `refs`, or `static-components` errors
+- [ ] `pnpm exec tsc -b` passes — no TypeScript errors
+- [ ] `pnpm test` passes — all existing tests green, new tests added for new hooks/components
+- [ ] `pnpm run build` passes — production bundle compiles
+- [ ] Zustand store accesses use selectors (`useQueueStore(s => s.items)`) not bare `useQueueStore()`
+- [ ] Arrays mapped in hooks/components are wrapped in `useMemo`
+- [ ] Callbacks passed as JSX props are wrapped in `useCallback`
+- [ ] `useQuery` data is used directly — never copied into local state via `useEffect`
+- [ ] No components defined inside other components

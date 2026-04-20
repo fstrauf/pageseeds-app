@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Play, CheckCircle2 } from 'lucide-react'
 import { listTasks } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
@@ -21,6 +21,16 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
   const queue = useQueue()
   const { showError } = useErrorHandler()
   
+  const load = useCallback(async () => {
+    try {
+      const data = await listTasks(projectId, 'todo')
+      setTasks(data)
+      setLoaded(true)
+    } catch (e: unknown) {
+      showError(String(e))
+    }
+  }, [projectId, showError])
+
   // Listen for queue completion to refresh task list
   const [lastQueueActive, setLastQueueActive] = useState(queue.isActive)
   useEffect(() => {
@@ -30,17 +40,7 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
       setQueuedMsg(null)
     }
     setLastQueueActive(queue.isActive)
-  }, [queue.isActive, lastQueueActive])
-
-  async function load() {
-    try {
-      const data = await listTasks(projectId, 'todo')
-      setTasks(data)
-      setLoaded(true)
-    } catch (e: unknown) {
-      showError(String(e))
-    }
-  }
+  }, [queue.isActive, lastQueueActive, load])
 
   async function run() {
     if (!selected) return

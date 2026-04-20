@@ -14,6 +14,11 @@ interface Props {
 
 type SortKey = 'final_score' | 'upvotes' | 'subreddit' | 'reply_status' | 'created_at'
 
+function SortIcon({ col, sortKey, sortAsc }: { col: SortKey; sortKey: SortKey; sortAsc: boolean }) {
+  if (sortKey !== col) return null
+  return sortAsc ? <ChevronUp className="inline h-3 w-3 ml-1" /> : <ChevronDown className="inline h-3 w-3 ml-1" />
+}
+
 function relativeDate(iso: string | null | undefined): string {
   if (!iso) return '—'
   const ms = Date.now() - new Date(iso).getTime()
@@ -39,7 +44,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChange }: Props) {
   const { showError } = useErrorHandler()
-  const [opps, setOpps] = useState<RedditOpportunity[]>([])
+
   const [statusFilter, setStatusFilter] = useState<string>('pending')
   const [sortKey, setSortKey] = useState<SortKey>('final_score')
   const [sortAsc, setSortAsc] = useState(false)
@@ -53,10 +58,7 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
     { enabled: !!projectId, staleTime: 0 }
   )
 
-  useEffect(() => {
-    setOpps(fetchedOpps)
-    setSelectedIds(new Set())
-  }, [fetchedOpps])
+
 
   useEffect(() => {
     if (queryError) {
@@ -69,7 +71,7 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
     else { setSortKey(key); setSortAsc(false) }
   }
 
-  const sorted = [...opps].sort((a, b) => {
+  const sorted = [...fetchedOpps].sort((a, b) => {
     const av = a[sortKey] ?? (sortKey === 'final_score' || sortKey === 'upvotes' ? -Infinity : '')
     const bv = b[sortKey] ?? (sortKey === 'final_score' || sortKey === 'upvotes' ? -Infinity : '')
     const cmp = av < bv ? -1 : av > bv ? 1 : 0
@@ -150,11 +152,6 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
     setBulkWorking(false)
   }, [selectedIds, sorted, bulkWorking, projectId, refetch, onStatusChange])
 
-  function SortIcon({ col }: { col: SortKey }) {
-    if (sortKey !== col) return null
-    return sortAsc ? <ChevronUp className="inline h-3 w-3 ml-1" /> : <ChevronDown className="inline h-3 w-3 ml-1" />
-  }
-
   const thClass = 'px-3 py-2 text-left text-xs font-medium cursor-pointer select-none'
     + ' hover:text-white transition-colors'
   const thStyle = { color: 'var(--color-text-muted)' }
@@ -167,7 +164,7 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
           {(['', 'pending', 'posted', 'skipped'] as const).map(s => (
             <button
               key={s}
-              onClick={() => setStatusFilter(s)}
+              onClick={() => { setStatusFilter(s); setSelectedIds(new Set()) }}
               className={`px-2 py-0.5 rounded text-xs transition-colors ${
                 statusFilter === s
                   ? 'bg-primary text-primary-foreground'
@@ -180,7 +177,7 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
         </div>
         <div className="flex-1" />
         <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-          {opps.length} result{opps.length !== 1 ? 's' : ''}
+          {fetchedOpps.length} result{fetchedOpps.length !== 1 ? 's' : ''}
         </span>
         <button
           onClick={refetch}
@@ -234,7 +231,7 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
 
       {/* table */}
       <div className="flex-1 overflow-y-auto">
-        {opps.length === 0 && !loading ? (
+        {fetchedOpps.length === 0 && !loading ? (
           <div className="flex items-center justify-center h-32 text-sm" style={{ color: 'var(--color-text-muted)' }}>
             {statusFilter === 'pending' ? 'No pending opportunities.' : 'No opportunities found.'}
           </div>
@@ -253,13 +250,13 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
                     />
                   )}
                 </th>
-                <th className={thClass} style={thStyle} onClick={() => toggleSort('final_score')}>Score<SortIcon col="final_score" /></th>
+                <th className={thClass} style={thStyle} onClick={() => toggleSort('final_score')}>Score<SortIcon col="final_score" sortKey={sortKey} sortAsc={sortAsc} /></th>
                 <th className={thClass} style={{ ...thStyle, minWidth: 200 }}>Title</th>
-                <th className={thClass} style={thStyle} onClick={() => toggleSort('subreddit')}>Subreddit<SortIcon col="subreddit" /></th>
-                <th className={thClass} style={thStyle} onClick={() => toggleSort('upvotes')}>↑<SortIcon col="upvotes" /></th>
+                <th className={thClass} style={thStyle} onClick={() => toggleSort('subreddit')}>Subreddit<SortIcon col="subreddit" sortKey={sortKey} sortAsc={sortAsc} /></th>
+                <th className={thClass} style={thStyle} onClick={() => toggleSort('upvotes')}>↑<SortIcon col="upvotes" sortKey={sortKey} sortAsc={sortAsc} /></th>
                 <th className={thClass} style={{ ...thStyle, minWidth: 240 }}>Reply</th>
-                <th className={thClass} style={thStyle} onClick={() => toggleSort('created_at')}>Posted<SortIcon col="created_at" /></th>
-                <th className={thClass} style={thStyle} onClick={() => toggleSort('reply_status')}>Status<SortIcon col="reply_status" /></th>
+                <th className={thClass} style={thStyle} onClick={() => toggleSort('created_at')}>Posted<SortIcon col="created_at" sortKey={sortKey} sortAsc={sortAsc} /></th>
+                <th className={thClass} style={thStyle} onClick={() => toggleSort('reply_status')}>Status<SortIcon col="reply_status" sortKey={sortKey} sortAsc={sortAsc} /></th>
               </tr>
             </thead>
             <tbody>

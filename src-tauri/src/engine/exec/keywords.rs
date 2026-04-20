@@ -57,6 +57,21 @@ fn load_coverage_clusters(project_path: &str) -> Vec<CoverageCluster> {
         .unwrap_or_default()
 }
 
+const STOP_WORDS: &[&str] = &[
+    "the", "a", "an", "for", "to", "of", "in", "on", "and", "or", "is", "are",
+    "how", "what", "best", "top",
+];
+
+fn word_set(s: &str) -> HashSet<&str> {
+    s.split_whitespace()
+        .filter(|w| !STOP_WORDS.contains(w))
+        .collect()
+}
+
+fn fuzzy_word_match(a: &str, b: &str) -> bool {
+    a == b || a.starts_with(b) || b.starts_with(a)
+}
+
 /// Score how well a keyword fills a coverage gap.
 /// 
 /// Returns (score, match_type, cluster_name):
@@ -81,11 +96,22 @@ fn score_coverage_gap(
         return (0, "exact_duplicate", None);
     }
     
-    // Check for semantic match against cluster keywords
+    let kw_words: HashSet<&str> = word_set(&kw_lower);
+
+    // Check for semantic match against cluster keywords using Jaccard word-overlap
     for cluster in clusters {
         let is_related = cluster.primary_keywords.iter().any(|pk| {
-            // Keyword contains cluster keyword OR cluster keyword contains keyword
-            kw_lower.contains(pk) || pk.contains(&kw_lower)
+            let pk_words = word_set(pk);
+            if pk_words.is_empty() || kw_words.is_empty() {
+                return false;
+            }
+            // Count intersection using fuzzy word match (covers call/calls, trade/trading)
+            let intersection = kw_words.iter().filter(|kw_w| {
+                pk_words.iter().any(|pk_w| fuzzy_word_match(kw_w, pk_w))
+            }).count();
+            let union = kw_words.union(&pk_words).count();
+            let jaccard = intersection as f64 / union as f64;
+            jaccard >= 0.3
         });
         
         if is_related {
@@ -172,14 +198,14 @@ impl ResearchMode {
 /// Parse themes from the `research_seed_extraction` step artifact.
 /// Parsed result from the research_seed_extraction artifact.
 #[derive(Debug, Clone, Default)]
-struct SeedArtifact {
-    themes: Vec<String>,
-    competitors: Vec<String>,
+pub(crate) struct SeedArtifact {
+    pub(crate) themes: Vec<String>,
+    pub(crate) competitors: Vec<String>,
 }
 
 /// Parse the output of Step 1 in the hybrid research workflow.
 /// Expects JSON with {"themes": [...], "competitors": [...]}.
-fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
+pub(crate) fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
     let content = task
         .artifacts
         .iter()
@@ -249,6 +275,64 @@ fn competitors_from_json(v: &serde_json::Value) -> Vec<String> {
     }
 
     vec![]
+}
+
+/// Parse the `research_seed_validation` artifact.
+///
+/// Returns a flat list of `(theme, seed)` pairs ready for DataForSEO calls.
+/// Expected artifact format:
+/// `{validated_seeds: [{theme: string, seeds: [string]}]}`
+fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String)> {
+    let content = task
+        .artifacts
+        .iter()
+        .rev()
+        .find(|a| a.key == "research_seed_validation")
+        .and_then(|a| a.content.as_deref());
+
+    let Some(raw) = content else {
+        return vec![];
+    };
+
+    // Try direct JSON parse first, then normalizer
+    let json = serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .or_else(|| {
+            crate::engine::normalizer::normalize_agent_output(raw)
+                .json_artifact
+        });
+
+    let Some(json) = json else {
+        return vec![];
+    };
+
+    let validated = json
+        .get("validated_seeds")
+        .and_then(|v| v.as_array());
+
+    let Some(validated) = validated else {
+        return vec![];
+    };
+
+    let mut pairs: Vec<(String, String)> = vec![];
+    for entry in validated {
+        let theme = entry.get("theme").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        if theme.is_empty() {
+            continue;
+        }
+        let seeds = entry.get("seeds").and_then(|s| s.as_array());
+        if let Some(seeds) = seeds {
+            for seed in seeds {
+                if let Some(s) = seed.as_str() {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        pairs.push((theme.clone(), s.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    pairs
 }
 
 pub(crate) fn estimate_volume(raw: &str) -> Option<i64> {
@@ -449,10 +533,12 @@ pub(crate) fn exec_keyword_research_native(
     log::info!("[keyword_research_native] {} competitors: {:?}", agent_competitors.len(), agent_competitors);
 
     // ── Cost estimate (DataForSEO) ────────────────────────────────────────────
+    // Two-phase: Phase 1 (Google Autocomplete) is free.
+    // Phase 2 tries seeds in order, stopping at first hit (~1-2 calls per theme on average).
     if is_dataforseo {
         let est_cost = themes.len() as f64 * 0.012; // ~$0.01/task + $0.0001 × ~20 keywords
         log::info!(
-            "[keyword_research_native] DataForSEO estimated cost: ${:.3} ({} themes × $0.012/theme)",
+            "[keyword_research_native] DataForSEO estimated cost: ~${:.3} ({} themes × ~$0.012/theme, stops at first hit)",
             est_cost, themes.len()
         );
     }
@@ -467,6 +553,16 @@ pub(crate) fn exec_keyword_research_native(
                  Run 'Init Workspace' from Project Settings first.",
                 articles_json_path.display()
             ),
+            output: None,
+        };
+    }
+
+    // ── Pre-flight: keyword_coverage.json must exist ──────────────────────────
+    let coverage_path = paths.automation_dir.join("keyword_coverage.json");
+    if !coverage_path.exists() {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: "keyword_coverage.json not found. Run 'Analyze Keyword Coverage' first.".into(),
             output: None,
         };
     }
@@ -499,6 +595,9 @@ pub(crate) fn exec_keyword_research_native(
         log::info!("[keyword_research_native] no coverage analysis found, skipping gap filtering");
     }
 
+    // ── Pre-parse validated seeds (needs task borrow, must happen before thread spawn) ──
+    let validated_seeds = parse_validated_seeds_artifact(task);
+
     // ── Bridge to tokio async runtime ─────────────────────────────────────────
     // Spawn a new thread with its own runtime to avoid block_on issues when called
     // from within an async context (queue executor)
@@ -509,6 +608,7 @@ pub(crate) fn exec_keyword_research_native(
     let coverage_clusters_thread = coverage_clusters.clone();
     let seo_provider_thread = seo_provider.to_string();
     let project_path_thread = project_path.to_string();
+    let validated_seeds_thread = validated_seeds;
     
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
@@ -521,17 +621,40 @@ pub(crate) fn exec_keyword_research_native(
             let mut seen: HashSet<String> = HashSet::new();
 
             if is_dataforseo {
-                // ── DataForSEO path: keyword_suggestions returns volume + KD + intent ──
-                for theme in &themes_thread {
-                    log::info!("[keyword_research_native] fetching DataForSEO keyword suggestions for theme '{}'", theme);
-                    match provider.keyword_ideas(theme, "us", "google").await {
+                // ── DataForSEO path: read validated seeds from Step 3 artifact ────────────
+                // Seeds were pre-filtered for domain relevance by the agentic
+                // research_seed_validation step. One DataForSEO call per seed.
+                if validated_seeds_thread.is_empty() {
+                    log::warn!(
+                        "[keyword_research_native] research_seed_validation artifact missing or empty — \
+                         falling back to raw themes as seeds"
+                    );
+                }
+
+                // Use validated seeds if available, otherwise fall back to raw themes
+                let seeds_to_use: Vec<(String, String)> = if !validated_seeds_thread.is_empty() {
+                    validated_seeds_thread
+                } else {
+                    themes_thread.iter().map(|t| (t.clone(), t.clone())).collect()
+                };
+
+                log::info!(
+                    "[keyword_research_native] {} (theme, seed) pairs to query",
+                    seeds_to_use.len()
+                );
+
+                for (theme, seed) in &seeds_to_use {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+                    match provider.keyword_ideas(seed, "us", "google").await {
                         Ok(result) => {
+                            let count = result.ideas.len() + result.question_ideas.len();
+                            log::info!(
+                                "[keyword_research_native] theme '{}' seed '{}' → {} ideas",
+                                theme, seed, count
+                            );
                             for idea in result.ideas.iter().chain(result.question_ideas.iter()) {
                                 let kw_lower = idea.keyword.to_lowercase();
-                                if existing_keywords_thread.contains(&kw_lower) {
-                                    continue;
-                                }
-                                if seen.contains(&kw_lower) {
+                                if existing_keywords_thread.contains(&kw_lower) || seen.contains(&kw_lower) {
                                     continue;
                                 }
                                 seen.insert(kw_lower);
@@ -544,16 +667,20 @@ pub(crate) fn exec_keyword_research_native(
                                     intent: idea.intent.clone(),
                                 });
                             }
-                            log::info!(
-                                "[keyword_research_native] theme '{}' → {} total candidates (DataForSEO)",
-                                theme, candidates.len()
-                            );
                         }
                         Err(e) => {
-                            log::warn!("[keyword_research_native] DataForSEO keyword_ideas failed for '{}': {}", theme, e);
+                            log::warn!(
+                                "[keyword_research_native] DataForSEO failed for seed '{}': {}",
+                                seed, e
+                            );
                         }
                     }
                 }
+
+                log::info!(
+                    "[keyword_research_native] DataForSEO phase complete → {} total candidates",
+                    candidates.len()
+                );
             } else {
                 // ── Ahrefs/Google Autocomplete path (legacy) ──────────────────────
                 for theme in &themes_thread {

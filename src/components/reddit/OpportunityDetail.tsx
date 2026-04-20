@@ -22,6 +22,7 @@ export function OpportunityDetail({ opportunity: opp, projectId, onClose, onStat
     setReplyText(opp.reply_text ?? '')
     setValidation(null)
     setActionMsg(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opp.post_id])
 
   async function handleValidate() {

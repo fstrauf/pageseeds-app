@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X } from 'lucide-react'
 import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -37,60 +37,61 @@ export function TaskRunner({
 }: Props) {
   logger.entry('TaskRunner', { itemCount: items.length, isRunning, isPaused });
   
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [userExpanded, setUserExpanded] = useState<Set<string>>(new Set())
   const [isPanelExpanded, setIsPanelExpanded] = useState(true)
+  const [prevStatusMap, setPrevStatusMap] = useState<Map<string, string>>(new Map())
   const queue = useQueue()
-  const prevStatusRef = useRef<Map<string, string>>(new Map())
-  
-  useEffect(() => {
-    logger.stateChange('items', prevStatusRef.current.size, items.length);
-    prevStatusRef.current = new Map(items.map(it => [it.task.id, it.status]));
-  }, [items]);
+  const autoOpenedRef = useRef<Set<string>>(new Set())
 
-  // Auto-expand items that just finished with follow-ups or failed.
-  // Also auto-open review tasks so user can immediately act on them.
-  useEffect(() => {
-    const prev = prevStatusRef.current
-    const toExpand: string[] = []
-    const toOpen: string[] = []
-    
+  // Derive auto-expand ids from status transitions using previous state map
+  const autoExpandIds = useMemo(() => {
+    const ids: string[] = []
     for (const item of items) {
-      const was = prev.get(item.task.id)
+      const was = prevStatusMap.get(item.task.id)
       const now = item.status
       if (was && was !== now && (now === 'done' || now === 'failed')) {
-        logger.stateChange(`task ${item.task.id}`, was, now);
+        logger.stateChange(`task ${item.task.id}`, was, now)
         const hasFollowUps = (item.result?.follow_up_tasks?.length ?? 0) > 0
-        // Check if this task needs review - it's in follow_up_tasks with status='review'
-        const isReviewTask = item.result?.follow_up_tasks?.some(
-          f => f.id === item.task.id && f.status === 'review'
-        )
-        
         if (now === 'failed' || hasFollowUps) {
-          toExpand.push(item.task.id)
-        }
-        
-        // Auto-open tasks that need review (reddit_opportunity_search, research_keywords, etc.)
-        if (now === 'done' && isReviewTask) {
-          toOpen.push(item.task.id)
+          ids.push(item.task.id)
         }
       }
     }
-    
-    if (toExpand.length > 0) {
-      logger.debug('auto-expanding items', { ids: toExpand });
-      setExpanded(prevExpanded => {
-        const next = new Set(prevExpanded)
-        for (const id of toExpand) next.add(id)
-        return next
-      })
+    return ids
+  }, [items, prevStatusMap])
+
+  // Combine user-expanded + auto-expanded
+  const expanded = useMemo(() => {
+    const next = new Set(userExpanded)
+    for (const id of autoExpandIds) next.add(id)
+    return next
+  }, [userExpanded, autoExpandIds])
+
+  // Update prev status map after render so next render can detect transitions.
+  // Bounded: only runs when `items` changes, and `items` is stable (memoized in useQueueRunner).
+  useEffect(() => {
+    logger.stateChange('items', items.length)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPrevStatusMap(new Map(items.map(it => [it.task.id, it.status])))
+  }, [items])
+
+  // Auto-open review tasks (bounded side effect — only fires on real status changes)
+  useEffect(() => {
+    for (const item of items) {
+      const was = prevStatusMap.get(item.task.id)
+      const now = item.status
+      if (was && was !== now && now === 'done') {
+        const isReviewTask = item.result?.follow_up_tasks?.some(
+          f => f.id === item.task.id && f.status === 'review'
+        )
+        if (isReviewTask && onOpenTask && !autoOpenedRef.current.has(item.task.id)) {
+          logger.debug('auto-opening review task', { id: item.task.id })
+          autoOpenedRef.current.add(item.task.id)
+          onOpenTask(item.task.id)
+        }
+      }
     }
-    
-    // Auto-open the first review task (shopping cart UX pattern)
-    if (toOpen.length > 0 && onOpenTask) {
-      logger.debug('auto-opening review task', { id: toOpen[0] });
-      onOpenTask(toOpen[0])
-    }
-  }, [items, onOpenTask])
+  }, [items, onOpenTask, prevStatusMap])
 
   const succeeded = items.filter(it => it.status === 'done').length
   const failed = items.filter(it => it.status === 'failed').length
@@ -100,7 +101,7 @@ export function TaskRunner({
   const isDone = !isRunning && completed === total && total > 0
 
   function toggleExpand(id: string) {
-    setExpanded(prev => {
+    setUserExpanded(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)

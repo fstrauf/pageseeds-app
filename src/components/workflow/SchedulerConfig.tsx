@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Plus, Trash2, RefreshCw, Play, ToggleLeft, ToggleRight } from 'lucide-react'
 import {
   listSchedulerRules,
@@ -165,18 +165,18 @@ export function SchedulerConfig({ projectId }: SchedulerConfigProps) {
   const [error, setError] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
 
-  useEffect(() => {
-    if (projectId) load()
-  }, [projectId])
-
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const data = await listSchedulerRules(projectId)
       setRules(data)
     } catch (e: unknown) {
       setError(String(e))
     }
-  }
+  }, [projectId])
+
+  useEffect(() => {
+    if (projectId) load()
+  }, [projectId, load])
 
   async function toggle(rule: SchedulerRule, enabled: boolean) {
     await setSchedulerRuleEnabled(rule.rule_id, enabled)

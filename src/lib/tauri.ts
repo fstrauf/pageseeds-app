@@ -393,7 +393,6 @@ import type {
   BatchResult,
   BatchSummary,
   DueRuleResult,
-  ExecutionResult,
   LedgerEvent,
   RunSummary,
   SchedulerCycleResult,

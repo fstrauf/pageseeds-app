@@ -199,13 +199,13 @@ function parseArtifact(content: string): KeywordResearchResult | null {
     // Handle new unified format: landing_page_candidates (from research_final_selection step)
     if (parsed.landing_page_candidates && Array.isArray(parsed.landing_page_candidates)) {
       return {
-        new_keywords: parsed.landing_page_candidates.map((c: any) => c.keyword),
+        new_keywords: parsed.landing_page_candidates.map((c) => c.keyword),
         total_candidates: parsed.landing_page_candidates.length,
         filtered_out: 0,
         difficulty: {
           total: parsed.landing_page_candidates.length,
           successful: parsed.landing_page_candidates.length,
-          results: parsed.landing_page_candidates.map((c: any) => ({
+          results: parsed.landing_page_candidates.map((c) => ({
             keyword: c.keyword,
             difficulty: c.estimated_kd ?? c.difficulty ?? null,
             volume: c.estimated_volume ?? c.volume ?? null,
@@ -224,13 +224,13 @@ function parseArtifact(content: string): KeywordResearchResult | null {
     // Handle new unified format: difficulty.results (from research_final_selection step)
     if (parsed.difficulty && parsed.difficulty.results && Array.isArray(parsed.difficulty.results)) {
       return {
-        new_keywords: parsed.difficulty.results.map((r: any) => r.keyword),
+        new_keywords: parsed.difficulty.results.map((r) => r.keyword),
         total_candidates: parsed.difficulty.results.length,
         filtered_out: 0,
         difficulty: {
           total: parsed.difficulty.total ?? parsed.difficulty.results.length,
           successful: parsed.difficulty.successful ?? parsed.difficulty.results.length,
-          results: parsed.difficulty.results.map((r: any) => ({
+          results: parsed.difficulty.results.map((r) => ({
             keyword: r.keyword,
             difficulty: r.difficulty ?? null,
             volume: r.volume ?? null,
@@ -247,7 +247,7 @@ function parseArtifact(content: string): KeywordResearchResult | null {
     if (parsed.results && Array.isArray(parsed.results)) {
       console.log('[KeywordPicker] ResearchFinalOutput format - first item:', parsed.results[0])
       console.log('[KeywordPicker] Traffic field:', parsed.results[0]?.traffic)
-      const results = parsed.results.map((r: any) => ({
+      const results = parsed.results.map((r) => ({
         keyword: r.keyword,
         difficulty: r.difficulty ?? null,
         volume: r.volume ?? null,
@@ -258,7 +258,7 @@ function parseArtifact(content: string): KeywordResearchResult | null {
       }))
       console.log('[KeywordPicker] Mapped results:', results.slice(0, 3))
       return {
-        new_keywords: parsed.results.map((r: any) => r.keyword),
+        new_keywords: parsed.results.map((r) => r.keyword),
         total_candidates: parsed.results.length,
         filtered_out: 0,
         difficulty: {
@@ -275,7 +275,7 @@ function parseArtifact(content: string): KeywordResearchResult | null {
       if (parsed.keywords.length > 0) {
         console.log('[KeywordPicker] First keyword data:', parsed.keywords[0])
       }
-      const results = parsed.keywords.map((k: any) => ({
+      const results = parsed.keywords.map((k) => ({
         keyword: k.keyword || k,
         difficulty: k.kd ?? k.difficulty ?? null,
         volume: k.volume ?? null,
@@ -286,7 +286,7 @@ function parseArtifact(content: string): KeywordResearchResult | null {
       }))
       console.log('[KeywordPicker] Parsed results with traffic:', results.slice(0, 3))
       return {
-        new_keywords: parsed.keywords.map((k: any) => k.keyword || k),
+        new_keywords: parsed.keywords.map((k) => k.keyword || k),
         total_candidates: parsed.keywords.length,
         filtered_out: 0,
         difficulty: {
