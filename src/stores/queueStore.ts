@@ -402,6 +402,23 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       }
       const next = [...state.items];
       next[idx] = { ...current, status: 'completed' as const, result: newResult };
+
+      // Trim old completed items to prevent unbounded memory growth.
+      // Each completed item carries an ExecutionResult with step outputs
+      // and follow_up_tasks — for large batches this accumulates fast.
+      const MAX_COMPLETED_ITEMS = 50;
+      const completedIndices = next
+        .map((item, i) => ({ item, i }))
+        .filter(({ item }) => item.status === 'completed')
+        .map(({ i }) => i);
+      if (completedIndices.length > MAX_COMPLETED_ITEMS) {
+        const toRemove = completedIndices.length - MAX_COMPLETED_ITEMS;
+        // Remove oldest completed items (they appear first in the array)
+        for (let r = 0; r < toRemove; r++) {
+          next.splice(completedIndices[r], 1);
+        }
+      }
+
       return { items: next };
     });
     logger.stateChange('task status', 'running', 'completed');

@@ -38,6 +38,41 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     })
 }
 
+/// Lightweight variant: skips deserialising the `artifacts` JSON blob.
+/// Use this when you only need task metadata (status, type, title, etc.)
+/// and don't want to pay the memory cost of large artifact payloads.
+fn row_to_task_light(row: &rusqlite::Row) -> rusqlite::Result<Task> {
+    let depends_on_str: String = row.get(10)?;
+    let run_attempts: i64 = row.get(12)?;
+    let run_last_error: Option<String> = row.get(13)?;
+    let run_provider: Option<String> = row.get(14)?;
+
+    let depends_on: Vec<String> =
+        serde_json::from_str(&depends_on_str).unwrap_or_default();
+
+    Ok(Task {
+        id: row.get(0)?,
+        task_type: row.get(1)?,
+        phase: row.get(2)?,
+        status: row.get(3)?,
+        priority: row.get(4)?,
+        execution_mode: row.get(5)?,
+        agent_policy: row.get(6)?,
+        title: row.get(7)?,
+        description: row.get(8)?,
+        project_id: row.get(9)?,
+        depends_on,
+        artifacts: vec![], // Skip — saves memory on large artifact columns
+        run: crate::models::task::TaskRun {
+            attempts: run_attempts as u32,
+            last_error: run_last_error,
+            provider: run_provider,
+        },
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+    })
+}
+
 const SELECT_COLS: &str = "
     id, type, phase, status, priority, execution_mode, agent_policy,
     title, description, project_id, depends_on, artifacts,
@@ -52,6 +87,22 @@ pub fn list_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
     let mut stmt = conn.prepare(&sql)?;
     let tasks: Vec<Task> = stmt
         .query_map([project_id], row_to_task)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(tasks)
+}
+
+/// Lightweight variant of `list_tasks` that skips artifact deserialization.
+/// Use for list views and batch scheduling where only metadata is needed.
+pub fn list_tasks_light(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM tasks WHERE project_id = ?1 ORDER BY
+         CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         updated_at DESC, created_at DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let tasks: Vec<Task> = stmt
+        .query_map([project_id], row_to_task_light)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(tasks)
@@ -92,9 +143,52 @@ pub fn list_tasks_filtered(
     Ok(tasks)
 }
 
+/// Lightweight variant of `list_tasks_filtered` that skips artifact deserialization.
+pub fn list_tasks_filtered_light(
+    conn: &Connection,
+    project_id: &str,
+    status: Option<&str>,
+    phase: Option<&str>,
+) -> Result<Vec<Task>> {
+    let mut conditions = vec!["project_id = ?1".to_string()];
+    let mut idx = 2;
+    let mut binds: Vec<String> = vec![project_id.to_string()];
+
+    if let Some(s) = status {
+        conditions.push(format!("status = ?{idx}"));
+        binds.push(s.to_string());
+        idx += 1;
+    }
+    if let Some(p) = phase {
+        conditions.push(format!("phase = ?{idx}"));
+        binds.push(p.to_string());
+    }
+
+    let where_clause = conditions.join(" AND ");
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM tasks WHERE {where_clause} ORDER BY
+         CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+            updated_at DESC, created_at DESC"
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let tasks: Vec<Task> = stmt
+        .query_map(rusqlite::params_from_iter(binds.iter()), row_to_task_light)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(tasks)
+}
+
 pub fn get_task(conn: &Connection, id: &str) -> Result<Task> {
     let sql = format!("SELECT {SELECT_COLS} FROM tasks WHERE id = ?1");
     conn.query_row(&sql, [id], row_to_task)
+        .map_err(|_| Error::Other(format!("Task '{id}' not found")))
+}
+
+/// Lightweight variant of `get_task` that skips artifact deserialization.
+pub fn get_task_light(conn: &Connection, id: &str) -> Result<Task> {
+    let sql = format!("SELECT {SELECT_COLS} FROM tasks WHERE id = ?1");
+    conn.query_row(&sql, [id], row_to_task_light)
         .map_err(|_| Error::Other(format!("Task '{id}' not found")))
 }
 

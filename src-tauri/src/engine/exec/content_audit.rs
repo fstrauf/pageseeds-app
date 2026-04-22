@@ -49,8 +49,16 @@ pub(crate) fn exec_content_audit(task: &crate::models::task::Task, project_path:
 
     let num_prefix_re = Regex::new(r"^\d+[_\-]+").unwrap();
 
+    // Pre-compile regexes once instead of inside every audit_one_article call.
+    // Previously each article re-compiled 4 regexes — for 500 articles that's
+    // 2000 regex compilations, each allocating significant temporary memory.
+    let code_block_re = Regex::new(r"(?s)```.*?```").unwrap();
+    let link_syntax_re = Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap();
+    let md_syntax_re = Regex::new(r"[#*_`>|]").unwrap();
+    let link_extract_re = Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
+
     let mut results: Vec<serde_json::Value> = to_audit.iter().map(|article| {
-        audit_one_article(article, &paths.repo_root, &num_prefix_re)
+        audit_one_article(article, &paths.repo_root, &num_prefix_re, &code_block_re, &link_syntax_re, &md_syntax_re, &link_extract_re)
     }).collect();
 
     // Sort: worst first (highest priority_score, lowest health_score)
@@ -101,6 +109,10 @@ pub(crate) fn audit_one_article(
     article: &serde_json::Value,
     repo_root: &std::path::Path,
     num_prefix_re: &regex::Regex,
+    code_block_re: &regex::Regex,
+    link_syntax_re: &regex::Regex,
+    md_syntax_re: &regex::Regex,
+    link_extract_re: &regex::Regex,
 ) -> serde_json::Value {
     let keyword = article["target_keyword"].as_str().unwrap_or("").trim().to_lowercase();
     let title = article["title"].as_str().unwrap_or("").trim().to_string();
@@ -144,18 +156,19 @@ pub(crate) fn audit_one_article(
         .filter(|l| { let t = l.trim_start(); t.starts_with("## ") && !t.starts_with("### ") })
         .count();
 
-    // Word count (strip markdown syntax)
+    // Word count (strip markdown syntax) — reuse pre-compiled regexes
     let plain = {
-        let no_code = regex::Regex::new(r"(?s)```.*?```").unwrap().replace_all(&body, " ").to_string();
-        let no_links = regex::Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap().replace_all(&no_code, "$1").to_string();
-        let no_md = regex::Regex::new(r"[#*_`>|]").unwrap().replace_all(&no_links, " ").to_string();
-        no_md
+        let no_code = code_block_re.replace_all(&body, " ");
+        let no_links = link_syntax_re.replace_all(&no_code, "$1");
+        let no_md = md_syntax_re.replace_all(&no_links, " ");
+        no_md.into_owned()
     };
     let actual_word_count = plain.split_whitespace().count();
 
-    // Keyword density
+    // Keyword density — avoid full body.to_lowercase() by searching case-insensitively
     let kw_count = if keyword.is_empty() { 0 } else {
-        body.to_lowercase().matches(keyword.as_str()).count()
+        let kw_lower = keyword.as_str();
+        body.to_lowercase().matches(kw_lower).count()
     };
     let kw_density = if actual_word_count > 0 && !keyword.is_empty() {
         kw_count as f64 / actual_word_count as f64 * 100.0
@@ -168,18 +181,19 @@ pub(crate) fn audit_one_article(
         .unwrap_or("")
         .to_lowercase();
 
-    // Links
-    let link_re = regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
-    let all_links: Vec<(String, String)> = link_re.captures_iter(&body)
-        .map(|c| (c[1].to_string(), c[2].to_string()))
-        .collect();
-    let internal_link_count = all_links.iter()
-        .filter(|(_, href)| !href.starts_with("http"))
-        .count();
-    let broken_links: Vec<serde_json::Value> = all_links.iter()
-        .filter(|(_, href)| href.contains("TODO") || href.trim() == "" || href.trim() == "#")
-        .map(|(text, href)| serde_json::json!({ "text": text, "href": href }))
-        .collect();
+    // Links — count internal links and broken links without collecting all into a Vec
+    let mut internal_link_count = 0usize;
+    let mut broken_links = Vec::new();
+    for c in link_extract_re.captures_iter(&body) {
+        let href = c.get(2).map(|m| m.as_str()).unwrap_or("");
+        if !href.starts_with("http") {
+            internal_link_count += 1;
+        }
+        if href.contains("TODO") || href.trim() == "" || href.trim() == "#" {
+            let text = c.get(1).map(|m| m.as_str()).unwrap_or("");
+            broken_links.push(serde_json::json!({ "text": text, "href": href }));
+        }
+    }
 
     // ─── Checks ──────────────────────────────────────────────────────────────
     let check_pass = |pass: Option<bool>, label: &str| -> serde_json::Value {

@@ -65,7 +65,9 @@ fn is_autonomous(task: &Task) -> bool {
 
 /// Returns tasks that are todo, autonomous, and have all dependencies done.
 pub fn get_ready_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>, String> {
-    let all_tasks = task_store::list_tasks(conn, project_id).map_err(|e| e.to_string())?;
+    // Use list_tasks_light to avoid loading large artifact blobs into memory
+    // when we only need status, type, and dependency info.
+    let all_tasks = task_store::list_tasks_light(conn, project_id).map_err(|e| e.to_string())?;
     let done_ids: std::collections::HashSet<String> = all_tasks
         .iter()
         .filter(|t| t.status == TaskStatus::Done)

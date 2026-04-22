@@ -224,7 +224,9 @@ pub async fn execute_task_with_token(
             });
         }
 
-        // Persist agentic / deterministic output as artifact
+        // Persist agentic / deterministic output as artifact.
+        // We write to SQLite but do NOT push into task.artifacts — the in-memory
+        // Task struct would grow monotonically and bloat memory on every run.
         if let Some(ref out) = result.output {
             let artifact = TaskArtifact {
                 key: step.name.clone(),
@@ -234,7 +236,8 @@ pub async fn execute_task_with_token(
                 content: Some(out.clone()),
             };
             let _ = task_store::append_task_artifact(conn, task_id, &artifact);
-            task.artifacts.push(artifact);
+            // Intentionally NOT doing: task.artifacts.push(artifact);
+            // The artifact is in SQLite; the in-memory task doesn't need it.
         }
 
         // After a reddit_search step, upsert posts from the JSON output into SQLite.
@@ -370,6 +373,9 @@ pub async fn execute_task_with_token(
             }
         }
     }
+
+    // Explicitly drop any remaining large raw output before creating follow-up tasks.
+    drop(latest_raw_output);
 
     let finished_at = Utc::now().to_rfc3339();
     let new_status = completed_task_status(&task.task_type, all_ok);

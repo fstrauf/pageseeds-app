@@ -11,7 +11,9 @@ pub fn list_tasks(
     phase: Option<String>,
 ) -> Result<Vec<Task>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    Ok(task_store::list_tasks_filtered(&db, &project_id, status.as_deref(), phase.as_deref())?)
+    // Use the light variant to avoid loading large artifact blobs into memory
+    // for list views that only need task metadata.
+    Ok(task_store::list_tasks_filtered_light(&db, &project_id, status.as_deref(), phase.as_deref())?)
 }
 
 #[tauri::command]

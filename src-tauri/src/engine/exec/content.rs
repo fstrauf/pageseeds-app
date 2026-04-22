@@ -671,25 +671,26 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
             continue;
         }
 
-        // Extract specific recommendations for this article
-        let article_rec = serde_json::json!({
-            "article_id": article["article_id"].clone(),
-            "article_title": article_title,
+        // Store a lightweight reference instead of the full recommendation JSON.
+        // The full recommendations live in recommendations.json on disk;
+        // duplicating them here bloats every follow-up task row and accumulates
+        // in memory when list_tasks loads all tasks.
+        let article_ref = serde_json::json!({
+            "article_id": article_id,
             "article_file": article_file,
-            "suggestions": article["suggestions"],
         });
-        let article_rec_str = serde_json::to_string_pretty(&article_rec).unwrap_or_default();
+        let article_ref_str = serde_json::to_string(&article_ref).unwrap_or_default();
         let article_id_str = article_id.to_string();
 
         let title = format!("Fix: {}", article_title);
 
-        // Create individual artifact for this article
+        // Create individual artifact for this article — minimal reference only
         let artifact = TaskArtifact {
             key: format!("recommendations_{}", article_id_str),
             path: None,
             artifact_type: Some("json".to_string()),
             source: Some("content_review".to_string()),
-            content: Some(article_rec_str),
+            content: Some(article_ref_str),
         };
 
         // Idempotency key per article: content_review_apply:{project_id}:{article_id}

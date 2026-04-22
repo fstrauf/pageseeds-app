@@ -4,13 +4,11 @@
 /// and event emission for UI updates.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
 
 use crate::commands::AppState;
 use crate::engine::executor;
@@ -168,6 +166,18 @@ async fn execute_queue_internal(
     log::info!("[execute_queue_internal] ==========================================");
     log::info!("[execute_queue_internal] STARTING EXECUTION OF {} TASKS", items.len());
     log::info!("[execute_queue_internal] DB path: {:?}", db_path);
+
+    // Create ONE shared runtime for all tasks in this queue.
+    // Previously we created a Runtime::new() inside every spawn_blocking closure,
+    // which leaked thread-pool memory (3-5 MB per task) and caused 30+ GB usage
+    // when running large queues.
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => std::sync::Arc::new(rt),
+        Err(e) => {
+            log::error!("[execute_queue_internal] Failed to create runtime: {}. Aborting queue.", e);
+            return;
+        }
+    };
     
     for (index, item) in items.iter().enumerate() {
         log::info!("[execute_queue_internal] ------------------------------------------");
@@ -217,11 +227,12 @@ async fn execute_queue_internal(
         
         // Execute task in blocking thread with local runtime
         let task_id = item.task_id.clone();
-        let project_id = item.project_id.clone();
+        let _project_id = item.project_id.clone();
         let db_path_clone = db_path.clone();
         let app_handle_clone = app_handle.clone();
         
         log::info!("[execute_queue_internal] Spawning blocking task for {}", item.task_id);
+        let rt = std::sync::Arc::clone(&rt);
         let result = tokio::task::spawn_blocking(move || {
             log::info!("[execute_queue_internal] Blocking task started for {}", task_id);
             let conn = match Connection::open(&db_path_clone) {
@@ -235,12 +246,7 @@ async fn execute_queue_internal(
             conn.busy_timeout(Duration::from_secs(10))
                 .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
             
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => return Err(format!("Runtime error: {}", e)),
-            };
-            
-            // Use the runtime to block on the async executor
+            // Reuse the shared runtime instead of creating a new one per task.
             let result = rt.block_on(async {
                 executor::execute_task_with_token(
                     &conn,
