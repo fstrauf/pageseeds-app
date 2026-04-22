@@ -201,6 +201,17 @@ CREATE TABLE IF NOT EXISTS skill_embeddings (
 CREATE INDEX IF NOT EXISTS idx_skill_embeddings_project ON skill_embeddings(project_id);
 "#;
 
+static MIGRATION_V16: &str = r#"
+-- Track durable content review state per article
+ALTER TABLE articles ADD COLUMN review_status TEXT;
+ALTER TABLE articles ADD COLUMN review_started_at TEXT;
+ALTER TABLE articles ADD COLUMN last_reviewed_at TEXT;
+ALTER TABLE articles ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_articles_review_status ON articles(project_id, review_status);
+CREATE INDEX IF NOT EXISTS idx_articles_last_reviewed ON articles(project_id, last_reviewed_at);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -498,6 +509,43 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (15, ?1)",
             [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 16 {
+        let _ = conn.execute_batch(MIGRATION_V16);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (16, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    // Repair: ensure article review-state columns exist even if V16 partially applied.
+    {
+        let review_columns = [
+            ("review_status", "ALTER TABLE articles ADD COLUMN review_status TEXT;"),
+            ("review_started_at", "ALTER TABLE articles ADD COLUMN review_started_at TEXT;"),
+            ("last_reviewed_at", "ALTER TABLE articles ADD COLUMN last_reviewed_at TEXT;"),
+            (
+                "review_count",
+                "ALTER TABLE articles ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0;",
+            ),
+        ];
+
+        for (name, sql) in review_columns {
+            let has_col: bool = conn
+                .prepare("SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name = ?1")?
+                .query_row([name], |r| r.get::<_, i64>(0))
+                .unwrap_or(0)
+                > 0;
+            if !has_col {
+                conn.execute_batch(sql)?;
+            }
+        }
+
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_articles_review_status ON articles(project_id, review_status);
+             CREATE INDEX IF NOT EXISTS idx_articles_last_reviewed ON articles(project_id, last_reviewed_at);",
         )?;
     }
 

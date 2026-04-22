@@ -9,6 +9,10 @@ interface Props {
   projectId: string
 }
 
+function countNumber(value: number | bigint | null | undefined): number {
+  return Number(value ?? 0)
+}
+
 export function RedditStats({ projectId }: Props) {
   const { showError } = useErrorHandler()
   const { data: stats, isLoading: loading, refetch, error: queryError } = useQuery(
@@ -23,10 +27,10 @@ export function RedditStats({ projectId }: Props) {
     }
   }, [queryError, showError])
 
-  const pending = stats?.by_status?.['pending'] ?? 0
-  const posted  = stats?.by_status?.['posted']  ?? 0
-  const skipped = stats?.by_status?.['skipped'] ?? 0
-  const total   = stats?.total_opportunities ?? 0
+  const pending = countNumber(stats?.by_status?.['pending'])
+  const posted  = countNumber(stats?.by_status?.['posted'])
+  const skipped = countNumber(stats?.by_status?.['skipped'])
+  const total   = countNumber(stats?.total_opportunities)
   const skipRate = total > 0 ? ((skipped / total) * 100).toFixed(0) : '—'
   const postRate = total > 0 ? ((posted  / total) * 100).toFixed(0) : '—'
 
@@ -74,9 +78,9 @@ export function RedditStats({ projectId }: Props) {
               </p>
               <div className="space-y-1.5">
                 {Object.entries(stats.pending_by_severity)
-                  .sort(([, a], [, b]) => b - a)
+                  .sort(([, a], [, b]) => countNumber(b) - countNumber(a))
                   .map(([sev, count]) => (
-                    <SeverityBar key={sev} label={sev} count={count} max={pending} />
+                    <SeverityBar key={sev} label={sev} count={countNumber(count)} max={pending} />
                   ))}
               </div>
             </div>

@@ -147,10 +147,10 @@ export function GscIndexing({ projectId, siteUrl: defaultSite }: Props) {
                   <td className={`px-3 py-1.5 text-center font-medium ${VERDICT_COLOR[r.verdict ?? ''] ?? ''}`}>
                     {r.verdict}
                   </td>
-                  <td className="px-3 py-1.5 max-w-[180px] truncate text-muted-foreground" title={r.coverage_state}>
+                  <td className="px-3 py-1.5 max-w-[180px] truncate text-muted-foreground" title={r.coverage_state ?? undefined}>
                     {r.coverage_state}
                   </td>
-                  <td className="px-3 py-1.5 max-w-[200px] truncate" title={r.action}>
+                  <td className="px-3 py-1.5 max-w-[200px] truncate" title={r.action ?? undefined}>
                     {r.action}
                   </td>
                   <td className="px-3 py-1.5 text-right">{r.priority}</td>

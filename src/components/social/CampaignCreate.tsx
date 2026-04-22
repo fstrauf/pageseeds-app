@@ -75,7 +75,7 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
       await createSocialCampaign({
         project_id: projectId,
         name: name.trim(),
-        description: description.trim() || undefined,
+        description: description.trim() || null,
         source_config: sourceConfig,
         target_platforms: selectedPlatforms,
         template_ids: selectedTemplates,

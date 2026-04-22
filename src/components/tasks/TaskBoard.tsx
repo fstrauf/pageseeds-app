@@ -559,11 +559,6 @@ export function TaskBoard({
                         <div className="font-medium text-sm text-foreground max-w-xs truncate">
                           {task.title}
                         </div>
-                        {task.article_slug && (
-                          <div className="text-xs mt-0.5 text-muted-foreground truncate">
-                            {task.article_slug}
-                          </div>
-                        )}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {task.phase ?? '—'}

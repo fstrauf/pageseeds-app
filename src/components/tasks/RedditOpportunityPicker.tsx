@@ -131,10 +131,10 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
         queue.enqueueNext(
           newTasks.map(t => ({
             taskId: t.id,
-            projectId: t.projectId ?? task.project_id,
+            projectId: t.project_id,
             title: t.title ?? 'Reply to Reddit post',
-            taskType: t.type ?? 'reddit_reply',
-            projectName: task.projectName,
+            taskType: t.type,
+            projectName: undefined,
           }))
         )
       }

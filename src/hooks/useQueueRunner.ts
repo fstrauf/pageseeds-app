@@ -6,13 +6,16 @@
 
 import { useQueueStore } from '../stores/queueStore';
 import type { QueueItem, RunnerItem } from '../lib/types';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { createLogger, LogTarget } from '../lib/logging';
 
 const logger = createLogger(LogTarget.QUEUE);
 
 export function useQueueRunner(onCompleted?: () => void) {
   logger.entry('useQueueRunner');
+
+  // Guard to prevent calling onCompleted multiple times for the same completion
+  const completedRef = useRef(false);
 
   // Use selectors to avoid re-rendering on unrelated store changes
   const itemsRaw = useQueueStore(s => s.items);
@@ -45,10 +48,16 @@ export function useQueueRunner(onCompleted?: () => void) {
       const allDone = itemsRaw.every((i: QueueItem) => i.status === 'completed' || i.status === 'failed');
       logger.debug('useEffect - allDone check', { allDone });
 
-      if (allDone) {
+      if (allDone && !completedRef.current) {
         logger.info('useEffect - queue complete, calling onCompleted');
+        completedRef.current = true;
         onCompleted?.();
       }
+    }
+
+    // Reset the guard when the queue becomes active again or is cleared
+    if (isRunning || itemsRaw.length === 0) {
+      completedRef.current = false;
     }
   }, [isRunning, itemsRaw, onCompleted]);
 

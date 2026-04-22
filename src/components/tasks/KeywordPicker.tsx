@@ -191,6 +191,37 @@ function extractJsonFromMarkdown(content: string): string {
   return trimmed
 }
 
+interface LandingPageCandidateArtifact {
+  keyword: string
+  estimated_kd?: number | string | null
+  difficulty?: number | string | null
+  estimated_volume?: number | string | null
+  volume?: number | string | null
+  landing_page_type?: string | null
+  opportunity_score?: number | null
+  opportunity_reason?: string | null
+  proposed_title?: string | null
+}
+
+interface DifficultyArtifact {
+  keyword: string
+  difficulty?: number | string | null
+  volume?: number | string | null
+  traffic?: number | string | null
+  intent?: string | null
+  intent_confidence?: number | null
+}
+
+type KeywordArtifact = {
+  keyword?: string
+  kd?: number | string | null
+  difficulty?: number | string | null
+  volume?: number | string | null
+  traffic?: number | string | null
+  intent?: string | null
+  intent_confidence?: number | null
+} | string
+
 function parseArtifact(content: string): KeywordResearchResult | null {
   try {
     const cleanContent = extractJsonFromMarkdown(content)
@@ -198,14 +229,15 @@ function parseArtifact(content: string): KeywordResearchResult | null {
     
     // Handle new unified format: landing_page_candidates (from research_final_selection step)
     if (parsed.landing_page_candidates && Array.isArray(parsed.landing_page_candidates)) {
+      const candidates = parsed.landing_page_candidates as LandingPageCandidateArtifact[]
       return {
-        new_keywords: parsed.landing_page_candidates.map((c) => c.keyword),
-        total_candidates: parsed.landing_page_candidates.length,
+        new_keywords: candidates.map((c: LandingPageCandidateArtifact) => c.keyword),
+        total_candidates: candidates.length,
         filtered_out: 0,
         difficulty: {
-          total: parsed.landing_page_candidates.length,
-          successful: parsed.landing_page_candidates.length,
-          results: parsed.landing_page_candidates.map((c) => ({
+          total: candidates.length,
+          successful: candidates.length,
+          results: candidates.map((c: LandingPageCandidateArtifact) => ({
             keyword: c.keyword,
             difficulty: c.estimated_kd ?? c.difficulty ?? null,
             volume: c.estimated_volume ?? c.volume ?? null,
@@ -223,14 +255,15 @@ function parseArtifact(content: string): KeywordResearchResult | null {
     
     // Handle new unified format: difficulty.results (from research_final_selection step)
     if (parsed.difficulty && parsed.difficulty.results && Array.isArray(parsed.difficulty.results)) {
+      const difficultyResults = parsed.difficulty.results as DifficultyArtifact[]
       return {
-        new_keywords: parsed.difficulty.results.map((r) => r.keyword),
-        total_candidates: parsed.difficulty.results.length,
+        new_keywords: difficultyResults.map((r: DifficultyArtifact) => r.keyword),
+        total_candidates: difficultyResults.length,
         filtered_out: 0,
         difficulty: {
-          total: parsed.difficulty.total ?? parsed.difficulty.results.length,
-          successful: parsed.difficulty.successful ?? parsed.difficulty.results.length,
-          results: parsed.difficulty.results.map((r) => ({
+          total: parsed.difficulty.total ?? difficultyResults.length,
+          successful: parsed.difficulty.successful ?? difficultyResults.length,
+          results: difficultyResults.map((r: DifficultyArtifact) => ({
             keyword: r.keyword,
             difficulty: r.difficulty ?? null,
             volume: r.volume ?? null,
@@ -245,9 +278,10 @@ function parseArtifact(content: string): KeywordResearchResult | null {
     
     // Handle ResearchFinalOutput format: results array from research_final_selection step
     if (parsed.results && Array.isArray(parsed.results)) {
+      const resultsSource = parsed.results as DifficultyArtifact[]
       console.log('[KeywordPicker] ResearchFinalOutput format - first item:', parsed.results[0])
       console.log('[KeywordPicker] Traffic field:', parsed.results[0]?.traffic)
-      const results = parsed.results.map((r) => ({
+      const results = resultsSource.map((r: DifficultyArtifact) => ({
         keyword: r.keyword,
         difficulty: r.difficulty ?? null,
         volume: r.volume ?? null,
@@ -258,12 +292,12 @@ function parseArtifact(content: string): KeywordResearchResult | null {
       }))
       console.log('[KeywordPicker] Mapped results:', results.slice(0, 3))
       return {
-        new_keywords: parsed.results.map((r) => r.keyword),
-        total_candidates: parsed.results.length,
+        new_keywords: resultsSource.map((r: DifficultyArtifact) => r.keyword),
+        total_candidates: resultsSource.length,
         filtered_out: 0,
         difficulty: {
-          total: parsed.results.length,
-          successful: parsed.results.length,
+          total: resultsSource.length,
+          successful: resultsSource.length,
           results,
         },
       }
@@ -271,27 +305,28 @@ function parseArtifact(content: string): KeywordResearchResult | null {
     
     // Handle keywords array format (intermediate step output)
     if (parsed.keywords && Array.isArray(parsed.keywords)) {
+      const keywords = parsed.keywords as KeywordArtifact[]
       // Debug: log first keyword to verify traffic data
-      if (parsed.keywords.length > 0) {
-        console.log('[KeywordPicker] First keyword data:', parsed.keywords[0])
+      if (keywords.length > 0) {
+        console.log('[KeywordPicker] First keyword data:', keywords[0])
       }
-      const results = parsed.keywords.map((k) => ({
-        keyword: k.keyword || k,
-        difficulty: k.kd ?? k.difficulty ?? null,
-        volume: k.volume ?? null,
-        traffic: k.traffic ?? null,
-        has_data: k.kd != null || k.difficulty != null,
-        intent: k.intent,
-        intent_confidence: k.intent_confidence,
+      const results = keywords.map((k: KeywordArtifact) => ({
+        keyword: typeof k === 'string' ? k : (k.keyword ?? ''),
+        difficulty: typeof k === 'string' ? null : (k.kd ?? k.difficulty ?? null),
+        volume: typeof k === 'string' ? null : (k.volume ?? null),
+        traffic: typeof k === 'string' ? null : (k.traffic ?? null),
+        has_data: typeof k === 'string' ? false : (k.kd != null || k.difficulty != null),
+        intent: typeof k === 'string' ? null : (k.intent ?? null),
+        intent_confidence: typeof k === 'string' ? null : (k.intent_confidence ?? null),
       }))
       console.log('[KeywordPicker] Parsed results with traffic:', results.slice(0, 3))
       return {
-        new_keywords: parsed.keywords.map((k) => k.keyword || k),
-        total_candidates: parsed.keywords.length,
+        new_keywords: keywords.map((k: KeywordArtifact) => typeof k === 'string' ? k : (k.keyword ?? '')),
+        total_candidates: keywords.length,
         filtered_out: 0,
         difficulty: {
-          total: parsed.keywords.length,
-          successful: parsed.keywords.length,
+          total: keywords.length,
+          successful: keywords.length,
           results,
         },
       }

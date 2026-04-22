@@ -16,15 +16,18 @@ pub async fn search_reddit(
     sort: Option<String>,
     time_filter: Option<String>,
 ) -> Result<Vec<SubmissionSummary>, String> {
-    reddit::search::search_submissions(
+    let result = reddit::search::search_submissions(
         &query,
         &subreddit,
         limit.unwrap_or(25),
         sort.as_deref().unwrap_or("relevance"),
         time_filter.as_deref().unwrap_or("all"),
+        0, // no delay for manual single searches
+        None, // manual search uses public API; OAuth not needed for single queries
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    Ok(result.posts)
 }
 
 #[tauri::command]
@@ -487,7 +490,11 @@ pub fn create_reddit_reply_tasks(
         created_tasks.push(task);
     }
     
-    log::info!("[create_reddit_reply_tasks] created {} reply tasks from parent {}", 
+    // Mark the parent search task as complete since the user has reviewed and selected opportunities
+    task_store::update_task_status(&db, &task_id, TaskStatus::Done)
+        .map_err(|e| format!("Failed to update parent task status: {}", e))?;
+    
+    log::info!("[create_reddit_reply_tasks] created {} reply tasks from parent {} and marked parent as Done", 
         created_tasks.len(), parent_task.id);
     
     Ok(created_tasks)

@@ -303,12 +303,13 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
     let mut stmt = conn.prepare(
         "SELECT id, title, url_slug, file, target_keyword, keyword_difficulty,
                 target_volume, published_date, word_count, status,
+                review_status, review_started_at, last_reviewed_at, review_count,
                 content_gaps_addressed, estimated_traffic_monthly
          FROM articles WHERE project_id = ?1 ORDER BY id ASC",
     )?;
     let articles: Vec<Article> = stmt
         .query_map([project_id], |row| {
-            let gaps_str: String = row.get(10)?;
+            let gaps_str: String = row.get(14)?;
             let gaps: Vec<String> =
                 serde_json::from_str(&gaps_str).unwrap_or_default();
             Ok(Article {
@@ -322,8 +323,12 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
                 published_date: row.get(7)?,
                 word_count: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 status: row.get(9)?,
+                review_status: row.get(10)?,
+                review_started_at: row.get(11)?,
+                last_reviewed_at: row.get(12)?,
+                review_count: row.get::<_, Option<i64>>(13)?.unwrap_or(0),
                 content_gaps_addressed: gaps,
-                estimated_traffic_monthly: row.get(11)?,
+                estimated_traffic_monthly: row.get(15)?,
                 project_id: project_id.to_string(),
                 quality_score: None,
                 quality_grade: None,
@@ -527,13 +532,16 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         ("collect_gsc",             "GSC Collection"),
     ];
 
-    // Build a map of task_type → last done updated_at from tasks table
-    // Include both 'done' and 'review' status - review tasks completed successfully
+    // Build a map of task_type → last successful run finished_at from task_runs.
+    // Using task_runs.finished_at is more accurate than tasks.updated_at,
+    // which is also modified by edits, retries, and follow-up task creation.
     let mut last_run_map: std::collections::HashMap<String, String> = {
         let mut stmt = conn.prepare(
-            "SELECT type, MAX(updated_at) FROM tasks
-             WHERE project_id = ?1 AND status IN ('done', 'review')
-             GROUP BY type",
+            "SELECT t.type, MAX(tr.finished_at)
+             FROM tasks t
+             JOIN task_runs tr ON t.id = tr.task_id
+             WHERE t.project_id = ?1 AND tr.success = 1
+             GROUP BY t.type",
         )?;
         let rows = stmt.query_map([project_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))

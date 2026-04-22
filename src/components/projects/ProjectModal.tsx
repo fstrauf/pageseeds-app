@@ -53,9 +53,9 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
           ...project,
           name: name.trim(),
           path: path.trim(),
-          content_dir: contentDir.trim() || undefined,
-          site_url: siteUrl.trim() || undefined,
-          site_id: siteId.trim() || undefined,
+          content_dir: contentDir.trim() || null,
+          site_url: siteUrl.trim() || null,
+          site_id: siteId.trim() || null,
         })
       } else {
         saved = await createProject({

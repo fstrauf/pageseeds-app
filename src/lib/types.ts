@@ -101,6 +101,12 @@ export interface KeywordDifficultyEntry {
   has_data?: boolean
   serp_count?: number
   top_result?: string
+  intent?: string | null
+  intent_confidence?: number | null
+  landing_page_type?: string | null
+  opportunity_score?: number | null
+  opportunity_reason?: string | null
+  proposed_title?: string | null
 }
 
 export interface KeywordResearchResult {

@@ -468,7 +468,9 @@ export function Settings({ projectId }: SettingsProps) {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={loadAgentStatus}
+                      onClick={() => {
+                        void loadAgentStatus()
+                      }}
                       disabled={agentLoading}
                       className="text-muted-foreground"
                     >

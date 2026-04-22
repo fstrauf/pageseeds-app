@@ -59,7 +59,7 @@ pub struct CommentResult {
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 /// Exchange a Reddit refresh token for a short-lived access token.
-async fn get_access_token(
+pub(crate) async fn get_access_token(
     client: &reqwest::Client,
     client_id: &str,
     client_secret: &str,

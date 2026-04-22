@@ -20,6 +20,14 @@ pub struct Article {
     #[serde(default)]
     pub word_count: i64,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_reviewed_at: Option<String>,
+    #[serde(default)]
+    pub review_count: i64,
     #[serde(default)]
     pub content_gaps_addressed: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { PieChart, RefreshCw, Target, FolderOpen, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { getKeywordCoverage, createTask } from '../../lib/tauri'
-import type { Project, KeywordCoverage, KeywordCoverageCluster } from '../../lib/types'
+import type { Project, KeywordCoverage, KeywordCoverageCluster, Task } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +17,7 @@ const AUTHORITY_BADGE: Record<string, string> = {
 
 interface KeywordCoverageProps {
   project: Project | null
-  onRunTasks?: (tasks: { id: string; title?: string; type: string }[]) => void
+  onRunTasks?: (tasks: Task[]) => void
 }
 
 export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoverageProps) {
@@ -59,7 +59,7 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
         undefined,
         'medium',
       )
-      onRunTasks?.([{ id: task.id, title: task.title ?? undefined, type: task.type }])
+      onRunTasks?.([task])
       // Poll for completion
       setTimeout(() => load(), 2000)
     } catch (e) {

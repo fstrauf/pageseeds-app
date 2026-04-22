@@ -17,6 +17,10 @@ interface Props {
 
 type View = 'campaigns' | 'templates' | 'stats'
 
+function statNumber(value: number | bigint | null | undefined): number {
+  return Number(value ?? 0)
+}
+
 export function SocialDashboard({ projectId }: Props) {
   const { showError } = useErrorHandler()
   const [view, setView] = useState<View>('campaigns')
@@ -55,17 +59,17 @@ export function SocialDashboard({ projectId }: Props) {
   const templates = data?.templates ?? []
   const stats = data?.stats ?? {}
 
-  const totalPosts = Object.values(stats).reduce((sum, s) => sum + s.total_posts, 0)
+  const totalPosts = Object.values(stats).reduce((sum, s) => sum + statNumber(s.total_posts), 0)
   const totalDrafts = Object.values(stats).reduce(
-    (sum, s) => sum + (s.by_status.draft || 0),
+    (sum, s) => sum + statNumber(s.by_status.draft),
     0
   )
   const totalScheduled = Object.values(stats).reduce(
-    (sum, s) => sum + (s.by_status.scheduled || 0),
+    (sum, s) => sum + statNumber(s.by_status.scheduled),
     0
   )
   const totalPosted = Object.values(stats).reduce(
-    (sum, s) => sum + (s.by_status.posted || 0),
+    (sum, s) => sum + statNumber(s.by_status.posted),
     0
   )
 

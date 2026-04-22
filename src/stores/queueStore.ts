@@ -236,10 +236,13 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     }
     
     console.log('[QueueStore] start - setting up event listeners...');
+
+    // Set isRunning BEFORE await to close the race window where concurrent
+    // start() calls could both pass the isRunning check.
+    set({ isRunning: true, isPaused: false });
+
     await setupEventListeners();
     console.log('[QueueStore] start - event listeners ready');
-    
-    set({ isRunning: true, isPaused: false });
     console.log('[QueueStore] start - isRunning set to true');
     
     try {
@@ -361,11 +364,15 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   onTaskStarted: (event: QueueProgressEvent) => {
     console.log('[QueueStore] Task started:', event.taskId);
     logger.entry('onTaskStarted', { taskId: event.taskId, title: event.payload.title });
-    set((state: QueueState) => ({
-      items: state.items.map((i: QueueItem) =>
-        i.taskId === event.taskId ? { ...i, status: 'running' as const } : i
-      ),
-    }));
+    set((state: QueueState) => {
+      const idx = state.items.findIndex((i: QueueItem) => i.taskId === event.taskId);
+      if (idx === -1 || state.items[idx].status === 'running') {
+        return state;
+      }
+      const next = [...state.items];
+      next[idx] = { ...next[idx], status: 'running' as const };
+      return { items: next };
+    });
     logger.stateChange('task status', 'pending/queued', 'running');
     logger.exit('onTaskStarted');
   },
@@ -373,35 +380,45 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   onTaskCompleted: (event: QueueProgressEvent) => {
     logger.entry('onTaskCompleted', { taskId: event.taskId });
     console.log('[QueueStore] Task completed:', event.taskId);
-    set((state: QueueState) => ({
-      items: state.items.map((i: QueueItem) =>
-        i.taskId === event.taskId 
-          ? { 
-              ...i, 
-              status: 'completed' as const, 
-              result: event.payload?.follow_up_tasks 
-                ? { 
-                    follow_up_tasks: event.payload.follow_up_tasks,
-                    started_at: event.payload.started_at,
-                    finished_at: event.payload.finished_at,
-                  } as unknown as ExecutionResult 
-                : undefined 
-            } 
-          : i
-      ),
-    }));
+    set((state: QueueState) => {
+      const idx = state.items.findIndex((i: QueueItem) => i.taskId === event.taskId);
+      if (idx === -1) {
+        return state;
+      }
+      const current = state.items[idx];
+      const newResult = event.payload?.follow_up_tasks
+        ? {
+            follow_up_tasks: event.payload.follow_up_tasks,
+            started_at: event.payload.started_at,
+            finished_at: event.payload.finished_at,
+          } as unknown as ExecutionResult
+        : undefined;
+      // Idempotent: skip if already completed with same result
+      if (
+        current.status === 'completed' &&
+        JSON.stringify(current.result) === JSON.stringify(newResult)
+      ) {
+        return state;
+      }
+      const next = [...state.items];
+      next[idx] = { ...current, status: 'completed' as const, result: newResult };
+      return { items: next };
+    });
     logger.stateChange('task status', 'running', 'completed');
     logger.exit('onTaskCompleted');
   },
 
   onTaskFailed: (event: QueueProgressEvent) => {
     logger.error('onTaskFailed', { taskId: event.taskId, error: event.payload.error });
-    set((state: QueueState) => ({
-      items: state.items.map((i: QueueItem) =>
-        i.taskId === event.taskId ? { ...i, status: 'failed' as const, error: event.payload.error } : i
-      ),
-      isPaused: true,
-    }));
+    set((state: QueueState) => {
+      const idx = state.items.findIndex((i: QueueItem) => i.taskId === event.taskId);
+      if (idx === -1 || state.items[idx].status === 'failed') {
+        return { isPaused: true };
+      }
+      const next = [...state.items];
+      next[idx] = { ...next[idx], status: 'failed' as const, error: event.payload.error };
+      return { items: next, isPaused: true };
+    });
     logger.stateChange('task status', 'running', 'failed');
     logger.stateChange('queue paused', false, true);
   },
@@ -438,3 +455,10 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     logger.exit('onFollowUpCreated');
   },
 }));
+
+// HMR cleanup: remove orphaned Tauri event listeners when this module is hot-replaced
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    useQueueStore.getState().cleanupEventListeners();
+  });
+}

@@ -107,7 +107,7 @@ export function WorkflowView({ projectId, projectName }: WorkflowViewProps) {
                   onClick={() => setSelected(t.id)}
                 >
                   <span className="font-medium">{t.title ?? t.id}</span>
-                  <span className="ml-2 text-xs text-muted-foreground">{t.task_type ?? (t as Task & { type?: string }).type}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">{t.type}</span>
                 </button>
               ))}
             </div>

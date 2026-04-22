@@ -126,7 +126,7 @@ function StatusRow({
 }: {
   label: string
   ok: boolean
-  detail?: string
+  detail?: string | null
 }) {
   return (
     <div className="flex items-center gap-2">

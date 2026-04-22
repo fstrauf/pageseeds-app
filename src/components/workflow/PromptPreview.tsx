@@ -86,7 +86,7 @@ export function PromptPreview({ projectId }: PromptPreviewProps) {
               <option value="">— choose a task —</option>
               {tasks.map(t => (
                 <option key={t.id} value={t.id}>
-                  [{t.status}] {t.task_type}
+                    [{t.status}] {t.type}
                   {t.title ? ` — ${t.title}` : ''}
                 </option>
               ))}

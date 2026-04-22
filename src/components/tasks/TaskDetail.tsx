@@ -174,7 +174,7 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Priority</Label>
-              <Select value={editPriority} onValueChange={setEditPriority}>
+              <Select value={editPriority} onValueChange={value => setEditPriority(value as 'high' | 'medium' | 'low')}>
                 <SelectTrigger className="h-7 text-xs bg-background border-border text-foreground">
                   <SelectValue />
                 </SelectTrigger>

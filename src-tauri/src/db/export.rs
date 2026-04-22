@@ -269,6 +269,10 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
         let published_date = a["published_date"].as_str().map(String::from);
         let word_count = a["word_count"].as_i64().unwrap_or(0);
         let status = a["status"].as_str().unwrap_or("draft").to_string();
+        let review_status = a["review_status"].as_str().map(String::from);
+        let review_started_at = a["review_started_at"].as_str().map(String::from);
+        let last_reviewed_at = a["last_reviewed_at"].as_str().map(String::from);
+        let review_count = a["review_count"].as_i64().unwrap_or(0);
         let gaps =
             serde_json::to_string(&a["content_gaps_addressed"]).unwrap_or_else(|_| "[]".into());
         let estimated_traffic = a["estimated_traffic_monthly"].as_str().map(String::from);
@@ -277,8 +281,9 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
             "INSERT INTO articles (
                 id, title, url_slug, file, target_keyword, keyword_difficulty,
                 target_volume, published_date, word_count, status,
+                review_status, review_started_at, last_reviewed_at, review_count,
                 content_gaps_addressed, estimated_traffic_monthly, project_id
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
              ON CONFLICT(id, project_id) DO UPDATE SET
                 title                       = excluded.title,
                 url_slug                    = excluded.url_slug,
@@ -289,6 +294,10 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
                 published_date              = excluded.published_date,
                 word_count                  = excluded.word_count,
                 status                      = excluded.status,
+                review_status               = excluded.review_status,
+                review_started_at           = excluded.review_started_at,
+                last_reviewed_at            = excluded.last_reviewed_at,
+                review_count                = excluded.review_count,
                 content_gaps_addressed      = excluded.content_gaps_addressed,
                 estimated_traffic_monthly   = excluded.estimated_traffic_monthly",
             rusqlite::params![
@@ -302,6 +311,10 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
                 published_date,
                 word_count,
                 status,
+                review_status,
+                review_started_at,
+                last_reviewed_at,
+                review_count,
                 gaps,
                 estimated_traffic,
                 project_id,
@@ -325,6 +338,7 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
     let mut stmt = conn.prepare(
         "SELECT id, title, url_slug, file, target_keyword, keyword_difficulty,
                 target_volume, published_date, word_count, status,
+                review_status, review_started_at, last_reviewed_at, review_count,
                 content_gaps_addressed, estimated_traffic_monthly
          FROM articles WHERE project_id = ?1 ORDER BY id ASC",
     )?;
@@ -341,8 +355,12 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
             let published_date: Option<String> = row.get(7)?;
             let word_count: i64 = row.get(8)?;
             let status: String = row.get(9)?;
-            let gaps_str: String = row.get(10)?;
-            let estimated_traffic: Option<String> = row.get(11)?;
+            let review_status: Option<String> = row.get(10)?;
+            let review_started_at: Option<String> = row.get(11)?;
+            let last_reviewed_at: Option<String> = row.get(12)?;
+            let review_count: i64 = row.get::<_, Option<i64>>(13)?.unwrap_or(0);
+            let gaps_str: String = row.get(14)?;
+            let estimated_traffic: Option<String> = row.get(15)?;
             Ok((
                 id,
                 title,
@@ -354,6 +372,10 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
                 published_date,
                 word_count,
                 status,
+                review_status,
+                review_started_at,
+                last_reviewed_at,
+                review_count,
                 gaps_str,
                 estimated_traffic,
             ))
@@ -371,12 +393,16 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
                 published_date,
                 word_count,
                 status,
+                review_status,
+                review_started_at,
+                last_reviewed_at,
+                review_count,
                 gaps_str,
                 estimated_traffic,
             )| {
                 let gaps: Value =
                     serde_json::from_str(&gaps_str).unwrap_or(Value::Array(vec![]));
-                serde_json::json!({
+                let mut article = serde_json::json!({
                     "id": id,
                     "title": title,
                     "url_slug": url_slug,
@@ -389,7 +415,20 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
                     "status": status,
                     "content_gaps_addressed": gaps,
                     "estimated_traffic_monthly": estimated_traffic.unwrap_or_default(),
-                })
+                });
+                if let Some(review_status) = review_status.filter(|s| !s.is_empty()) {
+                    article["review_status"] = Value::String(review_status);
+                }
+                if let Some(review_started_at) = review_started_at.filter(|s| !s.is_empty()) {
+                    article["review_started_at"] = Value::String(review_started_at);
+                }
+                if let Some(last_reviewed_at) = last_reviewed_at.filter(|s| !s.is_empty()) {
+                    article["last_reviewed_at"] = Value::String(last_reviewed_at);
+                }
+                if review_count > 0 {
+                    article["review_count"] = Value::from(review_count);
+                }
+                article
             },
         )
         .collect();
@@ -427,6 +466,10 @@ fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()
                 published_date,
                 word_count: 0,
                 status,
+                review_status: None,
+                review_started_at: None,
+                last_reviewed_at: None,
+                review_count: 0,
                 content_gaps_addressed: vec![],
                 estimated_traffic_monthly: None,
                 project_id: project_id.to_string(),

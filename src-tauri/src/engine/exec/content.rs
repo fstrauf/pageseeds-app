@@ -145,6 +145,32 @@ pub(crate) fn exec_content_sync(task: &Task, project_path: &str) -> crate::engin
 ///   +15×N  checks_failed × 15                          (weak content quality)
 ///   +∆     max(0, 100 − health_score)                  (inverse health)
 ///   −600   position 1–4 and CTR ≥ 5%                   (already strong)
+const REVIEW_REVISIT_STALE_DAYS: i64 = 45;
+const REVIEW_REVISIT_REGRESSION_DAYS: i64 = 14;
+
+fn reviewed_article_revisit_reason(
+    review_status: &str,
+    last_reviewed_at: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    has_regression_signal: bool,
+) -> Option<&'static str> {
+    let has_review_history = review_status == "reviewed" || !last_reviewed_at.trim().is_empty();
+    if !has_review_history {
+        return None;
+    }
+
+    let review_age_days = chrono::DateTime::parse_from_rfc3339(last_reviewed_at)
+        .ok()
+        .map(|reviewed_at| now.signed_duration_since(reviewed_at.with_timezone(&chrono::Utc)).num_days().max(0));
+
+    match review_age_days {
+        Some(days) if days >= REVIEW_REVISIT_STALE_DAYS => Some("stale"),
+        Some(days) if days >= REVIEW_REVISIT_REGRESSION_DAYS && has_regression_signal => Some("regressed"),
+        Some(_) => None,
+        None => Some("stale"),
+    }
+}
+
 pub(crate) fn select_priority_articles(
     raw_articles: &[serde_json::Value],
     audit_articles: &[serde_json::Value],
@@ -162,11 +188,14 @@ pub(crate) fn select_priority_articles(
     }
 
     let null_value = serde_json::Value::Null;
-    let mut candidates: Vec<(i64, serde_json::Value)> = Vec::new();
+    let now = chrono::Utc::now();
+    let mut backlog_candidates: Vec<(i64, serde_json::Value)> = Vec::new();
+    let mut revisit_candidates: Vec<(i64, serde_json::Value)> = Vec::new();
 
     for article in raw_articles {
         let status = article["status"].as_str().unwrap_or("").to_lowercase();
         let review_status = article["review_status"].as_str().unwrap_or("").to_lowercase();
+        let last_reviewed_at = article["last_reviewed_at"].as_str().unwrap_or("").trim();
         let file_rel = article["file"].as_str().unwrap_or("").to_string();
         if status == "draft" || review_status == "in_review" || file_rel.is_empty() {
             continue;
@@ -200,7 +229,8 @@ pub(crate) fn select_priority_articles(
             .unwrap_or_default();
 
         let mut score: i64 = 0;
-        if pos >= 5.0 && pos <= 20.0 && impressions > 200.0 && ctr < 0.03 {
+        let quick_ctr_opportunity = pos >= 5.0 && pos <= 20.0 && impressions > 200.0 && ctr < 0.03;
+        if quick_ctr_opportunity {
             score += 1000;
         }
         if health == "poor" {
@@ -211,17 +241,54 @@ pub(crate) fn select_priority_articles(
         if pos >= 1.0 && pos <= 4.0 && ctr >= 0.05 {
             score -= 600;
         }
-        if score <= 0 {
-            continue;
-        }
+
+        let has_regression_signal = quick_ctr_opportunity
+            || health == "poor"
+            || checks_failed >= 3
+            || health_score <= 70;
+
+        let has_review_history = review_status == "reviewed" || !last_reviewed_at.is_empty();
 
         let mut enriched = article.clone();
         enriched["_failed_checks"] = serde_json::json!(failed_checks);
-        candidates.push((score, enriched));
+
+        if has_review_history {
+            let Some(reason) = reviewed_article_revisit_reason(
+                &review_status,
+                last_reviewed_at,
+                now,
+                has_regression_signal,
+            ) else {
+                continue;
+            };
+            enriched["_review_bucket"] = serde_json::json!("revisit");
+            enriched["_review_reason"] = serde_json::json!(reason);
+            revisit_candidates.push((score, enriched));
+        } else {
+            enriched["_review_bucket"] = serde_json::json!("backlog");
+            backlog_candidates.push((score, enriched));
+        }
     }
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-    candidates.into_iter().take(max_items).map(|(_, a)| a).collect()
+    backlog_candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    revisit_candidates.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut selected: Vec<serde_json::Value> = backlog_candidates
+        .into_iter()
+        .take(max_items)
+        .map(|(_, article)| article)
+        .collect();
+
+    if selected.len() < max_items {
+        selected.extend(
+            revisit_candidates
+                .into_iter()
+                .take(max_items - selected.len())
+                .map(|(_, article)| article),
+        );
+    }
+
+    selected
 }
 
 /// Build a structured context payload for the LLM.
@@ -436,6 +503,110 @@ pub(crate) fn exec_content_review_recommend(
     }
 }
 
+fn recommendation_article_id(article: &serde_json::Value) -> Option<i64> {
+    match article.get("article_id") {
+        Some(serde_json::Value::String(id)) => {
+            let trimmed = id.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                trimmed.parse::<i64>().ok()
+            }
+        }
+        Some(serde_json::Value::Number(id)) => id.as_i64(),
+        _ => None,
+    }
+}
+
+fn fix_content_article_id(task: &Task) -> Option<i64> {
+    task.artifacts
+        .iter()
+        .find_map(|artifact| {
+            artifact
+                .content
+                .as_deref()
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+                .and_then(|article| recommendation_article_id(&article))
+                .or_else(|| {
+                    artifact
+                        .key
+                        .strip_prefix("recommendations_")
+                        .and_then(|suffix| suffix.parse::<i64>().ok())
+                })
+        })
+}
+
+fn sync_article_review_state_to_repo(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &str,
+) -> crate::error::Result<()> {
+    let json = crate::db::export::export_articles(conn, project_id)?;
+    let out_path = std::path::Path::new(project_path)
+        .join(".github")
+        .join("automation")
+        .join("articles.json");
+    std::fs::create_dir_all(out_path.parent().unwrap())?;
+    std::fs::write(out_path, json)?;
+    Ok(())
+}
+
+fn mark_articles_in_review(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &str,
+    article_ids: &[i64],
+) -> crate::error::Result<usize> {
+    if article_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut updated = 0usize;
+    for article_id in article_ids {
+        updated += conn.execute(
+            "UPDATE articles
+             SET review_status = 'in_review', review_started_at = ?1
+             WHERE id = ?2 AND project_id = ?3",
+            rusqlite::params![&now, article_id, project_id],
+        )?;
+    }
+
+    if updated > 0 {
+        sync_article_review_state_to_repo(conn, project_id, project_path)?;
+    }
+
+    Ok(updated)
+}
+
+pub(crate) fn mark_fix_content_article_reviewed(
+    conn: &Connection,
+    task: &Task,
+    project_path: &str,
+) -> crate::error::Result<Option<i64>> {
+    let Some(article_id) = fix_content_article_id(task) else {
+        return Ok(None);
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let rows = conn.execute(
+        "UPDATE articles
+         SET review_status = 'reviewed',
+             review_started_at = NULL,
+             last_reviewed_at = ?1,
+             review_count = COALESCE(review_count, 0) + 1
+         WHERE id = ?2 AND project_id = ?3",
+        rusqlite::params![&now, article_id, &task.project_id],
+    )?;
+
+    if rows > 0 {
+        sync_article_review_state_to_repo(conn, &task.project_id, project_path)?;
+        Ok(Some(article_id))
+    } else {
+        Ok(None)
+    }
+}
+
 /// After a successful content review, create individual `fix_content_article` tasks
 /// for each article in recommendations.json.
 ///
@@ -445,7 +616,8 @@ pub(crate) fn exec_content_review_recommend(
 /// Skips if recommendations.json is absent (review found nothing).
 pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &Task, project_path: &str) -> Vec<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{TaskArtifact, ExecutionMode, Priority, AgentPolicy};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskArtifact, TaskStatus};
+    use std::collections::HashSet;
 
     let paths = ProjectPaths::from_path(project_path);
     let rec_path = paths.automation_dir.join("recommendations.json");
@@ -474,26 +646,46 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
     };
 
     let mut created_task_ids = Vec::new();
+    let mut seen_article_ids = HashSet::new();
+    let mut in_review_article_ids = Vec::new();
 
-    for (idx, article) in articles.iter().enumerate() {
-        let article_id = article["article_id"].as_str().unwrap_or("");
+    for article in articles {
+        let Some(article_id) = recommendation_article_id(article) else {
+            let article_title = article["article_title"].as_str().unwrap_or("article");
+            log::warn!(
+                "[create_apply_task] skipping article '{}' with missing/invalid article_id",
+                article_title
+            );
+            continue;
+        };
+
         let article_title = article["article_title"].as_str().unwrap_or("article");
         let article_file = article["article_file"].as_str().unwrap_or("");
 
+        if !seen_article_ids.insert(article_id.clone()) {
+            log::warn!(
+                "[create_apply_task] skipping duplicate recommendation for article '{}' ({})",
+                article_title,
+                article_id
+            );
+            continue;
+        }
+
         // Extract specific recommendations for this article
         let article_rec = serde_json::json!({
-            "article_id": article_id,
+            "article_id": article["article_id"].clone(),
             "article_title": article_title,
             "article_file": article_file,
             "suggestions": article["suggestions"],
         });
         let article_rec_str = serde_json::to_string_pretty(&article_rec).unwrap_or_default();
+        let article_id_str = article_id.to_string();
 
         let title = format!("Fix: {}", article_title);
 
         // Create individual artifact for this article
         let artifact = TaskArtifact {
-            key: format!("recommendations_{}", article_id),
+            key: format!("recommendations_{}", article_id_str),
             path: None,
             artifact_type: Some("json".to_string()),
             source: Some("content_review".to_string()),
@@ -501,7 +693,7 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
         };
 
         // Idempotency key per article: content_review_apply:{project_id}:{article_id}
-        let idempotency_key = format!("content_review_apply:{}:{}", parent_task.project_id, article_id);
+        let idempotency_key = format!("content_review_apply:{}:{}", parent_task.project_id, article_id_str);
 
         // Calculate priority based on issue count
         let issue_count = article["suggestions"].as_array().map(|s| s.len()).unwrap_or(0);
@@ -536,11 +728,21 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
 
         match TaskSpawner::spawn(conn, spec) {
             Ok(task) => {
-                log::info!(
-                    "[create_apply_task] created {} for article '{}' ({} issues)",
-                    task.id, article_title, issue_count
-                );
-                created_task_ids.push(task.id);
+                if matches!(task.status, TaskStatus::Todo | TaskStatus::InProgress | TaskStatus::Review) {
+                    log::info!(
+                        "[create_apply_task] created {} for article '{}' ({} issues)",
+                        task.id, article_title, issue_count
+                    );
+                    created_task_ids.push(task.id);
+                    in_review_article_ids.push(article_id);
+                } else {
+                    log::info!(
+                        "[create_apply_task] existing task {} for article '{}' is {:?}; not reopening review",
+                        task.id,
+                        article_title,
+                        task.status
+                    );
+                }
             }
             Err(e) => {
                 log::warn!(
@@ -549,6 +751,10 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
                 );
             }
         }
+    }
+
+    if let Err(e) = mark_articles_in_review(conn, &parent_task.project_id, project_path, &in_review_article_ids) {
+        log::warn!("[create_apply_task] failed to mark articles in_review: {}", e);
     }
 
     log::info!(
@@ -1104,5 +1310,514 @@ pub(crate) fn exec_cluster_link_apply(
         success: true,
         message: format!("Applied {} links to {} files", links_added, files_modified),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::task_store;
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskRun, TaskStatus};
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
+
+    struct TempProjectDir {
+        path: PathBuf,
+    }
+
+    impl TempProjectDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "pageseeds-content-review-{}",
+                Uuid::new_v4()
+            ));
+            fs::create_dir_all(path.join(".github").join("automation")).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempProjectDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                active INTEGER DEFAULT 1
+            );
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                agent_policy TEXT NOT NULL DEFAULT 'none',
+                title TEXT,
+                description TEXT,
+                project_id TEXT NOT NULL,
+                depends_on TEXT NOT NULL DEFAULT '[]',
+                artifacts TEXT NOT NULL DEFAULT '[]',
+                run_attempts INTEGER DEFAULT 0,
+                run_last_error TEXT,
+                run_provider TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE task_idempotency_keys (
+                key TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE task_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                provider TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                success INTEGER,
+                error TEXT
+            );
+            CREATE TABLE articles (
+                id INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                url_slug TEXT NOT NULL DEFAULT '',
+                file TEXT NOT NULL DEFAULT '',
+                target_keyword TEXT,
+                keyword_difficulty TEXT,
+                target_volume INTEGER DEFAULT 0,
+                published_date TEXT,
+                word_count INTEGER DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'draft',
+                review_status TEXT,
+                review_started_at TEXT,
+                last_reviewed_at TEXT,
+                review_count INTEGER NOT NULL DEFAULT 0,
+                content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
+                estimated_traffic_monthly TEXT,
+                project_id TEXT NOT NULL,
+                PRIMARY KEY (id, project_id)
+            );
+            CREATE TABLE articles_meta (
+                project_id TEXT PRIMARY KEY,
+                next_article_id INTEGER NOT NULL DEFAULT 1
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn create_test_project(conn: &Connection, id: &str, path: &str) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active) VALUES (?1, ?2, ?3, 1)",
+            rusqlite::params![id, "Test Project", path],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles_meta (project_id, next_article_id) VALUES (?1, 200)",
+            [id],
+        )
+        .unwrap();
+    }
+
+    fn insert_test_article(conn: &Connection, project_id: &str, id: i64, status: &str, review_status: Option<&str>) {
+        conn.execute(
+            "INSERT INTO articles (
+                id, title, url_slug, file, target_keyword, keyword_difficulty,
+                target_volume, published_date, word_count, status,
+                review_status, review_started_at, last_reviewed_at, review_count,
+                content_gaps_addressed, estimated_traffic_monthly, project_id
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, 0, NULL, 0, ?5, ?6, NULL, NULL, 0, '[]', NULL, ?7)",
+            rusqlite::params![
+                id,
+                format!("Article {id}"),
+                format!("article-{id}"),
+                format!("./content/{id}_article.mdx"),
+                status,
+                review_status,
+                project_id,
+            ],
+        )
+        .unwrap();
+    }
+
+    fn make_parent_task(project_id: &str) -> Task {
+        let now = chrono::Utc::now().to_rfc3339();
+        Task {
+            id: format!("task-{}", Uuid::new_v4()),
+            project_id: project_id.to_string(),
+            task_type: "content_review".to_string(),
+            phase: "investigation".to_string(),
+            status: TaskStatus::Done,
+            priority: Priority::Medium,
+            execution_mode: ExecutionMode::Batchable,
+            agent_policy: AgentPolicy::Required,
+            title: Some("Content Review".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    fn write_recommendations(project_dir: &Path, recommendations: serde_json::Value) {
+        let path = project_dir
+            .join(".github")
+            .join("automation")
+            .join("recommendations.json");
+        fs::write(path, serde_json::to_string_pretty(&recommendations).unwrap()).unwrap();
+    }
+
+    fn idempotency_keys(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT key FROM task_idempotency_keys ORDER BY key")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn recommendation_article_id_accepts_strings_and_numbers() {
+        assert_eq!(
+            recommendation_article_id(&json!({ "article_id": "109" })),
+            Some(109)
+        );
+        assert_eq!(
+            recommendation_article_id(&json!({ "article_id": 111 })),
+            Some(111)
+        );
+        assert_eq!(recommendation_article_id(&json!({ "article_id": "   " })), None);
+        assert_eq!(recommendation_article_id(&json!({})), None);
+    }
+
+    fn reviewed_at(days_ago: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::days(days_ago)).to_rfc3339()
+    }
+
+    #[test]
+    fn select_priority_articles_prioritizes_unreviewed_backlog_before_reviewed_revisits() {
+        let raw_articles = vec![
+            json!({
+                "id": 1,
+                "title": "Reviewed winner",
+                "file": "./content/1_reviewed.mdx",
+                "url_slug": "reviewed-winner",
+                "status": "published",
+                "review_status": "reviewed",
+                "last_reviewed_at": reviewed_at(60),
+                "gsc": { "avg_position": 8.0, "impressions": 800.0, "ctr": 0.0 }
+            }),
+            json!({
+                "id": 2,
+                "title": "Unreviewed backlog",
+                "file": "./content/2_unreviewed.mdx",
+                "url_slug": "unreviewed-backlog",
+                "status": "published",
+                "gsc": { "avg_position": 2.0, "impressions": 10.0, "ctr": 0.2 }
+            })
+        ];
+
+        let audit_articles = vec![
+            json!({
+                "file": "./content/1_reviewed.mdx",
+                "health": "poor",
+                "checks_failed": 6,
+                "health_score": 40,
+                "checks": {}
+            }),
+            json!({
+                "file": "./content/2_unreviewed.mdx",
+                "health": "good",
+                "checks_failed": 0,
+                "health_score": 100,
+                "checks": {}
+            })
+        ];
+
+        let selected = select_priority_articles(&raw_articles, &audit_articles, 2);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0]["id"], 2);
+        assert_eq!(selected[0]["_review_bucket"], "backlog");
+        assert_eq!(selected[1]["id"], 1);
+        assert_eq!(selected[1]["_review_reason"], "stale");
+    }
+
+    #[test]
+    fn select_priority_articles_backfills_with_stale_reviewed_articles() {
+        let raw_articles = vec![json!({
+            "id": 1,
+            "title": "Stale reviewed article",
+            "file": "./content/1_reviewed.mdx",
+            "url_slug": "stale-reviewed",
+            "status": "published",
+            "review_status": "reviewed",
+            "last_reviewed_at": reviewed_at(90),
+            "gsc": { "avg_position": 2.0, "impressions": 50.0, "ctr": 0.10 }
+        })];
+
+        let audit_articles = vec![json!({
+            "file": "./content/1_reviewed.mdx",
+            "health": "good",
+            "checks_failed": 0,
+            "health_score": 100,
+            "checks": {}
+        })];
+
+        let selected = select_priority_articles(&raw_articles, &audit_articles, 5);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["id"], 1);
+        assert_eq!(selected[0]["_review_reason"], "stale");
+    }
+
+    #[test]
+    fn select_priority_articles_allows_regressed_reviewed_articles_after_cooldown() {
+        let raw_articles = vec![json!({
+            "id": 1,
+            "title": "Regressed reviewed article",
+            "file": "./content/1_reviewed.mdx",
+            "url_slug": "regressed-reviewed",
+            "status": "published",
+            "review_status": "reviewed",
+            "last_reviewed_at": reviewed_at(20),
+            "gsc": { "avg_position": 8.0, "impressions": 900.0, "ctr": 0.01 }
+        })];
+
+        let audit_articles = vec![json!({
+            "file": "./content/1_reviewed.mdx",
+            "health": "good",
+            "checks_failed": 0,
+            "health_score": 100,
+            "checks": {}
+        })];
+
+        let selected = select_priority_articles(&raw_articles, &audit_articles, 5);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["id"], 1);
+        assert_eq!(selected[0]["_review_reason"], "regressed");
+    }
+
+    #[test]
+    fn select_priority_articles_keeps_recent_reviewed_regressions_on_cooldown() {
+        let raw_articles = vec![json!({
+            "id": 1,
+            "title": "Recently reviewed article",
+            "file": "./content/1_reviewed.mdx",
+            "url_slug": "recent-reviewed",
+            "status": "published",
+            "review_status": "reviewed",
+            "last_reviewed_at": reviewed_at(5),
+            "gsc": { "avg_position": 9.0, "impressions": 1200.0, "ctr": 0.01 }
+        })];
+
+        let audit_articles = vec![json!({
+            "file": "./content/1_reviewed.mdx",
+            "health": "poor",
+            "checks_failed": 5,
+            "health_score": 45,
+            "checks": {}
+        })];
+
+        let selected = select_priority_articles(&raw_articles, &audit_articles, 5);
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn create_content_review_apply_task_uses_numeric_article_ids_in_idempotency_keys() {
+        let conn = in_memory_db();
+        let project_dir = TempProjectDir::new();
+        let project_path = project_dir.path().to_string_lossy().to_string();
+        create_test_project(&conn, "proj1", &project_path);
+        insert_test_article(&conn, "proj1", 109, "published", None);
+        insert_test_article(&conn, "proj1", 111, "published", None);
+
+        write_recommendations(
+            project_dir.path(),
+            json!({
+                "articles": [
+                    {
+                        "article_id": 109,
+                        "article_title": "Alpha",
+                        "article_file": "./content/109_alpha.mdx",
+                        "suggestions": [{ "category": "title" }]
+                    },
+                    {
+                        "article_id": 111,
+                        "article_title": "Beta",
+                        "article_file": "./content/111_beta.mdx",
+                        "suggestions": [{ "category": "meta_description" }, { "category": "cta" }]
+                    }
+                ]
+            }),
+        );
+
+        let parent = make_parent_task("proj1");
+        let created = create_content_review_apply_task(&conn, &parent, &project_path);
+
+        assert_eq!(created.len(), 2);
+        assert_eq!(
+            idempotency_keys(&conn),
+            vec![
+                "content_review_apply:proj1:109".to_string(),
+                "content_review_apply:proj1:111".to_string(),
+            ]
+        );
+
+        let tasks = task_store::list_tasks(&conn, "proj1").unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks.iter().all(|task| task.task_type == "fix_content_article"));
+        assert!(tasks.iter().all(|task| {
+            task.artifacts
+                .iter()
+                .any(|artifact| artifact.key == "recommendations_109" || artifact.key == "recommendations_111")
+        }));
+
+        let articles = task_store::list_articles(&conn, "proj1").unwrap();
+        assert!(articles.iter().all(|article| article.review_status.as_deref() == Some("in_review")));
+
+        let exported: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                project_dir
+                    .path()
+                    .join(".github")
+                    .join("automation")
+                    .join("articles.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let exported_articles = exported["articles"].as_array().unwrap();
+        assert!(exported_articles.iter().all(|article| article["review_status"] == "in_review"));
+    }
+
+    #[test]
+    fn create_content_review_apply_task_skips_invalid_and_duplicate_article_ids() {
+        let conn = in_memory_db();
+        let project_dir = TempProjectDir::new();
+        let project_path = project_dir.path().to_string_lossy().to_string();
+        create_test_project(&conn, "proj1", &project_path);
+        insert_test_article(&conn, "proj1", 109, "published", None);
+
+        write_recommendations(
+            project_dir.path(),
+            json!({
+                "articles": [
+                    {
+                        "article_id": 109,
+                        "article_title": "Alpha",
+                        "article_file": "./content/109_alpha.mdx",
+                        "suggestions": [{ "category": "title" }]
+                    },
+                    {
+                        "article_id": 109,
+                        "article_title": "Alpha Duplicate",
+                        "article_file": "./content/109_alpha_dup.mdx",
+                        "suggestions": [{ "category": "cta" }]
+                    },
+                    {
+                        "article_title": "Missing ID",
+                        "article_file": "./content/missing_id.mdx",
+                        "suggestions": [{ "category": "faq" }]
+                    }
+                ]
+            }),
+        );
+
+        let parent = make_parent_task("proj1");
+        let created = create_content_review_apply_task(&conn, &parent, &project_path);
+
+        assert_eq!(created.len(), 1);
+        assert_eq!(
+            idempotency_keys(&conn),
+            vec!["content_review_apply:proj1:109".to_string()]
+        );
+    }
+
+    #[test]
+    fn mark_fix_content_article_reviewed_updates_article_state_and_export() {
+        let conn = in_memory_db();
+        let project_dir = TempProjectDir::new();
+        let project_path = project_dir.path().to_string_lossy().to_string();
+        create_test_project(&conn, "proj1", &project_path);
+        insert_test_article(&conn, "proj1", 109, "published", Some("in_review"));
+
+        let task = Task {
+            id: format!("task-{}", Uuid::new_v4()),
+            project_id: "proj1".to_string(),
+            task_type: "fix_content_article".to_string(),
+            phase: "implementation".to_string(),
+            status: TaskStatus::Done,
+            priority: Priority::Medium,
+            execution_mode: ExecutionMode::Batchable,
+            agent_policy: AgentPolicy::Required,
+            title: Some("Fix: Alpha".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "recommendations_109".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("content_review".to_string()),
+                content: Some(
+                    serde_json::to_string(&json!({
+                        "article_id": 109,
+                        "article_title": "Alpha",
+                        "article_file": "./content/109_alpha.mdx",
+                        "suggestions": []
+                    }))
+                    .unwrap(),
+                ),
+            }],
+            run: TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let article_id = mark_fix_content_article_reviewed(&conn, &task, &project_path).unwrap();
+        assert_eq!(article_id, Some(109));
+
+        let articles = task_store::list_articles(&conn, "proj1").unwrap();
+        let article = articles.iter().find(|article| article.id == 109).unwrap();
+        assert_eq!(article.review_status.as_deref(), Some("reviewed"));
+        assert_eq!(article.review_count, 1);
+        assert!(article.last_reviewed_at.is_some());
+        assert!(article.review_started_at.is_none());
+
+        let exported: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                project_dir
+                    .path()
+                    .join(".github")
+                    .join("automation")
+                    .join("articles.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let exported_article = exported["articles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|article| article["id"] == 109)
+            .unwrap();
+        assert_eq!(exported_article["review_status"], "reviewed");
+        assert_eq!(exported_article["review_count"], 1);
+        assert!(exported_article.get("last_reviewed_at").is_some());
     }
 }

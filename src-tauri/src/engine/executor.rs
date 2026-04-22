@@ -433,6 +433,12 @@ pub async fn execute_task_with_token(
             }
         }
     }
+
+    if all_ok && task.task_type == "fix_content_article" {
+        if let Err(e) = crate::engine::exec::content::mark_fix_content_article_reviewed(conn, &task, &project_path) {
+            log::warn!("[content_review] failed to persist article review completion: {}", e);
+        }
+    }
     
     // After a successful reddit_opportunity_search, the task goes to Review status.
     // The user will review opportunities and select which ones to create reply tasks for.
@@ -1089,6 +1095,10 @@ mod tests {
                 published_date TEXT,
                 word_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'draft',
+                review_status TEXT,
+                review_started_at TEXT,
+                last_reviewed_at TEXT,
+                review_count INTEGER NOT NULL DEFAULT 0,
                 content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
                 estimated_traffic_monthly TEXT,
                 project_id TEXT NOT NULL

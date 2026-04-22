@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { checkProjectSetup, fixDateMismatches, getContentHealth, ingestOrphanArticles, initWorkspaceConfig, initializeProjectWorkspace } from '../../lib/tauri'
-import type { ContentHealthResult, ProjectSetup, SetupCheckItem, SetupSeverity } from '../../lib/types'
+import type { ContentHealthResult, ProjectSetup, SetupCheckItem, SetupSeverity, View } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { ActionDrawer } from '@/components/ui/action-drawer'
 import { useActionRun } from '../../hooks/useActionRun'
@@ -8,7 +8,7 @@ import type { ActionResultPayload } from '../../hooks/useActionRun'
 
 interface Props {
   projectId: string
-  onViewChange?: (view: string) => void
+  onViewChange?: (view: View, taskId?: string) => void
 }
 
 const SEVERITY_STYLES: Record<SetupSeverity, string> = {
@@ -208,8 +208,8 @@ function OrphanFilesBanner({
   projectId: string
   isRunning: boolean
   onFixed: () => void | Promise<void>
-  onRun: (label: string, fn: () => Promise<ActionResultPayload>, nextStep?: { view: string; label: string }) => void
-  onViewChange?: (view: string) => void
+  onRun: (label: string, fn: () => Promise<ActionResultPayload>, nextStep?: { view: View; label: string }) => void
+  onViewChange?: (view: View, taskId?: string) => void
 }) {
   const [dismissed, setDismissed] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -381,7 +381,11 @@ export function SetupWarnings({ projectId, onViewChange }: Props) {
           <OrphanFilesBanner health={health} projectId={projectId} isRunning={actionState.status === 'running'} onFixed={load} onRun={runAction} onViewChange={onViewChange} />
         )}
       </div>
-      <ActionDrawer state={actionState} onDismiss={dismissAction} onNavigate={onViewChange} />
+      <ActionDrawer
+        state={actionState}
+        onDismiss={dismissAction}
+        onNavigate={onViewChange ? (view, taskId) => onViewChange(view as View, taskId) : undefined}
+      />
     </>
   )
 }

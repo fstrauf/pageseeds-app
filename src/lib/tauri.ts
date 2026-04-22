@@ -742,10 +742,10 @@ import type {
   ReadabilityReport, 
   IntentClassification, 
   OpportunityScore, 
-  KeywordIdea,
   WordCountComparison,
   KeywordDensityReport,
 } from './bindings'
+import type { KeywordIdea } from './types'
 
 export const analyzeArticleReadability = (projectId: string, slug: string): Promise<ReadabilityReport> =>
   invoke('analyze_article_readability', { projectId, slug })

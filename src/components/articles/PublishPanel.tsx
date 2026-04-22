@@ -35,6 +35,10 @@ type PanelState =
   | { kind: 'done'; result: PublishResult }
   | { kind: 'error'; message: string }
 
+function articleIdNumber(id: number | bigint): number {
+  return Number(id)
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function ArticleRow({ article, badge, badgeClass, detail }: {
@@ -128,7 +132,7 @@ export function PublishPanel({
   async function runPreflight() {
     setState({ kind: 'preflight_running' })
     try {
-      const ids = candidates.map(a => a.id)
+      const ids = candidates.map(a => articleIdNumber(a.id))
       const result = await preflightPublishArticles(projectId, ids)
       setState({
         kind: 'preflight_done',
@@ -179,8 +183,8 @@ export function PublishPanel({
 
     // Collect article IDs to publish: ready + year_mismatch (if resolved) + needs_date_fix
     const publishIds: number[] = [
-      ...result.ready.map(a => a.id),
-      ...result.needs_date_fix.map(wi => wi.article.id),
+      ...result.ready.map(a => articleIdNumber(a.id)),
+      ...result.needs_date_fix.map(wi => articleIdNumber(wi.article.id)),
       ...result.year_mismatches
         .filter(m => resolutions.has(m.article_id))
         .map(m => m.article_id),

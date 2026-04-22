@@ -77,7 +77,7 @@ impl TaskSpawner {
 
         // 3. Generate ID and timestamps
         let now = chrono::Utc::now().to_rfc3339();
-        let id = format!("task-{}", chrono::Utc::now().timestamp_millis());
+        let id = format!("task-{}", uuid::Uuid::new_v4());
 
         // 4. Resolve defaults
         let phase = spec

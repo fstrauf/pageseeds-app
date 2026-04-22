@@ -29,8 +29,8 @@ function ArtifactRow({ artifact, onNormalize }: {
     <div className="border border-border rounded overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border">
         <span className="text-sm font-mono font-medium text-foreground">{artifact.key}</span>
-        {artifact.type && (
-          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{artifact.type}</span>
+        {artifact.artifact_type && (
+          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{artifact.artifact_type}</span>
         )}
         {artifact.source && (
           <span className={cn(
@@ -209,7 +209,7 @@ export function AgentLog({ projectId }: AgentLogProps) {
             <option value="">— choose a task —</option>
             {tasks.map(t => (
               <option key={t.id} value={t.id}>
-                [{t.status}] {t.task_type}
+                [{t.status}] {t.type}
                 {t.title ? ` — ${t.title}` : ''}
               </option>
             ))}

@@ -68,11 +68,21 @@ export function TaskRunner({
   }, [userExpanded, autoExpandIds])
 
   // Update prev status map after render so next render can detect transitions.
-  // Bounded: only runs when `items` changes, and `items` is stable (memoized in useQueueRunner).
+  // Idempotent: only sets state if the content actually changed, avoiding extra re-renders.
   useEffect(() => {
-    logger.stateChange('items', items.length)
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPrevStatusMap(new Map(items.map(it => [it.task.id, it.status])))
+    setPrevStatusMap(prev => {
+      if (prev.size !== items.length) {
+        logger.stateChange('items', prev.size, items.length)
+        return new Map(items.map(it => [it.task.id, it.status]))
+      }
+      for (const item of items) {
+        if (prev.get(item.task.id) !== item.status) {
+          return new Map(items.map(it => [it.task.id, it.status]))
+        }
+      }
+      return prev
+    })
   }, [items])
 
   // Auto-open review tasks (bounded side effect — only fires on real status changes)
