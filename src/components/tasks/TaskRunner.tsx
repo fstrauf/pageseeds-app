@@ -486,6 +486,7 @@ function FollowUpList({ followUps, onRunNow, onOpenTask }: FollowUpListProps) {
 
 function StepRow({ step }: { step: StepProgress }) {
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
 
   const icon =
     step.status === 'ok'      ? '✓' :
@@ -494,6 +495,17 @@ function StepRow({ step }: { step: StepProgress }) {
     step.status === 'running' ? '⟳' : '○'
 
   const isFailed = step.status === 'failed'
+  const isImplementation = step.step_name === 'implementation_agent_stage'
+
+  // For implementation steps, show a preview inline so users can see what changed
+  // without clicking through a dialog.
+  const outputPreview = useMemo(() => {
+    if (!step.output || !isImplementation) return null
+    // Extract first ~400 chars or first paragraph
+    const text = step.output.trim()
+    const firstPara = text.split('\n\n')[0] ?? text
+    return firstPara.length > 400 ? firstPara.slice(0, 400) + '…' : firstPara
+  }, [step.output, isImplementation])
 
   return (
     <div className="flex items-start gap-2 text-xs">
@@ -526,6 +538,24 @@ function StepRow({ step }: { step: StepProgress }) {
             </button>
           )}
         </div>
+
+        {/* Inline preview for implementation agent output */}
+        {outputPreview && (
+          <div className="mt-1.5">
+            <button
+              onClick={() => setExpanded(v => !v)}
+              className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+            >
+              {expanded ? 'Hide preview' : 'Show what changed'}
+            </button>
+            {expanded && (
+              <div className="mt-1 rounded border bg-secondary/30 px-2.5 py-2 text-[11px] text-muted-foreground whitespace-pre-wrap break-words max-h-64 overflow-y-auto">
+                {outputPreview}
+              </div>
+            )}
+          </div>
+        )}
+
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent className={cn('max-w-2xl', isFailed && 'border-red-200')}>
             <DialogHeader>
