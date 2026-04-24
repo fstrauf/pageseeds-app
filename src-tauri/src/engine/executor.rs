@@ -208,6 +208,18 @@ pub async fn execute_task_with_token(
                 log::info!("[executor] research_ahrefs_pipeline output ({} chars)", out.len());
                 latest_raw_output = result.output.clone();
             }
+        } else if step.name == "ctr_build_context" {
+            // Pass deterministic context to the agentic ctr_analyze step that follows
+            if let Some(ref out) = result.output {
+                log::info!("[executor] ctr_build_context output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
+        } else if step.name == "can_build_context" {
+            // Pass deterministic context to the agentic can_analyze step that follows
+            if let Some(ref out) = result.output {
+                log::info!("[executor] can_build_context output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
         }
 
         progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
@@ -402,6 +414,16 @@ pub async fn execute_task_with_token(
     // After a successful collect_gsc, spawn fix tasks from the gsc_collection.json artifact.
     if all_ok && task.task_type == "collect_gsc" {
         follow_up_ids.extend(crate::engine::exec::gsc::create_tasks_from_collection_after_exec(conn, &task, &project_path));
+    }
+
+    // After a successful ctr_audit, spawn fix tasks from the ctr_recommendations artifact.
+    if all_ok && task.task_type == "ctr_audit" {
+        follow_up_ids.extend(crate::engine::exec::ctr_audit::create_ctr_fix_tasks(conn, &task, &project_path));
+    }
+
+    // After a successful cannibalization_audit, spawn fix tasks from the cannibalization_strategy artifact.
+    if all_ok && task.task_type == "cannibalization_audit" {
+        follow_up_ids.extend(crate::engine::exec::cannibalization_audit::create_can_fix_tasks(conn, &task, &project_path));
     }
 
     // After a successful indexing_diagnostics, collect spawned fix task IDs from step output.

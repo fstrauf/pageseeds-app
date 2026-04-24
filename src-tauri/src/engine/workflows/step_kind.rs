@@ -49,6 +49,14 @@ pub enum StepKind {
     ResearchAutocomplete,
     /// LLM filters autocomplete suggestions for domain relevance (agentic).
     ResearchSeedValidation,
+    /// Build structured context for CTR audit (deterministic data collection).
+    CtrBuildContext,
+    /// Agentic CTR analysis — titles, meta, snippets, FAQ (agentic).
+    CtrAnalyze,
+    /// Build structured context for cannibalization audit (TF-IDF + data formatting).
+    CanBuildContext,
+    /// Agentic cannibalization strategy — merges, hubs, territories (agentic).
+    CanAnalyze,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -98,6 +106,10 @@ impl StepKind {
             Self::SocialExtractArticle => "social_extract_article",
             Self::ResearchAutocomplete => "research_autocomplete",
             Self::ResearchSeedValidation => "research_seed_validation",
+            Self::CtrBuildContext => "ctr_build_context",
+            Self::CtrAnalyze => "ctr_analyze",
+            Self::CanBuildContext => "can_build_context",
+            Self::CanAnalyze => "can_analyze",
             Self::Unknown => "unknown",
         }
     }
@@ -161,6 +173,10 @@ impl FromStr for StepKind {
             "social_extract_article" => Ok(Self::SocialExtractArticle),
             "research_autocomplete" => Ok(Self::ResearchAutocomplete),
             "research_seed_validation" => Ok(Self::ResearchSeedValidation),
+            "ctr_build_context" => Ok(Self::CtrBuildContext),
+            "ctr_analyze" => Ok(Self::CtrAnalyze),
+            "can_build_context" => Ok(Self::CanBuildContext),
+            "can_analyze" => Ok(Self::CanAnalyze),
             _ => Err(()),
         }
     }

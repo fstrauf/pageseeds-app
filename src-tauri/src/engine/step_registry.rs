@@ -591,6 +591,78 @@ impl StepRegistry {
             })
         }));
 
+        handlers.insert(StepKind::CtrBuildContext, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::ctr_audit::exec_ctr_build_context(&task, &project_path)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
+        handlers.insert(StepKind::CtrAnalyze, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let agent_provider = ctx.agent_provider.to_string();
+            let context_json = ctx.latest_raw.unwrap_or("{}").to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::ctr_audit::exec_ctr_analyze(
+                        &task, &project_path, &agent_provider, &context_json,
+                    )
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
+        handlers.insert(StepKind::CanBuildContext, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::cannibalization_audit::exec_can_build_context(&task, &project_path)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
+        handlers.insert(StepKind::CanAnalyze, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let agent_provider = ctx.agent_provider.to_string();
+            let context_json = ctx.latest_raw.unwrap_or("{}").to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::cannibalization_audit::exec_can_analyze(
+                        &task, &project_path, &agent_provider, &context_json,
+                    )
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
         Self { handlers }
     }
 

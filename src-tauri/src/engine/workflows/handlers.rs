@@ -371,6 +371,75 @@ impl WorkflowHandler for PerformanceHandler {
     }
 }
 
+// ─── CTR Audit ────────────────────────────────────────────────────────────────
+
+pub struct CtrAuditHandler;
+
+impl WorkflowHandler for CtrAuditHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task) == "ctr_audit"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            // Step 1 (deterministic): Sync latest GSC data.
+            WorkflowStep::new("ctr_gsc_sync", StepKind::GscSyncArticles.as_ref()).optional(),
+            // Step 2 (deterministic): Collect raw article data + compute CTR scores.
+            // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
+            // and deterministic math: clicks_lost = impressions * max(0, target_ctr - actual_ctr).
+            WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext.as_ref()),
+            // Step 3 (agentic): Analyze titles, meta descriptions, FAQ schema, snippet readiness.
+            // Cannot be deterministic: assessing title quality, brand patterns, snippet suitability
+            // requires intelligence that varies per site. Hard-coding rules would silently fail
+            // on inputs they were never tested against.
+            // Input contract: structured JSON with per-article raw data + CTR metrics.
+            // Output contract: JSON with recommendations array.
+            WorkflowStep::new("ctr_analyze", StepKind::CtrAnalyze.as_ref())
+                .with_param(step_params::SKILL, "ctr-optimization"),
+            // Step 4 (normalizer): Enforce output contract.
+            WorkflowStep::new("ctr_normalize", StepKind::Normalizer.as_ref())
+                .with_param(step_params::NORMALIZER_ID, "ctr_recommendations")
+                .with_param(step_params::ARTIFACT_NAME, "ctr_recommendations"),
+        ]
+    }
+}
+
+// ─── Cannibalization Audit ────────────────────────────────────────────────────
+
+pub struct CannibalizationAuditHandler;
+
+impl WorkflowHandler for CannibalizationAuditHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task) == "cannibalization_audit"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            // Step 1 (deterministic): Sync latest GSC data.
+            WorkflowStep::new("can_gsc_sync", StepKind::GscSyncArticles.as_ref()).optional(),
+            // Step 2 (deterministic): Load articles from articles.json or live-site inventory.
+            WorkflowStep::new("can_coverage_load", StepKind::CoverageLoadArticles.as_ref()),
+            // Step 3 (deterministic): Compute TF-IDF similarity matrix + format structured context.
+            // Pure math: TF-IDF vectorization on [title, h1, target_keyword, first_200_words],
+            // cosine similarity between pairs, group by shared keyword. NO judgment about what
+            // to do with the clusters.
+            WorkflowStep::new("can_build_context", StepKind::CanBuildContext.as_ref()),
+            // Step 4 (agentic): Generate merge strategy + expansion plan.
+            // Cannot be deterministic: deciding which article to keep in a merge requires
+            // judgment about authority (impressions, internal links), content quality, and
+            // brand alignment. Cannot be reduced to a single metric.
+            // Input contract: structured JSON with similarity clusters + article metadata.
+            // Output contract: JSON with merge_recommendations, hub_recommendations, territory_recommendations.
+            WorkflowStep::new("can_analyze", StepKind::CanAnalyze.as_ref())
+                .with_param(step_params::SKILL, "cannibalization-strategy"),
+            // Step 5 (normalizer)
+            WorkflowStep::new("can_normalize", StepKind::Normalizer.as_ref())
+                .with_param(step_params::NORMALIZER_ID, "cannibalization_strategy")
+                .with_param(step_params::ARTIFACT_NAME, "cannibalization_strategy"),
+        ]
+    }
+}
+
 // ─── Social Media Marketing ───────────────────────────────────────────────────
 
 pub struct SocialHandler;
@@ -437,6 +506,8 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(SocialHandler),
         Box::new(PerformanceHandler),
         Box::new(CoverageHandler),
+        Box::new(CtrAuditHandler),
+        Box::new(CannibalizationAuditHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
     ]
