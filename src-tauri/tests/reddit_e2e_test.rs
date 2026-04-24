@@ -116,8 +116,11 @@ fn create_test_project_in_db(conn: &rusqlite::Connection, path: &str) -> String 
         content_dir: Some("content".to_string()),
         site_url: Some("https://example.com".to_string()),
         site_id: None,
+        sitemap_url: None,
+        project_mode: pageseeds_lib::models::project::ProjectMode::Workspace,
         active: true,
         agent_provider: Some("kimi".to_string()),
+        seo_provider: Some("ahrefs".to_string()),
     };
     
     task_store::create_project(conn, &project).expect("Failed to create project");

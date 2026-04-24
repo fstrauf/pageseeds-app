@@ -178,7 +178,10 @@ pub async fn execute_task_with_token(
         ).await;
 
         // Track the raw output of agentic steps for the normalizer that follows
-        if step.kind == StepKind::Agentic {
+        if step.kind == StepKind::Agentic
+            || step.kind == StepKind::CtrAnalyze
+            || step.kind == StepKind::CanAnalyze
+        {
             if let Some(ref out) = result.output {
                 let preview = crate::engine::text::char_prefix(out, 300);
                 log::info!("[executor] agentic step '{}' output ({} chars): {:?}",
@@ -240,8 +243,11 @@ pub async fn execute_task_with_token(
         // We write to SQLite but do NOT push into task.artifacts — the in-memory
         // Task struct would grow monotonically and bloat memory on every run.
         if let Some(ref out) = result.output {
+            let artifact_key = step.params.get(step_params::ARTIFACT_NAME)
+                .cloned()
+                .unwrap_or_else(|| step.name.clone());
             let artifact = TaskArtifact {
-                key: step.name.clone(),
+                key: artifact_key,
                 path: None,
                 artifact_type: Some(step.kind.to_string()),
                 source: Some(step.kind.to_string()),
@@ -417,13 +423,19 @@ pub async fn execute_task_with_token(
     }
 
     // After a successful ctr_audit, spawn fix tasks from the ctr_recommendations artifact.
+    // Reload the task so it has artifacts that were persisted during execution.
     if all_ok && task.task_type == "ctr_audit" {
-        follow_up_ids.extend(crate::engine::exec::ctr_audit::create_ctr_fix_tasks(conn, &task, &project_path));
+        if let Ok(reloaded) = task_store::get_task(conn, &task.id) {
+            follow_up_ids.extend(crate::engine::exec::ctr_audit::create_ctr_fix_tasks(conn, &reloaded, &project_path));
+        }
     }
 
     // After a successful cannibalization_audit, spawn fix tasks from the cannibalization_strategy artifact.
+    // Reload the task so it has artifacts that were persisted during execution.
     if all_ok && task.task_type == "cannibalization_audit" {
-        follow_up_ids.extend(crate::engine::exec::cannibalization_audit::create_can_fix_tasks(conn, &task, &project_path));
+        if let Ok(reloaded) = task_store::get_task(conn, &task.id) {
+            follow_up_ids.extend(crate::engine::exec::cannibalization_audit::create_can_fix_tasks(conn, &reloaded, &project_path));
+        }
     }
 
     // After a successful indexing_diagnostics, collect spawned fix task IDs from step output.

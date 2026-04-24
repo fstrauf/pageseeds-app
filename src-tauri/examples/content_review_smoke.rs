@@ -61,8 +61,11 @@ fn main() {
         content_dir: None,
         site_url: if site_url.is_empty() { None } else { Some(site_url) },
         site_id: None,
+        sitemap_url: None,
+        project_mode: pageseeds_lib::models::project::ProjectMode::Workspace,
         active: true,
         agent_provider: Some(AGENT_PROVIDER.to_string()),
+        seo_provider: Some("ahrefs".to_string()),
     };
     task_store::create_project(&conn, &project).expect("create_project failed");
     println!("✓ Project registered: {} ({})", project.name, PROJECT_PATH);

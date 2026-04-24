@@ -14,7 +14,35 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::engine::{agent, skills};
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
-use crate::models::task::{Task, TaskArtifact};
+use crate::models::task::{ExecutionMode, Task, TaskArtifact};
+
+/// Load a skill from the project repo, falling back to app-level default skills.
+fn load_skill_with_fallback(repo_root: &Path, skill_name: &str) -> Option<crate::engine::skills::Skill> {
+    // 1. Try project-level skill first
+    if let Some(skill) = skills::load_skill(repo_root, skill_name) {
+        return Some(skill);
+    }
+    // 2. Fall back to app-level default skills (for dev mode)
+    // CARGO_MANIFEST_DIR points to src-tauri/ during compilation
+    let app_skills_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".github")
+        .join("skills")
+        .join(skill_name);
+    if app_skills_dir.exists() {
+        let skill_md = app_skills_dir.join("SKILL.md");
+        if let Ok(content) = std::fs::read_to_string(&skill_md) {
+            return Some(crate::engine::skills::Skill {
+                name: skill_name.to_string(),
+                skill_dir: format!(".github/skills/{}", skill_name),
+                description: skill_name.to_string(),
+                content,
+            });
+        }
+    }
+    None
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Build Context
@@ -103,7 +131,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
             let a = &records[i];
             let b = &records[j];
             let similarity = jaccard_similarity(&a.word_set, &b.word_set);
-            if similarity > 0.3 {
+            if similarity >= 0.3 {
                 similarity_pairs.push(serde_json::json!({
                     "article_a_id": a.id,
                     "article_b_id": b.id,
@@ -162,7 +190,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         .collect();
 
     let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let output_doc = serde_json::json!({
+    let full_doc = serde_json::json!({
         "generated_at": now_iso,
         "total_articles": articles_json.len(),
         "articles": articles_json,
@@ -170,15 +198,24 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         "keyword_groups": keyword_groups_json,
     });
 
-    // Write context to automation dir for reference
+    // Write full context to automation dir for reference
     let out_path = paths.automation_dir.join("cannibalization_audit_context.json");
-    let out_str = serde_json::to_string_pretty(&output_doc).unwrap_or_default() + "\n";
-    if let Err(e) = std::fs::write(&out_path, &out_str) {
+    let full_str = serde_json::to_string_pretty(&full_doc).unwrap_or_default() + "\n";
+    if let Err(e) = std::fs::write(&out_path, &full_str) {
         log::warn!(
             "[cannibalization_audit] Failed to write cannibalization_audit_context.json: {}",
             e
         );
     }
+
+    // Return only findings as step output to keep the agentic prompt small
+    let summary_doc = serde_json::json!({
+        "generated_at": now_iso,
+        "total_articles": articles_json.len(),
+        "similarity_pairs": similarity_pairs,
+        "keyword_groups": keyword_groups_json,
+    });
+    let summary_str = serde_json::to_string_pretty(&summary_doc).unwrap_or_default() + "\n";
 
     StepResult {
         success: true,
@@ -188,7 +225,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
             similarity_pairs.len(),
             keyword_groups_json.len()
         ),
-        output: Some(out_str),
+        output: Some(summary_str),
     }
 }
 
@@ -287,22 +324,25 @@ pub(crate) fn exec_can_analyze(
 ) -> StepResult {
     let repo_root = Path::new(project_path);
 
-    let skill = match skills::load_skill(repo_root, "cannibalization-strategy") {
+    let skill = match load_skill_with_fallback(repo_root, "cannibalization-strategy") {
         Some(s) => s,
         None => {
             return StepResult {
                 success: false,
-                message: "Skill 'cannibalization-strategy' not found in .github/skills/".to_string(),
+                message: "Skill 'cannibalization-strategy' not found in .github/skills/ or app defaults".to_string(),
                 output: None,
             };
         }
     };
 
-    let prompt = format!(
-        "{skill_content}\n\n---\n\n## Cannibalization Audit Context\n\n{context}\n\nPlease analyze the above context and provide a cannibalization resolution strategy.",
-        skill_content = skill.content,
-        context = context_json,
-    );
+    // Use string concatenation to avoid format! panics if skill content contains { or }
+    let prompt = skill.content
+        + "\n\n---\n\n## Cannibalization Audit Context\n\n"
+        + context_json
+        + "\n\nPlease analyze the above context and provide a cannibalization resolution strategy."
+        + "\n\nCRITICAL: Return ONLY a single JSON object matching the Output Contract above."
+        + " Do not include markdown prose, summaries, tables, or explanations outside the JSON."
+        + " Do not write files. Output the JSON directly in your response.";
 
     match agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(output) => StepResult {
@@ -363,9 +403,9 @@ pub(crate) fn create_can_fix_tasks(
     };
 
     let fix_task_types = [
-        ("fix_content_merge", format!("can_fix:merge:{}", parent_task.project_id)),
-        ("fix_hub_page", format!("can_fix:hub:{}", parent_task.project_id)),
-        ("research_territory", format!("can_fix:territory:{}", parent_task.project_id)),
+        ("fix_content_merge", format!("can_fix:merge:{}:{}", parent_task.project_id, parent_task.id)),
+        ("fix_hub_page", format!("can_fix:hub:{}:{}", parent_task.project_id, parent_task.id)),
+        ("research_territory", format!("can_fix:territory:{}:{}", parent_task.project_id, parent_task.id)),
     ];
 
     let mut created_ids = Vec::new();
@@ -380,6 +420,7 @@ pub(crate) fn create_can_fix_tasks(
                 task_type, parent_task.id
             )),
             priority: crate::models::task::Priority::Medium,
+            execution_mode: Some(ExecutionMode::Automatic),
             agent_policy: crate::models::task::AgentPolicy::Optional,
             depends_on: vec![parent_task.id.clone()],
             artifacts: vec![artifact.clone()],
@@ -405,4 +446,157 @@ pub(crate) fn create_can_fix_tasks(
     }
 
     created_ids
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn test_dir() -> String {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir()
+            .join(format!("can_audit_test_{}_{}", std::process::id(), n))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn setup_project(path: &str) {
+        let _ = std::fs::remove_dir_all(path);
+        let auto_dir = Path::new(path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let content_dir = Path::new(path).join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        let articles = serde_json::json!({
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "best-stocks-csp",
+                    "title": "Best Stocks for Cash-Secured Puts",
+                    "target_keyword": "cash secured puts",
+                    "file": "content/001_best_stocks_csp.mdx",
+                    "gsc": { "impressions": 45000.0, "clicks": 120.0, "ctr": 0.0027 }
+                },
+                {
+                    "id": 2,
+                    "url_slug": "csp-strategy-explained",
+                    "title": "Cash-Secured Puts Strategy Explained",
+                    "target_keyword": "cash secured puts",
+                    "file": "content/002_csp_strategy.mdx",
+                    "gsc": { "impressions": 1200.0, "clicks": 5.0, "ctr": 0.0042 }
+                },
+                {
+                    "id": 3,
+                    "url_slug": "covered-calls-guide",
+                    "title": "Covered Calls Complete Guide",
+                    "target_keyword": "covered calls",
+                    "file": "content/003_covered_calls.mdx",
+                    "gsc": { "impressions": 8000.0, "clicks": 30.0, "ctr": 0.0038 }
+                }
+            ]
+        });
+        std::fs::write(auto_dir.join("articles.json"), serde_json::to_string_pretty(&articles).unwrap()).unwrap();
+
+        let mdx1 = r#"---
+title: "Best Stocks for Cash-Secured Puts"
+date: "2024-01-01"
+---
+
+# Best Stocks for Cash-Secured Puts
+
+This article covers the best stocks for cash secured puts strategy in 2024.
+
+## Criteria
+
+We look for stable blue chip stocks with weekly options.
+"#;
+        std::fs::write(content_dir.join("001_best_stocks_csp.mdx"), mdx1).unwrap();
+
+        let mdx2 = r#"---
+title: "Cash-Secured Puts Strategy Explained"
+date: "2024-01-02"
+---
+
+# Cash-Secured Puts Strategy Explained
+
+This article covers the cash secured puts strategy for beginners looking for the best stocks.
+
+## How It Works
+
+You sell put options while holding cash to buy the stock if assigned.
+"#;
+        std::fs::write(content_dir.join("002_csp_strategy.mdx"), mdx2).unwrap();
+
+        let mdx3 = r#"---
+title: "Covered Calls Complete Guide"
+date: "2024-01-03"
+---
+
+# Covered Calls Complete Guide
+
+This guide covers covered calls strategy for income generation.
+
+## Basics
+
+You sell call options against stock you already own.
+"#;
+        std::fs::write(content_dir.join("003_covered_calls.mdx"), mdx3).unwrap();
+    }
+
+    fn cleanup(path: &str) {
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn test_jaccard_similarity() {
+        let a: HashSet<String> = ["apple".to_string(), "banana".to_string(), "cherry".to_string()].into_iter().collect();
+        let b: HashSet<String> = ["apple".to_string(), "banana".to_string(), "date".to_string()].into_iter().collect();
+        let sim = jaccard_similarity(&a, &b);
+        assert!((sim - 0.5).abs() < 0.01, "Expected ~0.5, got {}", sim);
+    }
+
+    #[test]
+    fn test_exec_can_build_context() {
+        let path = test_dir();
+        setup_project(&path);
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "cannibalization_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test Cannibalization Audit".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_can_build_context(&task, &path);
+        assert!(result.success, "build_context failed: {}", result.message);
+
+        let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(output["total_articles"].as_i64().unwrap(), 3);
+
+        let groups = output["keyword_groups"].as_object().unwrap();
+        let csp_group = groups.get("cash secured puts");
+        assert!(csp_group.is_some(), "Should find 'cash secured puts' keyword group");
+        assert_eq!(csp_group.unwrap().as_array().unwrap().len(), 2);
+
+        let pairs = output["similarity_pairs"].as_array().unwrap();
+        assert!(!pairs.is_empty(), "Should find at least one similarity pair");
+        cleanup(&path);
+    }
 }

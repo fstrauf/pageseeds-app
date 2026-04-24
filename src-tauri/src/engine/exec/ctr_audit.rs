@@ -13,7 +13,35 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::engine::{agent, skills};
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
-use crate::models::task::{Task, TaskArtifact};
+use crate::models::task::{ExecutionMode, Task, TaskArtifact};
+
+/// Load a skill from the project repo, falling back to app-level default skills.
+fn load_skill_with_fallback(repo_root: &Path, skill_name: &str) -> Option<crate::engine::skills::Skill> {
+    // 1. Try project-level skill first
+    if let Some(skill) = skills::load_skill(repo_root, skill_name) {
+        return Some(skill);
+    }
+    // 2. Fall back to app-level default skills (for dev mode)
+    // CARGO_MANIFEST_DIR points to src-tauri/ during compilation
+    let app_skills_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".github")
+        .join("skills")
+        .join(skill_name);
+    if app_skills_dir.exists() {
+        let skill_md = app_skills_dir.join("SKILL.md");
+        if let Ok(content) = std::fs::read_to_string(&skill_md) {
+            return Some(crate::engine::skills::Skill {
+                name: skill_name.to_string(),
+                skill_dir: format!(".github/skills/{}", skill_name),
+                description: skill_name.to_string(),
+                content,
+            });
+        }
+    }
+    None
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Build Context
@@ -51,6 +79,7 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
     let articles = doc["articles"].as_array().unwrap_or(&empty);
 
     let mut article_records: Vec<serde_json::Value> = Vec::new();
+    let mut skipped_healthy = 0usize;
 
     for article in articles.iter() {
         let id = article["id"].as_i64().unwrap_or(0);
@@ -65,17 +94,35 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
         let ctr = gsc["ctr"].as_f64().unwrap_or(0.0);
         let avg_position = gsc["avg_position"].as_f64().unwrap_or(0.0);
 
-        // Extract meta_description, first_paragraph, h1 from source file
-        let (meta_description, first_paragraph, h1) =
+        // Extract current title, meta_description, first_paragraph, h1, faq_schema from source file
+        let (current_title, meta_description, first_paragraph, h1, has_faq_schema) =
             read_article_excerpt(project_path, &file_ref);
 
         // Compute clicks_lost: impressions * max(0, 0.005 - actual_ctr)
         let clicks_lost = impressions * (0.005_f64 - ctr).max(0.0);
 
+        // Lightweight health check: skip articles that already look fixed.
+        // Uses CURRENT MDX state, not stale articles.json data.
+        let meta_ok = !meta_description.is_empty() && meta_description.len() >= 50;
+        let title_ok = current_title.len() <= 60;
+        let first_para_word_count = first_paragraph.split_whitespace().count();
+        let first_para_lower = first_paragraph.to_lowercase();
+        let keyword_lower = target_keyword.to_lowercase();
+        let has_keyword_or_question = keyword_lower.is_empty()
+            || first_para_lower.contains(&keyword_lower)
+            || first_paragraph.contains('?');
+        let snippet_ok = first_para_word_count >= 30 && has_keyword_or_question;
+        let faq_ok = has_faq_schema;
+
+        if meta_ok && title_ok && snippet_ok && faq_ok {
+            skipped_healthy += 1;
+            continue;
+        }
+
         article_records.push(serde_json::json!({
             "id": id,
             "url_slug": url_slug,
-            "title": title,
+            "title": current_title,
             "target_keyword": target_keyword,
             "meta_description": meta_description,
             "first_paragraph": first_paragraph,
@@ -88,7 +135,20 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
                 "avg_position": avg_position,
             },
             "clicks_lost": clicks_lost,
+            "issues_detected": {
+                "title_too_long": !title_ok,
+                "meta_too_short": !meta_ok,
+                "snippet_suboptimal": !snippet_ok,
+                "missing_faq_schema": !faq_ok,
+            },
         }));
+    }
+
+    if skipped_healthy > 0 {
+        log::info!(
+            "[ctr_audit] Skipped {} articles that already look healthy (good title/meta/snippet/faq)",
+            skipped_healthy
+        );
     }
 
     // Sort by clicks_lost descending
@@ -101,19 +161,27 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
     let top_20: Vec<&serde_json::Value> = article_records.iter().take(20).collect();
 
     let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let output_doc = serde_json::json!({
+    let full_doc = serde_json::json!({
         "generated_at": now_iso,
         "total_articles": article_records.len(),
         "articles": article_records,
         "top_20_by_clicks_lost": top_20,
     });
 
-    // Write context to automation dir for reference
+    // Write full context to automation dir for reference
     let out_path = paths.automation_dir.join("ctr_audit_context.json");
-    let out_str = serde_json::to_string_pretty(&output_doc).unwrap_or_default() + "\n";
-    if let Err(e) = std::fs::write(&out_path, &out_str) {
+    let full_str = serde_json::to_string_pretty(&full_doc).unwrap_or_default() + "\n";
+    if let Err(e) = std::fs::write(&out_path, &full_str) {
         log::warn!("[ctr_audit] Failed to write ctr_audit_context.json: {}", e);
     }
+
+    // Return only the top 20 as step output to keep the agentic prompt small
+    let summary_doc = serde_json::json!({
+        "generated_at": now_iso,
+        "total_articles": article_records.len(),
+        "top_20_by_clicks_lost": top_20,
+    });
+    let summary_str = serde_json::to_string_pretty(&summary_doc).unwrap_or_default() + "\n";
 
     StepResult {
         success: true,
@@ -121,14 +189,14 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
             "CTR context built for {} articles",
             article_records.len()
         ),
-        output: Some(out_str),
+        output: Some(summary_str),
     }
 }
 
-/// Read an MDX file and extract (meta_description, first_paragraph, h1).
-fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, String) {
+/// Read an MDX file and extract (title, meta_description, first_paragraph, h1, has_faq_schema).
+fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, String, String, bool) {
     if file_ref.is_empty() {
-        return (String::new(), String::new(), String::new());
+        return (String::new(), String::new(), String::new(), String::new(), false);
     }
 
     let repo_root = Path::new(project_path);
@@ -143,7 +211,7 @@ fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, 
         Ok(s) => s,
         Err(e) => {
             log::warn!("[ctr_audit] Could not read {}: {}", full.display(), e);
-            return (String::new(), String::new(), String::new());
+            return (String::new(), String::new(), String::new(), String::new(), false);
         }
     };
 
@@ -152,6 +220,21 @@ fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, 
         Some((fm, b)) => (fm, b),
         None => ("", content.as_str()),
     };
+
+    // Extract title from frontmatter
+    let title = frontmatter_str
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("title:") {
+                let val = rest.trim().trim_matches('"').trim_matches('\'');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+            None
+        })
+        .unwrap_or_default();
 
     // Extract meta_description from frontmatter
     let meta_description = frontmatter_str
@@ -186,7 +269,33 @@ fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, 
         .unwrap_or("")
         .to_string();
 
-    (meta_description, first_paragraph, h1)
+    let has_faq = has_faq_schema(&content);
+
+    (title, meta_description, first_paragraph, h1, has_faq)
+}
+
+/// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage or markdown FAQ section).
+fn has_faq_schema(content: &str) -> bool {
+    // 1. Check for JSON-LD FAQPage schema
+    let content_lower = content.to_lowercase();
+    if content_lower.contains("faqpage")
+        || content_lower.contains("\"@type\": \"question\"")
+        || content_lower.contains("'@type': 'question'")
+        || content_lower.contains("\"@type\":\"question\"")
+    {
+        return true;
+    }
+
+    // 2. Check for markdown FAQ headings
+    content.lines().any(|line| {
+        let trimmed = line.trim().to_lowercase();
+        trimmed.starts_with("# faq")
+            || trimmed.starts_with("## faq")
+            || trimmed.starts_with("### faq")
+            || trimmed.starts_with("# frequently asked questions")
+            || trimmed.starts_with("## frequently asked questions")
+            || trimmed.starts_with("### frequently asked questions")
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -203,24 +312,45 @@ pub(crate) fn exec_ctr_analyze(
     agent_provider: &str,
     context_json: &str,
 ) -> StepResult {
+    // Quick check: if the context contains zero articles with issues, skip the agent call.
+    let context_doc: serde_json::Value = match serde_json::from_str(context_json) {
+        Ok(v) => v,
+        Err(_) => {
+            // If we can't parse the context, still try the agent — it might handle raw text.
+            serde_json::Value::Null
+        }
+    };
+    let total_articles = context_doc["total_articles"].as_i64().unwrap_or(-1);
+    if total_articles == 0 {
+        log::info!("[ctr_audit] No articles with CTR issues detected. Skipping agent analysis.");
+        return StepResult {
+            success: true,
+            message: "All articles look healthy — no CTR issues detected.".to_string(),
+            output: Some("{\"recommendations\":[],\"summary\":\"All clear – every article passes the current health checks.\"}".to_string()),
+        };
+    }
+
     let repo_root = Path::new(project_path);
 
-    let skill = match skills::load_skill(repo_root, "ctr-optimization") {
+    let skill = match load_skill_with_fallback(repo_root, "ctr-optimization") {
         Some(s) => s,
         None => {
             return StepResult {
                 success: false,
-                message: "Skill 'ctr-optimization' not found in .github/skills/".to_string(),
+                message: "Skill 'ctr-optimization' not found in .github/skills/ or app defaults".to_string(),
                 output: None,
             };
         }
     };
 
-    let prompt = format!(
-        "{skill_content}\n\n---\n\n## CTR Audit Context\n\n{context}\n\nPlease analyze the above context and provide actionable CTR optimization recommendations.",
-        skill_content = skill.content,
-        context = context_json,
-    );
+    // Use string concatenation to avoid format! panics if skill content contains { or }
+    let prompt = skill.content
+        + "\n\n---\n\n## CTR Audit Context\n\n"
+        + context_json
+        + "\n\nPlease analyze the above context and provide actionable CTR optimization recommendations."
+        + "\n\nCRITICAL: Return ONLY a single JSON object matching the Output Contract above."
+        + " Do not include markdown prose, summaries, tables, or explanations outside the JSON."
+        + " Do not write files. Output the JSON directly in your response.";
 
     match agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(output) => StepResult {
@@ -281,9 +411,9 @@ pub(crate) fn create_ctr_fix_tasks(
     };
 
     let fix_task_types = [
-        ("fix_title_meta", format!("ctr_fix:title_meta:{}", parent_task.project_id)),
-        ("fix_faq_schema", format!("ctr_fix:faq:{}", parent_task.project_id)),
-        ("fix_snippet_bait", format!("ctr_fix:snippet:{}", parent_task.project_id)),
+        ("fix_title_meta", format!("ctr_fix:title_meta:{}:{}", parent_task.project_id, parent_task.id)),
+        ("fix_faq_schema", format!("ctr_fix:faq:{}:{}", parent_task.project_id, parent_task.id)),
+        ("fix_snippet_bait", format!("ctr_fix:snippet:{}:{}", parent_task.project_id, parent_task.id)),
     ];
 
     let mut created_ids = Vec::new();
@@ -298,6 +428,7 @@ pub(crate) fn create_ctr_fix_tasks(
                 task_type, parent_task.id
             )),
             priority: crate::models::task::Priority::Medium,
+            execution_mode: Some(ExecutionMode::Automatic),
             agent_policy: crate::models::task::AgentPolicy::Optional,
             depends_on: vec![parent_task.id.clone()],
             artifacts: vec![artifact.clone()],
@@ -317,4 +448,325 @@ pub(crate) fn create_ctr_fix_tasks(
     }
 
     created_ids
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn test_dir() -> String {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir()
+            .join(format!("ctr_audit_test_{}_{}", std::process::id(), n))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn setup_project(path: &str) {
+        let _ = std::fs::remove_dir_all(path);
+        let auto_dir = Path::new(path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let content_dir = Path::new(path).join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        let articles = serde_json::json!({
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "test-article",
+                    "title": "Test Article | Brand | Brand -- Tagline",
+                    "target_keyword": "test article",
+                    "file": "content/001_test_article.mdx",
+                    "gsc": { "impressions": 10000.0, "clicks": 10.0, "ctr": 0.001, "avg_position": 8.5 }
+                },
+                {
+                    "id": 2,
+                    "url_slug": "another-article",
+                    "title": "Another Article",
+                    "target_keyword": "another article",
+                    "file": "content/002_another_article.mdx",
+                    "gsc": { "impressions": 5000.0, "clicks": 5.0, "ctr": 0.001, "avg_position": 12.0 }
+                }
+            ]
+        });
+        std::fs::write(auto_dir.join("articles.json"), serde_json::to_string_pretty(&articles).unwrap()).unwrap();
+
+        let mdx1 = r#"---
+title: "Test Article | Brand | Brand -- Tagline"
+description: "A short desc"
+date: "2024-01-01"
+---
+
+# Test Article | Brand | Brand -- Tagline
+
+This is the first paragraph of the test article. It contains some content.
+
+## Section 1
+
+More content here.
+"#;
+        std::fs::write(content_dir.join("001_test_article.mdx"), mdx1).unwrap();
+
+        let mdx2 = r#"---
+title: "Another Article"
+description: ""
+date: "2024-01-02"
+---
+
+# Another Article
+
+This is another article with different content.
+"#;
+        std::fs::write(content_dir.join("002_another_article.mdx"), mdx2).unwrap();
+    }
+
+    fn cleanup(path: &str) {
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn test_read_article_excerpt() {
+        let path = test_dir();
+        setup_project(&path);
+        let (title, meta, first, h1, has_faq) = read_article_excerpt(&path, "content/001_test_article.mdx");
+        assert_eq!(title, "Test Article | Brand | Brand -- Tagline");
+        assert_eq!(meta, "A short desc");
+        assert_eq!(h1, "Test Article | Brand | Brand -- Tagline");
+        assert!(first.contains("This is the first paragraph"));
+        assert!(!has_faq, "Should not detect FAQ schema in this article");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_exec_ctr_build_context() {
+        let path = test_dir();
+        setup_project(&path);
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "ctr_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test CTR Audit".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_build_context(&task, &path);
+        assert!(result.success, "build_context failed: {}", result.message);
+
+        let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(output["total_articles"].as_i64().unwrap(), 2);
+
+        let articles = output["top_20_by_clicks_lost"].as_array().unwrap();
+        let first = &articles[0];
+        assert!(first["clicks_lost"].as_f64().unwrap() > 0.0);
+        assert_eq!(first["title"].as_str().unwrap(), "Test Article | Brand | Brand -- Tagline");
+        assert_eq!(first["meta_description"].as_str().unwrap(), "A short desc");
+        assert!(!first["first_paragraph"].as_str().unwrap().is_empty());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_clicks_lost_computation() {
+        let path = test_dir();
+        setup_project(&path);
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "ctr_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_build_context(&task, &path);
+        let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        let articles = output["top_20_by_clicks_lost"].as_array().unwrap();
+
+        let a1 = articles.iter().find(|a| a["id"].as_i64().unwrap() == 1).unwrap();
+        let cl1 = a1["clicks_lost"].as_f64().unwrap();
+        assert!((cl1 - 40.0).abs() < 0.1, "Expected ~40 clicks_lost, got {}", cl1);
+
+        let a2 = articles.iter().find(|a| a["id"].as_i64().unwrap() == 2).unwrap();
+        let cl2 = a2["clicks_lost"].as_f64().unwrap();
+        assert!((cl2 - 20.0).abs() < 0.1, "Expected ~20 clicks_lost, got {}", cl2);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_faq_schema_detection() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let content_dir = Path::new(&path).join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        // MDX with JSON-LD FAQPage schema
+        let mdx_with_faq = r#"---
+title: "FAQ Article"
+description: "An article with FAQ"
+date: "2024-01-01"
+---
+
+# FAQ Article
+
+Some content here.
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is this?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "This is a test."
+      }
+    }
+  ]
+}
+</script>
+"#;
+        std::fs::write(content_dir.join("with_faq.mdx"), mdx_with_faq).unwrap();
+
+        let (title, meta, first, h1, has_faq) = read_article_excerpt(&path, "content/with_faq.mdx");
+        assert_eq!(title, "FAQ Article");
+        assert!(has_faq, "Should detect JSON-LD FAQPage schema");
+
+        // MDX with markdown FAQ heading but no schema
+        let mdx_no_faq = r#"---
+title: "No FAQ Article"
+description: "An article without FAQ"
+date: "2024-01-01"
+---
+
+# No FAQ Article
+
+Some content here.
+"#;
+        std::fs::write(content_dir.join("no_faq.mdx"), mdx_no_faq).unwrap();
+
+        let (_, _, _, _, has_faq2) = read_article_excerpt(&path, "content/no_faq.mdx");
+        assert!(!has_faq2, "Should not detect FAQ schema when absent");
+
+        // MDX with markdown FAQ heading
+        let mdx_md_faq = r#"---
+title: "Markdown FAQ"
+description: "An article with markdown FAQ"
+date: "2024-01-01"
+---
+
+# Markdown FAQ
+
+## FAQ
+
+Q: What?\nA: This.
+"#;
+        std::fs::write(content_dir.join("md_faq.mdx"), mdx_md_faq).unwrap();
+
+        let (_, _, _, _, has_faq3) = read_article_excerpt(&path, "content/md_faq.mdx");
+        assert!(has_faq3, "Should detect markdown FAQ heading");
+
+        cleanup(&path);
+    }
+
+    /// When all articles already have good titles, meta, snippets, and FAQ schema,
+    /// the audit should return 0 articles and the analyze step should skip the agent.
+    #[test]
+    fn test_all_healthy_skips_agent() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let content_dir = Path::new(&path).join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        let articles = serde_json::json!({
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "healthy-article",
+                    "title": "Healthy Article",
+                    "target_keyword": "healthy article",
+                    "file": "content/001_healthy.mdx",
+                    "gsc": { "impressions": 10000.0, "clicks": 10.0, "ctr": 0.001, "avg_position": 8.5 }
+                }
+            ]
+        });
+        std::fs::write(auto_dir.join("articles.json"), serde_json::to_string_pretty(&articles).unwrap()).unwrap();
+
+        // Good title (<=60), good meta (>=50 chars), good snippet (>=30 words + contains keyword), has FAQ schema
+        let mdx = r#"---
+title: "Healthy Article"
+description: "This is a very good meta description that is definitely longer than fifty characters for sure."
+date: "2024-01-01"
+---
+
+# Healthy Article
+
+One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty healthy article.
+
+## FAQ
+
+**Q: What is this?**\nA: A test article.
+"#;
+        std::fs::write(content_dir.join("001_healthy.mdx"), mdx).unwrap();
+
+        let task = Task {
+            id: "task-healthy".to_string(),
+            project_id: "proj-healthy".to_string(),
+            task_type: "ctr_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Healthy Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        // Build context should find 0 articles with issues
+        let result = exec_ctr_build_context(&task, &path);
+        assert!(result.success);
+        let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(output["total_articles"].as_i64().unwrap(), 0, "Expected 0 articles with issues");
+
+        // Analyze step should skip the agent and return "all clear"
+        let context_json = result.output.unwrap();
+        let analyze_result = exec_ctr_analyze(&task, &path, "kimi", &context_json);
+        assert!(analyze_result.success);
+        assert!(analyze_result.message.contains("All articles look healthy"), "Expected early-exit message, got: {}", analyze_result.message);
+
+        cleanup(&path);
+    }
 }

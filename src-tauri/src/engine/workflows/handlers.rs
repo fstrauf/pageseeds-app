@@ -680,6 +680,18 @@ pub async fn exec_agentic(
         ) + &artifact_context
     };
 
+    // Include embedded task artifacts so follow-up fix tasks receive parent context
+    // (e.g. ctr_recommendations, cannibalization_strategy attached by create_*_fix_tasks).
+    let task_artifacts: Vec<String> = task.artifacts.iter().filter_map(|a| {
+        a.content.as_ref().map(|c| {
+            format!("\n\n## Artifact: {}\n\n```\n{}\n```", a.key, c)
+        })
+    }).collect();
+    if !task_artifacts.is_empty() {
+        prompt.push_str("\n\n## Task Artifacts\n");
+        prompt.push_str(&task_artifacts.join("\n"));
+    }
+
             if is_content_task {
                 // Pre-compute the next safe publish date and inject it into the prompt.
                 // Without this, the agent defaults to today's date which conflicts with

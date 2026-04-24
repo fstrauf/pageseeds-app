@@ -164,11 +164,20 @@ pub fn log(
     message: &str,
     metadata: Option<serde_json::Value>,
 ) {
+    let source = if component.starts_with("frontend") {
+        LogSource::Frontend
+    } else if component.starts_with("agent") {
+        LogSource::Agent
+    } else if component.starts_with("system") {
+        LogSource::System
+    } else {
+        LogSource::Backend
+    };
     let entry = LogEntry {
         id: None,
         timestamp: Utc::now().to_rfc3339(),
         level,
-        source: LogSource::Backend,
+        source,
         component: component.to_string(),
         message: message.to_string(),
         metadata,
