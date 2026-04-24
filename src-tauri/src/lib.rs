@@ -158,6 +158,7 @@ pub fn run() {
             commands::get_content_health,
             commands::fix_date_mismatches,
             commands::ingest_orphan_articles,
+            commands::clean_stale_articles,
             commands::get_keyword_coverage,
             commands::preflight_publish_articles,
             commands::apply_publish_articles,

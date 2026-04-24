@@ -343,6 +343,73 @@ pub fn sync_and_validate(
     })
 }
 
+/// Clean stale entries from articles.json — remove articles whose files no longer exist.
+/// The source of truth is the filesystem. Returns the list of removed article titles.
+pub fn clean_stale_articles_json(
+    automation_dir: &Path,
+    repo_root: &Path,
+) -> std::result::Result<Vec<String>, String> {
+    let articles_path = automation_dir.join("articles.json");
+    let json_str = std::fs::read_to_string(&articles_path)
+        .map_err(|e| format!("articles.json not found at {}: {}", articles_path.display(), e))?;
+    let mut doc: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse articles.json: {}", e))?;
+
+    let articles = doc
+        .get_mut("articles")
+        .and_then(|v| v.as_array_mut())
+        .ok_or_else(|| "articles.json must contain an 'articles' array".to_string())?;
+
+    let content_dir = resolve_content_dir(automation_dir, repo_root)?;
+
+    // Collect all content files: filename → absolute path
+    let content_files: std::collections::HashSet<String> =
+        crate::content::locator::collect_markdown_files(&content_dir)
+            .into_iter()
+            .filter_map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.to_string())
+            })
+            .collect();
+
+    let mut removed = Vec::new();
+    articles.retain(|article| {
+        let file_ref = article
+            .get("file")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let basename = std::path::Path::new(file_ref)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        if basename.is_empty() {
+            return true; // Keep malformed entries — they'll be flagged elsewhere
+        }
+
+        if content_files.contains(basename) {
+            true // File exists — keep
+        } else {
+            let title = article
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(untitled)");
+            removed.push(format!("{} ({})", title, file_ref));
+            false // File missing — remove
+        }
+    });
+
+    if !removed.is_empty() {
+        let out = serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n";
+        std::fs::write(&articles_path, out)
+            .map_err(|e| format!("Failed to write cleaned articles.json: {}", e))?;
+    }
+
+    Ok(removed)
+}
+
 /// Resolve the content directory via the centralised `setup_check` module.
 ///
 /// Priority:

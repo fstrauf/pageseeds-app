@@ -680,6 +680,10 @@ export const fixDateMismatches = (projectId: string): Promise<ContentHealthResul
 export const ingestOrphanArticles = (projectId: string): Promise<IngestOrphanResult> =>
   invoke('ingest_orphan_articles', { projectId })
 
+/** Remove articles.json entries whose files no longer exist on disk. Returns list of removed titles. */
+export const cleanStaleArticles = (projectId: string): Promise<string[]> =>
+  invoke('clean_stale_articles', { projectId })
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Social Media Marketing
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -61,6 +61,25 @@ pub(crate) fn exec_ctr_build_context(
     let paths = ProjectPaths::from_path(project_path);
     let articles_path = paths.automation_dir.join("articles.json");
 
+    // ── Step 0: Clean stale entries from articles.json ───────────────────────
+    // The filesystem is the source of truth. Remove entries whose files no longer exist.
+    let mut cleaned_summary = Vec::new();
+    match crate::content::ops::clean_stale_articles_json(&paths.automation_dir, Path::new(project_path)) {
+        Ok(removed) => {
+            if !removed.is_empty() {
+                log::info!(
+                    "[ctr_audit] Removed {} stale entries from articles.json: {:?}",
+                    removed.len(),
+                    removed
+                );
+                cleaned_summary = removed;
+            }
+        }
+        Err(e) => {
+            log::warn!("[ctr_audit] Failed to clean stale articles.json entries: {}", e);
+        }
+    }
+
     let raw = match std::fs::read_to_string(&articles_path) {
         Ok(s) => s,
         Err(e) => {
@@ -218,16 +237,28 @@ pub(crate) fn exec_ctr_build_context(
         "generated_at": now_iso,
         "total_articles": article_records.len(),
         "top_20_by_clicks_lost": top_20,
+        "cleaned_stale_entries": cleaned_summary.len(),
+        "cleaned_files": cleaned_summary,
     });
     let summary_str = serde_json::to_string_pretty(&summary_doc).unwrap_or_default() + "\n";
+
+    let clean_msg = if cleaned_summary.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " — removed {} stale entries from articles.json",
+            cleaned_summary.len()
+        )
+    };
 
     StepResult {
         success: true,
         message: format!(
-            "CTR context built for {} articles ({} healthy, {} unchanged)",
+            "CTR context built for {} articles ({} healthy, {} unchanged){}",
             article_records.len(),
             skipped_healthy,
-            skipped_unchanged
+            skipped_unchanged,
+            clean_msg
         ),
         output: Some(summary_str),
     }

@@ -301,6 +301,19 @@ pub async fn compare_competitor_content(
 }
 
 #[tauri::command]
+pub fn clean_stale_articles(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<String>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::Path::new(&project.path);
+    let automation_dir = repo_root.join(".github").join("automation");
+    crate::content::ops::clean_stale_articles_json(&automation_dir, repo_root)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn analyze_keyword_density(
     state: State<'_, AppState>,
     project_id: String,
