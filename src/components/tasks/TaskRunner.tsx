@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X } from 'lucide-react'
+import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X, AlertTriangle } from 'lucide-react'
 import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -272,6 +272,27 @@ function ItemRow({ item, expanded, onToggle, onRunNow, onRemove, onOpenTask }: I
       ? new Date(result.finished_at).getTime() - new Date(result.started_at).getTime()
       : undefined
 
+  // Detect missing files from ctr_build_context step output
+  const missingFileInfo = useMemo(() => {
+    const buildStep = result?.steps?.find((s: StepProgress) => s.step_name === 'ctr_build_context')
+    if (!buildStep?.output) return null
+    try {
+      const parsed = JSON.parse(buildStep.output)
+      const cleaned = parsed.cleaned_stale_entries ?? 0
+      const files: string[] = parsed.cleaned_files ?? []
+      if (cleaned > 0) return { count: cleaned, files }
+      // Also check if any article has file_not_found issue
+      const articles = parsed.top_20_by_clicks_lost ?? parsed.articles ?? []
+      const missing = articles.filter((a: Record<string, unknown>) => (a.issues_detected as Record<string, boolean> | undefined)?.file_not_found)
+      if (missing.length > 0) return { count: missing.length, files: missing.map((a: Record<string, unknown>) => a.file as string) }
+      return null
+    } catch {
+      return null
+    }
+  }, [result])
+
+  const hasMissingFiles = !!missingFileInfo
+
   return (
     <div
       className={cn(
@@ -300,7 +321,15 @@ function ItemRow({ item, expanded, onToggle, onRunNow, onRemove, onOpenTask }: I
 
         {/* Task info */}
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-foreground truncate">{task.title}</div>
+          <div className="flex items-center gap-2">
+            <div className="font-medium text-foreground truncate">{task.title}</div>
+            {hasMissingFiles && (
+              <Badge variant="outline" className="text-[10px] h-4 px-1 border-amber-300 text-amber-700 bg-amber-50 shrink-0">
+                <AlertTriangle size={10} className="mr-0.5" />
+                {missingFileInfo.count} missing
+              </Badge>
+            )}
+          </div>
           <div className="text-xs text-muted-foreground font-mono mt-0.5">{task.type}</div>
         </div>
 
@@ -337,6 +366,21 @@ function ItemRow({ item, expanded, onToggle, onRunNow, onRemove, onOpenTask }: I
           {error && (
             <div className="text-xs text-red-600 font-mono bg-red-50 dark:bg-red-950/30 rounded px-2 py-1.5">
               {error}
+            </div>
+          )}
+
+          {/* Missing files warning */}
+          {hasMissingFiles && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 mb-2">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+                <AlertTriangle size={12} />
+                {missingFileInfo.count} file{missingFileInfo.count !== 1 ? 's' : ''} referenced in articles.json not found on disk
+              </div>
+              <div className="mt-1 text-[10px] text-amber-700 font-mono space-y-0.5 max-h-24 overflow-y-auto">
+                {missingFileInfo.files.map((f: string, i: number) => (
+                  <div key={i} className="truncate">{f}</div>
+                ))}
+              </div>
             </div>
           )}
 
