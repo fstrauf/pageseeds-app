@@ -26,6 +26,8 @@ const DEFAULT_TASK_TYPES = [
   'reddit_opportunity_search',
   'write_article',
   'content_cleanup',
+  'ctr_audit',
+  'cannibalization_audit',
 ]
 
 function RuleRow({

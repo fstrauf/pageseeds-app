@@ -28,6 +28,8 @@ const TASK_TYPES = [
   'fix_indexing',
   'fix_redirects',
   'implementation',
+  'ctr_audit',
+  'cannibalization_audit',
 ]
 
 const KEYWORD_RESEARCH_TYPES = new Set(['research_keywords', 'custom_keyword_research', 'research_landing_pages'])

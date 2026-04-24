@@ -99,6 +99,24 @@ const QUICK_ACTIONS: ActionDef[] = [
     nextView: 'tasks',
     nextLabel: 'View coverage results',
   },
+  {
+    task_type: 'ctr_audit',
+    label: 'CTR Audit',
+    description: 'Analyze titles, meta descriptions, and snippet readiness to fix low CTR',
+    icon: <BarChart2 size={16} />,
+    phase: 'investigation',
+    nextView: 'tasks',
+    nextLabel: 'See CTR fix tasks',
+  },
+  {
+    task_type: 'cannibalization_audit',
+    label: 'Cannibalization Audit',
+    description: 'Detect overlapping content, find merge candidates, and identify hub gaps',
+    icon: <Target size={16} />,
+    phase: 'investigation',
+    nextView: 'tasks',
+    nextLabel: 'See merge & hub tasks',
+  },
 ]
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
