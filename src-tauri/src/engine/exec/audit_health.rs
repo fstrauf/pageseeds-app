@@ -12,6 +12,7 @@ pub struct ArticleHealth {
     pub meta_ok: bool,
     pub snippet_ok: bool,
     pub faq_ok: bool,
+    pub file_found: bool,
     /// List of issue keys for checks that FAILED.
     pub issues: Vec<String>,
     /// Number of words in the first paragraph.
@@ -23,7 +24,7 @@ pub struct ArticleHealth {
 impl ArticleHealth {
     /// True if ALL checks pass (article is healthy).
     pub fn all_ok(&self) -> bool {
-        self.title_ok && self.meta_ok && self.snippet_ok && self.faq_ok
+        self.file_found && self.title_ok && self.meta_ok && self.snippet_ok && self.faq_ok
     }
 
     /// Human-readable summary of which checks failed.
@@ -39,6 +40,7 @@ impl ArticleHealth {
 ///
 /// | Check            | Pass condition                                   |
 /// |------------------|--------------------------------------------------|
+/// | file_found       | MDX file exists on disk                          |
 /// | title_ok         | title.len() <= 60                                |
 /// | meta_ok          | !meta.is_empty() && meta.len() >= 50             |
 /// | snippet_ok       | word_count >= 30 && (has_keyword \|\| has '?')    |
@@ -49,6 +51,7 @@ pub fn check_article_health(
     first_paragraph: &str,
     target_keyword: &str,
     has_faq_schema: bool,
+    file_found: bool,
 ) -> ArticleHealth {
     let title_ok = title.len() <= 60;
     let meta_ok = !meta.is_empty() && meta.len() >= 50;
@@ -63,6 +66,9 @@ pub fn check_article_health(
     let faq_ok = has_faq_schema;
 
     let mut issues = Vec::new();
+    if !file_found {
+        issues.push("file_not_found".to_string());
+    }
     if !title_ok {
         issues.push("title_too_long".to_string());
     }
@@ -81,6 +87,7 @@ pub fn check_article_health(
         meta_ok,
         snippet_ok,
         faq_ok,
+        file_found,
         issues,
         snippet_word_count,
         snippet_has_keyword_or_question,
@@ -102,14 +109,15 @@ pub fn compute_content_hash(title: &str, meta: &str, first_paragraph: &str) -> S
     format!("{:x}", hasher.finish())
 }
 
-/// Read an MDX file and extract (title, meta_description, first_paragraph, h1, has_faq_schema).
-pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, String, String, bool) {
+/// Read an MDX file and extract (title, meta_description, first_paragraph, h1, has_faq_schema, file_found).
+pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, String, String, bool, bool) {
     if file_ref.is_empty() {
         return (
             String::new(),
             String::new(),
             String::new(),
             String::new(),
+            false,
             false,
         );
     }
@@ -131,6 +139,7 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
                 String::new(),
                 String::new(),
                 String::new(),
+                false,
                 false,
             );
         }
@@ -192,7 +201,7 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
 
     let has_faq = has_faq_schema(&content);
 
-    (title, meta_description, first_paragraph, h1, has_faq)
+    (title, meta_description, first_paragraph, h1, has_faq, true)
 }
 
 /// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage or markdown FAQ section).

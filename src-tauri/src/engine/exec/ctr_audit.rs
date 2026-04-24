@@ -103,7 +103,7 @@ pub(crate) fn exec_ctr_build_context(
         let avg_position = gsc["avg_position"].as_f64().unwrap_or(0.0);
 
         // Extract current MDX state
-        let (current_title, meta_description, first_paragraph, h1, has_faq_schema) =
+        let (current_title, meta_description, first_paragraph, h1, has_faq_schema, file_found) =
             crate::engine::exec::audit_health::read_article_excerpt(project_path, &file_ref);
 
         // Compute content hash for change detection
@@ -133,6 +133,7 @@ pub(crate) fn exec_ctr_build_context(
             &first_paragraph,
             &target_keyword,
             has_faq_schema,
+            file_found,
         );
 
         // Persist the audit state immediately (healthy or not)
@@ -171,6 +172,7 @@ pub(crate) fn exec_ctr_build_context(
             },
             "clicks_lost": clicks_lost,
             "issues_detected": {
+                "file_not_found": !health.file_found,
                 "title_too_long": !health.title_ok,
                 "meta_too_short": !health.meta_ok,
                 "snippet_suboptimal": !health.snippet_ok,
@@ -556,13 +558,14 @@ This is another article with different content.
     fn test_read_article_excerpt() {
         let path = test_dir();
         setup_project(&path);
-        let (title, meta, first, h1, has_faq) =
+        let (title, meta, first, h1, has_faq, file_found) =
             crate::engine::exec::audit_health::read_article_excerpt(&path, "content/001_test_article.mdx");
         assert_eq!(title, "Test Article | Brand | Brand -- Tagline");
         assert_eq!(meta, "A short desc");
         assert_eq!(h1, "Test Article | Brand | Brand -- Tagline");
         assert!(first.contains("This is the first paragraph"));
         assert!(!has_faq, "Should not detect FAQ schema in this article");
+        assert!(file_found, "File should exist");
         cleanup(&path);
     }
 
@@ -678,10 +681,11 @@ Some content here.
 "#;
         std::fs::write(content_dir.join("with_faq.mdx"), mdx_with_faq).unwrap();
 
-        let (title, meta, first, h1, has_faq) =
+        let (title, meta, first, h1, has_faq, file_found) =
             crate::engine::exec::audit_health::read_article_excerpt(&path, "content/with_faq.mdx");
         assert_eq!(title, "FAQ Article");
         assert!(has_faq, "Should detect JSON-LD FAQPage schema");
+        assert!(file_found);
 
         // MDX with markdown FAQ heading but no schema
         let mdx_no_faq = r#"---
@@ -696,9 +700,10 @@ Some content here.
 "#;
         std::fs::write(content_dir.join("no_faq.mdx"), mdx_no_faq).unwrap();
 
-        let (_, _, _, _, has_faq2) =
+        let (_, _, _, _, has_faq2, file_found2) =
             crate::engine::exec::audit_health::read_article_excerpt(&path, "content/no_faq.mdx");
         assert!(!has_faq2, "Should not detect FAQ schema when absent");
+        assert!(file_found2);
 
         // MDX with markdown FAQ heading
         let mdx_md_faq = r#"---
@@ -715,9 +720,78 @@ Q: What?\nA: This.
 "#;
         std::fs::write(content_dir.join("md_faq.mdx"), mdx_md_faq).unwrap();
 
-        let (_, _, _, _, has_faq3) =
+        let (_, _, _, _, has_faq3, file_found3) =
             crate::engine::exec::audit_health::read_article_excerpt(&path, "content/md_faq.mdx");
         assert!(has_faq3, "Should detect markdown FAQ heading");
+        assert!(file_found3);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_missing_file_detected() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        let articles = serde_json::json!({
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "missing-article",
+                    "title": "Missing Article",
+                    "target_keyword": "missing article",
+                    "file": "content/does_not_exist.mdx",
+                    "gsc": { "impressions": 1000.0, "clicks": 5.0, "ctr": 0.005, "avg_position": 10.0 }
+                }
+            ]
+        });
+        std::fs::write(auto_dir.join("articles.json"), serde_json::to_string_pretty(&articles).unwrap()).unwrap();
+
+        // File does not exist — read_article_excerpt should return file_found=false
+        let (title, meta, first, _h1, _has_faq, file_found) =
+            crate::engine::exec::audit_health::read_article_excerpt(&path, "content/does_not_exist.mdx");
+        assert!(!file_found, "Should report file not found");
+        assert_eq!(title, "");
+        assert_eq!(meta, "");
+        assert_eq!(first, "");
+
+        // Health check should flag file_not_found
+        let health = crate::engine::exec::audit_health::check_article_health(
+            &title, &meta, &first, "missing article", false, file_found,
+        );
+        assert!(!health.all_ok(), "Missing file should not be healthy");
+        assert!(health.issues.contains(&"file_not_found".to_string()), "Should flag file_not_found");
+
+        // Build context should include the article with file_not_found issue
+        let conn = test_db();
+        let task = Task {
+            id: "task-missing".to_string(),
+            project_id: "proj-missing".to_string(),
+            task_type: "ctr_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Missing File Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_build_context(&task, &path, &conn);
+        assert!(result.success);
+        let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(output["total_articles"].as_i64().unwrap(), 1);
+
+        let articles = output["top_20_by_clicks_lost"].as_array().unwrap();
+        let first = &articles[0];
+        assert_eq!(first["issues_detected"]["file_not_found"].as_bool().unwrap(), true);
 
         cleanup(&path);
     }
