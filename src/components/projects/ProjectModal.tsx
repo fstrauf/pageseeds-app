@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { createProject, updateProject, openFolderDialog } from '../../lib/tauri'
-import type { Project } from '../../lib/types'
+import type { Project, ProjectMode } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -12,6 +14,26 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
+
+const PROJECT_MODE_LABEL: Record<ProjectMode, string> = {
+  workspace: 'Workspace Project',
+  live_site: 'Live Site Project',
+}
+
+function deriveDefaultSitemapUrl(rawSiteUrl: string) {
+  const trimmed = rawSiteUrl.trim()
+  if (!trimmed) return ''
+
+  try {
+    const url = new URL(trimmed)
+    url.pathname = '/sitemap.xml'
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
 
 interface ProjectModalProps {
   project?: Project | null
@@ -26,8 +48,11 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
   const [contentDir, setContentDir] = useState(project?.content_dir ?? '')
   const [siteUrl, setSiteUrl] = useState(project?.site_url ?? '')
   const [siteId, setSiteId] = useState(project?.site_id ?? '')
+  const [sitemapUrl, setSitemapUrl] = useState(project?.sitemap_url ?? '')
+  const [projectMode, setProjectMode] = useState<ProjectMode>(project?.project_mode ?? 'workspace')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const isWorkspaceProject = projectMode === 'workspace'
 
   useEffect(() => {
     if (project) {
@@ -36,12 +61,30 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
       setContentDir(project.content_dir ?? '')
       setSiteUrl(project.site_url ?? '')
       setSiteId(project.site_id ?? '')
+      setSitemapUrl(project.sitemap_url ?? '')
+      setProjectMode(project.project_mode)
     }
   }, [project])
 
+  function fillDefaultSitemapFromSiteUrl() {
+    if (isWorkspaceProject || sitemapUrl.trim()) return
+    const derived = deriveDefaultSitemapUrl(siteUrl)
+    if (derived) {
+      setSitemapUrl(derived)
+    }
+  }
+
   async function handleSave() {
-    if (!name.trim() || !path.trim()) {
-      setError('Name and path are required.')
+    if (!name.trim()) {
+      setError('Project name is required.')
+      return
+    }
+    if (isWorkspaceProject && !path.trim()) {
+      setError('Workspace projects require a repository path.')
+      return
+    }
+    if (!isWorkspaceProject && !siteUrl.trim()) {
+      setError('Live site projects require a site URL.')
       return
     }
     setLoading(true)
@@ -52,18 +95,22 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
         saved = await updateProject({
           ...project,
           name: name.trim(),
-          path: path.trim(),
-          content_dir: contentDir.trim() || null,
+          path: isWorkspaceProject ? path.trim() : project.path,
+          content_dir: isWorkspaceProject ? (contentDir.trim() || null) : null,
           site_url: siteUrl.trim() || null,
           site_id: siteId.trim() || null,
+          sitemap_url: sitemapUrl.trim() || null,
+          project_mode: project.project_mode,
         })
       } else {
         saved = await createProject({
           name: name.trim(),
-          path: path.trim(),
-          content_dir: contentDir.trim() || undefined,
+          path: isWorkspaceProject ? path.trim() : undefined,
+          content_dir: isWorkspaceProject ? (contentDir.trim() || undefined) : undefined,
           site_url: siteUrl.trim() || undefined,
           site_id: siteId.trim() || undefined,
+          sitemap_url: sitemapUrl.trim() || undefined,
+          project_mode: projectMode,
         })
       }
       onSaved(saved)
@@ -100,51 +147,89 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="proj-path">Repository Path <span className="text-destructive">*</span></Label>
-            <div className="flex gap-2">
-              <Input
-                id="proj-path"
-                value={path}
-                onChange={e => setPath(e.target.value)}
-                placeholder="/Users/you/projects/my-website"
-                className="flex-1 bg-secondary border-input font-mono text-xs"
-              />
-              <Button
-                variant="outline"
-                size="icon"
-                className="border-input bg-secondary"
-                title="Browse for folder"
-                onClick={async () => {
-                  const selected = await openFolderDialog('Select project root')
-                  if (selected) setPath(selected)
-                }}
-              >
-                <FolderOpen size={14} />
-              </Button>
-            </div>
+            <Label htmlFor="proj-mode">Project Type</Label>
+            {isEdit ? (
+              <div className="rounded-md border border-border bg-secondary/40 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs">
+                    {PROJECT_MODE_LABEL[projectMode]}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">Project type is fixed after creation.</span>
+                </div>
+              </div>
+            ) : (
+              <Select value={projectMode} onValueChange={value => setProjectMode(value as ProjectMode)}>
+                <SelectTrigger id="proj-mode" className="w-full bg-secondary border-input">
+                  <SelectValue placeholder="Choose a project type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="workspace">Workspace Project</SelectItem>
+                  <SelectItem value="live_site">Live Site Project</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {isWorkspaceProject
+                ? 'Use your existing repo and markdown content workflow.'
+                : 'Store synced site data inside PageSeeds without requiring a local repo.'}
+            </p>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="proj-content">
-              Content Directory
-              <span className="ml-1 text-xs text-muted-foreground font-normal">(relative, e.g. content/blog)</span>
-            </Label>
-            <Input
-              id="proj-content"
-              value={contentDir}
-              onChange={e => setContentDir(e.target.value)}
-              placeholder="content/blog"
-              className="bg-secondary border-input"
-            />
-          </div>
+          {isWorkspaceProject ? (
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="proj-path">Repository Path <span className="text-destructive">*</span></Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="proj-path"
+                    value={path}
+                    onChange={e => setPath(e.target.value)}
+                    placeholder="/Users/you/projects/my-website"
+                    className="flex-1 bg-secondary border-input font-mono text-xs"
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="border-input bg-secondary"
+                    title="Browse for folder"
+                    onClick={async () => {
+                      const selected = await openFolderDialog('Select project root')
+                      if (selected) setPath(selected)
+                    }}
+                  >
+                    <FolderOpen size={14} />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="proj-content">
+                  Content Directory
+                  <span className="ml-1 text-xs text-muted-foreground font-normal">(relative, e.g. content/blog)</span>
+                </Label>
+                <Input
+                  id="proj-content"
+                  value={contentDir}
+                  onChange={e => setContentDir(e.target.value)}
+                  placeholder="content/blog"
+                  className="bg-secondary border-input"
+                />
+              </div>
+            </>
+          ) : (
+            <div className="rounded-md border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+              Live site projects keep imported data in PageSeeds-managed app storage. No repository path or markdown content directory is required.
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="proj-url">Site URL</Label>
+              <Label htmlFor="proj-url">Site URL {!isWorkspaceProject && <span className="text-destructive">*</span>}</Label>
               <Input
                 id="proj-url"
                 value={siteUrl}
                 onChange={e => setSiteUrl(e.target.value)}
+                onBlur={fillDefaultSitemapFromSiteUrl}
                 placeholder="https://mysite.com"
                 className="bg-secondary border-input"
               />
@@ -155,11 +240,27 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
                 id="proj-siteid"
                 value={siteId}
                 onChange={e => setSiteId(e.target.value)}
-                placeholder="my-website"
+                placeholder={isWorkspaceProject ? 'my-website' : 'sc-domain:example.com'}
                 className="bg-secondary border-input"
               />
             </div>
           </div>
+
+          {!isWorkspaceProject && (
+            <div className="space-y-1.5">
+              <Label htmlFor="proj-sitemap">Sitemap URL</Label>
+              <Input
+                id="proj-sitemap"
+                value={sitemapUrl}
+                onChange={e => setSitemapUrl(e.target.value)}
+                placeholder="https://mysite.com/sitemap.xml"
+                className="bg-secondary border-input"
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional. Leave blank to try the default <span className="font-mono">/sitemap.xml</span> path.
+              </p>
+            </div>
+          )}
         </div>
 
         <DialogFooter>

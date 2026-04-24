@@ -229,13 +229,13 @@ We need a data model that can represent both repo-backed and live-site-backed co
 
 ### Tasks
 
-- [ ] Add `project_mode` to the `projects` table and Rust/TypeScript models
+- [x] Add `project_mode` to the `projects` table and Rust/TypeScript models
 - [ ] Add optional `sitemap_url` and `cms_type` fields for live-site projects
-- [ ] Introduce a normalized `site_inventory_pages` table in SQLite
-- [ ] Introduce a `site_inventory_links` table or equivalent derived structure
+- [x] Introduce a normalized `site_inventory_pages` table in SQLite
+- [x] Introduce a `site_inventory_links` table or equivalent derived structure
 - [ ] Track source metadata for each inventory record (`file path`, `url`, `cms id`, `source type`)
 - [ ] Track last sync timestamps and sync status per page
-- [ ] Define a stable internal struct for a normalized page/article record
+- [x] Define a stable internal struct for a normalized page/article record
 - [ ] Keep existing `articles` table working during migration
 - [ ] Decide whether `articles` becomes a compatibility cache, generated view, or legacy-only store
 
@@ -251,19 +251,19 @@ We need separate onboarding flows for developer and non-developer users.
 
 ### Tasks
 
-- [ ] Update the project creation UI to let the user choose `Workspace Project` or `Live Site Project`
-- [ ] Keep the existing local-path form for `workspace` mode
-- [ ] Add a URL-first onboarding form for `live_site` mode
-- [ ] Add automatic sitemap detection for live-site setup
-- [ ] Add manual sitemap override when detection fails
+- [x] Update the project creation UI to let the user choose `Workspace Project` or `Live Site Project`
+- [x] Keep the existing local-path form for `workspace` mode
+- [x] Add a URL-first onboarding form for `live_site` mode
+- [x] Add automatic sitemap detection for live-site setup
+- [x] Add manual sitemap override when detection fails
 - [ ] Add first-run validation tailored to live-site projects
-- [ ] Hide repo/workspace setup warnings for live-site projects
+- [x] Hide repo/workspace setup warnings for live-site projects
 - [ ] Rename user-facing setup copy away from developer jargon where possible
 - [ ] Move advanced diagnostics into an expandable advanced section
 
 ### Acceptance
 
-- [ ] A non-developer can create a project with only a website URL and no filesystem path
+- [x] A non-developer can create a project with only a website URL and no filesystem path
 
 ---
 
@@ -273,20 +273,20 @@ We need a deterministic path from website URL to usable site inventory.
 
 ### Tasks
 
-- [ ] Reuse or extend sitemap fetching logic for live-site setup
-- [ ] Add a native `import_live_site` command/workflow
-- [ ] Fetch sitemap URLs and normalize them to the project domain
-- [ ] Crawl a bounded set of pages safely with timeouts and content-type checks
-- [ ] Extract page title, headings, text content, meta description, and canonical URL
-- [ ] Extract internal links from each crawled page
-- [ ] Store results into the shared site inventory tables
+- [x] Reuse or extend sitemap fetching logic for live-site setup
+- [x] Add a native `import_live_site` command/workflow
+- [x] Fetch sitemap URLs and normalize them to the project domain
+- [x] Crawl a bounded set of pages safely with timeouts and content-type checks
+- [x] Extract page title, headings, text content, meta description, and canonical URL
+- [x] Extract internal links from each crawled page
+- [x] Store results into the shared site inventory tables
 - [ ] Add incremental resync support so later imports do not rebuild everything unnecessarily
 - [ ] Expose an import summary in the UI: pages found, pages imported, failures, skipped URLs
 - [ ] Handle common failure modes clearly: blocked sitemap, no sitemap, non-HTML pages, timeouts, redirects
 
 ### Acceptance
 
-- [ ] A live-site project can build a usable page inventory from its sitemap and crawled HTML
+- [x] A live-site project can build a usable page inventory from its sitemap and crawled HTML
 
 ---
 
@@ -298,16 +298,16 @@ We need live-site equivalents that operate on inventory pages.
 ### Tasks
 
 - [ ] Refactor readability analysis to accept normalized page content, not only local files
-- [ ] Refactor internal linking analysis to run on inventory link graphs
-- [ ] Refactor content health checks so they can run on live-site inventory where applicable
-- [ ] Add a page-level overview UI for imported site pages
-- [ ] Add filters for thin content, missing metadata, weak headings, stale pages, and weak interlinking
-- [ ] Distinguish deterministic facts from agentic recommendations in the UI
-- [ ] Keep the richer workspace-only checks available when local files exist
+- [x] Refactor internal linking analysis to run on inventory link graphs
+- [x] Refactor content health checks so they can run on live-site inventory where applicable
+- [x] Add a page-level overview UI for imported site pages
+- [x] Add filters for thin content, missing metadata, weak headings, stale pages, and weak interlinking
+- [x] Distinguish deterministic facts from agentic recommendations in the UI
+- [x] Keep the richer workspace-only checks available when local files exist
 
 ### Acceptance
 
-- [ ] Live-site users can audit existing pages without needing markdown or `articles.json`
+- [x] Live-site users can audit existing pages without needing markdown or `articles.json`
 
 ---
 
@@ -318,16 +318,16 @@ The main change is attaching opportunities to live-site inventory rather than on
 
 ### Tasks
 
-- [ ] Ensure keyword research flows can run for both project modes
-- [ ] Replace `articles.json`-only coverage assumptions with coverage derived from the shared site inventory
+- [x] Ensure keyword research flows can run for both project modes
+- [x] Replace `articles.json`-only coverage assumptions with coverage derived from the shared site inventory
 - [ ] Add URL/page matching so opportunities map to existing live pages where possible
 - [ ] Mark opportunities as `new article`, `refresh existing page`, or `landing page` based on inventory coverage
-- [ ] Keep developer workflows and task creation intact for workspace mode
+- [x] Keep developer workflows and task creation intact for workspace mode
 - [ ] Design a simpler opportunity review UI for non-developer users
 
 ### Acceptance
 
-- [ ] Keyword research works for live-site projects without a local article registry
+- [x] Keyword research works for live-site projects without a local article registry
 
 ---
 
@@ -337,16 +337,16 @@ GSC is useful to both modes, but the setup and data application should feel simp
 
 ### Tasks
 
-- [ ] Allow GSC to attach directly to live-site projects with no repo manifest dependency
-- [ ] Persist site URL / property metadata in the project record or project config tables
-- [ ] Sync Search Analytics data into the shared site inventory
+- [x] Allow GSC to attach directly to live-site projects with no repo manifest dependency
+- [x] Persist site URL / property metadata in the project record or project config tables
+- [x] Sync Search Analytics data into the shared site inventory
 - [ ] Sync URL inspection results against live-site URLs
 - [ ] Surface indexing and performance issues in site/page language rather than file/workspace language
-- [ ] Reuse existing GSC internals where possible
+- [x] Reuse existing GSC internals where possible
 
 ### Acceptance
 
-- [ ] A live-site project can connect GSC and annotate imported pages with performance data
+- [x] A live-site project can connect GSC and annotate imported pages with performance data
 
 ---
 
@@ -453,15 +453,15 @@ This work must preserve existing value for developer users.
 
 ### Phase 1: Foundation
 
-- [ ] Add `project_mode` and live-site project creation
-- [ ] Add shared site inventory tables and models
-- [ ] Add sitemap import and bounded page crawl
-- [ ] Show imported pages in the UI
+- [x] Add `project_mode` and live-site project creation
+- [x] Add shared site inventory tables and models
+- [x] Add sitemap import and bounded page crawl
+- [x] Show imported pages in the UI
 
 ### Phase 2: Read-only Value
 
-- [ ] Run page analysis and internal linking on live inventory
-- [ ] Connect GSC to live-site projects
+- [x] Run page analysis and internal linking on live inventory
+- [x] Connect GSC to live-site projects
 - [ ] Map keyword opportunities against live-site inventory
 
 ### Phase 3: Drafts
@@ -501,12 +501,12 @@ The first milestone does **not** need:
 
 ### Milestone tasks
 
-- [ ] Add live-site project mode to project model and onboarding
-- [ ] Add sitemap import and crawl pipeline
-- [ ] Add shared inventory persistence
-- [ ] Add live-site pages UI
-- [ ] Add live-site compatible audit views
-- [ ] Add GSC-to-inventory sync
+- [x] Add live-site project mode to project model and onboarding
+- [x] Add sitemap import and crawl pipeline
+- [x] Add shared inventory persistence
+- [x] Add live-site pages UI
+- [x] Add live-site compatible audit views
+- [x] Add GSC-to-inventory sync
 - [ ] Add keyword opportunity mapping to inventory pages
 
 ---
@@ -545,7 +545,7 @@ If we build a second parallel UI everywhere instead of shared components with mo
 
 - [ ] A non-developer user can create a project from a URL with no repo path
 - [ ] The app can build a page inventory from a live sitemap and crawl
-- [ ] Existing-page analysis works on live-site content
+- [x] Existing-page analysis works on live-site content
 - [ ] Keyword opportunity mapping works without `articles.json`
 - [ ] GSC data can attach to live-site pages
 - [ ] Draft generation produces exportable output without requiring markdown file workflows

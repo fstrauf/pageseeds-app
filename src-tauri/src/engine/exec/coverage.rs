@@ -3,18 +3,95 @@
 /// Analyzes existing articles to build a semantic cluster map of keyword coverage.
 
 use crate::engine::project_paths::ProjectPaths;
+use crate::engine::task_store;
 use crate::engine::workflows::StepResult;
+use crate::models::project::ProjectMode;
 use crate::models::task::Task;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Execute the `coverage_load_articles` step.
 ///
-/// Reads articles.json and returns the article metadata for clustering.
+/// Reads articles.json or live-site inventory and returns normalized metadata
+/// for clustering.
 pub(crate) fn exec_coverage_load_articles(
-    _task: &Task,
+    task: &Task,
     project_path: &str,
 ) -> StepResult {
+    let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to open app database: {}", e),
+                output: None,
+            }
+        }
+    };
+
+    let project = match task_store::get_project(&db, &task.project_id) {
+        Ok(project) => project,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to load project '{}': {}", task.project_id, e),
+                output: None,
+            }
+        }
+    };
+
+    if project.project_mode == ProjectMode::LiveSite {
+        let pages = match crate::live_site::list_live_site_pages(&db, &task.project_id) {
+            Ok(pages) => pages,
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    message: format!("Failed to load live-site inventory: {}", e),
+                    output: None,
+                }
+            }
+        };
+
+        if pages.is_empty() {
+            return StepResult {
+                success: false,
+                message: "No live-site pages imported yet. Import the site before running coverage analysis.".to_string(),
+                output: None,
+            };
+        }
+
+        let page_summaries: Vec<serde_json::Value> = pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| {
+                serde_json::json!({
+                    "id": (index + 1) as i64,
+                    "title": if page.title.trim().is_empty() { page.path.clone() } else { page.title.clone() },
+                    "slug": slug_from_live_site_path(&page.path),
+                    "target_keyword": "",
+                    "file": page.path,
+                    "status": "live",
+                    "url": page.url,
+                    "source_type": "live_site_page",
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "article_count": page_summaries.len(),
+            "articles": page_summaries,
+        });
+
+        return StepResult {
+            success: true,
+            message: format!(
+                "Loaded {} live-site pages for coverage analysis",
+                output["article_count"].as_i64().unwrap_or(0)
+            ),
+            output: Some(output.to_string()),
+        };
+    }
+
     let paths = ProjectPaths::from_path(project_path);
     let articles_path = paths.automation_dir.join("articles.json");
     
@@ -89,6 +166,19 @@ pub(crate) fn exec_coverage_load_articles(
         message: format!("Loaded {} articles for coverage analysis", article_summaries.len()),
         output: Some(output.to_string()),
     }
+}
+
+fn slug_from_live_site_path(path: &str) -> String {
+    let trimmed = path.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return "home".to_string();
+    }
+
+    trimmed
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// Authority level classification
@@ -359,6 +449,14 @@ pub(crate) fn exec_coverage_cluster_analysis(
     enhance_clusters_with_authority(&mut clusters, &articles);
 
     // Persist to keyword_coverage.json for future reference
+    if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
+        return StepResult {
+            success: false,
+            message: format!("Failed to create automation directory: {}", e),
+            output: None,
+        };
+    }
+
     let coverage_path = paths.automation_dir.join("keyword_coverage.json");
     let coverage_str = serde_json::to_string_pretty(&clusters).unwrap_or_default() + "\n";
     if let Err(e) = std::fs::write(&coverage_path, &coverage_str) {
@@ -402,9 +500,9 @@ fn build_cluster_prompt(articles: &serde_json::Value) -> String {
     let articles_json = serde_json::to_string_pretty(articles).unwrap_or_default();
 
     format!(
-        r#"You are an SEO content strategist analyzing a website's article portfolio.
+        r#"You are an SEO content strategist analyzing a website's existing content portfolio.
 
-Your task is to group the articles into semantic clusters based on their topics and target keywords.
+    Your task is to group the content items into semantic clusters based on their topics and target keywords.
 
 ## Articles to Analyze
 

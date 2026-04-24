@@ -5,6 +5,7 @@ pub mod db;
 pub mod engine;
 mod error;
 mod gsc;
+mod live_site;
 pub mod logging;
 pub mod models;
 mod reddit;
@@ -71,7 +72,12 @@ pub fn run() {
             commands::cancel_task,
             commands::create_article_tasks_from_keywords,
             commands::list_articles,
+            commands::list_live_site_pages,
+            commands::get_live_site_audit,
             commands::import_from_repo,
+            commands::import_live_site,
+            commands::scan_live_site_links,
+            commands::sync_live_site_gsc,
             commands::export_to_repo,
             commands::get_secrets_status,
             commands::get_secrets_file_path,

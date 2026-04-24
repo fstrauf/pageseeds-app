@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS projects (
     content_dir TEXT,
     site_url    TEXT,
     site_id     TEXT,
+    sitemap_url TEXT,
+    project_mode TEXT NOT NULL DEFAULT 'workspace',
     active      INTEGER NOT NULL DEFAULT 1
 );
 
@@ -210,6 +212,65 @@ ALTER TABLE articles ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_articles_review_status ON articles(project_id, review_status);
 CREATE INDEX IF NOT EXISTS idx_articles_last_reviewed ON articles(project_id, last_reviewed_at);
+"#;
+
+static MIGRATION_V17: &str = r#"
+-- Track whether a project is repo-backed or live-site-backed
+ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'workspace';
+"#;
+
+static MIGRATION_V18: &str = r#"
+-- Normalized live-site inventory for non-repo projects
+CREATE TABLE IF NOT EXISTS live_site_pages (
+    project_id           TEXT NOT NULL,
+    url                  TEXT NOT NULL,
+    path                 TEXT NOT NULL,
+    title                TEXT NOT NULL DEFAULT '',
+    meta_description     TEXT,
+    h1                   TEXT,
+    content_excerpt      TEXT,
+    word_count           INTEGER NOT NULL DEFAULT 0,
+    heading_count        INTEGER NOT NULL DEFAULT 0,
+    internal_links_out   INTEGER NOT NULL DEFAULT 0,
+    status_code          INTEGER,
+    gsc_clicks           REAL,
+    gsc_impressions      REAL,
+    gsc_ctr              REAL,
+    gsc_position         REAL,
+    gsc_synced_at        TEXT,
+    last_crawled_at      TEXT NOT NULL,
+    PRIMARY KEY (project_id, url),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_site_pages_project_path ON live_site_pages(project_id, path);
+
+CREATE TABLE IF NOT EXISTS live_site_links (
+    project_id     TEXT NOT NULL,
+    source_url     TEXT NOT NULL,
+    target_url     TEXT NOT NULL,
+    anchor_text    TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL,
+    PRIMARY KEY (project_id, source_url, target_url, anchor_text),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_site_links_source ON live_site_links(project_id, source_url);
+CREATE INDEX IF NOT EXISTS idx_live_site_links_target ON live_site_links(project_id, target_url);
+"#;
+
+static MIGRATION_V19: &str = r#"
+-- Optional manual sitemap override for live-site projects
+ALTER TABLE projects ADD COLUMN sitemap_url TEXT;
+"#;
+
+static MIGRATION_V20: &str = r#"
+-- Optional GSC metrics cached on imported live-site pages
+ALTER TABLE live_site_pages ADD COLUMN gsc_clicks REAL;
+ALTER TABLE live_site_pages ADD COLUMN gsc_impressions REAL;
+ALTER TABLE live_site_pages ADD COLUMN gsc_ctr REAL;
+ALTER TABLE live_site_pages ADD COLUMN gsc_position REAL;
+ALTER TABLE live_site_pages ADD COLUMN gsc_synced_at TEXT;
 "#;
 
 static MIGRATION_V6: &str = r#"
@@ -547,6 +608,79 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             "CREATE INDEX IF NOT EXISTS idx_articles_review_status ON articles(project_id, review_status);
              CREATE INDEX IF NOT EXISTS idx_articles_last_reviewed ON articles(project_id, last_reviewed_at);",
         )?;
+    }
+
+    if version < 17 {
+        let _ = conn.execute_batch(MIGRATION_V17);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (17, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    // Repair: ensure project_mode exists even if the migration was skipped.
+    {
+        let has_col: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='project_mode'")?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) > 0;
+        if !has_col {
+            conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'workspace';",
+            )?;
+        }
+    }
+
+    if version < 18 {
+        conn.execute_batch(MIGRATION_V18)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (18, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 19 {
+        let _ = conn.execute_batch(MIGRATION_V19);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (19, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 20 {
+        let _ = conn.execute_batch(MIGRATION_V20);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (20, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    // Repair: ensure sitemap_url exists even if the migration was skipped.
+    {
+        let has_col: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='sitemap_url'")?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) > 0;
+        if !has_col {
+            conn.execute_batch("ALTER TABLE projects ADD COLUMN sitemap_url TEXT;")?;
+        }
+    }
+
+    // Repair: ensure live-site GSC metric columns exist even if the migration was skipped.
+    for column in [
+        ("gsc_clicks", "ALTER TABLE live_site_pages ADD COLUMN gsc_clicks REAL;"),
+        ("gsc_impressions", "ALTER TABLE live_site_pages ADD COLUMN gsc_impressions REAL;"),
+        ("gsc_ctr", "ALTER TABLE live_site_pages ADD COLUMN gsc_ctr REAL;"),
+        ("gsc_position", "ALTER TABLE live_site_pages ADD COLUMN gsc_position REAL;"),
+        ("gsc_synced_at", "ALTER TABLE live_site_pages ADD COLUMN gsc_synced_at TEXT;"),
+    ] {
+        let has_col: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('live_site_pages') WHERE name = ?1")?
+            .query_row([column.0], |row| row.get::<_, i64>(0))
+            .unwrap_or(0) > 0;
+        if !has_col {
+            conn.execute_batch(column.1)?;
+        }
     }
 
     Ok(())

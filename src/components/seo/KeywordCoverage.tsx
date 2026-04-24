@@ -77,6 +77,9 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
     )
   }
 
+  const isLiveSiteProject = project.project_mode === 'live_site'
+  const sourceLabel = isLiveSiteProject ? 'pages' : 'articles'
+  const sourceLabelSingular = isLiveSiteProject ? 'page' : 'article'
   const hasCoverage = exists && coverage && coverage.clusters.length > 0
 
   return (
@@ -90,7 +93,9 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
               Keyword Coverage
             </h1>
             <div className="text-xs text-muted-foreground mt-0.5">
-              Semantic clustering of your content portfolio
+              {isLiveSiteProject
+                ? 'Semantic clustering of your imported site pages'
+                : 'Semantic clustering of your content portfolio'}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -150,7 +155,7 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
               <div className="grid grid-cols-3 gap-4 mb-4">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-foreground">{coverage.article_count}</div>
-                  <div className="text-xs text-muted-foreground">Total Articles</div>
+                  <div className="text-xs text-muted-foreground">Total {sourceLabel}</div>
                 </div>
                 <div className="text-center">
                   <div className="text-2xl font-bold text-foreground">{coverage.clusters.length}</div>
@@ -160,7 +165,7 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
                   <div className="text-2xl font-bold text-foreground">
                     {Math.round(coverage.article_count / coverage.clusters.length)}
                   </div>
-                  <div className="text-xs text-muted-foreground">Avg per Cluster</div>
+                  <div className="text-xs text-muted-foreground">Avg {sourceLabelSingular}s per Cluster</div>
                 </div>
               </div>
               
@@ -191,7 +196,7 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
           <div className="space-y-3">
             <h3 className="text-sm font-medium text-foreground">Topic Clusters</h3>
             {coverage.clusters.map((cluster) => (
-              <ClusterCard key={cluster.cluster_id} cluster={cluster} />
+              <ClusterCard key={cluster.cluster_id} cluster={cluster} sourceLabel={sourceLabel} />
             ))}
           </div>
         ) : exists ? (
@@ -199,7 +204,7 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
             <CardContent className="py-8 text-center">
               <AlertCircle size={32} className="text-muted-foreground mx-auto mb-3 opacity-50" />
               <p className="text-sm text-muted-foreground">
-                No coverage data available. The analysis may have failed or found no articles.
+                No coverage data available. The analysis may have failed or found no {sourceLabel}.
               </p>
               <Button onClick={handleAnalyze} disabled={creating} variant="outline" size="sm" className="mt-4">
                 {creating ? <RefreshCw size={13} className="animate-spin mr-1.5" /> : <RefreshCw size={13} className="mr-1.5" />}
@@ -215,7 +220,7 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
                 No coverage analysis yet.
               </p>
               <p className="text-xs text-muted-foreground mb-4">
-                Run an analysis to see how your articles are clustered by topic.
+                Run an analysis to see how your {sourceLabel} are clustered by topic.
               </p>
               <Button onClick={handleAnalyze} disabled={creating} size="sm">
                 {creating ? <RefreshCw size={13} className="animate-spin mr-1.5" /> : <Target size={13} className="mr-1.5" />}
@@ -229,7 +234,13 @@ export function KeywordCoveragePanel({ project, onRunTasks }: KeywordCoveragePro
   )
 }
 
-function ClusterCard({ cluster }: { cluster: KeywordCoverageCluster }) {
+function ClusterCard({
+  cluster,
+  sourceLabel,
+}: {
+  cluster: KeywordCoverageCluster
+  sourceLabel: string
+}) {
   const hasAuthority = cluster.authority_score !== undefined
 
   return (
@@ -249,7 +260,7 @@ function ClusterCard({ cluster }: { cluster: KeywordCoverageCluster }) {
               </Badge>
             )}
             <Badge variant="secondary" className="text-xs">
-              {cluster.article_count} articles
+              {cluster.article_count} {sourceLabel}
             </Badge>
           </div>
         </div>
@@ -285,7 +296,7 @@ function ClusterCard({ cluster }: { cluster: KeywordCoverageCluster }) {
         </div>
         <Separator className="my-2" />
         <div className="text-xs text-muted-foreground">
-          Article IDs: {cluster.article_ids.join(', ')}
+          Content IDs: {cluster.article_ids.join(', ')}
         </div>
       </CardContent>
     </Card>

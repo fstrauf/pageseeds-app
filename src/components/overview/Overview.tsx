@@ -4,13 +4,15 @@ import {
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
   PlayCircle, TrendingUp, Users, ArrowRight, Send, PieChart, Target,
 } from 'lucide-react'
-import { createTask, getProjectOverview, listArticles } from '../../lib/tauri'
+import { createTask, getProjectOverview, importLiveSite, listArticles, listLiveSitePages } from '../../lib/tauri'
 import type { Article, LandingPageResearchPending, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '../../lib/utils'
 import { SetupWarnings } from './SetupWarnings'
 import { PublishPanel } from '../articles/PublishPanel'
+import { useQuery } from '../../hooks/useQuery'
 
 // ─── Quick actions definition ─────────────────────────────────────────────────
 
@@ -228,7 +230,7 @@ function PendingLandingPageCard({
   if (!items || items.length === 0) return null
   
   return (
-    <Card className="bg-card border-border border-amber-200">
+    <Card className="bg-card border-amber-200">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-1.5">
           <Target size={13} className="text-amber-600" />
@@ -302,6 +304,7 @@ export function Overview({
   onRunTasks,
   runCompletedTick = 0,
 }: OverviewProps) {
+  const isLiveSiteProject = project?.project_mode === 'live_site'
   const [overview, setOverview] = useState<ProjectOverview | null>(null)
   const [loading, setLoading] = useState(false)
   const [runningActionLabel, setRunningActionLabel] = useState<string | null>(null)
@@ -310,12 +313,24 @@ export function Overview({
   const [publishOpen, setPublishOpen] = useState(false)
   const [publishCandidates, setPublishCandidates] = useState<Article[]>([])
   const [loadingPublish, setLoadingPublish] = useState(false)
+  const [liveSiteImporting, setLiveSiteImporting] = useState(false)
+  const [liveSiteMsg, setLiveSiteMsg] = useState<string | null>(null)
   
   // Landing page research dialog state
   const [lpDialogOpen, setLpDialogOpen] = useState(false)
   const [lpContext, setLpContext] = useState('')
   const [lpThemes, setLpThemes] = useState('')
   const [lpCreating, setLpCreating] = useState(false)
+
+  const {
+    data: liveSitePages = [],
+    isLoading: loadingLiveSitePages,
+    refetch: refetchLiveSitePages,
+  } = useQuery(
+    `overview-live-site-pages-${project?.id ?? 'none'}`,
+    () => listLiveSitePages(project?.id ?? ''),
+    { enabled: !!project?.id && isLiveSiteProject, staleTime: 0 },
+  )
 
   const load = useCallback(async () => {
     if (!project) return
@@ -385,6 +400,26 @@ export function Overview({
     }
   }
 
+  async function handleImportLiveSite() {
+    if (!project || !isLiveSiteProject || liveSiteImporting) return
+
+    setLiveSiteImporting(true)
+    setQuickActionError(null)
+    setLiveSiteMsg(null)
+    try {
+      const result = await importLiveSite(project.id, 50)
+      setLiveSiteMsg(
+        `Imported ${result.pages_imported} page${result.pages_imported !== 1 ? 's' : ''} from ${result.discovered_urls} sitemap URL${result.discovered_urls !== 1 ? 's' : ''}${result.pages_failed > 0 ? `, with ${result.pages_failed} crawl failure${result.pages_failed !== 1 ? 's' : ''}` : ''}.`,
+      )
+      await refetchLiveSitePages()
+      await load()
+    } catch (e: unknown) {
+      setQuickActionError(String(e))
+    } finally {
+      setLiveSiteImporting(false)
+    }
+  }
+
   if (!project) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -396,6 +431,7 @@ export function Overview({
   const tasks = overview?.tasks
   const articles = overview?.articles
   const pct = tasks && tasks.total > 0 ? Math.round((tasks.done / tasks.total) * 100) : 0
+  const liveSitePageCount = liveSitePages.length
 
   return (
     <>
@@ -406,6 +442,11 @@ export function Overview({
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-base font-semibold text-foreground">{project.name}</h1>
+            <div className="mt-1 flex items-center gap-2">
+              <Badge variant={isLiveSiteProject ? 'secondary' : 'outline'} className="text-[10px] uppercase tracking-wide">
+                {isLiveSiteProject ? 'Live Site' : 'Workspace'}
+              </Badge>
+            </div>
             {project.site_url && (
               <div className="text-xs text-muted-foreground mt-0.5">{project.site_url}</div>
             )}
@@ -415,8 +456,9 @@ export function Overview({
           </Button>
         </div>
 
-        {/* Setup warnings — shown when workspace config is missing or content dir is guessed */}
-        <SetupWarnings projectId={project.id} onViewChange={onViewChange} />
+        {!isLiveSiteProject && (
+          <SetupWarnings projectId={project.id} onViewChange={onViewChange} />
+        )}
 
         {/* Stat cards row */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -457,10 +499,16 @@ export function Overview({
           {/* Articles */}
           <Card className="bg-card border-border">
             <CardContent className="pt-4 pb-3 px-4">
-              <div className="text-xs text-muted-foreground mb-1">Articles</div>
-              <div className="text-2xl font-bold text-foreground">{articles?.total ?? '—'}</div>
+              <div className="text-xs text-muted-foreground mb-1">{isLiveSiteProject ? 'Pages' : 'Articles'}</div>
+              <div className="text-2xl font-bold text-foreground">{isLiveSiteProject ? liveSitePageCount : articles?.total ?? '—'}</div>
               <div className="text-xs text-muted-foreground mt-1">
-                {articles ? `${articles.published} published · ${articles.draft} draft` : ''}
+                {isLiveSiteProject
+                  ? (loadingLiveSitePages
+                    ? 'Loading page inventory…'
+                    : liveSitePageCount > 0
+                      ? 'Imported from live sitemap'
+                      : 'No pages imported yet')
+                  : (articles ? `${articles.published} published · ${articles.draft} draft` : '')}
               </div>
             </CardContent>
           </Card>
@@ -506,7 +554,18 @@ export function Overview({
                   {quickActionError}
                 </div>
               )}
-              {QUICK_ACTIONS.map(action => (
+              {isLiveSiteProject && liveSiteMsg && (
+                <div className="mb-2 px-2.5 py-2 rounded-md text-xs bg-emerald-100 text-emerald-700">
+                  {liveSiteMsg}
+                </div>
+              )}
+              {(isLiveSiteProject
+                ? QUICK_ACTIONS.filter(a =>
+                    ['research_keywords', 'research_landing_pages', 'collect_gsc',
+                     'reddit_opportunity_search', 'analyze_keyword_coverage'].includes(a.task_type)
+                  )
+                : QUICK_ACTIONS
+              ).map(action => (
                 <button
                   key={action.task_type}
                   onClick={() => handleQuickAction(action)}
@@ -536,29 +595,55 @@ export function Overview({
                   }
                 </button>
               ))}
-              <button
-                onClick={handleOpenPublish}
-                disabled={loadingPublish}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors',
-                  'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
-                )}
-              >
-                <span className="shrink-0 text-muted-foreground"><Send size={16} /></span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-foreground font-medium">Publish Articles</span>
-                    <span className={cn('text-xs px-1.5 py-0.5 rounded border-transparent', PHASE_BADGE['implementation'])}>
-                      implementation
-                    </span>
+              {isLiveSiteProject ? (
+                <button
+                  onClick={handleImportLiveSite}
+                  disabled={liveSiteImporting}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors',
+                    'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
+                  )}
+                >
+                  <span className="shrink-0 text-muted-foreground"><Globe size={16} /></span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-foreground font-medium">Import Site</span>
+                      <span className={cn('text-xs px-1.5 py-0.5 rounded border-transparent', PHASE_BADGE['collection'])}>
+                        collection
+                      </span>
+                    </div>
+                    <span className="text-xs text-muted-foreground leading-snug">Re-crawl sitemap and refresh the live page inventory</span>
                   </div>
-                  <span className="text-xs text-muted-foreground leading-snug">Fix dates, resolve mismatches, mark drafts as published</span>
-                </div>
-                {loadingPublish
-                  ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
-                  : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                }
-              </button>
+                  {liveSiteImporting
+                    ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
+                    : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                  }
+                </button>
+              ) : (
+                <button
+                  onClick={handleOpenPublish}
+                  disabled={loadingPublish}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors',
+                    'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
+                  )}
+                >
+                  <span className="shrink-0 text-muted-foreground"><Send size={16} /></span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-foreground font-medium">Publish Articles</span>
+                      <span className={cn('text-xs px-1.5 py-0.5 rounded border-transparent', PHASE_BADGE['implementation'])}>
+                        implementation
+                      </span>
+                    </div>
+                    <span className="text-xs text-muted-foreground leading-snug">Fix dates, resolve mismatches, mark drafts as published</span>
+                  </div>
+                  {loadingPublish
+                    ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
+                    : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                  }
+                </button>
+              )}
             </CardContent>
           </Card>
 
@@ -650,7 +735,7 @@ export function Overview({
         style={{ background: 'rgba(0,0,0,0.5)' }}
         onClick={e => { if (e.target === e.currentTarget) setLpDialogOpen(false) }}
       >
-        <div className="bg-card border border-border rounded-lg shadow-xl w-[450px]">
+        <div className="bg-card border border-border rounded-lg shadow-xl w-112.5">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border">
             <h2 className="text-sm font-semibold text-foreground">Landing Page Research</h2>
             <button 

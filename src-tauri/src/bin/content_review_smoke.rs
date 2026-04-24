@@ -17,7 +17,7 @@ use pageseeds_lib::{
     db,
     engine::{executor, task_store},
     models::{
-        project::Project,
+        project::{Project, ProjectMode},
         task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus},
     },
 };
@@ -59,6 +59,8 @@ async fn main() {
         content_dir: None,
         site_url: if site_url.is_empty() { None } else { Some(site_url) },
         site_id: None,
+        sitemap_url: None,
+        project_mode: ProjectMode::Workspace,
         active: true,
         agent_provider: Some(AGENT_PROVIDER.to_string()),
         seo_provider: Some("ahrefs".to_string()),

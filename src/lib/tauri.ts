@@ -8,7 +8,13 @@ import type {
   IngestOrphanResult,
   KeywordCoverageStatus,
   MigrationResult,
+  LiveSiteAuditReport,
+  LiveSiteGscSyncResult,
+  LiveSiteImportResult,
+  LiveSiteLinkScanResult,
+  LiveSitePage,
   Project,
+  ProjectMode,
   ProjectConfigFileStatus,
   ProjectSetup,
   QueueItem,
@@ -28,16 +34,21 @@ export const listProjects = (): Promise<Project[]> =>
 
 export const createProject = (args: {
   name: string
-  path: string
+  path?: string
   content_dir?: string
   site_url?: string
   site_id?: string
+  sitemap_url?: string
+  project_mode?: ProjectMode
 }): Promise<Project> =>
   invoke('create_project', {
     name: args.name,
     path: args.path,
     contentDir: args.content_dir,
     siteUrl: args.site_url,
+    siteId: args.site_id,
+    sitemapUrl: args.sitemap_url,
+    projectMode: args.project_mode,
   })
 
 export const updateProject = (project: Project): Promise<Project> =>
@@ -101,10 +112,33 @@ export const createArticleTasksFromKeywords = (
 export const listArticles = (projectId: string): Promise<Article[]> =>
   invoke('list_articles', { projectId })
 
+export const listLiveSitePages = (projectId: string): Promise<LiveSitePage[]> =>
+  invoke('list_live_site_pages', { projectId })
+
+export const getLiveSiteAudit = (projectId: string): Promise<LiveSiteAuditReport> =>
+  invoke('get_live_site_audit', { projectId })
+
+export const scanLiveSiteLinks = (projectId: string): Promise<LiveSiteLinkScanResult> =>
+  invoke('scan_live_site_links', { projectId })
+
 // ─── Import / Export ──────────────────────────────────────────────────────────
 
 export const importFromRepo = (projectId: string): Promise<ImportResult> =>
   invoke('import_from_repo', { projectId })
+
+export const importLiveSite = (
+  projectId: string,
+  limit?: number,
+): Promise<LiveSiteImportResult> =>
+  invoke('import_live_site', { projectId, limit })
+
+export const syncLiveSiteGsc = (
+  projectId: string,
+  startDate: string,
+  endDate: string,
+  limit?: number,
+): Promise<LiveSiteGscSyncResult> =>
+  invoke('sync_live_site_gsc', { projectId, startDate, endDate, limit })
 
 export const exportToRepo = (projectId: string): Promise<void> =>
   invoke('export_to_repo', { projectId })

@@ -278,11 +278,99 @@ pub(crate) fn exec_gsc_sync_articles(
     }
 }
 
+// ─── Site config resolution (manifest.json → project DB fallback) ────────────
+
+/// Resolve `site_url` and `sitemap_url` for a project.
+///
+/// First tries `manifest.json` in the automation dir (workspace convention).
+/// If that is missing or lacks a site URL, falls back to the `projects` table
+/// (live-site projects store site_url/sitemap_url directly in SQLite).
+fn resolve_site_config(
+    task: &Task,
+    project_path: &str,
+) -> Result<(String, String), crate::engine::workflows::StepResult> {
+    let paths = ProjectPaths::from_path(project_path);
+    let manifest_path = paths.automation_dir.join("manifest.json");
+
+    // Try manifest.json first
+    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+        if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(site_url) = manifest
+                .get("gsc_site")
+                .or_else(|| manifest.get("url"))
+                .and_then(|v| v.as_str())
+                .map(String::from)
+            {
+                let sitemap_url = manifest
+                    .get("sitemap")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("{}/sitemap.xml", normalize_site_for_url_match(&site_url)));
+                return Ok((site_url, sitemap_url));
+            }
+        }
+    }
+
+    // Fallback: query the projects table (live-site projects)
+    let db_path = crate::db::default_db_path();
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(crate::engine::workflows::StepResult {
+                success: false,
+                message: format!(
+                    "manifest.json not found at {} and failed to open DB for fallback: {}",
+                    manifest_path.display(),
+                    e
+                ),
+                output: None,
+            });
+        }
+    };
+
+    match crate::engine::task_store::get_project(&conn, &task.project_id) {
+        Ok(project) => {
+            let site_url = project
+                .site_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(String::from)
+                .ok_or_else(|| crate::engine::workflows::StepResult {
+                    success: false,
+                    message: format!(
+                        "manifest.json not found at {} and project '{}' has no site_url configured",
+                        manifest_path.display(),
+                        task.project_id
+                    ),
+                    output: None,
+                })?;
+            let sitemap_url = project
+                .sitemap_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(String::from)
+                .unwrap_or_else(|| format!("{}/sitemap.xml", normalize_site_for_url_match(&site_url)));
+            Ok((site_url, sitemap_url))
+        }
+        Err(e) => Err(crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "manifest.json not found at {} and failed to load project from DB: {}",
+                manifest_path.display(),
+                e
+            ),
+            output: None,
+        }),
+    }
+}
+
 // ─── GSC collection ───────────────────────────────────────────────────────────
 
 /// Native Rust implementation of the GSC collection step.
 ///
-/// 1. Reads sitemap URL from manifest.json.
+/// 1. Reads sitemap URL from manifest.json (or project DB for live-site).
 /// 2. Mints a service account token.
 /// 3. Fetches all sitemap URLs (up to 200).
 /// 4. Calls the URL Inspection API for each URL.
@@ -295,47 +383,18 @@ pub(crate) fn exec_collect_gsc(
 ) -> crate::engine::workflows::StepResult {
     use crate::config::env_resolver::EnvResolver;
     use std::collections::HashMap;
-    let _ = task;
 
     let paths = ProjectPaths::from_path(project_path);
     let resolver = EnvResolver::new(project_path);
 
-    // 1. manifest.json → site_url + sitemap_url
-    let manifest_path = paths.automation_dir.join("manifest.json");
-    let manifest: serde_json::Value = match std::fs::read_to_string(&manifest_path) {
-        Ok(s) => match serde_json::from_str(&s) {
-            Ok(v) => v,
-            Err(e) => return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to parse manifest.json: {}", e),
-                output: None,
-            },
-        },
-        Err(_) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!(
-                "manifest.json not found at {} — run 'Init Workspace' first",
-                manifest_path.display()
-            ),
-            output: None,
-        },
+    // 1. Resolve site_url + sitemap_url (manifest.json → project DB fallback)
+    let (site_url, sitemap_url) = match resolve_site_config(task, project_path) {
+        Ok(v) => v,
+        Err(step_result) => return step_result,
     };
 
-    let site_url = match manifest.get("gsc_site").or_else(|| manifest.get("url"))
-        .and_then(|v| v.as_str()).map(String::from)
-    {
-        Some(u) => u,
-        None => return crate::engine::workflows::StepResult {
-            success: false,
-            message: "No 'url' or 'gsc_site' field in manifest.json".to_string(),
-            output: None,
-        },
-    };
-
-    let sitemap_url = manifest.get("sitemap")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| format!("{}/sitemap.xml", normalize_site_for_url_match(&site_url)));
+    log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
+    let site_match_prefix = normalize_site_for_url_match(&site_url);
 
     log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
     let site_match_prefix = normalize_site_for_url_match(&site_url);

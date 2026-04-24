@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Shell } from './components/layout/Shell'
 import { TaskBoard } from './components/tasks/TaskBoard'
 import { ArticleTable } from './components/articles/ArticleTable'
+import { LiveSiteAudit } from './components/articles/LiveSiteAudit'
+import { LiveSiteLinkingMap } from './components/articles/LiveSiteLinkingMap'
+import { LiveSitePageTable } from './components/articles/LiveSitePageTable'
 import { ContentHealth } from './components/articles/ContentHealth'
 import { LinkingMap } from './components/articles/LinkingMap'
 import { Reddit } from './components/reddit/Reddit'
@@ -237,36 +240,68 @@ export default function App() {
           />
         )}
         {activeView === 'articles' && (
-          <div className="flex flex-col h-full overflow-hidden">
-            <Tabs defaultValue="list" className="flex flex-col h-full">
-              <div className="px-6 pt-4 border-b border-border shrink-0">
-                <TabsList className="bg-card border border-border">
-                  <TabsTrigger value="list" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-                    Articles
-                  </TabsTrigger>
-                  <TabsTrigger value="health" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-                    Health
-                  </TabsTrigger>
-                  <TabsTrigger value="links" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-                    Links
-                  </TabsTrigger>
-                </TabsList>
-              </div>
-              <TabsContent value="list" className="flex-1 overflow-y-auto mt-0 p-0">
-                <ArticleTable
-                  projectId={activeProject?.id ?? ''}
-                  project={activeProject ?? undefined}
-                  onEditProject={activeProject ? () => setModalProject(activeProject) : undefined}
-                />
-              </TabsContent>
-              <TabsContent value="health" className="flex-1 overflow-y-auto mt-0 p-0">
-                <ContentHealth projectId={activeProject?.id ?? ''} />
-              </TabsContent>
-              <TabsContent value="links" className="flex-1 overflow-y-auto mt-0 p-0">
-                <LinkingMap projectId={activeProject?.id ?? ''} />
-              </TabsContent>
-            </Tabs>
-          </div>
+          activeProject?.project_mode === 'live_site' ? (
+            <div className="flex flex-col h-full overflow-hidden">
+              <Tabs defaultValue="pages" className="flex flex-col h-full">
+                <div className="px-6 pt-4 border-b border-border shrink-0">
+                  <TabsList className="bg-card border border-border">
+                    <TabsTrigger value="pages" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                      Pages
+                    </TabsTrigger>
+                    <TabsTrigger value="audit" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                      Audit
+                    </TabsTrigger>
+                    <TabsTrigger value="links" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                      Links
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+                <TabsContent value="pages" className="flex-1 overflow-y-auto mt-0 p-0">
+                  <LiveSitePageTable
+                    projectId={activeProject?.id ?? ''}
+                    project={activeProject ?? undefined}
+                  />
+                </TabsContent>
+                <TabsContent value="audit" className="flex-1 overflow-y-auto mt-0 p-0">
+                  <LiveSiteAudit projectId={activeProject?.id ?? ''} />
+                </TabsContent>
+                <TabsContent value="links" className="flex-1 overflow-y-auto mt-0 p-0">
+                  <LiveSiteLinkingMap projectId={activeProject?.id ?? ''} />
+                </TabsContent>
+              </Tabs>
+            </div>
+          ) : (
+            <div className="flex flex-col h-full overflow-hidden">
+              <Tabs defaultValue="list" className="flex flex-col h-full">
+                <div className="px-6 pt-4 border-b border-border shrink-0">
+                  <TabsList className="bg-card border border-border">
+                    <TabsTrigger value="list" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                      Articles
+                    </TabsTrigger>
+                    <TabsTrigger value="health" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                      Health
+                    </TabsTrigger>
+                    <TabsTrigger value="links" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                      Links
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+                <TabsContent value="list" className="flex-1 overflow-y-auto mt-0 p-0">
+                  <ArticleTable
+                    projectId={activeProject?.id ?? ''}
+                    project={activeProject ?? undefined}
+                    onEditProject={activeProject ? () => setModalProject(activeProject) : undefined}
+                  />
+                </TabsContent>
+                <TabsContent value="health" className="flex-1 overflow-y-auto mt-0 p-0">
+                  <ContentHealth projectId={activeProject?.id ?? ''} />
+                </TabsContent>
+                <TabsContent value="links" className="flex-1 overflow-y-auto mt-0 p-0">
+                  <LinkingMap projectId={activeProject?.id ?? ''} />
+                </TabsContent>
+              </Tabs>
+            </div>
+          )
         )}
         {activeView === 'settings' && <Settings projectId={activeProject?.id} />}
         {activeView === 'reddit' && (

@@ -10,6 +10,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::project_paths::ProjectPaths;
+use crate::models::live_site::LiveSitePage;
+use crate::models::project::ProjectMode;
 use crate::models::task::Task;
 
 // ─── Coverage-Aware Filtering ─────────────────────────────────────────────────
@@ -55,6 +57,52 @@ fn load_coverage_clusters(project_path: &str) -> Vec<CoverageCluster> {
             }).collect()
         })
         .unwrap_or_default()
+}
+
+fn normalize_keyword_candidate(value: &str) -> Option<String> {
+    let lowered = value.trim().to_lowercase();
+    if lowered.is_empty() {
+        return None;
+    }
+
+    let normalized = lowered
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if normalized.len() < 3 {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn collect_existing_keywords_from_live_site(pages: &[LiveSitePage]) -> HashSet<String> {
+    let mut existing = HashSet::new();
+
+    for page in pages {
+        if let Some(title) = normalize_keyword_candidate(&page.title) {
+            existing.insert(title);
+        }
+        if let Some(h1) = page.h1.as_deref().and_then(normalize_keyword_candidate) {
+            existing.insert(h1);
+        }
+        if let Some(last_segment) = page
+            .path
+            .trim_matches('/')
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .next_back()
+            .and_then(normalize_keyword_candidate)
+        {
+            existing.insert(last_segment);
+        }
+    }
+
+    existing
 }
 
 const STOP_WORDS: &[&str] = &[
@@ -471,6 +519,27 @@ pub(crate) fn exec_keyword_research_native(
 
     let paths = ProjectPaths::from_path(project_path);
     let is_dataforseo = seo_provider.eq_ignore_ascii_case("dataforseo");
+    let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to open app database: {}", e),
+                output: None,
+            }
+        }
+    };
+    let project = match crate::engine::task_store::get_project(&db, &task.project_id) {
+        Ok(project) => project,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to load project '{}': {}", task.project_id, e),
+                output: None,
+            }
+        }
+    };
+    let is_live_site_project = project.project_mode == ProjectMode::LiveSite;
 
     // ── Re-use cached results if this step already ran ────────────────────────
     // Prevents burning paid API credits on accidental re-runs.
@@ -545,7 +614,7 @@ pub(crate) fn exec_keyword_research_native(
 
     // ── Pre-flight: articles.json must exist ──────────────────────────────────
     let articles_json_path = paths.automation_dir.join("articles.json");
-    if !articles_json_path.exists() {
+    if !is_live_site_project && !articles_json_path.exists() {
         return crate::engine::workflows::StepResult {
             success: false,
             message: format!(
@@ -569,20 +638,33 @@ pub(crate) fn exec_keyword_research_native(
 
     // Load existing keywords from articles.json so we can skip already-covered ones.
     // articles.json format: {"nextArticleId": N, "articles": [...]}
-    let existing_keywords: HashSet<String> = std::fs::read_to_string(&articles_json_path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| {
-            // Support both {"articles": [...]} wrapper and bare [...] array.
-            let arr = v["articles"].as_array().or_else(|| v.as_array());
-            arr.map(|items| {
-                items.iter()
-                    .filter_map(|a| a["target_keyword"].as_str())
-                    .map(|k| k.to_lowercase())
-                    .collect()
+    let existing_keywords: HashSet<String> = if is_live_site_project {
+        match crate::live_site::list_live_site_pages(&db, &task.project_id) {
+            Ok(pages) => collect_existing_keywords_from_live_site(&pages),
+            Err(e) => {
+                return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: format!("Failed to load live-site pages for keyword filtering: {}", e),
+                    output: None,
+                }
+            }
+        }
+    } else {
+        std::fs::read_to_string(&articles_json_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| {
+                // Support both {"articles": [...]} wrapper and bare [...] array.
+                let arr = v["articles"].as_array().or_else(|| v.as_array());
+                arr.map(|items| {
+                    items.iter()
+                        .filter_map(|a| a["target_keyword"].as_str())
+                        .map(|k| k.to_lowercase())
+                        .collect()
+                })
             })
-        })
-        .unwrap_or_default();
+            .unwrap_or_default()
+    };
 
     log::info!("[keyword_research_native] {} existing keywords to filter against", existing_keywords.len());
 
