@@ -49,7 +49,15 @@ fn load_skill_with_fallback(repo_root: &Path, skill_name: &str) -> Option<crate:
 
 /// Build the CTR audit context by reading articles.json, extracting excerpts,
 /// computing clicks_lost per article, and returning structured JSON.
-pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepResult {
+///
+/// Uses persistent `article_audit_state` to skip articles that were healthy on the
+/// last audit AND have not changed since. This prevents re-flagging already-fixed
+/// issues across repeated audit runs.
+pub(crate) fn exec_ctr_build_context(
+    task: &Task,
+    project_path: &str,
+    conn: &Connection,
+) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let articles_path = paths.automation_dir.join("articles.json");
 
@@ -80,11 +88,11 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
 
     let mut article_records: Vec<serde_json::Value> = Vec::new();
     let mut skipped_healthy = 0usize;
+    let mut skipped_unchanged = 0usize;
 
     for article in articles.iter() {
         let id = article["id"].as_i64().unwrap_or(0);
         let url_slug = article["url_slug"].as_str().unwrap_or("").to_string();
-        let title = article["title"].as_str().unwrap_or("").to_string();
         let target_keyword = article["target_keyword"].as_str().unwrap_or("").to_string();
         let file_ref = article["file"].as_str().unwrap_or("").to_string();
 
@@ -94,30 +102,57 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
         let ctr = gsc["ctr"].as_f64().unwrap_or(0.0);
         let avg_position = gsc["avg_position"].as_f64().unwrap_or(0.0);
 
-        // Extract current title, meta_description, first_paragraph, h1, faq_schema from source file
+        // Extract current MDX state
         let (current_title, meta_description, first_paragraph, h1, has_faq_schema) =
-            read_article_excerpt(project_path, &file_ref);
+            crate::engine::exec::audit_health::read_article_excerpt(project_path, &file_ref);
 
-        // Compute clicks_lost: impressions * max(0, 0.005 - actual_ctr)
-        let clicks_lost = impressions * (0.005_f64 - ctr).max(0.0);
+        // Compute content hash for change detection
+        let content_hash = crate::engine::exec::audit_health::compute_content_hash(
+            &current_title,
+            &meta_description,
+            &first_paragraph,
+        );
 
-        // Lightweight health check: skip articles that already look fixed.
-        // Uses CURRENT MDX state, not stale articles.json data.
-        let meta_ok = !meta_description.is_empty() && meta_description.len() >= 50;
-        let title_ok = current_title.len() <= 60;
-        let first_para_word_count = first_paragraph.split_whitespace().count();
-        let first_para_lower = first_paragraph.to_lowercase();
-        let keyword_lower = target_keyword.to_lowercase();
-        let has_keyword_or_question = keyword_lower.is_empty()
-            || first_para_lower.contains(&keyword_lower)
-            || first_paragraph.contains('?');
-        let snippet_ok = first_para_word_count >= 30 && has_keyword_or_question;
-        let faq_ok = has_faq_schema;
+        // Check stored audit state: if hash matches and was healthy, skip
+        if let Ok(Some(stored)) = crate::db::get_article_audit_state(
+            conn,
+            &task.project_id,
+            &file_ref,
+            "ctr_audit",
+        ) {
+            if stored.content_hash == content_hash && stored.was_healthy {
+                skipped_unchanged += 1;
+                continue;
+            }
+        }
 
-        if meta_ok && title_ok && snippet_ok && faq_ok {
+        // Run deterministic health checks
+        let health = crate::engine::exec::audit_health::check_article_health(
+            &current_title,
+            &meta_description,
+            &first_paragraph,
+            &target_keyword,
+            has_faq_schema,
+        );
+
+        // Persist the audit state immediately (healthy or not)
+        let _ = crate::db::set_article_audit_state(
+            conn,
+            &task.project_id,
+            &file_ref,
+            "ctr_audit",
+            health.all_ok(),
+            &content_hash,
+            &health.issues,
+        );
+
+        if health.all_ok() {
             skipped_healthy += 1;
             continue;
         }
+
+        // Compute clicks_lost: impressions * max(0, 0.005 - actual_ctr)
+        let clicks_lost = impressions * (0.005_f64 - ctr).max(0.0);
 
         article_records.push(serde_json::json!({
             "id": id,
@@ -136,18 +171,19 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
             },
             "clicks_lost": clicks_lost,
             "issues_detected": {
-                "title_too_long": !title_ok,
-                "meta_too_short": !meta_ok,
-                "snippet_suboptimal": !snippet_ok,
-                "missing_faq_schema": !faq_ok,
+                "title_too_long": !health.title_ok,
+                "meta_too_short": !health.meta_ok,
+                "snippet_suboptimal": !health.snippet_ok,
+                "missing_faq_schema": !health.faq_ok,
             },
         }));
     }
 
-    if skipped_healthy > 0 {
+    if skipped_healthy > 0 || skipped_unchanged > 0 {
         log::info!(
-            "[ctr_audit] Skipped {} articles that already look healthy (good title/meta/snippet/faq)",
-            skipped_healthy
+            "[ctr_audit] Skipped {} healthy + {} unchanged articles",
+            skipped_healthy,
+            skipped_unchanged
         );
     }
 
@@ -186,116 +222,13 @@ pub(crate) fn exec_ctr_build_context(_task: &Task, project_path: &str) -> StepRe
     StepResult {
         success: true,
         message: format!(
-            "CTR context built for {} articles",
-            article_records.len()
+            "CTR context built for {} articles ({} healthy, {} unchanged)",
+            article_records.len(),
+            skipped_healthy,
+            skipped_unchanged
         ),
         output: Some(summary_str),
     }
-}
-
-/// Read an MDX file and extract (title, meta_description, first_paragraph, h1, has_faq_schema).
-fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, String, String, bool) {
-    if file_ref.is_empty() {
-        return (String::new(), String::new(), String::new(), String::new(), false);
-    }
-
-    let repo_root = Path::new(project_path);
-    let p = Path::new(file_ref);
-    let full = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        repo_root.join(p)
-    };
-
-    let content = match std::fs::read_to_string(&full) {
-        Ok(s) => s,
-        Err(e) => {
-            log::warn!("[ctr_audit] Could not read {}: {}", full.display(), e);
-            return (String::new(), String::new(), String::new(), String::new(), false);
-        }
-    };
-
-    // Use cleaner::parse_frontmatter to split frontmatter and body
-    let (frontmatter_str, body) = match crate::content::cleaner::parse_frontmatter(&content) {
-        Some((fm, b)) => (fm, b),
-        None => ("", content.as_str()),
-    };
-
-    // Extract title from frontmatter
-    let title = frontmatter_str
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("title:") {
-                let val = rest.trim().trim_matches('"').trim_matches('\'');
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
-            None
-        })
-        .unwrap_or_default();
-
-    // Extract meta_description from frontmatter
-    let meta_description = frontmatter_str
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("description:") {
-                let val = rest.trim().trim_matches('"').trim_matches('\'');
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
-            None
-        })
-        .unwrap_or_default();
-
-    // Extract h1: first line starting with "# " in body
-    let h1 = body
-        .lines()
-        .find(|l| {
-            let t = l.trim_start();
-            t.starts_with("# ") && !t.starts_with("## ")
-        })
-        .map(|l| l.trim_start_matches('#').trim().to_string())
-        .unwrap_or_default();
-
-    // Extract first_paragraph: first non-empty, non-heading line
-    let first_paragraph = body
-        .lines()
-        .map(|l| l.trim())
-        .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("---"))
-        .unwrap_or("")
-        .to_string();
-
-    let has_faq = has_faq_schema(&content);
-
-    (title, meta_description, first_paragraph, h1, has_faq)
-}
-
-/// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage or markdown FAQ section).
-fn has_faq_schema(content: &str) -> bool {
-    // 1. Check for JSON-LD FAQPage schema
-    let content_lower = content.to_lowercase();
-    if content_lower.contains("faqpage")
-        || content_lower.contains("\"@type\": \"question\"")
-        || content_lower.contains("'@type': 'question'")
-        || content_lower.contains("\"@type\":\"question\"")
-    {
-        return true;
-    }
-
-    // 2. Check for markdown FAQ headings
-    content.lines().any(|line| {
-        let trimmed = line.trim().to_lowercase();
-        trimmed.starts_with("# faq")
-            || trimmed.starts_with("## faq")
-            || trimmed.starts_with("### faq")
-            || trimmed.starts_with("# frequently asked questions")
-            || trimmed.starts_with("## frequently asked questions")
-            || trimmed.starts_with("### frequently asked questions")
-    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -531,11 +464,18 @@ This is another article with different content.
         let _ = std::fs::remove_dir_all(path);
     }
 
+    fn test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
     #[test]
     fn test_read_article_excerpt() {
         let path = test_dir();
         setup_project(&path);
-        let (title, meta, first, h1, has_faq) = read_article_excerpt(&path, "content/001_test_article.mdx");
+        let (title, meta, first, h1, has_faq) =
+            crate::engine::exec::audit_health::read_article_excerpt(&path, "content/001_test_article.mdx");
         assert_eq!(title, "Test Article | Brand | Brand -- Tagline");
         assert_eq!(meta, "A short desc");
         assert_eq!(h1, "Test Article | Brand | Brand -- Tagline");
@@ -566,7 +506,8 @@ This is another article with different content.
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
-        let result = exec_ctr_build_context(&task, &path);
+        let conn = test_db();
+        let result = exec_ctr_build_context(&task, &path, &conn);
         assert!(result.success, "build_context failed: {}", result.message);
 
         let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
@@ -603,7 +544,8 @@ This is another article with different content.
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
-        let result = exec_ctr_build_context(&task, &path);
+        let conn = test_db();
+        let result = exec_ctr_build_context(&task, &path, &conn);
         let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
         let articles = output["top_20_by_clicks_lost"].as_array().unwrap();
 
@@ -654,7 +596,8 @@ Some content here.
 "#;
         std::fs::write(content_dir.join("with_faq.mdx"), mdx_with_faq).unwrap();
 
-        let (title, meta, first, h1, has_faq) = read_article_excerpt(&path, "content/with_faq.mdx");
+        let (title, meta, first, h1, has_faq) =
+            crate::engine::exec::audit_health::read_article_excerpt(&path, "content/with_faq.mdx");
         assert_eq!(title, "FAQ Article");
         assert!(has_faq, "Should detect JSON-LD FAQPage schema");
 
@@ -671,7 +614,8 @@ Some content here.
 "#;
         std::fs::write(content_dir.join("no_faq.mdx"), mdx_no_faq).unwrap();
 
-        let (_, _, _, _, has_faq2) = read_article_excerpt(&path, "content/no_faq.mdx");
+        let (_, _, _, _, has_faq2) =
+            crate::engine::exec::audit_health::read_article_excerpt(&path, "content/no_faq.mdx");
         assert!(!has_faq2, "Should not detect FAQ schema when absent");
 
         // MDX with markdown FAQ heading
@@ -689,7 +633,8 @@ Q: What?\nA: This.
 "#;
         std::fs::write(content_dir.join("md_faq.mdx"), mdx_md_faq).unwrap();
 
-        let (_, _, _, _, has_faq3) = read_article_excerpt(&path, "content/md_faq.mdx");
+        let (_, _, _, _, has_faq3) =
+            crate::engine::exec::audit_health::read_article_excerpt(&path, "content/md_faq.mdx");
         assert!(has_faq3, "Should detect markdown FAQ heading");
 
         cleanup(&path);
@@ -756,7 +701,8 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
         };
 
         // Build context should find 0 articles with issues
-        let result = exec_ctr_build_context(&task, &path);
+        let conn = test_db();
+        let result = exec_ctr_build_context(&task, &path, &conn);
         assert!(result.success);
         let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
         assert_eq!(output["total_articles"].as_i64().unwrap(), 0, "Expected 0 articles with issues");

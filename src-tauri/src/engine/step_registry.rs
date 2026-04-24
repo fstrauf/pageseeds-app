@@ -594,9 +594,20 @@ impl StepRegistry {
         handlers.insert(StepKind::CtrBuildContext, Box::new(|_step, ctx| {
             let task = ctx.task.clone();
             let project_path = ctx.project_path.to_string();
+            let db_path = crate::db::default_db_path();
             Box::pin(async move {
                 tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::ctr_audit::exec_ctr_build_context(&task, &project_path)
+                    let conn = match rusqlite::Connection::open(&db_path) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return StepResult {
+                                success: false,
+                                message: format!("Failed to open DB: {}", e),
+                                output: None,
+                            };
+                        }
+                    };
+                    crate::engine::exec::ctr_audit::exec_ctr_build_context(&task, &project_path, &conn)
                 })
                 .await
                 .unwrap_or_else(|e| StepResult {

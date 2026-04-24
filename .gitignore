@@ -30,3 +30,8 @@ dist-ssr
 .build_windows_exe_path
 .build_windows_signature
 latest.json
+
+# Smoke test SQLite temp files
+smoke_*.db
+smoke_*.db-shm
+smoke_*.db-wal

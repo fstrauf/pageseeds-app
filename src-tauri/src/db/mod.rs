@@ -273,6 +273,24 @@ ALTER TABLE live_site_pages ADD COLUMN gsc_position REAL;
 ALTER TABLE live_site_pages ADD COLUMN gsc_synced_at TEXT;
 "#;
 
+static MIGRATION_V21: &str = r#"
+-- Persistent audit state per article per audit type
+CREATE TABLE IF NOT EXISTS article_audit_state (
+    project_id      TEXT NOT NULL,
+    article_file    TEXT NOT NULL,
+    audit_type      TEXT NOT NULL,
+    last_audited_at TEXT NOT NULL,
+    was_healthy     INTEGER NOT NULL DEFAULT 0,
+    content_hash    TEXT NOT NULL,
+    issues_found    TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (project_id, article_file, audit_type),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_audit_state_project ON article_audit_state(project_id);
+CREATE INDEX IF NOT EXISTS idx_article_audit_state_audit ON article_audit_state(project_id, audit_type);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -655,6 +673,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 21 {
+        conn.execute_batch(MIGRATION_V21)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (21, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn
@@ -684,4 +710,135 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Article Audit State CRUD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Persistent state for a single article under a specific audit type.
+#[derive(Debug, Clone)]
+pub struct ArticleAuditState {
+    pub project_id: String,
+    pub article_file: String,
+    pub audit_type: String,
+    pub last_audited_at: String,
+    pub was_healthy: bool,
+    pub content_hash: String,
+    pub issues_found: Vec<String>,
+}
+
+/// Retrieve the stored audit state for an article.
+pub fn get_article_audit_state(
+    conn: &Connection,
+    project_id: &str,
+    article_file: &str,
+    audit_type: &str,
+) -> Result<Option<ArticleAuditState>> {
+    let mut stmt = conn.prepare(
+        "SELECT last_audited_at, was_healthy, content_hash, issues_found
+         FROM article_audit_state
+         WHERE project_id = ?1 AND article_file = ?2 AND audit_type = ?3",
+    )?;
+
+    let row = stmt.query_row(rusqlite::params![project_id, article_file, audit_type], |row| {
+        let issues_json: String = row.get(3)?;
+        let issues: Vec<String> = serde_json::from_str(&issues_json).unwrap_or_default();
+        Ok(ArticleAuditState {
+            project_id: project_id.to_string(),
+            article_file: article_file.to_string(),
+            audit_type: audit_type.to_string(),
+            last_audited_at: row.get(0)?,
+            was_healthy: row.get::<_, i64>(1)? != 0,
+            content_hash: row.get(2)?,
+            issues_found: issues,
+        })
+    });
+
+    match row {
+        Ok(state) => Ok(Some(state)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Store (or update) the audit state for an article.
+pub fn set_article_audit_state(
+    conn: &Connection,
+    project_id: &str,
+    article_file: &str,
+    audit_type: &str,
+    was_healthy: bool,
+    content_hash: &str,
+    issues_found: &[String],
+) -> Result<()> {
+    let issues_json = serde_json::to_string(issues_found).unwrap_or_else(|_| "[]".to_string());
+    let now = chrono::Utc::now().to_rfc3339();
+    let healthy_i64 = if was_healthy { 1 } else { 0 };
+
+    conn.execute(
+        "INSERT INTO article_audit_state
+         (project_id, article_file, audit_type, last_audited_at, was_healthy, content_hash, issues_found)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(project_id, article_file, audit_type)
+         DO UPDATE SET
+             last_audited_at = excluded.last_audited_at,
+             was_healthy = excluded.was_healthy,
+             content_hash = excluded.content_hash,
+             issues_found = excluded.issues_found",
+        rusqlite::params![
+            project_id,
+            article_file,
+            audit_type,
+            now,
+            healthy_i64,
+            content_hash,
+            issues_json,
+        ],
+    )?;
+
+    Ok(())
+}
+
+/// Delete all audit state for a project (e.g. when project is deleted).
+pub fn delete_project_audit_state(conn: &Connection, project_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM article_audit_state WHERE project_id = ?1",
+        [project_id],
+    )?;
+    Ok(())
+}
+
+/// Get all audit states for a project + audit type.
+pub fn list_article_audit_states(
+    conn: &Connection,
+    project_id: &str,
+    audit_type: &str,
+) -> Result<Vec<ArticleAuditState>> {
+    let mut stmt = conn.prepare(
+        "SELECT article_file, last_audited_at, was_healthy, content_hash, issues_found
+         FROM article_audit_state
+         WHERE project_id = ?1 AND audit_type = ?2",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![project_id, audit_type], |row| {
+        let issues_json: String = row.get(4)?;
+        let issues: Vec<String> = serde_json::from_str(&issues_json).unwrap_or_default();
+        Ok(ArticleAuditState {
+            project_id: project_id.to_string(),
+            article_file: row.get(0)?,
+            audit_type: audit_type.to_string(),
+            last_audited_at: row.get(1)?,
+            was_healthy: row.get::<_, i64>(2)? != 0,
+            content_hash: row.get(3)?,
+            issues_found: issues,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
 }
