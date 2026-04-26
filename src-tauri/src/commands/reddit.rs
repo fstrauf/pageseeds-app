@@ -179,12 +179,7 @@ pub async fn draft_reddit_reply(
     let (project_path, agent_provider, opp) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-        // Agent provider is global (user preference), check for legacy project setting
-        let provider = if let Some(legacy) = &project.agent_provider {
-            legacy.clone()
-        } else {
-            global_settings::get_agent_provider(&db)
-        };
+        let provider = global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
         let opp = crate::reddit::db::get_opportunity(&db, &post_id)
             .map_err(|e| e.to_string())?;
         (project.path.clone(), provider, opp)
@@ -345,12 +340,7 @@ pub async fn enrich_reddit_opportunities(
     let (project_path, agent_provider) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-        // Agent provider is global (user preference), check for legacy project setting
-        let provider = if let Some(legacy) = &project.agent_provider {
-            legacy.clone()
-        } else {
-            global_settings::get_agent_provider(&db)
-        };
+        let provider = global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
         (project.path.clone(), provider)
     };
 

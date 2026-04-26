@@ -200,6 +200,41 @@ pub fn gsc_parse_redirect_csv(csv_content: String) -> Result<Vec<RedirectRecord>
     crate::gsc::redirects::parse_redirect_csv(&csv_content).map_err(|e| e.to_string())
 }
 
+/// Resolve a GSC token using the shared state cache, falling back to
+/// service-account authentication via the project's env resolver.
+/// On success, caches the new token in `gsc_state` and returns it.
+pub async fn resolve_gsc_token(
+    gsc_state: &State<'_, GscState>,
+    project_path: &str,
+) -> Result<Option<String>, String> {
+    // 1. Check cache (scoped so guard never crosses an await)
+    let cached = {
+        let guard = gsc_state.token.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().filter(|t| !t.is_expired()).map(|t| t.access_token.clone())
+    };
+    if let Some(token) = cached {
+        return Ok(Some(token));
+    }
+
+    // 2. Try service account
+    let resolver = EnvResolver::new(project_path);
+    if let Some(sa_path) = resolver
+        .resolve("GSC_SERVICE_ACCOUNT_PATH")
+        .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS"))
+        .map(|(v, _)| v)
+    {
+        if let Ok(token_state) = crate::gsc::auth::get_service_account_token(&sa_path).await {
+            let token = token_state.access_token.clone();
+            if let Ok(mut guard) = gsc_state.token.lock() {
+                *guard = Some(token_state);
+            }
+            return Ok(Some(token));
+        }
+    }
+
+    Ok(None)
+}
+
 pub(super) fn gsc_token(gsc_state: &State<'_, GscState>) -> Result<String, String> {
     let guard = gsc_state.token.lock().map_err(|e| e.to_string())?;
     match guard.as_ref() {

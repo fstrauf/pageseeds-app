@@ -209,16 +209,11 @@ pub fn resolve_year_mismatch_agent(
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::PathBuf::from(&project.path);
     
-    // Agent provider is global (user preference), check for legacy project setting
-    let provider = if let Some(legacy) = &project.agent_provider {
-        legacy.as_str()
-    } else {
-        &global_settings::get_agent_provider(&db)
-    };
+    let provider = global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
     
     let all_articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
     crate::content::publish::resolve_year_mismatch_with_agent(
-        provider,
+        &provider,
         article_id,
         &title,
         title_year,

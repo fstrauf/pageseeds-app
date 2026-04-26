@@ -42,6 +42,16 @@ pub fn get_agent_provider(conn: &Connection) -> String {
         .unwrap_or_else(|| DEFAULT_AGENT_PROVIDER.to_string())
 }
 
+/// Resolve the agent provider for a project.
+/// Uses the project's legacy `agent_provider` if set and non-empty,
+/// otherwise falls back to the global setting.
+pub fn resolve_agent_provider(conn: &Connection, legacy: Option<&str>) -> String {
+    legacy
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| get_agent_provider(conn))
+}
+
 /// Set the global agent provider setting.
 pub fn set_agent_provider(conn: &Connection, provider: &str) -> Result<()> {
     log::info!("[global_settings] Setting agent_provider to '{}'", provider);

@@ -181,16 +181,9 @@ pub async fn check_agent_status_for_project(
 ) -> Result<agent::AgentStatus, String> {
     let provider = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        // First check if project has a legacy agent_provider
         if let Ok(project) = task_store::get_project(&db, &project_id) {
-            if let Some(project_provider) = project.agent_provider {
-                project_provider
-            } else {
-                // Fall back to global
-                global_settings::get_agent_provider(&db)
-            }
+            global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref())
         } else {
-            // Project not found, use global
             global_settings::get_agent_provider(&db)
         }
     };
