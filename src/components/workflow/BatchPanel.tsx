@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Zap, RefreshCw, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 import { getBatchSummary, runBatch } from '../../lib/tauri'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { BatchResult, BatchSummary } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -15,7 +16,7 @@ export function BatchPanel({ projectId }: BatchPanelProps) {
   const [summary, setSummary] = useState<BatchSummary | null>(null)
   const [result, setResult] = useState<BatchResult | null>(null)
   const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [maxTasks, setMaxTasks] = useState(20)
   const [pauseOnError, setPauseOnError] = useState(true)
 
@@ -24,9 +25,9 @@ export function BatchPanel({ projectId }: BatchPanelProps) {
       const s = await getBatchSummary(projectId)
       setSummary(s)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   useEffect(() => {
     if (projectId) loadSummary()
@@ -35,13 +36,12 @@ export function BatchPanel({ projectId }: BatchPanelProps) {
   async function startBatch() {
     setRunning(true)
     setResult(null)
-    setError(null)
     try {
       const r = await runBatch(projectId, maxTasks, pauseOnError)
       setResult(r)
       await loadSummary()
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setRunning(false)
     }
@@ -125,12 +125,6 @@ export function BatchPanel({ projectId }: BatchPanelProps) {
             <span className="text-xs text-muted-foreground animate-pulse">Processing tasks…</span>
           )}
         </div>
-
-        {error && (
-          <div className="rounded border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
 
         {result && (
           <div className="flex flex-col gap-3">

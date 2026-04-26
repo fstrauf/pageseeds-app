@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Plus, Trash2, RefreshCw, Play, ToggleLeft, ToggleRight } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import {
   listSchedulerRules,
   upsertSchedulerRule,
@@ -161,10 +162,10 @@ function NewRuleForm({
 }
 
 export function SchedulerConfig({ projectId }: SchedulerConfigProps) {
+  const { showError } = useErrorHandler()
   const [rules, setRules] = useState<SchedulerRule[]>([])
   const [cycleResult, setCycleResult] = useState<SchedulerCycleResult | null>(null)
   const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
 
   const load = useCallback(async () => {
@@ -172,9 +173,9 @@ export function SchedulerConfig({ projectId }: SchedulerConfigProps) {
       const data = await listSchedulerRules(projectId)
       setRules(data)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   useEffect(() => {
     if (projectId) load()
@@ -193,13 +194,12 @@ export function SchedulerConfig({ projectId }: SchedulerConfigProps) {
   async function triggerCycle() {
     setRunning(true)
     setCycleResult(null)
-    setError(null)
     try {
       const r = await runSchedulerCycle(projectId)
       setCycleResult(r)
       await load()
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setRunning(false)
     }
@@ -233,12 +233,6 @@ export function SchedulerConfig({ projectId }: SchedulerConfigProps) {
             </Button>
           </div>
         </div>
-
-        {error && (
-          <div className="rounded border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
 
         {showAdd && (
           <NewRuleForm

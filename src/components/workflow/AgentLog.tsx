@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, Wand2, Copy, Check } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { listTaskArtifacts, normalizeOutput, listTasks } from '../../lib/tauri'
 import type { NormalizedArtifact, Task, TaskArtifact } from '../../lib/types'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -132,7 +133,7 @@ export function AgentLog({ projectId }: AgentLogProps) {
   const [loadingTasks, setLoadingTasks] = useState(false)
   const [loadingArtifacts, setLoadingArtifacts] = useState(false)
   const [normalizeResult, setNormalizeResult] = useState<NormalizedArtifact | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
 
   const loadTasks = useCallback(async () => {
     setLoadingTasks(true)
@@ -140,40 +141,39 @@ export function AgentLog({ projectId }: AgentLogProps) {
       const data = await listTasks(projectId)
       setTasks(data)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoadingTasks(false)
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   useEffect(() => {
     if (projectId) loadTasks()
   }, [projectId, loadTasks])
 
-  useEffect(() => {
-    if (selectedTask) loadArtifacts(selectedTask)
-  }, [selectedTask])
-
-  async function loadArtifacts(taskId: string) {
+  const loadArtifacts = useCallback(async (taskId: string) => {
     setLoadingArtifacts(true)
     setNormalizeResult(null)
-    setError(null)
     try {
       const data = await listTaskArtifacts(taskId)
       setArtifacts(data)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoadingArtifacts(false)
     }
-  }
+  }, [showError])
+
+  useEffect(() => {
+    if (selectedTask) loadArtifacts(selectedTask)
+  }, [selectedTask, loadArtifacts])
 
   async function handleNormalize(raw: string) {
     try {
       const result = await normalizeOutput(raw)
       setNormalizeResult(result)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     }
   }
 
@@ -215,12 +215,6 @@ export function AgentLog({ projectId }: AgentLogProps) {
             ))}
           </select>
         </div>
-
-        {error && (
-          <div className="rounded border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
 
         {/* Artifacts */}
         {selectedTask && (

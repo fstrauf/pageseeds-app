@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { CheckSquare, Square, Loader2, ExternalLink, MessageSquare } from 'lucide-react'
 import { createRedditReplyTasks } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -74,14 +75,14 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
   const queue = useQueue()
   const [rows, setRows] = useState<OpportunityRow[]>([])
   const [creating, setCreating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [expandedReply, setExpandedReply] = useState<string | null>(null)
 
   // Parse opportunities from task artifact
   useEffect(() => {
     const resultsArtifact = task.artifacts.find(a => a.key === 'reddit_results_stage')
     if (!resultsArtifact?.content) {
-      setError('No results found. The search may have failed or returned no opportunities.')
+      showError('No results found. The search may have failed or returned no opportunities.')
       return
     }
 
@@ -91,9 +92,9 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
       const sorted = opportunities.sort((a, b) => (b.final_score || 0) - (a.final_score || 0))
       setRows(sorted.map(opp => ({ opportunity: opp, selected: false })))
     } catch {
-      setError('Failed to parse search results. The data may be corrupted.')
+      showError('Failed to parse search results. The data may be corrupted.')
     }
-  }, [task])
+  }, [task, showError])
 
   const selectedCount = useMemo(() => rows.filter(r => r.selected).length, [rows])
   const criticalCount = useMemo(() => rows.filter(r => r.opportunity.severity?.toUpperCase() === 'CRITICAL').length, [rows])
@@ -121,7 +122,6 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
     if (selectedIds.length === 0) return
 
     setCreating(true)
-    setError(null)
 
     try {
       const newTasks = await createRedditReplyTasks(task.id, selectedIds)
@@ -141,18 +141,10 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
       
       onTasksCreated(newTasks)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setCreating(false)
     }
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-md bg-destructive/10 text-destructive px-3 py-2.5 text-xs">
-        {error}
-      </div>
-    )
   }
 
   if (rows.length === 0) {

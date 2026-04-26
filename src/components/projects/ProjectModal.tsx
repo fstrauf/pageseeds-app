@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { createProject, updateProject, openFolderDialog } from '../../lib/tauri'
 import type { Project, ProjectMode } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -51,7 +52,7 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
   const [sitemapUrl, setSitemapUrl] = useState(project?.sitemap_url ?? '')
   const [projectMode, setProjectMode] = useState<ProjectMode>(project?.project_mode ?? 'workspace')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const isWorkspaceProject = projectMode === 'workspace'
 
   useEffect(() => {
@@ -76,19 +77,18 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
 
   async function handleSave() {
     if (!name.trim()) {
-      setError('Project name is required.')
+      showError('Project name is required.')
       return
     }
     if (isWorkspaceProject && !path.trim()) {
-      setError('Workspace projects require a repository path.')
+      showError('Workspace projects require a repository path.')
       return
     }
     if (!isWorkspaceProject && !siteUrl.trim()) {
-      setError('Live site projects require a site URL.')
+      showError('Live site projects require a site URL.')
       return
     }
     setLoading(true)
-    setError(null)
     try {
       let saved: Project
       if (isEdit && project) {
@@ -115,7 +115,7 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
       }
       onSaved(saved)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -129,12 +129,6 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {error && (
-            <div className="px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
-              {error}
-            </div>
-          )}
-
           <div className="space-y-1.5">
             <Label htmlFor="proj-name">Project Name <span className="text-destructive">*</span></Label>
             <Input

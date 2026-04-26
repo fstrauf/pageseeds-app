@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CheckSquare, Square, Loader2, Sparkles } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { createArticleTasksFromKeywords } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
 import type { KeywordDifficultyEntry, KeywordResearchResult, Task } from '../../lib/types'
@@ -440,7 +441,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
     setSelected(defaultSelected)
   }, [defaultSelected])
   const [creating, setCreating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   
   // Get unique intents for filter dropdown
   const availableIntents = useMemo(() => {
@@ -517,7 +518,6 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
   async function handleCreate() {
     if (selected.size === 0) return
     setCreating(true)
-    setError(null)
     try {
       const tasks = await createArticleTasksFromKeywords(
         task.project_id,
@@ -540,7 +540,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
       
       onTasksCreated(tasks)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
       setCreating(false)
     }
   }
@@ -685,10 +685,6 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
         <p className="text-[11px] text-muted-foreground">
           {result.difficulty_skipped_keywords.length} additional keywords are available but hidden to keep this review focused to top-10.
         </p>
-      )}
-
-      {error && (
-        <div className="text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-md">{error}</div>
       )}
 
       {rows.length > 0 && (

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AlertCircle, CheckCircle, RefreshCw, Wrench, BookOpen } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { scanContentHealth, fixContentDates, analyzeArticleDatePolicy, analyzeArticleReadability, listArticles } from '../../lib/tauri'
 import type { CleaningResult, DateFixResult, DatePolicyReport, ReadabilityReport, Article } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -39,17 +40,16 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
   const [scanLoading, setScanLoading] = useState(false)
   const [dateLoading, setDateLoading] = useState(false)
   const [readabilityLoading, setReadabilityLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [tab, setTab] = useState('structural')
 
   async function handleScan(fix: boolean) {
     setScanLoading(true)
-    setError(null)
     try {
       const result = await scanContentHealth(projectId, !fix)
       setCleaning(result)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setScanLoading(false)
     }
@@ -57,7 +57,6 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
 
   async function handleAnalyseDates(apply: boolean) {
     setDateLoading(true)
-    setError(null)
     try {
       const [result, policy] = await Promise.all([
         fixContentDates(projectId, !apply),
@@ -66,7 +65,7 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
       setDateResult(result)
       setDatePolicy(policy)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setDateLoading(false)
     }
@@ -77,19 +76,18 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
       const articleList = await listArticles(projectId)
       setArticles(articleList)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     }
   }
   
   async function handleAnalyzeReadability(article: Article) {
     setReadabilityLoading(true)
-    setError(null)
     setSelectedArticle(article)
     try {
       const result = await analyzeArticleReadability(projectId, article.url_slug)
       setReadability(result)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setReadabilityLoading(false)
     }
@@ -98,13 +96,6 @@ export function ContentHealth({ projectId }: ContentHealthProps) {
   return (
     <div className="p-6 space-y-6 overflow-y-auto">
       <h2 className="text-base font-semibold text-foreground">Content Health</h2>
-
-      {error && (
-        <div className="flex items-start gap-2 px-3 py-2.5 rounded-md text-sm bg-destructive/15 text-destructive">
-          <AlertCircle size={14} className="mt-0.5 shrink-0" />
-          {error}
-        </div>
-      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-card border border-border">

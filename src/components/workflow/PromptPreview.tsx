@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Eye, Copy, Check } from 'lucide-react'
 import { listTasks, listSkills, buildPromptPreview } from '../../lib/tauri'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { PromptContext, Skill, Task } from '../../lib/types'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
@@ -17,23 +18,22 @@ export function PromptPreview({ projectId }: PromptPreviewProps) {
   const [loading, setLoading] = useState(false)
   const [loadingInit, setLoadingInit] = useState(false)
   const [context, setContext] = useState<PromptContext | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [copied, setCopied] = useState(false)
   const [activeSection, setActiveSection] = useState<number | null>(null)
 
   const init = useCallback(async () => {
     setLoadingInit(true)
-    setError(null)
     try {
       const [t, s] = await Promise.all([listTasks(projectId), listSkills(projectId)])
       setTasks(t)
       setSkills(s)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoadingInit(false)
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   useEffect(() => {
     if (projectId) init()
@@ -42,14 +42,13 @@ export function PromptPreview({ projectId }: PromptPreviewProps) {
   async function build() {
     if (!selectedTask || !selectedSkill) return
     setLoading(true)
-    setError(null)
     setContext(null)
     try {
       const ctx = await buildPromptPreview(selectedTask, selectedSkill)
       setContext(ctx)
       setActiveSection(null)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -117,12 +116,6 @@ export function PromptPreview({ projectId }: PromptPreviewProps) {
             {loading ? 'Building…' : 'Build Preview'}
           </button>
         </div>
-
-        {error && (
-          <div className="rounded border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
 
         {/* Result */}
         {context && (

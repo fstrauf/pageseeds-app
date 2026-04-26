@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { X } from 'lucide-react'
 import { createTask } from '../../lib/tauri'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -48,7 +49,7 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
   const [landingPageContext, setLandingPageContext] = useState('')
   const [priority, setPriority] = useState('medium')
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
 
   const resolvedType = taskType === '__custom__' ? customType.trim() : taskType
   const isKeywordResearch = KEYWORD_RESEARCH_TYPES.has(resolvedType)
@@ -58,7 +59,6 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
     e.preventDefault()
     if (!resolvedType) return
     setSaving(true)
-    setError(null)
     try {
       // Build description based on task type
       let description: string | undefined
@@ -81,7 +81,7 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
       const task = await createTask(projectId, resolvedType, title || undefined, description, priority)
       onCreated(task)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
       setSaving(false)
     }
   }
@@ -103,12 +103,6 @@ export function TaskCreate({ projectId, onClose, onCreated }: TaskCreateProps) {
 
         <form onSubmit={handleCreate}>
           <div className="px-5 py-5 space-y-4">
-            {error && (
-              <div className="px-3 py-2 rounded-md text-sm bg-destructive/15 text-destructive">
-                {error}
-              </div>
-            )}
-
             {/* Task type */}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Type</Label>

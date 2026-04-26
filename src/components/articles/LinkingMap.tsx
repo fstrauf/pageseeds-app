@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { AlertCircle, RefreshCw, Link2, ExternalLink } from 'lucide-react'
+import { RefreshCw, Link2, ExternalLink } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { scanContentLinks } from '../../lib/tauri'
 import type { LinkScanResult } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -21,17 +22,16 @@ interface LinkingMapProps {
 export function LinkingMap({ projectId }: LinkingMapProps) {
   const [result, setResult] = useState<LinkScanResult | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [showOrphansOnly, setShowOrphansOnly] = useState(false)
 
   async function handleScan() {
     setLoading(true)
-    setError(null)
     try {
       const data = await scanContentLinks(projectId)
       setResult(data)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -58,13 +58,6 @@ export function LinkingMap({ projectId }: LinkingMapProps) {
           Scan links
         </Button>
       </div>
-
-      {error && (
-        <div className="flex items-start gap-2 px-3 py-2.5 rounded-md text-sm bg-destructive/15 text-destructive">
-          <AlertCircle size={14} className="mt-0.5 shrink-0" />
-          {error}
-        </div>
-      )}
 
       {result && (
         <>

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { gscFetchAnalytics, gscFetchQueriesForPage } from '../../lib/tauri'
 import type { PageMetrics, QueryMetrics } from '../../lib/types'
 
@@ -27,19 +28,18 @@ export function GscDashboard({ siteUrl: defaultSite }: Props) {
   const [selectedPage, setSelectedPage] = useState<string | null>(null)
 
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
 
   async function fetch() {
     if (!site) return
     setLoading(true)
-    setError(null)
     setQueries([])
     setSelectedPage(null)
     try {
       const rows = await gscFetchAnalytics(site, startDate, endDate, limit)
       setPages(rows)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -51,7 +51,7 @@ export function GscDashboard({ siteUrl: defaultSite }: Props) {
       const qs = await gscFetchQueriesForPage(site, pageUrl, startDate, endDate, 20)
       setQueries(qs)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     }
   }
 
@@ -110,10 +110,6 @@ export function GscDashboard({ siteUrl: defaultSite }: Props) {
             {loading ? 'Loading…' : 'Fetch'}
           </button>
         </div>
-
-        {error && (
-          <p className="text-xs text-destructive px-3 py-2">{error}</p>
-        )}
 
         {/* Table */}
         <div className="flex-1 overflow-auto">

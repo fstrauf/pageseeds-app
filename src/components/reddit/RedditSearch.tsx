@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Search, Loader2 } from 'lucide-react'
 import { searchReddit, upsertRedditOpportunity } from '../../lib/tauri'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { RedditOpportunity, SubmissionSummary } from '../../lib/types'
 
 interface Props {
@@ -16,7 +17,7 @@ export function RedditSearch({ projectId, onSaved }: Props) {
   const [timeFilter, setTimeFilter] = useState('all')
   const [results, setResults] = useState<SubmissionSummary[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [saving, setSaving] = useState<string | null>(null)
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
 
@@ -24,13 +25,12 @@ export function RedditSearch({ projectId, onSaved }: Props) {
     e.preventDefault()
     if (!query.trim()) return
     setLoading(true)
-    setError(null)
     setResults([])
     try {
       const data = await searchReddit(query.trim(), subreddit.trim(), limit, sort, timeFilter)
       setResults(data)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -74,7 +74,7 @@ export function RedditSearch({ projectId, onSaved }: Props) {
       setSavedIds(ids => new Set([...ids, submission.post_id]))
       onSaved()
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setSaving(null)
     }
@@ -150,10 +150,6 @@ export function RedditSearch({ projectId, onSaved }: Props) {
           </button>
         </div>
       </form>
-
-      {error && (
-        <div className="mx-4 my-2 px-3 py-2 rounded text-xs bg-red-100 text-red-700">{error}</div>
-      )}
 
       {/* results */}
       <div className="flex-1 overflow-y-auto">

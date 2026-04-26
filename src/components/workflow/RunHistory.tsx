@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, ChevronDown, ChevronUp, CheckCircle2, XCircle } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { listLedgerRuns, getLedgerRunSummary, getLedgerRunEvents } from '../../lib/tauri'
 import type { LedgerEvent, RunSummary } from '../../lib/types'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -25,17 +26,17 @@ function EventLog({ events }: { events: LedgerEvent[] }) {
 }
 
 function RunCard({ runId, projectId }: { runId: string; projectId: string }) {
+  const { showError } = useErrorHandler()
   const [summary, setSummary] = useState<RunSummary | null>(null)
   const [events, setEvents] = useState<LedgerEvent[]>([])
   const [expanded, setExpanded] = useState(false)
   const [eventsLoaded, setEventsLoaded] = useState(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     getLedgerRunSummary(projectId, runId)
       .then(setSummary)
-      .catch(e => setLoadError(String(e)))
-  }, [projectId, runId])
+      .catch(e => showError(String(e)))
+  }, [projectId, runId, showError])
 
   async function loadEvents() {
     if (eventsLoaded) return
@@ -44,21 +45,13 @@ function RunCard({ runId, projectId }: { runId: string; projectId: string }) {
       setEvents(evs)
       setEventsLoaded(true)
     } catch (e: unknown) {
-      setLoadError(String(e))
+      showError(String(e))
     }
   }
 
   function toggle() {
     setExpanded(v => !v)
     if (!eventsLoaded) loadEvents()
-  }
-
-  if (!summary && !loadError) {
-    return (
-      <div className="px-3 py-2 text-sm text-muted-foreground border-b border-border">
-        {runId} — loading…
-      </div>
-    )
   }
 
   return (
@@ -87,7 +80,6 @@ function RunCard({ runId, projectId }: { runId: string; projectId: string }) {
             </span>
           </>
         )}
-        {loadError && <span className="text-destructive text-xs ml-auto">{loadError}</span>}
         <span className={cn('ml-2 shrink-0 text-muted-foreground', !summary && 'ml-auto')}>
           {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </span>
@@ -111,22 +103,21 @@ function RunCard({ runId, projectId }: { runId: string; projectId: string }) {
 }
 
 export function RunHistory({ projectId }: RunHistoryProps) {
+  const { showError } = useErrorHandler()
   const [runs, setRuns] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
-    setError(null)
     try {
       const data = await listLedgerRuns(projectId)
       setRuns(data)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   useEffect(() => {
     if (projectId) load()
@@ -151,12 +142,6 @@ export function RunHistory({ projectId }: RunHistoryProps) {
             <RefreshCw size={14} className={cn(loading && 'animate-spin')} />
           </button>
         </div>
-
-        {error && (
-          <div className="rounded border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
 
         {runs.length === 0 && !loading && (
           <p className="text-sm text-muted-foreground">No runs recorded yet.</p>

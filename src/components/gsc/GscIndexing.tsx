@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { gscInspectUrls, gscGenerateIndexingReport } from '../../lib/tauri'
 import type { InspectionRecord } from '../../lib/types'
 
@@ -19,7 +20,7 @@ export function GscIndexing({ projectId, siteUrl: defaultSite }: Props) {
   const [urlsText, setUrlsText] = useState('')
   const [records, setRecords] = useState<InspectionRecord[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [reportPath, setReportPath] = useState<string | null>(null)
   const [filter, setFilter] = useState<string>('ALL')
 
@@ -31,13 +32,12 @@ export function GscIndexing({ projectId, siteUrl: defaultSite }: Props) {
     if (!urls.length || !site) return
 
     setLoading(true)
-    setError(null)
     setReportPath(null)
     try {
       const result = await gscInspectUrls(site, urls)
       setRecords(result)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -48,7 +48,7 @@ export function GscIndexing({ projectId, siteUrl: defaultSite }: Props) {
       const path = await gscGenerateIndexingReport(projectId, site, records)
       setReportPath(path)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     }
   }
 
@@ -93,7 +93,6 @@ export function GscIndexing({ projectId, siteUrl: defaultSite }: Props) {
         onChange={e => setUrlsText(e.target.value)}
       />
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
       {reportPath && (
         <p className="text-xs text-muted-foreground">Report saved: {reportPath}</p>
       )}

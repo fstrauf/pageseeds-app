@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { gscParseCoverageCsv } from '../../lib/tauri'
 import type { Coverage404Record } from '../../lib/types'
 
@@ -13,17 +14,16 @@ const CATEGORY_COLORS: Record<string, string> = {
 export function GscCoverage() {
   const [csvText, setCsvText] = useState('')
   const [records, setRecords] = useState<Coverage404Record[]>([])
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
   const [filter, setFilter] = useState('ALL')
 
   async function parse() {
     if (!csvText.trim()) return
-    setError(null)
     try {
       const rows = await gscParseCoverageCsv(csvText)
       setRecords(rows)
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     }
   }
 
@@ -63,8 +63,6 @@ export function GscCoverage() {
           </button>
         )}
       </div>
-
-      {error && <p className="text-xs text-destructive">{error}</p>}
 
       {records.length > 0 && (
         <>

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { X, ChevronRight, ChevronLeft, Check } from 'lucide-react'
 import { createSocialCampaign } from '../../lib/tauri'
+import { useErrorHandler } from '../../lib/toast-context'
 import type { ContentTemplate, SourceConfig, Platform } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,7 +28,7 @@ const PLATFORMS: { id: Platform; name: string; icon: string }[] = [
 export function CampaignCreate({ projectId, templates, onClose, onCreated }: Props) {
   const [step, setStep] = useState<Step>('basics')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
 
   // Form state
   const [name, setName] = useState('')
@@ -70,7 +71,6 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
   async function handleCreate() {
     setLoading(true)
-    setError(null)
     try {
       await createSocialCampaign({
         project_id: projectId,
@@ -82,7 +82,7 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
       })
       onCreated()
     } catch (e) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
@@ -142,12 +142,6 @@ export function CampaignCreate({ projectId, templates, onClose, onCreated }: Pro
 
         {/* Content */}
         <div className="flex-1 overflow-auto p-6">
-          {error && (
-            <div className="mb-4 p-4 bg-destructive/10 text-destructive rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-
           {step === 'basics' && (
             <div className="space-y-4">
               <div>

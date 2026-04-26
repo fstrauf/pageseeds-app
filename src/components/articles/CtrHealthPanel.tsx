@@ -11,6 +11,7 @@ import {
   RefreshCw,
   ArrowRight,
 } from 'lucide-react'
+import { useErrorHandler } from '../../lib/toast-context'
 import { getCtrHealthSummary } from '../../lib/tauri'
 import type { CtrHealthSummary, CtrHealthArticle } from '../../lib/types'
 import { Button } from '@/components/ui/button'
@@ -165,21 +166,20 @@ function ArticleRow({ article }: { article: CtrHealthArticle }) {
 export function CtrHealthPanel({ projectId }: CtrHealthPanelProps) {
   const [summary, setSummary] = useState<CtrHealthSummary | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorHandler()
 
   const load = useCallback(async () => {
     if (!projectId) return
     setLoading(true)
-    setError(null)
     try {
       const result = await getCtrHealthSummary(projectId)
       setSummary(result)
     } catch (e: unknown) {
-      setError(String(e))
+      showError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   useEffect(() => {
     load()
@@ -216,13 +216,7 @@ export function CtrHealthPanel({ projectId }: CtrHealthPanelProps) {
 
       <ScrollArea className="flex-1">
         <div className="p-6 space-y-5">
-          {error && (
-            <div className="px-3 py-2 rounded-md text-xs bg-destructive/15 text-destructive">
-              {error}
-            </div>
-          )}
-
-          {!summary && !loading && !error && (
+          {!summary && !loading && (
             <div className="text-xs text-muted-foreground py-4">
               No data yet. Click Refresh to scan.
             </div>
