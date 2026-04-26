@@ -38,6 +38,70 @@ macro_rules! register_blocking {
             })
         }))
     };
+    ($registry:ident, $kind:expr, $fn:path, gsc_token) => {
+        $registry.insert($kind, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let gsc_token = ctx.gsc_token.map(|s| s.to_string());
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    $fn(&task, &project_path, gsc_token.as_deref())
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }))
+    };
+    ($registry:ident, $kind:expr, $fn:path, optional_context) => {
+        $registry.insert($kind, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let context_json = ctx.latest_raw.map(|s| s.to_string());
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    $fn(&task, &project_path, context_json.as_deref())
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }))
+    };
+    ($registry:ident, $kind:expr, $fn:path, db_conn) => {
+        $registry.insert($kind, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let db_path = crate::db::default_db_path();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let conn = match rusqlite::Connection::open(&db_path) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return StepResult {
+                                success: false,
+                                message: format!("Failed to open DB: {}", e),
+                                output: None,
+                            }
+                        }
+                    };
+                    $fn(&task, &project_path, &conn)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }))
+    };
     ($registry:ident, $kind:expr, $fn:path, $provider:ident) => {
         $registry.insert($kind, Box::new(|_step, ctx| {
             let task = ctx.task.clone();
@@ -46,6 +110,44 @@ macro_rules! register_blocking {
             Box::pin(async move {
                 tokio::task::spawn_blocking(move || {
                     $fn(&task, &project_path, &provider)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }))
+    };
+    ($registry:ident, $kind:expr, $fn:path, $provider:ident, optional_context) => {
+        $registry.insert($kind, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let provider = ctx.$provider.to_string();
+            let context_json = ctx.latest_raw.map(|s| s.to_string());
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    $fn(&task, &project_path, &provider, context_json.as_deref())
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }))
+    };
+    ($registry:ident, $kind:expr, $fn:path, $provider:ident, context_json) => {
+        $registry.insert($kind, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let provider = ctx.$provider.to_string();
+            let context_json = ctx.latest_raw.unwrap_or("{}").to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    $fn(&task, &project_path, &provider, &context_json)
                 })
                 .await
                 .unwrap_or_else(|e| StepResult {
@@ -199,30 +301,8 @@ impl StepRegistry {
         register_blocking!(handlers, StepKind::KeywordResearchNative,
             crate::engine::exec::keywords::exec_keyword_research_native, seo_provider);
 
-        handlers.insert(StepKind::ResearchFinalSelection, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let previous_output = ctx.latest_raw.map(|s| s.to_string());
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async {
-                        crate::engine::exec::research::exec_research_final_selection(
-                            &task,
-                            &project_path,
-                            previous_output.as_deref(),
-                        )
-                        .await
-                    })
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::ResearchFinalSelection,
+            crate::engine::exec::research::exec_research_final_selection, optional_context);
 
         register_blocking!(handlers, StepKind::LandingPageSpecWrite,
             crate::engine::exec::research::exec_landing_page_spec_write);
@@ -285,22 +365,8 @@ impl StepRegistry {
             })
         }));
 
-        handlers.insert(StepKind::GscSyncArticles, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let gsc_token = ctx.gsc_token.map(|s| s.to_string());
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::gsc::exec_gsc_sync_articles(&task, &project_path, gsc_token.as_deref())
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::GscSyncArticles,
+            crate::engine::exec::gsc::exec_gsc_sync_articles, gsc_token);
 
         handlers.insert(StepKind::GscSummarise, Box::new(|_step, ctx| {
             let task = ctx.task;
@@ -318,61 +384,14 @@ impl StepRegistry {
             })
         }));
 
-        handlers.insert(StepKind::IndexingFixApply, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let agent_provider = ctx.agent_provider.to_string();
-            let context_json = ctx.latest_raw.map(|s| s.to_string());
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::indexing_fix::exec_indexing_fix_apply(
-                        &task,
-                        &project_path,
-                        &agent_provider,
-                        context_json.as_deref(),
-                    )
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::IndexingFixApply,
+            crate::engine::exec::indexing_fix::exec_indexing_fix_apply, agent_provider, optional_context);
 
-        handlers.insert(StepKind::ContentAudit, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::content_audit::exec_content_audit(&task, &project_path)
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::ContentAudit,
+            crate::engine::exec::content_audit::exec_content_audit);
 
-        handlers.insert(StepKind::CollectGscInspect, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let gsc_token = ctx.gsc_token.map(|s| s.to_string());
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::gsc::exec_collect_gsc(&task, &project_path, gsc_token.as_deref())
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::CollectGscInspect,
+            crate::engine::exec::gsc::exec_collect_gsc, gsc_token);
 
         handlers.insert(StepKind::IndexingDiagnosticsRun, Box::new(|_step, ctx| {
             let result = crate::engine::exec::gsc_diagnostics::exec_indexing_diagnostics(
@@ -455,28 +474,8 @@ impl StepRegistry {
             })
         }));
 
-        handlers.insert(StepKind::CoverageClusterAnalysis, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let agent_provider = ctx.agent_provider.to_string();
-            let articles_json = ctx.latest_raw.unwrap_or("{}").to_string();
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::coverage::exec_coverage_cluster_analysis(
-                        &task,
-                        &project_path,
-                        &agent_provider,
-                        &articles_json,
-                    )
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::CoverageClusterAnalysis,
+            crate::engine::exec::coverage::exec_coverage_cluster_analysis, agent_provider, context_json);
 
         handlers.insert(StepKind::CoverageSave, Box::new(|_step, ctx| {
             let task = ctx.task;
@@ -486,32 +485,8 @@ impl StepRegistry {
             })
         }));
 
-        handlers.insert(StepKind::RedditPostReply, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let db_path = crate::db::default_db_path();
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    let conn = match rusqlite::Connection::open(&db_path) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return StepResult {
-                                success: false,
-                                message: format!("Failed to open DB: {}", e),
-                                output: None,
-                            }
-                        }
-                    };
-                    crate::engine::exec::reddit::exec_reddit_post_reply(&task, &project_path, &conn)
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::RedditPostReply,
+            crate::engine::exec::reddit::exec_reddit_post_reply, db_conn);
 
         handlers.insert(StepKind::SocialExtractArticle, Box::new(|_step, ctx| {
             let task = ctx.task;
@@ -521,75 +496,17 @@ impl StepRegistry {
             })
         }));
 
-        handlers.insert(StepKind::CtrBuildContext, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let db_path = crate::db::default_db_path();
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    let conn = match rusqlite::Connection::open(&db_path) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return StepResult {
-                                success: false,
-                                message: format!("Failed to open DB: {}", e),
-                                output: None,
-                            };
-                        }
-                    };
-                    crate::engine::exec::ctr_audit::exec_ctr_build_context(&task, &project_path, &conn)
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::CtrBuildContext,
+            crate::engine::exec::ctr_audit::exec_ctr_build_context, db_conn);
 
-        handlers.insert(StepKind::CtrAnalyze, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let agent_provider = ctx.agent_provider.to_string();
-            let context_json = ctx.latest_raw.unwrap_or("{}").to_string();
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::ctr_audit::exec_ctr_analyze(
-                        &task, &project_path, &agent_provider, &context_json,
-                    )
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::CtrAnalyze,
+            crate::engine::exec::ctr_audit::exec_ctr_analyze, agent_provider, context_json);
 
         register_blocking!(handlers, StepKind::CanBuildContext,
             crate::engine::exec::cannibalization_audit::exec_can_build_context);
 
-        handlers.insert(StepKind::CanAnalyze, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let agent_provider = ctx.agent_provider.to_string();
-            let context_json = ctx.latest_raw.unwrap_or("{}").to_string();
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    crate::engine::exec::cannibalization_audit::exec_can_analyze(
-                        &task, &project_path, &agent_provider, &context_json,
-                    )
-                })
-                .await
-                .unwrap_or_else(|e| StepResult {
-                    success: false,
-                    message: format!("Step panicked: {}", e),
-                    output: None,
-                })
-            })
-        }));
+        register_blocking!(handlers, StepKind::CanAnalyze,
+            crate::engine::exec::cannibalization_audit::exec_can_analyze, agent_provider, context_json);
 
         Self { handlers }
     }

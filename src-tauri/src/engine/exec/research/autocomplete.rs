@@ -292,7 +292,7 @@ fn capitalize_first(s: &str) -> String {
 /// This is called by the executor when it encounters a step with kind "research_final_selection".
 /// It reads the previous step's output (keyword pipeline results) and applies deterministic
 /// filtering/sorting to select the best candidates.
-pub async fn exec_research_final_selection(
+pub fn exec_research_final_selection(
     task: &Task,
     _project_path: &str,
     previous_output: Option<&str>,
