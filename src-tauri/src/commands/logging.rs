@@ -1,7 +1,7 @@
 //! Logging commands for frontend integration
 
 use crate::commands::AppState;
-use crate::logging::{LogEntry, LogLevel, LogSource, LogQueryFilters, LogStats};
+use crate::logging::{LogLevel, LogSource, LogQueryFilters, LogStats};
 use serde::{Deserialize, Serialize};
 
 /// Submit a log entry from the frontend

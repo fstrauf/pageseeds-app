@@ -41,6 +41,7 @@ impl MentionStance {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RedditProjectConfig {
     pub product_name: Option<String>,
     pub mention_stance: MentionStance,
@@ -53,6 +54,7 @@ pub struct RedditProjectConfig {
 
 /// The config files required to run Reddit opportunity search.
 /// Uses consolidated project.md (primary) with fallback to legacy files.
+#[allow(dead_code)]
 pub fn required_config_files(automation_dir: &Path) -> Vec<std::path::PathBuf> {
     vec![
         automation_dir.join("project.md"), // consolidated

@@ -149,16 +149,6 @@ pub fn statuses_set(statuses: &[&str]) -> HashSet<String> {
     statuses.iter().map(|s| s.to_lowercase()).collect()
 }
 
-pub fn validate_publish_ready_dates(articles: &[Article]) -> DatePolicyReport {
-    validate_dates(
-        articles,
-        &DatePolicyConfig {
-            allowed_future_days: 0,
-            statuses: Some(statuses_set(&["published", "ready_to_publish"])),
-        },
-    )
-}
-
 /// Export-time gate: only block on future dates.
 ///
 /// Duplicate dates among already-published articles are a legacy import artefact.

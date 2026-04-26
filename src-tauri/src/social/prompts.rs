@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Agent prompts for social media content generation
 
 use crate::models::social::*;

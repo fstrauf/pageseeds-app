@@ -77,6 +77,7 @@ impl RedditHistoryManager {
     }
 
     /// Check whether a single post_id has already been handled.
+    #[allow(dead_code)]
     pub fn is_handled(&self, post_id: &str) -> bool {
         let history = self.load();
         history.posted.iter().any(|e| e.post_id() == post_id)

@@ -221,7 +221,7 @@ fn extract_sections(document: &scraper::Html, full_text: &str) -> Vec<Competitor
 }
 
 /// Estimate word count for a section based on heading position.
-fn estimate_section_words(full_text: &str, heading: &str, idx: usize, total: usize) -> usize {
+fn estimate_section_words(full_text: &str, _heading: &str, idx: usize, total: usize) -> usize {
     let words: Vec<&str> = full_text.split_whitespace().collect();
     let total_words = words.len();
     

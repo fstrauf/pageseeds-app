@@ -12,7 +12,7 @@ use crate::models::social::*;
 
 /// Create a new social campaign
 pub fn create_campaign(conn: &Connection, campaign: &SocialCampaign) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
+    let _now = Utc::now().to_rfc3339();
     
     conn.execute(
         r#"INSERT INTO social_campaigns (
@@ -180,7 +180,7 @@ pub fn get_posts_by_campaign(
     campaign_id: &str,
     status: Option<PostStatus>,
 ) -> Result<Vec<SocialPost>> {
-    let sql = if let Some(ref s) = status {
+    let sql = if let Some(ref _s) = status {
         r#"SELECT 
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,
@@ -221,7 +221,7 @@ pub fn get_posts_by_project(
     project_id: &str,
     status: Option<PostStatus>,
 ) -> Result<Vec<SocialPost>> {
-    let sql = if let Some(ref s) = status {
+    let sql = if let Some(ref _s) = status {
         r#"SELECT 
             id, campaign_id, project_id, source_type, source_id, source_url,
             platform, format, hook, caption, hashtags, cta, visual_assets,

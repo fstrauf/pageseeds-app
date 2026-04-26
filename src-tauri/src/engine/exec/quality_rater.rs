@@ -233,14 +233,14 @@ fn analyze_structure(content: &ContentToAnalyze) -> QualityDetails {
     let word_count = text.split_whitespace().count();
 
     // Paragraph analysis
-    let paragraphs: Vec<&str> = text.split("\n\n").filter(|p| {
+    let _paragraphs: Vec<&str> = text.split("\n\n").filter(|p| {
         let trimmed = p.trim();
         !trimmed.is_empty() && !trimmed.starts_with('#')
     }).collect();
 
     // Keyword checks
     let keyword_lower = content.target_keyword.to_lowercase();
-    let text_lower = text.to_lowercase();
+    let _text_lower = text.to_lowercase();
 
     let keyword_in_h1 = h1_text.to_lowercase().contains(&keyword_lower);
 
@@ -509,7 +509,7 @@ fn count_external_links(content: &str) -> usize {
 // Issue collection functions
 
 fn collect_content_issues(
-    score: &u8,
+    _score: &u8,
     structure: &QualityDetails,
     guidelines: &SeoGuidelines,
     critical: &mut Vec<String>,
@@ -529,12 +529,12 @@ fn collect_content_issues(
 }
 
 fn collect_keyword_issues(
-    score: &u8,
+    _score: &u8,
     structure: &QualityDetails,
     keyword: &str,
-    guidelines: &SeoGuidelines,
+    _guidelines: &SeoGuidelines,
     critical: &mut Vec<String>,
-    warnings: &mut Vec<String>,
+    _warnings: &mut Vec<String>,
 ) {
     if !structure.keyword_in_h1 {
         critical.push(format!(
@@ -552,7 +552,7 @@ fn collect_keyword_issues(
 }
 
 fn collect_meta_issues(
-    score: &u8,
+    _score: &u8,
     content: &ContentToAnalyze,
     guidelines: &SeoGuidelines,
     critical: &mut Vec<String>,
@@ -594,7 +594,7 @@ fn collect_meta_issues(
 }
 
 fn collect_structure_issues(
-    score: &u8,
+    _score: &u8,
     structure: &QualityDetails,
     guidelines: &SeoGuidelines,
     critical: &mut Vec<String>,
@@ -613,7 +613,7 @@ fn collect_structure_issues(
 }
 
 fn collect_link_issues(
-    score: &u8,
+    _score: &u8,
     content: &ContentToAnalyze,
     guidelines: &SeoGuidelines,
     warnings: &mut Vec<String>,
@@ -645,11 +645,11 @@ fn collect_link_issues(
 }
 
 fn collect_readability_issues(
-    score: &u8,
-    content: &ContentToAnalyze,
-    guidelines: &SeoGuidelines,
-    warnings: &mut Vec<String>,
-    suggestions: &mut Vec<String>,
+    _score: &u8,
+    _content: &ContentToAnalyze,
+    _guidelines: &SeoGuidelines,
+    _warnings: &mut Vec<String>,
+    _suggestions: &mut Vec<String>,
 ) {
     // This is already handled in score_readability
     // Additional issues can be added here

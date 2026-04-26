@@ -94,12 +94,6 @@ fn extract_value<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
-/// Scan all MDX files in `content_dir` and return their metadata.
-pub fn scan_content_dir(content_dir: &Path) -> Result<Vec<FileMetadata>> {
-    let files = crate::content::locator::collect_markdown_files(content_dir);
-    files.iter().map(|p| read_file_metadata(p)).collect()
-}
-
 // ─── sync_and_validate ────────────────────────────────────────────────────────
 
 /// Single issue found during sync/validation.
@@ -415,7 +409,7 @@ pub fn clean_stale_articles_json(
 /// Priority:
 /// 1. `content_dir` in `{automation_dir}/seo_workspace.json`
 /// 2. Standard candidate auto-discovery from repo_root
-fn resolve_content_dir(
+pub fn resolve_content_dir(
     automation_dir: &Path,
     repo_root: &Path,
 ) -> std::result::Result<PathBuf, String> {

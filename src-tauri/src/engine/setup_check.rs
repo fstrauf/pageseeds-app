@@ -37,6 +37,8 @@ pub struct SeoWorkspaceConfig {
     pub content_dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontmatter_schema: Option<crate::content::validator::FrontmatterSchema>,
 }
 
 // ─── Resolution result ────────────────────────────────────────────────────────
@@ -1068,7 +1070,7 @@ pub fn initialize_project_workspace(
 /// Adds entries for:
 /// - artifacts/ (generated files)
 /// - task_results/ (generated files)
-fn update_gitignore(repo_root: &Path, automation_dir: &Path) -> std::result::Result<(), String> {
+fn update_gitignore(repo_root: &Path, _automation_dir: &Path) -> std::result::Result<(), String> {
     let gitignore_path = repo_root.join(".gitignore");
     
     // Entries to add

@@ -8,3 +8,4 @@ pub mod locator;
 pub mod ops;
 pub mod publish;
 pub mod readability;
+pub mod validator;

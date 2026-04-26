@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { checkProjectSetup, fixDateMismatches, getContentHealth, ingestOrphanArticles, initWorkspaceConfig, initializeProjectWorkspace } from '../../lib/tauri'
-import type { ContentHealthResult, ProjectSetup, SetupCheckItem, SetupSeverity, View } from '../../lib/types'
+import { checkProjectSetup, fixContentFormat, fixDateMismatches, getContentHealth, ingestOrphanArticles, initWorkspaceConfig, initializeProjectWorkspace, validateContentFormat } from '../../lib/tauri'
+import type { ContentHealthResult, FormatValidationResult, ProjectSetup, SetupCheckItem, SetupSeverity, View } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { ActionDrawer } from '@/components/ui/action-drawer'
 import { useActionRun } from '../../hooks/useActionRun'
@@ -147,13 +147,13 @@ function DateMismatchBanner({
   function handleFix() {
     onRun('Fixing date mismatches', async () => {
       const r = await fixDateMismatches(projectId)
-      onFixed()
+      await onFixed()
       return {
         kind: 'summary' as const,
         success: true,
         items: [
           { label: 'Articles checked', value: String(r.checked) },
-          { label: 'Dates fixed', value: String(r.date_mismatches) },
+          { label: 'Dates fixed', value: String(r.dates_synced) },
         ],
       }
     })
@@ -277,19 +277,100 @@ function OrphanFilesBanner({
   )
 }
 
+function FormatDriftBanner({
+  format,
+  projectId,
+  isRunning,
+  onFixed,
+  onRun,
+}: {
+  format: FormatValidationResult
+  projectId: string
+  isRunning: boolean
+  onFixed: () => void | Promise<void>
+  onRun: (label: string, fn: () => Promise<ActionResultPayload>) => void
+}) {
+  const [dismissed, setDismissed] = useState(false)
+
+  if (dismissed) return null
+
+  const errorCount = format.error_count
+  const warnCount = format.warn_count
+  const totalIssues = errorCount + warnCount
+  const preview = format.issues.slice(0, 3).map(i => i.file)
+  const extra = totalIssues > 3 ? totalIssues - 3 : 0
+
+  function handleFix() {
+    onRun('Fixing frontmatter format issues', async () => {
+      const r = await fixContentFormat(projectId)
+      await onFixed()
+      return {
+        kind: 'summary' as const,
+        success: true,
+        items: [
+          { label: 'Files checked', value: String(r.files_checked) },
+          { label: 'Files fixed', value: String(r.files_fixed) },
+          { label: 'Issues remaining', value: String(r.issues_remaining.length) },
+        ],
+      }
+    })
+  }
+
+  return (
+    <div className={`flex items-start gap-3 rounded-md border px-3 py-2.5 text-sm ${SEVERITY_STYLES.warn}`}>
+      <span className="mt-0.5 shrink-0 font-semibold">{SEVERITY_ICON.warn}</span>
+      <div className="flex-1 min-w-0">
+        <span className="font-medium">
+          {totalIssues} frontmatter issue{totalIssues !== 1 ? 's' : ''} across {format.files_checked} file{format.files_checked !== 1 ? 's' : ''}
+        </span>
+        <span className="ml-2 opacity-90">
+          {errorCount > 0 && `${errorCount} error${errorCount !== 1 ? 's' : ''}`}
+          {errorCount > 0 && warnCount > 0 && ', '}
+          {warnCount > 0 && `${warnCount} warning${warnCount !== 1 ? 's' : ''}`}
+        </span>
+        {preview.length > 0 && (
+          <div className="mt-0.5 text-xs opacity-80">
+            {preview.join(', ')}
+            {extra > 0 && ` +${extra} more`}
+          </div>
+        )}
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="shrink-0 h-6 px-2 text-xs"
+        onClick={handleFix}
+        disabled={isRunning}
+      >
+        {isRunning ? 'Fixing…' : 'Fix format'}
+      </Button>
+      <button
+        className="shrink-0 opacity-40 hover:opacity-70 text-xs leading-none pt-0.5"
+        aria-label="Dismiss"
+        onClick={() => setDismissed(true)}
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
 export function SetupWarnings({ projectId, onViewChange }: Props) {
   const [setup, setSetup] = useState<ProjectSetup | null>(null)
   const [health, setHealth] = useState<ContentHealthResult | null>(null)
+  const [format, setFormat] = useState<FormatValidationResult | null>(null)
   const { state: actionState, run: runAction, dismiss: dismissAction } = useActionRun()
 
   const load = useCallback(async () => {
     try {
-      const [setupData, healthData] = await Promise.all([
+      const [setupData, healthData, formatData] = await Promise.all([
         checkProjectSetup(projectId),
         getContentHealth(projectId).catch(() => null),
+        validateContentFormat(projectId).catch(() => null),
       ])
       setSetup(setupData)
       setHealth(healthData)
+      setFormat(formatData)
     } catch {
       // Silent — don't disturb the UI if diagnostics fail
     }
@@ -323,8 +404,9 @@ export function SetupWarnings({ projectId, onViewChange }: Props) {
 
   const showDateMismatch = health && health.date_mismatches > 0 && setup.is_valid
   const showOrphans = health && health.orphan_files.length > 0 && setup.is_valid
+  const showFormatIssues = format && (format.error_count > 0 || format.warn_count > 0) && setup.is_valid
 
-  if (visible.length === 0 && !showDateMismatch && !showOrphans && actionState.status === 'idle') return null
+  if (visible.length === 0 && !showDateMismatch && !showOrphans && !showFormatIssues && actionState.status === 'idle') return null
 
   function handleBulkInitialize() {
     runAction('Initializing project workspace', async () => {
@@ -379,6 +461,9 @@ export function SetupWarnings({ projectId, onViewChange }: Props) {
         )}
         {showOrphans && health && (
           <OrphanFilesBanner health={health} projectId={projectId} isRunning={actionState.status === 'running'} onFixed={load} onRun={runAction} onViewChange={onViewChange} />
+        )}
+        {showFormatIssues && format && (
+          <FormatDriftBanner format={format} projectId={projectId} isRunning={actionState.status === 'running'} onFixed={load} onRun={runAction} />
         )}
       </div>
       <ActionDrawer

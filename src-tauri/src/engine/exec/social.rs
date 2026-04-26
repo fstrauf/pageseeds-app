@@ -9,9 +9,8 @@ use crate::engine::workflows::WorkflowStep;
 use crate::models::social::*;
 use crate::models::task::Task;
 use crate::social::content::sources::{discover_sources, ensure_output_dir};
-use crate::social::db;
 use crate::social::image::assets::generate_branded_graphic;
-use crate::social::models::{AgentPostOutput, AgentTemplateOutput, ContentSource, PostGenerationJob, SourceManifest};
+use crate::social::models::{AgentPostOutput, AgentTemplateOutput, PostGenerationJob};
 use crate::social::prompts;
 use crate::social::templates::{TemplateRegistry, TemplateDef, render_prompt, validate_output};
 
@@ -176,7 +175,7 @@ pub fn exec_social_generate_posts(
 
     // Get project context
     let site_url = get_site_url_from_project(task);
-    let project_context = prompts::default_project_context(&site_url);
+    let _project_context = prompts::default_project_context(&site_url);
 
     // Generate jobs: cross product of sources × templates × platforms
     let mut jobs: Vec<PostGenerationJob> = Vec::new();
@@ -209,7 +208,7 @@ pub fn exec_social_generate_posts(
     let campaign_id = extract_campaign_id_from_task(task).unwrap_or_else(|| task.id.clone());
     
     // Use new template registry for better template selection
-    let registry = TemplateRegistry::default();
+    let _registry = TemplateRegistry::default();
 
     for (idx, job) in jobs.iter().enumerate() {
         // Use new template system to render prompt
@@ -440,13 +439,6 @@ pub fn exec_social_save_campaign(
     }
 }
 
-#[derive(serde::Serialize)]
-struct CampaignSaveResult {
-    campaign_id: String,
-    posts_saved: usize,
-    posts: Vec<SocialPost>,
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Regenerate Steps
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -644,7 +636,7 @@ fn load_posts_from_artifacts(task: &Task) -> Option<Vec<SocialPost>> {
         .and_then(|c| serde_json::from_str(c).ok())
 }
 
-fn get_site_url_from_project(task: &Task) -> String {
+fn get_site_url_from_project(_task: &Task) -> String {
     // In real implementation, get from project
     "https://example.com".to_string()
 }
@@ -674,7 +666,7 @@ fn load_templates_for_generation(
     Ok(templates)
 }
 
-fn create_default_template(id: &str) -> Result<ContentTemplate, String> {
+fn _create_default_template(id: &str) -> Result<ContentTemplate, String> {
     let (name, platform, format, creation_prompt) = match id {
         "article_hook" => (
             "Article Hook",
@@ -834,7 +826,7 @@ fn create_template_from_agent_output(
     }
 }
 
-fn parse_regenerate_params(task: &Task) -> (String, String) {
+fn parse_regenerate_params(_task: &Task) -> (String, String) {
     // Parse from task description
     ("post_id".to_string(), "feedback".to_string())
 }

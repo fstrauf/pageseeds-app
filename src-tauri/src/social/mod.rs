@@ -16,4 +16,3 @@ pub mod content {
 pub mod image;
 
 // Re-export commonly used types
-pub use models::*;

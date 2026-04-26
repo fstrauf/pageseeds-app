@@ -346,3 +346,52 @@ pub fn analyze_keyword_density(
     // Analyze keyword density
     Ok(crate::content::keyword_density::analyze_keyword_density(&body, &target_keyword))
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Content format validator & cleanup
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub fn validate_content_format(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::content::validator::FormatValidationResult, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::Path::new(&project.path);
+    let automation_dir = repo_root.join(".github").join("automation");
+
+    // Load workspace config to check for schema override
+    let schema = crate::engine::setup_check::load_workspace_config(&automation_dir)
+        .and_then(|cfg| cfg.frontmatter_schema);
+
+    let content_dir = crate::content::ops::resolve_content_dir(&automation_dir, repo_root)
+        .map_err(|e| e.to_string())?;
+
+    crate::content::validator::validate_project(repo_root, &content_dir, schema.as_ref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn fix_content_format(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::content::validator::FormatFixResult, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::Path::new(&project.path);
+    let automation_dir = repo_root.join(".github").join("automation");
+
+    // Load workspace config to check for schema override
+    let schema = crate::engine::setup_check::load_workspace_config(&automation_dir)
+        .and_then(|cfg| cfg.frontmatter_schema);
+
+    let content_dir = crate::content::ops::resolve_content_dir(&automation_dir, repo_root)
+        .map_err(|e| e.to_string())?;
+
+    let validation = crate::content::validator::validate_project(repo_root, &content_dir, schema.as_ref())
+        .map_err(|e| e.to_string())?;
+
+    crate::content::validator::apply_fixes(&validation.issues, repo_root)
+        .map_err(|e| e.to_string())
+}

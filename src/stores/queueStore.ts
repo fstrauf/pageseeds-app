@@ -13,7 +13,7 @@ import type { StepProgress, QueueItem, ExecutionResult } from '@/lib/types';
 const logger = createLogger(LogTarget.QUEUE);
 
 export interface QueueProgressEvent {
-  eventType: 'started' | 'step_progress' | 'completed' | 'failed';
+  eventType: 'started' | 'step_progress' | 'completed' | 'failed' | 'skipped';
   taskId: string;
   projectId: string;
   payload: {
@@ -26,6 +26,7 @@ export interface QueueProgressEvent {
     followUpCount?: number;
     error?: string;
     retryable?: boolean;
+    reason?: string;
     follow_up_tasks?: { id: string; task_type: string; title: string; status: string; execution_mode: string; priority: string }[];
     started_at?: string;
     finished_at?: string;
@@ -62,6 +63,7 @@ interface QueueState {
   onTaskStarted: (event: QueueProgressEvent) => void;
   onTaskCompleted: (event: QueueProgressEvent) => void;
   onTaskFailed: (event: QueueProgressEvent) => void;
+  onTaskSkipped: (event: QueueProgressEvent) => void;
   onFollowUpCreated: (event: FollowUpCreatedEvent) => void;
 }
 
@@ -287,7 +289,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   setupEventListeners: async () => {
     logger.entry('setupEventListeners');
     console.log('[QueueStore] Setting up event listeners...');
-    const { onTaskStarted, onTaskCompleted, onTaskFailed, onFollowUpCreated, cleanupEventListeners } = get();
+    const { onTaskStarted, onTaskCompleted, onTaskFailed, onTaskSkipped, onFollowUpCreated, cleanupEventListeners } = get();
     
     cleanupEventListeners();
     const unlisteners: UnlistenFn[] = [];
@@ -322,6 +324,13 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       onTaskFailed(payload);
     });
     unlisteners.push(unlistenFailed);
+
+    const unlistenSkipped = await listen<QueueProgressEvent>('queue:task-skipped', (event) => {
+      const payload = event.payload;
+      logger.event('queue:task-skipped', { taskId: payload.taskId, reason: payload.payload?.reason });
+      onTaskSkipped(payload);
+    });
+    unlisteners.push(unlistenSkipped);
     
     const unlistenFollowUp = await listen<FollowUpCreatedEvent>('queue:follow-up-created', (event) => {
       const payload = event.payload;
@@ -330,14 +339,28 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     });
     unlisteners.push(unlistenFollowUp);
     
-    const unlistenFinished = await listen('queue:finished', () => {
-      logger.event('queue:finished');
-      console.log('[QueueStore] Queue finished event received');
+    const unlistenFinished = await listen<{ status?: string; reason?: string }>('queue:finished', (event) => {
+      const payload = event.payload;
+      logger.event('queue:finished', { status: payload?.status, reason: payload?.reason });
+      console.log('[QueueStore] Queue finished event received', payload);
       cleanupEventListeners();
       set({ isRunning: false });
       
+      // Do NOT auto-restart if queue was halted or is paused
+      if (payload?.status === 'halted') {
+        console.log('[QueueStore] Queue was halted, not restarting');
+        logger.warn('queue:finished - queue halted, not restarting');
+        return;
+      }
+      
+      const { items, start, isPaused } = get();
+      if (isPaused) {
+        console.log('[QueueStore] Queue is paused, not restarting');
+        logger.info('queue:finished - queue is paused, not restarting');
+        return;
+      }
+      
       // Check if there are any pending items that were added while queue was running
-      const { items, start } = get();
       const pendingItems = items.filter((i: QueueItem) => i.status === 'pending');
       if (pendingItems.length > 0) {
         console.log('[QueueStore] Found', pendingItems.length, 'pending items after queue finished, restarting...');
@@ -438,6 +461,20 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     });
     logger.stateChange('task status', 'running', 'failed');
     logger.stateChange('queue paused', false, true);
+  },
+
+  onTaskSkipped: (event: QueueProgressEvent) => {
+    logger.warn('onTaskSkipped', { taskId: event.taskId, reason: event.payload?.reason });
+    set((state: QueueState) => {
+      const idx = state.items.findIndex((i: QueueItem) => i.taskId === event.taskId);
+      if (idx === -1) {
+        return state;
+      }
+      const next = [...state.items];
+      next[idx] = { ...next[idx], status: 'skipped' as const, error: event.payload?.reason ?? 'skipped' };
+      return { items: next };
+    });
+    logger.stateChange('task status', 'pending', 'skipped');
   },
 
   onFollowUpCreated: (event: FollowUpCreatedEvent) => {

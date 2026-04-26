@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
-use crate::engine::{batch, ledger, task_store};
+use crate::engine::{batch, task_store};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

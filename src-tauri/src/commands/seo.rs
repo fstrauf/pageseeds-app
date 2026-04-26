@@ -169,7 +169,7 @@ pub async fn classify_search_intent(
 
 #[tauri::command]
 pub async fn score_keyword_opportunities(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     _project_id: String,
     keywords: Vec<KeywordIdea>,
     intents: Vec<IntentClassification>,

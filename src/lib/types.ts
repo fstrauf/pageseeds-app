@@ -369,6 +369,8 @@ export interface PublishPreflightResult {
   year_mismatches: YearMismatch[]
   blocked: ArticleWithIssue[]
   structural_issue_count: number
+  cleaned_stale_count: number
+  cleaned_stale_files: string[]
 }
 
 export interface PublishedArticle {
@@ -383,6 +385,47 @@ export interface PublishResult {
   errors: string[]
 }
 
+// ─── CTR Health Summary ───────────────────────────────────────────────────────
+
+export interface CtrHealthArticle {
+  id: number
+  title: string
+  url_slug: string
+  file: string
+  healthy: boolean
+  audit_status: string
+  issues: string[]
+  last_audited_at: string | null
+  last_audit_issues: string[]
+  resolved_issues: string[]
+}
+
+export interface CtrHealthSummary {
+  total_articles: number
+  healthy_count: number
+  unhealthy_count: number
+  improved_count: number
+  already_healthy_count: number
+  regressed_count: number
+  missing_files: number
+  title_issues: number
+  meta_issues: number
+  snippet_issues: number
+  faq_issues: number
+  last_audit_at: string | null
+  articles: CtrHealthArticle[]
+  pending_fix_tasks: number
+  completed_audits: number
+  open_issues_count: number
+}
+
+export interface RepairPathResult {
+  checked: number
+  repaired: number
+  removed: number
+  not_found: string[]
+}
+
 // ─── Global Task Queue ────────────────────────────────────────────────────────
 
 export interface QueueItem {
@@ -391,7 +434,7 @@ export interface QueueItem {
   title: string
   taskType: string
   projectName?: string
-  status?: 'pending' | 'running' | 'completed' | 'failed'
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
   error?: string
   result?: import('./bindings').ExecutionResult
 }
@@ -659,6 +702,31 @@ export interface ContentHealthResult {
   mismatch_details: string[]
   orphan_files: string[]
   fixed: boolean
+  dates_synced: number
+}
+
+export interface FormatIssue {
+  file: string
+  issue_type: string
+  field: string | null
+  severity: 'error' | 'warn' | 'info'
+  message: string
+  auto_fixable: boolean
+}
+
+export interface FormatValidationResult {
+  files_checked: number
+  issues: FormatIssue[]
+  error_count: number
+  warn_count: number
+  info_count: number
+  auto_fixable_count: number
+}
+
+export interface FormatFixResult {
+  files_checked: number
+  files_fixed: number
+  issues_remaining: FormatIssue[]
 }
 
 export interface IngestOrphanResult {

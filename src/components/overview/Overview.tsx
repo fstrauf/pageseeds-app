@@ -3,8 +3,10 @@ import {
   Zap, RefreshCw, CheckCircle2, Clock, AlertCircle,
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
   PlayCircle, TrendingUp, Users, ArrowRight, Send, PieChart, Target,
+  Activity, Wrench,
 } from 'lucide-react'
-import { createTask, getProjectOverview, importLiveSite, listArticles, listLiveSitePages } from '../../lib/tauri'
+import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths } from '../../lib/tauri'
+import { useQueueStore } from '@/stores/queueStore'
 import type { Article, LandingPageResearchPending, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -117,6 +119,15 @@ const QUICK_ACTIONS: ActionDef[] = [
     nextView: 'tasks',
     nextLabel: 'See merge & hub tasks',
   },
+  {
+    task_type: 'sanitize_content',
+    label: 'Sanitize Content',
+    description: 'Normalize frontmatter field names (metaDescription → description) across all MDX files',
+    icon: <Wrench size={16} />,
+    phase: 'implementation',
+    nextView: 'tasks',
+    nextLabel: 'See sanitize results',
+  },
 ]
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -140,6 +151,8 @@ const WORKFLOW_ICONS: Record<string, React.ReactNode> = {
   content_review:           <TrendingUp size={13} />,
   reddit_opportunity_search:<Users size={13} />,
   collect_gsc:              <Globe size={13} />,
+  ctr_audit:                <BarChart2 size={13} />,
+  sanitize_content:         <Wrench size={13} />,
 }
 
 function relativeDate(iso: string): string {
@@ -339,6 +352,9 @@ export function Overview({
   const [lpContext, setLpContext] = useState('')
   const [lpThemes, setLpThemes] = useState('')
   const [lpCreating, setLpCreating] = useState(false)
+  const [repairingPaths, setRepairingPaths] = useState(false)
+  const [repairResult, setRepairResult] = useState<import('../../lib/types').RepairPathResult | null>(null)
+  const [runningCtr, setRunningCtr] = useState(false)
 
   const {
     data: liveSitePages = [],
@@ -348,6 +364,16 @@ export function Overview({
     `overview-live-site-pages-${project?.id ?? 'none'}`,
     () => listLiveSitePages(project?.id ?? ''),
     { enabled: !!project?.id && isLiveSiteProject, staleTime: 0 },
+  )
+
+  const {
+    data: ctrHealth,
+    isLoading: loadingCtrHealth,
+    refetch: refetchCtrHealth,
+  } = useQuery(
+    `overview-ctr-health-${project?.id ?? 'none'}`,
+    () => getCtrHealthSummary(project?.id ?? ''),
+    { enabled: !!project?.id && !isLiveSiteProject, staleTime: 30_000 },
   )
 
   const load = useCallback(async () => {
@@ -679,6 +705,190 @@ export function Overview({
               items={overview?.workflow_activity ?? []}
               lastPublishedDate={overview?.articles.last_published_date}
             />
+
+            {/* CTR Health Summary */}
+            {!isLiveSiteProject && (
+              <Card className="bg-card border-border">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+                    <Activity size={13} className="text-muted-foreground" />
+                    CTR Health
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pb-3">
+                  {loadingCtrHealth ? (
+                    <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+                      <RefreshCw size={12} className="animate-spin" />
+                      Loading CTR data…
+                    </div>
+                  ) : !ctrHealth || ctrHealth.total_articles === 0 ? (
+                    <p className="text-xs text-muted-foreground py-2">No articles found. Run a CTR Audit to analyze your content.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Last audit</span>
+                        <span className="text-xs text-foreground">
+                          {ctrHealth.last_audit_at ? relativeDate(ctrHealth.last_audit_at) : 'Never'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Articles covered</span>
+                        <span className="text-xs text-foreground">{ctrHealth.total_articles}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Open CTR issues</span>
+                        <span className={cn(
+                          'text-xs font-medium px-1.5 py-0.5 rounded',
+                          ctrHealth.open_issues_count > 0
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-emerald-100 text-emerald-700',
+                        )}>
+                          {ctrHealth.open_issues_count}
+                        </span>
+                      </div>
+                      {ctrHealth.healthy_count > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">Healthy</span>
+                          <span className="text-xs text-emerald-600">{ctrHealth.healthy_count}</span>
+                        </div>
+                      )}
+                      {ctrHealth.improved_count > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">Improved since last audit</span>
+                          <span className="text-xs text-emerald-600">{ctrHealth.improved_count}</span>
+                        </div>
+                      )}
+                      {ctrHealth.regressed_count > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">Regressed</span>
+                          <span className="text-xs text-destructive">{ctrHealth.regressed_count}</span>
+                        </div>
+                      )}
+                      {ctrHealth.missing_files > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">Missing files</span>
+                          <span className="text-xs text-destructive">{ctrHealth.missing_files}</span>
+                        </div>
+                      )}
+                      {(ctrHealth.pending_fix_tasks > 0 || ctrHealth.completed_audits > 0) && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">Pipeline</span>
+                          <span className="text-xs text-foreground">
+                            {ctrHealth.pending_fix_tasks > 0
+                              ? `Wave ${ctrHealth.completed_audits + 1} — ${ctrHealth.pending_fix_tasks} fix task${ctrHealth.pending_fix_tasks !== 1 ? 's' : ''} pending`
+                              : `${ctrHealth.completed_audits} wave${ctrHealth.completed_audits !== 1 ? 's' : ''} completed`}
+                          </span>
+                        </div>
+                      )}
+                      <div className="pt-1 space-y-1.5">
+                        <button
+                          onClick={async () => {
+                            if (!project || runningCtr) return
+                            setRunningCtr(true)
+                            setQuickActionError(null)
+                            try {
+                              const task = await createTask(
+                                project.id,
+                                'ctr_audit',
+                                'CTR Audit',
+                                'Full CTR audit run',
+                                'medium',
+                              )
+                              const queue = useQueueStore.getState()
+                              queue.enqueue([{
+                                taskId: task.id,
+                                projectId: project.id,
+                                title: task.title ?? 'CTR Audit',
+                                taskType: 'ctr_audit',
+                                projectName: project.name,
+                                status: 'pending',
+                              }])
+                              // Refresh CTR health after queue starts
+                              await refetchCtrHealth?.()
+                            } catch (e: unknown) {
+                              setQuickActionError(String(e))
+                            } finally {
+                              setRunningCtr(false)
+                            }
+                          }}
+                          disabled={runningCtr}
+                          className={cn(
+                            'w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs transition-colors',
+                            'bg-primary hover:bg-primary/90 text-primary-foreground',
+                            'disabled:opacity-50 disabled:cursor-not-allowed',
+                          )}
+                        >
+                          {runningCtr ? (
+                            <>
+                              <RefreshCw size={11} className="animate-spin" />
+                              Running CTR Audit…
+                            </>
+                          ) : (
+                            <>
+                              <PlayCircle size={11} />
+                              Run CTR Audit
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!project || repairingPaths) return
+                            setRepairingPaths(true)
+                            setRepairResult(null)
+                            try {
+                              const result = await repairArticlePaths(project.id)
+                              setRepairResult(result)
+                              await refetchCtrHealth?.()
+                            } catch (e: unknown) {
+                              setQuickActionError(String(e))
+                            } finally {
+                              setRepairingPaths(false)
+                            }
+                          }}
+                          disabled={repairingPaths}
+                          className={cn(
+                            'w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs transition-colors',
+                            'bg-secondary hover:bg-secondary/80 text-foreground',
+                            'disabled:opacity-50 disabled:cursor-not-allowed',
+                          )}
+                        >
+                          {repairingPaths ? (
+                            <>
+                              <RefreshCw size={11} className="animate-spin" />
+                              Repairing paths…
+                            </>
+                          ) : (
+                            <>
+                              <FileText size={11} />
+                              Repair article paths
+                            </>
+                          )}
+                        </button>
+                        {repairResult && (
+                          <div className="mt-1.5 text-[11px] text-muted-foreground space-y-0.5">
+                            <p>
+                              Checked {repairResult.checked}, repaired {repairResult.repaired}, removed {repairResult.removed}.
+                            </p>
+                            {repairResult.not_found.length > 0 && (
+                              <details>
+                                <summary className="cursor-pointer text-destructive">
+                                  {repairResult.not_found.length} stale article(s) removed (no MDX on disk)
+                                </summary>
+                                <ul className="pl-3 mt-1 space-y-0.5">
+                                  {repairResult.not_found.map((f, i) => (
+                                    <li key={i} className="truncate">{f}</li>
+                                  ))}
+                                </ul>
+                              </details>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Recent tasks */}
             <Card className="bg-card border-border">

@@ -1,4 +1,4 @@
-use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
 use std::collections::{HashMap, HashSet};
 
 /// Build content tasks from selected keywords and mark the research task as done.

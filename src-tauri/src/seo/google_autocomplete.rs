@@ -189,6 +189,7 @@ pub async fn get_keyword_ideas_google(
 
 /// Result structure matching the old Ahrefs API for easy integration.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct GoogleKeywordIdeasResult {
     pub keyword: String,
     pub country: String,

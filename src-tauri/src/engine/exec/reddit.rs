@@ -1270,7 +1270,7 @@ pub fn exec_reddit_post_reply(
     match result {
         Ok(comment_result) => {
             let reply_url = comment_result.permalink;
-            let now = chrono::Utc::now().to_rfc3339();
+            let _now = chrono::Utc::now().to_rfc3339();
             
             // Update database with posted status
             if let Err(e) = crate::reddit::db::mark_posted(conn, &post_id, &reply_text, &reply_url) {

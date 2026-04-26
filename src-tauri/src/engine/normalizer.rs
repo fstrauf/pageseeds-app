@@ -125,7 +125,7 @@ fn extract_first_json_line(text: &str) -> Option<Value> {
         if t.len() < 2 {
             continue;
         }
-        if (t.starts_with('{') || t.starts_with('[')) {
+        if t.starts_with('{') || t.starts_with('[') {
             if let Ok(v) = serde_json::from_str::<Value>(t) {
                 return Some(v);
             }

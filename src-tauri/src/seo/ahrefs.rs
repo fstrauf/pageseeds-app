@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::seo::provider::SeoDataProvider;
 use crate::seo::keywords::{KeywordIdeasResult, KeywordDifficultyResult, get_keyword_ideas, get_keyword_difficulty};
 use crate::seo::intent::{IntentClassification, classify_batch_by_pattern};

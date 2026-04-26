@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 //! Template system for social media content generation
 //!
 //! This module provides a hybrid deterministic/agentic approach:
 //! - Template selection is deterministic (rule-based)
 //! - Content transformation is agentic (creative writing)
 
-use crate::models::social::{ContentTemplate, Platform, PostFormat, SourceType};
+use crate::models::social::{Platform, PostFormat, SourceType};
 use crate::social::models::ContentSource;
 
 /// Output schema for validation

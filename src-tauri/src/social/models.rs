@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Internal models for the social module
 //!
 //! These types are used internally and may differ from the

@@ -97,7 +97,7 @@ fn check_file(path: &Path, dry_run: bool) -> Result<Vec<CleaningIssue>> {
                         .strip_prefix(&expected)
                         .map(|s| s.trim_start_matches('\n'))
                         .unwrap_or(body_trimmed);
-                    let new_content = format!("{}---\n\n{}", &content[..fm_end.unwrap() - 5 + 4], new_body);
+                    let _new_content = format!("{}---\n\n{}", &content[..fm_end.unwrap() - 5 + 4], new_body);
                     // Make sure closing --- is correct
                     let rebuilt = rebuild_content(&content, new_body, body_start);
                     std::fs::write(path, rebuilt)?;

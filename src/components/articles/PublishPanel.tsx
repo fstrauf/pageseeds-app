@@ -293,6 +293,12 @@ export function PublishPanel({
                     </div>
                   )}
 
+                  {result.cleaned_stale_count > 0 && (
+                    <div className="px-3 py-2 rounded-md text-xs bg-amber-50 text-amber-700 border border-amber-200">
+                      {result.cleaned_stale_count} stale entr{result.cleaned_stale_count !== 1 ? 'ies' : 'y'} removed from articles.json — content file{result.cleaned_stale_count !== 1 ? 's' : ''} no longer exist on disk.
+                    </div>
+                  )}
+
                   {result.blocked.length > 0 && (
                     <div className="space-y-1">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-destructive mb-1">
@@ -370,7 +376,8 @@ export function PublishPanel({
 
                   {result.ready.length === 0 &&
                     result.needs_date_fix.length === 0 &&
-                    result.year_mismatches.length === 0 && (
+                    result.year_mismatches.length === 0 &&
+                    result.cleaned_stale_count === 0 && (
                     <div className="text-xs text-muted-foreground py-2">
                       All candidates are blocked. Resolve the issues above before publishing.
                     </div>

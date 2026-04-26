@@ -394,7 +394,6 @@ pub(crate) fn exec_collect_gsc(
     };
 
     log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
-    let site_match_prefix = normalize_site_for_url_match(&site_url);
 
     log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
     let site_match_prefix = normalize_site_for_url_match(&site_url);
@@ -445,7 +444,7 @@ pub(crate) fn exec_collect_gsc(
         })
     }).join();
     
-    let (records, token) = match gsc_result {
+    let (records, _token) = match gsc_result {
         Ok(Ok((r, t))) => (r, t),
         Ok(Err(e)) => {
             let msg = e.to_string();

@@ -111,14 +111,6 @@ pub fn analyse_dates(articles: &[Article]) -> DateAnalysis {
     }
 }
 
-/// Calculate the next safe date for a new article.
-///
-/// Strategy: 2 days before the earliest existing date (or yesterday if none).
-/// Guarantees no future dates and no overlaps.
-pub fn next_article_date(articles: &[Article]) -> String {
-    date_policy::suggest_next_safe_date(articles)
-}
-
 /// Produce a fix plan that redistributes problematic dates (future or duplicate)
 /// evenly in the past without touching already-published articles that are fine.
 ///

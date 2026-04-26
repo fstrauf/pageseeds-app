@@ -1,9 +1,10 @@
+#![allow(dead_code)]
 //! Text overlay rendering on images
 
 use std::path::Path;
 
 use crate::error::Result;
-use crate::models::social::{CanvasSize, OverlayConfig, TextPosition};
+use crate::models::social::{CanvasSize, OverlayConfig};
 
 /// Dimensions for a canvas size
 pub struct CanvasDimensions {
@@ -66,8 +67,8 @@ pub fn apply_text_overlay(
 pub fn create_text_image(
     output_path: &Path,
     text: &str,
-    config: &OverlayConfig,
-    background_color: (u8, u8, u8),
+    _config: &OverlayConfig,
+    _background_color: (u8, u8, u8),
 ) -> Result<()> {
     log::info!(
         "Creating text image at {:?} with text: '{}'",

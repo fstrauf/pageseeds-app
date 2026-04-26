@@ -6,6 +6,7 @@ import { LiveSiteAudit } from './components/articles/LiveSiteAudit'
 import { LiveSiteLinkingMap } from './components/articles/LiveSiteLinkingMap'
 import { LiveSitePageTable } from './components/articles/LiveSitePageTable'
 import { ContentHealth } from './components/articles/ContentHealth'
+import { CtrHealthPanel } from './components/articles/CtrHealthPanel'
 import { LinkingMap } from './components/articles/LinkingMap'
 import { Reddit } from './components/reddit/Reddit'
 import { GSC } from './components/gsc/GSC'
@@ -284,6 +285,9 @@ export default function App() {
                     <TabsTrigger value="links" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                       Links
                     </TabsTrigger>
+                    <TabsTrigger value="ctr" className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                      CTR
+                    </TabsTrigger>
                   </TabsList>
                 </div>
                 <TabsContent value="list" className="flex-1 overflow-y-auto mt-0 p-0">
@@ -298,6 +302,9 @@ export default function App() {
                 </TabsContent>
                 <TabsContent value="links" className="flex-1 overflow-y-auto mt-0 p-0">
                   <LinkingMap projectId={activeProject?.id ?? ''} />
+                </TabsContent>
+                <TabsContent value="ctr" className="flex-1 overflow-y-auto mt-0 p-0">
+                  <CtrHealthPanel projectId={activeProject?.id ?? ''} />
                 </TabsContent>
               </Tabs>
             </div>

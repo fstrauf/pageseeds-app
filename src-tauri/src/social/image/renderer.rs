@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! High-level image rendering for social posts
 
 use std::path::{Path, PathBuf};
@@ -145,7 +146,7 @@ pub fn generate_preview(
 }
 
 /// Create a placeholder preview image
-fn create_placeholder_preview(path: &Path, text: &str) -> Result<()> {
+fn create_placeholder_preview(path: &Path, _text: &str) -> Result<()> {
     // Placeholder - would create an image with the text
     // For now, just create an empty file
     std::fs::create_dir_all(path.parent().unwrap())?;

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// Raw HTTP client for OpenAI-compatible API with prompt-based tool calling
 /// 
 /// This bypasses rig.rs and uses prompt-based tool calling to work around
@@ -6,7 +7,7 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::engine::tools::{Tool, ToolRegistry};
+use crate::engine::tools::{ToolRegistry};
 
 /// OpenAI chat completion request (simplified - no native tools)
 #[derive(Debug, Serialize)]
@@ -320,7 +321,7 @@ impl HttpToolAgent {
             .iter()
             .filter_map(|name| self.tools.get(name))
             .map(|tool| {
-                let params = serde_json::to_string_pretty(&tool.parameters_schema())
+                let _params = serde_json::to_string_pretty(&tool.parameters_schema())
                     .unwrap_or_else(|_| "{}".to_string());
                 format!(
                     "### {}\n\n{}",

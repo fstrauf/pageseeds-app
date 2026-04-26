@@ -334,7 +334,7 @@ pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult
     );
 
     let themes = seed_artifact.themes.clone();
-    let project_path = project_path.to_string();
+    let _project_path = project_path.to_string();
 
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()
@@ -413,7 +413,7 @@ pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult
 /// - `landing_page_candidates` for landing page research
 /// - `difficulty.results` for keyword research (wrapped in difficulty object)
 #[derive(Debug, Clone, serde::Serialize)]
-struct KeywordPickerOutput {
+pub struct KeywordPickerOutput {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub landing_page_candidates: Vec<LandingPageCandidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -423,7 +423,7 @@ struct KeywordPickerOutput {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-struct DifficultyWrapper {
+pub struct DifficultyWrapper {
     pub total: usize,
     pub successful: usize,
     pub results: Vec<SelectedKeyword>,
@@ -600,7 +600,7 @@ fn capitalize_first(s: &str) -> String {
 /// filtering/sorting to select the best candidates.
 pub async fn exec_research_final_selection(
     task: &Task,
-    project_path: &str,
+    _project_path: &str,
     previous_output: Option<&str>,
 ) -> StepResult {
     let pipeline_json = match previous_output {

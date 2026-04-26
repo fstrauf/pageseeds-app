@@ -295,6 +295,22 @@ impl StepRegistry {
             })
         }));
 
+        handlers.insert(StepKind::FormatValidation, Box::new(|_step, ctx| {
+            let task = ctx.task;
+            let project_path = ctx.project_path;
+            Box::pin(async move {
+                crate::engine::exec::content::exec_format_validation(task, project_path)
+            })
+        }));
+
+        handlers.insert(StepKind::FormatFix, Box::new(|_step, ctx| {
+            let task = ctx.task;
+            let project_path = ctx.project_path;
+            Box::pin(async move {
+                crate::engine::exec::content::exec_format_fix(task, project_path)
+            })
+        }));
+
         handlers.insert(StepKind::GscSyncArticles, Box::new(|_step, ctx| {
             let task = ctx.task.clone();
             let project_path = ctx.project_path.to_string();

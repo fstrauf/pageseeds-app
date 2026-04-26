@@ -205,6 +205,18 @@ pub(crate) fn audit_one_article(
 
     let kw_opt = if keyword.is_empty() { None } else { Some(keyword.clone()) };
 
+    // Frontmatter completeness check
+    let frontmatter_complete = source.is_some() && {
+        let has_title = fm.get("title").map(|s| !s.is_empty()).unwrap_or(false);
+        let has_date = fm.get("date").map(|s| !s.is_empty()).unwrap_or(false)
+            || fm.get("publishedDate").map(|s| !s.is_empty()).unwrap_or(false)
+            || fm.get("published_date").map(|s| !s.is_empty()).unwrap_or(false);
+        let has_desc = fm.get("description").map(|s| !s.is_empty()).unwrap_or(false)
+            || fm.get("metaDescription").map(|s| !s.is_empty()).unwrap_or(false)
+            || fm.get("meta_description").map(|s| !s.is_empty()).unwrap_or(false);
+        has_title && has_date && has_desc
+    };
+
     let checks = serde_json::json!({
         "title_keyword":        check_pass(kw_opt.as_ref().map(|kw| title.to_lowercase().contains(kw.as_str())), "Title contains keyword"),
         "h1_keyword":           check_pass(kw_opt.as_ref().map(|kw| h1.to_lowercase().contains(kw.as_str())), "H1 contains keyword"),
@@ -219,6 +231,7 @@ pub(crate) fn audit_one_article(
         "broken_links":         serde_json::json!({ "pass": broken_links.is_empty(), "value": broken_links.len(), "issues": broken_links, "label": "No broken/placeholder links" }),
         "gsc_data":             check_pass(Some(!gsc.is_null()), "GSC data synced"),
         "source_file_found":    check_pass(Some(source.is_some()), "Source file readable"),
+        "frontmatter_complete": check_pass(Some(frontmatter_complete), "Frontmatter has title, date, and description"),
         "readability":          check_val(readability.as_ref().map(|_| flesch_score >= 30.0), serde_json::json!(format!("{:.1}", flesch_score)), "Flesch Reading Ease ≥ 30"),
         "passive_voice":        check_val(readability.as_ref().map(|_| passive_voice_pct <= 20.0), serde_json::json!(format!("{:.1}%", passive_voice_pct)), "Passive voice ≤ 20%"),
     });
@@ -227,8 +240,9 @@ pub(crate) fn audit_one_article(
     let weights = [
         ("broken_links", 30i64), ("source_file_found", 20), ("title_keyword", 10),
         ("h1_keyword", 10), ("meta_desc_keyword", 10), ("keyword_first_para", 8),
-        ("keyword_density", 8), ("meta_desc_present", 7), ("meta_desc_length", 5),
-        ("word_count", 5), ("h2_structure", 3), ("internal_links", 3), ("gsc_data", 1),
+        ("keyword_density", 8), ("meta_desc_present", 7), ("frontmatter_complete", 6),
+        ("meta_desc_length", 5), ("word_count", 5), ("h2_structure", 3),
+        ("internal_links", 3), ("gsc_data", 1),
         ("readability", 8), ("passive_voice", 5),
     ];
     let penalty: i64 = weights.iter().map(|(k, w)| {

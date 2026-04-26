@@ -91,8 +91,8 @@ Return JSON exactly matching this structure:
 ## Constraints
 
 - Limit to **top 20 pages** by `clicks_lost`.
-- **Title rewrites**: keep under 55 characters, front-load keyword, remove duplication.
-- **Meta descriptions**: 140–155 characters, pattern `[Keyword] + [benefit] + [soft CTA]`.
-- **FAQ**: 3–5 questions that reflect real search queries.
-- **Snippet bait**: match article type (`X vs Y` → paragraph, `best X` → list, comparison → table).
+- **Title rewrites**: keep under 55 characters (hard limit: 55), front-load keyword, remove duplication.
+- **Meta descriptions**: 140–155 characters (hard limits: 140 min, 155 max), pattern `[Keyword] + [benefit] + [soft CTA]`.
+- **FAQ**: 3–5 questions that reflect real search queries. Must be JSON-LD FAQPage schema, not just markdown headings.
+- **Snippet bait**: 40–60 word direct answer. Match article type (`X vs Y` → paragraph, `best X` → list, comparison → table).
 - Be specific: name exact current titles and recommended replacements.

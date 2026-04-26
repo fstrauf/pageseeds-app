@@ -101,7 +101,7 @@ fn discover_articles(
             }
             
             match extractor::extract_from_article(path) {
-                Ok(mut source) => {
+                Ok(source) => {
                     // Re-wrap with computed scores
                     let source_with_scores = ContentSource::new(
                         source.source_type,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tauri::State;
 use crate::config::env_resolver::EnvResolver;
-use crate::engine::{executor, task_store};
+use crate::engine::task_store;
 use crate::models::reddit::{
     MigrationResult, RedditOpportunity, RedditStats, SubmissionSummary, ValidationResult,
 };

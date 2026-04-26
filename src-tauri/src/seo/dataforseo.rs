@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::error::{Error, Result};
 use crate::seo::provider::SeoDataProvider;
@@ -250,6 +249,7 @@ impl DataForSeoProvider {
     }
 
     /// Call the `keyword_suggestions` endpoint (substring matching against keyword database).
+    #[allow(dead_code)]
     async fn fetch_keyword_suggestions(&self, keyword: &str, location_code: &str) -> Result<KeywordIdeasResult> {
         let payload = serde_json::json!([{
             "keyword": keyword,

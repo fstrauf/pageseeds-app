@@ -157,6 +157,8 @@ pub fn run() {
             commands::initialize_project_workspace,
             commands::get_content_health,
             commands::fix_date_mismatches,
+            commands::validate_content_format,
+            commands::fix_content_format,
             commands::ingest_orphan_articles,
             commands::clean_stale_articles,
             commands::get_keyword_coverage,

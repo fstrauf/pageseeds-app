@@ -218,8 +218,11 @@ impl WorkflowHandler for ImplementationHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "content_cleanup" => vec![
-                WorkflowStep::new("content_cleanup_run", StepKind::Deterministic.as_ref())
-                    .with_param(step_params::CMD, "pageseeds content clean --workspace-dir {automation_dir}"),
+                // Step 1 (deterministic): validate frontmatter format across all MDX files.
+                // Writes format_issues.json to the automation dir.
+                WorkflowStep::new("content_cleanup_validate", StepKind::FormatValidation.as_ref()),
+                // Step 2 (deterministic): apply auto-fixes for all auto-fixable issues.
+                WorkflowStep::new("content_cleanup_fix", StepKind::FormatFix.as_ref()),
             ],
             "publish_content" => vec![
                 WorkflowStep::new("publish_content_run", StepKind::Deterministic.as_ref())
@@ -948,6 +951,7 @@ fn snapshot_markdown_mtime(
 ///
 /// Returns a formatted string describing current topic clusters, or an empty string
 /// if no coverage analysis exists.
+#[allow(dead_code)]
 fn load_coverage_context(automation_dir: &std::path::Path) -> String {
     let coverage_path = automation_dir.join("keyword_coverage.json");
     

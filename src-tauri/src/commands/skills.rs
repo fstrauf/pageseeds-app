@@ -78,7 +78,7 @@ pub async fn quick_run_workflow(
     themes: Option<Vec<String>>,
 ) -> Result<executor::ExecutionResult, String> {
     use crate::config::{default_execution_mode, default_phase};
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskStatus};
+    use crate::models::task::{AgentPolicy, Priority, TaskStatus};
 
     let task_id = {
         let db = state.db.lock().map_err(|e| e.to_string())?;

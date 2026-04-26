@@ -1,6 +1,6 @@
 use tauri::State;
 use crate::engine::task_store;
-use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskStatus};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
 use super::AppState;
 
 #[tauri::command]

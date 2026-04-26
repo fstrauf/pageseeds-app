@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// Keyword research execution module.
 ///
 /// Native Rust pipeline:
@@ -1994,7 +1995,7 @@ pub fn auto_create_article_tasks_from_research(
     use crate::config::{default_execution_mode, default_phase};
     use crate::engine::task_store;
     use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
-    use std::collections::HashSet;
+    
 
     let max_tasks = max_tasks.unwrap_or(5);
     if max_tasks == 0 {

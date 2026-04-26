@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Image asset resolution for social posts
 //!
 //! Tries multiple sources in order:
@@ -142,7 +143,7 @@ pub fn generate_branded_graphic(output_dir: &Path, text: &str) -> Result<VisualA
     // PageSeeds brand colors
     let forest_green = Rgb([33, 54, 41]);     // #213629
     let clay = Rgb([181, 101, 43]);           // #b5652b
-    let cream = Rgb([250, 243, 232]);         // #faf3e8
+    let _cream = Rgb([250, 243, 232]);         // #faf3e8
     
     // Create 1080x1080 square image (Instagram optimal)
     let width = 1080u32;

@@ -10,7 +10,6 @@
 /// - **Navigational**: User wants to go somewhere (login, website, official, dashboard)
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Search intent classification result
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -100,15 +99,6 @@ impl IntentScores {
         (primary_score / total * 100.0).round()
     }
 
-    /// Get all scores as a map for debugging/analysis
-    fn as_map(&self) -> HashMap<String, f64> {
-        let mut map = HashMap::new();
-        map.insert("informational".to_string(), self.informational);
-        map.insert("navigational".to_string(), self.navigational);
-        map.insert("transactional".to_string(), self.transactional);
-        map.insert("commercial".to_string(), self.commercial);
-        map
-    }
 }
 
 /// Informational intent signal keywords

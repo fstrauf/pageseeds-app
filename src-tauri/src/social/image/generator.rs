@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Image generation for social media posts
 //!
 //! Generates images programmatically when no screenshots are available:
@@ -79,7 +80,7 @@ fn generate_solid_color_image(
     use image::{ImageBuffer, Rgb};
     
     // Create image buffer
-    let mut img = ImageBuffer::from_pixel(
+    let img = ImageBuffer::from_pixel(
         dims.width,
         dims.height,
         Rgb([color.0, color.1, color.2]),
@@ -153,13 +154,13 @@ fn generate_gradient_image(
 fn generate_code_image(
     output_path: &Path,
     dims: CanvasDimensions,
-    code: &str,
+    _code: &str,
 ) -> Result<()> {
     use image::{ImageBuffer, Rgb};
     
     // Dark background for code
     let bg_color = brand::DARK_BG;
-    let mut img = ImageBuffer::from_pixel(
+    let img = ImageBuffer::from_pixel(
         dims.width,
         dims.height,
         Rgb([bg_color.0, bg_color.1, bg_color.2]),

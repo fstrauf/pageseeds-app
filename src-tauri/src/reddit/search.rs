@@ -65,6 +65,7 @@ pub struct RedditCredentials {
 }
 
 /// Result of a single Reddit search attempt.
+#[allow(dead_code)]
 pub struct SearchResult {
     pub posts: Vec<SubmissionSummary>,
     pub was_rate_limited: bool,
@@ -95,7 +96,7 @@ pub async fn search_submissions(
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
     }
 
-    let (base, use_oauth) = if let Some(creds) = credentials {
+    let (base, use_oauth) = if let Some(_creds) = credentials {
         let url = if subreddit.is_empty() {
             "https://oauth.reddit.com/search.json".to_string()
         } else {

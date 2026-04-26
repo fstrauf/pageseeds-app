@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 //! Extract content from MDX files and other sources
 
 use std::path::Path;
 
 use crate::error::Result;
 use crate::social::models::{ContentMetadata, ContentSource};
-use crate::models::social::{SourceType, Platform};
+use crate::models::social::SourceType;
 
 /// Extract content from an MDX article file
 pub fn extract_from_article(path: &Path) -> Result<ContentSource> {

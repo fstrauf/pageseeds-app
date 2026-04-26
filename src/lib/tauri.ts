@@ -4,6 +4,8 @@ import type {
   Article,
   ContentHealthResult,
   EmbeddingStatus,
+  FormatFixResult,
+  FormatValidationResult,
   ImportResult,
   IngestOrphanResult,
   KeywordCoverageStatus,
@@ -196,9 +198,11 @@ import type {
   PublishPreflightResult,
   PublishResult,
   YearMismatchResolution,
+  CtrHealthSummary,
+  RepairPathResult,
 } from './types'
 // Re-export to keep callers from needing to import from types directly
-export type { PublishPreflightResult, PublishResult, YearMismatchResolution }
+export type { PublishPreflightResult, PublishResult, YearMismatchResolution, CtrHealthSummary, RepairPathResult }
 export type { ArticleWithIssue } from './types'
 export type { YearMismatch } from './types'
 
@@ -224,6 +228,18 @@ export const resolveYearMismatchAgent = (
   publishYear: number,
 ): Promise<YearMismatchResolution> =>
   invoke('resolve_year_mismatch_agent', { projectId, articleId, title, titleYear, publishYear })
+
+export const getCtrHealthSummary = (
+  projectId: string,
+): Promise<CtrHealthSummary> =>
+  invoke('get_ctr_health_summary', { projectId })
+
+export const repairArticlePaths = (
+  projectId: string,
+): Promise<RepairPathResult> =>
+  invoke('repair_article_paths', { projectId })
+
+
 
 // ─── Reddit ──────────────────────────────────────────────────────────────────
 
@@ -675,6 +691,14 @@ export const getContentHealth = (projectId: string): Promise<ContentHealthResult
 /** Patch frontmatter dates that differ from articles.json. */
 export const fixDateMismatches = (projectId: string): Promise<ContentHealthResult> =>
   invoke('fix_date_mismatches', { projectId })
+
+/** Validate frontmatter format across all MDX files in the project. */
+export const validateContentFormat = (projectId: string): Promise<FormatValidationResult> =>
+  invoke('validate_content_format', { projectId })
+
+/** Apply auto-fixes for frontmatter format issues. */
+export const fixContentFormat = (projectId: string): Promise<FormatFixResult> =>
+  invoke('fix_content_format', { projectId })
 
 /** Import MDX files that exist on disk but have no entry in articles.json. */
 export const ingestOrphanArticles = (projectId: string): Promise<IngestOrphanResult> =>
