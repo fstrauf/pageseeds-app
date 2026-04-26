@@ -38,27 +38,9 @@ pub(crate) fn exec_indexing_diagnostics(
 
     // 1. manifest.json → site_url + sitemap_url
     let manifest_path = paths.automation_dir.join("manifest.json");
-    let manifest: serde_json::Value = match std::fs::read_to_string(&manifest_path) {
-        Ok(s) => match serde_json::from_str(&s) {
-            Ok(v) => v,
-            Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Failed to parse manifest.json: {}", e),
-                    output: None,
-                }
-            }
-        },
-        Err(_) => {
-            return StepResult {
-                success: false,
-                message: format!(
-                    "manifest.json not found at {} — run 'Init Workspace' first",
-                    manifest_path.display()
-                ),
-                output: None,
-            }
-        }
+    let manifest: serde_json::Value = match crate::engine::exec::common::read_json(&manifest_path, "manifest.json") {
+        Ok(v) => v,
+        Err(e) => return e,
     };
 
     let site_url = match manifest

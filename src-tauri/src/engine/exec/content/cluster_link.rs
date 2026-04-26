@@ -14,26 +14,9 @@ pub(crate) fn exec_cluster_link_scan(
     let paths = ProjectPaths::from_path(project_path);
     let articles_path = paths.automation_dir.join("articles.json");
 
-    let articles_str = match std::fs::read_to_string(&articles_path) {
-        Ok(s) => s,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("articles.json not found — run a content sync first: {}", e),
-                output: None,
-            }
-        }
-    };
-
-    let articles_doc: serde_json::Value = match serde_json::from_str(&articles_str) {
+    let articles_doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
         Ok(v) => v,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to parse articles.json: {}", e),
-                output: None,
-            }
-        }
+        Err(e) => return e,
     };
 
     // Support both bare array and {articles:[...]} envelope
@@ -207,48 +190,16 @@ pub(crate) fn exec_cluster_link_strategy(
 
     // --- Load scan output ---
     let scan_path = paths.automation_dir.join("link_scan.json");
-    let scan_str = match std::fs::read_to_string(&scan_path) {
-        Ok(s) => s,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("link_scan.json not found — run the scan step first: {}", e),
-                output: None,
-            }
-        }
-    };
-    let scan: serde_json::Value = match serde_json::from_str(&scan_str) {
+    let scan: serde_json::Value = match crate::engine::exec::common::read_json(&scan_path, "link_scan.json") {
         Ok(v) => v,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to parse link_scan.json: {}", e),
-                output: None,
-            }
-        }
+        Err(e) => return e,
     };
 
     // --- Load articles for title/slug map ---
     let articles_path = paths.automation_dir.join("articles.json");
-    let articles_str = match std::fs::read_to_string(&articles_path) {
-        Ok(s) => s,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("articles.json not found: {}", e),
-                output: None,
-            }
-        }
-    };
-    let articles_doc: serde_json::Value = match serde_json::from_str(&articles_str) {
+    let articles_doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
         Ok(v) => v,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to parse articles.json: {}", e),
-                output: None,
-            }
-        }
+        Err(e) => return e,
     };
 
     let empty_vec: Vec<serde_json::Value> = Vec::new();
@@ -407,25 +358,9 @@ pub(crate) fn exec_cluster_link_apply(
 
     // --- Load links_to_add.json ---
     let links_path = paths.automation_dir.join("links_to_add.json");
-    let links_str = match std::fs::read_to_string(&links_path) {
-        Ok(s) => s,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("links_to_add.json not found — run strategy step first: {}", e),
-                output: None,
-            }
-        }
-    };
-    let links_doc: serde_json::Value = match serde_json::from_str(&links_str) {
+    let links_doc: serde_json::Value = match crate::engine::exec::common::read_json(&links_path, "links_to_add.json") {
         Ok(v) => v,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to parse links_to_add.json: {}", e),
-                output: None,
-            }
-        }
+        Err(e) => return e,
     };
 
     let empty_arr: Vec<serde_json::Value> = Vec::new();

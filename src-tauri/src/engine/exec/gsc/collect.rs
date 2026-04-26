@@ -279,13 +279,8 @@ pub(crate) fn exec_collect_gsc(
             output: None,
         };
     }
-    let json_str = serde_json::to_string_pretty(&collection).unwrap_or_default();
-    if let Err(e) = std::fs::write(&output_path, &json_str) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write gsc_collection.json: {}", e),
-            output: None,
-        };
+    if let Err(e) = crate::engine::exec::common::write_json(&output_path, &collection, "gsc_collection.json") {
+        return e;
     }
 
     log::info!("[collect_gsc] wrote {} — {} URLs, {} issues", output_path.display(), records.len(), issues_found);
@@ -293,6 +288,6 @@ pub(crate) fn exec_collect_gsc(
     StepResult {
         success: true,
         message: format!("{} URLs inspected, {} issues found", records.len(), issues_found),
-        output: Some(json_str),
+        output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
     }
 }

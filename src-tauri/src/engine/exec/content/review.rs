@@ -334,39 +334,15 @@ pub(crate) fn exec_content_review_recommend(
     let repo_root = Path::new(project_path);
 
     let audit_path = paths.automation_dir.join("content_audit.json");
-    let audit_str = match std::fs::read_to_string(&audit_path) {
-        Ok(s) => s,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("content_audit.json not found — run content audit first: {}", e),
-            output: None,
-        },
-    };
-    let audit: serde_json::Value = match serde_json::from_str(&audit_str) {
+    let audit: serde_json::Value = match crate::engine::exec::common::read_json(&audit_path, "content_audit.json") {
         Ok(v) => v,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Failed to parse content_audit.json: {}", e),
-            output: None,
-        },
+        Err(e) => return e,
     };
 
     let articles_path = paths.automation_dir.join("articles.json");
-    let articles_str = match std::fs::read_to_string(&articles_path) {
-        Ok(s) => s,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("articles.json not found: {}", e),
-            output: None,
-        },
-    };
-    let articles_doc: serde_json::Value = match serde_json::from_str(&articles_str) {
+    let articles_doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
         Ok(v) => v,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Failed to parse articles.json: {}", e),
-            output: None,
-        },
+        Err(e) => return e,
     };
 
     let empty_vec: Vec<serde_json::Value> = Vec::new();

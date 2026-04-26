@@ -27,22 +27,9 @@ pub(crate) fn exec_gsc_summarise(
     let paths = ProjectPaths::from_path(project_path);
     let collection_path = paths.automation_dir.join("gsc_collection.json");
 
-    let raw = match std::fs::read_to_string(&collection_path) {
-        Ok(s) => s,
-        Err(_) => return StepResult {
-            success: false,
-            message: "gsc_collection.json not found — run collect_gsc first".to_string(),
-            output: None,
-        },
-    };
-
-    let collection: Value = match serde_json::from_str(&raw) {
+    let collection: Value = match crate::engine::exec::common::read_json(&collection_path, "gsc_collection.json") {
         Ok(v) => v,
-        Err(e) => return StepResult {
-            success: false,
-            message: format!("Failed to parse gsc_collection.json: {}", e),
-            output: None,
-        },
+        Err(e) => return e,
     };
 
     let items = match collection.get("items").and_then(|v| v.as_array()) {
@@ -101,12 +88,8 @@ pub(crate) fn exec_gsc_summarise(
 
     let summary_path = paths.automation_dir.join("gsc_summary.json");
     let summary_str = serde_json::to_string_pretty(&summary).unwrap_or_default();
-    if let Err(e) = std::fs::write(&summary_path, &summary_str) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write gsc_summary.json: {}", e),
-            output: None,
-        };
+    if let Err(e) = crate::engine::exec::common::write_json(&summary_path, &summary, "gsc_summary.json") {
+        return e;
     }
 
     StepResult {

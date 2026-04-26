@@ -19,21 +19,9 @@ pub(crate) fn exec_content_audit(task: &crate::models::task::Task, project_path:
     let articles_path = paths.automation_dir.join("articles.json");
     let _ = task;
 
-    let raw = match std::fs::read_to_string(&articles_path) {
-        Ok(s) => s,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("articles.json not found: {}", e),
-            output: None,
-        },
-    };
-    let doc: serde_json::Value = match serde_json::from_str(&raw) {
+    let doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
         Ok(v) => v,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Failed to parse articles.json: {}", e),
-            output: None,
-        },
+        Err(e) => return e,
     };
 
     let empty = vec![];
@@ -81,13 +69,8 @@ pub(crate) fn exec_content_audit(task: &crate::models::task::Task, project_path:
     });
 
     let out_path = paths.automation_dir.join("content_audit.json");
-    let out_str = serde_json::to_string_pretty(&output_doc).unwrap_or_default() + "\n";
-    if let Err(e) = std::fs::write(&out_path, &out_str) {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Failed to write content_audit.json: {}", e),
-            output: None,
-        };
+    if let Err(e) = crate::engine::exec::common::write_json(&out_path, &output_doc, "content_audit.json") {
+        return e;
     }
 
     crate::engine::workflows::StepResult {

@@ -35,26 +35,9 @@ pub(crate) fn exec_ctr_build_context(
         }
     }
 
-    let raw = match std::fs::read_to_string(&articles_path) {
-        Ok(s) => s,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("articles.json not found: {}", e),
-                output: None,
-            };
-        }
-    };
-
-    let doc: serde_json::Value = match serde_json::from_str(&raw) {
+    let doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
         Ok(v) => v,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to parse articles.json: {}", e),
-                output: None,
-            };
-        }
+        Err(e) => return e,
     };
 
     let empty = vec![];

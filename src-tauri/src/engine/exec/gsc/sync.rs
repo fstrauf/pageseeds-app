@@ -67,21 +67,9 @@ pub(crate) fn exec_gsc_sync_articles(
 
     // 3. articles.json
     let articles_path = paths.automation_dir.join("articles.json");
-    let raw = match std::fs::read_to_string(&articles_path) {
-        Ok(s) => s,
-        Err(e) => return StepResult {
-            success: false,
-            message: format!("articles.json not found: {}", e),
-            output: None,
-        },
-    };
-    let mut doc: serde_json::Value = match serde_json::from_str(&raw) {
+    let mut doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
         Ok(v) => v,
-        Err(e) => return StepResult {
-            success: false,
-            message: format!("Failed to parse articles.json: {}", e),
-            output: None,
-        },
+        Err(e) => return e,
     };
 
     // 4. site_url from manifest.json
@@ -219,13 +207,8 @@ pub(crate) fn exec_gsc_sync_articles(
     }
 
     // 8. Write back
-    let out = serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n";
-    if let Err(e) = std::fs::write(&articles_path, &out) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write articles.json: {}", e),
-            output: None,
-        };
+    if let Err(e) = crate::engine::exec::common::write_json(&articles_path, &doc, "articles.json") {
+        return e;
     }
 
     let summary = serde_json::json!({
