@@ -171,10 +171,6 @@ pub async fn draft_reddit_reply(
     post_id: String,
 ) -> Result<String, String> {
     use crate::db::global_settings;
-    use crate::engine::agent as agent_mod;
-    use crate::engine::skills;
-    use crate::reddit::config as reddit_cfg;
-    use std::path::Path;
 
     let (project_path, agent_provider, opp) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -185,69 +181,10 @@ pub async fn draft_reddit_reply(
         (project.path.clone(), provider, opp)
     };
 
-    let repo_root = Path::new(&project_path);
-    let automation_dir = repo_root.join(".github").join("automation");
+    let reply_text = crate::reddit::draft::generate_draft_reply(&project_path, &agent_provider, &opp)
+        .await?;
 
-    let missing = reddit_cfg::missing_config_files(&automation_dir);
-    if !missing.is_empty() {
-        return Err(format!(
-            "Missing required config files: {}. Create them in .github/automation/ first.",
-            missing.join(", ")
-        ));
-    }
-
-    // Primary: project.md (consolidated). Fallback: legacy files.
-    let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
-        .or_else(|_| {
-            let summary = std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
-            let brand = std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
-            if summary.is_empty() && brand.is_empty() {
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no project context"))
-            } else {
-                Ok(format!("{}\n\n{}", summary, brand))
-            }
-        })
-        .map_err(|e| format!("Failed to read project.md: {}", e))?;
-    let reddit_config_raw = std::fs::read_to_string(automation_dir.join("reddit_config.md"))
-        .unwrap_or_default();
-    let guardrails = std::fs::read_to_string(
-        automation_dir.join("reddit").join("_reply_guardrails.md")
-    ).unwrap_or_default();
-
-    let skill_content = skills::load_skill(repo_root, "reddit-reply-drafting")
-        .map(|s| s.content)
-        .unwrap_or_default();
-
-    // Read product_name and mention_stance from the opportunity row (stored during enrichment)
-    // Fall back to deterministic parsing only for pre-migration rows
-    let (product_name, mention_stance) = match (&opp.product_name, &opp.mention_stance) {
-        (Some(name), Some(stance)) if !name.is_empty() => {
-            log::info!("[draft_reddit_reply] using DB-stored params: name='{}', stance='{}'", name, stance);
-            (name.clone(), stance.clone())
-        }
-        _ => {
-            log::info!("[draft_reddit_reply] DB values missing, falling back to deterministic parse");
-            let cfg = reddit_cfg::parse_reddit_config(&reddit_config_raw);
-            let name = cfg.product_name.unwrap_or_else(|| "the product".to_string());
-            let stance = cfg.mention_stance.as_str().to_string();
-            (name, stance)
-        }
-    };
-
-    let prompt = crate::reddit::prompts::build_draft_reply_prompt(
-        &project_context,
-        &guardrails,
-        &skill_content,
-        &product_name,
-        &mention_stance,
-        &opp,
-    );
-
-    let reply_text = agent_mod::run_agent(&agent_provider, &prompt, repo_root)
-        .map_err(|e| format!("Agent failed: {}", e))?;
-
-    let reply_text = reply_text.trim().to_string();
-
+    // Persist the generated reply
     {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -266,7 +203,7 @@ pub fn validate_reddit_reply(
     text: String,
     project_id: Option<String>,
 ) -> ValidationResult {
-    let base = validate_reply(&text);
+    let base = crate::reddit::validation::validate_reply(&text);
     if !base.valid {
         return base;
     }
@@ -277,54 +214,14 @@ pub fn validate_reddit_reply(
                 let automation_dir = std::path::Path::new(&project.path)
                     .join(".github")
                     .join("automation");
-                if let Ok(cfg) = crate::reddit::config::load_reddit_config(&automation_dir) {
-                    if cfg.mention_stance == crate::reddit::config::MentionStance::Required {
-                        if let Some(product) = &cfg.product_name {
-                            if !text.to_lowercase().contains(&product.to_lowercase()) {
-                                return ValidationResult {
-                                    valid: false,
-                                    error: Some(format!(
-                                        "Reply must mention \"{}\" by name (mention stance: REQUIRED).",
-                                        product
-                                    )),
-                                };
-                            }
-                        }
-                    }
+                let stance_check = crate::reddit::validation::validate_project_stance(&text, &automation_dir);
+                if !stance_check.valid {
+                    return stance_check;
                 }
             }
         }
     }
 
-    ValidationResult { valid: true, error: None }
-}
-
-fn validate_reply(text: &str) -> ValidationResult {
-    let text = text.trim();
-
-    if text.len() < 10 {
-        return ValidationResult { valid: false, error: Some("Reply is too short (minimum 10 characters).".to_string()) };
-    }
-    if text.contains("http://") || text.contains("https://") {
-        return ValidationResult { valid: false, error: Some("Reply must not contain URLs.".to_string()) };
-    }
-    if regex::Regex::new(r"\[.+?\]\(.+?\)").unwrap().is_match(text) {
-        return ValidationResult { valid: false, error: Some("Reply must not contain markdown links.".to_string()) };
-    }
-    let sentences: Vec<&str> = text.split(['.', '!', '?']).filter(|s| !s.trim().is_empty()).collect();
-    if sentences.len() < 3 {
-        return ValidationResult { valid: false, error: Some(format!("{} sentence(s) — minimum 3 required.", sentences.len())) };
-    }
-    if sentences.len() > 5 {
-        return ValidationResult { valid: false, error: Some(format!("{} sentences — maximum 5 allowed.", sentences.len())) };
-    }
-    let word_count = text.split_whitespace().count();
-    if word_count < 30 {
-        return ValidationResult { valid: false, error: Some(format!("{} words — minimum 30 recommended.", word_count)) };
-    }
-    if word_count > 250 {
-        return ValidationResult { valid: false, error: Some(format!("{} words — maximum 250 recommended.", word_count)) };
-    }
     ValidationResult { valid: true, error: None }
 }
 
@@ -394,98 +291,6 @@ pub fn create_reddit_reply_tasks(
     task_id: String,
     post_ids: Vec<String>,
 ) -> Result<Vec<crate::models::task::Task>, String> {
-    use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
-    use crate::models::reddit::RedditOpportunity;
-    use chrono::Utc;
-
-    if post_ids.is_empty() {
-        return Err("No opportunities selected".to_string());
-    }
-
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    
-    // Get the parent task
-    let parent_task = task_store::get_task(&db, &task_id)
-        .map_err(|e| format!("Failed to get parent task: {}", e))?;
-    
-    // Find the reddit_results_stage artifact
-    let results_artifact = parent_task.artifacts.iter()
-        .find(|a| a.key == "reddit_results_stage")
-        .ok_or_else(|| "No reddit_results_stage artifact found. Run the search first.".to_string())?;
-    
-    let artifact_content = results_artifact.content.as_ref()
-        .ok_or_else(|| "reddit_results_stage artifact has no content".to_string())?;
-    
-    // Parse opportunities from JSON
-    let opportunities: Vec<RedditOpportunity> = serde_json::from_str(artifact_content)
-        .map_err(|e| format!("Failed to parse opportunities: {}", e))?;
-    
-    // Filter to only selected post_ids
-    let selected_opps: Vec<RedditOpportunity> = opportunities.into_iter()
-        .filter(|o| post_ids.contains(&o.post_id))
-        .collect();
-    
-    if selected_opps.is_empty() {
-        return Err("None of the selected post IDs were found in the search results".to_string());
-    }
-    
-    // Create a task for each selected opportunity
-    let mut created_tasks = Vec::new();
-    let now = Utc::now().to_rfc3339();
-    
-    for (idx, opp) in selected_opps.iter().enumerate() {
-        let task_id = format!("task-{}", Utc::now().timestamp_millis() + idx as i64);
-        
-        // Determine priority based on severity
-        let priority = match opp.severity.as_deref() {
-            Some("CRITICAL") | Some("HIGH") => Priority::High,
-            _ => Priority::Medium,
-        };
-        
-        let title = format!(
-            "Reply to: {}",
-            opp.title.as_deref().unwrap_or("Reddit post").chars().take(50).collect::<String>()
-        );
-        
-        let description = format!(
-            "**Subreddit:** r/{}\n\n**Post URL:** {}\n\n**Why Relevant:** {}\n\n**Draft Reply:**\n{}\n\n**Post ID:** {}",
-            opp.subreddit.as_deref().unwrap_or("unknown"),
-            opp.url.as_deref().unwrap_or(""),
-            opp.why_relevant.as_deref().unwrap_or(""),
-            opp.reply_text.as_deref().unwrap_or("(no draft reply)"),
-            opp.post_id
-        );
-        
-        let task = Task {
-            id: task_id,
-            project_id: parent_task.project_id.clone(),
-            task_type: "reddit_reply".to_string(),
-            phase: "engagement".to_string(),
-            status: TaskStatus::Todo,
-            priority,
-            execution_mode: ExecutionMode::Manual,
-            agent_policy: AgentPolicy::Optional,
-            title: Some(title),
-            description: Some(description),
-            depends_on: vec![],
-            artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None },
-            created_at: now.clone(),
-            updated_at: now.clone(),
-        };
-        
-        task_store::create_task(&db, &task)
-            .map_err(|e| format!("Failed to create task: {}", e))?;
-        
-        created_tasks.push(task);
-    }
-    
-    // Mark the parent search task as complete since the user has reviewed and selected opportunities
-    task_store::update_task_status(&db, &task_id, TaskStatus::Done)
-        .map_err(|e| format!("Failed to update parent task status: {}", e))?;
-    
-    log::info!("[create_reddit_reply_tasks] created {} reply tasks from parent {} and marked parent as Done", 
-        created_tasks.len(), parent_task.id);
-    
-    Ok(created_tasks)
+    crate::reddit::spawner::create_reply_tasks_from_opportunities(&db, &task_id, &post_ids)
 }
