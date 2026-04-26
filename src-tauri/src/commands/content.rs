@@ -44,17 +44,10 @@ pub fn fix_content_dates(
     fix_result.dry_run = dry_run;
 
     if !dry_run {
-        let now = chrono::Utc::now().to_rfc3339();
-        for fix in &fix_result.fixes {
-            db.execute(
-                "UPDATE articles SET published_date = ?1 WHERE id = ?2 AND project_id = ?3",
-                rusqlite::params![fix.new_date, fix.article_id, project_id],
-            ).map_err(|e| e.to_string())?;
-        }
         let project_path = std::path::PathBuf::from(&project.path);
-        crate::db::export::write_articles_to_repo(&db, &project_id, &project_path)
-            .map_err(|e| e.to_string())?;
-        let _ = now;
+        crate::content::dates::apply_fixes_to_db_and_export(
+            &db, &project_id, &project_path, &fix_result.fixes,
+        ).map_err(|e| e.to_string())?;
     }
 
     Ok(fix_result)
@@ -253,30 +246,11 @@ pub fn analyze_article_readability(
 ) -> Result<crate::content::readability::ReadabilityReport, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-    let repo_root = std::path::PathBuf::from(&project.path);
-    let resolution = crate::content::locator::resolve(&repo_root, project.content_dir.as_deref());
-    let content_dir = resolution
-        .selected
-        .ok_or_else(|| "Content directory not found".to_string())?;
-    
-    // Find the article file by slug
-    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
-    let article = articles
-        .iter()
-        .find(|a| a.url_slug == slug)
-        .ok_or_else(|| format!("Article with slug '{}' not found", slug))?;
-    
-    // Read the article file
-    let file_path = content_dir.join(&article.file);
-    let content = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read article file: {}", e))?;
-    
-    // Clean the content for readability analysis
-    let cleaned = crate::content::readability::clean_mdx_for_readability(&content);
-    
-    // Analyze readability
-    crate::content::readability::analyze_readability(&cleaned)
-        .map_err(|e| e.to_string())
+    let repo_root = std::path::Path::new(&project.path);
+    crate::content::ops::analyze_article_readability(
+        &db, &project_id, repo_root, project.content_dir.as_deref(), &slug,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -317,29 +291,11 @@ pub fn analyze_keyword_density(
 ) -> Result<crate::content::keyword_density::KeywordDensityReport, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-    let repo_root = std::path::PathBuf::from(&project.path);
-    let resolution = crate::content::locator::resolve(&repo_root, project.content_dir.as_deref());
-    let content_dir = resolution
-        .selected
-        .ok_or_else(|| "Content directory not found".to_string())?;
-    
-    // Find the article file by slug
-    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
-    let article = articles
-        .iter()
-        .find(|a| a.url_slug == slug)
-        .ok_or_else(|| format!("Article with slug '{}' not found", slug))?;
-    
-    // Read the article file
-    let file_path = content_dir.join(&article.file);
-    let content = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read article file: {}", e))?;
-    
-    // Strip frontmatter to get body content
-    let (_, body) = crate::engine::exec::utils::parse_frontmatter(&content);
-    
-    // Analyze keyword density
-    Ok(crate::content::keyword_density::analyze_keyword_density(&body, &target_keyword))
+    let repo_root = std::path::Path::new(&project.path);
+    crate::content::ops::analyze_keyword_density(
+        &db, &project_id, repo_root, project.content_dir.as_deref(), &slug, &target_keyword,
+    )
+    .map_err(|e| e.to_string())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

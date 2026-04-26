@@ -185,3 +185,22 @@ pub fn calculate_fixes(articles: &[Article]) -> DateFixResult {
         dry_run: true, // caller decides whether to persist
     }
 }
+
+/// Apply date fixes to the database and export updated articles to the repo.
+///
+/// Updates `published_date` in the SQLite `articles` table for each fix, then
+/// writes the full articles list back to `articles.json` in the project.
+pub fn apply_fixes_to_db_and_export(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    project_path: &std::path::Path,
+    fixes: &[DateFix],
+) -> Result<(), crate::error::Error> {
+    for fix in fixes {
+        conn.execute(
+            "UPDATE articles SET published_date = ?1 WHERE id = ?2 AND project_id = ?3",
+            rusqlite::params![fix.new_date, fix.article_id, project_id],
+        )?;
+    }
+    crate::db::export::write_articles_to_repo(conn, project_id, project_path)
+}

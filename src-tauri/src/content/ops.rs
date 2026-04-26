@@ -630,3 +630,68 @@ fn derive_url_slug(filename: &str) -> String {
     let stripped = re.replace(base, "");
     stripped.to_lowercase().replace('_', "-")
 }
+
+// ─── Article Analysis Helpers ───────────────────────────────────────────────
+
+/// Load an article's raw content by slug.
+///
+/// Looks up the article in the database, resolves the content directory,
+/// and reads the file from disk.
+pub fn load_article_by_slug(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &Path,
+    content_dir_override: Option<&str>,
+    slug: &str,
+) -> Result<(crate::models::article::Article, String, PathBuf)> {
+    use crate::models::article::Article;
+    use crate::engine::task_store;
+
+    let articles: Vec<Article> = task_store::list_articles(conn, project_id)?;
+    let article = articles
+        .into_iter()
+        .find(|a| a.url_slug == slug)
+        .ok_or_else(|| crate::error::Error::Other(format!("Article with slug '{}' not found", slug)))?;
+
+    let resolution = crate::content::locator::resolve(project_path, content_dir_override);
+    let content_dir = resolution
+        .selected
+        .ok_or_else(|| crate::error::Error::Other("Content directory not found".to_string()))?;
+
+    let file_path = content_dir.join(&article.file);
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| crate::error::Error::Other(format!("Failed to read article file: {}", e)))?;
+
+    Ok((article, content, file_path))
+}
+
+/// Analyze readability for a single article identified by slug.
+pub fn analyze_article_readability(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &Path,
+    content_dir_override: Option<&str>,
+    slug: &str,
+) -> Result<crate::content::readability::ReadabilityReport> {
+    let (_article, content, _path) = load_article_by_slug(
+        conn, project_id, project_path, content_dir_override, slug,
+    )?;
+    let cleaned = crate::content::readability::clean_mdx_for_readability(&content);
+    crate::content::readability::analyze_readability(&cleaned)
+}
+
+/// Analyze keyword density for a single article identified by slug.
+pub fn analyze_keyword_density(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &Path,
+    content_dir_override: Option<&str>,
+    slug: &str,
+    target_keyword: &str,
+) -> Result<crate::content::keyword_density::KeywordDensityReport> {
+    let (_article, content, _path) = load_article_by_slug(
+        conn, project_id, project_path, content_dir_override, slug,
+    )?;
+    let (_, body) = crate::engine::exec::utils::parse_frontmatter(&content);
+    Ok(crate::content::keyword_density::analyze_keyword_density(&body, target_keyword))
+}
