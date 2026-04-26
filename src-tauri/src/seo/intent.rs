@@ -10,42 +10,53 @@ pub struct IntentClassification {
     pub confidence: Option<f64>,  // DataForSEO only
 }
 
+/// Check if a keyword contains a pattern with word-boundary awareness.
+/// Multi-word patterns use substring matching; single-word patterns match whole words only.
+fn keyword_matches_pattern(keyw: &str, pattern: &str) -> bool {
+    if pattern.contains(' ') {
+        keyw.contains(pattern)
+    } else {
+        keyw.split(|c: char| !c.is_alphanumeric())
+            .any(|word| word == pattern)
+    }
+}
+
 /// Classify search intent using keyword pattern matching (Ahrefs fallback).
 /// This is a deterministic mapping based on keyword patterns.
 pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
     let kw_lower = keyword.to_lowercase();
-    
+
     // Informational patterns
     let informational_patterns = [
         "how to", "what is", "what are", "guide", "tutorial", "why ", "tips",
         "explain", "meaning", "definition", "examples", "learn", "understand",
         "beginner", "beginners", "introduction", "overview", "basics",
     ];
-    
+
     // Transactional patterns
     let transactional_patterns = [
         "buy", "price", "discount", "coupon", "deal", "cheap", "order",
         "purchase", "shop", "sale", "free shipping", "add to cart",
         "subscription", "subscribe", "sign up", "register", "download",
     ];
-    
+
     // Commercial patterns
     let commercial_patterns = [
         "best", "top", "review", "reviews", "vs", "versus", "comparison",
         "compare", "alternative", "alternatives", "recommendation",
         "recommended", "rated", "rating", "pros and cons",
     ];
-    
+
     // Navigational patterns (brand names, login, specific sites)
     let navigational_patterns = [
         "login", "sign in", "log in", "signup", "register", "account",
         "customer service", "contact", "phone number", "address",
         "hours", "location", "directions",
     ];
-    
+
     // Check patterns in order of specificity
     for pattern in &transactional_patterns {
-        if kw_lower.contains(pattern) {
+        if keyword_matches_pattern(&kw_lower, pattern) {
             return IntentClassification {
                 keyword: keyword.to_string(),
                 intent: "transactional".to_string(),
@@ -53,9 +64,9 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
             };
         }
     }
-    
+
     for pattern in &commercial_patterns {
-        if kw_lower.contains(pattern) {
+        if keyword_matches_pattern(&kw_lower, pattern) {
             return IntentClassification {
                 keyword: keyword.to_string(),
                 intent: "commercial".to_string(),
@@ -63,9 +74,9 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
             };
         }
     }
-    
+
     for pattern in &navigational_patterns {
-        if kw_lower.contains(pattern) {
+        if keyword_matches_pattern(&kw_lower, pattern) {
             return IntentClassification {
                 keyword: keyword.to_string(),
                 intent: "navigational".to_string(),
@@ -73,9 +84,9 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
             };
         }
     }
-    
+
     for pattern in &informational_patterns {
-        if kw_lower.contains(pattern) {
+        if keyword_matches_pattern(&kw_lower, pattern) {
             return IntentClassification {
                 keyword: keyword.to_string(),
                 intent: "informational".to_string(),

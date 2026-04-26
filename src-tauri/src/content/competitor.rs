@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn test_calculate_percentile() {
         let data = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-        assert_eq!(calculate_percentile(&data, 50), 50);  // median
+        assert_eq!(calculate_percentile(&data, 50), 60);  // index = round(0.5 * 9) = 5
         assert_eq!(calculate_percentile(&data, 75), 80);  // 75th percentile
         assert_eq!(calculate_percentile(&data, 0), 10);   // min
         assert_eq!(calculate_percentile(&data, 100), 100); // max

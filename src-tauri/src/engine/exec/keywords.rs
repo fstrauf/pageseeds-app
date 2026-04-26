@@ -2386,20 +2386,26 @@ mod keyword_workflow_tests {
         let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
         let steps = handler.plan(&task);
         
-        // New 4-step hybrid workflow: 
+        // 6-step hybrid workflow:
         //   1. seed extraction (agentic)
-        //   2. ahrefs pipeline (deterministic) 
-        //   3. final selection (agentic)
-        //   4. normalizer (normalizer)
-        assert_eq!(steps.len(), 4, "Should have 4 steps: agentic → deterministic → agentic → normalizer");
+        //   2. autocomplete (deterministic)
+        //   3. seed validation (agentic)
+        //   4. ahrefs pipeline (deterministic)
+        //   5. final selection (deterministic)
+        //   6. normalizer (normalizer)
+        assert_eq!(steps.len(), 6, "Should have 6 steps: agentic → deterministic → agentic → deterministic → deterministic → normalizer");
         assert_eq!(steps[0].name, "research_seed_extraction");
         assert_eq!(steps[0].kind, StepKind::Agentic);
-        assert_eq!(steps[1].name, "research_ahrefs_pipeline");
-        assert_eq!(steps[1].kind, StepKind::KeywordResearchNative);
-        assert_eq!(steps[2].name, "research_final_selection");
-        assert_eq!(steps[2].kind, StepKind::ResearchFinalSelection);
-        assert_eq!(steps[3].name, "research_normalize");
-        assert_eq!(steps[3].kind, StepKind::Normalizer);
+        assert_eq!(steps[1].name, "research_autocomplete");
+        assert_eq!(steps[1].kind, StepKind::ResearchAutocomplete);
+        assert_eq!(steps[2].name, "research_seed_validation");
+        assert_eq!(steps[2].kind, StepKind::Agentic);
+        assert_eq!(steps[3].name, "research_ahrefs_pipeline");
+        assert_eq!(steps[3].kind, StepKind::KeywordResearchNative);
+        assert_eq!(steps[4].name, "research_final_selection");
+        assert_eq!(steps[4].kind, StepKind::ResearchFinalSelection);
+        assert_eq!(steps[5].name, "research_normalize");
+        assert_eq!(steps[5].kind, StepKind::Normalizer);
         
         std::fs::remove_dir_all(&temp_dir).ok();
     }

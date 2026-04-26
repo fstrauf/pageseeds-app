@@ -150,6 +150,7 @@ mod tests {
                 key_pain_points TEXT NOT NULL DEFAULT '[]',
                 website_fit TEXT,
                 mention_stance TEXT,
+                product_name TEXT,
                 reply_status TEXT NOT NULL DEFAULT 'pending',
                 reply_text TEXT,
                 reply_url TEXT,

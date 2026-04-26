@@ -115,8 +115,11 @@ fn clean_content_for_analysis(content: &str) -> String {
 fn analyze_section_distribution(content: &str, keyword: &str) -> Vec<SectionPresence> {
     let mut sections = Vec::new();
     
-    // Split content into sentences
-    let sentences: Vec<&str> = content.split(|c: char| c == '.' || c == '!' || c == '?').collect();
+    // Split content into sentences (filter empty like detect_consecutive_violations)
+    let sentences: Vec<&str> = content.split(|c: char| c == '.' || c == '!' || c == '?')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     let total_sentences = sentences.len();
     
     if total_sentences == 0 {
