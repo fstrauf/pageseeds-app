@@ -1,12 +1,6 @@
-/// Queue execution commands for PageSeeds
-///
-/// Thin wrappers around engine::queue_runner. All business logic lives there.
-
-use std::path::PathBuf;
 
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 use crate::commands::AppState;
 use crate::engine::queue_runner;
@@ -14,9 +8,7 @@ use crate::engine::task_store;
 use crate::models::task::TaskStatus;
 
 // Re-export types used by the frontend via IPC.
-pub use crate::engine::queue_runner::FollowUpCreatedEvent;
 pub use crate::engine::queue_runner::QueueItem;
-pub use crate::engine::queue_runner::QueueProgressEvent;
 
 /// Mark tasks as queued in the database when added to the queue
 #[tauri::command]

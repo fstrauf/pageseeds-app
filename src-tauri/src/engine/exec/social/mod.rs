@@ -1,6 +1,5 @@
 //! Social media marketing workflow step executors
 
-use std::path::Path;
 
 use chrono::Utc;
 
@@ -8,21 +7,18 @@ use crate::engine::workflows::StepResult;
 use crate::engine::workflows::WorkflowStep;
 use crate::models::social::*;
 use crate::models::task::Task;
-use crate::social::content::sources::{discover_sources, ensure_output_dir};
-use crate::social::image::assets::generate_branded_graphic;
 use crate::social::models::{AgentPostOutput, AgentTemplateOutput, PostGenerationJob};
-use crate::social::prompts;
-use crate::social::templates::{TemplateRegistry, TemplateDef, render_prompt, validate_output};
+use crate::social::templates::{TemplateRegistry, TemplateDef};
 
 mod extract;
 mod generate;
 mod visuals;
 mod templates;
 
-pub use extract::*;
-pub use generate::*;
-pub use visuals::*;
-pub use templates::*;
+pub(crate) use extract::*;
+pub(crate) use generate::*;
+pub(crate) use visuals::*;
+pub(crate) use templates::*;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 2: Load Templates

@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use crate::models::task::{Task, TaskArtifact, TaskRun, TaskStatus, Priority, AgentPolicy, ExecutionMode};
+use crate::models::task::{Task, TaskArtifact, TaskRun, TaskStatus, Priority, AgentPolicy};
 
 /// Auto-create `write_article` tasks from keyword research results.
 ///

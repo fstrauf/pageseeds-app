@@ -19,10 +19,10 @@ mod search;
 mod enrich;
 mod reply;
 
-pub use config::*;
+pub(crate) use config::*;
 pub(crate) use search::*;
-pub use enrich::*;
-pub use reply::*;
+pub(crate) use enrich::*;
+pub(crate) use reply::*;
 
 /// Load structured search params from the reddit_config_parse_stage artifact.
 /// Returns None if no artifact found or parsing fails.

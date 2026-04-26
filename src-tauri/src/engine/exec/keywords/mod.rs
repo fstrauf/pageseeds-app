@@ -14,7 +14,6 @@ mod research_pipeline;
 mod theme_extraction;
 mod tests;
 
-pub(crate) use auto_spawn::*;
 pub(crate) use coverage_filter::*;
 pub(crate) use research_pipeline::*;
 pub(crate) use theme_extraction::*;

@@ -11,9 +11,9 @@ mod autocomplete;
 mod landing_page;
 mod prompts;
 
-pub use autocomplete::*;
-pub use landing_page::*;
-pub use prompts::*;
+pub(crate) use autocomplete::*;
+pub(crate) use landing_page::*;
+pub(crate) use prompts::*;
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::{StepResult, WorkflowStep};

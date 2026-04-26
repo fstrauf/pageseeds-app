@@ -2,7 +2,6 @@ use std::path::Path;
 
 use crate::engine::workflows::StepResult;
 use crate::engine::workflows::WorkflowStep;
-use crate::models::social::ContentTemplate;
 use crate::models::task::Task;
 use crate::social::prompts;
 

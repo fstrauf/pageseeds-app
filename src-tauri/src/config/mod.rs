@@ -3,19 +3,8 @@ use crate::models::task::ExecutionMode;
 /// Application-level constants matching the Python CLI config.py
 pub mod env_resolver;
 
-pub const PHASES: &[&str] = &[
-    "collection",
-    "investigation",
-    "research",
-    "implementation",
-    "verification",
-];
-
-pub const STATUSES: &[&str] = &["todo", "in_progress", "review", "done", "cancelled"];
-
-pub const PRIORITIES: &[&str] = &["high", "medium", "low"];
-
-pub const TASK_TYPES: &[&str] = &[
+#[allow(dead_code)]
+pub(crate) const TASK_TYPES: &[&str] = &[
     "write_article",
     "optimize_article",
     "create_landing_page",

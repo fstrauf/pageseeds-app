@@ -1,15 +1,14 @@
 use std::path::Path;
 
-use chrono::Utc;
 
 use crate::engine::workflows::StepResult;
 use crate::engine::workflows::WorkflowStep;
 use crate::models::social::*;
 use crate::models::task::Task;
 use crate::social::content::sources::discover_sources;
-use crate::social::models::{AgentPostOutput, PostGenerationJob};
+use crate::social::models::PostGenerationJob;
 use crate::social::prompts;
-use crate::social::templates::{TemplateDef, render_prompt, validate_output};
+use crate::social::templates::{render_prompt, validate_output};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 3: Generate Posts (Agentic)

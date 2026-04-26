@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
-use std::collections::HashMap;
 
 /// Section presence for keyword distribution.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -209,51 +208,10 @@ fn detect_consecutive_violations(content: &str, keyword: &str) -> Vec<Consecutiv
 }
 
 /// Check if content has good keyword distribution.
-pub fn has_good_distribution(report: &KeywordDensityReport) -> bool {
+#[allow(dead_code)]
+fn has_good_distribution(report: &KeywordDensityReport) -> bool {
     // Should appear in all three sections
     report.section_distribution.iter().all(|s| s.present)
-}
-
-/// Get keyword density recommendations.
-pub fn get_density_recommendations(report: &KeywordDensityReport) -> Vec<String> {
-    let mut recommendations = Vec::new();
-    
-    if report.is_stuffed {
-        recommendations.push(format!(
-            "Keyword density {:.1}% is too high (>3%). Reduce keyword usage to avoid stuffing penalties.",
-            report.density_percent
-        ));
-    }
-    
-    if report.is_underused {
-        recommendations.push(format!(
-            "Keyword density {:.1}% is too low (<0.5%). Increase keyword usage for better relevance.",
-            report.density_percent
-        ));
-    }
-    
-    // Check section distribution
-    let missing_sections: Vec<&str> = report.section_distribution.iter()
-        .filter(|s| !s.present)
-        .map(|s| s.section.as_str())
-        .collect();
-    
-    if !missing_sections.is_empty() {
-        recommendations.push(format!(
-            "Keyword not found in: {}. Ensure keyword appears in all sections for better distribution.",
-            missing_sections.join(", ")
-        ));
-    }
-    
-    // Check consecutive violations
-    if !report.consecutive_violations.is_empty() {
-        recommendations.push(format!(
-            "Found {} instance(s) of keyword appearing in 3+ consecutive sentences. Vary your phrasing.",
-            report.consecutive_violations.len()
-        ));
-    }
-    
-    recommendations
 }
 
 #[cfg(test)]

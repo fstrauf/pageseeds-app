@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use crate::models::live_site::LiveSitePage;
 
 /// Coverage cluster data loaded from keyword_coverage.json

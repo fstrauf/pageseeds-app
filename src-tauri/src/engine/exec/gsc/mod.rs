@@ -14,10 +14,10 @@ mod investigate;
 mod sync;
 mod task_spawner;
 
-pub use collect::*;
-pub use investigate::*;
-pub use sync::*;
-pub use task_spawner::*;
+pub(crate) use collect::*;
+pub(crate) use investigate::*;
+pub(crate) use sync::*;
+pub(crate) use task_spawner::*;
 
 /// Normalize a URL for domain comparison by stripping scheme and www.
 ///

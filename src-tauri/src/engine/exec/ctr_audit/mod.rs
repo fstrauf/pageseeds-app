@@ -9,9 +9,9 @@ mod analyze;
 mod context;
 mod task_spawner;
 
-pub use analyze::*;
-pub use context::*;
-pub use task_spawner::*;
+pub(crate) use analyze::*;
+pub(crate) use context::*;
+pub(crate) use task_spawner::*;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Tests

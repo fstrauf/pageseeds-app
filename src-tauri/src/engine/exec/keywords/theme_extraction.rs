@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 
 // ─── Theme string cleaning ──────────────────────────────────────────────────
 

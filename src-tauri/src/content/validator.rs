@@ -457,7 +457,7 @@ pub fn apply_fixes(
         };
 
         if new_content != content {
-            if let Err(e) = std::fs::write(&path, new_content) {
+            if let Err(_) = std::fs::write(&path, new_content) {
                 remaining.extend(file_issues.into_iter().cloned());
                 continue;
             }
@@ -516,7 +516,6 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
                 .push((key.clone(), val.clone()));
             lines_info.push(LineInfo {
                 idx,
-                original_line: line.to_string(),
                 key,
                 canonical,
                 value: val,
@@ -524,7 +523,6 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
         } else {
             lines_info.push(LineInfo {
                 idx,
-                original_line: line.to_string(),
                 key: String::new(),
                 canonical: String::new(),
                 value: String::new(),
@@ -606,7 +604,6 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
 
 struct LineInfo {
     idx: usize,
-    original_line: String,
     key: String,
     canonical: String,
     value: String,
