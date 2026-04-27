@@ -5,6 +5,7 @@
 ///   Step 2 (deterministic): ahrefs_pipeline → KeywordPipelineOutput  
 ///   Step 3 (agentic): final_selection → ResearchFinalOutput
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -12,7 +13,7 @@ use ts_rs::TS;
 /// 
 /// The LLM reads the project brief and extracts research themes and competitor domains.
 /// Contract: MUST return valid JSON with {"themes": [...], "competitors": [...]}
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct SeedExtractionOutput {
     /// 8-12 seed themes for Ahrefs keyword ideas API
@@ -23,8 +24,26 @@ pub struct SeedExtractionOutput {
     pub competitors: Vec<String>,
 }
 
+/// A validated seed within a theme.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct ValidatedSeed {
+    pub theme: String,
+    pub seeds: Vec<String>,
+}
+
+/// Output from Step 3: research_seed_validation
+///
+/// The LLM filters autocomplete suggestions for domain relevance.
+/// Contract: MUST return valid JSON with {"validated_seeds": [{"theme": ..., "seeds": [...]}]}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct SeedValidationOutput {
+    pub validated_seeds: Vec<ValidatedSeed>,
+}
+
 /// A scored keyword from the Ahrefs pipeline
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct ScoredKeyword {
     /// The keyword phrase
@@ -47,7 +66,7 @@ pub struct ScoredKeyword {
 }
 
 /// A competitor top keyword from Ahrefs traffic data.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct CompetitorTopKeyword {
     pub keyword: String,
@@ -56,7 +75,7 @@ pub struct CompetitorTopKeyword {
 }
 
 /// Competitor traffic insight for the final selection agent.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct CompetitorInsight {
     pub domain: String,
@@ -68,7 +87,7 @@ pub struct CompetitorInsight {
 ///
 /// The deterministic step calls Ahrefs API for each theme,
 /// deduplicates, fetches KD scores, and returns structured data.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct KeywordPipelineOutput {
     /// All keywords found with their scores
@@ -88,7 +107,7 @@ pub struct KeywordPipelineOutput {
 }
 
 /// A selected keyword candidate for final output
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct SelectedKeyword {
     /// The keyword phrase
@@ -107,7 +126,7 @@ pub struct SelectedKeyword {
 }
 
 /// A landing page candidate (for commercial research)
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct LandingPageCandidate {
     /// The keyword phrase
@@ -131,7 +150,7 @@ pub struct LandingPageCandidate {
 /// Output from Step 3: research_final_selection
 ///
 /// The LLM selects the best candidates from the structured data.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct ResearchFinalOutput {
     /// Selected informational keywords (for research_keywords task)

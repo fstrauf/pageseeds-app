@@ -110,7 +110,7 @@ pub(crate) fn exec_ctr_fix_apply(
         };
     }
 
-    let (fm, body) = match crate::content::cleaner::parse_frontmatter(&original_content) {
+    let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
         Some((f, b)) => (f.to_string(), b.to_string()),
         None => {
             return StepResult {

@@ -46,7 +46,7 @@ pub fn read_file_metadata(path: &Path) -> Result<FileMetadata> {
     let url_slug = slug_from_filename(&file_name);
 
     let (title, published_date, status, body) =
-        if let Some((fm, body)) = crate::content::cleaner::parse_frontmatter(&content) {
+        if let Some((fm, body)) = crate::content::frontmatter::split_mdx(&content) {
             let title = extract_value(fm, "title").map(String::from);
             let date = extract_value(fm, "date")
                 .or_else(|| extract_value(fm, "publishedDate"))
@@ -298,7 +298,7 @@ pub fn sync_and_validate(
             continue;
         }
 
-        let is_fixable = crate::content::cleaner::parse_frontmatter(&text).is_some();
+        let is_fixable = crate::content::frontmatter::split_mdx(&text).is_some();
         if is_fixable {
             fixable_mismatches += 1;
         }
@@ -447,7 +447,7 @@ pub fn resolve_content_dir(
 
 /// Extract the `date:` value from YAML frontmatter, stripping quotes.
 fn extract_frontmatter_date(content: &str) -> Option<String> {
-    let (fm, _) = crate::content::cleaner::parse_frontmatter(content)?;
+    let (fm, _) = crate::content::frontmatter::split_mdx(content)?;
     for line in fm.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("date:") {
@@ -466,7 +466,7 @@ fn patch_frontmatter_date(
     content: &str,
     new_date: &str,
 ) -> std::result::Result<String, String> {
-    let Some((fm, body)) = crate::content::cleaner::parse_frontmatter(content) else {
+    let Some((fm, body)) = crate::content::frontmatter::split_mdx(content) else {
         return Err("no frontmatter found".into());
     };
 

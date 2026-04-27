@@ -166,6 +166,27 @@ pub fn get_global_settings(
     global_settings::get_all(&db).map_err(|e| e.to_string())
 }
 
+/// Get the global Kimi backend mode (for UI initialization).
+#[tauri::command]
+pub fn get_kimi_backend_mode(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(global_settings::get_kimi_backend_mode(&db))
+}
+
+/// Set the global Kimi backend mode.
+#[tauri::command]
+pub fn set_kimi_backend_mode(
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<String, String> {
+    log::info!("[set_kimi_backend_mode] Setting to '{}'", mode);
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    global_settings::set_kimi_backend_mode(&db, &mode).map_err(|e| e.to_string())?;
+    Ok(mode)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LEGACY: Per-project agent provider (deprecated, kept for backward compatibility)
 // ═══════════════════════════════════════════════════════════════════════════════

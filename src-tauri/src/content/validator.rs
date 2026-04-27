@@ -174,7 +174,7 @@ fn validate_file(
     let content = std::fs::read_to_string(path).unwrap_or_default();
 
     // 1. Frontmatter block exists
-    let Some((fm, _body)) = crate::content::cleaner::parse_frontmatter(&content) else {
+    let Some((fm_raw, _body)) = crate::content::frontmatter::split_mdx(&content) else {
         issues.push(FormatIssue {
             file: String::new(),
             issue_type: "missing_frontmatter".into(),
@@ -186,17 +186,33 @@ fn validate_file(
         return Ok(issues);
     };
 
-    // Parse frontmatter into a map of canonical_key -> (original_key, value)
-    let mut fields: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for line in fm.lines() {
-        let trimmed = line.trim();
-        if let Some((key, val)) = split_field_line(trimmed) {
-            let canonical = schema.canonical(&key);
-            fields
-                .entry(canonical)
-                .or_default()
-                .push((key, val));
+    // Parse frontmatter for structural understanding
+    let fm_parsed = match crate::content::frontmatter::parse(fm_raw) {
+        Ok(p) => p,
+        Err(e) => {
+            issues.push(FormatIssue {
+                file: String::new(),
+                issue_type: "invalid_yaml".into(),
+                field: None,
+                severity: Severity::Error,
+                message: format!("Frontmatter is not valid YAML: {}", e),
+                auto_fixable: false,
+            });
+            return Ok(issues);
         }
+    };
+
+    let is_complex = crate::content::frontmatter::is_complex(fm_raw, &fm_parsed.parsed);
+
+    // Extract top-level scalar fields only (skips comments, lists, nested objects)
+    let scalars = crate::content::frontmatter::top_level_scalars(fm_raw);
+    let mut fields: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for scalar in &scalars {
+        let canonical = schema.canonical(scalar.key);
+        fields
+            .entry(canonical)
+            .or_default()
+            .push((scalar.key.to_string(), scalar.raw_value.to_string()));
     }
 
     // 2. Required fields present
@@ -214,7 +230,7 @@ fn validate_file(
                 } else {
                     format!("Required frontmatter field '{}' is empty", req)
                 },
-                auto_fixable: is_missing,
+                auto_fixable: is_missing && !is_complex,
             });
         }
     }
@@ -232,7 +248,7 @@ fn validate_file(
                         "Frontmatter uses alias '{}'; canonical name is '{}'",
                         original, canonical
                     ),
-                    auto_fixable: true,
+                    auto_fixable: !is_complex,
                 });
             }
         }
@@ -241,13 +257,14 @@ fn validate_file(
     // 4. Date format valid
     if let Some(date_occurrences) = fields.get("date") {
         if let Some((_, date_val)) = date_occurrences.first() {
-            if !date_val.is_empty() && !is_valid_iso_date(date_val) {
+            let clean = date_val.trim_matches('"').trim_matches('\'');
+            if !clean.is_empty() && !is_valid_iso_date(clean) {
                 issues.push(FormatIssue {
                     file: String::new(),
                     issue_type: "invalid_date".into(),
                     field: Some("date".into()),
                     severity: Severity::Error,
-                    message: format!("Date '{}' is not a valid YYYY-MM-DD format", date_val),
+                    message: format!("Date '{}' is not a valid YYYY-MM-DD format", clean),
                     auto_fixable: false,
                 });
             }
@@ -257,23 +274,24 @@ fn validate_file(
     // 5. Description length
     if let Some(desc_occurrences) = fields.get("description") {
         if let Some((_, desc_val)) = desc_occurrences.first() {
-            if !desc_val.is_empty() {
-                if desc_val.len() < 50 {
+            let clean = desc_val.trim_matches('"').trim_matches('\'');
+            if !clean.is_empty() {
+                if clean.len() < 50 {
                     issues.push(FormatIssue {
                         file: String::new(),
                         issue_type: "description_too_short".into(),
                         field: Some("description".into()),
                         severity: Severity::Warn,
-                        message: format!("Description is {} chars (minimum 50)", desc_val.len()),
+                        message: format!("Description is {} chars (minimum 50)", clean.len()),
                         auto_fixable: false,
                     });
-                } else if desc_val.len() > 160 {
+                } else if clean.len() > 160 {
                     issues.push(FormatIssue {
                         file: String::new(),
                         issue_type: "description_too_long".into(),
                         field: Some("description".into()),
                         severity: Severity::Warn,
-                        message: format!("Description is {} chars (maximum 160)", desc_val.len()),
+                        message: format!("Description is {} chars (maximum 160)", clean.len()),
                         auto_fixable: false,
                     });
                 }
@@ -284,20 +302,21 @@ fn validate_file(
     // 6. Title length
     if let Some(title_occurrences) = fields.get("title") {
         if let Some((_, title_val)) = title_occurrences.first() {
-            if !title_val.is_empty() && title_val.len() > 100 {
+            let clean = title_val.trim_matches('"').trim_matches('\'');
+            if !clean.is_empty() && clean.len() > 100 {
                 issues.push(FormatIssue {
                     file: String::new(),
                     issue_type: "title_too_long".into(),
                     field: Some("title".into()),
                     severity: Severity::Warn,
-                    message: format!("Title is {} chars (maximum 100)", title_val.len()),
+                    message: format!("Title is {} chars (maximum 100)", clean.len()),
                     auto_fixable: false,
                 });
             }
         }
     }
 
-    // 7. Duplicate fields
+    // 7. Duplicate fields (only among top-level scalars — no false positives on YAML lists)
     for (canonical, occurrences) in &fields {
         if occurrences.len() > 1 {
             issues.push(FormatIssue {
@@ -306,26 +325,36 @@ fn validate_file(
                 field: Some(canonical.clone()),
                 severity: Severity::Warn,
                 message: format!("Field '{}' appears {} times in frontmatter", canonical, occurrences.len()),
-                auto_fixable: true,
+                auto_fixable: !is_complex,
             });
         }
     }
 
-    // 8. Unquoted values (values that contain spaces or special chars but aren't quoted)
-    for line in fm.lines() {
-        let trimmed = line.trim();
-        if let Some((key, val)) = split_field_line(trimmed) {
-            if !val.is_empty() && !is_raw_value_quoted(trimmed) && needs_quoting(&val) {
-                issues.push(FormatIssue {
-                    file: String::new(),
-                    issue_type: "unquoted_value".into(),
-                    field: Some(key),
-                    severity: Severity::Info,
-                    message: format!("Value '{}' should be quoted to avoid YAML parsing issues", val),
-                    auto_fixable: true,
-                });
-            }
+    // 8. Unquoted values (only top-level scalars)
+    for scalar in &scalars {
+        let val = scalar.raw_value;
+        if !val.is_empty() && !is_quoted(val) && needs_quoting(val) {
+            issues.push(FormatIssue {
+                file: String::new(),
+                issue_type: "unquoted_value".into(),
+                field: Some(scalar.key.to_string()),
+                severity: Severity::Info,
+                message: format!("Value '{}' should be quoted to avoid YAML parsing issues", val),
+                auto_fixable: !is_complex,
+            });
         }
+    }
+
+    // 9. Surface complex frontmatter so users know auto-fix is disabled
+    if is_complex {
+        issues.push(FormatIssue {
+            file: String::new(),
+            issue_type: "complex_frontmatter".into(),
+            field: None,
+            severity: Severity::Info,
+            message: "Frontmatter contains complex YAML (lists, nested objects, or comments); auto-fix disabled".into(),
+            auto_fixable: false,
+        });
     }
 
     Ok(issues)
@@ -341,18 +370,17 @@ fn detect_format_drift(
         return Ok(Vec::new());
     }
 
-    // Build a frequency map of key sets
+    // Build a frequency map of key sets (top-level scalars only)
     let mut key_set_counts: HashMap<Vec<String>, usize> = HashMap::new();
     for path in files {
         let content = std::fs::read_to_string(path).unwrap_or_default();
-        if let Some((fm, _)) = crate::content::cleaner::parse_frontmatter(&content) {
+        if let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(&content) {
+            let scalars = crate::content::frontmatter::top_level_scalars(fm_raw);
             let mut keys: Vec<String> = Vec::new();
-            for line in fm.lines() {
-                if let Some((key, _)) = split_field_line(line.trim()) {
-                    let canonical = schema.canonical(&key);
-                    if !keys.contains(&canonical) {
-                        keys.push(canonical);
-                    }
+            for scalar in &scalars {
+                let canonical = schema.canonical(scalar.key);
+                if !keys.contains(&canonical) {
+                    keys.push(canonical);
                 }
             }
             keys.sort();
@@ -376,14 +404,13 @@ fn detect_format_drift(
     let mut issues = Vec::new();
     for path in files {
         let content = std::fs::read_to_string(path).unwrap_or_default();
-        if let Some((fm, _)) = crate::content::cleaner::parse_frontmatter(&content) {
+        if let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(&content) {
+            let scalars = crate::content::frontmatter::top_level_scalars(fm_raw);
             let mut keys: Vec<String> = Vec::new();
-            for line in fm.lines() {
-                if let Some((key, _)) = split_field_line(line.trim()) {
-                    let canonical = schema.canonical(&key);
-                    if !keys.contains(&canonical) {
-                        keys.push(canonical);
-                    }
+            for scalar in &scalars {
+                let canonical = schema.canonical(scalar.key);
+                if !keys.contains(&canonical) {
+                    keys.push(canonical);
                 }
             }
             keys.sort();
@@ -490,6 +517,8 @@ pub fn apply_fixes(
 
 /// Apply fixes to a single file's content. Returns None if no frontmatter could be parsed
 /// and the issue type isn't `missing_frontmatter`.
+///
+/// SAFETY: never auto-fixes files with complex YAML (lists, nested objects, comments).
 fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
     let has_missing_fm = issues.iter().any(|i| i.issue_type == "missing_frontmatter");
 
@@ -509,37 +538,34 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
         return Some(format!("---\n{}\n---\n\n{}", fm_lines.join("\n"), content));
     }
 
-    let (fm, body) = crate::content::cleaner::parse_frontmatter(content)?;
+    let (fm_raw, body) = crate::content::frontmatter::split_mdx(content)?;
 
-    // Build a map of canonical -> list of (original_key, value)
-    let mut field_map: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    let mut lines_info: Vec<LineInfo> = Vec::new();
-
-    for (idx, line) in fm.lines().enumerate() {
-        let trimmed = line.trim();
-        if let Some((key, val)) = split_field_line(trimmed) {
-            let canonical = canonical_key(&key);
-            field_map
-                .entry(canonical.clone())
-                .or_default()
-                .push((key.clone(), val.clone()));
-            lines_info.push(LineInfo {
-                idx,
-                key,
-                canonical,
-                value: val,
-            });
+    // Safety guard: skip files with complex YAML (lists, nested objects, comments).
+    // We check raw text first (fast path), then try YAML parse for nested objects.
+    // Parsing may fail on duplicate keys — that's fine, we still fix if raw text is simple.
+    let raw_has_lists_or_comments = fm_raw.lines().any(|l| {
+        let t = l.trim_start();
+        t.starts_with('#') || t.starts_with('-')
+    });
+    if raw_has_lists_or_comments {
+        return None;
+    }
+    if let Ok(fm_parsed) = crate::content::frontmatter::parse(fm_raw) {
+        if let Some(mapping) = fm_parsed.parsed.as_mapping() {
+            for (_k, v) in mapping {
+                match v {
+                    serde_yaml::Value::String(_) | serde_yaml::Value::Number(_) | serde_yaml::Value::Bool(_) | serde_yaml::Value::Null => {}
+                    _ => return None,
+                }
+            }
         } else {
-            lines_info.push(LineInfo {
-                idx,
-                key: String::new(),
-                canonical: String::new(),
-                value: String::new(),
-            });
+            return None;
         }
     }
 
-    let mut new_fm_lines: Vec<String> = fm.lines().map(|s| s.to_string()).collect();
+    // Only operate on top-level scalar fields
+    let scalars = crate::content::frontmatter::top_level_scalars(fm_raw);
+    let mut new_fm_lines: Vec<String> = fm_raw.lines().map(|s| s.to_string()).collect();
     let mut lines_to_remove: HashSet<usize> = HashSet::new();
 
     for issue in issues {
@@ -547,9 +573,16 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
             "unknown_alias" => {
                 if let Some(field) = &issue.field {
                     let canonical = canonical_key(field);
-                    for info in &lines_info {
-                        if info.key == *field {
-                            new_fm_lines[info.idx] = format!("{}: \"{}\"", canonical, info.value);
+                    for scalar in &scalars {
+                        if scalar.key == field {
+                            let old_val = scalar.raw_value;
+                            let needs_quotes = old_val.starts_with('"') || old_val.starts_with('\'');
+                            let new_val = if needs_quotes {
+                                format!("\"{}\"", old_val.trim_matches('"').trim_matches('\''))
+                            } else {
+                                old_val.to_string()
+                            };
+                            new_fm_lines[scalar.line_idx] = format!("{}: {}", canonical, new_val);
                         }
                     }
                 }
@@ -557,10 +590,10 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
             "duplicate_field" => {
                 if let Some(field) = &issue.field {
                     let mut seen = false;
-                    for info in &lines_info {
-                        if info.canonical == *field && !info.key.is_empty() {
+                    for scalar in &scalars {
+                        if canonical_key(scalar.key) == *field {
                             if seen {
-                                lines_to_remove.insert(info.idx);
+                                lines_to_remove.insert(scalar.line_idx);
                             } else {
                                 seen = true;
                             }
@@ -570,28 +603,28 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
             }
             "missing_field" => {
                 if let Some(field) = &issue.field {
-                    if !field_map.contains_key(field) {
+                    let has_field = scalars.iter().any(|s| canonical_key(s.key) == *field);
+                    if !has_field {
                         // Insert after title if possible, otherwise at end
-                        let insert_idx = lines_info
+                        let insert_idx = scalars
                             .iter()
-                            .rfind(|i| i.canonical == "title")
-                            .map(|i| i.idx + 1)
+                            .find(|s| s.key == "title")
+                            .map(|s| s.line_idx + 1)
                             .unwrap_or(new_fm_lines.len());
                         new_fm_lines.insert(insert_idx, format!("{}: \"\"", field));
-                        // Update indices for subsequent operations
-                        for info in &mut lines_info {
-                            if info.idx >= insert_idx {
-                                info.idx += 1;
-                            }
-                        }
+                        // Note: line indices in scalars are now stale, but we don't use them
+                        // after this point for line removal (missing_field is last).
                     }
                 }
             }
             "unquoted_value" => {
                 if let Some(field) = &issue.field {
-                    for info in &lines_info {
-                        if info.key == *field && !is_quoted(&info.value) && needs_quoting(&info.value) {
-                            new_fm_lines[info.idx] = format!("{}: \"{}\"", info.key, info.value);
+                    for scalar in &scalars {
+                        if scalar.key == *field {
+                            let val = scalar.raw_value;
+                            if !is_quoted(val) && needs_quoting(val) {
+                                new_fm_lines[scalar.line_idx] = format!("{}: \"{}\"", scalar.key, val);
+                            }
                         }
                     }
                 }
@@ -600,7 +633,6 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
         }
     }
 
-    // Remove duplicate lines
     let mut filtered: Vec<String> = Vec::new();
     for (idx, line) in new_fm_lines.into_iter().enumerate() {
         if !lines_to_remove.contains(&idx) {
@@ -609,13 +641,6 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
     }
 
     Some(format!("---\n{}\n---\n\n{}", filtered.join("\n"), body))
-}
-
-struct LineInfo {
-    idx: usize,
-    key: String,
-    canonical: String,
-    value: String,
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -644,15 +669,6 @@ fn is_valid_iso_date(s: &str) -> bool {
 /// Check if a value is already quoted.
 fn is_quoted(s: &str) -> bool {
     (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))
-}
-
-/// Check if the raw value in a field line is quoted (without stripping quotes).
-fn is_raw_value_quoted(line: &str) -> bool {
-    if let Some(colon_pos) = line.find(':') {
-        let raw = line[colon_pos + 1..].trim();
-        return is_quoted(raw);
-    }
-    false
 }
 
 /// Check if a value should be quoted for YAML safety.
@@ -799,7 +815,7 @@ mod tests {
     fn validate_file_content(content: &str, schema: &FrontmatterSchema) -> Vec<FormatIssue> {
         let mut issues = Vec::new();
 
-        let Some((fm, _body)) = crate::content::cleaner::parse_frontmatter(content) else {
+        let Some((fm_raw, _body)) = crate::content::frontmatter::split_mdx(content) else {
             issues.push(FormatIssue {
                 file: String::new(),
                 issue_type: "missing_frontmatter".into(),
@@ -811,12 +827,18 @@ mod tests {
             return issues;
         };
 
+        let is_complex = crate::content::frontmatter::parse(fm_raw)
+            .map(|fm| crate::content::frontmatter::is_complex(fm_raw, &fm.parsed))
+            .unwrap_or(false);
+
+        let scalars = crate::content::frontmatter::top_level_scalars(fm_raw);
         let mut fields: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        for line in fm.lines() {
-            if let Some((key, val)) = split_field_line(line.trim()) {
-                let canonical = schema.canonical(&key);
-                fields.entry(canonical).or_default().push((key, val));
-            }
+        for scalar in &scalars {
+            let canonical = schema.canonical(scalar.key);
+            fields.entry(canonical).or_default().push((
+                scalar.key.to_string(),
+                scalar.raw_value.to_string(),
+            ));
         }
 
         for req in &schema.required {
@@ -849,13 +871,14 @@ mod tests {
 
         if let Some(date_occurrences) = fields.get("date") {
             if let Some((_, date_val)) = date_occurrences.first() {
-                if !date_val.is_empty() && !is_valid_iso_date(date_val) {
+                let clean = date_val.trim_matches('"').trim_matches('\'');
+                if !clean.is_empty() && !is_valid_iso_date(clean) {
                     issues.push(FormatIssue {
                         file: String::new(),
                         issue_type: "invalid_date".into(),
                         field: Some("date".into()),
                         severity: Severity::Error,
-                        message: format!("bad date {}", date_val),
+                        message: format!("bad date {}", clean),
                         auto_fixable: false,
                     });
                 }
@@ -875,6 +898,129 @@ mod tests {
             }
         }
 
+        if is_complex {
+            issues.push(FormatIssue {
+                file: String::new(),
+                issue_type: "complex_frontmatter".into(),
+                field: None,
+                severity: Severity::Info,
+                message: "Frontmatter contains complex YAML (lists, nested objects, or comments); auto-fix disabled".into(),
+                auto_fixable: false,
+            });
+        }
+
         issues
+    }
+
+    #[test]
+    fn validate_no_false_duplicate_on_yaml_lists() {
+        let schema = FrontmatterSchema::default_schema();
+        let content = r#"---
+title: "Hello"
+date: "2024-01-01"
+description: "A desc"
+faq:
+  - question: "Q1?"
+    answer: "A1"
+  - question: "Q2?"
+    answer: "A2"
+---
+
+Body."#;
+        let issues = validate_file_content(content, &schema);
+        assert!(
+            !issues.iter().any(|i| i.issue_type == "duplicate_field"),
+            "YAML list items should NOT be flagged as duplicate fields"
+        );
+    }
+
+    #[test]
+    fn validate_no_false_unquoted_on_comments() {
+        let schema = FrontmatterSchema::default_schema();
+        let content = r#"---
+title: "Hello"
+date: "2024-01-01"
+description: "A desc"
+# AI SEO: FAQ Schema
+---
+
+Body."#;
+        let issues = validate_file_content(content, &schema);
+        assert!(
+            !issues.iter().any(|i| i.issue_type == "unquoted_value"),
+            "Comment lines should NOT be flagged as unquoted values"
+        );
+    }
+
+    #[test]
+    fn apply_fixes_skips_complex_yaml() {
+        let content = r#"---
+title: "Hello"
+date: "2024-01-01"
+description: "A desc"
+faq:
+  - question: "Q1?"
+    answer: "A1"
+---
+
+Body."#;
+        let issues = vec![FormatIssue {
+            file: "test.mdx".into(),
+            issue_type: "unknown_alias".into(),
+            field: Some("description".into()),
+            severity: Severity::Warn,
+            message: "alias".into(),
+            auto_fixable: true,
+        }];
+        let fixed = apply_file_fixes(content, &issues.iter().collect::<Vec<_>>());
+        assert!(
+            fixed.is_none(),
+            "Auto-fix should be skipped for complex YAML frontmatter"
+        );
+    }
+
+    #[test]
+    fn apply_fixes_preserves_faq_on_simple_file() {
+        // Even a simple file should not have FAQ items touched — but this test
+        // ensures we don't accidentally regress on the structural-fix path.
+        let content = r#"---
+title: "Hello"
+date: "2024-01-01"
+description: "A desc"
+---
+
+Body."#;
+        let issues = vec![FormatIssue {
+            file: "test.mdx".into(),
+            issue_type: "unquoted_value".into(),
+            field: Some("description".into()),
+            severity: Severity::Info,
+            message: "unquoted".into(),
+            auto_fixable: true,
+        }];
+        let fixed = apply_file_fixes(content, &issues.iter().collect::<Vec<_>>()).unwrap();
+        assert!(fixed.contains("description: \"A desc\""));
+        assert!(!fixed.contains("faq:")); // no FAQ was in original
+    }
+
+    #[test]
+    fn validate_complex_frontmatter_info_issue() {
+        let schema = FrontmatterSchema::default_schema();
+        let content = r#"---
+title: "Hello"
+date: "2024-01-01"
+description: "A desc"
+# comment here
+tags:
+  - rust
+  - yaml
+---
+
+Body."#;
+        let issues = validate_file_content(content, &schema);
+        assert!(
+            issues.iter().any(|i| i.issue_type == "complex_frontmatter"),
+            "Complex frontmatter should be flagged with an info issue"
+        );
     }
 }

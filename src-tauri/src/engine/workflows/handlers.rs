@@ -88,6 +88,7 @@ impl WorkflowHandler for ResearchHandler {
                 // agentic → deterministic → agentic → deterministic → deterministic → normalizer
                 vec![
                     // Step 1 (agentic): LLM extracts 3-4 themes from project brief.
+                    // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires reading intent from free-form text.
                     WorkflowStep::new("research_seed_extraction", StepKind::Agentic.as_ref()),
 
@@ -96,6 +97,7 @@ impl WorkflowHandler for ResearchHandler {
                     WorkflowStep::new("research_autocomplete", StepKind::ResearchAutocomplete.as_ref()),
 
                     // Step 3 (agentic): LLM filters autocomplete suggestions for domain relevance.
+                    // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires understanding what is on-topic for this
                     // specific product/site. Hard-coding a relevance rule would produce silent errors
                     // on any input it was not tested against.
@@ -108,12 +110,9 @@ impl WorkflowHandler for ResearchHandler {
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative.as_ref()),
 
                     // Step 5 (deterministic): Select best candidates from structured data.
+                    // Outputs clean JSON directly — no normalizer needed because upstream
+                    // agentic steps now use Extractor<T>.
                     WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection.as_ref()),
-
-                    // Step 6 (normalizer): Enforces output contract before UI parses it.
-                    WorkflowStep::new("research_normalize", StepKind::Normalizer.as_ref())
-                        .with_param(step_params::NORMALIZER_ID, "keyword_research")
-                        .with_param(step_params::ARTIFACT_NAME, "keyword_research"),
                 ]
             }
             _ => {

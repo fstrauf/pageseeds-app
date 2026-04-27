@@ -131,7 +131,7 @@ pub(crate) fn exec_format_fix(task: &Task, project_path: &str) -> crate::engine:
     }
 }
 
-/// Sanitize content: rename `.md` → `.mdx`, repair article paths, then run format validation + fix.
+/// Sanitize content: rename `.md` → `.mdx`, repair article paths, then run read-only format validation.
 pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
     use crate::content::cleaner::rename_md_to_mdx;
     use crate::content::article_resolver::repair_article_paths_in_batch;
@@ -192,7 +192,9 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
         }
     };
 
-    // 5. Run format validation + fix inline
+    // 5. Run format validation read-only (report only — do NOT auto-fix).
+    //    Broad auto-fixes on frontmatter destroy structured YAML (FAQ lists,
+    //    citations, comments). Only explicit format-fix step applies fixes.
     let schema = crate::engine::setup_check::load_workspace_config(&paths.automation_dir)
         .and_then(|cfg| cfg.frontmatter_schema);
 
@@ -203,20 +205,6 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
                 success: renamed.is_empty() && structurally_fixed.is_empty(),
                 message: format!(
                     "Fixed {} closers, renamed {} .md → .mdx, repaired {} paths, but validation failed: {}",
-                    structurally_fixed.len(), renamed.len(), repaired, e
-                ),
-                output: None,
-            };
-        }
-    };
-
-    let fix_result = match crate::content::validator::apply_fixes(&validation.issues, &paths.repo_root) {
-        Ok(r) => r,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: renamed.is_empty() && structurally_fixed.is_empty(),
-                message: format!(
-                    "Fixed {} closers, renamed {} .md → .mdx, repaired {} paths, but fix failed: {}",
                     structurally_fixed.len(), renamed.len(), repaired, e
                 ),
                 output: None,
@@ -243,21 +231,22 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
     crate::engine::workflows::StepResult {
         success: true,
         message: format!(
-            "Sanitized: {} closers fixed, {} .md → .mdx, {} paths repaired, {} files checked, {} fixed, {} issues remain",
+            "Sanitized: {} closers fixed, {} .md → .mdx, {} paths repaired, {} files checked, {} issues found (not auto-fixed)",
             structurally_fixed.len(),
             renamed.len(),
             repaired,
-            fix_result.files_checked,
-            fix_result.files_fixed,
-            fix_result.issues_remaining.len()
+            validation.files_checked,
+            validation.issues.len()
         ),
         output: Some(serde_json::to_string_pretty(&serde_json::json!({
             "structurally_fixed": structurally_fixed_names,
             "renamed": renamed_names,
             "paths_repaired": repaired,
-            "files_checked": fix_result.files_checked,
-            "files_fixed": fix_result.files_fixed,
-            "issues_remaining": fix_result.issues_remaining.len(),
+            "files_checked": validation.files_checked,
+            "errors": validation.error_count,
+            "warnings": validation.warn_count,
+            "info": validation.info_count,
+            "issues": validation.issues,
         })).unwrap_or_default()),
     }
 }

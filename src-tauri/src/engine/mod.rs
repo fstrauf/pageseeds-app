@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod tool_agent;
 pub mod tools;
 pub mod batch;
 pub mod exec;

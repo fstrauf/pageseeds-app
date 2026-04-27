@@ -1,5 +1,12 @@
 /// Normalizer — parses raw agent text output into structured JSON artifacts.
 ///
+/// **Deprecated:** Use `rig::extraction::extract_structured<T>()` instead.
+/// This module is kept for backward compatibility with legacy workflows that
+/// still use the `Agentic` → `Normalizer` two-step pattern. New code should
+/// use rig's type-safe `Extractor<T>` which sends the JSON schema to the LLM
+/// and enforces structured output via tool calling, eliminating the need for
+/// post-hoc regex extraction.
+///
 /// Extraction strategy (attempted in order):
 /// 1. Fenced code block: ```json ... ``` (most reliable — agents produce these)
 /// 2. Bare JSON object or array at the start/end of the text
@@ -23,6 +30,7 @@ pub struct NormalizedArtifact {
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+#[deprecated(since = "0.1.0", note = "Use rig::extraction::extract_structured<T>() instead")]
 pub fn normalize_agent_output(raw: &str) -> NormalizedArtifact {
     // 1. JSON fenced code block
     if let Some(json) = extract_fenced_json(raw) {

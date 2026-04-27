@@ -9,6 +9,9 @@ use crate::error::{Error, Result};
 /// Default agent provider if none is set globally.
 pub const DEFAULT_AGENT_PROVIDER: &str = "kimi";
 
+/// Default Kimi backend mode: "auto" tries bridge then falls back to direct CLI.
+pub const DEFAULT_KIMI_BACKEND_MODE: &str = "auto";
+
 /// Get a global setting value by key.
 /// Returns None if the key doesn't exist.
 pub fn get(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -67,6 +70,33 @@ pub fn set_agent_provider(conn: &Connection, provider: &str) -> Result<()> {
     }
     
     log::info!("[global_settings] Successfully saved agent_provider '{}'", provider);
+    Ok(())
+}
+
+/// Get the global Kimi backend mode setting.
+/// Falls back to DEFAULT_KIMI_BACKEND_MODE if not set.
+pub fn get_kimi_backend_mode(conn: &Connection) -> String {
+    get(conn, "kimi_backend_mode")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| DEFAULT_KIMI_BACKEND_MODE.to_string())
+}
+
+/// Set the global Kimi backend mode setting.
+/// Valid values: "auto", "bridge", "direct".
+pub fn set_kimi_backend_mode(conn: &Connection, mode: &str) -> Result<()> {
+    log::info!("[global_settings] Setting kimi_backend_mode to '{}'", mode);
+    set(conn, "kimi_backend_mode", mode)?;
+    
+    let saved = get_kimi_backend_mode(conn);
+    if saved != mode {
+        return Err(Error::Other(format!(
+            "Failed to save kimi_backend_mode: expected '{}', got '{}'",
+            mode, saved
+        )));
+    }
+    
+    log::info!("[global_settings] Successfully saved kimi_backend_mode '{}'", mode);
     Ok(())
 }
 

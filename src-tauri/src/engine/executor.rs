@@ -751,12 +751,19 @@ mod tests {
         assert_eq!(completed_task_status("fix_indexing", true), TaskStatus::Done);
     }
 
-    // 3. Any failed task resets to "todo" so it can be retried.
+    // 3. Most failed tasks reset to "todo" so they can be retried.
     #[test]
     fn failed_task_resets_to_todo() {
         assert_eq!(completed_task_status("research_keywords", false), TaskStatus::Todo);
         assert_eq!(completed_task_status("content_review", false), TaskStatus::Todo);
         assert_eq!(completed_task_status("fix_indexing", false), TaskStatus::Todo);
+    }
+
+    // 4. CTR fix failures land in Review (soft failure, retryable) rather than Todo,
+    //    so they don't get blindly re-queued by the batch executor.
+    #[test]
+    fn fix_ctr_article_failure_goes_to_review() {
+        assert_eq!(completed_task_status("fix_ctr_article", false), TaskStatus::Review);
     }
 
     // 4. Handler registry routes fix_* task types to ImplementationHandler.

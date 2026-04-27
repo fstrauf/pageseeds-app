@@ -200,39 +200,28 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
         }
     };
 
-    // Use cleaner::parse_frontmatter to split frontmatter and body
-    let (frontmatter_str, body) = match crate::content::cleaner::parse_frontmatter(&content) {
+    // Use frontmatter::split_mdx for canonical frontmatter/body split
+    let (frontmatter_str, body) = match crate::content::frontmatter::split_mdx(&content) {
         Some((fm, b)) => (fm, b),
         None => ("", content.as_str()),
     };
 
-    // Extract title from frontmatter
-    let title = frontmatter_str
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("title:") {
-                let val = rest.trim().trim_matches('"').trim_matches('\'');
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
-            None
+    // Extract title and description from top-level scalar fields
+    let scalars = crate::content::frontmatter::top_level_scalars(frontmatter_str);
+    let title = scalars
+        .iter()
+        .find(|s| s.key == "title")
+        .and_then(|s| {
+            let v = s.raw_value.trim_matches('"').trim_matches('\'');
+            if !v.is_empty() { Some(v.to_string()) } else { None }
         })
         .unwrap_or_default();
-
-    // Extract meta_description from frontmatter
-    let meta_description = frontmatter_str
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("description:") {
-                let val = rest.trim().trim_matches('"').trim_matches('\'');
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
-            None
+    let meta_description = scalars
+        .iter()
+        .find(|s| s.key == "description")
+        .and_then(|s| {
+            let v = s.raw_value.trim_matches('"').trim_matches('\'');
+            if !v.is_empty() { Some(v.to_string()) } else { None }
         })
         .unwrap_or_default();
 

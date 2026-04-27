@@ -9,6 +9,7 @@ mod live_site;
 pub mod logging;
 pub mod models;
 mod reddit;
+mod rig;
 mod seo;
 mod social;
 
@@ -149,6 +150,8 @@ pub fn run() {
             commands::check_agent_status,
             commands::set_agent_provider,
             commands::get_global_agent_provider,
+            commands::get_kimi_backend_mode,
+            commands::set_kimi_backend_mode,
             commands::get_global_settings,
             commands::check_agent_status_for_project,
             commands::check_project_setup,

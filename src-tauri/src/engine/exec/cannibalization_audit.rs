@@ -210,7 +210,7 @@ fn read_article_head_and_words(project_path: &str, file_ref: &str) -> (String, S
         }
     };
 
-    let (_, body) = match crate::content::cleaner::parse_frontmatter(&content) {
+    let (_, body) = match crate::content::frontmatter::split_mdx(&content) {
         Some((_, b)) => ("", b),
         None => ("", content.as_str()),
     };
