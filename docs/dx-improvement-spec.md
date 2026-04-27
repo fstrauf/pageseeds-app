@@ -1,5 +1,8 @@
 # DX Improvement Spec
 
+> **Historical:** All items in this spec are complete. Current DX work is tracked in
+> [`docs/ai-dx-contract-enforcement-spec.md`](./ai-dx-contract-enforcement-spec.md).
+
 Actionable improvements to reduce friction when building new features. Ordered by impact.
 
 ---

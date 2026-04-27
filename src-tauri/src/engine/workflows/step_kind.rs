@@ -8,7 +8,6 @@ pub enum StepKind {
     Deterministic,
     Agentic,
     Manual,
-    Normalizer,
     ClusterLinkScan,
     ClusterLinkStrategy,
     ClusterLinkApply,
@@ -77,7 +76,6 @@ impl StepKind {
             Self::Deterministic => "deterministic",
             Self::Agentic => "agentic",
             Self::Manual => "manual",
-            Self::Normalizer => "normalizer",
             Self::ClusterLinkScan => "cluster_link_scan",
             Self::ClusterLinkStrategy => "cluster_link_strategy",
             Self::ClusterLinkApply => "cluster_link_apply",
@@ -150,7 +148,6 @@ impl FromStr for StepKind {
             "deterministic" => Ok(Self::Deterministic),
             "agentic" => Ok(Self::Agentic),
             "manual" => Ok(Self::Manual),
-            "normalizer" => Ok(Self::Normalizer),
             "cluster_link_scan" => Ok(Self::ClusterLinkScan),
             "cluster_link_strategy" => Ok(Self::ClusterLinkStrategy),
             "cluster_link_apply" => Ok(Self::ClusterLinkApply),
@@ -220,5 +217,106 @@ impl<'de> Deserialize<'de> for StepKind {
     {
         let s = String::deserialize(deserializer)?;
         Ok(StepKind::from_str(&s).unwrap_or(StepKind::Unknown))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_variants_round_trip_through_as_str_and_from_str() {
+        let variants = [
+            StepKind::Deterministic,
+            StepKind::Agentic,
+            StepKind::Manual,
+            StepKind::ClusterLinkScan,
+            StepKind::ClusterLinkStrategy,
+            StepKind::ClusterLinkApply,
+            StepKind::ContentReviewRecommend,
+            StepKind::ContentReviewApplyExecute,
+            StepKind::KeywordResearchNative,
+            StepKind::ResearchFinalSelection,
+            StepKind::LandingPageSpecWrite,
+            StepKind::RedditConfigParse,
+            StepKind::RedditSearch,
+            StepKind::RedditEnrich,
+            StepKind::RedditFetchResults,
+            StepKind::ContentSync,
+            StepKind::FormatValidation,
+            StepKind::FormatFix,
+            StepKind::GscSyncArticles,
+            StepKind::GscSummarise,
+            StepKind::IndexingFixContext,
+            StepKind::IndexingFixApply,
+            StepKind::ContentAudit,
+            StepKind::CollectGscInspect,
+            StepKind::IndexingDiagnosticsRun,
+            StepKind::GscInvestigateAgentic,
+            StepKind::SocialCollectSources,
+            StepKind::SocialLoadTemplates,
+            StepKind::SocialGeneratePosts,
+            StepKind::SocialBuildVisuals,
+            StepKind::SocialSaveCampaign,
+            StepKind::SocialRegenerateSingle,
+            StepKind::SocialRebuildVisual,
+            StepKind::SocialUpdatePost,
+            StepKind::SocialDesignTemplate,
+            StepKind::SocialSaveTemplate,
+            StepKind::CoverageLoadArticles,
+            StepKind::CoverageClusterAnalysis,
+            StepKind::CoverageSave,
+            StepKind::RedditPostReply,
+            StepKind::SocialExtractArticle,
+            StepKind::ResearchAutocomplete,
+            StepKind::ResearchSeedValidation,
+            StepKind::KeywordResearchToolAgent,
+            StepKind::CtrBuildContext,
+            StepKind::CtrAnalyze,
+            StepKind::CanBuildContext,
+            StepKind::CanAnalyze,
+            StepKind::CtrFixApply,
+            StepKind::CtrVerifyFix,
+            StepKind::SanitizeContent,
+        ];
+
+        for variant in &variants {
+            let s = variant.as_str();
+            let parsed = StepKind::from_str(s).unwrap_or_else(|_| {
+                panic!("StepKind variant {:?} failed to round-trip through '{}'", variant, s)
+            });
+            assert_eq!(*variant, parsed, "Round-trip failed for '{}': expected {:?}, got {:?}", s, variant, parsed);
+        }
+    }
+
+    #[test]
+    fn unknown_variant_as_str_and_display() {
+        assert_eq!(StepKind::Unknown.as_str(), "unknown");
+        assert_eq!(format!("{}", StepKind::Unknown), "unknown");
+        // Note: from_str("unknown") intentionally returns Err so deserialization
+        // maps unrecognized strings to StepKind::Unknown rather than treating
+        // "unknown" as a magic sentinel value.
+        assert!(StepKind::from_str("unknown").is_err());
+    }
+
+    #[test]
+    fn display_matches_as_str() {
+        assert_eq!(format!("{}", StepKind::Deterministic), "deterministic");
+        assert_eq!(format!("{}", StepKind::CtrBuildContext), "ctr_build_context");
+    }
+
+    #[test]
+    fn serialize_deserialize_round_trip() {
+        let kind = StepKind::RedditSearch;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"reddit_search\"");
+        let decoded: StepKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(kind, decoded);
+    }
+
+    #[test]
+    fn deserialize_unknown_defaults_to_unknown_variant() {
+        let decoded: StepKind = serde_json::from_str("\"nonexistent_kind\"").unwrap();
+        assert_eq!(decoded, StepKind::Unknown);
     }
 }

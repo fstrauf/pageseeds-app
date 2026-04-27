@@ -3,7 +3,7 @@ use ts_rs::TS;
 
 // ─── Status / mode enums ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum TaskStatus {
@@ -64,7 +64,7 @@ impl rusqlite::types::FromSql for TaskStatus {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ExecutionMode {
@@ -237,6 +237,10 @@ pub struct TaskRun {
     pub attempts: u32,
     pub last_error: Option<String>,
     pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]

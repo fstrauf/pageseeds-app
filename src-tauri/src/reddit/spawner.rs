@@ -78,7 +78,7 @@ pub fn create_reply_tasks_from_opportunities(
             description: Some(description),
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
             created_at: now.clone(),
             updated_at: now.clone(),
         };

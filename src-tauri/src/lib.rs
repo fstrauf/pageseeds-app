@@ -143,7 +143,6 @@ pub fn run() {
             commands::index_skills,
             commands::search_skills,
             commands::build_prompt_preview,
-            commands::normalize_output,
             commands::list_task_artifacts,
             commands::get_project_overview,
             commands::quick_run_workflow,

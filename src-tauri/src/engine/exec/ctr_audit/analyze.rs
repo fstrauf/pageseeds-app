@@ -55,11 +55,17 @@ pub(crate) fn exec_ctr_analyze(
         + " Do not write files. Output the JSON directly in your response.";
 
     match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => StepResult {
-            success: true,
-            message: "CTR analysis completed".to_string(),
-            output: Some(output),
-        },
+        Ok(output) => {
+            // Extract JSON if present so downstream steps receive clean structured data
+            let final_output = crate::engine::text::extract_json(&output)
+                .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                .unwrap_or(output);
+            StepResult {
+                success: true,
+                message: "CTR analysis completed".to_string(),
+                output: Some(final_output),
+            }
+        }
         Err(e) => StepResult {
             success: false,
             message: format!("Agent error during CTR analysis: {}", e),

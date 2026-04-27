@@ -109,7 +109,9 @@ mod tests {
                 started_at TEXT NOT NULL,
                 finished_at TEXT,
                 success INTEGER,
-                error TEXT
+                error TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER
             );
             CREATE TABLE articles (
                 id INTEGER NOT NULL,

@@ -1,5 +1,8 @@
 # Agent DX Improvement Plan
 
+> **Historical:** All items in this plan are complete. Current DX work is tracked in
+> [`docs/ai-dx-contract-enforcement-spec.md`](./ai-dx-contract-enforcement-spec.md).
+
 **Goal:** Make agentic development in this repo as reliable as it is in the Python/TS sister repos — fewer silent failures, faster feedback loops, smaller files agents need to reason about.
 
 **Root cause summary:** The architecture is sound. The problems are (1) a single 3,000-line god module, (2) invisible runtime contracts, (3) zero automated tests, and (4) string-typed values that can only fail at runtime.

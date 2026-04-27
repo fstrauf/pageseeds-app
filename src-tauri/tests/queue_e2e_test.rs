@@ -118,6 +118,7 @@ fn create_reddit_task(project_id: &str) -> Task {
             attempts: 0,
             last_error: None,
             provider: None,
+            ..Default::default()
         },
         created_at: now.clone(),
         updated_at: now,

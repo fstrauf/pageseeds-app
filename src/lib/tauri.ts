@@ -516,7 +516,6 @@ export const getLedgerRunEvents = (projectId: string, runId: string): Promise<Le
 
 import type {
   AgentStatus,
-  NormalizedArtifact,
   ProjectOverview,
   PromptContext,
   Skill,
@@ -544,9 +543,6 @@ export const searchSkills = (
 
 export const buildPromptPreview = (taskId: string, skillName: string): Promise<PromptContext> =>
   invoke('build_prompt_preview', { taskId, skillName })
-
-export const normalizeOutput = (raw: string): Promise<NormalizedArtifact> =>
-  invoke('normalize_output', { raw })
 
 export const listTaskArtifacts = (taskId: string): Promise<TaskArtifact[]> =>
   invoke('list_task_artifacts', { taskId })

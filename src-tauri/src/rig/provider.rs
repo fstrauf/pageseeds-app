@@ -48,16 +48,24 @@ pub enum LlmBackend {
 pub struct AgentResponse {
     pub content: String,
     /// Token usage when available (rig HTTP providers). `None` for direct CLI.
-    pub _prompt_tokens: Option<u64>,
-    pub _completion_tokens: Option<u64>,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
 }
 
 impl AgentResponse {
     pub fn from_content(content: String) -> Self {
         Self {
             content,
-            _prompt_tokens: None,
-            _completion_tokens: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+        }
+    }
+
+    pub fn with_usage(content: String, prompt_tokens: u64, completion_tokens: u64) -> Self {
+        Self {
+            content,
+            prompt_tokens: Some(prompt_tokens),
+            completion_tokens: Some(completion_tokens),
         }
     }
 }
@@ -205,12 +213,17 @@ async fn run_kimi_bridge(
         .preamble(preamble.unwrap_or("You are a helpful assistant."))
         .build();
 
-    let content = agent
+    let resp = agent
         .prompt(prompt)
+        .extended_details()
         .await
         .map_err(|e| format!("Bridge prompt failed: {}", e))?;
 
-    Ok(AgentResponse::from_content(content))
+    Ok(AgentResponse::with_usage(
+        resp.output,
+        resp.usage.input_tokens,
+        resp.usage.output_tokens,
+    ))
 }
 
 fn run_kimi_direct(prompt: &str, _preamble: Option<&str>) -> Result<AgentResponse, String> {
@@ -240,12 +253,17 @@ async fn run_claude(
         .preamble(preamble.unwrap_or("You are a helpful assistant."))
         .build();
 
-    let content = agent
+    let resp = agent
         .prompt(prompt)
+        .extended_details()
         .await
         .map_err(|e| format!("Claude prompt failed: {}", e))?;
 
-    Ok(AgentResponse::from_content(content))
+    Ok(AgentResponse::with_usage(
+        resp.output,
+        resp.usage.input_tokens,
+        resp.usage.output_tokens,
+    ))
 }
 
 async fn run_openai(
@@ -262,12 +280,17 @@ async fn run_openai(
         .preamble(preamble.unwrap_or("You are a helpful assistant."))
         .build();
 
-    let content = agent
+    let resp = agent
         .prompt(prompt)
+        .extended_details()
         .await
         .map_err(|e| format!("OpenAI prompt failed: {}", e))?;
 
-    Ok(AgentResponse::from_content(content))
+    Ok(AgentResponse::with_usage(
+        resp.output,
+        resp.usage.input_tokens,
+        resp.usage.output_tokens,
+    ))
 }
 
 async fn run_ollama(
@@ -289,10 +312,15 @@ async fn run_ollama(
         .preamble(preamble.unwrap_or("You are a helpful assistant."))
         .build();
 
-    let content = agent
+    let resp = agent
         .prompt(prompt)
+        .extended_details()
         .await
         .map_err(|e| format!("Ollama prompt failed: {}", e))?;
 
-    Ok(AgentResponse::from_content(content))
+    Ok(AgentResponse::with_usage(
+        resp.output,
+        resp.usage.input_tokens,
+        resp.usage.output_tokens,
+    ))
 }

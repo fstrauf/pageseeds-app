@@ -436,8 +436,7 @@ pub(crate) fn exec_coverage_cluster_analysis(
     };
 
     // Parse the agent output to extract clusters
-    let normalized = crate::engine::normalizer::normalize_agent_output(&raw_output);
-    let mut clusters = normalized.json_artifact.unwrap_or_else(|| {
+    let mut clusters = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
         serde_json::json!({
             "generated_at": chrono::Utc::now().to_rfc3339(),
             "article_count": article_count,

@@ -122,25 +122,36 @@ export function useMutation<T, V = void>(
 ) {
   const [isPending, setIsPending] = useState(false)
 
+  // Destructure scalar values so they are stable across renders
+  const invalidateKeys = options?.invalidateQueries
+
+  // Use refs for callbacks so mutate reference stays stable
+  const onSuccessRef = useRef(options?.onSuccess)
+  const onErrorRef = useRef(options?.onError)
+  useEffect(() => {
+    onSuccessRef.current = options?.onSuccess
+    onErrorRef.current = options?.onError
+  })
+
   const mutate = useCallback(
     async (variables: V) => {
       setIsPending(true)
       try {
         const result = await mutationFn(variables)
-        if (options?.invalidateQueries) {
-          invalidateQueries(options.invalidateQueries)
+        if (invalidateKeys) {
+          invalidateQueries(invalidateKeys)
         }
-        options?.onSuccess?.(result, variables)
+        onSuccessRef.current?.(result, variables)
         return result
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err))
-        options?.onError?.(error, variables)
+        onErrorRef.current?.(error, variables)
         throw error
       } finally {
         setIsPending(false)
       }
     },
-    [mutationFn, options]
+    [mutationFn, invalidateKeys]
   )
 
   return { mutate, isPending }

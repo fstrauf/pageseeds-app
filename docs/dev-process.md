@@ -110,7 +110,7 @@ In `engine/workflows/handlers.rs`, add `summarize_content` to the appropriate ha
 
 ```rust
 "summarize_content" => vec![
-    WorkflowStep::new("summarize_content_run", StepKind::SummarizeContent.as_ref()),
+    WorkflowStep::new("summarize_content_run", StepKind::SummarizeContent),
 ],
 ```
 

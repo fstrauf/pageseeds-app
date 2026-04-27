@@ -187,7 +187,7 @@ mod tests {
             description: Some("Search for Reddit posting opportunities".to_string()),
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         }
@@ -424,13 +424,13 @@ Helpful, technical, and concise.
             description: None,
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         };
         
         // Create the step
-        let step = WorkflowStep::new("reddit_results_stage", "reddit_fetch_results");
+        let step = WorkflowStep::from_kind_str("reddit_results_stage", "reddit_fetch_results");
         
         // Call run_step directly (this is what the executor does)
         let result: StepResult = match step.kind.as_str() {
@@ -461,7 +461,7 @@ Helpful, technical, and concise.
         
         // Verify each step kind is recognized (would be called by run_step)
         for (name, kind) in &expected_steps {
-            let step = WorkflowStep::new(*name, *kind);
+            let step = WorkflowStep::from_kind_str(*name, *kind);
             
             // Match on the same arms as run_step
             let recognized = matches!(step.kind.as_str(), 

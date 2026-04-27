@@ -291,6 +291,18 @@ CREATE INDEX IF NOT EXISTS idx_article_audit_state_project ON article_audit_stat
 CREATE INDEX IF NOT EXISTS idx_article_audit_state_audit ON article_audit_state(project_id, audit_type);
 "#;
 
+static MIGRATION_V22: &str = r#"
+-- Add JSON embedding storage for rig-based vector search
+-- Replaces raw f32 BLOB storage with structured JSON.
+ALTER TABLE skill_embeddings ADD COLUMN embedding_json TEXT;
+"#;
+
+static MIGRATION_V23: &str = r#"
+-- Token usage tracking for LLM observability
+ALTER TABLE task_runs ADD COLUMN prompt_tokens INTEGER;
+ALTER TABLE task_runs ADD COLUMN completion_tokens INTEGER;
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -677,6 +689,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V21)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (21, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 22 {
+        let _ = conn.execute_batch(MIGRATION_V22);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (22, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 23 {
+        let _ = conn.execute_batch(MIGRATION_V23);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (23, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

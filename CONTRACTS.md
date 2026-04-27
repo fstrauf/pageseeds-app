@@ -16,20 +16,20 @@ This file documents runtime contracts, invariants, and hidden rules that are NOT
 | `"done"` | Completed successfully | `executor.rs` — most task types |
 | `"cancelled"` | User dismissed | Frontend UI only |
 
-**Critical rule:** Only `research_keywords` and `custom_keyword_research` tasks finish with status `"review"`. All other task types transition `in_progress → done` on success, and `in_progress → todo` on failure.
+**Critical rule:** Tasks that finish with `"review"` are defined in `config/task_definitions.rs` via `review_on_success: true`. Currently:
+- `research_keywords`
+- `custom_keyword_research`
+- `research_landing_pages`
+- `reddit_opportunity_search`
 
-```
-// executor.rs lines ~233-238
-let new_status = if all_ok {
-    if matches!(task.task_type.as_str(), "research_keywords" | "custom_keyword_research") {
-        "review"
-    } else {
-        "done"
-    }
-} else { "todo" };
+All other task types transition `in_progress → done` on success, and `in_progress → todo` on failure.
+
+```rust
+// executor.rs
+let new_status = completed_task_status(&task.task_type, all_ok);
 ```
 
-**If you add a new task type that should go to `"review"`, you must add it to this match arm.**
+**If you add a new task type that should go to `"review"`, set `review_on_success: true` in its `TaskDefinition`. Do not edit `executor.rs` directly.**
 
 ---
 

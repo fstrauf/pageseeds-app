@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use tauri::State;
-use crate::engine::{executor, normalizer, prompts, skills, skills_search, task_store};
+use crate::engine::{executor, prompts, skills, skills_search, task_store};
 use super::{AppState, GscState};
 
 #[tauri::command]
@@ -42,12 +42,6 @@ pub fn build_prompt_preview(
         &project.path,
         project.site_url.as_deref(),
     ))
-}
-
-#[tauri::command]
-#[allow(deprecated)]
-pub fn normalize_output(raw: String) -> normalizer::NormalizedArtifact {
-    normalizer::normalize_agent_output(&raw)
 }
 
 #[tauri::command]
@@ -175,7 +169,11 @@ pub async fn index_skills(
     let db_arc = Arc::clone(&state.db);
     tokio::task::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        skills_search::index_skills_blocking(&db, &project_id, &skills).map_err(|e| e.to_string())
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            skills_search::index_skills(&db, &project_id, &skills).await
+        })
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -200,8 +198,11 @@ pub async fn search_skills(
     let limit = limit.unwrap_or(5);
     tokio::task::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        skills_search::search_skills_blocking(&db, &project_id, &query, limit, &all_skills)
-            .map_err(|e| e.to_string())
+        let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            skills_search::search_skills(&db, &project_id, &query, limit, &all_skills).await
+        })
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

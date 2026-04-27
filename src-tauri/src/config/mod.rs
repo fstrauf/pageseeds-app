@@ -2,6 +2,10 @@ use crate::models::task::ExecutionMode;
 
 /// Application-level constants matching the Python CLI config.py
 pub mod env_resolver;
+pub mod task_definitions;
+
+// Re-export for backward compatibility during migration.
+pub use task_definitions::{default_execution_mode, default_phase, review_on_success};
 
 #[allow(dead_code)]
 pub(crate) const TASK_TYPES: &[&str] = &[
@@ -27,35 +31,3 @@ pub(crate) const TASK_TYPES: &[&str] = &[
     "ctr_audit",
     "cannibalization_audit",
 ];
-
-pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
-    match task_type {
-        "collect_gsc" => ExecutionMode::Automatic,
-        "indexing_diagnostics" => ExecutionMode::Automatic,
-        "ctr_audit" => ExecutionMode::Automatic,
-        "cannibalization_audit" => ExecutionMode::Automatic,
-        "reddit_search" => ExecutionMode::Batchable,
-        "research_keywords" | "custom_keyword_research" | "research_landing_pages" => ExecutionMode::Manual,
-        "write_article" | "optimize_article" | "create_landing_page" => ExecutionMode::Spec,
-        "reddit_reply" => ExecutionMode::Manual,
-        _ => ExecutionMode::Manual,
-    }
-}
-
-pub fn default_phase(task_type: &str) -> &'static str {
-    match task_type {
-        "collect_gsc" => "collection",
-        "indexing_diagnostics" => "investigation",
-        "investigate_gsc" => "investigation",
-        "ctr_audit" => "investigation",
-        "cannibalization_audit" => "investigation",
-        "research_keywords" => "research",
-        "write_article" | "optimize_article" | "create_landing_page" => "implementation",
-        "reddit_search" | "reddit_reply" => "implementation",
-        "fix_404s" | "fix_redirects" | "technical_seo" => "implementation",
-        "fix_indexing" | "fix_technical" | "fix_content" | "fix_gsc_access" => "implementation",
-        "content_cleanup" => "implementation",
-        "sanitize_content" => "implementation",
-        _ => "implementation",
-    }
-}

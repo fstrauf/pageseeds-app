@@ -55,10 +55,8 @@ pub(crate) fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
         }
     }
 
-    // Fallback: try normalizer output format
-    #[allow(deprecated)]
-    let normalized = crate::engine::normalizer::normalize_agent_output(raw);
-    if let Some(json) = normalized.json_artifact {
+    // Fallback: extract JSON from fenced blocks or bare JSON
+    if let Some(json) = crate::engine::text::extract_json(raw) {
         let themes = themes_from_json(&json);
         let competitors = competitors_from_json(&json);
         if !themes.is_empty() || !competitors.is_empty() {
@@ -124,14 +122,10 @@ fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String)> {
         return vec![];
     };
 
-    // Try direct JSON parse first, then normalizer
+    // Try direct JSON parse first, then extract_json helper
     let json = serde_json::from_str::<serde_json::Value>(raw)
         .ok()
-        .or_else(|| {
-            #[allow(deprecated)]
-            crate::engine::normalizer::normalize_agent_output(raw)
-                .json_artifact
-        });
+        .or_else(|| crate::engine::text::extract_json(raw));
 
     let Some(json) = json else {
         return vec![];

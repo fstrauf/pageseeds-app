@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::Mutex;
 
 pub use agent_wrapper::detect_agents_cached as detect_agents;
 
@@ -44,6 +45,28 @@ pub fn detect_agents_sync(configured_provider: &str) -> AgentStatus {
         configured_provider: configured_provider.to_string(),
     }
 }
+
+// ─── Token usage side-channel ────────────────────────────────────────────────
+
+static LAST_TOKENS: Mutex<(Option<u64>, Option<u64>)> = Mutex::new((None, None));
+
+/// Retrieve and clear the token usage from the most recent rig-backed agent run.
+///
+/// Returns `(prompt_tokens, completion_tokens)`. Call this after `run_agent`
+/// to capture usage for persistence.
+pub fn take_last_tokens() -> (Option<u64>, Option<u64>) {
+    let mut guard = LAST_TOKENS.lock().unwrap();
+    let result = *guard;
+    *guard = (None, None);
+    result
+}
+
+fn set_last_tokens(prompt: Option<u64>, completion: Option<u64>) {
+    let mut guard = LAST_TOKENS.lock().unwrap();
+    *guard = (prompt, completion);
+}
+
+// ─── Public API ──────────────────────────────────────────────────────────────
 
 /// Run an agent with the given prompt and return the captured stdout.
 ///
@@ -119,6 +142,13 @@ async fn run_rig_prompt(provider: &str, prompt: &str) -> Result<String, RigError
             let response = crate::rig::provider::run_agent(&backend, prompt, None)
                 .await
                 .map_err(|e| RigError::Other(e))?;
+            if let (Some(pt), Some(ct)) = (response.prompt_tokens, response.completion_tokens) {
+                log::info!(
+                    "[agent] tokens — prompt={}, completion={}, total={}",
+                    pt, ct, pt + ct
+                );
+                set_last_tokens(Some(pt), Some(ct));
+            }
             Ok(response.content)
         }
     }

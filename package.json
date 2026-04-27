@@ -14,6 +14,7 @@
     "build:mac": "./build-release.sh",
     "build:windows": "./build-windows.sh",
     "release": "./publish-release.sh",
+    "check:ipc": "node scripts/check-ipc-surface.mjs",
     "check:pre-release": "./scripts/pre-release-checks.sh"
   },
   "dependencies": {

@@ -57,6 +57,7 @@ src-tauri/src/
 │   ├── ledger.rs        # Append-only execution history (JSONL)
 │   ├── agent.rs         # LLM provider calls (Kimi / Copilot)
 │   ├── normalizer.rs    # Parse agent raw output → structured JSON
+│   ├── post_actions.rs  # Domain-specific post-step / post-task side effects
 │   ├── skills.rs        # Load SKILL.md files from the user's repo
 │   ├── prompts.rs       # Prompt assembly
 │   ├── project_paths.rs # Resolve content dir, automation dir, output dir per project
@@ -64,7 +65,8 @@ src-tauri/src/
 │       ├── mod.rs       # WorkflowStep struct + StepResult
 │       └── handlers.rs  # WorkflowHandler trait + one impl per task family
 ├── config/
-│   ├── mod.rs           # Constants: PHASES, EXECUTION_MODE_MAP, etc.
+│   ├── mod.rs           # Constants, re-exports
+│   ├── task_definitions.rs # Single source of truth for task type metadata
 │   └── env_resolver.rs  # Secrets + env file loading with precedence chain
 ├── content/             # MDX file operations
 │   ├── locator.rs       # Find content directory (project override → heuristics)
@@ -241,10 +243,13 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 
 ### New workflow task type
 
-1. Add a `WorkflowHandler` impl in `engine/workflows/handlers.rs`.
-2. Register it in `default_handlers()` (same file).
-3. Each handler only returns a `Vec<WorkflowStep>` — no execution logic.
-4. Execution runs through `engine/executor.rs` unchanged.
+1. Register the task type in `config/task_definitions.rs` (phase, execution mode, review behavior, handler family).
+2. Add a `WorkflowHandler` impl in `engine/workflows/handlers.rs`.
+3. Register it in `default_handlers()` (same file).
+4. Each handler only returns a `Vec<WorkflowStep>` — no execution logic.
+5. Execution runs through `engine/executor.rs` unchanged.
+
+**Step constructors are typed:** Use `WorkflowStep::new("name", StepKind::X)` — never pass string step kinds.
 
 ---
 
@@ -279,6 +284,7 @@ We use [ts-rs](https://github.com/Aleph-Alpha/ts-rs) to auto-generate TypeScript
 ```
 
 This runs `cargo test export_bindings --lib` and copies the generated `.ts` files to `src/lib/bindings/`.
+The script now fails loudly if Rust exports fail and removes stale bindings before copying.
 
 **Don't manually edit** files in `src/lib/bindings/` — they are auto-generated.
 
@@ -604,15 +610,18 @@ See `docs/async-architecture.md` for detailed comparison.
 
 ### Rust backend
 - [ ] `cargo check` passes before touching the frontend
+- [ ] `cargo test` passes — especially workflow routing and task definition tests
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] **Settings placed correctly**: User preferences → `global_settings`; Project config → `projects` table
 - [ ] No business logic added to `commands/*.rs` — only thin wrappers
 - [ ] `tauri.ts` wrapper added/updated for any new or changed command
 - [ ] `types.ts` updated to match Rust struct changes (or run `./scripts/sync-bindings.sh` if `#[ts(export)]` is present)
 - [ ] `./scripts/check-bindings.sh` passes if a Rust model with `#[ts(export)]` was changed
+- [ ] `pnpm run check:ipc` passes — every frontend `invoke` must be statically registered or explicitly allowlisted
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls — use Rust crates instead
 - [ ] Reviewed `CONTRACTS.md` for any affected implicit contracts (statuses, step ordering, auto-spawned tasks, handler registry order)
+- [ ] New task types added to `config/task_definitions.rs` before wiring handlers
 - [ ] Every new agentic step has: (a) specific input context, (b) an output contract in a code comment, (c) a comment explaining why it cannot be deterministic
 - [ ] Every new deterministic step does not contain a hard-coded heuristic that substitutes for judgment (that is fake intelligence — use an agentic step for the selection)
 
@@ -620,6 +629,7 @@ See `docs/async-architecture.md` for detailed comparison.
 - [ ] `pnpm run lint` passes — no `exhaustive-deps`, `set-state-in-effect`, `refs`, or `static-components` errors
 - [ ] `pnpm exec tsc -b` passes — no TypeScript errors
 - [ ] `pnpm test` passes — all existing tests green, new tests added for new hooks/components
+- [ ] `pnpm run check:ipc` passes — no unregistered frontend invokes
 - [ ] `pnpm run build` passes — production bundle compiles
 - [ ] Zustand store accesses use selectors (`useQueueStore(s => s.items)`) not bare `useQueueStore()`
 - [ ] Arrays mapped in hooks/components are wrapped in `useMemo`

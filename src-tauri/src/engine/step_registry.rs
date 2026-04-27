@@ -238,42 +238,6 @@ impl StepRegistry {
             })
         }));
 
-        handlers.insert(StepKind::Normalizer, Box::new(|step, ctx| {
-            let name = step.name.clone();
-            let latest_raw = ctx.latest_raw;
-            Box::pin(async move {
-                if let Some(raw) = latest_raw {
-                    #[allow(deprecated)]
-                    let normalized = crate::engine::normalizer::normalize_agent_output(raw);
-                    let msg = if normalized.success {
-                        format!(
-                            "Normalized via '{}' — {} chars",
-                            normalized.extraction_method,
-                            normalized.raw_output.len()
-                        )
-                    } else {
-                        format!("Normalizer recorded raw output ({} chars)", normalized.raw_output.len())
-                    };
-                    let output_str = normalized
-                        .json_artifact
-                        .as_ref()
-                        .and_then(|v| serde_json::to_string_pretty(v).ok())
-                        .unwrap_or_else(|| normalized.raw_output.clone());
-                    StepResult {
-                        success: true,
-                        message: msg,
-                        output: Some(output_str),
-                    }
-                } else {
-                    StepResult {
-                        success: true,
-                        message: format!("Normalizer step '{}' — no raw output to normalize", name),
-                        output: None,
-                    }
-                }
-            })
-        }));
-
         handlers.insert(StepKind::ClusterLinkScan, Box::new(|_step, ctx| {
             let task = ctx.task;
             let project_path = ctx.project_path;

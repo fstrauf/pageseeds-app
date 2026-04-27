@@ -16,7 +16,7 @@ use crate::engine::workflows::{
     StepKind, StepResult,
     WorkflowStep,
 };
-use crate::engine::task_store;
+use crate::engine::{agent, task_store};
 use crate::models::task::{Task, TaskArtifact, TaskStatus};
 use ts_rs::TS;
 
@@ -161,6 +161,8 @@ pub async fn execute_task_with_token(
     let mut all_ok = true;
     let mut last_error = String::new();
     let mut latest_raw_output: Option<String> = None;
+    let mut total_prompt_tokens: Option<u64> = None;
+    let mut total_completion_tokens: Option<u64> = None;
 
     for (i, step) in steps.iter().enumerate() {
         progress[i].status = "running".to_string();
@@ -177,7 +179,12 @@ pub async fn execute_task_with_token(
             conn,
         ).await;
 
-        // Track the raw output of agentic steps for the normalizer that follows
+        // Capture token usage from any agentic step that used a rig backend
+        let (pt, ct) = agent::take_last_tokens();
+        total_prompt_tokens = add_optional(total_prompt_tokens, pt);
+        total_completion_tokens = add_optional(total_completion_tokens, ct);
+
+        // Track the raw output of agentic steps for downstream consumers
         if step.kind == StepKind::Agentic
             || step.kind == StepKind::CtrAnalyze
             || step.kind == StepKind::CanAnalyze
@@ -190,9 +197,6 @@ pub async fn execute_task_with_token(
                 log::warn!("[executor] agentic step '{}' produced no output", step.name);
             }
             latest_raw_output = result.output.clone();
-        } else if step.kind == StepKind::Normalizer {
-            // Normalizer consumed latest_raw; clear so it isn't reused
-            latest_raw_output = None;
         } else if step.name == "indexing_fix_context" {
             // Pass deterministic context to the agentic step that follows
             if let Some(ref out) = result.output {
@@ -258,127 +262,27 @@ pub async fn execute_task_with_token(
             // The artifact is in SQLite; the in-memory task doesn't need it.
         }
 
-        // After a reddit_search step, upsert posts from the JSON output into SQLite.
-        // Enrichment (AI pass) is a separate step — see reddit_enrich block below.
-        if step.kind == StepKind::RedditSearch && result.success {
-            if let Some(ref out) = result.output {
-                crate::engine::exec::reddit::persist_reddit_opportunities(conn, &task.project_id, out);
-            }
+        // Run domain-specific post-step side effects.
+        let post = crate::engine::post_actions::after_step(&crate::engine::post_actions::PostStepContext {
+            conn,
+            task: &task,
+            step,
+            result: &result,
+            project_path: &project_path,
+            agent_provider: &agent_provider,
+        });
+        if let Some(status) = post.status {
+            progress[i].status = status;
         }
-
-        // reddit_enrich step: AI enrichment batches — fills why_relevant, key_pain_points,
-        // website_fit, reply_text. Handled here (not in run_step) because it needs conn.
-        if step.kind == StepKind::RedditEnrich {
-            loop {
-                let pending: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM reddit_opportunities \
-                     WHERE project_id=?1 AND (why_relevant IS NULL OR reply_text IS NULL) \
-                     AND reply_status != 'skipped'",
-                    rusqlite::params![&task.project_id],
-                    |r| r.get(0),
-                ).unwrap_or(0);
-                if pending == 0 { break; }
-                log::info!("[reddit_enrich] {} posts still pending enrichment — running batch", pending);
-                crate::engine::exec::reddit::exec_reddit_enrich(conn, &task, &project_path, &agent_provider);
-            }
-            progress[i].message = "Reddit enrichment complete".to_string();
+        if let Some(message) = post.message {
+            progress[i].message = message;
         }
-        
-        // reddit_fetch_results step: fetch enriched opportunities from DB and return as JSON.
-        // Handled here (not in run_step) because it needs conn.
-        if step.kind == StepKind::RedditFetchResults {
-            let result = crate::engine::exec::reddit::exec_reddit_fetch_results(conn, &task.project_id);
-            progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
-            progress[i].message = result.message.clone();
-            progress[i].output = result.output.clone();
-            if let Some(ref out) = result.output {
-                let artifact = TaskArtifact {
-                    key: step.name.clone(),
-                    path: None,
-                    artifact_type: Some(step.kind.to_string()),
-                    source: Some(step.kind.to_string()),
-                    content: Some(out.clone()),
-                };
-                let _ = task_store::append_task_artifact(conn, task_id, &artifact);
-                task.artifacts.push(artifact);
-            }
+        if let Some(output) = post.output {
+            progress[i].output = Some(output);
         }
-
-        // After a reddit_opportunities normalizer step, upsert parsed opportunities into DB.
-        if step.kind == StepKind::Normalizer
-            && step.params.get(step_params::NORMALIZER_ID).map(|s| s.as_str()) == Some("reddit_opportunities")
-        {
-            log::info!("[reddit] normalizer step complete — success={} output_len={}",
-                result.success,
-                result.output.as_ref().map(|o| o.len()).unwrap_or(0)
-            );
-            if result.success {
-                match &result.output {
-                    Some(out) => crate::engine::exec::reddit::persist_reddit_opportunities(conn, &task.project_id, out),
-                    None => log::warn!("[reddit] normalizer succeeded but produced no output"),
-                }
-            } else {
-                log::warn!("[reddit] normalizer step failed: {}", result.message);
-            }
-        }
-
-        // After a successful content write, register the new MDX file in SQLite + articles.json.
-        // Mirrors the Python CLI's article_manager.add_article() call which runs immediately
-        // after the agent writes the file. Without this, articles.json is only updated at
-        // publish time, meaning the next write_article task cannot compute a safe date.
-        if step.name == "content_write_stage" && result.success {
-            let automation_dir = std::path::Path::new(&project_path)
-                .join(".github")
-                .join("automation");
-            match crate::content::ops::ingest_orphan_files(
-                &automation_dir,
-                std::path::Path::new(&project_path),
-                &task.project_id,
-                conn,
-            ) {
-                Ok(ingested) if ingested.ingested > 0 => {
-                    // Patch keyword metadata from the task description onto the newly
-                    // inserted row. ingest_orphan_files has no task context so it
-                    // cannot fill these fields itself.
-                    let (keyword, kd_str, vol) = parse_content_task_keyword_meta(&task);
-                    for filename in &ingested.files {
-                        let _ = conn.execute(
-                            "UPDATE articles
-                             SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                                 status='draft'
-                             WHERE project_id=?4 AND file LIKE ?5",
-                            rusqlite::params![
-                                keyword.as_deref(),
-                                kd_str.as_deref(),
-                                vol,
-                                &task.project_id,
-                                format!("%{}", filename),
-                            ],
-                        );
-                    }
-                    // Re-export articles.json so keyword fields are persisted.
-                    if let Ok(json) =
-                        crate::db::export::export_articles(conn, &task.project_id)
-                    {
-                        let articles_path = std::path::Path::new(&project_path)
-                            .join(".github")
-                            .join("automation")
-                            .join("articles.json");
-                        let _ = std::fs::write(&articles_path, json);
-                    }
-                    log::info!(
-                        "[content_register] registered {} article(s): {:?}",
-                        ingested.ingested,
-                        ingested.files
-                    );
-                }
-                Ok(_) => {
-                    log::info!(
-                        "[content_register] no new orphan files to register after content write"
-                    )
-                }
-                Err(e) => log::warn!("[content_register] article registration failed: {}", e),
-            }
+        if let Some(artifact) = post.artifact {
+            let _ = task_store::append_task_artifact(conn, task_id, &artifact);
+            task.artifacts.push(artifact);
         }
 
         if !result.success {
@@ -402,88 +306,19 @@ pub async fn execute_task_with_token(
 
     let mut follow_up_ids: Vec<String> = vec![];
 
-    // After a successful content review, create individual fix_content_article tasks
-    // for each article in recommendations.json (one task per article, not one monolithic task).
-    if all_ok && matches!(task.task_type.as_str(), "content_review" | "content_audit") {
-        let fix_task_ids = crate::engine::exec::content::create_content_review_apply_task(conn, &task, &project_path);
-        follow_up_ids.extend(fix_task_ids);
-    }
-
-    // After a successful write_article, queue a cluster_and_link task so the
-    // new article is integrated into the site's internal link graph.
-    if all_ok && task.task_type == "write_article" {
-        if let Some(task_id) = crate::engine::exec::content::create_cluster_and_link_task(conn, &task, &project_path) {
-            follow_up_ids.push(task_id);
-        }
-    }
-
-    // After a successful collect_gsc, spawn fix tasks from the gsc_collection.json artifact.
-    if all_ok && task.task_type == "collect_gsc" {
-        follow_up_ids.extend(crate::engine::exec::gsc::create_tasks_from_collection_after_exec(conn, &task, &project_path));
-    }
-
-    // After a successful ctr_audit, spawn fix tasks from the ctr_recommendations artifact.
-    // Reload the task so it has artifacts that were persisted during execution.
-    if all_ok && task.task_type == "ctr_audit" {
-        if let Ok(reloaded) = task_store::get_task(conn, &task.id) {
-            follow_up_ids.extend(crate::engine::exec::ctr_audit::create_ctr_fix_tasks(conn, &reloaded, &project_path));
-        }
-    }
-
-    // After a successful cannibalization_audit, spawn fix tasks from the cannibalization_strategy artifact.
-    // Reload the task so it has artifacts that were persisted during execution.
-    if all_ok && task.task_type == "cannibalization_audit" {
-        if let Ok(reloaded) = task_store::get_task(conn, &task.id) {
-            follow_up_ids.extend(crate::engine::exec::cannibalization_audit::create_can_fix_tasks(conn, &reloaded, &project_path));
-        }
-    }
-
-    // After a successful indexing_diagnostics, collect spawned fix task IDs from step output.
-    if all_ok && task.task_type == "indexing_diagnostics" {
-        if let Some(step_result) = progress.iter().find(|p| p.step_name == "indexing_diagnostics_run") {
-            if let Some(ref out) = step_result.output {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(out) {
-                    if let Some(ids) = val.get("spawned_task_ids").and_then(|v| v.as_array()) {
-                        for id in ids {
-                            if let Some(s) = id.as_str() {
-                                follow_up_ids.push(s.to_string());
-                            }
-                        }
-                    }
+    // Run domain-specific post-task side effects.
+    if all_ok {
+        follow_up_ids.extend(
+            crate::engine::post_actions::after_task_success(
+                &crate::engine::post_actions::PostTaskContext {
+                    conn,
+                    task: &task,
+                    project_path: &project_path,
+                    progress: &progress,
                 }
-            }
-        }
+            )
+        );
     }
-
-    // After a successful GSC fix task, record resolution so indexing_diagnostics knows the fix was applied.
-    if all_ok && matches!(task.task_type.as_str(), "fix_indexing" | "fix_technical" | "fix_content" | "fix_gsc_access") {
-        if let Some(ref desc) = task.description {
-            if let Some(url_line) = desc.lines().next() {
-                if let Some(url) = url_line.strip_prefix("URL: ") {
-                    // Get the fix summary from the indexing_fix_apply step output
-                    let fix_summary = progress
-                        .iter()
-                        .find(|p| p.step_name == "indexing_fix_apply")
-                        .and_then(|p| p.output.as_ref())
-                        .map(|o| crate::engine::text::char_prefix(o, 500).to_string())
-                        .unwrap_or_else(|| "Fix applied (no summary available)".to_string());
-                    
-                    let _ = crate::gsc::db::record_fix_resolved(conn, url, &task.project_id, &fix_summary);
-                }
-            }
-        }
-    }
-
-    if all_ok && task.task_type == "fix_content_article" {
-        if let Err(e) = crate::engine::exec::content::mark_fix_content_article_reviewed(conn, &task, &project_path) {
-            log::warn!("[content_review] failed to persist article review completion: {}", e);
-        }
-    }
-    
-    // After a successful reddit_opportunity_search, the task goes to Review status.
-    // The user will review opportunities and select which ones to create reply tasks for.
-    // No automatic task creation - user must approve each opportunity first.
-
     let follow_up_tasks: Vec<FollowUpTask> = follow_up_ids
         .iter()
         .filter_map(|id| task_store::get_task(conn, id).ok())
@@ -516,10 +351,10 @@ pub async fn execute_task_with_token(
     };
 
     if !all_ok {
-        task_store::record_task_run(conn, task_id, false, Some(&last_error), None)
+        task_store::record_task_run(conn, task_id, false, Some(&last_error), None, total_prompt_tokens, total_completion_tokens)
             .map_err(|e| e.to_string())?;
     } else {
-        task_store::record_task_run(conn, task_id, true, None, None)
+        task_store::record_task_run(conn, task_id, true, None, None, total_prompt_tokens, total_completion_tokens)
             .map_err(|e| e.to_string())?;
     }
 
@@ -572,7 +407,17 @@ async fn run_step(
 
 fn _fail_task(conn: &Connection, task: &mut Task, msg: &str) {
     let _ = task_store::update_task_status(conn, &task.id, TaskStatus::Todo);
-    let _ = task_store::record_task_run(conn, &task.id, false, Some(msg), None);
+    let _ = task_store::record_task_run(conn, &task.id, false, Some(msg), None, None, None);
+}
+
+/// Add two optional u64 values, returning Some if either is Some.
+fn add_optional(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x + y),
+        (Some(x), None) => Some(x),
+        (None, Some(y)) => Some(y),
+        (None, None) => None,
+    }
 }
 
 /// Parse keyword metadata embedded in the write_article task description.
@@ -605,12 +450,7 @@ fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<Strin
 /// Extracted as a named function so it can be unit-tested.
 pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus {
     if all_ok {
-        // Tasks that require user review before proceeding go to Review status
-        if matches!(task_type, 
-            "research_keywords" | "custom_keyword_research" |
-            "research_landing_pages" |
-            "reddit_opportunity_search"
-        ) {
+        if crate::config::review_on_success(task_type) {
             TaskStatus::Review
         } else {
             TaskStatus::Done
@@ -673,7 +513,8 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
                 provider TEXT, started_at TEXT NOT NULL,
-                finished_at TEXT, success INTEGER, error TEXT
+                finished_at TEXT, success INTEGER, error TEXT,
+                prompt_tokens INTEGER, completion_tokens INTEGER
              );",
         )
         .unwrap();
@@ -728,7 +569,7 @@ mod tests {
             project_id: project_id.to_string(),
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None },
+            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
         }
@@ -817,7 +658,7 @@ mod tests {
         ];
         
         for (kind, should_be_recognized) in reddit_steps {
-            let step = WorkflowStep::new_with_kind("test_step", kind);
+            let step = WorkflowStep::new("test_step", kind);
             
             // Simulate what run_step does - match on step.kind
             let result = match step.kind {

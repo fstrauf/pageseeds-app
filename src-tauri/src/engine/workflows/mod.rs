@@ -8,15 +8,13 @@ use std::str::FromStr;
 /// Param keys consumed by the executor's step dispatch logic.
 /// Use these constants instead of inline string literals in handler `plan()` implementations.
 ///
-/// - Keys used by `executor::run_step()` directly: `NORMALIZER_ID`, `CMD`, `ARTIFACT`
+/// - Keys used by `executor::run_step()` directly: `CMD`, `ARTIFACT`
 /// - Keys forwarded to `exec_agentic()`: `SKILL`
-/// - Keys used by normalizer post-processing: `ARTIFACT_NAME`
+/// - Keys used for artifact naming: `ARTIFACT_NAME`
 pub mod step_params {
     /// Names the SKILL.md file to load for an `"agentic"` step.
     pub const SKILL: &str = "skill";
-    /// Selects which normalizer to apply in a `"normalizer"` step.
-    pub const NORMALIZER_ID: &str = "normalizer_id";
-    /// Names the output artifact written by a `"normalizer"` step.
+    /// Names the output artifact written by a step.
     pub const ARTIFACT_NAME: &str = "artifact_name";
     /// CLI command string for a `"deterministic"` step. Supports `{project_path}` and `{automation_dir}` tokens.
     pub const CMD: &str = "cmd";
@@ -34,20 +32,20 @@ pub struct WorkflowStep {
 }
 
 impl WorkflowStep {
-    pub fn new(name: &str, kind: &str) -> Self {
-        let parsed = StepKind::from_str(kind).unwrap_or_else(|_| {
-            panic!("Unknown step kind '{}'", kind)
-        });
-        Self::new_with_kind(name, parsed)
-    }
-
-    pub fn new_with_kind(name: &str, kind: StepKind) -> Self {
+    pub fn new(name: &str, kind: StepKind) -> Self {
         Self {
             name: name.to_string(),
             kind,
             params: Default::default(),
             optional: false,
         }
+    }
+
+    pub fn from_kind_str(name: &str, kind: &str) -> Self {
+        let parsed = StepKind::from_str(kind).unwrap_or_else(|_| {
+            panic!("Unknown step kind '{}'", kind)
+        });
+        Self::new(name, parsed)
     }
 
     pub fn with_param(mut self, key: &str, val: &str) -> Self {

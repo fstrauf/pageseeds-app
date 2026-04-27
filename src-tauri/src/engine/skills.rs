@@ -6,12 +6,13 @@
 /// take precedence, allowing per-project overrides.
 
 use std::path::{Path, PathBuf};
+use rig::Embed;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default, rig::Embed)]
 pub struct Skill {
     /// Directory name (e.g. "reddit-opportunity-search")
     pub name: String,
@@ -20,6 +21,7 @@ pub struct Skill {
     /// Short description extracted from SKILL.md (first non-empty paragraph after the title)
     pub description: String,
     /// Full raw SKILL.md content
+    #[embed]
     pub content: String,
 }
 

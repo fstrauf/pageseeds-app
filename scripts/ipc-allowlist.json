@@ -1,0 +1,9 @@
+{
+  "registeredButNotInvoked": [
+    "check_agent_status_for_project",
+    "dry_run_task",
+    "execute_task",
+    "get_kimi_backend_mode",
+    "set_kimi_backend_mode"
+  ]
+}

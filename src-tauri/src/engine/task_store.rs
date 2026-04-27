@@ -32,6 +32,7 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
             attempts: run_attempts as u32,
             last_error: run_last_error,
             provider: run_provider,
+            ..Default::default()
         },
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
@@ -67,6 +68,7 @@ fn row_to_task_light(row: &rusqlite::Row) -> rusqlite::Result<Task> {
             attempts: run_attempts as u32,
             last_error: run_last_error,
             provider: run_provider,
+            ..Default::default()
         },
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
@@ -469,14 +471,16 @@ pub fn record_task_run(
     success: bool,
     error: Option<&str>,
     provider: Option<&str>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO task_runs (task_id, attempt, provider, started_at, finished_at, success, error)
+        "INSERT INTO task_runs (task_id, attempt, provider, started_at, finished_at, success, error, prompt_tokens, completion_tokens)
          SELECT ?1,
                 COALESCE((SELECT MAX(attempt) FROM task_runs WHERE task_id = ?1), 0) + 1,
-                ?2, ?3, ?3, ?4, ?5",
-        rusqlite::params![task_id, provider, now, success as i64, error],
+                ?2, ?3, ?3, ?4, ?5, ?6, ?7",
+        rusqlite::params![task_id, provider, now, success as i64, error, prompt_tokens, completion_tokens],
     )?;
     conn.execute(
         "UPDATE tasks SET run_attempts = run_attempts + 1, run_last_error = ?1, updated_at = ?2 WHERE id = ?3",

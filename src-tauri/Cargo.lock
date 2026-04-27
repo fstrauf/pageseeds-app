@@ -3191,7 +3191,6 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rig-core",
- "rig-sqlite",
  "rusqlite",
  "schemars 1.2.1",
  "scraper",
@@ -4170,23 +4169,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rig-sqlite"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7159136954aa3cdeae3c07dd8fac4a8da38cbed03b350dc478d18a7de17a2e9"
-dependencies = [
- "chrono",
- "rig-core",
- "rusqlite",
- "serde",
- "serde_json",
- "sqlite-vec",
- "tokio-rusqlite",
- "tracing",
- "zerocopy",
-]
-
-[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4921,15 +4903,6 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "sqlite-vec"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -5696,17 +5669,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
 dependencies = [
  "native-tls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-rusqlite"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b65501378eb676f400c57991f42cbd0986827ab5c5200c53f206d710fb32a945"
-dependencies = [
- "crossbeam-channel",
- "rusqlite",
  "tokio",
 ]
 

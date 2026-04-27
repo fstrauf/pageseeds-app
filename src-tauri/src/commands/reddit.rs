@@ -255,7 +255,7 @@ pub async fn enrich_reddit_opportunities(
         description: None,
         depends_on: vec![],
         artifacts: vec![], // Empty - will fall back to deterministic parsing
-        run: TaskRun { attempts: 0, last_error: None, provider: None },
+        run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
         created_at: Utc::now().to_rfc3339(),
         updated_at: Utc::now().to_rfc3339(),
     };

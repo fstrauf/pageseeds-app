@@ -97,9 +97,8 @@ fn parse_seed_extraction(raw: &str) -> SeedExtractionOutput {
         }
     }
 
-    // Fallback: normalizer
-    let normalized = pageseeds_lib::engine::normalizer::normalize_agent_output(raw);
-    if let Some(json) = normalized.json_artifact {
+    // Fallback: extract_json helper
+    if let Some(json) = pageseeds_lib::engine::text::extract_json(raw) {
         if let Ok(parsed) = serde_json::from_str::<SeedExtractionOutput>(&serde_json::to_string(&json).unwrap_or_default()) {
             return parsed;
         }

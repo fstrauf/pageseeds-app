@@ -399,8 +399,8 @@ pub(crate) fn exec_content_review_recommend(
         },
     };
 
-    let normalized = crate::engine::normalizer::normalize_agent_output(&raw_output);
-    let rec = normalized.json_artifact.unwrap_or_else(|| serde_json::json!({
+    let rec = crate::engine::text::extract_json(&raw_output)
+        .unwrap_or_else(|| serde_json::json!({
         "generated_at": chrono::Utc::now().to_rfc3339(),
         "total_articles": 0,
         "articles": [],

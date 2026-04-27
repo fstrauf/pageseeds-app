@@ -1,10 +1,92 @@
 import { useState, useEffect, useCallback } from 'react'
 import { RefreshCw, Wand2, Copy, Check } from 'lucide-react'
 import { useErrorHandler } from '../../lib/toast-context'
-import { listTaskArtifacts, normalizeOutput, listTasks } from '../../lib/tauri'
+import { listTaskArtifacts, listTasks } from '../../lib/tauri'
 import type { NormalizedArtifact, Task, TaskArtifact } from '../../lib/types'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
+
+/// Extract JSON from raw LLM text (mirrors engine/text.rs::extract_json).
+function extractJson(raw: string): NormalizedArtifact {
+  const trimmed = raw.trim()
+
+  // 1. Whole text is JSON
+  try {
+    const parsed = JSON.parse(trimmed)
+    return {
+      raw_output: raw,
+      json_artifact: parsed,
+      extraction_method: 'bare_json',
+      success: true,
+    }
+  } catch {
+    // continue
+  }
+
+  // 2. Fenced code block
+  const fencePatterns = ['```json\n', '```json\r\n', '```JSON\n', '```\n']
+  for (const pat of fencePatterns) {
+    const start = raw.indexOf(pat)
+    if (start !== -1) {
+      const afterOpen = start + pat.length
+      const rest = raw.slice(afterOpen)
+      const end = rest.indexOf('```')
+      if (end !== -1) {
+        const candidate = rest.slice(0, end).trim()
+        try {
+          const parsed = JSON.parse(candidate)
+          return {
+            raw_output: raw,
+            json_artifact: parsed,
+            extraction_method: 'json_block',
+            success: true,
+          }
+        } catch {
+          // continue
+        }
+      }
+    }
+  }
+
+  // 3. Bare JSON object/array
+  const objStart = trimmed.indexOf('{')
+  const objEnd = trimmed.lastIndexOf('}')
+  if (objStart !== -1 && objEnd > objStart) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(objStart, objEnd + 1))
+      return {
+        raw_output: raw,
+        json_artifact: parsed,
+        extraction_method: 'bare_json',
+        success: true,
+      }
+    } catch {
+      // continue
+    }
+  }
+  const arrStart = trimmed.indexOf('[')
+  const arrEnd = trimmed.lastIndexOf(']')
+  if (arrStart !== -1 && arrEnd > arrStart) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(arrStart, arrEnd + 1))
+      return {
+        raw_output: raw,
+        json_artifact: parsed,
+        extraction_method: 'bare_json',
+        success: true,
+      }
+    } catch {
+      // continue
+    }
+  }
+
+  return {
+    raw_output: raw,
+    json_artifact: null,
+    extraction_method: 'none',
+    success: false,
+  }
+}
 
 interface AgentLogProps {
   projectId: string
@@ -168,13 +250,9 @@ export function AgentLog({ projectId }: AgentLogProps) {
     if (selectedTask) loadArtifacts(selectedTask)
   }, [selectedTask, loadArtifacts])
 
-  async function handleNormalize(raw: string) {
-    try {
-      const result = await normalizeOutput(raw)
-      setNormalizeResult(result)
-    } catch (e: unknown) {
-      showError(String(e))
-    }
+  function handleNormalize(raw: string) {
+    const result = extractJson(raw)
+    setNormalizeResult(result)
   }
 
   return (

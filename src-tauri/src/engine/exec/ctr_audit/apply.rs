@@ -34,13 +34,12 @@ pub(crate) fn exec_ctr_fix_apply(
         }
     };
 
-    // Normalize agent output: extract JSON from fenced blocks, bare JSON, etc.
-    let normalized = crate::engine::normalizer::normalize_agent_output(raw);
-    let json_str = match normalized.json_artifact {
-        Some(ref v) => match serde_json::to_string(v) {
+    // Extract JSON from agent output
+    let json_str = match crate::engine::text::extract_json(raw) {
+        Some(v) => match serde_json::to_string(&v) {
             Ok(s) => s,
             Err(e) => {
-                log::warn!("[ctr_fix_apply] Failed to serialize normalized JSON: {}", e);
+                log::warn!("[ctr_fix_apply] Failed to serialize extracted JSON: {}", e);
                 return StepResult {
                     success: false,
                     message: format!("Agent did not return valid CtrFixPatch JSON: {}", e),
@@ -49,10 +48,10 @@ pub(crate) fn exec_ctr_fix_apply(
             }
         },
         None => {
-            log::warn!("[ctr_fix_apply] No JSON found in agent output (method: {})", normalized.extraction_method);
+            log::warn!("[ctr_fix_apply] No JSON found in agent output");
             return StepResult {
                 success: false,
-                message: "Agent did not return valid CtrFixPatch JSON — no JSON artifact found".to_string(),
+                message: "Agent did not return valid CtrFixPatch JSON — no JSON found".to_string(),
                 output: None,
             };
         }
