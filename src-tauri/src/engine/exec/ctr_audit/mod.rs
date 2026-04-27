@@ -778,4 +778,119 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
 
         cleanup(&path);
     }
+
+    /// End-to-end regression test: CTR fix apply on complex frontmatter preserves
+    /// YAML lists, comments, and nested objects. This was the original sanitizer
+    /// root-cause — the old `replace_frontmatter_field` would match indented lines
+    /// and alias lines, destroying structured data.
+    #[test]
+    fn exec_ctr_fix_apply_preserves_complex_frontmatter() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let content_dir = std::path::Path::new(&path).join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        // File with complex frontmatter: comments, FAQ list, citations, alias
+        let mdx = r#"---
+title: "Old Title"
+metaDescription: "Old alias desc"
+description: "Old desc"
+date: "2024-01-01"
+# AI SEO: FAQ Schema
+faq:
+  - question: "What is this?"
+    answer: "This is a test."
+  - question: "Why?"
+    answer: "For regression testing."
+citations:
+  - source: "Example"
+    url: "https://example.com"
+---
+
+# Old Title
+
+This is the first paragraph that should be replaced with something longer so it passes the health check. One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty.
+
+## FAQ
+
+Q: What is this?
+A: This is a test.
+"#;
+
+        let file_path = content_dir.join("test_article.mdx");
+        std::fs::write(&file_path, mdx).unwrap();
+
+        let patch = serde_json::json!({
+            "article_id": 1,
+            "file": "content/test_article.mdx",
+            "changes": {
+                "title": "New Title",
+                "description": "This is a very good meta description that is definitely longer than one hundred and thirty characters so it passes the strict health check.",
+                "first_paragraph": "One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."
+            }
+        });
+
+        let task = crate::models::task::Task {
+            id: "task-fix-complex".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "fix_ctr_article".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Fix complex frontmatter test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![
+                crate::models::task::TaskArtifact {
+                    key: "ctr_recommendations".to_string(),
+                    path: None,
+                    artifact_type: None,
+                    source: None,
+                    content: Some(serde_json::json!({
+                        "article_id": 1,
+                        "file": "content/test_article.mdx",
+                        "target_keyword": "test article",
+                        "fixes": [
+                            { "type": "TitleRewrite", "recommended": "New Title" },
+                            { "type": "MetaDescription", "recommended": "New desc" },
+                            { "type": "SnippetBait", "recommended": "New paragraph" }
+                        ]
+                    }).to_string()),
+                }
+            ],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_fix_apply(&task, &path, Some(&patch.to_string()));
+        assert!(result.success, "CTR fix apply failed: {}", result.message);
+
+        // Read the modified file
+        let modified = std::fs::read_to_string(&file_path).unwrap();
+
+        // Title and description should be updated
+        assert!(modified.contains("title: \"New Title\""), "Title was not updated");
+        assert!(modified.contains("description: \"This is a very good meta description"), "Description was not updated");
+
+        // Alias should be removed
+        assert!(!modified.contains("metaDescription:"), "metaDescription alias was not removed");
+
+        // Complex YAML must be preserved
+        assert!(modified.contains("faq:"), "FAQ list was destroyed");
+        assert!(modified.contains("  - question: \"What is this?\""), "FAQ question 1 was destroyed");
+        assert!(modified.contains("  - question: \"Why?\""), "FAQ question 2 was destroyed");
+        assert!(modified.contains("# AI SEO: FAQ Schema"), "Comment was destroyed");
+        assert!(modified.contains("citations:"), "Citations list was destroyed");
+        assert!(modified.contains("  - source: \"Example\""), "Citation source was destroyed");
+
+        // First paragraph should be replaced
+        assert!(!modified.contains("This is the first paragraph that should be replaced"), "First paragraph was not replaced");
+        assert!(modified.contains("One two three four five six seven"), "New first paragraph is missing");
+
+        cleanup(&path);
+    }
 }

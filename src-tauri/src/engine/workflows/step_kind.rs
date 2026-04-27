@@ -65,7 +65,7 @@ pub enum StepKind {
     CtrFixApply,
     /// Deterministic verification that applied CTR fixes meet health thresholds.
     CtrVerifyFix,
-    /// Sanitize content: rename .md → .mdx, repair paths, validate and fix frontmatter.
+    /// Sanitize content: rename .md → .mdx, repair paths, validate frontmatter (read-only report).
     SanitizeContent,
     /// Fallback for unknown strings during deserialization.
     Unknown,

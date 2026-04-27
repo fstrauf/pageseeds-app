@@ -70,3 +70,13 @@ pub struct QualityBreakdown {
     /// Readability score
     pub readability: u8,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct RepairPathResult {
+    pub checked: usize,
+    pub repaired: usize,
+    pub removed: usize,
+    pub not_found: Vec<String>,
+}

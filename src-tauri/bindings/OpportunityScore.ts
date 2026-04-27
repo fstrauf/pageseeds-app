@@ -3,4 +3,4 @@
 /**
  * Multi-factor opportunity score for a keyword.
  */
-export type OpportunityScore = { keyword: string, total_score: number, tier: string, factor_scores: { [key in string]?: number }, };
+export type OpportunityScore = { keyword: string, total_score: number, tier: string, factor_scores: { [key in string]: number }, };

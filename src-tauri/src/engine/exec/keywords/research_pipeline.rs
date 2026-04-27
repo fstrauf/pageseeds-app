@@ -56,6 +56,7 @@ pub(crate) fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
     }
 
     // Fallback: try normalizer output format
+    #[allow(deprecated)]
     let normalized = crate::engine::normalizer::normalize_agent_output(raw);
     if let Some(json) = normalized.json_artifact {
         let themes = themes_from_json(&json);
@@ -127,6 +128,7 @@ fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String)> {
     let json = serde_json::from_str::<serde_json::Value>(raw)
         .ok()
         .or_else(|| {
+            #[allow(deprecated)]
             crate::engine::normalizer::normalize_agent_output(raw)
                 .json_artifact
         });

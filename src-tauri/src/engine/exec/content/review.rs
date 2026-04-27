@@ -323,6 +323,7 @@ IMPORTANT:
 /// 3. Builds structured context with source excerpts
 /// 4. Makes one agent call with a targeted structured prompt
 /// 5. Writes recommendations.json to the automation dir
+#[allow(deprecated)]
 pub(crate) fn exec_content_review_recommend(
     task: &Task,
     project_path: &str,

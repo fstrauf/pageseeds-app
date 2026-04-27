@@ -11,8 +11,8 @@ export type ResearchFinalOutput = {
 /**
  * Selected informational keywords (for research_keywords task)
  */
-results: Array<SelectedKeyword>, 
+results?: Array<SelectedKeyword>, 
 /**
  * Selected landing page candidates (for research_landing_pages task)
  */
-landing_page_candidates: Array<LandingPageCandidate>, };
+landing_page_candidates?: Array<LandingPageCandidate>, };

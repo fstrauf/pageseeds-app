@@ -235,22 +235,32 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
         .map(|l| l.trim_start_matches('#').trim().to_string())
         .unwrap_or_default();
 
-    // Extract first_paragraph: first non-empty, non-heading line
-    let first_paragraph = body
-        .lines()
-        .map(|l| l.trim())
-        .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("---"))
-        .unwrap_or("")
-        .to_string();
+    // Extract first_paragraph using the MDX-aware paragraph finder.
+    // This skips imports, exports, JSX components, and headings.
+    let first_paragraph = crate::content::cleaner::find_first_paragraph_range(body)
+        .map(|(start, end)| body[start..end].to_string())
+        .unwrap_or_default();
 
     let has_faq = has_faq_schema(&content);
 
     (title, meta_description, first_paragraph, h1, has_faq, true)
 }
 
-/// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage or markdown FAQ section).
+/// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage, markdown FAQ section,
+/// or frontmatter `faq:` YAML list).
 pub fn has_faq_schema(content: &str) -> bool {
-    // 1. Check for JSON-LD FAQPage schema
+    // 1. Check frontmatter for `faq:` YAML list
+    if let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(content) {
+        if let Ok(fm) = crate::content::frontmatter::parse(fm_raw) {
+            if let Some(faq) = fm.parsed.get("faq") {
+                if faq.is_sequence() && !faq.as_sequence().unwrap().is_empty() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 2. Check for JSON-LD FAQPage schema in body
     let content_lower = content.to_lowercase();
     if content_lower.contains("faqpage")
         || content_lower.contains("\"@type\": \"question\"")
@@ -260,7 +270,7 @@ pub fn has_faq_schema(content: &str) -> bool {
         return true;
     }
 
-    // 2. Check for markdown FAQ headings
+    // 3. Check for markdown FAQ headings
     content.lines().any(|line| {
         let trimmed = line.trim().to_lowercase();
         trimmed.starts_with("# faq")

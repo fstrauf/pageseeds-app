@@ -79,6 +79,7 @@ fn find_file_by_suffix(dir: &Path, suffix: &str) -> Option<PathBuf> {
         })
 }
 
+#[allow(deprecated)]
 fn parse_seed_extraction(raw: &str) -> SeedExtractionOutput {
     // Try direct JSON parse first
     if let Ok(parsed) = serde_json::from_str::<SeedExtractionOutput>(raw) {

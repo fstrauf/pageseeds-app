@@ -15,4 +15,4 @@ themes: Array<string>,
 /**
  * 2-3 competitor domains for traffic/context cross-reference
  */
-competitors: Array<string>, };
+competitors?: Array<string>, };

@@ -5,4 +5,4 @@ export type CtrRecommendation = { article_id: bigint, url_slug: string, file: st
 /**
  * Target keyword for this article (used by verifier for snippet keyword check).
  */
-target_keyword: string | null, fixes: Array<CtrFix>, };
+target_keyword?: string | null, fixes: Array<CtrFix>, };

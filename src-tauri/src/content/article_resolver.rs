@@ -6,7 +6,7 @@ pub struct ResolvedFile {
     /// The canonical path relative to repo root (no ./ prefix)
     pub relative_path: String,
     /// Absolute path on disk
-    pub absolute_path: PathBuf,
+    pub _absolute_path: PathBuf,
     /// Whether the file was found
     pub found: bool,
     /// Whether the path was repaired (different from stored)
@@ -26,7 +26,7 @@ pub fn resolve_article_file(
     if stored_path.is_empty() {
         return ResolvedFile {
             relative_path: String::new(),
-            absolute_path: PathBuf::new(),
+            _absolute_path: PathBuf::new(),
             found: false,
             was_repaired: false,
         };
@@ -39,7 +39,7 @@ pub fn resolve_article_file(
     if direct.exists() {
         return ResolvedFile {
             relative_path: clean.to_string(),
-            absolute_path: direct,
+            _absolute_path: direct,
             found: true,
             was_repaired: clean != stored_path,
         };
@@ -50,7 +50,7 @@ pub fn resolve_article_file(
     if with_prefix.exists() {
         return ResolvedFile {
             relative_path: stored_path.to_string(),
-            absolute_path: with_prefix,
+            _absolute_path: with_prefix,
             found: true,
             was_repaired: false,
         };
@@ -72,7 +72,7 @@ pub fn resolve_article_file(
                 .to_string();
             return ResolvedFile {
                 relative_path: rel,
-                absolute_path: candidate,
+                _absolute_path: candidate,
                 found: true,
                 was_repaired: true,
             };
@@ -88,7 +88,7 @@ pub fn resolve_article_file(
             .to_string();
         return ResolvedFile {
             relative_path: rel,
-            absolute_path: found,
+            _absolute_path: found,
             found: true,
             was_repaired: true,
         };
@@ -97,7 +97,7 @@ pub fn resolve_article_file(
     // Not found anywhere
     ResolvedFile {
         relative_path: stored_path.to_string(),
-        absolute_path: direct,
+        _absolute_path: direct,
         found: false,
         was_repaired: false,
     }

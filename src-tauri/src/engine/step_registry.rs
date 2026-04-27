@@ -243,6 +243,7 @@ impl StepRegistry {
             let latest_raw = ctx.latest_raw;
             Box::pin(async move {
                 if let Some(raw) = latest_raw {
+                    #[allow(deprecated)]
                     let normalized = crate::engine::normalizer::normalize_agent_output(raw);
                     let msg = if normalized.success {
                         format!(

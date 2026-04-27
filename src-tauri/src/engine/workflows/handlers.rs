@@ -225,7 +225,8 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("content_cleanup_fix", StepKind::FormatFix.as_ref()),
             ],
             "sanitize_content" => vec![
-                // Single deterministic step: rename .md → .mdx, repair paths, validate + fix frontmatter.
+                // Single deterministic step: rename .md → .mdx, repair paths, validate frontmatter (read-only).
+                // Broad frontmatter auto-fix is intentionally NOT applied here; use format_fix for that.
                 WorkflowStep::new("sanitize_content_run", StepKind::SanitizeContent.as_ref()),
             ],
             "publish_content" => vec![

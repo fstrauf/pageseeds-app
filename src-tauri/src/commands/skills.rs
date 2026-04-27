@@ -45,6 +45,7 @@ pub fn build_prompt_preview(
 }
 
 #[tauri::command]
+#[allow(deprecated)]
 pub fn normalize_output(raw: String) -> normalizer::NormalizedArtifact {
     normalizer::normalize_agent_output(&raw)
 }

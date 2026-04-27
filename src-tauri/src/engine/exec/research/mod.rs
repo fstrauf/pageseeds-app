@@ -161,7 +161,6 @@ pub async fn exec_keyword_research_with_tools(
     preamble: &str,
 ) -> StepResult {
     use rig::client::CompletionClient;
-    use rig::completion::Prompt;
 
     let backend = crate::rig::provider::resolve_backend(provider, None, None, None).await;
 

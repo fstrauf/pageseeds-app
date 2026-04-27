@@ -20,11 +20,11 @@ themes: Array<string>,
 /**
  * Competitor domains extracted from the seed step
  */
-competitors: Array<string>, 
+competitors?: Array<string>, 
 /**
  * Competitor traffic insights for context
  */
-competitor_insights: Array<CompetitorInsight>, 
+competitor_insights?: Array<CompetitorInsight>, 
 /**
  * Total candidates before filtering
  */

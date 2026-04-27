@@ -192,3 +192,43 @@ pub struct CtrFixCheckResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
+
+// ─── Health Summary (project-wide CTR health dashboard) ───────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrHealthSummary {
+    pub total_articles: usize,
+    pub healthy_count: usize,
+    pub unhealthy_count: usize,
+    pub improved_count: usize,
+    pub already_healthy_count: usize,
+    pub regressed_count: usize,
+    pub missing_files: usize,
+    pub title_issues: usize,
+    pub meta_issues: usize,
+    pub snippet_issues: usize,
+    pub faq_issues: usize,
+    pub last_audit_at: Option<String>,
+    pub articles: Vec<CtrHealthArticle>,
+    pub pending_fix_tasks: usize,
+    pub completed_audits: usize,
+    pub open_issues_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrHealthArticle {
+    pub id: i64,
+    pub title: String,
+    pub url_slug: String,
+    pub file: String,
+    pub healthy: bool,
+    pub audit_status: String,
+    pub issues: Vec<String>,
+    pub last_audited_at: Option<String>,
+    pub last_audit_issues: Vec<String>,
+    pub resolved_issues: Vec<String>,
+}

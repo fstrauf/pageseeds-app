@@ -160,6 +160,8 @@ pub fn run() {
             commands::initialize_project_workspace,
             commands::get_content_health,
             commands::fix_date_mismatches,
+            commands::repair_article_paths,
+            commands::get_ctr_health_summary,
             commands::validate_content_format,
             commands::fix_content_format,
             commands::ingest_orphan_articles,

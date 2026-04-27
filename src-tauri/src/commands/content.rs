@@ -346,3 +346,178 @@ pub fn fix_content_format(
     crate::content::validator::apply_fixes(&validation.issues, repo_root)
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn repair_article_paths(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::models::article::RepairPathResult, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::Path::new(&project.path);
+
+    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+    let mut checked = 0usize;
+    let mut repaired = 0usize;
+    let mut removed = 0usize;
+    let mut not_found = Vec::new();
+
+    let content_dirs = crate::content::article_resolver::discover_content_dirs(repo_root);
+    let content_dirs_refs: Vec<&str> = content_dirs.iter().map(|s| s.as_str()).collect();
+
+    for article in &articles {
+        checked += 1;
+        let resolved = crate::content::article_resolver::resolve_article_file(
+            repo_root, &article.file, &content_dirs_refs,
+        );
+        if resolved.found && resolved.was_repaired {
+            // Update DB path
+            let _ = db.execute(
+                "UPDATE articles SET file = ?1 WHERE id = ?2",
+                rusqlite::params![&resolved.relative_path, article.id],
+            );
+            repaired += 1;
+        } else if !resolved.found {
+            not_found.push(article.file.clone());
+            removed += 1;
+        }
+    }
+
+    // Re-export articles.json so changes are persisted to repo
+    let _ = crate::db::export::export_articles(&db, &project_id);
+
+    Ok(crate::models::article::RepairPathResult {
+        checked,
+        repaired,
+        removed,
+        not_found,
+    })
+}
+
+#[tauri::command]
+pub fn get_ctr_health_summary(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::models::ctr::CtrHealthSummary, String> {
+    use crate::models::ctr::{CtrHealthSummary, CtrHealthArticle};
+    use crate::engine::exec::audit_health;
+
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+    let repo_root = std::path::Path::new(&project.path);
+
+    let articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
+
+    // Count CTR-related tasks
+    let all_tasks = task_store::list_tasks_light(&db, &project_id).map_err(|e| e.to_string())?;
+    let pending_fix_tasks = all_tasks.iter().filter(|t| t.task_type == "fix_ctr_article" && t.status == crate::models::task::TaskStatus::Todo).count();
+    let completed_audits = all_tasks.iter().filter(|t| t.task_type == "ctr_audit" && t.status == crate::models::task::TaskStatus::Done).count();
+
+    let mut health_articles = Vec::new();
+    let mut missing_files = 0usize;
+    let mut title_issues = 0usize;
+    let mut meta_issues = 0usize;
+    let mut snippet_issues = 0usize;
+    let mut faq_issues = 0usize;
+
+    for article in &articles {
+        let file_found = audit_health::resolve_content_file(repo_root, &article.file).is_some();
+        if !file_found {
+            missing_files += 1;
+            health_articles.push(CtrHealthArticle {
+                id: article.id,
+                title: article.title.clone(),
+                url_slug: article.url_slug.clone(),
+                file: article.file.clone(),
+                healthy: false,
+                audit_status: "needs_fix".to_string(),
+                issues: vec!["file_not_found".to_string()],
+                last_audited_at: None,
+                last_audit_issues: Vec::new(),
+                resolved_issues: Vec::new(),
+            });
+            continue;
+        }
+
+        let (title, meta, first_paragraph, _h1, has_faq, _found) =
+            audit_health::read_article_excerpt(&project.path, &article.file);
+
+        let health = audit_health::check_article_health(
+            &title,
+            &meta,
+            &first_paragraph,
+            article.target_keyword.as_deref().unwrap_or(""),
+            has_faq,
+            true,
+        );
+
+        let mut issues = Vec::new();
+        if title.len() > audit_health::TITLE_MAX_LEN {
+            issues.push("title_too_long".to_string());
+            title_issues += 1;
+        }
+        if meta.len() < audit_health::META_MIN_LEN || meta.len() > audit_health::META_MAX_LEN {
+            issues.push("meta_too_short".to_string());
+            meta_issues += 1;
+        }
+        let word_count = first_paragraph.split_whitespace().count();
+        let has_kw_or_q = article.target_keyword.as_deref().unwrap_or("").is_empty()
+            || first_paragraph.to_lowercase().contains(&article.target_keyword.as_deref().unwrap_or("").to_lowercase())
+            || first_paragraph.contains('?');
+        if word_count < audit_health::SNIPPET_MIN_WORDS
+            || word_count > audit_health::SNIPPET_MAX_WORDS
+            || !has_kw_or_q
+        {
+            issues.push("snippet_suboptimal".to_string());
+            snippet_issues += 1;
+        }
+        if !has_faq {
+            issues.push("missing_faq_schema".to_string());
+            faq_issues += 1;
+        }
+
+        let healthy = issues.is_empty();
+        let audit_status = if healthy {
+            "healthy".to_string()
+        } else {
+            "needs_fix".to_string()
+        };
+
+        health_articles.push(CtrHealthArticle {
+            id: article.id,
+            title: article.title.clone(),
+            url_slug: article.url_slug.clone(),
+            file: article.file.clone(),
+            healthy,
+            audit_status,
+            issues: issues.clone(),
+            last_audited_at: None,
+            last_audit_issues: Vec::new(),
+            resolved_issues: Vec::new(),
+        });
+    }
+
+    let total_articles = health_articles.len();
+    let healthy_count = health_articles.iter().filter(|a| a.healthy).count();
+    let unhealthy_count = total_articles - healthy_count;
+    let open_issues_count = health_articles.iter().map(|a| a.issues.len()).sum();
+
+    Ok(CtrHealthSummary {
+        total_articles,
+        healthy_count,
+        unhealthy_count,
+        improved_count: 0,
+        already_healthy_count: healthy_count,
+        regressed_count: 0,
+        missing_files,
+        title_issues,
+        meta_issues,
+        snippet_issues,
+        faq_issues,
+        last_audit_at: None,
+        articles: health_articles,
+        pending_fix_tasks,
+        completed_audits,
+        open_issues_count,
+    })
+}

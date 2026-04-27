@@ -16,5 +16,5 @@
 //!     .build();
 //! ```
 
-pub use rig::tool::{Tool, ToolDyn, ToolSet, ToolSetBuilder};
-pub use rig::completion::ToolDefinition;
+#[allow(unused_imports)]
+pub use rig::tool::Tool;

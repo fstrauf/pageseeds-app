@@ -17,6 +17,7 @@ use crate::models::task::Task;
 /// 7. rebuild_mdx → write file
 /// 8. validate_mdx_structure → if fail, restore snapshot, return failed
 /// 9. Return success with summary
+#[allow(deprecated)]
 pub(crate) fn exec_ctr_fix_apply(
     _task: &Task,
     project_path: &str,
@@ -133,12 +134,12 @@ pub(crate) fn exec_ctr_fix_apply(
     let mut applied = Vec::new();
 
     if let Some(new_title) = title {
-        new_fm = crate::content::cleaner::replace_frontmatter_field(&new_fm, "title", &new_title);
+        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "title", &new_title);
         applied.push("title".to_string());
     }
 
     if let Some(new_desc) = description {
-        new_fm = crate::content::cleaner::replace_frontmatter_field(&new_fm, "description", &new_desc);
+        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", &new_desc);
         applied.push("description".to_string());
     }
 
@@ -227,7 +228,7 @@ pub(crate) fn exec_ctr_verify_fix(
     }
 
     let repo_root = Path::new(project_path);
-    let full_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref) {
+    let _full_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref) {
         Some(p) => p,
         None => {
             return StepResult {

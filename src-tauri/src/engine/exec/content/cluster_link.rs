@@ -179,6 +179,7 @@ pub(crate) fn create_cluster_and_link_task(
 /// Cannot be deterministic: deciding which cross-cluster links are valuable
 /// and which orphans are topically related requires understanding article
 /// content and business priorities — not just graph connectivity counts.
+#[allow(deprecated)]
 pub(crate) fn exec_cluster_link_strategy(
     _task: &Task,
     project_path: &str,

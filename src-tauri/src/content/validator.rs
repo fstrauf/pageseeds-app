@@ -646,6 +646,7 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Split a frontmatter line like `title: "Foo"` into ("title", "Foo").
+#[allow(dead_code)]
 fn split_field_line(line: &str) -> Option<(String, String)> {
     let colon_pos = line.find(':')?;
     let key = line[..colon_pos].trim().to_string();

@@ -379,6 +379,7 @@ fn calculate_cluster_metrics(
 ///
 /// Sends article metadata to the agent for semantic clustering.
 /// The agent groups articles by topic/theme and assigns human-readable cluster names.
+#[allow(deprecated)]
 pub(crate) fn exec_coverage_cluster_analysis(
     _task: &Task,
     project_path: &str,

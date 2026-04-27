@@ -30,8 +30,8 @@ function ArtifactRow({ artifact, onNormalize }: {
     <div className="border border-border rounded overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border">
         <span className="text-sm font-mono font-medium text-foreground">{artifact.key}</span>
-        {artifact.artifact_type && (
-          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{artifact.artifact_type}</span>
+        {artifact.type && (
+          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{artifact.type}</span>
         )}
         {artifact.source && (
           <span className={cn(

@@ -48,16 +48,16 @@ pub enum LlmBackend {
 pub struct AgentResponse {
     pub content: String,
     /// Token usage when available (rig HTTP providers). `None` for direct CLI.
-    pub prompt_tokens: Option<u64>,
-    pub completion_tokens: Option<u64>,
+    pub _prompt_tokens: Option<u64>,
+    pub _completion_tokens: Option<u64>,
 }
 
 impl AgentResponse {
     pub fn from_content(content: String) -> Self {
         Self {
             content,
-            prompt_tokens: None,
-            completion_tokens: None,
+            _prompt_tokens: None,
+            _completion_tokens: None,
         }
     }
 }
