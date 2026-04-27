@@ -79,20 +79,30 @@ It should not be used directly by internal workflows once this migration is comp
 
 These paths should be migrated away from direct `articles.json` access:
 
+### Read + Write (highest risk)
 - `src-tauri/src/content/ops.rs`
-  - `sync_and_validate`
-  - `clean_stale_articles_json`
-  - `ingest_orphan_files`
-- `src-tauri/src/engine/exec/gsc/sync.rs`
-- `src-tauri/src/engine/exec/keywords/research_pipeline.rs`
-- `src-tauri/src/engine/exec/coverage.rs`
-- `src-tauri/src/engine/exec/content_audit.rs`
-- `src-tauri/src/engine/exec/ctr_audit/context.rs`
-- `src-tauri/src/engine/exec/cannibalization_audit.rs`
-- `src-tauri/src/engine/exec/content/cluster_link.rs`
+  - `sync_and_validate` — reads `articles.json` to patch MDX frontmatter
+  - `clean_stale_articles_json` — reads and rewrites `articles.json` without touching SQLite
+  - `ingest_orphan_files` — writes `articles.json` directly after exporting from SQLite
+- `src-tauri/src/engine/exec/gsc/sync.rs` — mutates `articles.json` in-place to inject GSC metrics
+
+### Read-only (workflow executors)
+- `src-tauri/src/engine/exec/keywords/research_pipeline.rs` — reads existing keywords from `articles.json`
+- `src-tauri/src/engine/exec/coverage.rs` — loads article list from `articles.json`
+- `src-tauri/src/engine/exec/content_audit.rs` — reads article list from `articles.json`
+- `src-tauri/src/engine/exec/ctr_audit/context.rs` — reads article list from `articles.json`
+- `src-tauri/src/engine/exec/cannibalization_audit.rs` — reads article list from `articles.json`
+- `src-tauri/src/engine/exec/content/cluster_link.rs` — reads article list from `articles.json`
 - `src-tauri/src/engine/exec/content/review.rs`
-- `src-tauri/src/engine/post_actions.rs`
-- `src-tauri/src/content/publish.rs`
+  - `exec_content_review_recommend` — reads article list from `articles.json`
+  - `exec_content_review_apply` — embeds `articles.json` path in LLM prompt (indirect risk)
+
+### Write-only (indirect / hybrid)
+- `src-tauri/src/engine/post_actions.rs` — calls `db::export::export_articles` then writes directly with `std::fs::write`
+- `src-tauri/src/content/publish.rs` — delegates to `db::export::write_articles_to_repo` (clean), but calls `sync_and_validate` before export which reads stale JSON
+
+### Additional paths discovered during Phase 0 exploration
+- `src-tauri/src/engine/exec/content/sync.rs` — `exec_sanitize_content` writes projection via `db::export` (clean pattern)
 
 ## Implementation Plan
 

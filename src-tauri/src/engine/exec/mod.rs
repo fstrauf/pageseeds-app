@@ -4,6 +4,7 @@
 pub mod common;
 pub mod audit_health;
 pub mod cannibalization_audit;
+pub mod consolidate_cluster;
 pub mod content;
 pub mod content_audit;
 pub mod coverage;

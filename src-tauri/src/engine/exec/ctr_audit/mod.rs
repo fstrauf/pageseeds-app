@@ -141,7 +141,7 @@ This is another article with different content.
         };
 
         let conn = test_db();
-        let result = exec_ctr_build_context(&task, &path, &conn);
+        let result = exec_ctr_build_context(&task, &path, None, &conn);
         assert!(result.success, "build_context failed: {}", result.message);
 
         let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
@@ -179,18 +179,48 @@ This is another article with different content.
         };
 
         let conn = test_db();
-        let result = exec_ctr_build_context(&task, &path, &conn);
+        let result = exec_ctr_build_context(&task, &path, None, &conn);
         let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
         let articles = output["top_20_by_clicks_lost"].as_array().unwrap();
 
         let a1 = articles.iter().find(|a| a["id"].as_i64().unwrap() == 1).unwrap();
         let cl1 = a1["clicks_lost"].as_f64().unwrap();
-        assert!((cl1 - 40.0).abs() < 0.1, "Expected ~40 clicks_lost, got {}", cl1);
+        // Article 1: pos 8.5 → target 0.8% → 10000 * (0.008 - 0.001) = 70
+        assert!((cl1 - 70.0).abs() < 0.1, "Expected ~70 clicks_lost, got {}", cl1);
+        assert_eq!(a1["target_ctr"].as_f64().unwrap(), 0.008);
 
         let a2 = articles.iter().find(|a| a["id"].as_i64().unwrap() == 2).unwrap();
         let cl2 = a2["clicks_lost"].as_f64().unwrap();
-        assert!((cl2 - 20.0).abs() < 0.1, "Expected ~20 clicks_lost, got {}", cl2);
+        // Article 2: pos 12.0 → target 0.3% → 5000 * (0.003 - 0.001) = 10
+        assert!((cl2 - 10.0).abs() < 0.1, "Expected ~10 clicks_lost, got {}", cl2);
+        assert_eq!(a2["target_ctr"].as_f64().unwrap(), 0.003);
         cleanup(&path);
+    }
+
+    #[test]
+    fn test_target_ctr_for_position() {
+        assert_eq!(target_ctr_for_position(1.0), 0.08);
+        assert_eq!(target_ctr_for_position(2.0), 0.08);
+        assert_eq!(target_ctr_for_position(3.0), 0.04);
+        assert_eq!(target_ctr_for_position(4.0), 0.04);
+        assert_eq!(target_ctr_for_position(5.0), 0.015);
+        assert_eq!(target_ctr_for_position(7.0), 0.015);
+        assert_eq!(target_ctr_for_position(8.0), 0.008);
+        assert_eq!(target_ctr_for_position(10.0), 0.008);
+        assert_eq!(target_ctr_for_position(11.0), 0.003);
+        assert_eq!(target_ctr_for_position(20.0), 0.003);
+        assert_eq!(target_ctr_for_position(21.0), 0.0);
+        assert_eq!(target_ctr_for_position(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_classify_query_intent() {
+        assert_eq!(classify_query_intent("what is a cash secured put"), "question");
+        assert_eq!(classify_query_intent("cash secured put vs naked put"), "comparison");
+        assert_eq!(classify_query_intent("best stocks for covered calls"), "best_list");
+        assert_eq!(classify_query_intent("option tax calculator"), "tax_legal");
+        assert_eq!(classify_query_intent("theta decay tool"), "calculator_tool");
+        assert_eq!(classify_query_intent("option selling strategies"), "generic");
     }
 
     #[test]
@@ -333,7 +363,7 @@ Q: What?\nA: This.
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
-        let result = exec_ctr_build_context(&task, &path, &conn);
+        let result = exec_ctr_build_context(&task, &path, None, &conn);
         assert!(result.success);
         let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
         assert_eq!(output["total_articles"].as_i64().unwrap(), 1);
@@ -407,7 +437,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
 
         // Build context should find 0 articles with issues
         let conn = test_db();
-        let result = exec_ctr_build_context(&task, &path, &conn);
+        let result = exec_ctr_build_context(&task, &path, None, &conn);
         assert!(result.success);
         let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
         assert_eq!(output["total_articles"].as_i64().unwrap(), 0, "Expected 0 articles with issues");

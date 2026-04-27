@@ -480,6 +480,39 @@ impl WorkflowHandler for SocialHandler {
     }
 }
 
+// ─── Consolidate Cluster ─────────────────────────────────────────────────────
+
+pub struct ConsolidateClusterHandler;
+
+impl WorkflowHandler for ConsolidateClusterHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task) == "consolidate_cluster"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            // Step 1 (deterministic): Load approved merge plan from strategy artifact.
+            WorkflowStep::new("merge_load_plan", StepKind::MergeLoadPlan),
+            // Step 2 (deterministic): Preflight checks — files exist, no redirect cycles, keeper indexable.
+            WorkflowStep::new("merge_preflight", StepKind::MergePreflight),
+            // Step 3 (deterministic): Extract unique sections (headings, tables, examples, FAQs) from redirect pages.
+            WorkflowStep::new("merge_extract_sections", StepKind::MergeExtractSections),
+            // Step 4 (agentic): Draft ContentMergePatch JSON deciding which unique content belongs in keeper.
+            // Cannot be deterministic: understanding whether a section adds unique value requires judgment.
+            // Input contract: structured JSON with keeper content + extracted unique sections.
+            // Output contract: ContentMergePatch JSON.
+            WorkflowStep::new("merge_draft_patch", StepKind::MergeDraftPatch)
+                .with_param(step_params::SKILL, "merge-content"),
+            // Step 5 (deterministic): Apply structured patch, snapshot original, validate MDX/frontmatter.
+            WorkflowStep::new("merge_apply_patch", StepKind::MergeApplyPatch),
+            // Step 6 (deterministic): Generate redirect rules as generic CSV.
+            WorkflowStep::new("merge_generate_redirects", StepKind::MergeGenerateRedirects),
+            // Step 7 (deterministic): Validate merged keeper and redirect map.
+            WorkflowStep::new("merge_validate_output", StepKind::MergeValidateOutput),
+        ]
+    }
+}
+
 // ─── Manual Fallback ─────────────────────────────────────────────────────────
 
 pub struct ManualFallbackHandler;
@@ -510,6 +543,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(CoverageHandler),
         Box::new(CtrAuditHandler),
         Box::new(CannibalizationAuditHandler),
+        Box::new(ConsolidateClusterHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
     ]

@@ -331,6 +331,29 @@ CREATE INDEX IF NOT EXISTS idx_strategy_reviews_project ON strategy_reviews(proj
 CREATE INDEX IF NOT EXISTS idx_strategy_reviews_strategy ON strategy_reviews(strategy_id);
 "#;
 
+static MIGRATION_V25: &str = r#"
+-- Query-level GSC metrics for CTR audit context
+CREATE TABLE IF NOT EXISTS ctr_query_metrics (
+    project_id      TEXT NOT NULL,
+    article_id      INTEGER NOT NULL,
+    page_url        TEXT NOT NULL,
+    query           TEXT NOT NULL,
+    impressions     REAL NOT NULL DEFAULT 0,
+    clicks          REAL NOT NULL DEFAULT 0,
+    ctr             REAL NOT NULL DEFAULT 0,
+    avg_position    REAL NOT NULL DEFAULT 0,
+    period_start    TEXT,
+    period_end      TEXT,
+    intent          TEXT,
+    fetched_at      TEXT NOT NULL,
+    PRIMARY KEY (project_id, article_id, query),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ctr_query_metrics_project ON ctr_query_metrics(project_id);
+CREATE INDEX IF NOT EXISTS idx_ctr_query_metrics_article ON ctr_query_metrics(project_id, article_id);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -745,6 +768,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 25 {
+        conn.execute_batch(MIGRATION_V25)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (25, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn
@@ -897,6 +928,120 @@ pub fn list_article_audit_states(
             was_healthy: row.get::<_, i64>(2)? != 0,
             content_hash: row.get(3)?,
             issues_found: issues,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CTR Query Metrics CRUD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Single query-level GSC metric row for a page.
+#[derive(Debug, Clone)]
+pub struct CtrQueryMetricRow {
+    pub project_id: String,
+    pub article_id: i64,
+    pub page_url: String,
+    pub query: String,
+    pub impressions: f64,
+    pub clicks: f64,
+    pub ctr: f64,
+    pub avg_position: f64,
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub intent: Option<String>,
+    pub fetched_at: String,
+}
+
+/// Store (or replace) query metrics for an article.
+pub fn set_ctr_query_metrics(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+    page_url: &str,
+    metrics: &[(String, f64, f64, f64, f64, Option<String>)],
+    period_start: Option<&str>,
+    period_end: Option<&str>,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let tx = conn.unchecked_transaction()?;
+
+    // Clear old metrics for this article
+    tx.execute(
+        "DELETE FROM ctr_query_metrics WHERE project_id = ?1 AND article_id = ?2",
+        rusqlite::params![project_id, article_id],
+    )?;
+
+    for (query, impressions, clicks, ctr, avg_position, intent) in metrics {
+        tx.execute(
+            "INSERT INTO ctr_query_metrics
+             (project_id, article_id, page_url, query, impressions, clicks, ctr, avg_position, period_start, period_end, intent, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(project_id, article_id, query)
+             DO UPDATE SET
+                 page_url = excluded.page_url,
+                 impressions = excluded.impressions,
+                 clicks = excluded.clicks,
+                 ctr = excluded.ctr,
+                 avg_position = excluded.avg_position,
+                 period_start = excluded.period_start,
+                 period_end = excluded.period_end,
+                 intent = excluded.intent,
+                 fetched_at = excluded.fetched_at",
+            rusqlite::params![
+                project_id,
+                article_id,
+                page_url,
+                query,
+                impressions,
+                clicks,
+                ctr,
+                avg_position,
+                period_start,
+                period_end,
+                intent.as_deref(),
+                &now,
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Load stored query metrics for an article.
+pub fn get_ctr_query_metrics(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+) -> Result<Vec<CtrQueryMetricRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT page_url, query, impressions, clicks, ctr, avg_position, period_start, period_end, intent, fetched_at
+         FROM ctr_query_metrics
+         WHERE project_id = ?1 AND article_id = ?2
+         ORDER BY impressions DESC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![project_id, article_id], |row| {
+        Ok(CtrQueryMetricRow {
+            project_id: project_id.to_string(),
+            article_id,
+            page_url: row.get(0)?,
+            query: row.get(1)?,
+            impressions: row.get(2)?,
+            clicks: row.get(3)?,
+            ctr: row.get(4)?,
+            avg_position: row.get(5)?,
+            period_start: row.get(6)?,
+            period_end: row.get(7)?,
+            intent: row.get(8)?,
+            fetched_at: row.get(9)?,
         })
     })?;
 

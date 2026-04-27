@@ -501,8 +501,12 @@ impl StepRegistry {
             })
         }));
 
-        register_blocking!(handlers, StepKind::CtrBuildContext,
-            crate::engine::exec::ctr_audit::exec_ctr_build_context, db_conn);
+        handlers.insert(StepKind::CtrBuildContext, Box::new(|_step, ctx| {
+            let result = crate::engine::exec::ctr_audit::exec_ctr_build_context(
+                ctx.task, ctx.project_path, ctx.gsc_token, ctx.conn,
+            );
+            Box::pin(async move { result })
+        }));
 
         register_blocking!(handlers, StepKind::CtrAnalyze,
             crate::engine::exec::ctr_audit::exec_ctr_analyze, agent_provider, context_json);
@@ -547,6 +551,55 @@ impl StepRegistry {
                 })
             })
         }));
+
+        register_blocking!(handlers, StepKind::MergeLoadPlan,
+            crate::engine::exec::consolidate_cluster::exec_merge_load_plan);
+
+        handlers.insert(StepKind::MergePreflight, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let plan_json = ctx.latest_raw.unwrap_or("{}").to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::consolidate_cluster::exec_merge_preflight(&task, &project_path, &plan_json)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
+        register_blocking!(handlers, StepKind::MergeExtractSections,
+            crate::engine::exec::consolidate_cluster::exec_merge_extract_sections);
+
+        register_blocking!(handlers, StepKind::MergeDraftPatch,
+            crate::engine::exec::consolidate_cluster::exec_merge_draft_patch, agent_provider, context_json);
+
+        handlers.insert(StepKind::MergeApplyPatch, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let patch_json = ctx.latest_raw.unwrap_or("{}").to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::consolidate_cluster::exec_merge_apply_patch(&task, &project_path, &patch_json)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
+        register_blocking!(handlers, StepKind::MergeGenerateRedirects,
+            crate::engine::exec::consolidate_cluster::exec_merge_generate_redirects);
+
+        register_blocking!(handlers, StepKind::MergeValidateOutput,
+            crate::engine::exec::consolidate_cluster::exec_merge_validate_output);
 
         Self { handlers }
     }
