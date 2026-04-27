@@ -94,6 +94,54 @@ pub fn resolve_article_file(
         };
     }
 
+    // 5. Fallback: if basename ends with .md, try .mdx variant
+    if basename.ends_with(".md") {
+        let mdx_basename = format!("{}x", basename);
+        let mdx_direct = direct.with_extension("mdx");
+        if mdx_direct.exists() {
+            let rel = mdx_direct
+                .strip_prefix(repo_root)
+                .unwrap_or(mdx_direct.as_path())
+                .to_string_lossy()
+                .to_string();
+            return ResolvedFile {
+                relative_path: rel,
+                _absolute_path: mdx_direct,
+                found: true,
+                was_repaired: true,
+            };
+        }
+        for dir in content_dirs {
+            let candidate = repo_root.join(dir).join(&mdx_basename);
+            if candidate.exists() {
+                let rel = candidate
+                    .strip_prefix(repo_root)
+                    .unwrap_or(candidate.as_path())
+                    .to_string_lossy()
+                    .to_string();
+                return ResolvedFile {
+                    relative_path: rel,
+                    _absolute_path: candidate,
+                    found: true,
+                    was_repaired: true,
+                };
+            }
+        }
+        if let Some(found) = find_file_by_basename(repo_root, &mdx_basename) {
+            let rel = found
+                .strip_prefix(repo_root)
+                .unwrap_or(found.as_path())
+                .to_string_lossy()
+                .to_string();
+            return ResolvedFile {
+                relative_path: rel,
+                _absolute_path: found,
+                found: true,
+                was_repaired: true,
+            };
+        }
+    }
+
     // Not found anywhere
     ResolvedFile {
         relative_path: stored_path.to_string(),
