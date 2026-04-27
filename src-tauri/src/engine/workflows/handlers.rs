@@ -245,6 +245,22 @@ impl WorkflowHandler for ImplementationHandler {
                 // Produces CtrFixVerificationReport. Status = done if all pass, review if partial.
                 WorkflowStep::new("fix_ctr_article_verify", StepKind::CtrVerifyFix),
             ],
+            "fix_ctr_site_template" => vec![
+                // Step 1 (deterministic): detect repeated title template patterns from rendered audits.
+                // Groups pages by common suffix, identifies framework files, computes desired pattern.
+                WorkflowStep::new("ctr_template_detect", StepKind::CtrTemplateDetect),
+                // Step 2 (agentic/manual-review): produce framework-aware fix plan.
+                // Cannot be deterministic: the correct fix depends on framework (Next.js/Astro/Gatsby)
+                // and site-specific conventions. The agent reads candidate files and suggests edits.
+                // Output contract: markdown plan with file paths, current code, proposed changes.
+                WorkflowStep::new("ctr_template_plan", StepKind::Agentic)
+                    .with_param(step_params::SKILL, "ctr-template-fix"),
+                // Step 3 (manual): framework code changes require manual review/application.
+                // The task cannot auto-apply changes to the target repo's layout/metadata code.
+                WorkflowStep::new("ctr_template_apply", StepKind::Manual),
+                // Step 4 (deterministic): re-fetch sample pages and verify duplicate suffix is gone.
+                WorkflowStep::new("ctr_template_verify_render", StepKind::CtrTemplateVerifyRender),
+            ],
             "indexing_diagnostics" => vec![
                 // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
                 // only re-checks stale or known-bad URLs, and spawns fix tasks for new/regressed

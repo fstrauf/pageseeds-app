@@ -104,8 +104,14 @@ impl UnionFind {
 /// identical target keywords, building connected-component clusters, scanning
 /// the internal link graph, detecting hub gaps, and analysing territories.
 pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepResult {
-    let _ = task;
     let paths = ProjectPaths::from_path(project_path);
+
+    // Open DB connection for query overlap lookup (optional — falls back to proxy if unavailable)
+    let db_path = crate::db::default_db_path();
+    let db_conn = rusqlite::Connection::open(&db_path).ok();
+    if db_conn.is_none() {
+        log::warn!("[cannibalization_audit] Could not open DB at {:?} — using target_keyword proxy for query overlap", db_path);
+    }
     let articles_path = paths.automation_dir.join("articles.json");
 
     let doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
@@ -241,7 +247,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     // ── 6. Build connected-component clusters ─────────────────────────────────
     let mut all_edges = similarity_edges.clone();
     all_edges.extend(keyword_edges);
-    let clusters = build_clusters(&records, &all_edges);
+    let clusters = build_clusters(&records, &all_edges, db_conn.as_ref(), &task.project_id);
 
     // ── 7. Detect hub gaps ────────────────────────────────────────────────────
     let hub_gaps = detect_hub_gaps(&records, &clusters);
@@ -477,8 +483,74 @@ fn cosine_similarity(a: &TfIdfVector, b: &TfIdfVector) -> f64 {
 // Clustering
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Compute real query overlap between articles in a cluster.
+/// Uses `ctr_query_metrics` when available; falls back to target_keyword proxy otherwise.
+fn compute_query_overlap(
+    conn: Option<&rusqlite::Connection>,
+    project_id: &str,
+    records: &[ArticleRecord],
+    indices: &[usize],
+) -> (usize, Vec<String>) {
+    let mut query_sets: Vec<HashSet<String>> = Vec::new();
+    let mut has_db_data = false;
+
+    if let Some(conn) = conn {
+        for &i in indices {
+            let article_id = records[i].id;
+            if let Ok(rows) = crate::db::get_ctr_query_metrics(conn, project_id, article_id) {
+                if !rows.is_empty() {
+                    has_db_data = true;
+                    let queries: HashSet<String> = rows.into_iter().map(|r| r.query.to_lowercase()).collect();
+                    query_sets.push(queries);
+                }
+            }
+        }
+    }
+
+    if !has_db_data {
+        // Fall back to target_keyword proxy
+        let shared: HashSet<String> = indices
+            .iter()
+            .map(|&i| records[i].target_keyword.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let count = shared.len();
+        let top: Vec<String> = shared.into_iter().take(5).collect();
+        return (count, top);
+    }
+
+    if query_sets.len() <= 1 {
+        let count = query_sets.first().map(|s| s.len()).unwrap_or(0);
+        let top: Vec<String> = query_sets
+            .first()
+            .map(|s| s.iter().cloned().take(5).collect())
+            .unwrap_or_default();
+        return (count, top);
+    }
+
+    // Queries that appear in at least 2 pages (pairwise overlap)
+    let mut shared_queries: HashSet<String> = HashSet::new();
+    for i in 0..query_sets.len() {
+        for j in (i + 1)..query_sets.len() {
+            for q in query_sets[i].intersection(&query_sets[j]) {
+                shared_queries.insert(q.clone());
+            }
+        }
+    }
+
+    let count = shared_queries.len();
+    let mut top: Vec<String> = shared_queries.into_iter().take(5).collect();
+    top.sort();
+    (count, top)
+}
+
 /// Build connected-component clusters from similarity edges and keyword edges.
-fn build_clusters(records: &[ArticleRecord], edges: &[(usize, usize, f64)]) -> Vec<Cluster> {
+fn build_clusters(
+    records: &[ArticleRecord],
+    edges: &[(usize, usize, f64)],
+    conn: Option<&rusqlite::Connection>,
+    project_id: &str,
+) -> Vec<Cluster> {
     let n = records.len();
     let mut uf = UnionFind::new(n);
 
@@ -538,14 +610,9 @@ fn build_clusters(records: &[ArticleRecord], edges: &[(usize, usize, f64)]) -> V
             0.0
         };
 
-        // Shared queries proxy: count distinct target_keywords in cluster
-        let shared_queries: HashSet<String> = indices
-            .iter()
-            .map(|&i| records[i].target_keyword.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let shared_query_count = shared_queries.len();
-        let top_shared_queries: Vec<String> = shared_queries.into_iter().take(5).collect();
+        // Real query overlap from ctr_query_metrics (falls back to target_keyword proxy)
+        let (shared_query_count, top_shared_queries) =
+            compute_query_overlap(conn, project_id, records, &indices);
 
         // Hub existence: check if any page in cluster has a hub-like URL
         let hub_exists = indices.iter().any(|&i| {
@@ -1123,6 +1190,12 @@ Cash secured puts are a great way to generate income.
         assert_eq!(csp_cluster["pages"].as_array().unwrap().len(), 3);
         assert!(csp_cluster["total_impressions"].as_f64().unwrap() > 46000.0);
 
+        // Shared query overlap (falls back to target_keyword proxy in tests without DB query data)
+        assert_eq!(csp_cluster["shared_query_count"].as_i64().unwrap(), 1);
+        let top_queries = csp_cluster["top_shared_queries"].as_array().unwrap();
+        assert!(!top_queries.is_empty());
+        assert!(top_queries[0].as_str().unwrap().contains("cash secured puts"));
+
         // Hub gaps
         let hub_gaps = output["hub_gaps"].as_array().unwrap();
         assert!(!hub_gaps.is_empty(), "Should detect hub gaps for 3+ article clusters");
@@ -1280,7 +1353,7 @@ Some content here.
             },
         ];
 
-        let clusters = build_clusters(&records, &[(0, 1, 0.5), (1, 2, 0.5), (0, 2, 0.5), (0, 3, 0.5), (1, 3, 0.5), (2, 3, 0.5)]);
+        let clusters = build_clusters(&records, &[(0, 1, 0.5), (1, 2, 0.5), (0, 2, 0.5), (0, 3, 0.5), (1, 3, 0.5), (2, 3, 0.5)], None, "");
         let gaps = detect_hub_gaps(&records, &clusters);
 
         // Cluster includes hub page (id 4), so no gap should be reported
@@ -1406,5 +1479,117 @@ Some content here.
 
         assert_eq!(open.len(), 1, "Should detect open territory with impressions");
         assert_eq!(open[0]["theme"].as_str().unwrap(), "open territory");
+    }
+
+    #[test]
+    fn test_compute_query_overlap_with_db_data() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+
+        let project_id = "proj-overlap";
+
+        // Insert required project row (FK constraint)
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode) VALUES (?1, ?2, ?3, 1, 'workspace')",
+            rusqlite::params![project_id, "Test", "/tmp"],
+        ).unwrap();
+
+        // Insert query metrics for 3 articles
+        // Article 1: queries A, B, C
+        crate::db::set_ctr_query_metrics(
+            &conn, project_id, 1, "/a",
+            &[
+                ("query a".to_string(), 100.0, 1.0, 0.01, 5.0, None),
+                ("query b".to_string(), 80.0, 1.0, 0.01, 6.0, None),
+                ("query c".to_string(), 60.0, 1.0, 0.01, 7.0, None),
+            ],
+            Some("2026-01-01"), Some("2026-03-31"),
+        ).unwrap();
+
+        // Article 2: queries B, C, D
+        crate::db::set_ctr_query_metrics(
+            &conn, project_id, 2, "/b",
+            &[
+                ("query b".to_string(), 90.0, 1.0, 0.01, 4.0, None),
+                ("query c".to_string(), 70.0, 1.0, 0.01, 5.0, None),
+                ("query d".to_string(), 50.0, 1.0, 0.01, 8.0, None),
+            ],
+            Some("2026-01-01"), Some("2026-03-31"),
+        ).unwrap();
+
+        // Article 3: queries C, D, E (no overlap with article 1 except C)
+        crate::db::set_ctr_query_metrics(
+            &conn, project_id, 3, "/c",
+            &[
+                ("query c".to_string(), 85.0, 1.0, 0.01, 3.0, None),
+                ("query d".to_string(), 65.0, 1.0, 0.01, 6.0, None),
+                ("query e".to_string(), 45.0, 1.0, 0.01, 9.0, None),
+            ],
+            Some("2026-01-01"), Some("2026-03-31"),
+        ).unwrap();
+
+        let records = vec![
+            ArticleRecord {
+                id: 1, url_slug: "a".to_string(), title: "A".to_string(),
+                h1: "A".to_string(), target_keyword: "kw".to_string(),
+                first_200_words: "".to_string(), file: "a.mdx".to_string(),
+                gsc: serde_json::Value::Null, tokens: vec![],
+                incoming_links: 0, outgoing_links: 0,
+                published_date: "".to_string(), word_count: 0,
+            },
+            ArticleRecord {
+                id: 2, url_slug: "b".to_string(), title: "B".to_string(),
+                h1: "B".to_string(), target_keyword: "kw".to_string(),
+                first_200_words: "".to_string(), file: "b.mdx".to_string(),
+                gsc: serde_json::Value::Null, tokens: vec![],
+                incoming_links: 0, outgoing_links: 0,
+                published_date: "".to_string(), word_count: 0,
+            },
+            ArticleRecord {
+                id: 3, url_slug: "c".to_string(), title: "C".to_string(),
+                h1: "C".to_string(), target_keyword: "kw".to_string(),
+                first_200_words: "".to_string(), file: "c.mdx".to_string(),
+                gsc: serde_json::Value::Null, tokens: vec![],
+                incoming_links: 0, outgoing_links: 0,
+                published_date: "".to_string(), word_count: 0,
+            },
+        ];
+
+        let indices = vec![0, 1, 2];
+        let (count, top) = compute_query_overlap(Some(&conn), project_id, &records, &indices);
+
+        // Pairwise overlaps: (A,B)=B,C; (A,C)=C; (B,C)=C,D
+        // Union = B, C, D = 3 queries
+        assert_eq!(count, 3, "Should find 3 shared queries (B, C, D)");
+        assert_eq!(top.len(), 3);
+    }
+
+    #[test]
+    fn test_compute_query_overlap_fallback_to_proxy() {
+        let records = vec![
+            ArticleRecord {
+                id: 1, url_slug: "a".to_string(), title: "A".to_string(),
+                h1: "A".to_string(), target_keyword: "cash secured puts".to_string(),
+                first_200_words: "".to_string(), file: "a.mdx".to_string(),
+                gsc: serde_json::Value::Null, tokens: vec![],
+                incoming_links: 0, outgoing_links: 0,
+                published_date: "".to_string(), word_count: 0,
+            },
+            ArticleRecord {
+                id: 2, url_slug: "b".to_string(), title: "B".to_string(),
+                h1: "B".to_string(), target_keyword: "cash secured puts".to_string(),
+                first_200_words: "".to_string(), file: "b.mdx".to_string(),
+                gsc: serde_json::Value::Null, tokens: vec![],
+                incoming_links: 0, outgoing_links: 0,
+                published_date: "".to_string(), word_count: 0,
+            },
+        ];
+
+        let indices = vec![0, 1];
+        // No DB connection — should fall back to target_keyword proxy
+        let (count, top) = compute_query_overlap(None, "proj", &records, &indices);
+
+        assert_eq!(count, 1, "Proxy should find 1 distinct target_keyword");
+        assert_eq!(top[0], "cash secured puts");
     }
 }

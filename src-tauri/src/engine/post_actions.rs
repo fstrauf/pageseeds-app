@@ -166,6 +166,11 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
             follow_up_ids.extend(crate::engine::exec::ctr_audit::create_ctr_fix_tasks(
                 ctx.conn, &reloaded, ctx.project_path,
             ));
+            if let Some(task_id) = crate::engine::exec::ctr_audit::create_ctr_site_template_task(
+                ctx.conn, &reloaded, ctx.project_path,
+            ) {
+                follow_up_ids.push(task_id);
+            }
         }
     }
 

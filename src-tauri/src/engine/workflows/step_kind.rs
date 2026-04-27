@@ -66,6 +66,12 @@ pub enum StepKind {
     CtrVerifyFix,
     /// Deterministic rendered SERP audit — fetch live HTML, compare with source.
     CtrRenderedSerpAudit,
+    /// Deterministic detection of repeated site-wide title template patterns.
+    CtrTemplateDetect,
+    /// Agentic/manual step: plan framework-aware title template fix.
+    CtrTemplatePlan,
+    /// Deterministic verification that rendered sample pages pass title checks.
+    CtrTemplateVerifyRender,
     /// Load approved merge plan from strategy artifact.
     MergeLoadPlan,
     /// Preflight checks before merging (files exist, no cycles, keeper indexable).
@@ -140,6 +146,9 @@ impl StepKind {
             Self::CtrFixApply => "ctr_fix_apply",
             Self::CtrVerifyFix => "ctr_verify_fix",
             Self::CtrRenderedSerpAudit => "ctr_rendered_serp_audit",
+            Self::CtrTemplateDetect => "ctr_template_detect",
+            Self::CtrTemplatePlan => "ctr_template_plan",
+            Self::CtrTemplateVerifyRender => "ctr_template_verify_render",
             Self::MergeLoadPlan => "merge_load_plan",
             Self::MergePreflight => "merge_preflight",
             Self::MergeExtractSections => "merge_extract_sections",
@@ -220,6 +229,9 @@ impl FromStr for StepKind {
             "ctr_fix_apply" => Ok(Self::CtrFixApply),
             "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
             "ctr_rendered_serp_audit" => Ok(Self::CtrRenderedSerpAudit),
+            "ctr_template_detect" => Ok(Self::CtrTemplateDetect),
+            "ctr_template_plan" => Ok(Self::CtrTemplatePlan),
+            "ctr_template_verify_render" => Ok(Self::CtrTemplateVerifyRender),
             "merge_load_plan" => Ok(Self::MergeLoadPlan),
             "merge_preflight" => Ok(Self::MergePreflight),
             "merge_extract_sections" => Ok(Self::MergeExtractSections),
@@ -310,6 +322,9 @@ mod tests {
             StepKind::CtrFixApply,
             StepKind::CtrVerifyFix,
             StepKind::CtrRenderedSerpAudit,
+            StepKind::CtrTemplateDetect,
+            StepKind::CtrTemplatePlan,
+            StepKind::CtrTemplateVerifyRender,
             StepKind::MergeLoadPlan,
             StepKind::MergePreflight,
             StepKind::MergeExtractSections,

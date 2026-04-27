@@ -504,6 +504,9 @@ impl StepRegistry {
         register_blocking!(handlers, StepKind::CtrRenderedSerpAudit,
             crate::engine::exec::ctr_audit::exec_ctr_rendered_serp_audit, db_conn);
 
+        register_blocking!(handlers, StepKind::CtrTemplateDetect,
+            crate::engine::exec::ctr_audit::exec_ctr_template_detect, db_conn);
+
         handlers.insert(StepKind::CtrBuildContext, Box::new(|_step, ctx| {
             let result = crate::engine::exec::ctr_audit::exec_ctr_build_context(
                 ctx.task, ctx.project_path, ctx.gsc_token, ctx.conn,
@@ -554,6 +557,9 @@ impl StepRegistry {
                 })
             })
         }));
+
+        register_blocking!(handlers, StepKind::CtrTemplateVerifyRender,
+            crate::engine::exec::ctr_audit::exec_ctr_template_verify_render, db_conn);
 
         register_blocking!(handlers, StepKind::MergeLoadPlan,
             crate::engine::exec::consolidate_cluster::exec_merge_load_plan);

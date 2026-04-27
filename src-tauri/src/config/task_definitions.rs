@@ -221,6 +221,13 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
+        task_type: "fix_ctr_site_template",
+        phase: "implementation",
+        execution_mode: ExecutionMode::Manual,
+        review_on_success: true,
+        handler_family: HandlerFamily::Implementation,
+    },
+    TaskDefinition {
         task_type: "fix_content_article",
         phase: "implementation",
         execution_mode: ExecutionMode::Manual,

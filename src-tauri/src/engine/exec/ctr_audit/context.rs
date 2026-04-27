@@ -454,9 +454,17 @@ fn enrich_with_query_metrics(
             })
             .collect();
 
-        // TODO: store query metrics in DB once the schema function is added.
-        let _ = (conn, project_id, article_id, &page_url, &db_metrics, &start_str, &end_str);
-        log::warn!("[ctr_audit] DB storage for query metrics not yet implemented");
+        if let Err(e) = crate::db::set_ctr_query_metrics(
+            conn,
+            project_id,
+            article_id,
+            &page_url,
+            &db_metrics,
+            Some(&start_str),
+            Some(&end_str),
+        ) {
+            log::warn!("[ctr_audit] Failed to store query metrics for article {}: {}", article_id, e);
+        }
 
         record["top_queries"] = serde_json::json!(query_records);
         enriched += 1;

@@ -269,3 +269,39 @@ pub struct CtrSnippetMarkup {
     pub has_ordered_list: bool,
     pub has_table: bool,
 }
+
+// ─── Site Title Template Detection ────────────────────────────────────────────
+
+/// Result of detecting a repeated site-wide title template pattern.
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrTemplateDetectionResult {
+    /// The detected template pattern, e.g. "{title} | Days to Expiry | Days to Expiry — Option Selling Analyzer"
+    pub detected_pattern: String,
+    /// The desired corrected pattern, e.g. "{title} | Days to Expiry"
+    pub desired_pattern: String,
+    /// Number of pages affected by this pattern
+    pub affected_pages: usize,
+    /// Candidate framework files that may contain the title template
+    pub candidate_files: Vec<String>,
+    /// Confidence level: "high", "medium", or "low"
+    pub confidence: String,
+    /// Whether this fix requires manual review before applying
+    pub requires_manual_review: bool,
+    /// Sample URLs to verify after fix
+    pub verification_urls: Vec<String>,
+    /// Per-page details for affected articles
+    pub pages: Vec<CtrTemplatePageDetail>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrTemplatePageDetail {
+    pub article_id: i64,
+    pub url: String,
+    pub file: String,
+    pub source_title: String,
+    pub rendered_title: String,
+}
