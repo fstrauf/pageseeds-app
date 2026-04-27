@@ -232,3 +232,40 @@ pub struct CtrHealthArticle {
     pub last_audit_issues: Vec<String>,
     pub resolved_issues: Vec<String>,
 }
+
+// ─── Rendered SERP Audit (page-level rendered HTML observation) ───────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrRenderedPageAudit {
+    pub article_id: i64,
+    pub url: String,
+    pub file: String,
+    pub source_title: String,
+    pub rendered_title: String,
+    pub rendered_title_length: usize,
+    pub title_issue_source: String,
+    pub source_description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendered_h1: Option<String>,
+    pub schema_types: Vec<String>,
+    pub has_rendered_faq_page: bool,
+    pub snippet_markup: CtrSnippetMarkup,
+    pub issues: Vec<String>,
+    pub checked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Default)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrSnippetMarkup {
+    pub has_question_h2: bool,
+    pub has_ordered_list: bool,
+    pub has_table: bool,
+}

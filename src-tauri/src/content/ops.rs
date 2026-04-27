@@ -974,3 +974,163 @@ pub fn build_ctr_health_summary(
         open_issues_count,
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Regression tests for article-index persistence consolidation (Phase 0)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{}_{}", prefix, nanos))
+    }
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
+    fn setup_test_project(conn: &Connection, project_id: &str, project_path: &std::path::Path) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, ?2, ?3, 1, 'workspace')",
+            [project_id, "Test Project", project_path.to_str().unwrap()],
+        )
+        .unwrap();
+    }
+
+    fn write_articles_json(automation_dir: &Path, json: &str) {
+        std::fs::create_dir_all(automation_dir).unwrap();
+        std::fs::write(automation_dir.join("articles.json"), json).unwrap();
+    }
+
+    fn write_seo_workspace_json(automation_dir: &Path, content_dir: &str) {
+        std::fs::create_dir_all(automation_dir).unwrap();
+        let config = format!(r#"{{"content_dir": "{}"}}"#, content_dir);
+        std::fs::write(automation_dir.join("seo_workspace.json"), config).unwrap();
+    }
+
+    fn write_mdx(path: &Path, title: &str, date: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let content = format!(
+            "---\ntitle: \"{}\"\ndate: \"{}\"\n---\n\nBody text.\n",
+            title, date
+        );
+        std::fs::write(path, content).unwrap();
+    }
+
+    fn insert_article(conn: &Connection, project_id: &str, id: i64, file: &str, date: &str) {
+        conn.execute(
+            "INSERT INTO articles (
+                id, title, url_slug, file, target_keyword, keyword_difficulty,
+                target_volume, published_date, word_count, status,
+                content_gaps_addressed, estimated_traffic_monthly, project_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            rusqlite::params![
+                id,
+                "Test Article",
+                "test-article",
+                file,
+                Option::<String>::None,
+                Option::<String>::None,
+                0i64,
+                date,
+                100i64,
+                "draft",
+                "[]",
+                Option::<String>::None,
+                project_id,
+            ],
+        )
+        .unwrap();
+    }
+
+    // ─── Regression: clean_stale_articles_json leaves SQLite stale ─────────────
+
+    #[test]
+    fn clean_stale_articles_json_removes_from_json_but_not_db() {
+        let dir = unique_temp_dir("ps_stale_cleanup");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        write_seo_workspace_json(&auto_dir, "content");
+        write_articles_json(
+            &auto_dir,
+            r#"{"nextArticleId":2,"articles":[{"id":1,"title":"Old","file":"./content/001_old.mdx","status":"draft"}]}"#,
+        );
+
+        let conn = in_memory_db();
+        setup_test_project(&conn, "p1", &dir);
+        insert_article(&conn, "p1", 1, "./content/001_old.mdx", "2026-01-01");
+
+        // No MDX file on disk → article is stale
+        let removed = clean_stale_articles_json(&auto_dir, &dir).unwrap();
+        assert_eq!(removed.len(), 1);
+
+        // JSON should no longer contain the stale article
+        let json_on_disk = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&json_on_disk).unwrap();
+        assert!(doc["articles"].as_array().unwrap().is_empty());
+
+        // SQLite SHOULD also have the article removed (correct behavior),
+        // but currently it does NOT because clean_stale_articles_json only touches JSON.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM articles WHERE project_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // This assertion documents the bug: the DB row is still present.
+        // When the bug is fixed, this test will need to be updated to expect 0.
+        assert_eq!(count, 1, "BUG: clean_stale_articles_json removed the article from JSON but left the SQLite row intact");
+    }
+
+    // ─── Regression: sync_and_validate patches MDX from stale JSON ─────────────
+
+    #[test]
+    fn sync_and_validate_patches_mdx_from_json_not_sqlite() {
+        let dir = unique_temp_dir("ps_sync_date");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        write_seo_workspace_json(&auto_dir, "content");
+        write_articles_json(
+            &auto_dir,
+            r#"{"nextArticleId":2,"articles":[{"id":1,"title":"Test","file":"./content/001_test.mdx","published_date":"2026-01-01","status":"draft"}]}"#,
+        );
+
+        let mdx_path = content_dir.join("001_test.mdx");
+        write_mdx(&mdx_path, "Test", "2026-03-01");
+
+        let conn = in_memory_db();
+        setup_test_project(&conn, "p1", &dir);
+        // SQLite has a NEWER date than articles.json (e.g. publish just updated it)
+        insert_article(&conn, "p1", 1, "./content/001_test.mdx", "2026-04-28");
+
+        // Apply sync should patch MDX with the authoritative date.
+        // SQLite is the intended runtime source of truth, so MDX should become 2026-04-28.
+        let result = sync_and_validate(&auto_dir, &dir, true).unwrap();
+        assert_eq!(result.dates_synced, 1);
+
+        let mdx_content = std::fs::read_to_string(&mdx_path).unwrap();
+        // This assertion documents the bug: sync_and_validate reads articles.json (2026-01-01)
+        // instead of SQLite (2026-04-28), so MDX gets the stale JSON date.
+        // When the bug is fixed, MDX should contain 2026-04-28 and this test passes.
+        assert!(
+            mdx_content.contains("2026-04-28"),
+            "BUG: sync_and_validate patched MDX with the stale JSON date instead of the SQLite date. MDX content: {}",
+            mdx_content
+        );
+    }
+}

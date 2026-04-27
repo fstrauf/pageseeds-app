@@ -305,15 +305,18 @@ pub fn apply_publish(
     // Fix structural issues in content files.
     let _ = cleaner::scan_and_clean(content_dir, false);
 
-    // Patch MDX frontmatter dates from the updated SQLite state via sync_and_validate.
+    // Write articles.json BEFORE patching MDX frontmatter dates.
+    // sync_and_validate reads articles.json as its source of truth for dates;
+    // exporting first ensures it sees the updated SQLite state rather than stale JSON.
+    // TODO: migrate sync_and_validate to read from SQLite directly (Phase 1+).
     let automation_dir = project_path.join(".github").join("automation");
-    if let Err(e) = crate::content::ops::sync_and_validate(&automation_dir, project_path, true) {
-        errors.push(format!("MDX frontmatter sync warning: {e}"));
-    }
-
-    // Write articles.json.
     if let Err(e) = export::write_articles_to_repo(conn, project_id, project_path) {
         errors.push(format!("Failed to write articles.json: {e}"));
+    }
+
+    // Patch MDX frontmatter dates from the now-fresh articles.json projection.
+    if let Err(e) = crate::content::ops::sync_and_validate(&automation_dir, project_path, true) {
+        errors.push(format!("MDX frontmatter sync warning: {e}"));
     }
 
     PublishResult {
@@ -466,5 +469,109 @@ fn extract_json_object(text: &str) -> Option<String> {
         Some(text[start..=end].to_string())
     } else {
         None
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Regression tests for publish date consistency (Phase 5)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{}_{}", prefix, nanos))
+    }
+
+    fn in_memory_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
+    fn write_mdx(path: &std::path::Path, title: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let content = format!("---\ntitle: \"{}\"\n---\n\nBody text.\n", title);
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn apply_publish_keeps_mdx_json_and_db_dates_consistent() {
+        let dir = unique_temp_dir("ps_publish_consistent");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        // Write articles.json with a stale/empty date
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            r#"{"nextArticleId":2,"articles":[{"id":1,"title":"Test","file":"./content/001_test.mdx","published_date":"","status":"draft"}]}"#,
+        )
+        .unwrap();
+
+        // Write MDX without a date
+        let mdx_path = content_dir.join("001_test.mdx");
+        write_mdx(&mdx_path, "Test");
+
+        let conn = in_memory_db();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('p1', 'Test', ?1, 1, 'workspace')",
+            [dir.to_str().unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (id, title, url_slug, file, status, content_gaps_addressed, project_id)
+             VALUES (1, 'Test', 'test', './content/001_test.mdx', 'draft', '[]', 'p1')",
+            [],
+        )
+        .unwrap();
+
+        // Publish the article
+        let result = apply_publish(
+            &conn,
+            "p1",
+            &[1],
+            &HashMap::new(),
+            &[],
+            &content_dir,
+            &dir,
+        );
+
+        assert_eq!(result.published.len(), 1);
+        let assigned_date = &result.published[0].published_date;
+
+        // Verify SQLite has the assigned date
+        let db_date: String = conn
+            .query_row(
+                "SELECT published_date FROM articles WHERE id = 1 AND project_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(&db_date, assigned_date);
+
+        // Verify articles.json has the same assigned date
+        let json_on_disk = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&json_on_disk).unwrap();
+        let json_date = doc["articles"][0]["published_date"].as_str().unwrap();
+        assert_eq!(json_date, assigned_date);
+
+        // Verify MDX frontmatter has the same assigned date
+        let mdx_content = std::fs::read_to_string(&mdx_path).unwrap();
+        assert!(
+            mdx_content.contains(&format!("date: \"{}\"", assigned_date)),
+            "MDX frontmatter should contain the assigned date {}. MDX content: {}",
+            assigned_date,
+            mdx_content
+        );
     }
 }

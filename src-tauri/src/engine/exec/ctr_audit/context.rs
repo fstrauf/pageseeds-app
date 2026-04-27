@@ -199,6 +199,27 @@ pub(crate) fn exec_ctr_build_context(
         let target_ctr = target_ctr_for_position(avg_position);
         let clicks_lost = impressions * (target_ctr - ctr).max(0.0);
 
+        // Load rendered audit data if available
+        let rendered_audit = crate::db::get_ctr_rendered_audit(conn, &task.project_id, id)
+            .ok()
+            .flatten();
+
+        let rendered_json = match rendered_audit {
+            Some(a) => serde_json::json!({
+                "rendered_title": a.rendered_title,
+                "rendered_title_length": a.rendered_title_length,
+                "title_issue_source": a.title_issue_source,
+                "rendered_description": a.rendered_description,
+                "rendered_h1": a.rendered_h1,
+                "schema_types": a.schema_types,
+                "has_rendered_faq_page": a.has_rendered_faq_page,
+                "snippet_markup": a.snippet_markup,
+                "issues": a.issues,
+                "checked_at": a.checked_at,
+            }),
+            None => serde_json::Value::Null,
+        };
+
         article_records.push(serde_json::json!({
             "id": id,
             "url_slug": url_slug,
@@ -224,6 +245,7 @@ pub(crate) fn exec_ctr_build_context(
                 "missing_faq_schema": !health.faq_ok,
             },
             "top_queries": serde_json::Value::Null,
+            "rendered_audit": rendered_json,
         }));
     }
 

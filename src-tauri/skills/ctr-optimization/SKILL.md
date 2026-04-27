@@ -7,7 +7,8 @@ Used by the `ctr_analyze` agentic step.
 Structured JSON containing per-article data:
 - `article_id`, `url_slug`, `title`, `meta_description`, `first_paragraph`, `h1`
 - `target_keyword`, `gsc_metrics` (impressions, clicks, ctr, position)
-- Computed `clicks_lost` score
+- Computed `clicks_lost` score and `target_ctr` (position-aware expected CTR)
+- `top_queries` — array of top GSC queries for this page, each with `query`, `impressions`, `clicks`, `ctr`, `avg_position`, `intent`
 
 ## Analysis Rules
 
@@ -97,6 +98,7 @@ Return JSON exactly matching this structure:
 - `article_id` — echo from input (required)
 - `url_slug` — echo from input (required)
 - `file` — echo the `file` value from the input context **exactly** (required). Do not guess, construct, or modify the path.
+- `target_keyword` — echo from input (required)
 - `priority` — `high`, `medium`, or `low` based on clicks_lost magnitude
 - `expected_ctr_improvement` — estimated range (e.g. `0.3-0.8%`)
 
@@ -105,6 +107,11 @@ Return JSON exactly matching this structure:
 - Limit to **top 20 pages** by `clicks_lost`.
 - **Title rewrites**: keep under 55 characters (hard limit: 55), front-load keyword, remove duplication.
 - **Meta descriptions**: 150–155 characters (aim for 150, hard max 155), pattern `[Keyword] + [benefit] + [soft CTA]`. Minimum accepted is 130.
-- **FAQ**: 3–5 questions that reflect real search queries. Must be JSON-LD FAQPage schema, not just markdown headings.
-- **Snippet bait**: 40–60 word direct answer. Match article type (`X vs Y` → paragraph, `best X` → list, comparison → table).
+- **FAQ**: 3–5 questions that reflect real search queries. When `top_queries` is provided, prefer high-impression question/comparison queries from that list. Must be JSON-LD FAQPage schema, not just markdown headings.
+- **Snippet bait**: 40–60 word direct answer. Match article type to the query intent:
+  - `question` intent → paragraph direct answer
+  - `comparison` intent → paragraph comparison or table
+  - `best_list` intent → numbered or bulleted list
+  - `calculator_tool` / `generic` → paragraph
+  When `top_queries` is available, target the highest-impression query with position 2–10.
 - Be specific: name exact current titles and recommended replacements.

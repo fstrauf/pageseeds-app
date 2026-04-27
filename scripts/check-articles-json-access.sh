@@ -19,23 +19,32 @@ src-tauri/src/commands/articles.rs
 src-tauri/src/engine/setup_check.rs
 "
 
-# Build a grep invert pattern from the allowlist
-INVERT=""
-for f in $ALLOWLIST; do
-  INVERT="$INVERT -e $f"
+# Find all files containing "articles.json"
+FILES=$(grep -rln "articles\.json" src-tauri/src/ || true)
+
+if [ -z "$FILES" ]; then
+  echo "OK: No direct articles.json access found anywhere."
+  exit 0
+fi
+
+# Filter out allowed files
+VIOLATIONS=""
+for f in $FILES; do
+  if ! echo "$ALLOWLIST" | grep -qx "$f"; then
+    VIOLATIONS="$VIOLATIONS $f"
+  fi
 done
 
-HITS=$(grep -rn "articles\.json" src-tauri/src/ $INVERT || true)
-
-if [ -n "$HITS" ]; then
+if [ -n "$VIOLATIONS" ]; then
   echo "ERROR: Direct articles.json access found outside approved modules:"
   echo ""
-  echo "$HITS"
+  for f in $VIOLATIONS; do
+    # Show the matching lines for context
+    grep -n "articles\.json" "$f" | head -n 5
+  done
   echo ""
   echo "Approved modules are:"
-  for f in $ALLOWLIST; do
-    echo "  - $f"
-  done
+  echo "$ALLOWLIST" | sed '/^$/d' | sed 's/^/  - /'
   echo ""
   echo "If your change intentionally touches articles.json, either:"
   echo "  1. Add the file to ALLOWLIST in scripts/check-articles-json-access.sh, or"

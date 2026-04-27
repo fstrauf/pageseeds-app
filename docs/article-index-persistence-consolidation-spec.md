@@ -108,16 +108,16 @@ These paths should be migrated away from direct `articles.json` access:
 
 ### Phase 0: Baseline And Guardrails
 
-- [ ] Add tests that capture the current expected import/export behavior for `articles.json`.
-- [ ] Add a failing regression test for JSON-only cleanup leaving SQLite stale.
-- [ ] Add a failing regression test for publish date changes patching MDX from stale JSON.
-- [ ] Add a search/CI guard or lint-like test that lists direct runtime reads of `articles.json` outside approved modules.
-- [ ] Update this spec with any additional direct JSON paths found during implementation.
+- [x] Add tests that capture the current expected import/export behavior for `articles.json`.
+- [x] Add a failing regression test for JSON-only cleanup leaving SQLite stale.
+- [x] Add a failing regression test for publish date changes patching MDX from stale JSON.
+- [x] Add a search/CI guard or lint-like test that lists direct runtime reads of `articles.json` outside approved modules.
+- [x] Update this spec with any additional direct JSON paths found during implementation.
 
 Acceptance criteria:
 
-- [ ] Existing behavior is covered before refactors begin.
-- [ ] Approved direct JSON access is limited to import/export/projection modules and setup diagnostics.
+- [x] Existing behavior is covered before refactors begin.
+- [x] Approved direct JSON access is limited to import/export/projection modules and setup diagnostics.
 
 ### Phase 1: Introduce Article Index Service
 
@@ -220,13 +220,13 @@ Current risk: publish updates SQLite, then patches MDX dates through a helper th
 Tasks:
 
 - [ ] Change frontmatter date patching to use updated SQLite article records directly.
-- [ ] Or export the projection before any helper that still reads JSON, then remove that dependency in a later step.
-- [ ] Add a regression test where publishing assigns a new date and verifies both MDX frontmatter and `articles.json` contain that same date.
-- [ ] Ensure date-policy validation runs against SQLite state.
+- [x] Export the projection before any helper that still reads JSON, then remove that dependency in a later step.
+- [x] Add a regression test where publishing assigns a new date and verifies both MDX frontmatter and `articles.json` contain that same date.
+- [x] Ensure date-policy validation runs against SQLite state.
 
 Acceptance criteria:
 
-- [ ] Publishing cannot leave SQLite, MDX frontmatter, and `articles.json` with different dates.
+- [x] Publishing cannot leave SQLite, MDX frontmatter, and `articles.json` with different dates.
 - [ ] Publish warnings distinguish projection export failures from content patch failures.
 
 ### Phase 6: Drift Detection And Sync UX

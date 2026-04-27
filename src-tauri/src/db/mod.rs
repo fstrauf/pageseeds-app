@@ -354,6 +354,33 @@ CREATE INDEX IF NOT EXISTS idx_ctr_query_metrics_project ON ctr_query_metrics(pr
 CREATE INDEX IF NOT EXISTS idx_ctr_query_metrics_article ON ctr_query_metrics(project_id, article_id);
 "#;
 
+static MIGRATION_V26: &str = r#"
+-- Rendered SERP audit results per page
+CREATE TABLE IF NOT EXISTS ctr_rendered_page_audits (
+    project_id              TEXT NOT NULL,
+    article_id              INTEGER NOT NULL,
+    url                     TEXT NOT NULL,
+    file                    TEXT NOT NULL,
+    source_title            TEXT NOT NULL DEFAULT '',
+    rendered_title          TEXT NOT NULL DEFAULT '',
+    rendered_title_length   INTEGER NOT NULL DEFAULT 0,
+    title_issue_source      TEXT NOT NULL DEFAULT 'unknown',
+    source_description      TEXT NOT NULL DEFAULT '',
+    rendered_description    TEXT,
+    canonical_url           TEXT,
+    rendered_h1             TEXT,
+    schema_types_json       TEXT NOT NULL DEFAULT '[]',
+    has_rendered_faq_page   INTEGER NOT NULL DEFAULT 0,
+    snippet_markup_json     TEXT NOT NULL DEFAULT '{}',
+    issues_json             TEXT NOT NULL DEFAULT '[]',
+    checked_at              TEXT NOT NULL,
+    PRIMARY KEY (project_id, article_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ctr_rendered_audits_project ON ctr_rendered_page_audits(project_id);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -776,6 +803,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 26 {
+        conn.execute_batch(MIGRATION_V26)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (26, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn
@@ -1042,6 +1077,163 @@ pub fn get_ctr_query_metrics(
             period_end: row.get(7)?,
             intent: row.get(8)?,
             fetched_at: row.get(9)?,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CTR Rendered Page Audit CRUD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Store (or replace) a rendered SERP audit record for an article.
+pub fn set_ctr_rendered_audit(
+    conn: &Connection,
+    project_id: &str,
+    audit: &crate::models::ctr::CtrRenderedPageAudit,
+) -> Result<()> {
+    let schema_json = serde_json::to_string(&audit.schema_types).unwrap_or_else(|_| "[]".to_string());
+    let snippet_json = serde_json::to_string(&audit.snippet_markup).unwrap_or_else(|_| "{}".to_string());
+    let issues_json = serde_json::to_string(&audit.issues).unwrap_or_else(|_| "[]".to_string());
+    let has_faq = if audit.has_rendered_faq_page { 1 } else { 0 };
+
+    conn.execute(
+        "INSERT INTO ctr_rendered_page_audits
+         (project_id, article_id, url, file, source_title, rendered_title, rendered_title_length,
+          title_issue_source, source_description, rendered_description, canonical_url, rendered_h1,
+          schema_types_json, has_rendered_faq_page, snippet_markup_json, issues_json, checked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+         ON CONFLICT(project_id, article_id)
+         DO UPDATE SET
+             url = excluded.url,
+             file = excluded.file,
+             source_title = excluded.source_title,
+             rendered_title = excluded.rendered_title,
+             rendered_title_length = excluded.rendered_title_length,
+             title_issue_source = excluded.title_issue_source,
+             source_description = excluded.source_description,
+             rendered_description = excluded.rendered_description,
+             canonical_url = excluded.canonical_url,
+             rendered_h1 = excluded.rendered_h1,
+             schema_types_json = excluded.schema_types_json,
+             has_rendered_faq_page = excluded.has_rendered_faq_page,
+             snippet_markup_json = excluded.snippet_markup_json,
+             issues_json = excluded.issues_json,
+             checked_at = excluded.checked_at",
+        rusqlite::params![
+            project_id,
+            audit.article_id,
+            &audit.url,
+            &audit.file,
+            &audit.source_title,
+            &audit.rendered_title,
+            audit.rendered_title_length as i64,
+            &audit.title_issue_source,
+            &audit.source_description,
+            audit.rendered_description.as_deref(),
+            audit.canonical_url.as_deref(),
+            audit.rendered_h1.as_deref(),
+            schema_json,
+            has_faq,
+            snippet_json,
+            issues_json,
+            &audit.checked_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Load the latest rendered audit for an article.
+pub fn get_ctr_rendered_audit(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+) -> Result<Option<crate::models::ctr::CtrRenderedPageAudit>> {
+    let mut stmt = conn.prepare(
+        "SELECT url, file, source_title, rendered_title, rendered_title_length,
+                title_issue_source, source_description, rendered_description,
+                canonical_url, rendered_h1, schema_types_json, has_rendered_faq_page,
+                snippet_markup_json, issues_json, checked_at
+         FROM ctr_rendered_page_audits
+         WHERE project_id = ?1 AND article_id = ?2",
+    )?;
+
+    let row = stmt.query_row(rusqlite::params![project_id, article_id], |row| {
+        let schema_json: String = row.get(10)?;
+        let snippet_json: String = row.get(12)?;
+        let issues_json: String = row.get(13)?;
+        let has_faq: i64 = row.get(11)?;
+
+        Ok(crate::models::ctr::CtrRenderedPageAudit {
+            article_id,
+            url: row.get(0)?,
+            file: row.get(1)?,
+            source_title: row.get(2)?,
+            rendered_title: row.get(3)?,
+            rendered_title_length: row.get::<_, i64>(4)? as usize,
+            title_issue_source: row.get(5)?,
+            source_description: row.get(6)?,
+            rendered_description: row.get(7)?,
+            canonical_url: row.get(8)?,
+            rendered_h1: row.get(9)?,
+            schema_types: serde_json::from_str(&schema_json).unwrap_or_default(),
+            has_rendered_faq_page: has_faq != 0,
+            snippet_markup: serde_json::from_str(&snippet_json).unwrap_or_default(),
+            issues: serde_json::from_str(&issues_json).unwrap_or_default(),
+            checked_at: row.get(14)?,
+        })
+    });
+
+    match row {
+        Ok(audit) => Ok(Some(audit)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Load all rendered audits for a project.
+pub fn list_ctr_rendered_audits(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<crate::models::ctr::CtrRenderedPageAudit>> {
+    let mut stmt = conn.prepare(
+        "SELECT article_id, url, file, source_title, rendered_title, rendered_title_length,
+                title_issue_source, source_description, rendered_description,
+                canonical_url, rendered_h1, schema_types_json, has_rendered_faq_page,
+                snippet_markup_json, issues_json, checked_at
+         FROM ctr_rendered_page_audits
+         WHERE project_id = ?1
+         ORDER BY article_id",
+    )?;
+
+    let rows = stmt.query_map([project_id], |row| {
+        let schema_json: String = row.get(11)?;
+        let snippet_json: String = row.get(13)?;
+        let issues_json: String = row.get(14)?;
+        let has_faq: i64 = row.get(12)?;
+
+        Ok(crate::models::ctr::CtrRenderedPageAudit {
+            article_id: row.get(0)?,
+            url: row.get(1)?,
+            file: row.get(2)?,
+            source_title: row.get(3)?,
+            rendered_title: row.get(4)?,
+            rendered_title_length: row.get::<_, i64>(5)? as usize,
+            title_issue_source: row.get(6)?,
+            source_description: row.get(7)?,
+            rendered_description: row.get(8)?,
+            canonical_url: row.get(9)?,
+            rendered_h1: row.get(10)?,
+            schema_types: serde_json::from_str(&schema_json).unwrap_or_default(),
+            has_rendered_faq_page: has_faq != 0,
+            snippet_markup: serde_json::from_str(&snippet_json).unwrap_or_default(),
+            issues: serde_json::from_str(&issues_json).unwrap_or_default(),
+            checked_at: row.get(15)?,
         })
     })?;
 

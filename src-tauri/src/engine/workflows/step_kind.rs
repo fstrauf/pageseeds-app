@@ -64,6 +64,8 @@ pub enum StepKind {
     CtrFixApply,
     /// Deterministic verification that applied CTR fixes meet health thresholds.
     CtrVerifyFix,
+    /// Deterministic rendered SERP audit — fetch live HTML, compare with source.
+    CtrRenderedSerpAudit,
     /// Load approved merge plan from strategy artifact.
     MergeLoadPlan,
     /// Preflight checks before merging (files exist, no cycles, keeper indexable).
@@ -137,6 +139,7 @@ impl StepKind {
             Self::CanAnalyze => "can_analyze",
             Self::CtrFixApply => "ctr_fix_apply",
             Self::CtrVerifyFix => "ctr_verify_fix",
+            Self::CtrRenderedSerpAudit => "ctr_rendered_serp_audit",
             Self::MergeLoadPlan => "merge_load_plan",
             Self::MergePreflight => "merge_preflight",
             Self::MergeExtractSections => "merge_extract_sections",
@@ -216,6 +219,7 @@ impl FromStr for StepKind {
             "can_analyze" => Ok(Self::CanAnalyze),
             "ctr_fix_apply" => Ok(Self::CtrFixApply),
             "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
+            "ctr_rendered_serp_audit" => Ok(Self::CtrRenderedSerpAudit),
             "merge_load_plan" => Ok(Self::MergeLoadPlan),
             "merge_preflight" => Ok(Self::MergePreflight),
             "merge_extract_sections" => Ok(Self::MergeExtractSections),
@@ -305,6 +309,7 @@ mod tests {
             StepKind::CanAnalyze,
             StepKind::CtrFixApply,
             StepKind::CtrVerifyFix,
+            StepKind::CtrRenderedSerpAudit,
             StepKind::MergeLoadPlan,
             StepKind::MergePreflight,
             StepKind::MergeExtractSections,

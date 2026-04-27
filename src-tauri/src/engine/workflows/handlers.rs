@@ -391,15 +391,20 @@ impl WorkflowHandler for CtrAuditHandler {
         vec![
             // Step 1 (deterministic): Sync latest GSC data.
             WorkflowStep::new("ctr_gsc_sync", StepKind::GscSyncArticles).optional(),
-            // Step 2 (deterministic): Collect raw article data + compute CTR scores.
+            // Step 2 (deterministic): Fetch live HTML for target pages and compare rendered
+            // title/meta/schema/snippet markup against source files.
+            // Optional — still valuable even if some pages fail to fetch.
+            WorkflowStep::new("ctr_rendered_serp_audit", StepKind::CtrRenderedSerpAudit).optional(),
+            // Step 3 (deterministic): Collect raw article data + compute CTR scores.
+            // Includes rendered audit results from DB if available.
             // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
             // and deterministic math: clicks_lost = impressions * max(0, target_ctr - actual_ctr).
             WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext),
-            // Step 3 (agentic): Analyze titles, meta descriptions, FAQ schema, snippet readiness.
+            // Step 4 (agentic): Analyze titles, meta descriptions, FAQ schema, snippet readiness.
             // Cannot be deterministic: assessing title quality, brand patterns, snippet suitability
             // requires intelligence that varies per site. Hard-coding rules would silently fail
             // on inputs they were never tested against.
-            // Input contract: structured JSON with per-article raw data + CTR metrics.
+            // Input contract: structured JSON with per-article raw data + CTR metrics + rendered audit.
             // Output contract: JSON with recommendations array.
             WorkflowStep::new("ctr_analyze", StepKind::CtrAnalyze)
                 .with_param(step_params::SKILL, "ctr-optimization")
