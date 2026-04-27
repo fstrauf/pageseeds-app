@@ -58,6 +58,7 @@ Return JSON exactly matching this structure:
     {
       "article_id": 42,
       "url_slug": "best-stocks-csp",
+      "file": "content/042_best_stocks_csp.mdx",
       "priority": "high",
       "expected_ctr_improvement": "0.3-0.8%",
       "fixes": [
@@ -88,6 +89,16 @@ Return JSON exactly matching this structure:
   ]
 }
 ```
+
+## Constraints
+
+## Field Rules
+
+- `article_id` — echo from input (required)
+- `url_slug` — echo from input (required)
+- `file` — echo the `file` value from the input context **exactly** (required). Do not guess, construct, or modify the path.
+- `priority` — `high`, `medium`, or `low` based on clicks_lost magnitude
+- `expected_ctr_improvement` — estimated range (e.g. `0.3-0.8%`)
 
 ## Constraints
 

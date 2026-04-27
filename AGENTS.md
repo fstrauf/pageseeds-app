@@ -146,6 +146,14 @@ src/
 
    **Do not add deterministic fallbacks that reinterpret ambiguous brief text.** When an agentic selection step is required, it must run. A hard-coded heuristic that extracts themes from a brief is fake intelligence — it will silently produce wrong answers on inputs it was never tested against.
 
+### RIG / LLM integration
+1. **Use standard `rig-core` primitives first.** For new LLM work, prefer Rig providers/completion models, `Extractor<T>`, `Tool`/tool sets, embeddings, and agents before writing custom HTTP loops, regex JSON extraction, bespoke tool registries, or prompt-only protocols.
+2. **Keep Rig behind the local integration layer.** Put provider, extraction, tool, embedding, and agent adapters in `src-tauri/src/rig/` (or the existing domain module that already wraps Rig). Do not scatter direct Rig setup across commands, React, or unrelated exec modules.
+3. **Structured output uses schemas.** New agentic steps that need JSON must define a typed Rust output struct with `serde` + `schemars::JsonSchema` and use a Rig extractor or equivalent typed extraction wrapper. Do not add new normalizer regex paths unless preserving a legacy workflow.
+4. **Tools use Rig tool abstractions.** If a model needs to call Ahrefs, GSC, Reddit, file analysis, or other deterministic capabilities, expose them as typed Rig tools with explicit argument/result structs. Do not build another string-parsed tool calling loop.
+5. **Provider fallback is centralized.** Any fallback to `agent-wrapper`, CLI providers, or compatibility shims belongs in the Rig/provider layer and must be documented as temporary. Workflow steps should not choose subprocess paths directly.
+6. **Test without live providers by default.** Unit tests for Rig-backed code should use fixtures, mock providers, or mocked tools. Tests that require real Kimi/OpenAI/Claude credentials, local machine paths, or external APIs must be `#[ignore]` and clearly named as live smoke tests.
+
 ### Frontend
 1. **Frontend calls Rust**. All data fetching and mutations go through `invoke()` in `src/lib/tauri.ts`. No direct file I/O in React.
 2. **Keep `tauri.ts` the single IPC file**. Every new command gets a typed wrapper in `tauri.ts`. Don't call `invoke()` inline in components.

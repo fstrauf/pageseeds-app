@@ -5,11 +5,12 @@
 
 use std::path::{Path, PathBuf};
 
-/// Resolve a content file path, trying `.md` ↔ `.mdx` extension fallback.
+/// Resolve a content file path.
 ///
-/// If the exact path does not exist, attempts the alternate extension:
-/// - `foo.mdx` → tries `foo.md`
-/// - `foo.md`  → tries `foo.mdx`
+/// All content is assumed to be `.mdx`. If the stored reference ends with `.md`,
+/// tries the `.mdx` variant in the same directory. If the file is not found,
+/// returns `None` so the caller can surface a clear error prompting the user
+/// to run `sanitize_content` (which repairs paths and renames `.md` → `.mdx`).
 pub fn resolve_content_file(repo_root: &Path, file_ref: &str) -> Option<PathBuf> {
     if file_ref.is_empty() {
         return None;
@@ -26,24 +27,16 @@ pub fn resolve_content_file(repo_root: &Path, file_ref: &str) -> Option<PathBuf>
         return Some(full);
     }
 
-    // Try alternate extension
-    let parent = full.parent()?;
-    let stem = full.file_stem()?;
-    let ext = full.extension();
-
-    let alt = if ext == Some(std::ffi::OsStr::new("mdx")) {
-        parent.join(format!("{}.md", stem.to_string_lossy()))
-    } else if ext == Some(std::ffi::OsStr::new("md")) {
-        parent.join(format!("{}.mdx", stem.to_string_lossy()))
-    } else {
-        return None;
-    };
-
-    if alt.exists() {
-        Some(alt)
-    } else {
-        None
+    // If the reference still uses `.md`, try the `.mdx` variant.
+    // The sanitize step is responsible for keeping articles.json in sync.
+    if full.extension() == Some(std::ffi::OsStr::new("md")) {
+        let mdx = full.with_extension("mdx");
+        if mdx.exists() {
+            return Some(mdx);
+        }
     }
+
+    None
 }
 
 /// Result of running all deterministic health checks on a single article.

@@ -160,8 +160,10 @@ pub async fn resolve_backend(
                             model,
                         })
                     } else {
-                        log::info!("[rig::provider] Bridge not available on {}, falling back to direct CLI", bridge_url);
-                        Ok(LlmBackend::KimiDirect)
+                        Err(format!(
+                            "Kimi bridge not available on {}. Start the bridge or set kimi_backend_mode to 'direct'.",
+                            bridge_url
+                        ))
                     }
                 }
             }
@@ -205,7 +207,7 @@ async fn run_kimi_bridge(
     base_url: &str,
     model: &str,
     prompt: &str,
-    preamble: Option<&str>,
+    _preamble: Option<&str>,
 ) -> Result<AgentResponse, String> {
     let client = rig::providers::openai::Client::builder()
         .base_url(base_url)
@@ -214,10 +216,10 @@ async fn run_kimi_bridge(
         .map_err(|e| format!("Failed to build bridge client: {}", e))?
         .completions_api();
 
-    let agent = client
-        .agent(model)
-        .preamble(preamble.unwrap_or("You are a helpful assistant."))
-        .build();
+    // The bridge does not support system messages (preamble is ignored by ACP).
+    // Sending a system message causes a 422 because the bridge expects string
+    // content, not the content-parts array that rig's OpenAI provider uses.
+    let agent = client.agent(model).build();
 
     let resp = agent
         .prompt(prompt)

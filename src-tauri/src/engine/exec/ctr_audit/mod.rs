@@ -457,10 +457,6 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
         let result = exec_ctr_fix_apply(&task, &path, Some(&patch.to_string()));
         assert!(result.success, "Apply failed: {}", result.message);
 
-        // Backup should exist
-        let backup_path = std::path::Path::new(&path).join("content").join("001_test_article.mdx.backup");
-        assert!(backup_path.exists(), "Backup should exist");
-
         // File should have new content
         let content = std::fs::read_to_string(std::path::Path::new(&path).join("content").join("001_test_article.mdx")).unwrap();
         assert!(content.contains("New Title"));

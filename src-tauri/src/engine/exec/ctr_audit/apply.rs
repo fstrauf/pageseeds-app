@@ -11,7 +11,7 @@ use crate::models::task::Task;
 /// 1. Parse CtrFixPatch from latest_raw (agent output)
 /// 2. Resolve absolute file path from project_path + patch.file
 /// 3. Read original file content
-/// 4. Snapshot to {file}.backup
+/// 4. Validate original can be read
 /// 5. parse_frontmatter → (fm, body)
 /// 6. Apply changes deterministically
 /// 7. rebuild_mdx → write file
@@ -83,7 +83,10 @@ pub(crate) fn exec_ctr_fix_apply(
         None => {
             return StepResult {
                 success: false,
-                message: format!("File not found: {}", patch.file),
+                message: format!(
+                    "File not found: {}. Run sanitize_content to repair paths.",
+                    patch.file
+                ),
                 output: None,
             };
         }
@@ -100,15 +103,6 @@ pub(crate) fn exec_ctr_fix_apply(
         }
     };
 
-    // Snapshot original
-    let backup_path = file_path.with_extension("mdx.backup");
-    if let Err(e) = std::fs::write(&backup_path, &original_content) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write snapshot: {}", e),
-            output: None,
-        };
-    }
 
     let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
         Some((f, b)) => (f.to_string(), b.to_string()),
@@ -160,22 +154,18 @@ pub(crate) fn exec_ctr_fix_apply(
 
     // Validate before writing
     if let Err(e) = crate::content::cleaner::validate_mdx_structure(&new_content) {
-        // Restore from snapshot
-        let _ = std::fs::write(&file_path, &original_content);
-        let _ = std::fs::remove_file(&backup_path);
+        // Original is still on disk untouched — nothing to restore.
         return StepResult {
             success: false,
-            message: format!("File integrity failed after edit: {}. Original restored.", e),
+            message: format!("File integrity failed after edit: {}. No changes written.", e),
             output: None,
         };
     }
 
     if let Err(e) = std::fs::write(&file_path, &new_content) {
-        let _ = std::fs::write(&file_path, &original_content);
-        let _ = std::fs::remove_file(&backup_path);
         return StepResult {
             success: false,
-            message: format!("Failed to write file: {}. Original restored.", e),
+            message: format!("Failed to write file: {}. No changes written.", e),
             output: None,
         };
     }
@@ -221,7 +211,7 @@ pub(crate) fn exec_ctr_verify_fix(
     if file_ref.is_empty() {
         return StepResult {
             success: false,
-            message: "Recommendation has no file reference".to_string(),
+            message: "Recommendation has no file reference. Run sanitize_content to repair paths.".to_string(),
             output: None,
         };
     }
@@ -232,7 +222,7 @@ pub(crate) fn exec_ctr_verify_fix(
         None => {
             return StepResult {
                 success: false,
-                message: format!("File not found: {}", file_ref),
+                message: format!("File not found: {}. Run sanitize_content to repair paths.", file_ref),
                 output: None,
             };
         }
@@ -426,3 +416,5 @@ fn extract_recommendation(task: &Task) -> Option<crate::models::ctr::CtrRecommen
 
     serde_json::from_str(json).ok()
 }
+
+
