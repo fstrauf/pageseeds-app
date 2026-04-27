@@ -22,6 +22,7 @@ pub(crate) const TASK_TYPES: &[&str] = &[
     "fix_gsc_access",
     "technical_seo",
     "content_cleanup",
+    "sanitize_content",
     "indexing_diagnostics",
     "ctr_audit",
     "cannibalization_audit",
@@ -54,6 +55,7 @@ pub fn default_phase(task_type: &str) -> &'static str {
         "fix_404s" | "fix_redirects" | "technical_seo" => "implementation",
         "fix_indexing" | "fix_technical" | "fix_content" | "fix_gsc_access" => "implementation",
         "content_cleanup" => "implementation",
+        "sanitize_content" => "implementation",
         _ => "implementation",
     }
 }

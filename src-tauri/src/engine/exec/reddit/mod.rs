@@ -24,6 +24,10 @@ pub(crate) use search::*;
 pub(crate) use enrich::*;
 pub(crate) use reply::*;
 
+// Public re-exports for integration tests
+pub use config::extract_json_object;
+pub use config::exec_reddit_config_parse;
+
 /// Load structured search params from the reddit_config_parse_stage artifact.
 /// Returns None if no artifact found or parsing fails.
 pub(crate) fn load_search_params_from_artifact(task: &Task, _project_path: &str) -> Option<RedditSearchParams> {

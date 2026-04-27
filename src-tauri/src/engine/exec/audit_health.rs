@@ -3,7 +3,48 @@
 /// Provides deterministic checks for common CTR / on-page SEO issues,
 /// plus utilities for reading article excerpts and FAQ schema detection.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Resolve a content file path, trying `.md` ↔ `.mdx` extension fallback.
+///
+/// If the exact path does not exist, attempts the alternate extension:
+/// - `foo.mdx` → tries `foo.md`
+/// - `foo.md`  → tries `foo.mdx`
+pub fn resolve_content_file(repo_root: &Path, file_ref: &str) -> Option<PathBuf> {
+    if file_ref.is_empty() {
+        return None;
+    }
+
+    let p = Path::new(file_ref);
+    let full = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        repo_root.join(p)
+    };
+
+    if full.exists() {
+        return Some(full);
+    }
+
+    // Try alternate extension
+    let parent = full.parent()?;
+    let stem = full.file_stem()?;
+    let ext = full.extension();
+
+    let alt = if ext == Some(std::ffi::OsStr::new("mdx")) {
+        parent.join(format!("{}.md", stem.to_string_lossy()))
+    } else if ext == Some(std::ffi::OsStr::new("md")) {
+        parent.join(format!("{}.mdx", stem.to_string_lossy()))
+    } else {
+        return None;
+    };
+
+    if alt.exists() {
+        Some(alt)
+    } else {
+        None
+    }
+}
 
 /// Result of running all deterministic health checks on a single article.
 #[derive(Debug, Clone, Default)]
@@ -41,10 +82,16 @@ impl ArticleHealth {
 /// | Check            | Pass condition                                   |
 /// |------------------|--------------------------------------------------|
 /// | file_found       | MDX file exists on disk                          |
-/// | title_ok         | title.len() <= 60                                |
-/// | meta_ok          | !meta.is_empty() && meta.len() >= 50             |
-/// | snippet_ok       | word_count >= 30 && (has_keyword \|\| has '?')    |
+/// | title_ok         | title.len() <= 55                                |
+/// | meta_ok          | meta.len() >= 130 && meta.len() <= 155           |
+/// | snippet_ok       | word_count >= 40 && word_count <= 60 && (has_keyword \|\| has '?') |
 /// | faq_ok           | has_faq_schema == true                           |
+pub const TITLE_MAX_LEN: usize = 55;
+pub const META_MIN_LEN: usize = 130;
+pub const META_MAX_LEN: usize = 155;
+pub const SNIPPET_MIN_WORDS: usize = 40;
+pub const SNIPPET_MAX_WORDS: usize = 60;
+
 pub fn check_article_health(
     title: &str,
     meta: &str,
@@ -53,15 +100,15 @@ pub fn check_article_health(
     has_faq_schema: bool,
     file_found: bool,
 ) -> ArticleHealth {
-    let title_ok = title.len() <= 60;
-    let meta_ok = !meta.is_empty() && meta.len() >= 50;
+    let title_ok = title.len() <= TITLE_MAX_LEN;
+    let meta_ok = !meta.is_empty() && meta.len() >= META_MIN_LEN && meta.len() <= META_MAX_LEN;
 
     let snippet_word_count = first_paragraph.split_whitespace().count();
     let first_lower = first_paragraph.to_lowercase();
     let keyword_lower = target_keyword.to_lowercase();
     let snippet_has_keyword_or_question =
         keyword_lower.is_empty() || first_lower.contains(&keyword_lower) || first_paragraph.contains('?');
-    let snippet_ok = snippet_word_count >= 30 && snippet_has_keyword_or_question;
+    let snippet_ok = snippet_word_count >= SNIPPET_MIN_WORDS && snippet_word_count <= SNIPPET_MAX_WORDS && snippet_has_keyword_or_question;
 
     let faq_ok = has_faq_schema;
 
@@ -123,11 +170,19 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
     }
 
     let repo_root = Path::new(project_path);
-    let p = Path::new(file_ref);
-    let full = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        repo_root.join(p)
+    let full = match resolve_content_file(repo_root, file_ref) {
+        Some(p) => p,
+        None => {
+            log::warn!("[audit_health] Could not resolve file: {}", file_ref);
+            return (
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                false,
+                false,
+            );
+        }
     };
 
     let content = match std::fs::read_to_string(&full) {

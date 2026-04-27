@@ -16,34 +16,6 @@ use crate::engine::{agent, skills};
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
 use crate::models::task::{ExecutionMode, Task, TaskArtifact};
 
-/// Load a skill from the project repo, falling back to app-level default skills.
-fn load_skill_with_fallback(repo_root: &Path, skill_name: &str) -> Option<crate::engine::skills::Skill> {
-    // 1. Try project-level skill first
-    if let Some(skill) = skills::load_skill(repo_root, skill_name) {
-        return Some(skill);
-    }
-    // 2. Fall back to app-level default skills (for dev mode)
-    // CARGO_MANIFEST_DIR points to src-tauri/ during compilation
-    let app_skills_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(".github")
-        .join("skills")
-        .join(skill_name);
-    if app_skills_dir.exists() {
-        let skill_md = app_skills_dir.join("SKILL.md");
-        if let Ok(content) = std::fs::read_to_string(&skill_md) {
-            return Some(crate::engine::skills::Skill {
-                name: skill_name.to_string(),
-                skill_dir: format!(".github/skills/{}", skill_name),
-                description: skill_name.to_string(),
-                content,
-            });
-        }
-    }
-    None
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Build Context
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -307,7 +279,7 @@ pub(crate) fn exec_can_analyze(
 ) -> StepResult {
     let repo_root = Path::new(project_path);
 
-    let skill = match load_skill_with_fallback(repo_root, "cannibalization-strategy") {
+    let skill = match skills::load_skill(repo_root, "cannibalization-strategy") {
         Some(s) => s,
         None => {
             return StepResult {

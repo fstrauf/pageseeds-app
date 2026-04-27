@@ -4,14 +4,14 @@ Used by `fix_ctr_article` agentic steps.
 
 ## Objective
 
-Read the target MDX file and return a structured patch plan with replacement values for CTR fixes. **Do not edit the file directly** — the app applies changes deterministically. Your job is to produce the correct prose; the app handles frontmatter, body structure, and file writing.
+Return a structured patch plan with replacement values for CTR fixes. **Do not edit the file directly** — the app applies changes deterministically. Your job is to produce the correct prose; the app handles frontmatter, body structure, file writing, and file existence checks.
 
 ## Input
 
-A JSON artifact (`ctr_recommendations`) containing a `recommendations` array with one article. Each item has:
+A JSON artifact (`ctr_recommendations`) containing a single article recommendation object:
 - `article_id` — numeric ID from articles.json
 - `url_slug` — URL slug of the article
-- `file` — **relative path to the MDX file** (e.g. `content/042_article_slug.mdx`)
+- `file` — relative path to the content file (echo this value back unchanged)
 - `target_keyword` — the keyword this article targets
 - `fixes` — array of fixes to apply, each with:
   - `type`: `title_rewrite`, `meta_description`, `faq_schema`, or `snippet_bait`
@@ -21,21 +21,22 @@ A JSON artifact (`ctr_recommendations`) containing a `recommendations` array wit
 
 ## Rules
 
-1. **Read the file** at the given `file` path to verify current content.
-2. **Produce replacement values only**. Do not output raw MDX, frontmatter, or `---` delimiters.
-3. **Apply only the fixes listed**. Do not change unrelated fields.
-4. **Return structured JSON** matching the Output Contract below.
+1. **Produce replacement values only**. Do not output raw MDX, frontmatter, or `---` delimiters.
+2. **Apply only the fixes listed**. Do not change unrelated fields.
+3. **Return structured JSON** matching the Output Contract below.
 
 ## Per-Fix-Type Instructions
 
 ### `title_rewrite`
 - Return the new title text in `changes.title`.
-- Hard limit: 55 characters max.
+- Hard limit: 55 characters max (not 60).
 - If the current title is already good, return `null` for `title`.
 
 ### `meta_description`
 - Return the new meta description text in `changes.description`.
-- Aim for 150 characters, hard max 155. Minimum accepted is 130.
+- **Hard limits: 130–155 characters.** Minimum 130, maximum 155.
+- **Aim for 145–150 characters.** Undershooting 130 is a verification failure.
+- Count characters carefully. Do not return descriptions under 130 chars.
 - If the current description is already good, return `null` for `description`.
 
 ### `faq_schema`
@@ -45,7 +46,7 @@ A JSON artifact (`ctr_recommendations`) containing a `recommendations` array wit
 
 ### `snippet_bait`
 - Return the new first paragraph text in `changes.first_paragraph`.
-- Hard limits: 40–60 words (min 40, max 60).
+- Hard limits: 40–60 words (minimum 40, maximum 60).
 - Must contain the `target_keyword` OR a question mark (`?`).
 - Must be a single contiguous block of text (no blank lines inside it).
 
@@ -82,4 +83,4 @@ Return a JSON object exactly matching this structure:
 - Do not include raw MDX, frontmatter delimiters (`---`), or YAML formatting in output values.
 - Do not include markdown `#` headings in `title` or `description` values.
 - Do not write files — only return the structured JSON.
-- If the file does not exist, return an empty `changes` object and set `error: "file not found"`.
+- Do not verify file existence or read from disk — use the `current` values provided in the input.

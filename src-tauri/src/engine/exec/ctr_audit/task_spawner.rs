@@ -1,11 +1,13 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
+use crate::models::ctr::CtrRecommendation;
 use crate::models::task::{ExecutionMode, Task, TaskArtifact};
 
-/// Spawn up to 3 CTR fix tasks based on the recommendations artifact.
+/// Spawn per-article `fix_ctr_article` tasks based on the recommendations artifact.
 ///
 /// Looks for a `ctr_recommendations` artifact on the parent task; falls back
 /// to reading `ctr_recommendations.json` from the automation directory.
+/// Creates exactly one task per article with at least one fix recommendation.
 pub(crate) fn create_ctr_fix_tasks(
     conn: &rusqlite::Connection,
     parent_task: &Task,
@@ -34,10 +36,7 @@ pub(crate) fn create_ctr_fix_tasks(
         return Vec::new();
     }
 
-    // Parse recommendations so we can filter per fix task type.
-    // Each fix task only receives recommendations relevant to its specialty,
-    // preventing the agent from hitting step limits by trying to fix everything.
-    let full_recommendations: serde_json::Value = match serde_json::from_str(&recommendation_json) {
+    let agent_output: crate::models::ctr::CtrAgentOutput = match serde_json::from_str(&recommendation_json) {
         Ok(v) => v,
         Err(e) => {
             log::warn!("[ctr_audit] Failed to parse recommendations JSON: {}", e);
@@ -45,121 +44,78 @@ pub(crate) fn create_ctr_fix_tasks(
         }
     };
 
-    let fix_task_configs = [
-        (
-            "fix_title_meta",
-            format!("ctr_fix:title_meta:{}:{}", parent_task.project_id, parent_task.id),
-            vec!["title_rewrite", "meta_description"],
-        ),
-        (
-            "fix_faq_schema",
-            format!("ctr_fix:faq:{}:{}", parent_task.project_id, parent_task.id),
-            vec!["faq_schema"],
-        ),
-        (
-            "fix_snippet_bait",
-            format!("ctr_fix:snippet:{}:{}", parent_task.project_id, parent_task.id),
-            vec!["snippet_bait"],
-        ),
-    ];
-
     let mut created_ids = Vec::new();
 
-    for (task_type, idempotency_key, allowed_fix_types) in &fix_task_configs {
-        let filtered = filter_recommendations_by_fix_type(&full_recommendations, allowed_fix_types);
-        let filtered_json = match serde_json::to_string(&filtered) {
+    for rec in agent_output.recommendations {
+        if rec.fixes.is_empty() {
+            continue;
+        }
+
+        let article_id = rec.article_id;
+        let url_slug = rec.url_slug.clone();
+        let file = rec.file.clone().unwrap_or_default();
+
+        let single_rec = CtrRecommendation {
+            article_id: rec.article_id,
+            url_slug: rec.url_slug,
+            file: rec.file,
+            priority: rec.priority,
+            expected_ctr_improvement: rec.expected_ctr_improvement,
+            target_keyword: rec.target_keyword,
+            fixes: rec.fixes,
+        };
+
+        let single_json = match serde_json::to_string(&single_rec) {
             Ok(s) => s,
             Err(e) => {
-                log::warn!("[ctr_audit] Failed to serialize filtered recommendations: {}", e);
+                log::warn!("[ctr_audit] Failed to serialize single recommendation: {}", e);
                 continue;
             }
         };
-
-        // Skip creating this fix task if there are no relevant recommendations
-        let rec_count = filtered["recommendations"].as_array().map(|r| r.len()).unwrap_or(0);
-        if rec_count == 0 {
-            log::info!(
-                "[ctr_audit] No {} recommendations found — skipping fix task",
-                task_type
-            );
-            continue;
-        }
 
         let artifact = TaskArtifact {
             key: "ctr_recommendations".to_string(),
             path: None,
             artifact_type: Some("json".to_string()),
             source: Some("ctr_audit".to_string()),
-            content: Some(filtered_json),
+            content: Some(single_json),
         };
+
+        let idempotency_key = format!(
+            "ctr_fix:article:{}:{}:{}",
+            parent_task.project_id, article_id, parent_task.id
+        );
 
         let spec = TaskSpec {
             project_id: parent_task.project_id.clone(),
-            task_type: task_type.to_string(),
-            title: Some(format!("CTR fix: {} ({} articles)", task_type, rec_count)),
+            task_type: "fix_ctr_article".to_string(),
+            title: Some(format!("CTR fix: {}", url_slug)),
             description: Some(format!(
-                "Follow-up CTR fix task from {} (parent: {}) — {} articles to fix",
-                task_type, parent_task.id, rec_count
+                "Apply CTR fixes to article {} ({})",
+                article_id, url_slug
             )),
             priority: crate::models::task::Priority::Medium,
             execution_mode: Some(ExecutionMode::Automatic),
             agent_policy: crate::models::task::AgentPolicy::Optional,
             depends_on: vec![parent_task.id.clone()],
             artifacts: vec![artifact],
-            idempotency_key: Some(idempotency_key.clone()),
+            idempotency_key: Some(idempotency_key),
             ..Default::default()
         };
 
         match TaskSpawner::spawn(conn, spec) {
             Ok(task) => {
-                log::info!("[ctr_audit] Created fix task {} (type: {}, {} articles)", task.id, task_type, rec_count);
+                log::info!(
+                    "[ctr_audit] Created fix task {} (type: fix_ctr_article, article: {}, file: {})",
+                    task.id, article_id, file
+                );
                 created_ids.push(task.id);
             }
             Err(e) => {
-                log::warn!("[ctr_audit] Failed to create fix task {}: {}", task_type, e);
+                log::warn!("[ctr_audit] Failed to create fix task for article {}: {}", article_id, e);
             }
         }
     }
 
     created_ids
-}
-
-/// Filter recommendations to only include fixes of the specified types.
-/// Returns a new JSON object with only matching recommendations.
-fn filter_recommendations_by_fix_type(
-    full: &serde_json::Value,
-    allowed_types: &[&str],
-) -> serde_json::Value {
-    let empty_arr = vec![];
-    let recommendations = full["recommendations"].as_array().unwrap_or(&empty_arr);
-
-    let filtered: Vec<serde_json::Value> = recommendations
-        .iter()
-        .filter_map(|rec| {
-            let fixes = rec["fixes"].as_array()?;
-            let matching_fixes: Vec<serde_json::Value> = fixes
-                .iter()
-                .filter(|f| {
-                    f["type"]
-                        .as_str()
-                        .map(|t| allowed_types.contains(&t))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-
-            if matching_fixes.is_empty() {
-                return None;
-            }
-
-            let mut new_rec = rec.clone();
-            new_rec["fixes"] = serde_json::Value::Array(matching_fixes);
-            Some(new_rec)
-        })
-        .collect();
-
-    serde_json::json!({
-        "recommendations": filtered,
-        "summary": format!("Filtered for fix types: {:?}", allowed_types),
-    })
 }

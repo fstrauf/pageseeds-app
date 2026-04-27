@@ -4,34 +4,6 @@ use crate::engine::workflows::StepResult;
 use crate::engine::{agent, skills};
 use crate::models::task::Task;
 
-/// Load a skill from the project repo, falling back to app-level default skills.
-fn load_skill_with_fallback(repo_root: &Path, skill_name: &str) -> Option<crate::engine::skills::Skill> {
-    // 1. Try project-level skill first
-    if let Some(skill) = skills::load_skill(repo_root, skill_name) {
-        return Some(skill);
-    }
-    // 2. Fall back to app-level default skills (for dev mode)
-    // CARGO_MANIFEST_DIR points to src-tauri/ during compilation
-    let app_skills_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(".github")
-        .join("skills")
-        .join(skill_name);
-    if app_skills_dir.exists() {
-        let skill_md = app_skills_dir.join("SKILL.md");
-        if let Ok(content) = std::fs::read_to_string(&skill_md) {
-            return Some(crate::engine::skills::Skill {
-                name: skill_name.to_string(),
-                skill_dir: format!(".github/skills/{}", skill_name),
-                description: skill_name.to_string(),
-                content,
-            });
-        }
-    }
-    None
-}
-
 /// Run the CTR optimization analysis using an LLM agent.
 ///
 /// Loads the "ctr-optimization" skill, builds a prompt with the skill content
@@ -62,7 +34,7 @@ pub(crate) fn exec_ctr_analyze(
 
     let repo_root = Path::new(project_path);
 
-    let skill = match load_skill_with_fallback(repo_root, "ctr-optimization") {
+    let skill = match skills::load_skill(repo_root, "ctr-optimization") {
         Some(s) => s,
         None => {
             return StepResult {

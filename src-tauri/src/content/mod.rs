@@ -1,3 +1,4 @@
+pub mod article_resolver;
 pub mod cleaner;
 pub mod competitor;
 pub mod date_policy;

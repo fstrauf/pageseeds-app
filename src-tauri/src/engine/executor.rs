@@ -616,7 +616,13 @@ pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus
             TaskStatus::Done
         }
     } else {
-        TaskStatus::Todo
+        // Per-article CTR fixes that fail verification land in Review (soft failure,
+        // retryable) rather than Todo, so they don't get blindly re-queued.
+        if task_type == "fix_ctr_article" {
+            TaskStatus::Review
+        } else {
+            TaskStatus::Todo
+        }
     }
 }
 

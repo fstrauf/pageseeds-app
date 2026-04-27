@@ -6,3 +6,4 @@ pub mod reddit;
 pub mod gsc;
 pub mod social;
 pub mod research;
+pub mod ctr;

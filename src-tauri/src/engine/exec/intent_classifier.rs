@@ -138,6 +138,8 @@ const COMMERCIAL_SIGNALS: &[&str] = &[
 ///
 /// # Examples
 /// ```
+/// use pageseeds_lib::engine::exec::intent_classifier::{classify_intent, SearchIntent};
+///
 /// let (intent, confidence) = classify_intent("how to start a podcast");
 /// assert_eq!(intent, SearchIntent::Informational);
 ///

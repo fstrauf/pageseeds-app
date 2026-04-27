@@ -92,6 +92,24 @@ export type {
   IntentClassification,
   OpportunityScore,
   
+  // CTR Models
+  CtrAgentOutput,
+  CtrFix,
+  CtrFixApplied,
+  CtrFixChange,
+  CtrFixCheckResult,
+  CtrFixPatch,
+  CtrFixPatchChanges,
+  CtrFixPatchFaqQuestion,
+  CtrFixReport,
+  CtrFixSkipped,
+  CtrFixType,
+  CtrFixVerificationReport,
+  CtrRecommendation,
+  CtrVerificationReport,
+  CtrVerifiedArticle,
+  CtrVerifiedFix,
+  
   // Workflow
   ExecutionResult,
   FollowUpTask,
@@ -699,6 +717,7 @@ export interface ContentHealthResult {
   checked: number
   content_files: number
   date_mismatches: number
+  fixable_mismatches: number
   mismatch_details: string[]
   orphan_files: string[]
   fixed: boolean

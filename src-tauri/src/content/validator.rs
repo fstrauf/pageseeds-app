@@ -201,14 +201,20 @@ fn validate_file(
 
     // 2. Required fields present
     for req in &schema.required {
-        if !fields.contains_key(req) || fields[req].iter().all(|(_, v)| v.is_empty()) {
+        let is_missing = !fields.contains_key(req);
+        let is_empty = !is_missing && fields[req].iter().all(|(_, v)| v.is_empty());
+        if is_missing || is_empty {
             issues.push(FormatIssue {
                 file: String::new(),
                 issue_type: "missing_field".into(),
                 field: Some(req.clone()),
                 severity: Severity::Error,
-                message: format!("Required frontmatter field '{}' is missing or empty", req),
-                auto_fixable: true,
+                message: if is_missing {
+                    format!("Required frontmatter field '{}' is missing", req)
+                } else {
+                    format!("Required frontmatter field '{}' is empty", req)
+                },
+                auto_fixable: is_missing,
             });
         }
     }
@@ -309,7 +315,7 @@ fn validate_file(
     for line in fm.lines() {
         let trimmed = line.trim();
         if let Some((key, val)) = split_field_line(trimmed) {
-            if !val.is_empty() && !is_quoted(&val) && needs_quoting(&val) {
+            if !val.is_empty() && !is_raw_value_quoted(trimmed) && needs_quoting(&val) {
                 issues.push(FormatIssue {
                     file: String::new(),
                     issue_type: "unquoted_value".into(),
@@ -462,6 +468,9 @@ pub fn apply_fixes(
                 continue;
             }
             files_fixed += 1;
+        } else {
+            // Fix produced no change; preserve issues so the user knows they weren't fixed
+            remaining.extend(file_issues.into_iter().cloned());
         }
     }
 
@@ -637,8 +646,27 @@ fn is_quoted(s: &str) -> bool {
     (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))
 }
 
+/// Check if the raw value in a field line is quoted (without stripping quotes).
+fn is_raw_value_quoted(line: &str) -> bool {
+    if let Some(colon_pos) = line.find(':') {
+        let raw = line[colon_pos + 1..].trim();
+        return is_quoted(raw);
+    }
+    false
+}
+
 /// Check if a value should be quoted for YAML safety.
+///
+/// Returns false for YAML arrays (`[...]`) and objects (`{...}`) since
+/// wrapping them in quotes would corrupt the structure.
 fn needs_quoting(s: &str) -> bool {
+    let trimmed = s.trim();
+    // Already a YAML array or object — do not quote
+    if (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('{') && trimmed.ends_with('}'))
+    {
+        return false;
+    }
     s.contains(' ') || s.contains(':') || s.contains('#') || s.contains('[') || s.contains('{')
 }
 

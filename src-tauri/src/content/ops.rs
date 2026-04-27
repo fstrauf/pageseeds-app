@@ -120,6 +120,7 @@ pub struct SyncValidateResult {
     pub duplicate_file_refs: Vec<SyncIssue>,
     pub date_mismatches: Vec<SyncIssue>,
     pub dates_synced: usize,
+    pub fixable_mismatches: usize,
     pub next_action: String,
 }
 
@@ -132,12 +133,16 @@ pub struct ContentHealthResult {
     pub content_files: usize,
     /// Articles where frontmatter date ≠ articles.json date.
     pub date_mismatches: usize,
+    /// Mismatches that can actually be patched (file has parseable frontmatter).
+    pub fixable_mismatches: usize,
     /// Brief description of each mismatch (article title or id).
     pub mismatch_details: Vec<String>,
     /// MDX files on disk that have no matching entry in articles.json.
     pub orphan_files: Vec<String>,
     /// When true, `fix_date_mismatches` was called and patches were applied.
     pub fixed: bool,
+    /// Number of dates successfully patched during the last fix run.
+    pub dates_synced: usize,
 }
 
 /// Read-only health check: count date mismatches without writing anything.
@@ -155,9 +160,11 @@ pub fn content_health_check(
         checked: result.checked_entries,
         content_files: result.content_files,
         date_mismatches: result.date_mismatches.len(),
+        fixable_mismatches: result.fixable_mismatches,
         mismatch_details: details,
         orphan_files: result.orphan_files,
         fixed: false,
+        dates_synced: result.dates_synced,
     })
 }
 
@@ -171,9 +178,11 @@ pub fn apply_date_fixes(
         checked: result.checked_entries,
         content_files: result.content_files,
         date_mismatches: result.date_mismatches.len(),
+        fixable_mismatches: result.fixable_mismatches,
         mismatch_details: vec![],
         orphan_files: result.orphan_files,
         fixed: true,
+        dates_synced: result.dates_synced,
     })
 }
 
@@ -221,6 +230,7 @@ pub fn sync_and_validate(
     let mut duplicate_file_refs = Vec::new();
     let mut date_mismatches = Vec::new();
     let mut dates_synced = 0usize;
+    let mut fixable_mismatches = 0usize;
 
     for article in articles {
         let id = article.get("id").and_then(|v| v.as_i64());
@@ -288,6 +298,11 @@ pub fn sync_and_validate(
             continue;
         }
 
+        let is_fixable = crate::content::cleaner::parse_frontmatter(&text).is_some();
+        if is_fixable {
+            fixable_mismatches += 1;
+        }
+
         date_mismatches.push(SyncIssue {
             id,
             title: title.clone(),
@@ -333,6 +348,7 @@ pub fn sync_and_validate(
         duplicate_file_refs,
         date_mismatches,
         dates_synced,
+        fixable_mismatches,
         next_action: next_action.into(),
     })
 }

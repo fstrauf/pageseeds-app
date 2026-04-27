@@ -205,6 +205,7 @@ impl WorkflowHandler for ImplementationHandler {
             t,
             "cluster_and_link"
                 | "content_cleanup"
+                | "sanitize_content"
                 | "publish_content"
                 | "indexing_diagnostics"
                 | "content_strategy"
@@ -224,6 +225,10 @@ impl WorkflowHandler for ImplementationHandler {
                 // Step 2 (deterministic): apply auto-fixes for all auto-fixable issues.
                 WorkflowStep::new("content_cleanup_fix", StepKind::FormatFix.as_ref()),
             ],
+            "sanitize_content" => vec![
+                // Single deterministic step: rename .md → .mdx, repair paths, validate + fix frontmatter.
+                WorkflowStep::new("sanitize_content_run", StepKind::SanitizeContent.as_ref()),
+            ],
             "publish_content" => vec![
                 WorkflowStep::new("publish_content_run", StepKind::Deterministic.as_ref())
                     .with_param(step_params::CMD, "pageseeds content validate --workspace-dir {automation_dir}"),
@@ -233,6 +238,21 @@ impl WorkflowHandler for ImplementationHandler {
                 // and applies SEO improvements (title, meta, intro, internal links, FAQ, EEAT, CTA)
                 // to a single MDX file. One focused agent call per article.
                 WorkflowStep::new("fix_content_article_apply", StepKind::Agentic.as_ref()),
+            ],
+            "fix_ctr_article" => vec![
+                // Step 1 (agentic): read file + recommendations, produce structured CtrFixPatch JSON.
+                // Cannot be deterministic: the agent must read the article and write prose that
+                // satisfies SERP intent, brand voice, and keyword context.
+                // Input contract: single CtrRecommendation artifact + file contents.
+                // Output contract: CtrFixPatch JSON.
+                WorkflowStep::new("fix_ctr_article_generate", StepKind::Agentic.as_ref())
+                    .with_param(step_params::SKILL, "ctr-fix-apply"),
+                // Step 2 (deterministic): apply the patch to the MDX file.
+                // Snapshots original, replaces frontmatter/body, validates structure, restores on corruption.
+                WorkflowStep::new("fix_ctr_article_apply", StepKind::CtrFixApply.as_ref()),
+                // Step 3 (deterministic): re-run health checks to verify fixes meet thresholds.
+                // Produces CtrFixVerificationReport. Status = done if all pass, review if partial.
+                WorkflowStep::new("fix_ctr_article_verify", StepKind::CtrVerifyFix.as_ref()),
             ],
             "indexing_diagnostics" => vec![
                 // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
@@ -631,11 +651,26 @@ pub async fn exec_agentic(
         None
     };
 
-    // 1. Optionally load skill
-    let skill = step
-        .params
-        .get("skill")
-        .and_then(|name| skills::load_skill(repo_root, name));
+    // 1. Load skill if specified.  A declared skill is required — missing it is
+    //    a hard error so the step does not silently degrade to a vague generic
+    //    prompt that produces unparseable prose.
+    let skill = if let Some(name) = step.params.get("skill") {
+        match skills::load_skill(repo_root, name) {
+            Some(s) => Some(s),
+            None => {
+                return StepResult {
+                    success: false,
+                    message: format!(
+                        "Required skill '{}' not found in project repo or app defaults",
+                        name
+                    ),
+                    output: None,
+                };
+            }
+        }
+    } else {
+        None
+    };
 
     // 2. Optionally load step artifact content into prompt context.
     let artifact_context = if let Some(artifact_name) = step.params.get(step_params::ARTIFACT) {

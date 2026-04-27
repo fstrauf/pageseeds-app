@@ -10,13 +10,13 @@ use crate::models::task::Task;
 /// Register a synchronous handler that runs inside `tokio::task::spawn_blocking`.
 ///
 /// **Simple variant** (task + project_path only):
-/// ```rust
+/// ```ignore
 /// register_blocking!(handlers, StepKind::LandingPageSpecWrite,
 ///     crate::engine::exec::research::exec_landing_page_spec_write);
 /// ```
 ///
 /// **With provider variant** (task + project_path + ctx field):
-/// ```rust
+/// ```ignore
 /// register_blocking!(handlers, StepKind::ClusterLinkStrategy,
 ///     crate::engine::exec::content::exec_cluster_link_strategy, agent_provider);
 /// ```
@@ -365,6 +365,14 @@ impl StepRegistry {
             })
         }));
 
+        handlers.insert(StepKind::SanitizeContent, Box::new(|_step, ctx| {
+            let task = ctx.task;
+            let project_path = ctx.project_path;
+            Box::pin(async move {
+                crate::engine::exec::content::exec_sanitize_content(task, project_path)
+            })
+        }));
+
         register_blocking!(handlers, StepKind::GscSyncArticles,
             crate::engine::exec::gsc::exec_gsc_sync_articles, gsc_token);
 
@@ -507,6 +515,41 @@ impl StepRegistry {
 
         register_blocking!(handlers, StepKind::CanAnalyze,
             crate::engine::exec::cannibalization_audit::exec_can_analyze, agent_provider, context_json);
+
+        handlers.insert(StepKind::CtrFixApply, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let latest_raw = ctx.latest_raw.map(|s| s.to_string());
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::ctr_audit::exec_ctr_fix_apply(
+                        &task, &project_path, latest_raw.as_deref(),
+                    )
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
+        handlers.insert(StepKind::CtrVerifyFix, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::ctr_audit::exec_ctr_verify_fix(&task, &project_path)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
 
         Self { handlers }
     }

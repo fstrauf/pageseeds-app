@@ -1,5 +1,9 @@
 /// Skill registry — scans `.github/skills/*/SKILL.md` in a repo root,
 /// parses metadata from the content, and returns typed skill descriptors.
+///
+/// App-level default skills are embedded into the binary at compile time via
+/// `include_str!`.  Project-level skills in `{repo}/.github/skills/` always
+/// take precedence, allowing per-project overrides.
 
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
@@ -19,33 +23,83 @@ pub struct Skill {
     pub content: String,
 }
 
+// ─── Embedded skills ─────────────────────────────────────────────────────────
+
+const EMBEDDED_SKILL_NAMES: &[&str] = &[
+    "cannibalization-strategy",
+    "ctr-fix-apply",
+    "ctr-optimization",
+];
+
+fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
+    let content = match skill_name {
+        "cannibalization-strategy" => {
+            include_str!("../../skills/cannibalization-strategy/SKILL.md")
+        }
+        "ctr-fix-apply" => include_str!("../../skills/ctr-fix-apply/SKILL.md"),
+        "ctr-optimization" => include_str!("../../skills/ctr-optimization/SKILL.md"),
+        _ => return None,
+    };
+
+    Some(Skill {
+        name: skill_name.to_string(),
+        skill_dir: format!(".github/skills/{}", skill_name),
+        description: extract_description(content, skill_name),
+        content: content.to_string(),
+    })
+}
+
 // ─── Functions ───────────────────────────────────────────────────────────────
 
 /// Scan all skill directories under `{repo_root}/.github/skills/`.
 /// Each skill directory must contain a `SKILL.md` to be included.
+///
+/// Embedded app-level skills are merged in so the skill browser shows
+/// every skill that is available (project overrides take precedence).
 pub fn scan_skills(repo_root: &Path) -> Vec<Skill> {
+    let mut skills: Vec<Skill> = Vec::new();
+
+    // 1. Project-level skills
     let skills_root = repo_root.join(".github").join("skills");
-    if !skills_root.exists() {
-        return Vec::new();
+    if skills_root.exists() {
+        let project_skills: Vec<Skill> = WalkDir::new(&skills_root)
+            .min_depth(1)
+            .max_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_dir())
+            .filter_map(|entry| load_skill_from_dir(entry.path(), repo_root))
+            .collect();
+        skills.extend(project_skills);
     }
 
-    let mut skills: Vec<Skill> = WalkDir::new(&skills_root)
-        .min_depth(1)
-        .max_depth(1)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_dir())
-        .filter_map(|entry| load_skill_from_dir(entry.path(), repo_root))
-        .collect();
+    // 2. Embedded skills not already present at project-level
+    for name in EMBEDDED_SKILL_NAMES {
+        if !skills.iter().any(|s| s.name == *name) {
+            if let Some(skill) = load_embedded_skill(name) {
+                skills.push(skill);
+            }
+        }
+    }
 
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills
 }
 
 /// Load a single skill by directory name.
+///
+/// Resolution order:
+/// 1. Project repo: `{repo_root}/.github/skills/{skill_name}/SKILL.md`
+/// 2. Embedded app default: compiled into the binary via `include_str!`
 pub fn load_skill(repo_root: &Path, skill_name: &str) -> Option<Skill> {
+    // 1. Project-level skill first
     let skill_dir = repo_root.join(".github").join("skills").join(skill_name);
-    load_skill_from_dir(&skill_dir, repo_root)
+    if let Some(skill) = load_skill_from_dir(&skill_dir, repo_root) {
+        return Some(skill);
+    }
+
+    // 2. Fall back to embedded app-level skill
+    load_embedded_skill(skill_name)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -59,6 +59,12 @@ pub enum StepKind {
     CanBuildContext,
     /// Agentic cannibalization strategy — merges, hubs, territories (agentic).
     CanAnalyze,
+    /// Deterministic application of agent-generated CTR fix patch.
+    CtrFixApply,
+    /// Deterministic verification that applied CTR fixes meet health thresholds.
+    CtrVerifyFix,
+    /// Sanitize content: rename .md → .mdx, repair paths, validate and fix frontmatter.
+    SanitizeContent,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -114,6 +120,9 @@ impl StepKind {
             Self::CtrAnalyze => "ctr_analyze",
             Self::CanBuildContext => "can_build_context",
             Self::CanAnalyze => "can_analyze",
+            Self::CtrFixApply => "ctr_fix_apply",
+            Self::CtrVerifyFix => "ctr_verify_fix",
+            Self::SanitizeContent => "sanitize_content",
             Self::Unknown => "unknown",
         }
     }
@@ -183,6 +192,9 @@ impl FromStr for StepKind {
             "ctr_analyze" => Ok(Self::CtrAnalyze),
             "can_build_context" => Ok(Self::CanBuildContext),
             "can_analyze" => Ok(Self::CanAnalyze),
+            "ctr_fix_apply" => Ok(Self::CtrFixApply),
+            "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
+            "sanitize_content" => Ok(Self::SanitizeContent),
             _ => Err(()),
         }
     }

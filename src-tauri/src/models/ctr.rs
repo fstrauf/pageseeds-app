@@ -5,13 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrAgentOutput {
     pub recommendations: Vec<CtrRecommendation>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrRecommendation {
     pub article_id: i64,
@@ -30,7 +32,8 @@ pub struct CtrRecommendation {
 
 // ─── Verification Report (deterministic check results) ────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrVerificationReport {
     pub summary: String,
@@ -40,7 +43,8 @@ pub struct CtrVerificationReport {
     pub articles: Vec<CtrVerifiedArticle>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrVerifiedArticle {
     pub article_id: i64,
@@ -49,7 +53,8 @@ pub struct CtrVerifiedArticle {
     pub fixes: Vec<CtrVerifiedFix>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrVerifiedFix {
     pub fix_type: CtrFixType,
@@ -65,7 +70,8 @@ pub struct CtrVerifiedFix {
     pub expected: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFix {
     #[serde(rename = "type")]
@@ -78,7 +84,8 @@ pub struct CtrFix {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum CtrFixType {
     TitleRewrite,
@@ -89,7 +96,8 @@ pub enum CtrFixType {
 
 // ─── Fix Report (agent output after applying fixes) ───────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixReport {
     pub applied: Vec<CtrFixApplied>,
@@ -97,7 +105,8 @@ pub struct CtrFixReport {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixApplied {
     pub article_id: i64,
@@ -105,7 +114,8 @@ pub struct CtrFixApplied {
     pub changes: Vec<CtrFixChange>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixChange {
     pub fix_type: CtrFixType,
@@ -114,7 +124,8 @@ pub struct CtrFixChange {
     pub new: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixSkipped {
     pub article_id: i64,
@@ -125,7 +136,8 @@ pub struct CtrFixSkipped {
 // ─── Agent Patch Output (structured replacement values) ───────────────────────
 
 /// The agent returns this instead of raw MDX. Rust applies it deterministically.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatch {
     pub article_id: i64,
@@ -135,7 +147,8 @@ pub struct CtrFixPatch {
     pub changes: CtrFixPatchChanges,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatchChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -148,9 +161,34 @@ pub struct CtrFixPatchChanges {
     pub faq_questions: Option<Vec<CtrFixPatchFaqQuestion>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatchFaqQuestion {
     pub question: String,
     pub answer: String,
+}
+
+// ─── Per-Article Fix Verification Report ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrFixVerificationReport {
+    pub article_id: i64,
+    pub file: String,
+    pub overall_status: String, // "verified" | "partial" | "failed"
+    pub checks: Vec<CtrFixCheckResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrFixCheckResult {
+    pub check_type: String, // "title" | "description" | "snippet" | "faq"
+    pub status: String,     // "pass" | "fail" | "skip"
+    pub expected: String,
+    pub actual: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }

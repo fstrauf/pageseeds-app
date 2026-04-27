@@ -14,6 +14,13 @@ cargo test export_bindings --lib --quiet 2>/dev/null || true
 mkdir -p ../src/lib/bindings
 if [ -d "bindings" ]; then
     cp bindings/*.ts ../src/lib/bindings/
+    # Also copy any subdirectories (e.g. serde_json/)
+    for dir in bindings/*/; do
+        if [ -d "$dir" ]; then
+            base=$(basename "$dir")
+            cp -r "$dir" ../src/lib/bindings/"$base"
+        fi
+    done
     echo "✅ Copied $(ls bindings/*.ts 2>/dev/null | wc -l) binding files"
 else
     echo "⚠️  No bindings directory found. Running tests may have failed."
