@@ -76,6 +76,10 @@ pub enum StepKind {
     CtrSchemaDetect,
     /// Deterministic verification that rendered pages contain FAQPage JSON-LD.
     CtrSchemaVerifyRender,
+    /// Deterministic comparison of before/after CTR metrics for outcome tracking.
+    CtrOutcomeCompare,
+    /// Deterministic generation of CTR outcome report artifact.
+    CtrOutcomeReport,
     /// Load approved merge plan from strategy artifact.
     MergeLoadPlan,
     /// Preflight checks before merging (files exist, no cycles, keeper indexable).
@@ -155,6 +159,8 @@ impl StepKind {
             Self::CtrTemplateVerifyRender => "ctr_template_verify_render",
             Self::CtrSchemaDetect => "ctr_schema_detect",
             Self::CtrSchemaVerifyRender => "ctr_schema_verify_render",
+            Self::CtrOutcomeCompare => "ctr_outcome_compare",
+            Self::CtrOutcomeReport => "ctr_outcome_report",
             Self::MergeLoadPlan => "merge_load_plan",
             Self::MergePreflight => "merge_preflight",
             Self::MergeExtractSections => "merge_extract_sections",
@@ -240,6 +246,8 @@ impl FromStr for StepKind {
             "ctr_template_verify_render" => Ok(Self::CtrTemplateVerifyRender),
             "ctr_schema_detect" => Ok(Self::CtrSchemaDetect),
             "ctr_schema_verify_render" => Ok(Self::CtrSchemaVerifyRender),
+            "ctr_outcome_compare" => Ok(Self::CtrOutcomeCompare),
+            "ctr_outcome_report" => Ok(Self::CtrOutcomeReport),
             "merge_load_plan" => Ok(Self::MergeLoadPlan),
             "merge_preflight" => Ok(Self::MergePreflight),
             "merge_extract_sections" => Ok(Self::MergeExtractSections),
@@ -335,6 +343,8 @@ mod tests {
             StepKind::CtrTemplateVerifyRender,
             StepKind::CtrSchemaDetect,
             StepKind::CtrSchemaVerifyRender,
+            StepKind::CtrOutcomeCompare,
+            StepKind::CtrOutcomeReport,
             StepKind::MergeLoadPlan,
             StepKind::MergePreflight,
             StepKind::MergeExtractSections,

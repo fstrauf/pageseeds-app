@@ -416,33 +416,43 @@ pub struct CtrAuditHandler;
 
 impl WorkflowHandler for CtrAuditHandler {
     fn supports(&self, task: &Task) -> bool {
-        task_type(task) == "ctr_audit"
+        matches!(task_type(task), "ctr_audit" | "ctr_outcome_review")
     }
 
-    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
-        vec![
-            // Step 1 (deterministic): Sync latest GSC data.
-            WorkflowStep::new("ctr_gsc_sync", StepKind::GscSyncArticles).optional(),
-            // Step 2 (deterministic): Fetch live HTML for target pages and compare rendered
-            // title/meta/schema/snippet markup against source files.
-            // Optional — still valuable even if some pages fail to fetch.
-            WorkflowStep::new("ctr_rendered_serp_audit", StepKind::CtrRenderedSerpAudit).optional(),
-            // Step 3 (deterministic): Collect raw article data + compute CTR scores.
-            // Includes rendered audit results from DB if available.
-            // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
-            // and deterministic math: clicks_lost = impressions * max(0, target_ctr - actual_ctr).
-            WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext),
-            // Step 4 (agentic): Analyze titles, meta descriptions, FAQ schema, snippet readiness.
-            // Cannot be deterministic: assessing title quality, brand patterns, snippet suitability
-            // requires intelligence that varies per site. Hard-coding rules would silently fail
-            // on inputs they were never tested against.
-            // Input contract: structured JSON with per-article raw data + CTR metrics + rendered audit.
-            // Output contract: JSON with recommendations array.
-            WorkflowStep::new("ctr_analyze", StepKind::CtrAnalyze)
-                .with_param(step_params::SKILL, "ctr-optimization")
-                .with_param(step_params::ARTIFACT_NAME, "ctr_recommendations"),
-            // No normalizer needed — ctr_analyze extracts JSON internally.
-        ]
+    fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
+        match task_type(task) {
+            "ctr_outcome_review" => vec![
+                // Step 1 (deterministic): load baseline outcomes and fetch after-period GSC metrics.
+                // Compare before/after clicks, CTR, position per article and query.
+                // Output contract: JSON report with improved/regressed/neutral counts.
+                WorkflowStep::new("ctr_outcome_compare", StepKind::CtrOutcomeCompare),
+                // Step 2 (deterministic): generate structured report artifact.
+                WorkflowStep::new("ctr_outcome_report", StepKind::CtrOutcomeReport),
+            ],
+            _ => vec![
+                // Step 1 (deterministic): Sync latest GSC data.
+                WorkflowStep::new("ctr_gsc_sync", StepKind::GscSyncArticles).optional(),
+                // Step 2 (deterministic): Fetch live HTML for target pages and compare rendered
+                // title/meta/schema/snippet markup against source files.
+                // Optional — still valuable even if some pages fail to fetch.
+                WorkflowStep::new("ctr_rendered_serp_audit", StepKind::CtrRenderedSerpAudit).optional(),
+                // Step 3 (deterministic): Collect raw article data + compute CTR scores.
+                // Includes rendered audit results from DB if available.
+                // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
+                // and deterministic math: clicks_lost = impressions * max(0, target_ctr - actual_ctr).
+                WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext),
+                // Step 4 (agentic): Analyze titles, meta descriptions, FAQ schema, snippet readiness.
+                // Cannot be deterministic: assessing title quality, brand patterns, snippet suitability
+                // requires intelligence that varies per site. Hard-coding rules would silently fail
+                // on inputs they were never tested against.
+                // Input contract: structured JSON with per-article raw data + CTR metrics + rendered audit.
+                // Output contract: JSON with recommendations array.
+                WorkflowStep::new("ctr_analyze", StepKind::CtrAnalyze)
+                    .with_param(step_params::SKILL, "ctr-optimization")
+                    .with_param(step_params::ARTIFACT_NAME, "ctr_recommendations"),
+                // No normalizer needed — ctr_analyze extracts JSON internally.
+            ],
+        }
     }
 }
 

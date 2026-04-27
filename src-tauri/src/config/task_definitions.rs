@@ -235,6 +235,13 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
+        task_type: "ctr_outcome_review",
+        phase: "investigation",
+        execution_mode: ExecutionMode::Manual,
+        review_on_success: false,
+        handler_family: HandlerFamily::CtrAudit,
+    },
+    TaskDefinition {
         task_type: "fix_content_article",
         phase: "implementation",
         execution_mode: ExecutionMode::Manual,

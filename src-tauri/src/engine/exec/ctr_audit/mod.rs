@@ -8,6 +8,7 @@
 mod analyze;
 mod apply;
 mod context;
+mod outcome;
 mod rendered;
 mod task_spawner;
 mod template;
@@ -15,6 +16,7 @@ mod template;
 pub(crate) use analyze::*;
 pub(crate) use apply::*;
 pub(crate) use context::*;
+pub(crate) use outcome::*;
 pub(crate) use rendered::*;
 pub(crate) use task_spawner::*;
 pub(crate) use template::*;

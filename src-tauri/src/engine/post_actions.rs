@@ -94,10 +94,10 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
                         ],
                     );
                 }
-                if let Ok(json) = crate::db::export::export_articles(ctx.conn, &ctx.task.project_id) {
-                    let articles_path = automation_dir.join("articles.json");
-                    let _ = std::fs::write(&articles_path, json);
-                }
+                let project_path = std::path::Path::new(ctx.project_path);
+                let _ = crate::content::article_index::export_projection(
+                    ctx.conn, &ctx.task.project_id, project_path
+                );
                 log::info!(
                     "[content_register] registered {} article(s): {:?}",
                     ingested.ingested,
@@ -195,6 +195,37 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // CTR fix tasks → spawn outcome review task
+    if ctx.task.task_type == "fix_ctr_article" {
+        if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
+            if reloaded.status == crate::models::task::TaskStatus::Done {
+                let idempotency_key = format!(
+                    "ctr_outcome_review:{}:{}",
+                    reloaded.project_id, reloaded.id
+                );
+                let spec = crate::engine::spawner::TaskSpec {
+                    project_id: reloaded.project_id.clone(),
+                    task_type: "ctr_outcome_review".to_string(),
+                    title: Some(format!("CTR outcome review: {}", reloaded.id)),
+                    description: Some(format!(
+                        "Review CTR outcomes for fix task {}. Will wait 14 days post-deployment before comparing metrics.",
+                        reloaded.id
+                    )),
+                    priority: crate::models::task::Priority::Medium,
+                    execution_mode: Some(crate::models::task::ExecutionMode::Manual),
+                    agent_policy: crate::models::task::AgentPolicy::None,
+                    depends_on: vec![reloaded.id.clone()],
+                    artifacts: vec![],
+                    idempotency_key: Some(idempotency_key),
+                    ..Default::default()
+                };
+                if let Ok(task) = crate::engine::spawner::TaskSpawner::spawn(ctx.conn, spec) {
+                    follow_up_ids.push(task.id);
                 }
             }
         }

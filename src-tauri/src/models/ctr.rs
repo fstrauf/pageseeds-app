@@ -333,3 +333,30 @@ pub struct CtrTemplatePageDetail {
     pub source_title: String,
     pub rendered_title: String,
 }
+
+// ─── CTR Outcome Tracking ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrOutcome {
+    pub project_id: String,
+    pub article_id: i64,
+    pub fix_task_id: String,
+    pub baseline_start: String,
+    pub baseline_end: String,
+    pub after_start: Option<String>,
+    pub after_end: Option<String>,
+    pub baseline_clicks: f64,
+    pub baseline_impressions: f64,
+    pub baseline_ctr: f64,
+    pub baseline_position: f64,
+    pub after_clicks: Option<f64>,
+    pub after_impressions: Option<f64>,
+    pub after_ctr: Option<f64>,
+    pub after_position: Option<f64>,
+    pub position_delta: Option<f64>,
+    pub outcome_status: String,
+    pub deployed_at: Option<String>,
+    pub reviewed_at: Option<String>,
+}

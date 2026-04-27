@@ -566,6 +566,12 @@ impl StepRegistry {
         register_blocking!(handlers, StepKind::CtrSchemaVerifyRender,
             crate::engine::exec::ctr_audit::exec_ctr_schema_verify_render, db_conn);
 
+        register_blocking!(handlers, StepKind::CtrOutcomeCompare,
+            crate::engine::exec::ctr_audit::exec_ctr_outcome_compare, db_conn);
+
+        register_blocking!(handlers, StepKind::CtrOutcomeReport,
+            crate::engine::exec::ctr_audit::exec_ctr_outcome_report, db_conn);
+
         register_blocking!(handlers, StepKind::MergeLoadPlan,
             crate::engine::exec::consolidate_cluster::exec_merge_load_plan);
 

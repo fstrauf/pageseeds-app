@@ -402,6 +402,36 @@ static MIGRATION_V28: &str = r#"
 ALTER TABLE ctr_rendered_page_audits ADD COLUMN rendered_faq_question_count INTEGER NOT NULL DEFAULT 0;
 "#;
 
+static MIGRATION_V29: &str = r#"
+-- CTR outcome tracking: before/after metrics per article fix
+CREATE TABLE IF NOT EXISTS ctr_outcomes (
+    project_id          TEXT NOT NULL,
+    article_id          INTEGER NOT NULL,
+    fix_task_id         TEXT NOT NULL,
+    baseline_start      TEXT NOT NULL,
+    baseline_end        TEXT NOT NULL,
+    after_start         TEXT,
+    after_end           TEXT,
+    baseline_clicks     REAL NOT NULL DEFAULT 0,
+    baseline_impressions REAL NOT NULL DEFAULT 0,
+    baseline_ctr        REAL NOT NULL DEFAULT 0,
+    baseline_position   REAL NOT NULL DEFAULT 0,
+    after_clicks        REAL,
+    after_impressions   REAL,
+    after_ctr           REAL,
+    after_position      REAL,
+    position_delta      REAL,
+    outcome_status      TEXT NOT NULL DEFAULT 'pending',
+    deployed_at         TEXT,
+    reviewed_at         TEXT,
+    PRIMARY KEY (project_id, article_id, fix_task_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ctr_outcomes_project ON ctr_outcomes(project_id);
+CREATE INDEX IF NOT EXISTS idx_ctr_outcomes_task ON ctr_outcomes(fix_task_id);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -848,6 +878,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 29 {
+        conn.execute_batch(MIGRATION_V29)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (29, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn
@@ -1277,6 +1315,161 @@ pub fn list_ctr_rendered_audits(
             snippet_markup: serde_json::from_str(&snippet_json).unwrap_or_default(),
             issues: serde_json::from_str(&issues_json).unwrap_or_default(),
             checked_at: row.get(16)?,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CTR Outcome Tracking CRUD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Store a CTR outcome baseline record.
+pub fn set_ctr_outcome(
+    conn: &Connection,
+    outcome: &crate::models::ctr::CtrOutcome,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ctr_outcomes
+         (project_id, article_id, fix_task_id, baseline_start, baseline_end,
+          after_start, after_end, baseline_clicks, baseline_impressions, baseline_ctr,
+          baseline_position, after_clicks, after_impressions, after_ctr, after_position,
+          position_delta, outcome_status, deployed_at, reviewed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+         ON CONFLICT(project_id, article_id, fix_task_id)
+         DO UPDATE SET
+             baseline_start = excluded.baseline_start,
+             baseline_end = excluded.baseline_end,
+             after_start = excluded.after_start,
+             after_end = excluded.after_end,
+             baseline_clicks = excluded.baseline_clicks,
+             baseline_impressions = excluded.baseline_impressions,
+             baseline_ctr = excluded.baseline_ctr,
+             baseline_position = excluded.baseline_position,
+             after_clicks = excluded.after_clicks,
+             after_impressions = excluded.after_impressions,
+             after_ctr = excluded.after_ctr,
+             after_position = excluded.after_position,
+             position_delta = excluded.position_delta,
+             outcome_status = excluded.outcome_status,
+             deployed_at = excluded.deployed_at,
+             reviewed_at = excluded.reviewed_at",
+        rusqlite::params![
+            &outcome.project_id,
+            outcome.article_id,
+            &outcome.fix_task_id,
+            &outcome.baseline_start,
+            &outcome.baseline_end,
+            outcome.after_start.as_deref(),
+            outcome.after_end.as_deref(),
+            outcome.baseline_clicks,
+            outcome.baseline_impressions,
+            outcome.baseline_ctr,
+            outcome.baseline_position,
+            outcome.after_clicks,
+            outcome.after_impressions,
+            outcome.after_ctr,
+            outcome.after_position,
+            outcome.position_delta,
+            &outcome.outcome_status,
+            outcome.deployed_at.as_deref(),
+            outcome.reviewed_at.as_deref(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Load a CTR outcome by project, article, and fix task.
+pub fn get_ctr_outcome(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+    fix_task_id: &str,
+) -> Result<Option<crate::models::ctr::CtrOutcome>> {
+    let mut stmt = conn.prepare(
+        "SELECT baseline_start, baseline_end, after_start, after_end,
+                baseline_clicks, baseline_impressions, baseline_ctr, baseline_position,
+                after_clicks, after_impressions, after_ctr, after_position,
+                position_delta, outcome_status, deployed_at, reviewed_at
+         FROM ctr_outcomes
+         WHERE project_id = ?1 AND article_id = ?2 AND fix_task_id = ?3",
+    )?;
+
+    let row = stmt.query_row(
+        rusqlite::params![project_id, article_id, fix_task_id],
+        |row| {
+            Ok(crate::models::ctr::CtrOutcome {
+                project_id: project_id.to_string(),
+                article_id,
+                fix_task_id: fix_task_id.to_string(),
+                baseline_start: row.get(0)?,
+                baseline_end: row.get(1)?,
+                after_start: row.get(2)?,
+                after_end: row.get(3)?,
+                baseline_clicks: row.get(4)?,
+                baseline_impressions: row.get(5)?,
+                baseline_ctr: row.get(6)?,
+                baseline_position: row.get(7)?,
+                after_clicks: row.get(8)?,
+                after_impressions: row.get(9)?,
+                after_ctr: row.get(10)?,
+                after_position: row.get(11)?,
+                position_delta: row.get(12)?,
+                outcome_status: row.get(13)?,
+                deployed_at: row.get(14)?,
+                reviewed_at: row.get(15)?,
+            })
+        },
+    );
+
+    match row {
+        Ok(o) => Ok(Some(o)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// List all CTR outcomes for a project.
+pub fn list_ctr_outcomes(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<crate::models::ctr::CtrOutcome>> {
+    let mut stmt = conn.prepare(
+        "SELECT article_id, fix_task_id, baseline_start, baseline_end, after_start, after_end,
+                baseline_clicks, baseline_impressions, baseline_ctr, baseline_position,
+                after_clicks, after_impressions, after_ctr, after_position,
+                position_delta, outcome_status, deployed_at, reviewed_at
+         FROM ctr_outcomes
+         WHERE project_id = ?1
+         ORDER BY article_id",
+    )?;
+
+    let rows = stmt.query_map([project_id], |row| {
+        Ok(crate::models::ctr::CtrOutcome {
+            project_id: project_id.to_string(),
+            article_id: row.get(0)?,
+            fix_task_id: row.get(1)?,
+            baseline_start: row.get(2)?,
+            baseline_end: row.get(3)?,
+            after_start: row.get(4)?,
+            after_end: row.get(5)?,
+            baseline_clicks: row.get(6)?,
+            baseline_impressions: row.get(7)?,
+            baseline_ctr: row.get(8)?,
+            baseline_position: row.get(9)?,
+            after_clicks: row.get(10)?,
+            after_impressions: row.get(11)?,
+            after_ctr: row.get(12)?,
+            after_position: row.get(13)?,
+            position_delta: row.get(14)?,
+            outcome_status: row.get(15)?,
+            deployed_at: row.get(16)?,
+            reviewed_at: row.get(17)?,
         })
     })?;
 
