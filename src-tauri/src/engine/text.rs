@@ -22,8 +22,8 @@ pub fn char_prefix(s: &str, max_chars: usize) -> &str {
 /// 2. Extract JSON from a fenced code block (```json ... ```)
 /// 3. Find a bare JSON object/array in the text
 ///
-/// This is a lightweight replacement for the deprecated
-/// `engine/normalizer::normalize_agent_output` heuristic.
+/// Extracts the first JSON object or array found in a string.
+/// Used as a fallback when structured output is returned as raw text.
 pub fn extract_json(text: &str) -> Option<Value> {
     // 1. Whole text is JSON
     if let Ok(v) = serde_json::from_str::<Value>(text.trim()) {

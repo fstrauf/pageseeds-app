@@ -1114,7 +1114,7 @@ fn rename_new_or_modified_md_to_mdx(
 #[cfg(test)]
 mod registry_tests {
     use super::*;
-    use crate::config::TASK_TYPES;
+    use crate::config::task_definitions;
     use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
 
     fn make_task(task_type: &str) -> Task {
@@ -1137,43 +1137,39 @@ mod registry_tests {
         }
     }
 
-    /// Every task type in config::TASK_TYPES must match a non-fallback handler.
+    /// Every task type in task_definitions::all() must match a real handler.
     /// This catches silent registration failures where a new task type is added
-    /// to the config but not to the handler registry.
+    /// to the registry but not to the handler registry.
+    ///
+    /// Intentional placeholder handlers (e.g. PerformanceHandler returning Manual)
+    /// are allowed — they are registered and documented. Only the
+    /// ManualFallbackHandler (always last in default_handlers()) is rejected.
     #[test]
     #[cfg(debug_assertions)]
     fn all_task_types_have_non_fallback_handler() {
         let handlers = default_handlers();
-        // The last handler is always ManualFallbackHandler
-        let non_fallback_handlers: Vec<&Box<dyn WorkflowHandler>> = handlers
-            .iter()
-            .filter(|h| {
-                // ManualFallbackHandler matches everything, so we skip it
-                !h.supports(&make_task("__manual_fallback_probe__"))
-            })
-            .collect();
 
-        for task_type in TASK_TYPES {
-            let task = make_task(task_type);
-            let matched = handlers.iter().find(|h| h.supports(&task));
+        let definitions = task_definitions::all();
+        for def in definitions {
+            let task = make_task(def.task_type);
+            let matched_idx = handlers.iter().position(|h| h.supports(&task));
             assert!(
-                matched.is_some(),
+                matched_idx.is_some(),
                 "Task type '{}' has no handler at all",
-                task_type
+                def.task_type
             );
-            // Ensure it's not the fallback handler
-            let steps = matched.unwrap().plan(&task);
-            let is_fallback = steps.len() == 1 && steps[0].kind == StepKind::Manual;
+            // The last handler is always ManualFallbackHandler
+            let is_fallback = matched_idx.unwrap() == handlers.len() - 1;
             assert!(
                 !is_fallback,
                 "Task type '{}' falls through to ManualFallbackHandler. Add a real handler.",
-                task_type
+                def.task_type
             );
         }
 
         log::info!(
             "[registry_test] All {} task types have non-fallback handlers",
-            TASK_TYPES.len()
+            definitions.len()
         );
     }
 }

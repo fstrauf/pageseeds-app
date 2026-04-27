@@ -8,14 +8,20 @@ pub mod global_settings;
 
 /// Get the default database path based on platform conventions.
 /// Used when we need to access the DB without having the AppState.
+///
+/// Can be overridden via the `PAGESEEDS_DB_PATH` environment variable for testing.
 pub fn default_db_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("PAGESEEDS_DB_PATH") {
+        return std::path::PathBuf::from(path);
+    }
+
     let app_dir = dirs::data_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
         .join("com.pageseeds.app");
-    
+
     // Ensure directory exists
     let _ = std::fs::create_dir_all(&app_dir);
-    
+
     app_dir.join("pageseeds.db")
 }
 

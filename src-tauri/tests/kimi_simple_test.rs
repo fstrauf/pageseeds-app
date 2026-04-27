@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_kimi_basic() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     
@@ -81,6 +82,7 @@ fn test_kimi_basic() {
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_kimi_with_config_files() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let automation_dir = project_path.join(".github/automation");

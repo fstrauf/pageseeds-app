@@ -295,10 +295,10 @@ The frontend `useQueueRunner` hook consumes these to drive the TaskRunner UI.
        }
        fn plan(&self, task: &Task, ctx: &HandlerContext) -> Vec<WorkflowStep> {
            vec![
-               WorkflowStep::new("collect_data", "deterministic"),
-               WorkflowStep::new("analyze", "agentic")
+               WorkflowStep::new("collect_data", StepKind::Deterministic),
+               WorkflowStep::new("analyze", StepKind::Agentic)
                    .with_param("skill", "analyze_data"),
-               WorkflowStep::new("normalize", "normalizer")
+               WorkflowStep::new("normalize", StepKind::Normalizer)
                    .with_param("normalizer_id", "my_normalizer")
                    .with_param("artifact_name", "my_result"),
            ]

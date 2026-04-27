@@ -91,6 +91,7 @@ fn run_agent_in_thread(prompt: &str, project_path: &Path) -> Result<String, Stri
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_direct_call() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let prompt = build_prompt();
@@ -110,6 +111,7 @@ fn test_direct_call() {
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_thread_spawn() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let prompt = build_prompt();
@@ -131,6 +133,7 @@ fn test_thread_spawn() {
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_tokio_spawn_blocking() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let prompt = build_prompt();

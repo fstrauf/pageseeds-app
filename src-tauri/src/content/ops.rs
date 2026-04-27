@@ -647,6 +647,79 @@ fn derive_url_slug(filename: &str) -> String {
     stripped.to_lowercase().replace('_', "-")
 }
 
+/// Re-scan all MDX files for a project and update the DB when frontmatter
+/// metadata (title, published_date, status, word_count) differs from disk.
+///
+/// Returns the number of articles whose DB row was updated.
+pub fn sync_article_metadata_from_disk(
+    repo_root: &Path,
+    project_id: &str,
+    conn: &Connection,
+) -> std::result::Result<usize, String> {
+    let articles = crate::engine::task_store::list_articles(conn, project_id)
+        .map_err(|e| format!("Failed to list articles: {}", e))?;
+
+    let content_dirs = crate::content::article_resolver::discover_content_dirs(repo_root);
+    let content_dirs_refs: Vec<&str> = content_dirs.iter().map(|s| s.as_str()).collect();
+
+    let mut updated = 0usize;
+
+    for article in &articles {
+        let resolved = crate::content::article_resolver::resolve_article_file(
+            repo_root,
+            &article.file,
+            &content_dirs_refs,
+        );
+        if !resolved.found {
+            log::warn!(
+                "[sync_article_metadata] File not found for article {}: {}",
+                article.id,
+                article.file
+            );
+            continue;
+        }
+
+        let meta = match read_file_metadata(&resolved._absolute_path) {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!(
+                    "[sync_article_metadata] Failed to read {}: {}",
+                    resolved._absolute_path.display(),
+                    e
+                );
+                continue;
+            }
+        };
+
+        let new_title = meta
+            .title
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| article.title.clone());
+        let new_published_date = meta.published_date;
+        let new_status = meta
+            .status
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| article.status.clone());
+        let new_word_count = meta.word_count as i64;
+
+        let changed = new_title != article.title
+            || new_published_date != article.published_date
+            || new_status != article.status
+            || new_word_count != article.word_count;
+
+        if changed {
+            conn.execute(
+                "UPDATE articles SET title = ?1, published_date = ?2, status = ?3, word_count = ?4 WHERE id = ?5 AND project_id = ?6",
+                rusqlite::params![new_title, new_published_date, new_status, new_word_count, article.id, project_id],
+            )
+            .map_err(|e| format!("Failed to update article {}: {}", article.id, e))?;
+            updated += 1;
+        }
+    }
+
+    Ok(updated)
+}
+
 // ─── Article Analysis Helpers ───────────────────────────────────────────────
 
 /// Load an article's raw content by slug.
@@ -710,4 +783,122 @@ pub fn analyze_keyword_density(
     )?;
     let (_, body) = crate::engine::exec::utils::parse_frontmatter(&content);
     Ok(crate::content::keyword_density::analyze_keyword_density(&body, target_keyword))
+}
+
+/// Build a CTR health summary for all articles in a project.
+///
+/// Delegated from `commands::content::get_ctr_health_summary` to keep business logic
+/// out of the thin command layer.
+pub fn build_ctr_health_summary(
+    repo_root: &Path,
+    articles: &[crate::models::article::Article],
+    pending_fix_tasks: usize,
+    completed_audits: usize,
+) -> crate::models::ctr::CtrHealthSummary {
+    use crate::engine::exec::audit_health;
+    use crate::models::ctr::{CtrHealthArticle, CtrHealthSummary};
+
+    let mut health_articles = Vec::new();
+    let mut missing_files = 0usize;
+    let mut title_issues = 0usize;
+    let mut meta_issues = 0usize;
+    let mut snippet_issues = 0usize;
+    let mut faq_issues = 0usize;
+
+    for article in articles {
+        let file_found = audit_health::resolve_content_file(repo_root, &article.file).is_some();
+        if !file_found {
+            missing_files += 1;
+            health_articles.push(CtrHealthArticle {
+                id: article.id,
+                title: article.title.clone(),
+                url_slug: article.url_slug.clone(),
+                file: article.file.clone(),
+                healthy: false,
+                audit_status: "needs_fix".to_string(),
+                issues: vec!["file_not_found".to_string()],
+                last_audited_at: None,
+                last_audit_issues: Vec::new(),
+                resolved_issues: Vec::new(),
+            });
+            continue;
+        }
+
+        let (title, meta, first_paragraph, _h1, has_faq, _found) =
+            audit_health::read_article_excerpt(
+                repo_root.to_str().unwrap_or(""),
+                &article.file,
+            );
+
+        let health = audit_health::check_article_health(
+            &title,
+            &meta,
+            &first_paragraph,
+            article.target_keyword.as_deref().unwrap_or(""),
+            has_faq,
+            true,
+        );
+
+        let mut issues = Vec::new();
+        if !health.title_ok {
+            issues.push("title_too_long".to_string());
+            title_issues += 1;
+        }
+        if !health.meta_ok {
+            issues.push("meta_too_short".to_string());
+            meta_issues += 1;
+        }
+        if !health.snippet_ok {
+            issues.push("snippet_suboptimal".to_string());
+            snippet_issues += 1;
+        }
+        if !health.faq_ok {
+            issues.push("missing_faq_schema".to_string());
+            faq_issues += 1;
+        }
+
+        let healthy = issues.is_empty();
+        let audit_status = if healthy {
+            "healthy".to_string()
+        } else {
+            "needs_fix".to_string()
+        };
+
+        health_articles.push(CtrHealthArticle {
+            id: article.id,
+            title: article.title.clone(),
+            url_slug: article.url_slug.clone(),
+            file: article.file.clone(),
+            healthy,
+            audit_status,
+            issues: issues.clone(),
+            last_audited_at: None,
+            last_audit_issues: Vec::new(),
+            resolved_issues: Vec::new(),
+        });
+    }
+
+    let total_articles = health_articles.len();
+    let healthy_count = health_articles.iter().filter(|a| a.healthy).count();
+    let unhealthy_count = total_articles - healthy_count;
+    let open_issues_count = health_articles.iter().map(|a| a.issues.len()).sum();
+
+    CtrHealthSummary {
+        total_articles,
+        healthy_count,
+        unhealthy_count,
+        improved_count: 0,
+        already_healthy_count: healthy_count,
+        regressed_count: 0,
+        missing_files,
+        title_issues,
+        meta_issues,
+        snippet_issues,
+        faq_issues,
+        last_audit_at: None,
+        articles: health_articles,
+        pending_fix_tasks,
+        completed_audits,
+        open_issues_count,
+    }
 }

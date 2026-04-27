@@ -37,6 +37,7 @@ fn extract_json_object(output: &str) -> String {
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_kimi_json_extraction() {
     // This simulates what happens when we call Kimi
     // We'll test with the real config files

@@ -15,6 +15,7 @@ pub enum HandlerFamily {
     CtrAudit,
     CannibalizationAudit,
     Implementation,
+    #[allow(dead_code)]
     Manual,
 }
 
@@ -31,6 +32,7 @@ pub struct TaskDefinition {
     pub phase: &'static str,
     pub execution_mode: ExecutionMode,
     pub review_on_success: bool,
+    #[allow(dead_code)]
     pub handler_family: HandlerFamily,
 }
 
@@ -55,7 +57,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
         phase: "implementation",
         execution_mode: ExecutionMode::Spec,
         review_on_success: false,
-        handler_family: HandlerFamily::Content,
+        handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "create_content",
@@ -316,6 +318,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
     },
 ];
 
+#[allow(dead_code)]
 pub fn all() -> &'static [TaskDefinition] {
     DEFINITIONS
 }
@@ -336,6 +339,7 @@ pub fn review_on_success(task_type: &str) -> bool {
     find(task_type).map(|d| d.review_on_success).unwrap_or(false)
 }
 
+#[allow(dead_code)]
 pub fn handler_family(task_type: &str) -> Option<HandlerFamily> {
     find(task_type).map(|d| d.handler_family)
 }

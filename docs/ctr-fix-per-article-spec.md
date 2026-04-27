@@ -130,10 +130,10 @@ In `ImplementationHandler::plan`, add:
 
 ```rust
 "fix_ctr_article" => vec![
-    WorkflowStep::new("fix_ctr_article_generate", StepKind::Agentic.as_ref())
+    WorkflowStep::new("fix_ctr_article_generate", StepKind::Agentic)
         .with_param(step_params::SKILL, "ctr-fix-apply"),
-    WorkflowStep::new("fix_ctr_article_apply", StepKind::CtrFixApply.as_ref()),
-    WorkflowStep::new("fix_ctr_article_verify", StepKind::CtrVerifyFix.as_ref()),
+    WorkflowStep::new("fix_ctr_article_apply", StepKind::CtrFixApply),
+    WorkflowStep::new("fix_ctr_article_verify", StepKind::CtrVerifyFix),
 ],
 ```
 

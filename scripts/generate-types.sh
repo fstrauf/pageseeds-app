@@ -10,7 +10,7 @@ cd "$(dirname "$0")/../src-tauri"
 
 # Run cargo test to trigger ts-rs exports
 echo "📦 Running cargo test (this generates bindings)..."
-cargo test --quiet 2>/dev/null || true
+cargo test --quiet
 
 # Check if bindings were generated
 if [ -d "bindings" ]; then

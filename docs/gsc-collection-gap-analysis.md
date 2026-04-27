@@ -54,8 +54,7 @@ The capability exists. It's just not wired into the task system.
 **Current behaviour** (`engine/workflows/handlers.rs:37-40`):
 ```rust
 "collect_gsc" => vec![
-    WorkflowStep::new("collect_gsc_run", "deterministic")
-        .with_param("cmd", "pageseeds automation seo gsc-sync-articles --workspace-dir {automation_dir} --days 90"),
+    WorkflowStep::new("collect_gsc_inspect", StepKind::CollectGscInspect),
 ],
 ```
 
@@ -139,8 +138,8 @@ Without this, raw `InspectionRecord` data cannot drive task creation.
 **Current behaviour** (`handlers.rs:58-61`):
 ```rust
 "investigate_gsc" => vec![
-    WorkflowStep::new("investigate_gsc_run", "deterministic")
-        .with_param("cmd", "pageseeds automation seo content-audit --workspace-dir {automation_dir}"),
+    WorkflowStep::new("investigate_gsc_summarise", StepKind::GscSummarise),
+    WorkflowStep::new("investigate_gsc_agent", StepKind::GscInvestigateAgentic),
 ],
 ```
 

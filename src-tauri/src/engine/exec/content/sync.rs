@@ -175,22 +175,38 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
     };
 
     // 4. Repair articles.json / DB paths (in case stored paths were .md or got out of sync)
+    //    then re-scan frontmatter and update the DB + JSON export.
     let db_path = crate::db::default_db_path();
-    let repaired = match rusqlite::Connection::open(&db_path) {
-        Ok(conn) => {
-            match repair_article_paths_in_batch(&paths.repo_root, &task.project_id, &conn) {
-                Ok((count, _changes)) => count,
-                Err(e) => {
-                    log::warn!("[sanitize_content] Path repair failed: {}", e);
-                    0
-                }
+    let mut repaired = 0usize;
+    let mut metadata_updated = 0usize;
+    if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+        match repair_article_paths_in_batch(&paths.repo_root, &task.project_id, &conn) {
+            Ok(result) => repaired = result.repaired,
+            Err(e) => log::warn!("[sanitize_content] Path repair failed: {}", e),
+        }
+
+        match crate::content::ops::sync_article_metadata_from_disk(
+            &paths.repo_root,
+            &task.project_id,
+            &conn,
+        ) {
+            Ok(count) => metadata_updated = count,
+            Err(e) => log::warn!("[sanitize_content] Metadata sync failed: {}", e),
+        }
+
+        if metadata_updated > 0 {
+            if let Err(e) =
+                crate::db::export::write_articles_to_repo(&conn, &task.project_id, &paths.repo_root)
+            {
+                log::warn!(
+                    "[sanitize_content] Failed to export articles.json after metadata sync: {}",
+                    e
+                );
             }
         }
-        Err(e) => {
-            log::warn!("[sanitize_content] Could not open DB for path repair: {}", e);
-            0
-        }
-    };
+    } else {
+        log::warn!("[sanitize_content] Could not open DB for path repair / metadata sync");
+    }
 
     // 5. Run format validation read-only (report only — do NOT auto-fix).
     //    Broad auto-fixes on frontmatter destroy structured YAML (FAQ lists,
@@ -231,10 +247,11 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
     crate::engine::workflows::StepResult {
         success: true,
         message: format!(
-            "Sanitized: {} closers fixed, {} .md → .mdx, {} paths repaired, {} files checked, {} issues found (not auto-fixed)",
+            "Sanitized: {} closers fixed, {} .md → .mdx, {} paths repaired, {} metadata synced, {} files checked, {} issues found (not auto-fixed)",
             structurally_fixed.len(),
             renamed.len(),
             repaired,
+            metadata_updated,
             validation.files_checked,
             validation.issues.len()
         ),
@@ -242,6 +259,7 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
             "structurally_fixed": structurally_fixed_names,
             "renamed": renamed_names,
             "paths_repaired": repaired,
+            "metadata_updated": metadata_updated,
             "files_checked": validation.files_checked,
             "errors": validation.error_count,
             "warnings": validation.warn_count,

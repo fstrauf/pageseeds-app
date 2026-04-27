@@ -108,14 +108,20 @@ impl Tool for KeywordGeneratorTool {
         let search_engine = args.search_engine.as_deref().unwrap_or("Google");
 
         log::info!(
-            "[KeywordGeneratorTool] Generating ideas for '{}' (country: {})",
-            args.keyword,
-            country
+            "[KeywordGeneratorTool] call args: keyword='{}' country='{}' search_engine='{}'",
+            args.keyword, country, search_engine
         );
 
         let result = get_keyword_ideas(&capsolver_key, &args.keyword, country, search_engine)
             .await
             .map_err(|e| KeywordToolError::ApiError(e.to_string()))?;
+
+        log::info!(
+            "[KeywordGeneratorTool] call result: {} ideas, {} question_ideas for '{}'",
+            result.ideas.len(),
+            result.question_ideas.len(),
+            result.keyword
+        );
 
         let ideas = result
             .ideas
@@ -229,14 +235,21 @@ impl Tool for KeywordDifficultyTool {
         let country = args.country.as_deref().unwrap_or("us");
 
         log::info!(
-            "[KeywordDifficultyTool] Checking difficulty for '{}' (country: {})",
-            args.keyword,
-            country
+            "[KeywordDifficultyTool] call args: keyword='{}' country='{}'",
+            args.keyword, country
         );
 
         let result = get_keyword_difficulty(&capsolver_key, &args.keyword, country)
             .await
             .map_err(|e| KeywordToolError::ApiError(e.to_string()))?;
+
+        log::info!(
+            "[KeywordDifficultyTool] call result: kd={:?} shortage={:?} serp_entries={} for '{}'",
+            result.difficulty,
+            result.shortage,
+            result.serp.len(),
+            result.keyword
+        );
 
         let serp = result
             .serp
@@ -268,4 +281,62 @@ pub fn boxed_keyword_tools() -> Vec<Box<dyn rig::tool::ToolDyn>> {
         Box::new(KeywordGeneratorTool),
         Box::new(KeywordDifficultyTool),
     ]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rig::tool::Tool;
+
+    #[tokio::test]
+    async fn test_keyword_generator_tool_definition() {
+        let tool = KeywordGeneratorTool;
+        let def = tool.definition("test".to_string()).await;
+        assert_eq!(def.name, "keyword_generator");
+        assert!(def.description.contains("Ahrefs"));
+        assert!(def.description.contains("keyword ideas"));
+
+        let params = def.parameters.as_object().expect("parameters should be an object");
+        assert_eq!(params.get("type").and_then(|v| v.as_str()), Some("object"));
+
+        let required = params.get("required").and_then(|v| v.as_array());
+        assert!(required.is_some());
+        let required_fields: Vec<&str> = required
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required_fields.contains(&"keyword"));
+    }
+
+    #[tokio::test]
+    async fn test_keyword_difficulty_tool_definition() {
+        let tool = KeywordDifficultyTool;
+        let def = tool.definition("test".to_string()).await;
+        assert_eq!(def.name, "keyword_difficulty");
+        assert!(def.description.contains("difficulty"));
+        assert!(def.description.contains("SERP"));
+
+        let params = def.parameters.as_object().expect("parameters should be an object");
+        assert_eq!(params.get("type").and_then(|v| v.as_str()), Some("object"));
+
+        let required = params.get("required").and_then(|v| v.as_array());
+        assert!(required.is_some());
+        let required_fields: Vec<&str> = required
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required_fields.contains(&"keyword"));
+    }
+
+    #[test]
+    fn test_boxed_keyword_tools_count() {
+        let tools = boxed_keyword_tools();
+        assert_eq!(tools.len(), 2);
+    }
 }

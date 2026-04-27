@@ -162,7 +162,16 @@ pub async fn exec_keyword_research_with_tools(
 ) -> StepResult {
     use rig::client::CompletionClient;
 
-    let backend = crate::rig::provider::resolve_backend(provider, None, None, None).await;
+    let backend = match crate::rig::provider::resolve_backend(provider, None, None, None).await {
+        Ok(b) => b,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: e,
+                output: None,
+            };
+        }
+    };
 
     // Build agent with tools based on resolved backend and run immediately.
     // Each match arm creates a different Agent<M> type, so we run the prompt

@@ -258,8 +258,7 @@ pub async fn execute_task_with_token(
                 content: Some(out.clone()),
             };
             let _ = task_store::append_task_artifact(conn, task_id, &artifact);
-            // Intentionally NOT doing: task.artifacts.push(artifact);
-            // The artifact is in SQLite; the in-memory task doesn't need it.
+            task.artifacts.push(artifact);
         }
 
         // Run domain-specific post-step side effects.
@@ -420,32 +419,6 @@ fn add_optional(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     }
 }
 
-/// Parse keyword metadata embedded in the write_article task description.
-///
-/// Task creation puts `"Target keyword: {kw}\nKD: {kd}\nVolume: {vol}"` in the description.
-/// Returns (keyword, keyword_difficulty_as_string, volume).
-fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<String>, i64) {
-    let desc = match task.description.as_deref() {
-        Some(d) if !d.is_empty() => d,
-        _ => return (None, None, 0),
-    };
-    let mut keyword = None;
-    let mut kd: Option<String> = None;
-    let mut volume = 0i64;
-    for line in desc.lines() {
-        if let Some(rest) = line.strip_prefix("Target keyword:") {
-            keyword = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("KD:") {
-            if let Ok(n) = rest.trim().parse::<i64>() {
-                kd = Some(n.to_string());
-            }
-        } else if let Some(rest) = line.strip_prefix("Volume:") {
-            volume = rest.trim().parse::<i64>().unwrap_or(0);
-        }
-    }
-    (keyword, kd, volume)
-}
-
 /// Determine the final task status after all steps have run.
 /// Extracted as a named function so it can be unit-tested.
 pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus {
@@ -477,7 +450,7 @@ mod tests {
     use rusqlite::Connection;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -492,8 +465,11 @@ mod tests {
                 content_dir TEXT,
                 site_url TEXT,
                 site_id TEXT,
+                sitemap_url TEXT,
+                project_mode TEXT NOT NULL DEFAULT 'workspace',
                 active INTEGER NOT NULL DEFAULT 1,
-                agent_provider TEXT
+                agent_provider TEXT,
+                seo_provider TEXT
              );
              CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
@@ -545,6 +521,17 @@ mod tests {
         let brief = format!("# Test Project\n\n## Content Clusters & Status\n\n### Cluster 1: {theme} (PLANNED)\n");
         std::fs::write(automation.join("project.md"), brief).unwrap();
         std::fs::write(automation.join("articles.json"), "[]").unwrap();
+        std::fs::write(
+            automation.join("keyword_coverage.json"),
+            serde_json::json!({
+                "clusters": [
+                    {"cluster_name": "Risk Management", "article_count": 1},
+                    {"cluster_name": "Portfolio Hedging", "article_count": 0}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
@@ -701,13 +688,13 @@ mod tests {
         assert_eq!(done.status, TaskStatus::Done);
     }
 
-    /// Integration test for keyword research workflow.
-    /// 
-    /// NOTE: This test was written for the old workflow that used keyword_research_cli directly.
-    /// The new 3-step agentic workflow requires the kimi-acp-openai-bridge running on localhost:8080.
-    /// Run this test manually with the bridge running, or update it to mock the bridge endpoint.
+    /// Integration test for the 5-step hybrid keyword research workflow.
+    ///
+    /// Mocks:
+    /// - Bridge health + chat completions for agentic steps (seed extraction, seed validation)
+    /// - CapSolver token endpoint
+    /// - Ahrefs keyword ideas + difficulty endpoints
     #[test]
-    #[ignore = "Requires kimi-acp-openai-bridge running on localhost:8080"]
     fn execute_task_keyword_research_full_flow_with_mocked_http() {
         let _env_guard = ENV_LOCK.lock().unwrap();
 
@@ -715,6 +702,92 @@ mod tests {
         let mock_server = rt.block_on(MockServer::start());
 
         rt.block_on(async {
+            // Bridge health check
+            // Google Autocomplete mock
+            Mock::given(method("GET"))
+                .and(path("/complete/search"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    "risk management",
+                    ["risk management strategy", "risk management framework", "portfolio risk management"]
+                ])))
+                .mount(&mock_server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "kimi_available": true
+                })))
+                .mount(&mock_server)
+                .await;
+
+            // Step 1 (seed extraction) — matches system prompt content
+            Mock::given(method("POST"))
+                .and(path("/v1/chat/completions"))
+                .and(body_string_contains("Seed Extraction Contract"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "chatcmpl-extraction",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": null,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_extraction",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "submit",
+                                            "arguments": "{\"themes\":[\"risk management\",\"portfolio hedging\"],\"competitors\":[]}"
+                                        }
+                                    }
+                                ]
+                            },
+                            "finish_reason": "tool_calls"
+                        }
+                    ]
+                })))
+                .mount(&mock_server)
+                .await;
+
+            // Step 3 (seed validation) — matches system prompt content
+            Mock::given(method("POST"))
+                .and(path("/v1/chat/completions"))
+                .and(body_string_contains("Seed Validation Contract"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "chatcmpl-validation",
+                    "object": "chat.completion",
+                    "created": 1677652289,
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": null,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_validation",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "submit",
+                                            "arguments": "{\"validated_seeds\":[{\"theme\":\"risk management\",\"seeds\":[\"risk management strategy\"]},{\"theme\":\"portfolio hedging\",\"seeds\":[\"portfolio hedging options\"]}]}"
+                                        }
+                                    }
+                                ]
+                            },
+                            "finish_reason": "tool_calls"
+                        }
+                    ]
+                })))
+                .mount(&mock_server)
+                .await;
+
+            // CapSolver
             Mock::given(method("POST"))
                 .and(path("/createTask"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -734,6 +807,7 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
+            // Ahrefs keyword ideas
             Mock::given(method("POST"))
                 .and(path("/v4/stGetFreeKeywordIdeas"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
@@ -759,6 +833,7 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
+            // Ahrefs difficulty
             Mock::given(method("POST"))
                 .and(path("/v4/stGetFreeSerpOverviewForKeywordDifficultyChecker"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
@@ -781,6 +856,9 @@ mod tests {
         let old_create = std::env::var("PAGESEEDS_CAPSOLVER_CREATE_URL").ok();
         let old_result = std::env::var("PAGESEEDS_CAPSOLVER_RESULT_URL").ok();
         let old_ahrefs = std::env::var("PAGESEEDS_AHREFS_BASE_URL").ok();
+        let old_bridge = std::env::var("KIMI_BRIDGE_URL").ok();
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        let old_autocomplete = std::env::var("GOOGLE_AUTOCOMPLETE_BASE_URL").ok();
 
         std::env::set_var("CAPSOLVER_API_KEY", "mock-key");
         std::env::set_var(
@@ -792,8 +870,48 @@ mod tests {
             format!("{}/getTaskResult", mock_server.uri()),
         );
         std::env::set_var("PAGESEEDS_AHREFS_BASE_URL", mock_server.uri());
+        std::env::set_var("KIMI_BRIDGE_URL", format!("{}/v1", mock_server.uri()));
+        std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", mock_server.uri());
 
-        let conn = in_memory_db();
+        let db_path = project_dir.join("test.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_dir TEXT,
+                site_url TEXT,
+                site_id TEXT,
+                sitemap_url TEXT,
+                project_mode TEXT NOT NULL DEFAULT 'workspace',
+                active INTEGER NOT NULL DEFAULT 1,
+                agent_provider TEXT,
+                seo_provider TEXT
+             );
+             CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                agent_policy TEXT NOT NULL DEFAULT 'none',
+                title TEXT, description TEXT,
+                project_id TEXT NOT NULL,
+                depends_on TEXT NOT NULL DEFAULT '[]',
+                artifacts TEXT NOT NULL DEFAULT '[]',
+                run_attempts INTEGER NOT NULL DEFAULT 0,
+                run_last_error TEXT, run_provider TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS task_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+                provider TEXT, started_at TEXT NOT NULL,
+                finished_at TEXT, success INTEGER, error TEXT,
+                prompt_tokens INTEGER, completion_tokens INTEGER
+             );",
+        )
+        .unwrap();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
         let proj = test_project_in_at_path(&conn, &project_dir.to_string_lossy());
         let mut task = make_task("research_keywords", &proj);
         task.description = Some("risk management".to_string());
@@ -811,25 +929,68 @@ mod tests {
         assert!(result.success, "expected success, got: {}", result.message);
         assert_eq!(saved_task.status, TaskStatus::Review);
 
-        let artifact = saved_task
+        // 5-step workflow produces 5 artifacts
+        let artifact_keys: Vec<&str> = saved_task
             .artifacts
             .iter()
-            .find(|a| matches!(a.key.as_str(), "research_keywords_cli" | "keyword_research_cli"))
-            .expect("expected keyword research artifact");
+            .map(|a| a.key.as_str())
+            .collect();
+        assert!(
+            artifact_keys.contains(&"research_seed_extraction"),
+            "missing research_seed_extraction artifact; got: {:?}",
+            artifact_keys
+        );
+        assert!(
+            artifact_keys.contains(&"research_autocomplete"),
+            "missing research_autocomplete artifact; got: {:?}",
+            artifact_keys
+        );
+        assert!(
+            artifact_keys.contains(&"research_seed_validation"),
+            "missing research_seed_validation artifact; got: {:?}",
+            artifact_keys
+        );
+        assert!(
+            artifact_keys.contains(&"research_ahrefs_pipeline"),
+            "missing research_ahrefs_pipeline artifact; got: {:?}",
+            artifact_keys
+        );
+        assert!(
+            artifact_keys.contains(&"research_final_selection"),
+            "missing research_final_selection artifact; got: {:?}",
+            artifact_keys
+        );
 
-        let artifact_content = artifact
-            .content
-            .as_deref()
-            .expect("keyword research artifact should include content");
-        let output: serde_json::Value =
-            serde_json::from_str(artifact_content).expect("artifact should be valid JSON");
-        assert_eq!(output["themes"][0], "risk management");
-        assert_eq!(output["difficulty"]["successful"], 2);
+        // Verify seed extraction content
+        let seed_extraction = saved_task
+            .artifacts
+            .iter()
+            .find(|a| a.key == "research_seed_extraction")
+            .and_then(|a| a.content.as_deref())
+            .expect("seed extraction should have content");
+        let seeds: serde_json::Value = serde_json::from_str(seed_extraction).unwrap();
+        assert_eq!(seeds["themes"][0], "risk management");
+
+        // Verify final selection content
+        let final_selection = saved_task
+            .artifacts
+            .iter()
+            .find(|a| a.key == "research_final_selection")
+            .and_then(|a| a.content.as_deref())
+            .expect("final selection should have content");
+        let final_json: serde_json::Value = serde_json::from_str(final_selection).unwrap();
+        assert!(
+            final_json.get("difficulty").is_some() || final_json.get("landing_page_candidates").is_some(),
+            "final selection should contain keyword output"
+        );
 
         if let Some(v) = old_key { std::env::set_var("CAPSOLVER_API_KEY", v); } else { std::env::remove_var("CAPSOLVER_API_KEY"); }
         if let Some(v) = old_create { std::env::set_var("PAGESEEDS_CAPSOLVER_CREATE_URL", v); } else { std::env::remove_var("PAGESEEDS_CAPSOLVER_CREATE_URL"); }
         if let Some(v) = old_result { std::env::set_var("PAGESEEDS_CAPSOLVER_RESULT_URL", v); } else { std::env::remove_var("PAGESEEDS_CAPSOLVER_RESULT_URL"); }
         if let Some(v) = old_ahrefs { std::env::set_var("PAGESEEDS_AHREFS_BASE_URL", v); } else { std::env::remove_var("PAGESEEDS_AHREFS_BASE_URL"); }
+        if let Some(v) = old_bridge { std::env::set_var("KIMI_BRIDGE_URL", v); } else { std::env::remove_var("KIMI_BRIDGE_URL"); }
+        if let Some(v) = old_db { std::env::set_var("PAGESEEDS_DB_PATH", v); } else { std::env::remove_var("PAGESEEDS_DB_PATH"); }
+        if let Some(v) = old_autocomplete { std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", v); } else { std::env::remove_var("GOOGLE_AUTOCOMPLETE_BASE_URL"); }
 
         std::fs::remove_dir_all(&project_dir).ok();
     }
@@ -909,6 +1070,28 @@ mod tests {
     }
 
     // ── Fix 2: keyword metadata parsing ───────────────────────────────────────
+
+    fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<String>, i64) {
+        let desc = match task.description.as_deref() {
+            Some(d) if !d.is_empty() => d,
+            _ => return (None, None, 0),
+        };
+        let mut keyword = None;
+        let mut kd: Option<String> = None;
+        let mut volume = 0i64;
+        for line in desc.lines() {
+            if let Some(rest) = line.strip_prefix("Target keyword:") {
+                keyword = Some(rest.trim().to_string());
+            } else if let Some(rest) = line.strip_prefix("KD:") {
+                if let Ok(n) = rest.trim().parse::<i64>() {
+                    kd = Some(n.to_string());
+                }
+            } else if let Some(rest) = line.strip_prefix("Volume:") {
+                volume = rest.trim().parse::<i64>().unwrap_or(0);
+            }
+        }
+        (keyword, kd, volume)
+    }
 
     // parse_content_task_keyword_meta extracts all three fields from a full description.
     #[test]

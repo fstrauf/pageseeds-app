@@ -4,6 +4,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 #[test]
+#[ignore = "Requires local project files"]
 fn test_simple_task_execution() {
     println!("\n========================================");
     println!("TEST: Simple Task Execution");

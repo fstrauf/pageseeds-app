@@ -135,48 +135,54 @@ pub async fn resolve_backend(
     bridge_url: Option<&str>,
     _api_key: Option<&str>,
     kimi_backend_mode: Option<&str>,
-) -> LlmBackend {
+) -> Result<LlmBackend, String> {
     let model = default_model_for_provider(provider);
     let mode = kimi_backend_mode.unwrap_or("auto");
 
     match provider {
         "kimi" => {
-            let bridge_url = bridge_url.unwrap_or("http://localhost:8080/v1");
+            let bridge_url = bridge_url
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("KIMI_BRIDGE_URL").ok())
+                .unwrap_or_else(|| "http://localhost:8080/v1".to_string());
+            let bridge_url = bridge_url.as_str();
             match mode {
-                "bridge" => LlmBackend::KimiBridge {
+                "bridge" => Ok(LlmBackend::KimiBridge {
                     base_url: bridge_url.to_string(),
                     model,
-                },
-                "direct" => LlmBackend::KimiDirect,
+                }),
+                "direct" => Ok(LlmBackend::KimiDirect),
                 _ => {
                     // "auto" or any other value → health check
                     if check_bridge_health(bridge_url).await {
-                        LlmBackend::KimiBridge {
+                        Ok(LlmBackend::KimiBridge {
                             base_url: bridge_url.to_string(),
                             model,
-                        }
+                        })
                     } else {
                         log::info!("[rig::provider] Bridge not available on {}, falling back to direct CLI", bridge_url);
-                        LlmBackend::KimiDirect
+                        Ok(LlmBackend::KimiDirect)
                     }
                 }
             }
         }
-        "claude" => LlmBackend::Claude {
+        "claude" => Ok(LlmBackend::Claude {
             api_key: std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
             model,
-        },
-        "openai" => LlmBackend::OpenAi {
+        }),
+        "openai" => Ok(LlmBackend::OpenAi {
             api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             model,
-        },
-        "ollama" => LlmBackend::Ollama {
+        }),
+        "ollama" => Ok(LlmBackend::Ollama {
             base_url: bridge_url.unwrap_or("http://localhost:11434").to_string(),
             model,
-        },
+        }),
         other => {
-            log::warn!("[rig::provider] Unknown provider '{}', falling back to Kimi direct", other);
-            LlmBackend::KimiDirect
+            Err(format!(
+                "Unknown provider '{}'. Valid providers: kimi, claude, openai, ollama",
+                other
+            ))
         }
     }
 }
@@ -323,4 +329,130 @@ async fn run_ollama(
         resp.usage.input_tokens,
         resp.usage.output_tokens,
     ))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn test_default_model_for_provider() {
+        assert_eq!(default_model_for_provider("kimi"), "kimi-k2.5");
+        assert_eq!(default_model_for_provider("claude"), "claude-sonnet-4-6");
+        assert_eq!(default_model_for_provider("openai"), "gpt-4o");
+        assert_eq!(default_model_for_provider("ollama"), "llama3.2");
+        assert_eq!(default_model_for_provider("unknown"), "kimi-k2.5");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_backend_known_providers() {
+        // Claude
+        let backend = resolve_backend("claude", None, None, None).await.unwrap();
+        assert!(
+            matches!(backend, LlmBackend::Claude { model, .. } if model == "claude-sonnet-4-6")
+        );
+
+        // OpenAI
+        let backend = resolve_backend("openai", None, None, None).await.unwrap();
+        assert!(
+            matches!(backend, LlmBackend::OpenAi { model, .. } if model == "gpt-4o")
+        );
+
+        // Ollama
+        let backend = resolve_backend("ollama", None, None, None).await.unwrap();
+        assert!(
+            matches!(backend, LlmBackend::Ollama { model, .. } if model == "llama3.2")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_backend_unknown_provider_errors() {
+        let err = resolve_backend("invalid_provider", None, None, None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("Unknown provider 'invalid_provider'"));
+        assert!(err.contains("kimi"));
+        assert!(err.contains("claude"));
+        assert!(err.contains("openai"));
+        assert!(err.contains("ollama"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_backend_kimi_bridge_url_env_var() {
+        // Set KIMI_BRIDGE_URL to a fake URL. With mode "bridge", it should use it directly.
+        let old = std::env::var("KIMI_BRIDGE_URL").ok();
+        std::env::set_var("KIMI_BRIDGE_URL", "http://fake-bridge:9999/v1");
+        let backend = resolve_backend("kimi", None, None, Some("bridge")).await.unwrap();
+        assert!(
+            matches!(backend, LlmBackend::KimiBridge { base_url, .. } if base_url == "http://fake-bridge:9999/v1")
+        );
+        if let Some(v) = old {
+            std::env::set_var("KIMI_BRIDGE_URL", v);
+        } else {
+            std::env::remove_var("KIMI_BRIDGE_URL");
+        }
+    }
+
+    #[test]
+    fn test_agent_response_from_content() {
+        let resp = AgentResponse::from_content("hello".to_string());
+        assert_eq!(resp.content, "hello");
+        assert_eq!(resp.prompt_tokens, None);
+        assert_eq!(resp.completion_tokens, None);
+    }
+
+    #[test]
+    fn test_agent_response_with_usage() {
+        let resp = AgentResponse::with_usage("hello".to_string(), 10, 20);
+        assert_eq!(resp.content, "hello");
+        assert_eq!(resp.prompt_tokens, Some(10));
+        assert_eq!(resp.completion_tokens, Some(20));
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_kimi_bridge_mocked() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello from mock bridge!"
+                        },
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 7,
+                    "total_tokens": 19
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let backend = LlmBackend::KimiBridge {
+            base_url: format!("{}/v1", mock_server.uri()),
+            model: "test-model".to_string(),
+        };
+
+        let result = run_agent(&backend, "Say hello", None).await.unwrap();
+        assert_eq!(result.content, "Hello from mock bridge!");
+        assert_eq!(result.prompt_tokens, Some(12));
+        assert_eq!(result.completion_tokens, Some(7));
+    }
 }

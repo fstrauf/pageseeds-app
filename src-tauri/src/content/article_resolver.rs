@@ -229,9 +229,10 @@ pub fn repair_article_paths_in_batch(
     repo_root: &Path,
     project_id: &str,
     conn: &rusqlite::Connection,
-) -> Result<(usize, Vec<(String, String)>), String> {
+) -> Result<crate::models::article::RepairPathResult, String> {
     use crate::db::export;
     use crate::engine::task_store;
+    use crate::models::article::RepairPathResult;
 
     let content_dirs = discover_content_dirs(repo_root);
     let content_dirs_refs: Vec<&str> = content_dirs.iter().map(|s| s.as_str()).collect();
@@ -239,10 +240,13 @@ pub fn repair_article_paths_in_batch(
     let articles = task_store::list_articles(conn, project_id)
         .map_err(|e| format!("Failed to list articles: {}", e))?;
 
+    let mut checked = 0usize;
     let mut repaired = 0usize;
-    let mut changes = Vec::new();
+    let mut removed = 0usize;
+    let mut not_found = Vec::new();
 
     for article in &articles {
+        checked += 1;
         let resolved = resolve_article_file(repo_root, &article.file, &content_dirs_refs);
         if resolved.found && resolved.was_repaired {
             conn.execute(
@@ -252,14 +256,21 @@ pub fn repair_article_paths_in_batch(
             .map_err(|e| format!("Failed to update article {}: {}", article.id, e))?;
 
             repaired += 1;
-            changes.push((article.file.clone(), resolved.relative_path));
+        } else if !resolved.found {
+            not_found.push(article.file.clone());
+            removed += 1;
         }
     }
 
-    if repaired > 0 {
+    if repaired > 0 || removed > 0 {
         export::write_articles_to_repo(conn, project_id, repo_root)
             .map_err(|e| format!("Failed to export articles.json: {}", e))?;
     }
 
-    Ok((repaired, changes))
+    Ok(RepairPathResult {
+        checked,
+        repaired,
+        removed,
+        not_found,
+    })
 }

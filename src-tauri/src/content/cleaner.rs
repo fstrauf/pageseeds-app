@@ -143,6 +143,7 @@ fn rebuild_content(original: &str, new_body: &str, body_start: usize) -> String 
 /// Handles quoted and unquoted values. Preserves field order.
 /// If field doesn't exist, inserts it after "title" if present.
 /// For `description`, also removes `metaDescription:` and `meta_description:` aliases.
+#[allow(dead_code)]
 pub fn replace_frontmatter_field(fm: &str, key: &str, value: &str) -> String {
     let mut lines: Vec<String> = fm.lines().map(|s| s.to_string()).collect();
     let mut found = false;

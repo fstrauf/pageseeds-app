@@ -181,6 +181,22 @@ impl ResearchFinalOutput {
     }
 }
 
+/// Unified output for the complete keyword research workflow.
+///
+/// Combines the outputs from all research steps:
+/// - themes from seed extraction
+/// - validated_seeds from seed validation
+/// - selections from final selection
+///
+/// This is the spec-target type for the `research_keywords` workflow.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct KeywordResearchOutput {
+    pub themes: Vec<String>,
+    pub validated_seeds: Vec<ValidatedSeed>,
+    pub selections: Vec<SelectedKeyword>,
+}
+
 /// Helper to parse step output with clear error messages
 pub fn parse_seed_extraction(json_str: &str) -> Result<SeedExtractionOutput, String> {
     serde_json::from_str(json_str)

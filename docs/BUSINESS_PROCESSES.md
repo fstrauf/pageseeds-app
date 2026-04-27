@@ -432,7 +432,7 @@ impl WorkflowHandler for ImplementationHandler {
     }
     
     fn plan(&self, task: &Task, ctx: &HandlerContext) -> Vec<WorkflowStep> {
-        vec![WorkflowStep::new("apply_fix", "agentic")
+        vec![WorkflowStep::new("apply_fix", StepKind::Agentic)
             .with_param("skill", "apply_fix")]
     }
 }

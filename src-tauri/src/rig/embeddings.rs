@@ -109,6 +109,25 @@ pub async fn check_ollama_health(base_url: Option<&str>) -> Result<bool, String>
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_ollama_ndims() {
+        let backend = EmbeddingBackend::default_ollama();
+        assert_eq!(backend.ndims(), 768);
+    }
+
+    #[test]
+    fn test_ollama_backend_creation() {
+        let backend = EmbeddingBackend::ollama("http://localhost:11434", "nomic-embed-text", 768);
+        assert!(backend.is_ok());
+        let backend = backend.unwrap();
+        assert_eq!(backend.ndims(), 768);
+    }
+}
+
 #[allow(dead_code)]
 /// Check if the OpenAI API is reachable.
 pub async fn check_openai_health(api_key: &str) -> Result<bool, String> {

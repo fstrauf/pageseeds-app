@@ -588,6 +588,10 @@ export interface AgentInfo {
 export interface AgentStatus {
   available_agents: AgentInfo[]
   configured_provider: string
+  token_usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+  }
 }
 
 // ─── Skill Vector Search ─────────────────────────────────────────────────────

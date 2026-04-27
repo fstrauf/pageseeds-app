@@ -7,7 +7,7 @@
 use rusqlite::Connection;
 
 use crate::engine::task_store;
-use crate::engine::workflows::{step_params, StepKind, WorkflowStep};
+use crate::engine::workflows::{StepKind, WorkflowStep};
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 

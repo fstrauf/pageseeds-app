@@ -36,8 +36,11 @@ pub async fn fetch_suggestions(
         .build()
         .map_err(Error::Http)?;
 
+    let base_url = std::env::var("GOOGLE_AUTOCOMPLETE_BASE_URL")
+        .unwrap_or_else(|_| "https://suggestqueries.google.com".to_string());
     let url = format!(
-        "https://suggestqueries.google.com/complete/search?output=firefox&hl={}&gl={}&q={}",
+        "{}/complete/search?output=firefox&hl={}&gl={}&q={}",
+        base_url,
         language,
         country,
         urlencoding::encode(keyword)

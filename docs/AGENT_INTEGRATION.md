@@ -66,7 +66,7 @@ Set via task's `agent_policy` field or default in settings.
 Calls the LLM with a prompt, stores raw output.
 
 ```rust
-WorkflowStep::new("analyze_content", "agentic")
+WorkflowStep::new("analyze_content", StepKind::Agentic)
     .with_param("skill", "content_analysis")  // Loads SKILL.md
 ```
 
@@ -82,7 +82,7 @@ WorkflowStep::new("analyze_content", "agentic")
 Parses `latest_raw_output` into structured JSON artifact.
 
 ```rust
-WorkflowStep::new("parse_analysis", "normalizer")
+WorkflowStep::new("parse_analysis", StepKind::Normalizer)
     .with_param("normalizer_id", "content_analysis_parser")
     .with_param("artifact_name", "content_analysis_result")
 ```

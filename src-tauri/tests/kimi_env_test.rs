@@ -32,6 +32,7 @@ fn run_with_env(env_clear: bool, env_vars: &[(&str, &str)]) -> Result<String, St
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_normal_env() {
     println!("=== Normal Environment ===");
     match run_with_env(false, &[]) {
@@ -42,6 +43,7 @@ fn test_normal_env() {
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_cleared_env() {
     println!("=== Cleared Environment ===");
     match run_with_env(true, &[
@@ -55,6 +57,7 @@ fn test_cleared_env() {
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_with_kimi_vars() {
     println!("=== With KIMI_* env vars set ===");
     match run_with_env(false, &[
@@ -68,6 +71,7 @@ fn test_with_kimi_vars() {
 }
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_current_dir_set() {
     use std::path::Path;
     

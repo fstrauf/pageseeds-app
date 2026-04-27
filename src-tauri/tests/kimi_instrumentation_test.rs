@@ -2,6 +2,7 @@
 use std::path::PathBuf;
 
 #[test]
+#[ignore = "Requires local Kimi CLI and project files"]
 fn test_kimi_instrumentation() {
     // Initialize logging
     let _ = env_logger::Builder::from_default_env()

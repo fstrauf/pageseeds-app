@@ -24,6 +24,16 @@ pub struct AgentInfo {
 pub struct AgentStatus {
     pub available_agents: Vec<AgentInfo>,
     pub configured_provider: String,
+    /// Token usage from the most recent agent run, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
+}
+
+/// Token usage for a single agent run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
 }
 
 /// Check which agent CLIs are available on PATH.
@@ -43,6 +53,7 @@ pub fn detect_agents_sync(configured_provider: &str) -> AgentStatus {
     AgentStatus {
         available_agents,
         configured_provider: configured_provider.to_string(),
+        token_usage: None,
     }
 }
 
@@ -131,7 +142,26 @@ fn try_rig_backend(provider: &str, prompt: &str) -> Result<String, RigError> {
 
 /// Resolve backend and run prompt via rig.
 async fn run_rig_prompt(provider: &str, prompt: &str) -> Result<String, RigError> {
-    let backend = crate::rig::provider::resolve_backend(provider, None, None, None).await;
+    // Read kimi_backend_mode from global settings (fallback to "auto" if DB unreachable).
+    let kimi_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => crate::db::global_settings::get_kimi_backend_mode(&conn),
+        Err(e) => {
+            log::warn!("[agent] Failed to open DB for kimi_backend_mode: {}. Using auto.", e);
+            "auto".to_string()
+        }
+    };
+
+    let backend = match crate::rig::provider::resolve_backend(
+        provider,
+        None,
+        None,
+        Some(&kimi_mode),
+    )
+    .await
+    {
+        Ok(b) => b,
+        Err(e) => return Err(RigError::Other(e)),
+    };
 
     match &backend {
         crate::rig::provider::LlmBackend::KimiDirect => {
@@ -163,5 +193,6 @@ pub async fn detect_agents_async(configured_provider: &str) -> AgentStatus {
         .unwrap_or_else(|_| AgentStatus {
             available_agents: vec![],
             configured_provider: configured_provider.to_string(),
+            token_usage: None,
         })
 }
