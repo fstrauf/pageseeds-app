@@ -136,9 +136,9 @@ pub fn check_article_health(
 
 /// Compute a simple content hash for detecting changes.
 ///
-/// Hashes the concatenation of title + meta + first_paragraph so that
-/// any change to health-relevant fields invalidates the previous audit state.
-pub fn compute_content_hash(title: &str, meta: &str, first_paragraph: &str) -> String {
+/// Hashes the concatenation of title + meta + first_paragraph + has_faq_schema
+/// so that any change to health-relevant fields invalidates the previous audit state.
+pub fn compute_content_hash(title: &str, meta: &str, first_paragraph: &str, has_faq_schema: bool) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -146,6 +146,7 @@ pub fn compute_content_hash(title: &str, meta: &str, first_paragraph: &str) -> S
     title.hash(&mut hasher);
     meta.hash(&mut hasher);
     first_paragraph.hash(&mut hasher);
+    has_faq_schema.hash(&mut hasher);
     format!("{:x}", hasher.finish())
 }
 

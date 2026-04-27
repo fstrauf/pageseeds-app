@@ -889,4 +889,85 @@ A: This is a test.
 
         cleanup(&path);
     }
+
+    /// Phase 1 contract enforcement: recommendations missing required `file` or
+    /// `target_keyword` fields must be rejected rather than spawning broken fix tasks.
+    #[test]
+    fn create_ctr_fix_tasks_rejects_incomplete_recommendations() {
+        let path = test_dir();
+        setup_project(&path);
+        let conn = test_db();
+
+        let parent_task = crate::models::task::Task {
+            id: "parent-reject".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "ctr_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Reject Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "ctr_recommendations".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("ctr_audit".to_string()),
+                content: Some(serde_json::json!({
+                    "recommendations": [
+                        {
+                            "article_id": 1,
+                            "url_slug": "test-article",
+                            "file": "",
+                            "target_keyword": "test article",
+                            "fixes": [{"type": "title_rewrite", "recommended": "New Title"}]
+                        },
+                        {
+                            "article_id": 2,
+                            "url_slug": "another-article",
+                            "file": "content/002_another_article.mdx",
+                            "target_keyword": "",
+                            "fixes": [{"type": "meta_description", "recommended": "New meta"}]
+                        },
+                        {
+                            "article_id": 3,
+                            "url_slug": "valid-article",
+                            "file": "content/001_test_article.mdx",
+                            "target_keyword": "test article",
+                            "fixes": [{"type": "title_rewrite", "recommended": "Good Title"}]
+                        }
+                    ]
+                }).to_string()),
+            }],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let project = crate::models::project::Project {
+            id: "proj-test".to_string(),
+            name: "Test Project".to_string(),
+            path: path.clone(),
+            content_dir: None,
+            site_url: None,
+            site_id: None,
+            sitemap_url: None,
+            project_mode: crate::models::project::ProjectMode::Workspace,
+            active: true,
+            agent_provider: None,
+            seo_provider: Some("ahrefs".to_string()),
+        };
+        crate::engine::task_store::create_project(&conn, &project).unwrap();
+        crate::engine::task_store::create_task(&conn, &parent_task).unwrap();
+
+        let ids = create_ctr_fix_tasks(&conn, &parent_task, &path);
+        assert_eq!(ids.len(), 1, "Should create exactly 1 fix task (only the valid recommendation), got {}", ids.len());
+
+        let task = crate::engine::task_store::get_task(&conn, &ids[0]).unwrap();
+        assert!(task.description.as_ref().unwrap().contains("valid-article"));
+
+        cleanup(&path);
+    }
 }

@@ -381,6 +381,6 @@ pub fn get_ctr_health_summary(
         .count();
 
     Ok(crate::content::ops::build_ctr_health_summary(
-        repo_root, &articles, pending_fix_tasks, completed_audits,
+        repo_root, &articles, pending_fix_tasks, completed_audits, &db, &project_id,
     ))
 }

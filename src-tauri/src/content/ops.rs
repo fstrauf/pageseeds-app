@@ -808,6 +808,8 @@ pub fn build_ctr_health_summary(
     articles: &[crate::models::article::Article],
     pending_fix_tasks: usize,
     completed_audits: usize,
+    conn: &rusqlite::Connection,
+    project_id: &str,
 ) -> crate::models::ctr::CtrHealthSummary {
     use crate::engine::exec::audit_health;
     use crate::models::ctr::{CtrHealthArticle, CtrHealthSummary};
@@ -818,11 +820,41 @@ pub fn build_ctr_health_summary(
     let mut meta_issues = 0usize;
     let mut snippet_issues = 0usize;
     let mut faq_issues = 0usize;
+    let mut improved_count = 0usize;
+    let mut regressed_count = 0usize;
+    let mut already_healthy_count = 0usize;
+    let mut latest_audit_at: Option<String> = None;
 
     for article in articles {
         let file_found = audit_health::resolve_content_file(repo_root, &article.file).is_some();
+
+        // Load stored audit state for lifecycle tracking
+        let stored_state = crate::db::get_article_audit_state(conn, project_id, &article.file, "ctr_audit")
+            .ok()
+            .flatten();
+
+        let last_audited_at = stored_state.as_ref().map(|s| s.last_audited_at.clone());
+        let last_audit_issues = stored_state.as_ref()
+            .map(|s| s.issues_found.clone())
+            .unwrap_or_default();
+
+        // Track global last_audit_at
+        if let Some(ref ts) = last_audited_at {
+            if latest_audit_at.as_ref().map(|l| ts > l).unwrap_or(true) {
+                latest_audit_at = Some(ts.clone());
+            }
+        }
+
         if !file_found {
             missing_files += 1;
+            let resolved: Vec<String> = last_audit_issues
+                .iter()
+                .filter(|i| !(*i == "file_not_found"))
+                .cloned()
+                .collect();
+            if !last_audit_issues.is_empty() && !resolved.is_empty() {
+                improved_count += 1;
+            }
             health_articles.push(CtrHealthArticle {
                 id: article.id,
                 title: article.title.clone(),
@@ -831,9 +863,9 @@ pub fn build_ctr_health_summary(
                 healthy: false,
                 audit_status: "needs_fix".to_string(),
                 issues: vec!["file_not_found".to_string()],
-                last_audited_at: None,
-                last_audit_issues: Vec::new(),
-                resolved_issues: Vec::new(),
+                last_audited_at,
+                last_audit_issues,
+                resolved_issues: resolved,
             });
             continue;
         }
@@ -878,6 +910,32 @@ pub fn build_ctr_health_summary(
             "needs_fix".to_string()
         };
 
+        // Compute resolved issues: issues from last audit that are no longer present
+        let resolved_issues: Vec<String> = last_audit_issues
+            .iter()
+            .filter(|i| !issues.contains(i))
+            .cloned()
+            .collect();
+
+        // Compute improved / regressed / already_healthy
+        let was_healthy = stored_state.as_ref().map(|s| s.was_healthy).unwrap_or(false);
+        if was_healthy && healthy {
+            already_healthy_count += 1;
+        } else if !was_healthy && healthy {
+            improved_count += 1;
+        } else if was_healthy && !healthy {
+            regressed_count += 1;
+        } else {
+            // Both unhealthy: compare issue sets
+            let old_set: std::collections::HashSet<_> = last_audit_issues.iter().collect();
+            let new_set: std::collections::HashSet<_> = issues.iter().collect();
+            if new_set.is_subset(&old_set) && new_set.len() < old_set.len() {
+                improved_count += 1;
+            } else if !new_set.is_subset(&old_set) {
+                regressed_count += 1;
+            }
+        }
+
         health_articles.push(CtrHealthArticle {
             id: article.id,
             title: article.title.clone(),
@@ -886,9 +944,9 @@ pub fn build_ctr_health_summary(
             healthy,
             audit_status,
             issues: issues.clone(),
-            last_audited_at: None,
-            last_audit_issues: Vec::new(),
-            resolved_issues: Vec::new(),
+            last_audited_at,
+            last_audit_issues,
+            resolved_issues,
         });
     }
 
@@ -901,15 +959,15 @@ pub fn build_ctr_health_summary(
         total_articles,
         healthy_count,
         unhealthy_count,
-        improved_count: 0,
-        already_healthy_count: healthy_count,
-        regressed_count: 0,
+        improved_count,
+        already_healthy_count,
+        regressed_count,
         missing_files,
         title_issues,
         meta_issues,
         snippet_issues,
         faq_issues,
-        last_audit_at: None,
+        last_audit_at: latest_audit_at,
         articles: health_articles,
         pending_fix_tasks,
         completed_audits,

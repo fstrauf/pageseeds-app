@@ -64,6 +64,20 @@ pub enum StepKind {
     CtrFixApply,
     /// Deterministic verification that applied CTR fixes meet health thresholds.
     CtrVerifyFix,
+    /// Load approved merge plan from strategy artifact.
+    MergeLoadPlan,
+    /// Preflight checks before merging (files exist, no cycles, keeper indexable).
+    MergePreflight,
+    /// Extract unique sections from redirect pages.
+    MergeExtractSections,
+    /// Agentic step: draft structured ContentMergePatch JSON.
+    MergeDraftPatch,
+    /// Apply structured merge patch to keeper file, snapshot original.
+    MergeApplyPatch,
+    /// Generate redirect rules (generic CSV first, platform adapters later).
+    MergeGenerateRedirects,
+    /// Validate merged keeper and redirect map.
+    MergeValidateOutput,
     /// Sanitize content: rename .md → .mdx, repair paths, validate frontmatter (read-only report).
     SanitizeContent,
     /// Fallback for unknown strings during deserialization.
@@ -123,6 +137,13 @@ impl StepKind {
             Self::CanAnalyze => "can_analyze",
             Self::CtrFixApply => "ctr_fix_apply",
             Self::CtrVerifyFix => "ctr_verify_fix",
+            Self::MergeLoadPlan => "merge_load_plan",
+            Self::MergePreflight => "merge_preflight",
+            Self::MergeExtractSections => "merge_extract_sections",
+            Self::MergeDraftPatch => "merge_draft_patch",
+            Self::MergeApplyPatch => "merge_apply_patch",
+            Self::MergeGenerateRedirects => "merge_generate_redirects",
+            Self::MergeValidateOutput => "merge_validate_output",
             Self::SanitizeContent => "sanitize_content",
             Self::Unknown => "unknown",
         }
@@ -195,6 +216,13 @@ impl FromStr for StepKind {
             "can_analyze" => Ok(Self::CanAnalyze),
             "ctr_fix_apply" => Ok(Self::CtrFixApply),
             "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
+            "merge_load_plan" => Ok(Self::MergeLoadPlan),
+            "merge_preflight" => Ok(Self::MergePreflight),
+            "merge_extract_sections" => Ok(Self::MergeExtractSections),
+            "merge_draft_patch" => Ok(Self::MergeDraftPatch),
+            "merge_apply_patch" => Ok(Self::MergeApplyPatch),
+            "merge_generate_redirects" => Ok(Self::MergeGenerateRedirects),
+            "merge_validate_output" => Ok(Self::MergeValidateOutput),
             "sanitize_content" => Ok(Self::SanitizeContent),
             _ => Err(()),
         }
@@ -277,6 +305,13 @@ mod tests {
             StepKind::CanAnalyze,
             StepKind::CtrFixApply,
             StepKind::CtrVerifyFix,
+            StepKind::MergeLoadPlan,
+            StepKind::MergePreflight,
+            StepKind::MergeExtractSections,
+            StepKind::MergeDraftPatch,
+            StepKind::MergeApplyPatch,
+            StepKind::MergeGenerateRedirects,
+            StepKind::MergeValidateOutput,
             StepKind::SanitizeContent,
         ];
 

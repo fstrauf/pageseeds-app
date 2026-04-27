@@ -63,11 +63,12 @@ pub(crate) fn exec_ctr_build_context(
         let (current_title, meta_description, first_paragraph, h1, has_faq_schema, file_found) =
             crate::engine::exec::audit_health::read_article_excerpt(project_path, &file_ref);
 
-        // Compute content hash for change detection
+        // Compute content hash for change detection (includes FAQ/schema state)
         let content_hash = crate::engine::exec::audit_health::compute_content_hash(
             &current_title,
             &meta_description,
             &first_paragraph,
+            has_faq_schema,
         );
 
         // Check stored audit state: if hash matches and was healthy, skip

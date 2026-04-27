@@ -207,7 +207,7 @@ pub(crate) fn exec_ctr_verify_fix(
         }
     };
 
-    let file_ref = rec.file.unwrap_or_default();
+    let file_ref = &rec.file;
     if file_ref.is_empty() {
         return StepResult {
             success: false,
@@ -228,7 +228,7 @@ pub(crate) fn exec_ctr_verify_fix(
         }
     };
 
-    let target_keyword = rec.target_keyword.unwrap_or_default();
+    let target_keyword = &rec.target_keyword;
 
     let (title, meta, first_paragraph, _h1, has_faq, file_found) =
         crate::engine::exec::audit_health::read_article_excerpt(project_path, &file_ref);

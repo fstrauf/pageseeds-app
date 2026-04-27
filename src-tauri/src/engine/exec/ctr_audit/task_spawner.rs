@@ -51,9 +51,26 @@ pub(crate) fn create_ctr_fix_tasks(
             continue;
         }
 
+        // Phase 1 contract enforcement: file and target_keyword are required.
+        if rec.file.is_empty() {
+            log::warn!(
+                "[ctr_audit] Skipping recommendation for article {}: missing required 'file' field",
+                rec.article_id
+            );
+            continue;
+        }
+        if rec.target_keyword.is_empty() {
+            log::warn!(
+                "[ctr_audit] Skipping recommendation for article {} ({}): missing required 'target_keyword' field",
+                rec.article_id,
+                rec.file
+            );
+            continue;
+        }
+
         let article_id = rec.article_id;
         let url_slug = rec.url_slug.clone();
-        let file = rec.file.clone().unwrap_or_default();
+        let file = rec.file.clone();
 
         let single_rec = CtrRecommendation {
             article_id: rec.article_id,

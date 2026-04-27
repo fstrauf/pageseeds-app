@@ -635,3 +635,221 @@ pub fn import_projects_config(conn: &Connection) -> Result<Vec<(String, String, 
     }
     Ok(imported)
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{}_{}", prefix, nanos))
+    }
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
+    fn insert_test_project(conn: &Connection, id: &str, path: &str) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, ?2, ?3, 1, 'workspace')",
+            [id, "Test Project", path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn import_export_round_trip_preserves_known_fields() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1", "/tmp/test");
+
+        let json = r#"{
+            "nextArticleId": 3,
+            "articles": [
+                {
+                    "id": 1,
+                    "title": "Hello",
+                    "url_slug": "hello",
+                    "file": "./content/001_hello.mdx",
+                    "target_keyword": "hello world",
+                    "keyword_difficulty": "15",
+                    "target_volume": 1200,
+                    "published_date": "2026-01-15",
+                    "word_count": 450,
+                    "status": "published",
+                    "review_status": "reviewed",
+                    "review_started_at": "2026-01-10T00:00:00Z",
+                    "last_reviewed_at": "2026-01-12T00:00:00Z",
+                    "review_count": 2,
+                    "content_gaps_addressed": ["gap1"],
+                    "estimated_traffic_monthly": "100"
+                }
+            ]
+        }"#;
+
+        let imported = import_articles(&conn, "p1", json).unwrap();
+        assert_eq!(imported, 1);
+
+        let exported = export_articles(&conn, "p1").unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(doc["nextArticleId"], 3);
+
+        let articles = doc["articles"].as_array().unwrap();
+        assert_eq!(articles.len(), 1);
+
+        let a = &articles[0];
+        assert_eq!(a["id"], 1);
+        assert_eq!(a["title"], "Hello");
+        assert_eq!(a["url_slug"], "hello");
+        assert_eq!(a["file"], "./content/001_hello.mdx");
+        assert_eq!(a["target_keyword"], "hello world");
+        assert_eq!(a["keyword_difficulty"], "15");
+        assert_eq!(a["target_volume"], 1200);
+        assert_eq!(a["published_date"], "2026-01-15");
+        assert_eq!(a["word_count"], 450);
+        assert_eq!(a["status"], "published");
+        assert_eq!(a["review_status"], "reviewed");
+        assert_eq!(a["review_started_at"], "2026-01-10T00:00:00Z");
+        assert_eq!(a["last_reviewed_at"], "2026-01-12T00:00:00Z");
+        assert_eq!(a["review_count"], 2);
+        assert_eq!(a["estimated_traffic_monthly"], "100");
+    }
+
+    #[test]
+    fn export_preserves_unknown_fields_via_merge() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1", "/tmp/test");
+
+        let json = r#"{
+            "nextArticleId": 2,
+            "articles": [
+                {
+                    "id": 1,
+                    "title": "Hello",
+                    "url_slug": "hello",
+                    "file": "./content/001_hello.mdx",
+                    "status": "draft",
+                    "gsc": { "clicks": 42, "impressions": 1000 }
+                }
+            ]
+        }"#;
+
+        import_articles(&conn, "p1", json).unwrap();
+
+        // Simulate an export round-trip by writing to disk and reading back
+        let dir = unique_temp_dir("ps_export_test");
+        let auto_dir = dir.join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        std::fs::write(auto_dir.join("articles.json"), json).unwrap();
+
+        write_articles_to_repo(&conn, "p1", &dir).unwrap();
+
+        let on_disk = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&on_disk).unwrap();
+        let a = &doc["articles"].as_array().unwrap()[0];
+
+        // Known fields come from SQLite
+        assert_eq!(a["title"], "Hello");
+        // Unknown field preserved from existing JSON
+        assert_eq!(a["gsc"]["clicks"], 42);
+        assert_eq!(a["gsc"]["impressions"], 1000);
+    }
+
+    #[test]
+    fn import_does_not_destroy_unknown_fields_in_existing_json() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1", "/tmp/test");
+
+        let initial_json = r#"{
+            "nextArticleId": 2,
+            "articles": [
+                {
+                    "id": 1,
+                    "title": "Hello",
+                    "url_slug": "hello",
+                    "file": "./content/001_hello.mdx",
+                    "status": "draft",
+                    "custom_metric": 99
+                }
+            ]
+        }"#;
+
+        import_articles(&conn, "p1", initial_json).unwrap();
+
+        // After export, the unknown field should still be present if we merge
+        let exported = export_articles(&conn, "p1").unwrap();
+        let mut exported_doc: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        let existing_doc: serde_json::Value = serde_json::from_str(initial_json).unwrap();
+
+        merge_unknown_fields(&mut exported_doc, &existing_doc);
+
+        let a = &exported_doc["articles"].as_array().unwrap()[0];
+        assert_eq!(a["custom_metric"], 99);
+    }
+
+    #[test]
+    fn read_write_articles_from_repo_round_trip() {
+        let conn = in_memory_db();
+        let dir = unique_temp_dir("ps_repo_roundtrip");
+        let auto_dir = dir.join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        insert_test_project(&conn, "p1", dir.to_str().unwrap());
+
+        let json = r#"{
+            "nextArticleId": 2,
+            "articles": [
+                {
+                    "id": 1,
+                    "title": "Round Trip",
+                    "url_slug": "round-trip",
+                    "file": "./content/001_round_trip.mdx",
+                    "status": "published",
+                    "published_date": "2026-02-01"
+                }
+            ]
+        }"#;
+
+        std::fs::write(auto_dir.join("articles.json"), json).unwrap();
+
+        let imported = read_articles_from_repo(&conn, "p1", &dir).unwrap();
+        assert_eq!(imported, 1);
+
+        write_articles_to_repo(&conn, "p1", &dir).unwrap();
+
+        let on_disk = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&on_disk).unwrap();
+        assert_eq!(doc["nextArticleId"], 2);
+        let a = &doc["articles"].as_array().unwrap()[0];
+        assert_eq!(a["title"], "Round Trip");
+        assert_eq!(a["published_date"], "2026-02-01");
+    }
+
+    #[test]
+    fn import_articles_updates_meta_next_article_id() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1", "/tmp/test");
+
+        let json = r#"{"nextArticleId": 42, "articles": []}"#;
+        import_articles(&conn, "p1", json).unwrap();
+
+        let next: i64 = conn
+            .query_row(
+                "SELECT next_article_id FROM articles_meta WHERE project_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(next, 42);
+    }
+}

@@ -18,15 +18,15 @@ pub struct CtrAgentOutput {
 pub struct CtrRecommendation {
     pub article_id: i64,
     pub url_slug: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
+    /// Canonical file path for the article MDX file. Guaranteed by Rust context enrichment.
+    pub file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_ctr_improvement: Option<String>,
     /// Target keyword for this article (used by verifier for snippet keyword check).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub target_keyword: Option<String>,
+    /// Guaranteed by Rust context enrichment.
+    pub target_keyword: String,
     pub fixes: Vec<CtrFix>,
 }
 

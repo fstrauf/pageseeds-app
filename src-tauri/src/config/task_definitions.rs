@@ -14,6 +14,7 @@ pub enum HandlerFamily {
     Coverage,
     CtrAudit,
     CannibalizationAudit,
+    ConsolidateCluster,
     Implementation,
     #[allow(dead_code)]
     Manual,
@@ -278,6 +279,14 @@ const DEFINITIONS: &[TaskDefinition] = &[
         execution_mode: ExecutionMode::Automatic,
         review_on_success: false,
         handler_family: HandlerFamily::CannibalizationAudit,
+    },
+    // Consolidation
+    TaskDefinition {
+        task_type: "consolidate_cluster",
+        phase: "implementation",
+        execution_mode: ExecutionMode::Spec,
+        review_on_success: true,
+        handler_family: HandlerFamily::ConsolidateCluster,
     },
     // Indexing diagnostics
     TaskDefinition {

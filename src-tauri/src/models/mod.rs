@@ -8,3 +8,4 @@ pub mod social;
 pub mod research;
 pub mod ctr;
 pub mod cannibalization;
+pub mod merge_patch;
