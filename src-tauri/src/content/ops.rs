@@ -619,15 +619,29 @@ pub fn ingest_orphan_files(
 
     // 7. Write articles.json back to the repo (bypassing the date-policy gate since
     //    we may be ingesting old published content that hasn't been date-indexed yet).
-    let json = crate::db::export::export_articles(conn, project_id)
+    //    Preserve unknown/custom fields from the existing JSON.
+    let exported_json = crate::db::export::export_articles(conn, project_id)
         .map_err(|e| e.to_string())?;
+    let mut exported: serde_json::Value = serde_json::from_str(&exported_json)
+        .map_err(|e| e.to_string())?;
+
     let articles_json_path = repo_root
         .join(".github")
         .join("automation")
         .join("articles.json");
+    if let Ok(existing_json) = std::fs::read_to_string(&articles_json_path) {
+        if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_json) {
+            crate::db::export::merge_unknown_fields(&mut exported, &existing);
+        }
+    }
+
     std::fs::create_dir_all(articles_json_path.parent().unwrap())
         .map_err(|e| e.to_string())?;
-    std::fs::write(&articles_json_path, json).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &articles_json_path,
+        serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
 
     let count = ingested_files.len();
     Ok(IngestOrphanResult { ingested: count, files: ingested_files })

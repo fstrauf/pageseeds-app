@@ -502,6 +502,49 @@ fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()
     )))
 }
 
+/// Merge unknown/custom fields from an existing articles.json into a newly exported one.
+/// Preserves fields not in the SQLite schema (e.g. gsc, analytics) across export rounds.
+pub(crate) fn merge_unknown_fields(exported: &mut serde_json::Value, existing: &serde_json::Value) {
+    let Some(exported_articles) = exported.get_mut("articles").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    let Some(existing_articles) = existing.get("articles").and_then(|v| v.as_array()) else {
+        return;
+    };
+
+    let existing_map: std::collections::HashMap<i64, &serde_json::Map<String, serde_json::Value>> =
+        existing_articles
+            .iter()
+            .filter_map(|a| {
+                let id = a.get("id").and_then(|v| v.as_i64())?;
+                let obj = a.as_object()?;
+                Some((id, obj))
+            })
+            .collect();
+
+    let known_fields: std::collections::HashSet<&str> = [
+        "id", "title", "url_slug", "file", "target_keyword", "keyword_difficulty",
+        "target_volume", "published_date", "word_count", "status",
+        "content_gaps_addressed", "estimated_traffic_monthly",
+        "review_status", "review_started_at", "last_reviewed_at", "review_count",
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    for article in exported_articles.iter_mut() {
+        let Some(id) = article.get("id").and_then(|v| v.as_i64()) else { continue };
+        let Some(existing_obj) = existing_map.get(&id) else { continue };
+        let Some(article_obj) = article.as_object_mut() else { continue };
+
+        for (key, value) in existing_obj.iter() {
+            if !known_fields.contains(key.as_str()) {
+                article_obj.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 /// Write articles.json to .github/automation/articles.json (CLI-compatible location).
 pub fn write_articles_to_repo(
     conn: &Connection,
@@ -509,10 +552,17 @@ pub fn write_articles_to_repo(
     project_path: &Path,
 ) -> Result<()> {
     validate_export_date_policy(conn, project_id)?;
-    let json = export_articles(conn, project_id)?;
+    let mut exported: serde_json::Value = serde_json::from_str(&export_articles(conn, project_id)?)?;
+
     let out_path = articles_json_path(project_path);
+    if let Ok(existing_json) = std::fs::read_to_string(&out_path) {
+        if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_json) {
+            merge_unknown_fields(&mut exported, &existing);
+        }
+    }
+
     std::fs::create_dir_all(out_path.parent().unwrap())?;
-    std::fs::write(out_path, json)?;
+    std::fs::write(out_path, serde_json::to_string_pretty(&exported)?)?;
     Ok(())
 }
 
