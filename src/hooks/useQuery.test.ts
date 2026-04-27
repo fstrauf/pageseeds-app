@@ -1,5 +1,5 @@
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useQuery, useMutation, invalidateQueries } from './useQuery'
 
 describe('useQuery', () => {
