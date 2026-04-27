@@ -381,6 +381,27 @@ CREATE TABLE IF NOT EXISTS ctr_rendered_page_audits (
 CREATE INDEX IF NOT EXISTS idx_ctr_rendered_audits_project ON ctr_rendered_page_audits(project_id);
 "#;
 
+static MIGRATION_V27: &str = r#"
+-- Flexible sidecar metadata for articles (GSC, quality, analytics, custom)
+CREATE TABLE IF NOT EXISTS article_metadata (
+    project_id      TEXT NOT NULL,
+    article_id      INTEGER NOT NULL,
+    namespace       TEXT NOT NULL,
+    payload         TEXT NOT NULL DEFAULT '{}',
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (project_id, article_id, namespace),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_metadata_project ON article_metadata(project_id);
+CREATE INDEX IF NOT EXISTS idx_article_metadata_article ON article_metadata(project_id, article_id);
+"#;
+
+static MIGRATION_V28: &str = r#"
+-- Add rendered_faq_question_count to ctr_rendered_page_audits
+ALTER TABLE ctr_rendered_page_audits ADD COLUMN rendered_faq_question_count INTEGER NOT NULL DEFAULT 0;
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -811,6 +832,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 27 {
+        conn.execute_batch(MIGRATION_V27)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (27, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 28 {
+        conn.execute_batch(MIGRATION_V28)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (28, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn
@@ -1106,8 +1143,8 @@ pub fn set_ctr_rendered_audit(
         "INSERT INTO ctr_rendered_page_audits
          (project_id, article_id, url, file, source_title, rendered_title, rendered_title_length,
           title_issue_source, source_description, rendered_description, canonical_url, rendered_h1,
-          schema_types_json, has_rendered_faq_page, snippet_markup_json, issues_json, checked_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+          schema_types_json, has_rendered_faq_page, rendered_faq_question_count, snippet_markup_json, issues_json, checked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT(project_id, article_id)
          DO UPDATE SET
              url = excluded.url,
@@ -1122,6 +1159,7 @@ pub fn set_ctr_rendered_audit(
              rendered_h1 = excluded.rendered_h1,
              schema_types_json = excluded.schema_types_json,
              has_rendered_faq_page = excluded.has_rendered_faq_page,
+             rendered_faq_question_count = excluded.rendered_faq_question_count,
              snippet_markup_json = excluded.snippet_markup_json,
              issues_json = excluded.issues_json,
              checked_at = excluded.checked_at",
@@ -1140,6 +1178,7 @@ pub fn set_ctr_rendered_audit(
             audit.rendered_h1.as_deref(),
             schema_json,
             has_faq,
+            audit.rendered_faq_question_count as i64,
             snippet_json,
             issues_json,
             &audit.checked_at,
@@ -1158,16 +1197,17 @@ pub fn get_ctr_rendered_audit(
         "SELECT url, file, source_title, rendered_title, rendered_title_length,
                 title_issue_source, source_description, rendered_description,
                 canonical_url, rendered_h1, schema_types_json, has_rendered_faq_page,
-                snippet_markup_json, issues_json, checked_at
+                rendered_faq_question_count, snippet_markup_json, issues_json, checked_at
          FROM ctr_rendered_page_audits
          WHERE project_id = ?1 AND article_id = ?2",
     )?;
 
     let row = stmt.query_row(rusqlite::params![project_id, article_id], |row| {
         let schema_json: String = row.get(10)?;
-        let snippet_json: String = row.get(12)?;
-        let issues_json: String = row.get(13)?;
         let has_faq: i64 = row.get(11)?;
+        let faq_count: i64 = row.get(12)?;
+        let snippet_json: String = row.get(13)?;
+        let issues_json: String = row.get(14)?;
 
         Ok(crate::models::ctr::CtrRenderedPageAudit {
             article_id,
@@ -1183,9 +1223,10 @@ pub fn get_ctr_rendered_audit(
             rendered_h1: row.get(9)?,
             schema_types: serde_json::from_str(&schema_json).unwrap_or_default(),
             has_rendered_faq_page: has_faq != 0,
+            rendered_faq_question_count: faq_count as usize,
             snippet_markup: serde_json::from_str(&snippet_json).unwrap_or_default(),
             issues: serde_json::from_str(&issues_json).unwrap_or_default(),
-            checked_at: row.get(14)?,
+            checked_at: row.get(15)?,
         })
     });
 
@@ -1205,7 +1246,7 @@ pub fn list_ctr_rendered_audits(
         "SELECT article_id, url, file, source_title, rendered_title, rendered_title_length,
                 title_issue_source, source_description, rendered_description,
                 canonical_url, rendered_h1, schema_types_json, has_rendered_faq_page,
-                snippet_markup_json, issues_json, checked_at
+                rendered_faq_question_count, snippet_markup_json, issues_json, checked_at
          FROM ctr_rendered_page_audits
          WHERE project_id = ?1
          ORDER BY article_id",
@@ -1213,9 +1254,10 @@ pub fn list_ctr_rendered_audits(
 
     let rows = stmt.query_map([project_id], |row| {
         let schema_json: String = row.get(11)?;
-        let snippet_json: String = row.get(13)?;
-        let issues_json: String = row.get(14)?;
         let has_faq: i64 = row.get(12)?;
+        let faq_count: i64 = row.get(13)?;
+        let snippet_json: String = row.get(14)?;
+        let issues_json: String = row.get(15)?;
 
         Ok(crate::models::ctr::CtrRenderedPageAudit {
             article_id: row.get(0)?,
@@ -1231,9 +1273,10 @@ pub fn list_ctr_rendered_audits(
             rendered_h1: row.get(10)?,
             schema_types: serde_json::from_str(&schema_json).unwrap_or_default(),
             has_rendered_faq_page: has_faq != 0,
+            rendered_faq_question_count: faq_count as usize,
             snippet_markup: serde_json::from_str(&snippet_json).unwrap_or_default(),
             issues: serde_json::from_str(&issues_json).unwrap_or_default(),
-            checked_at: row.get(15)?,
+            checked_at: row.get(16)?,
         })
     })?;
 
@@ -1377,6 +1420,108 @@ pub fn delete_strategy_reviews(conn: &Connection, strategy_id: &str) -> Result<(
     conn.execute(
         "DELETE FROM strategy_reviews WHERE strategy_id = ?1",
         [strategy_id],
+    )?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Article Metadata CRUD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Upsert sidecar metadata for an article namespace.
+pub fn set_article_metadata(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+    namespace: &str,
+    payload: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO article_metadata (project_id, article_id, namespace, payload, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(project_id, article_id, namespace) DO UPDATE SET
+            payload = excluded.payload,
+            updated_at = excluded.updated_at",
+        rusqlite::params![project_id, article_id, namespace, payload, now],
+    )?;
+    Ok(())
+}
+
+/// Get sidecar metadata for a specific article namespace.
+pub fn get_article_metadata(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+    namespace: &str,
+) -> Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT payload FROM article_metadata
+         WHERE project_id = ?1 AND article_id = ?2 AND namespace = ?3",
+    )?;
+    let result = stmt.query_row(
+        rusqlite::params![project_id, article_id, namespace],
+        |row| row.get::<_, String>(0),
+    );
+    match result {
+        Ok(payload) => Ok(Some(payload)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// List all metadata namespaces for a given article.
+pub fn list_article_metadata(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT namespace, payload FROM article_metadata
+         WHERE project_id = ?1 AND article_id = ?2
+         ORDER BY namespace",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![project_id, article_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+/// List all metadata for a project (useful for bulk export).
+pub fn list_project_metadata(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<(i64, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT article_id, namespace, payload FROM article_metadata
+         WHERE project_id = ?1
+         ORDER BY article_id, namespace",
+    )?;
+    let rows = stmt.query_map([project_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })?;
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+/// Delete metadata for a specific article namespace.
+pub fn delete_article_metadata(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+    namespace: &str,
+) -> Result<()> {
+    conn.execute(
+        "DELETE FROM article_metadata
+         WHERE project_id = ?1 AND article_id = ?2 AND namespace = ?3",
+        rusqlite::params![project_id, article_id, namespace],
     )?;
     Ok(())
 }

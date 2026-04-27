@@ -339,11 +339,10 @@ impl StepRegistry {
         }));
 
         handlers.insert(StepKind::ContentSync, Box::new(|_step, ctx| {
-            let task = ctx.task;
-            let project_path = ctx.project_path;
-            Box::pin(async move {
-                crate::engine::exec::content::exec_content_sync(task, project_path)
-            })
+            let result = crate::engine::exec::content::exec_content_sync(
+                ctx.task, ctx.project_path, ctx.conn,
+            );
+            Box::pin(async move { result })
         }));
 
         handlers.insert(StepKind::FormatValidation, Box::new(|_step, ctx| {
@@ -560,6 +559,12 @@ impl StepRegistry {
 
         register_blocking!(handlers, StepKind::CtrTemplateVerifyRender,
             crate::engine::exec::ctr_audit::exec_ctr_template_verify_render, db_conn);
+
+        register_blocking!(handlers, StepKind::CtrSchemaDetect,
+            crate::engine::exec::ctr_audit::exec_ctr_schema_detect, db_conn);
+
+        register_blocking!(handlers, StepKind::CtrSchemaVerifyRender,
+            crate::engine::exec::ctr_audit::exec_ctr_schema_verify_render, db_conn);
 
         register_blocking!(handlers, StepKind::MergeLoadPlan,
             crate::engine::exec::consolidate_cluster::exec_merge_load_plan);

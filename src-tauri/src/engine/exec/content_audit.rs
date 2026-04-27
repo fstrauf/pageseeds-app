@@ -16,22 +16,33 @@ pub(crate) fn exec_content_audit(task: &crate::models::task::Task, project_path:
     use regex::Regex;
 
     let paths = ProjectPaths::from_path(project_path);
-    let articles_path = paths.automation_dir.join("articles.json");
-    let _ = task;
 
-    let doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
+    let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to open app database: {}", e),
+                output: None,
+            }
+        }
     };
 
-    let empty = vec![];
-    let articles = doc["articles"].as_array().unwrap_or(&empty);
+    let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
+        Ok(a) => a,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to load articles from DB: {}", e),
+                output: None,
+            }
+        }
+    };
 
     // Only audit published/live articles (skip drafts)
-    let to_audit: Vec<&serde_json::Value> = articles.iter()
+    let to_audit: Vec<&crate::models::article::Article> = articles.iter()
         .filter(|a| {
-            let status = a["status"].as_str().unwrap_or("").to_lowercase();
-            matches!(status.as_str(), "published" | "live" | "")
+            matches!(a.status.to_lowercase().as_str(), "published" | "live" | "")
         })
         .collect();
 
@@ -89,7 +100,7 @@ pub(crate) fn exec_content_audit(task: &crate::models::task::Task, project_path:
 
 /// Run all deterministic checks on one article, return an audit record Value.
 pub(crate) fn audit_one_article(
-    article: &serde_json::Value,
+    article: &crate::models::article::Article,
     repo_root: &std::path::Path,
     num_prefix_re: &regex::Regex,
     code_block_re: &regex::Regex,
@@ -97,12 +108,12 @@ pub(crate) fn audit_one_article(
     md_syntax_re: &regex::Regex,
     link_extract_re: &regex::Regex,
 ) -> serde_json::Value {
-    let keyword = article["target_keyword"].as_str().unwrap_or("").trim().to_lowercase();
-    let title = article["title"].as_str().unwrap_or("").trim().to_string();
-    let file_ref = article["file"].as_str().unwrap_or("").trim().to_string();
-    let gsc = &article["gsc"];
-    let published_date = article["published_date"].as_str().unwrap_or("").to_string();
-    let status = article["status"].as_str().unwrap_or("").to_lowercase();
+    let keyword = article.target_keyword.as_deref().unwrap_or("").trim().to_lowercase();
+    let title = article.title.trim().to_string();
+    let file_ref = article.file.trim().to_string();
+    let gsc = serde_json::Value::Null; // TODO: load from sidecar metadata once Phase 2 is implemented
+    let published_date = article.published_date.as_deref().unwrap_or("").to_string();
+    let status = article.status.to_lowercase();
 
     // Read source file
     let source = read_source_file(repo_root, &file_ref);
@@ -260,9 +271,9 @@ pub(crate) fn audit_one_article(
     let _ = num_prefix_re; // used by caller for slug normalization
 
     serde_json::json!({
-        "id": article["id"],
+        "id": article.id,
         "title": title,
-        "url_slug": article["url_slug"],
+        "url_slug": &article.url_slug,
         "file": file_ref,
         "target_keyword": keyword,
         "status": status,

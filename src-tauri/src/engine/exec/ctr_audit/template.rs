@@ -6,6 +6,7 @@
 use crate::engine::workflows::StepResult;
 use crate::models::ctr::{CtrRenderedPageAudit, CtrTemplateDetectionResult, CtrTemplatePageDetail};
 use crate::models::task::Task;
+use crate::engine::exec::ctr_audit::rendered::extract_json_ld_schema_types_with_faq_count;
 
 /// Minimum number of pages sharing a pattern to qualify as site-wide.
 const SITE_TEMPLATE_THRESHOLD: usize = 2;
@@ -491,6 +492,181 @@ fn is_brand_duplicated(title: &str) -> bool {
     counts.values().any(|&c| c >= 3)
 }
 
+// ─── Schema Renderer Detection ────────────────────────────────────────────────
+
+/// Detect articles where source has FAQ content but rendered HTML lacks FAQPage JSON-LD.
+pub(crate) fn exec_ctr_schema_detect(
+    task: &Task,
+    project_path: &str,
+    conn: &rusqlite::Connection,
+) -> StepResult {
+    let audits = match crate::db::list_ctr_rendered_audits(conn, &task.project_id) {
+        Ok(a) => a,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to load rendered audits: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    let mut affected = Vec::new();
+    for audit in &audits {
+        if audit.has_rendered_faq_page || audit.rendered_faq_question_count > 0 {
+            continue;
+        }
+        // Check if source file has FAQ content
+        let repo_root = std::path::Path::new(project_path);
+        if let Some(full_path) = crate::engine::exec::audit_health::resolve_content_file(repo_root, &audit.file) {
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                let has_source_faq = crate::engine::exec::audit_health::has_faq_schema(&content);
+                if has_source_faq {
+                    affected.push(serde_json::json!({
+                        "article_id": audit.article_id,
+                        "url": audit.url,
+                        "file": audit.file,
+                        "source_has_faq": true,
+                        "rendered_has_faq": false,
+                        "rendered_faq_question_count": audit.rendered_faq_question_count,
+                    }));
+                }
+            }
+        }
+    }
+
+    let output = serde_json::to_string_pretty(&affected).unwrap_or_default();
+    StepResult {
+        success: true,
+        message: format!(
+            "Schema renderer detection: {} article(s) with source FAQ but no rendered FAQPage JSON-LD",
+            affected.len()
+        ),
+        output: Some(output),
+    }
+}
+
+/// Verify that sample pages now contain FAQPage JSON-LD with 3–5 questions.
+pub(crate) fn exec_ctr_schema_verify_render(
+    task: &Task,
+    _project_path: &str,
+    _conn: &rusqlite::Connection,
+) -> StepResult {
+    let detection_json = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "ctr_schema_detection")
+        .and_then(|a| a.content.clone())
+        .unwrap_or_default();
+
+    if detection_json.is_empty() {
+        return StepResult {
+            success: false,
+            message: "No ctr_schema_detection artifact found".to_string(),
+            output: None,
+        };
+    }
+
+    let affected: Vec<serde_json::Value> = match serde_json::from_str(&detection_json) {
+        Ok(r) => r,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to parse detection artifact: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    let mut verified = 0usize;
+    let mut failed = 0usize;
+    let mut details = Vec::new();
+
+    for item in &affected {
+        let url = item["url"].as_str().unwrap_or("");
+        if url.is_empty() {
+            continue;
+        }
+
+        let (has_faq, question_count) = match fetch_current_faq_state(url) {
+            Ok(state) => state,
+            Err(e) => {
+                log::warn!("[ctr_schema_verify] Failed to fetch {}: {}", url, e);
+                failed += 1;
+                details.push(serde_json::json!({
+                    "url": url,
+                    "status": "fetch_failed",
+                    "error": e.to_string()
+                }));
+                continue;
+            }
+        };
+
+        if has_faq && question_count >= 3 {
+            verified += 1;
+            details.push(serde_json::json!({
+                "url": url,
+                "status": "verified",
+                "faq_question_count": question_count
+            }));
+        } else {
+            failed += 1;
+            details.push(serde_json::json!({
+                "url": url,
+                "status": "failed",
+                "has_faq": has_faq,
+                "faq_question_count": question_count,
+                "reason": if has_faq { "too few questions" } else { "no FAQPage schema" }
+            }));
+        }
+    }
+
+    let summary = serde_json::json!({
+        "verified": verified,
+        "failed": failed,
+        "details": details,
+    });
+
+    let all_pass = failed == 0 && verified > 0;
+    StepResult {
+        success: all_pass,
+        message: format!(
+            "Schema renderer verification: {} passed, {} failed",
+            verified, failed
+        ),
+        output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+    }
+}
+
+fn fetch_current_faq_state(url: &str) -> Result<(bool, usize), crate::error::Error> {
+    let url = url.to_string();
+    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+        crate::error::Error::Other(format!("Failed to create runtime: {}", e))
+    })?;
+
+    rt.block_on(async move {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .user_agent("Mozilla/5.0 (compatible; PageSeeds/1.0)")
+            .build()
+            .map_err(crate::error::Error::Http)?;
+
+        let response = client.get(&url).send().await.map_err(crate::error::Error::Http)?;
+        if !response.status().is_success() {
+            return Err(crate::error::Error::Other(format!(
+                "HTTP {}",
+                response.status()
+            )));
+        }
+
+        let html = response.text().await.map_err(crate::error::Error::Http)?;
+        let document = scraper::Html::parse_document(&html);
+
+        let (_, faq_count) = extract_json_ld_schema_types_with_faq_count(&document);
+        Ok((faq_count > 0, faq_count))
+    })
+}
+
 // ─── Task Spawner ─────────────────────────────────────────────────────────────
 
 /// Spawn a `fix_ctr_site_template` task if rendered audits show repeated patterns.
@@ -649,6 +825,7 @@ mod tests {
                 rendered_h1: None,
                 schema_types: vec![],
                 has_rendered_faq_page: false,
+                rendered_faq_question_count: 0,
                 snippet_markup: Default::default(),
                 issues: vec!["brand_duplicate".to_string()],
                 checked_at: chrono::Utc::now().to_rfc3339(),
@@ -667,6 +844,7 @@ mod tests {
                 rendered_h1: None,
                 schema_types: vec![],
                 has_rendered_faq_page: false,
+                rendered_faq_question_count: 0,
                 snippet_markup: Default::default(),
                 issues: vec!["brand_duplicate".to_string()],
                 checked_at: chrono::Utc::now().to_rfc3339(),
@@ -685,6 +863,7 @@ mod tests {
                 rendered_h1: None,
                 schema_types: vec![],
                 has_rendered_faq_page: false,
+                rendered_faq_question_count: 0,
                 snippet_markup: Default::default(),
                 issues: vec!["rendered_title_too_long".to_string()],
                 checked_at: chrono::Utc::now().to_rfc3339(),
@@ -715,6 +894,7 @@ mod tests {
                 rendered_h1: None,
                 schema_types: vec![],
                 has_rendered_faq_page: false,
+                rendered_faq_question_count: 0,
                 snippet_markup: Default::default(),
                 issues: vec![],
                 checked_at: chrono::Utc::now().to_rfc3339(),

@@ -62,6 +62,7 @@ Return JSON exactly matching this structure:
 
 ```json
 {
+  "generated_at": "2026-04-28T10:00:00Z",
   "merge_recommendations": [
     {
       "cluster_id": "cash_secured_puts_best_stocks",
@@ -87,7 +88,15 @@ Return JSON exactly matching this structure:
       "outline": ["What CSPs are", "Best stocks", "Strike selection", "Risks", "Calculators"]
     }
   ],
-  "calculator_recommendations": [],
+  "calculator_recommendations": [
+    {
+      "strategy": "cash-secured-put",
+      "ticker_universe": "sp500",
+      "priority_tickers": ["AAPL", "MSFT", "NVDA"],
+      "indexing_policy": "index when option data and unique computed tables are available",
+      "reason": "Ticker + strategy combinations open new long-tail query inventory."
+    }
+  ],
   "territory_recommendations": [
     {
       "theme": "broker-reviews",

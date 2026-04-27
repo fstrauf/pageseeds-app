@@ -120,6 +120,7 @@ pub(crate) fn exec_ctr_fix_apply(
         description,
         first_paragraph,
         faq_questions,
+        snippet_patch,
     } = patch.changes;
 
     let mut new_fm = fm;
@@ -148,6 +149,19 @@ pub(crate) fn exec_ctr_fix_apply(
             .collect();
         new_body = crate::content::cleaner::insert_faq_schema(&new_body, &qa);
         applied.push(format!("faq_schema ({} questions)", qa.len()));
+    }
+
+    if let Some(snippet) = snippet_patch {
+        let list = snippet.ordered_list.as_deref();
+        let table = snippet.comparison_table.as_deref();
+        new_body = crate::content::cleaner::insert_snippet_section(
+            &new_body,
+            &snippet.heading,
+            &snippet.answer_paragraph,
+            list,
+            table,
+        );
+        applied.push(format!("snippet_patch ({})", format!("{:?}", snippet.format).to_lowercase()));
     }
 
     let new_content = crate::content::cleaner::rebuild_mdx(&new_fm, &new_body);
@@ -217,7 +231,7 @@ pub(crate) fn exec_ctr_verify_fix(
     }
 
     let repo_root = Path::new(project_path);
-    let _full_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref) {
+    let full_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref) {
         Some(p) => p,
         None => {
             return StepResult {
@@ -232,6 +246,11 @@ pub(crate) fn exec_ctr_verify_fix(
 
     let (title, meta, first_paragraph, _h1, has_faq, file_found) =
         crate::engine::exec::audit_health::read_article_excerpt(project_path, &file_ref);
+
+    let file_content = std::fs::read_to_string(&full_path).unwrap_or_default();
+    let body_content = crate::content::frontmatter::split_mdx(&file_content)
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
 
     let _health = crate::engine::exec::audit_health::check_article_health(
         &title,
@@ -296,21 +315,31 @@ pub(crate) fn exec_ctr_verify_fix(
                 }
             }
             CtrFixType::SnippetBait => {
+                let keyword_lower = target_keyword.to_lowercase();
+                // Backward-compatible check: first paragraph
                 let word_count = first_paragraph.split_whitespace().count();
+                let has_kw_or_q = keyword_lower.is_empty()
+                    || first_paragraph.to_lowercase().contains(&keyword_lower)
+                    || first_paragraph.contains('?');
+                let first_para_ok = word_count >= crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+                    && word_count <= crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+                    && has_kw_or_q;
+
+                // New structured snippet check: H2 + answer + list/table
+                let snippet_check = check_snippet_structure(&body_content, &keyword_lower);
+                let has_good_answer = snippet_check.answer_word_count >= crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+                    && snippet_check.answer_word_count <= crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
+                let has_structure = snippet_check.has_h2
+                    && (snippet_check.has_ordered_list || snippet_check.has_table || has_good_answer);
+
                 let expected = format!(
                     "{}–{} words",
                     crate::engine::exec::audit_health::SNIPPET_MIN_WORDS,
                     crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
                 );
                 let actual = format!("{} words", word_count);
-                let keyword_lower = target_keyword.to_lowercase();
-                let has_kw_or_q = keyword_lower.is_empty()
-                    || first_paragraph.to_lowercase().contains(&keyword_lower)
-                    || first_paragraph.contains('?');
-                if word_count >= crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
-                    && word_count <= crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
-                    && has_kw_or_q
-                {
+
+                if first_para_ok || has_structure {
                     ("snippet", "pass", expected, actual, None)
                 } else {
                     let detail = if !has_kw_or_q {
@@ -415,6 +444,67 @@ fn extract_recommendation(task: &Task) -> Option<crate::models::ctr::CtrRecommen
         .and_then(|a| a.content.as_ref())?;
 
     serde_json::from_str(json).ok()
+}
+
+#[derive(Debug, Default)]
+struct SnippetCheck {
+    has_h2: bool,
+    answer_word_count: usize,
+    has_ordered_list: bool,
+    has_table: bool,
+}
+
+/// Check if the body contains a snippet-friendly structure:
+/// - H2 heading containing the target keyword or a question word
+/// - A paragraph after the H2 with a word count
+/// - Presence of ordered list or table near the top
+fn check_snippet_structure(body: &str, keyword_lower: &str) -> SnippetCheck {
+    let mut result = SnippetCheck::default();
+    let lines: Vec<&str> = body.lines().collect();
+
+    // Find first H2 that contains the keyword or a question word
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## ") {
+            let h2_text = trimmed.trim_start_matches("## ").trim().to_lowercase();
+            let has_question = h2_text.ends_with('?')
+                || h2_text.starts_with("what ")
+                || h2_text.starts_with("how ")
+                || h2_text.starts_with("why ")
+                || h2_text.starts_with("when ")
+                || h2_text.starts_with("where ");
+            let has_keyword = !keyword_lower.is_empty() && h2_text.contains(keyword_lower);
+            if has_question || has_keyword {
+                result.has_h2 = true;
+                // Count words in the next non-empty paragraph
+                let mut word_count = 0usize;
+                for j in (i + 1)..lines.len() {
+                    let next = lines[j].trim();
+                    if next.is_empty() || next.starts_with('#') {
+                        break;
+                    }
+                    if !next.starts_with('|') && !next.starts_with("1.") && !next.starts_with("- ") {
+                        word_count += next.split_whitespace().count();
+                    }
+                }
+                result.answer_word_count = word_count;
+                break;
+            }
+        }
+    }
+
+    // Check for ordered list or table in the first 50 lines
+    for line in lines.iter().take(50) {
+        let trimmed = line.trim();
+        if regex::Regex::new(r"^\d+\.\s").unwrap().is_match(trimmed) {
+            result.has_ordered_list = true;
+        }
+        if trimmed.starts_with('|') && trimmed.len() > 2 {
+            result.has_table = true;
+        }
+    }
+
+    result
 }
 
 

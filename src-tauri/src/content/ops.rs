@@ -149,8 +149,10 @@ pub struct ContentHealthResult {
 pub fn content_health_check(
     automation_dir: &Path,
     repo_root: &Path,
+    conn: &Connection,
+    project_id: &str,
 ) -> std::result::Result<ContentHealthResult, String> {
-    let result = sync_and_validate(automation_dir, repo_root, false)?;
+    let result = sync_and_validate(automation_dir, repo_root, false, conn, project_id)?;
     let details = result
         .date_mismatches
         .iter()
@@ -168,12 +170,14 @@ pub fn content_health_check(
     })
 }
 
-/// Apply date fixes: patch frontmatter dates that differ from articles.json.
+/// Apply date fixes: patch frontmatter dates that differ from SQLite.
 pub fn apply_date_fixes(
     automation_dir: &Path,
     repo_root: &Path,
+    conn: &Connection,
+    project_id: &str,
 ) -> std::result::Result<ContentHealthResult, String> {
-    let result = sync_and_validate(automation_dir, repo_root, true)?;
+    let result = sync_and_validate(automation_dir, repo_root, true, conn, project_id)?;
     Ok(ContentHealthResult {
         checked: result.checked_entries,
         content_files: result.content_files,
@@ -186,27 +190,22 @@ pub fn apply_date_fixes(
     })
 }
 
-/// Validate that articles.json and the content directory are in sync.
+/// Validate that SQLite article index and the content directory are in sync.
 ///
 /// Mirrors `pageseeds content sync-and-validate --workspace-root <automation_dir> --website-path .`
 ///
-/// When `apply_sync` is true, frontmatter dates that differ from articles.json
+/// When `apply_sync` is true, frontmatter dates that differ from SQLite
 /// are patched in-place (same as `--apply-sync` in the CLI).
 pub fn sync_and_validate(
     automation_dir: &Path,
     repo_root: &Path,
     apply_sync: bool,
+    conn: &Connection,
+    project_id: &str,
 ) -> std::result::Result<SyncValidateResult, String> {
-    // 1. Read articles.json from the automation workspace.
-    let articles_path = automation_dir.join("articles.json");
-    let json_str = std::fs::read_to_string(&articles_path)
-        .map_err(|e| format!("articles.json not found at {}: {}", articles_path.display(), e))?;
-    let doc: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse articles.json: {}", e))?;
-    let articles = doc
-        .get("articles")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "articles.json must contain an 'articles' array".to_string())?;
+    // 1. Load articles from SQLite (canonical runtime source of truth).
+    let articles = crate::content::article_index::list_articles(conn, project_id)
+        .map_err(|e| format!("Failed to load articles from SQLite: {}", e))?;
 
     // 2. Resolve content directory (mirrors Python CLI fallback chain).
     let content_dir = resolve_content_dir(automation_dir, repo_root)?;
@@ -232,15 +231,10 @@ pub fn sync_and_validate(
     let mut dates_synced = 0usize;
     let mut fixable_mismatches = 0usize;
 
-    for article in articles {
-        let id = article.get("id").and_then(|v| v.as_i64());
-        let title = article.get("title").and_then(|v| v.as_str()).map(String::from);
-        let file_ref = article
-            .get("file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
+    for article in &articles {
+        let id = Some(article.id);
+        let title = Some(article.title.clone());
+        let file_ref = article.file.trim().to_string();
         let basename = Path::new(&file_ref)
             .file_name()
             .and_then(|n| n.to_str())
@@ -283,12 +277,7 @@ pub fn sync_and_validate(
         };
 
         // Date consistency check.
-        let expected_date = article
-            .get("published_date")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        let expected_date = article.published_date.as_deref().unwrap_or("").trim().to_string();
         if expected_date.is_empty() {
             continue;
         }
@@ -520,7 +509,7 @@ pub fn ingest_orphan_files(
     conn: &Connection,
 ) -> std::result::Result<IngestOrphanResult, String> {
     // 1. Identify orphan files via sync_and_validate.
-    let sync_result = sync_and_validate(automation_dir, repo_root, false)?;
+    let sync_result = sync_and_validate(automation_dir, repo_root, false, conn, project_id)?;
     if sync_result.orphan_files.is_empty() {
         return Ok(IngestOrphanResult { ingested: 0, files: vec![] });
     }
@@ -1120,7 +1109,7 @@ mod tests {
 
         // Apply sync should patch MDX with the authoritative date.
         // SQLite is the intended runtime source of truth, so MDX should become 2026-04-28.
-        let result = sync_and_validate(&auto_dir, &dir, true).unwrap();
+        let result = sync_and_validate(&auto_dir, &dir, true, &conn, "p1").unwrap();
         assert_eq!(result.dates_synced, 1);
 
         let mdx_content = std::fs::read_to_string(&mdx_path).unwrap();
@@ -1129,7 +1118,7 @@ mod tests {
         // When the bug is fixed, MDX should contain 2026-04-28 and this test passes.
         assert!(
             mdx_content.contains("2026-04-28"),
-            "BUG: sync_and_validate patched MDX with the stale JSON date instead of the SQLite date. MDX content: {}",
+            "sync_and_validate should patch MDX with the SQLite date (2026-04-28), not the stale JSON date. MDX content: {}",
             mdx_content
         );
     }

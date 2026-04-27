@@ -198,7 +198,7 @@ pub fn create_tasks_from_approved_recommendations(
         );
         let spec = crate::engine::spawner::TaskSpec {
             project_id: project_id.clone(),
-            task_type: "fix_content_merge".to_string(),
+            task_type: "consolidate_cluster".to_string(),
             title: Some(format!("Merge cluster: {}", rec.cluster_id)),
             description: Some(format!(
                 "Approved merge: keep {} → redirect {:?}",
@@ -230,7 +230,7 @@ pub fn create_tasks_from_approved_recommendations(
         );
         let spec = crate::engine::spawner::TaskSpec {
             project_id: project_id.clone(),
-            task_type: "fix_hub_page".to_string(),
+            task_type: "create_hub_page".to_string(),
             title: Some(format!("Create hub: {}", rec.suggested_title)),
             description: Some(format!(
                 "Approved hub page: {} → {}",
@@ -262,7 +262,7 @@ pub fn create_tasks_from_approved_recommendations(
         );
         let spec = crate::engine::spawner::TaskSpec {
             project_id: project_id.clone(),
-            task_type: "research_territory".to_string(),
+            task_type: "territory_research".to_string(),
             title: Some(format!("Research territory: {}", rec.theme)),
             description: Some(format!(
                 "Approved territory research: {} (priority: {})",
@@ -279,6 +279,38 @@ pub fn create_tasks_from_approved_recommendations(
         match crate::engine::spawner::TaskSpawner::spawn(&db, spec) {
             Ok(task) => created_ids.push(task.id),
             Err(e) => log::warn!("Failed to create territory task: {}", e),
+        }
+    }
+
+    // Calculator recommendations
+    for rec in &strategy.calculator_recommendations {
+        let key = format!("calculator:{}", rec.strategy);
+        if !approved.contains(&key) {
+            continue;
+        }
+        let idempotency_key = format!(
+            "can_fix:calculator:{}:{}:{}",
+            project_id, strategy_id, rec.strategy
+        );
+        let spec = crate::engine::spawner::TaskSpec {
+            project_id: project_id.clone(),
+            task_type: "calculator_rollout".to_string(),
+            title: Some(format!("Calculator rollout: {}", rec.strategy)),
+            description: Some(format!(
+                "Approved calculator: {} (universe: {})",
+                rec.strategy, rec.ticker_universe
+            )),
+            priority: Priority::Medium,
+            execution_mode: Some(ExecutionMode::Spec),
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            depends_on: vec![strategy_id.clone()],
+            artifacts: vec![artifact.clone()],
+            idempotency_key: Some(idempotency_key),
+            ..Default::default()
+        };
+        match crate::engine::spawner::TaskSpawner::spawn(&db, spec) {
+            Ok(task) => created_ids.push(task.id),
+            Err(e) => log::warn!("Failed to create calculator task: {}", e),
         }
     }
 

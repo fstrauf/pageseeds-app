@@ -960,9 +960,33 @@ pub(crate) fn exec_can_analyze(
     match agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(output) => {
             // Extract JSON if present so downstream steps receive clean structured data
-            let final_output = crate::engine::text::extract_json(&output)
-                .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                .unwrap_or(output);
+            let mut value = crate::engine::text::extract_json(&output).unwrap_or_else(|| {
+                serde_json::Value::String(output)
+            });
+
+            // Inject generated_at if missing so deserialization always succeeds
+            if let serde_json::Value::Object(ref mut map) = value {
+                if !map.contains_key("generated_at") {
+                    map.insert(
+                        "generated_at".to_string(),
+                        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+                    );
+                }
+            }
+
+            let final_output = serde_json::to_string_pretty(&value).unwrap_or_default();
+
+            // Also write to automation dir so the file fallback works
+            let paths = ProjectPaths::from_path(project_path);
+            let strategy_path = paths.automation_dir.join("cannibalization_strategy.json");
+            if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
+                log::warn!("[cannibalization_audit] Failed to create automation dir: {}", e);
+            } else if let Err(e) = std::fs::write(&strategy_path, &final_output) {
+                log::warn!("[cannibalization_audit] Failed to write strategy file: {}", e);
+            } else {
+                log::info!("[cannibalization_audit] Wrote strategy to {:?}", strategy_path);
+            }
+
             StepResult {
                 success: true,
                 message: "Cannibalization analysis completed".to_string(),

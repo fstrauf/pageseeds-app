@@ -183,6 +183,7 @@ pub struct StrategyRisk {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct CannibalizationStrategy {
+    #[serde(default)]
     pub generated_at: String,
     #[serde(default)]
     pub merge_recommendations: Vec<MergeRecommendation>,

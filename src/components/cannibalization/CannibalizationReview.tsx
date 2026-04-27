@@ -6,6 +6,7 @@ import {
   GitMerge,
   BookOpen,
   MapPin,
+  Calculator,
   Play,
   Loader2,
 } from 'lucide-react'
@@ -20,6 +21,7 @@ import type {
   MergeRecommendation,
   HubRecommendation,
   TerritoryRecommendation,
+  CalculatorRecommendation,
   StrategyReview,
 } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -33,7 +35,7 @@ interface Props {
   projectId: string
 }
 
-type RecType = 'merge' | 'hub' | 'territory'
+type RecType = 'merge' | 'hub' | 'territory' | 'calculator'
 
 function statusBadgeClass(status: string) {
   switch (status) {
@@ -152,7 +154,8 @@ export function CannibalizationReview({ projectId }: Props) {
   const totalRecs =
     (strategyWithReviews?.strategy.merge_recommendations.length ?? 0) +
     (strategyWithReviews?.strategy.hub_recommendations.length ?? 0) +
-    (strategyWithReviews?.strategy.territory_recommendations.length ?? 0)
+    (strategyWithReviews?.strategy.territory_recommendations.length ?? 0) +
+    (strategyWithReviews?.strategy.calculator_recommendations.length ?? 0)
 
   if (isLoading) {
     return (
@@ -214,6 +217,10 @@ export function CannibalizationReview({ projectId }: Props) {
                 <MapPin size={14} className="mr-1.5" />
                 Territories ({strategy.territory_recommendations.length})
               </TabsTrigger>
+              <TabsTrigger value="calculator">
+                <Calculator size={14} className="mr-1.5" />
+                Calculators ({strategy.calculator_recommendations.length})
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="merge">
@@ -263,6 +270,23 @@ export function CannibalizationReview({ projectId }: Props) {
                 ))}
                 {strategy.territory_recommendations.length === 0 && (
                   <p className="text-sm text-muted-foreground">No territory recommendations.</p>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="calculator">
+              <div className="space-y-3">
+                {strategy.calculator_recommendations.map(rec => (
+                  <CalculatorCard
+                    key={rec.strategy}
+                    rec={rec}
+                    review={reviewLookup.get(`calculator:${rec.strategy}`)}
+                    onApprove={status => handleApprove('calculator', rec.strategy, status)}
+                    isPending={approveMutation.isPending}
+                  />
+                ))}
+                {strategy.calculator_recommendations.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No calculator recommendations.</p>
                 )}
               </div>
             </TabsContent>
@@ -400,6 +424,74 @@ function HubCard({
           {rec.outline.length > 0 && (
             <p className="mt-1">Outline: {rec.outline.join(' → ')}</p>
           )}
+        </div>
+        <Separator />
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={status === 'approved' ? 'default' : 'outline'}
+            onClick={() => onApprove('approved')}
+            disabled={isPending}
+          >
+            <Check size={14} className="mr-1" />
+            Approve
+          </Button>
+          <Button
+            size="sm"
+            variant={status === 'rejected' ? 'default' : 'outline'}
+            onClick={() => onApprove('rejected')}
+            disabled={isPending}
+          >
+            <X size={14} className="mr-1" />
+            Reject
+          </Button>
+          <Button
+            size="sm"
+            variant={status === 'needs_review' ? 'default' : 'outline'}
+            onClick={() => onApprove('needs_review')}
+            disabled={isPending}
+          >
+            <AlertCircle size={14} className="mr-1" />
+            Needs Review
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Calculator Card ──────────────────────────────────────────────────────────
+
+function CalculatorCard({
+  rec,
+  review,
+  onApprove,
+  isPending,
+}: {
+  rec: CalculatorRecommendation
+  review?: StrategyReview
+  onApprove: (status: 'approved' | 'rejected' | 'needs_review') => void
+  isPending: boolean
+}) {
+  const status = review?.approval_status ?? 'pending'
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1">
+            <CardTitle className="text-sm">{rec.strategy}</CardTitle>
+            <CardDescription className="text-xs">Universe: {rec.ticker_universe}</CardDescription>
+          </div>
+          <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
+            {statusLabel(status)}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="text-xs text-muted-foreground">
+          <p>Tickers: {rec.priority_tickers.join(', ')}</p>
+          <p className="mt-1">{rec.reason}</p>
         </div>
         <Separator />
         <div className="flex items-center gap-2">

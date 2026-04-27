@@ -72,6 +72,10 @@ pub enum StepKind {
     CtrTemplatePlan,
     /// Deterministic verification that rendered sample pages pass title checks.
     CtrTemplateVerifyRender,
+    /// Deterministic detection of articles with source FAQ but missing rendered JSON-LD.
+    CtrSchemaDetect,
+    /// Deterministic verification that rendered pages contain FAQPage JSON-LD.
+    CtrSchemaVerifyRender,
     /// Load approved merge plan from strategy artifact.
     MergeLoadPlan,
     /// Preflight checks before merging (files exist, no cycles, keeper indexable).
@@ -149,6 +153,8 @@ impl StepKind {
             Self::CtrTemplateDetect => "ctr_template_detect",
             Self::CtrTemplatePlan => "ctr_template_plan",
             Self::CtrTemplateVerifyRender => "ctr_template_verify_render",
+            Self::CtrSchemaDetect => "ctr_schema_detect",
+            Self::CtrSchemaVerifyRender => "ctr_schema_verify_render",
             Self::MergeLoadPlan => "merge_load_plan",
             Self::MergePreflight => "merge_preflight",
             Self::MergeExtractSections => "merge_extract_sections",
@@ -232,6 +238,8 @@ impl FromStr for StepKind {
             "ctr_template_detect" => Ok(Self::CtrTemplateDetect),
             "ctr_template_plan" => Ok(Self::CtrTemplatePlan),
             "ctr_template_verify_render" => Ok(Self::CtrTemplateVerifyRender),
+            "ctr_schema_detect" => Ok(Self::CtrSchemaDetect),
+            "ctr_schema_verify_render" => Ok(Self::CtrSchemaVerifyRender),
             "merge_load_plan" => Ok(Self::MergeLoadPlan),
             "merge_preflight" => Ok(Self::MergePreflight),
             "merge_extract_sections" => Ok(Self::MergeExtractSections),
@@ -325,6 +333,8 @@ mod tests {
             StepKind::CtrTemplateDetect,
             StepKind::CtrTemplatePlan,
             StepKind::CtrTemplateVerifyRender,
+            StepKind::CtrSchemaDetect,
+            StepKind::CtrSchemaVerifyRender,
             StepKind::MergeLoadPlan,
             StepKind::MergePreflight,
             StepKind::MergeExtractSections,

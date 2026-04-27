@@ -389,16 +389,23 @@ pub(crate) fn exec_keyword_research_native(
         );
     }
 
-    // ── Pre-flight: articles.json must exist ──────────────────────────────────
-    let articles_json_path = paths.automation_dir.join("articles.json");
-    if !is_live_site_project && !articles_json_path.exists() {
+    // ── Pre-flight: articles must exist in SQLite ────────────────────────────
+    let has_articles = if is_live_site_project {
+        match crate::live_site::list_live_site_pages(&db, &task.project_id) {
+            Ok(pages) => !pages.is_empty(),
+            Err(_) => false,
+        }
+    } else {
+        match crate::content::article_index::list_articles(&db, &task.project_id) {
+            Ok(a) => !a.is_empty(),
+            Err(_) => false,
+        }
+    };
+    if !has_articles {
         return crate::engine::workflows::StepResult {
             success: false,
-            message: format!(
-                "Workspace not initialised: articles.json not found at {}. \
-                 Run 'Init Workspace' from Project Settings first.",
-                articles_json_path.display()
-            ),
+            message: "Workspace not initialised: no articles found in the app index. \
+                 Run 'Init Workspace' from Project Settings first.".into(),
             output: None,
         };
     }
@@ -413,8 +420,7 @@ pub(crate) fn exec_keyword_research_native(
         };
     }
 
-    // Load existing keywords from articles.json so we can skip already-covered ones.
-    // articles.json format: {"nextArticleId": N, "articles": [...]}
+    // Load existing keywords from SQLite so we can skip already-covered ones.
     let existing_keywords: HashSet<String> = if is_live_site_project {
         match crate::live_site::list_live_site_pages(&db, &task.project_id) {
             Ok(pages) => super::collect_existing_keywords_from_live_site(&pages),
@@ -427,19 +433,7 @@ pub(crate) fn exec_keyword_research_native(
             }
         }
     } else {
-        std::fs::read_to_string(&articles_json_path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| {
-                // Support both {"articles": [...]} wrapper and bare [...] array.
-                let arr = v["articles"].as_array().or_else(|| v.as_array());
-                arr.map(|items| {
-                    items.iter()
-                        .filter_map(|a| a["target_keyword"].as_str())
-                        .map(|k| k.to_lowercase())
-                        .collect()
-                })
-            })
+        crate::content::article_index::existing_keywords(&db, &task.project_id)
             .unwrap_or_default()
     };
 

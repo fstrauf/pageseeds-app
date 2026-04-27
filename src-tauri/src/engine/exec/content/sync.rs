@@ -1,14 +1,15 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
+use rusqlite::Connection;
 
 /// Native Rust implementation of `pageseeds content sync-and-validate`.
-pub(crate) fn exec_content_sync(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
+pub(crate) fn exec_content_sync(task: &Task, project_path: &str, conn: &Connection) -> crate::engine::workflows::StepResult {
     use crate::content::ops::sync_and_validate;
 
     log::info!("[content_sync] starting for project={} path={}", task.project_id, project_path);
 
     let paths = ProjectPaths::from_path(project_path);
-    match sync_and_validate(&paths.automation_dir, &paths.repo_root, false) {
+    match sync_and_validate(&paths.automation_dir, &paths.repo_root, false, conn, &task.project_id) {
         Ok(result) => {
             let output = serde_json::to_string_pretty(&result)
                 .unwrap_or_else(|_| format!("{:?}", result));
@@ -195,9 +196,11 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
         }
 
         if metadata_updated > 0 {
-            if let Err(e) =
-                crate::db::export::write_articles_to_repo(&conn, &task.project_id, &paths.repo_root)
-            {
+            if let Err(e) = crate::content::article_index::export_projection(
+                &conn,
+                &task.project_id,
+                &paths.repo_root,
+            ) {
                 log::warn!(
                     "[sanitize_content] Failed to export articles.json after metadata sync: {}",
                     e

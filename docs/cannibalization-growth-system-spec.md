@@ -572,10 +572,41 @@ Required panels:
 
 ### Phase 4: Hub System
 
-- Add hub gap audit and hub creation handler.
-- Add hub outline/write skills.
-- Add deterministic hub/spoke link application.
-- Add validation that hubs and spokes link correctly.
+- Register dedicated task types: `hub_gap_audit`, `create_hub_page`, and `refresh_hub_page`.
+- Add `HubGapAuditHandler` and `HubPageHandler` workflow handlers. Do not route approved hub recommendations through generic `fix_*` tasks.
+- Add `StepKind` variants and executors for:
+  - `hub_load_recommendation` — deterministic; loads the approved hub recommendation and spoke set.
+  - `hub_build_brief` — deterministic; gathers spoke metadata, GSC metrics, link graph data, headings, excerpts, existing hub candidates, calculators, and competitor notes when available.
+  - `hub_outline` — agentic; returns a structured hub outline and linking strategy.
+  - `hub_write` — agentic; returns an MDX draft or structured content patch.
+  - `hub_apply_draft` — deterministic; writes the hub file, snapshots existing file if refreshing, and updates `articles.json` metadata.
+  - `hub_apply_links` — deterministic; adds hub-to-spoke links and spoke-to-hub links from the approved mapping.
+  - `hub_validate` — deterministic; validates frontmatter, H1/title, canonical slug, no duplicate hub, required links, and minimum content completeness.
+- Add hub-specific skills:
+  - `hub-outline` for information architecture, search intent, and spoke grouping.
+  - `hub-write` for broad pillar prose that does not cannibalize spoke pages.
+- Define typed artifacts:
+  - `hub_gap_report.json` with candidate cluster, spoke IDs, total impressions, existing hub candidates, and reason.
+  - `hub_brief.json` with selected hub URL/title, target broad keyword, spokes, excerpts, metrics, link requirements, and calculators.
+  - `hub_outline.json` with sections, intended spoke links, excluded sub-intents, and rationale.
+  - `hub_link_plan.json` with exact source files, target URLs, anchors, and insertion hints.
+  - `hub_validation_report.json` with pass/fail checks and blocking issues.
+- Review flow:
+  - Approved `hub` recommendations create `create_hub_page` tasks.
+  - Existing hub candidates create `refresh_hub_page` tasks instead of duplicate hubs.
+  - Low-confidence or route-collision recommendations stay in review and cannot spawn apply tasks.
+  - The review UI should show spoke list, impressions, current incoming/outgoing links, proposed URL/title, outline preview, and missing parent-link count.
+- Quality gates:
+  - Hub URL must be broader than the spokes and must not target a spoke keyword directly.
+  - Hub must link to every approved spoke and relevant calculator/index page.
+  - Every spoke must link back to the hub with a descriptive anchor unless the file is missing or no safe insertion point exists.
+  - Hub must not merge away distinct sub-intents that should remain spokes.
+  - Hub draft must pass MDX/frontmatter validation and cannot create duplicate H1/title collisions.
+- Tests:
+  - Unit-test hub gap scoring with clusters that have and lack existing hubs.
+  - Unit-test route collision handling for `/hub/...`, `/guide/...`, and project-configured hub routes.
+  - Unit-test link-plan generation and idempotent link application.
+  - Add a workflow test proving an approved hub recommendation spawns `create_hub_page` and executes the hub handler, not the generic implementation fallback.
 
 ### Phase 5: Territory Research
 

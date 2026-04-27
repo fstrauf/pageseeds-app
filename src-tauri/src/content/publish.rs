@@ -305,18 +305,15 @@ pub fn apply_publish(
     // Fix structural issues in content files.
     let _ = cleaner::scan_and_clean(content_dir, false);
 
-    // Write articles.json BEFORE patching MDX frontmatter dates.
-    // sync_and_validate reads articles.json as its source of truth for dates;
-    // exporting first ensures it sees the updated SQLite state rather than stale JSON.
-    // TODO: migrate sync_and_validate to read from SQLite directly (Phase 1+).
+    // Patch MDX frontmatter dates from SQLite (canonical runtime source of truth).
     let automation_dir = project_path.join(".github").join("automation");
-    if let Err(e) = export::write_articles_to_repo(conn, project_id, project_path) {
-        errors.push(format!("Failed to write articles.json: {e}"));
+    if let Err(e) = crate::content::ops::sync_and_validate(&automation_dir, project_path, true, conn, project_id) {
+        errors.push(format!("MDX frontmatter sync warning: {e}"));
     }
 
-    // Patch MDX frontmatter dates from the now-fresh articles.json projection.
-    if let Err(e) = crate::content::ops::sync_and_validate(&automation_dir, project_path, true) {
-        errors.push(format!("MDX frontmatter sync warning: {e}"));
+    // Export the updated SQLite state to articles.json so the projection stays in sync.
+    if let Err(e) = export::write_articles_to_repo(conn, project_id, project_path) {
+        errors.push(format!("Failed to write articles.json: {e}"));
     }
 
     PublishResult {

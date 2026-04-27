@@ -159,6 +159,33 @@ pub struct CtrFixPatchChanges {
     pub first_paragraph: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faq_questions: Option<Vec<CtrFixPatchFaqQuestion>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snippet_patch: Option<CtrSnippetPatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrSnippetPatch {
+    pub target_query: String,
+    pub format: CtrSnippetFormat,
+    pub heading: String,
+    pub answer_paragraph: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ordered_list: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison_table: Option<Vec<Vec<String>>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum CtrSnippetFormat {
+    DirectAnswerParagraph,
+    ComparisonParagraph,
+    BestListOrdered,
+    ComparisonTable,
+    DefinitionWithSteps,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -255,6 +282,7 @@ pub struct CtrRenderedPageAudit {
     pub rendered_h1: Option<String>,
     pub schema_types: Vec<String>,
     pub has_rendered_faq_page: bool,
+    pub rendered_faq_question_count: usize,
     pub snippet_markup: CtrSnippetMarkup,
     pub issues: Vec<String>,
     pub checked_at: String,

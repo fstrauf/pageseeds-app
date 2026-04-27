@@ -77,7 +77,7 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
             })
         }).join();
 
-        let (rendered_title, rendered_desc, canonical, h1, schema_types, has_faq, snippet, _fetch_error) = match result {
+        let (rendered_title, rendered_desc, canonical, h1, schema_types, has_faq, faq_count, snippet, _fetch_error) = match result {
             Ok(Ok(data)) => data,
             Ok(Err(e)) => {
                 log::warn!("[ctr_rendered_audit] Failed to fetch {}: {}", page_url, e);
@@ -123,6 +123,7 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
             rendered_h1: h1,
             schema_types,
             has_rendered_faq_page: has_faq,
+            rendered_faq_question_count: faq_count,
             snippet_markup: snippet,
             issues,
             checked_at: chrono::Utc::now().to_rfc3339(),
@@ -175,7 +176,7 @@ fn normalize_base_url(site_url: &str) -> String {
 
 async fn fetch_and_audit_page(
     page_url: &str,
-) -> Result<(String, Option<String>, Option<String>, Option<String>, Vec<String>, bool, CtrSnippetMarkup, Option<String>), crate::error::Error> {
+) -> Result<(String, Option<String>, Option<String>, Option<String>, Vec<String>, bool, usize, CtrSnippetMarkup, Option<String>), crate::error::Error> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("Mozilla/5.0 (compatible; PageSeeds/1.0)")
@@ -197,11 +198,11 @@ async fn fetch_and_audit_page(
     let rendered_desc = extract_meta_description(&document);
     let canonical = extract_canonical_url(&document, page_url);
     let h1 = extract_h1(&document);
-    let schema_types = extract_json_ld_schema_types(&document);
+    let (schema_types, faq_count) = extract_json_ld_schema_types_with_faq_count(&document);
     let has_faq = schema_types.iter().any(|t| t == "FAQPage");
     let snippet = extract_snippet_markup(&document);
 
-    Ok((rendered_title, rendered_desc, canonical, h1, schema_types, has_faq, snippet, None))
+    Ok((rendered_title, rendered_desc, canonical, h1, schema_types, has_faq, faq_count, snippet, None))
 }
 
 fn extract_title(document: &Html) -> Option<String> {
@@ -236,12 +237,19 @@ fn extract_h1(document: &Html) -> Option<String> {
 }
 
 fn extract_json_ld_schema_types(document: &Html) -> Vec<String> {
+    let (types, _) = extract_json_ld_schema_types_with_faq_count(document);
+    types
+}
+
+pub(crate) fn extract_json_ld_schema_types_with_faq_count(document: &Html) -> (Vec<String>, usize) {
     let selector = match Selector::parse("script[type='application/ld+json']") {
         Ok(s) => s,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), 0),
     };
 
     let mut types = HashSet::new();
+    let mut faq_count = 0usize;
+
     for element in document.select(&selector) {
         let text = element.text().collect::<String>();
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -250,6 +258,9 @@ fn extract_json_ld_schema_types(document: &Html) -> Vec<String> {
                 for item in graph {
                     if let Some(t) = item.get("@type").and_then(|t| t.as_str()) {
                         types.insert(t.to_string());
+                        if t == "FAQPage" {
+                            faq_count += count_faq_questions(item);
+                        }
                     }
                 }
             }
@@ -257,17 +268,31 @@ fn extract_json_ld_schema_types(document: &Html) -> Vec<String> {
             if let Some(t) = json.get("@type") {
                 if let Some(s) = t.as_str() {
                     types.insert(s.to_string());
+                    if s == "FAQPage" {
+                        faq_count += count_faq_questions(&json);
+                    }
                 } else if let Some(arr) = t.as_array() {
                     for item in arr {
                         if let Some(s) = item.as_str() {
                             types.insert(s.to_string());
                         }
                     }
+                    // If the root is an array containing FAQPage, count questions from root
+                    if arr.iter().any(|v| v.as_str() == Some("FAQPage")) {
+                        faq_count += count_faq_questions(&json);
+                    }
                 }
             }
         }
     }
-    types.into_iter().collect()
+    (types.into_iter().collect(), faq_count)
+}
+
+fn count_faq_questions(json: &serde_json::Value) -> usize {
+    json.get("mainEntity")
+        .and_then(|m| m.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0)
 }
 
 fn extract_snippet_markup(document: &Html) -> CtrSnippetMarkup {

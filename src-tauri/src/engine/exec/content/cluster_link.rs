@@ -8,38 +8,37 @@ use crate::models::task::Task;
 /// and calls `content::linking::scan_links()`.  Returns the scan result as JSON
 /// so the downstream agentic step has concrete link-graph data to work with.
 pub(crate) fn exec_cluster_link_scan(
-    _task: &Task,
+    task: &Task,
     project_path: &str,
 ) -> crate::engine::workflows::StepResult {
     let paths = ProjectPaths::from_path(project_path);
-    let articles_path = paths.automation_dir.join("articles.json");
 
-    let articles_doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
+    let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to open app database: {}", e),
+                output: None,
+            }
+        }
     };
 
-    // Support both bare array and {articles:[...]} envelope
-    let article_values: Vec<serde_json::Value> = if articles_doc.is_array() {
-        articles_doc.as_array().cloned().unwrap_or_default()
-    } else {
-        articles_doc
-            .get("articles")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default()
+    let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
+        Ok(a) => a.into_iter().filter(|a| !a.file.is_empty()).collect::<Vec<_>>(),
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to load articles from DB: {}", e),
+                output: None,
+            }
+        }
     };
-
-    let articles: Vec<crate::models::article::Article> = article_values
-        .iter()
-        .filter_map(|v| serde_json::from_value(v.clone()).ok())
-        .filter(|a: &crate::models::article::Article| !a.file.is_empty())
-        .collect();
 
     if articles.is_empty() {
         return crate::engine::workflows::StepResult {
             success: true,
-            message: "No articles in articles.json — nothing to scan".to_string(),
+            message: "No articles in app index — nothing to scan".to_string(),
             output: Some(r#"{"total_articles":0,"total_internal_links":0,"orphan_ids":[],"profiles":[]}"#.to_string()),
         };
     }
@@ -181,7 +180,7 @@ pub(crate) fn create_cluster_and_link_task(
 /// content and business priorities — not just graph connectivity counts.
 #[allow(deprecated)]
 pub(crate) fn exec_cluster_link_strategy(
-    _task: &Task,
+    task: &Task,
     project_path: &str,
     agent_provider: &str,
 ) -> crate::engine::workflows::StepResult {
@@ -196,25 +195,28 @@ pub(crate) fn exec_cluster_link_strategy(
         Err(e) => return e,
     };
 
-    // --- Load articles for title/slug map ---
-    let articles_path = paths.automation_dir.join("articles.json");
-    let articles_doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
+    // --- Load articles from SQLite for title/slug map ---
+    let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to open app database: {}", e),
+                output: None,
+            }
+        }
     };
 
-    let empty_vec: Vec<serde_json::Value> = Vec::new();
-    let article_values = if articles_doc.is_array() {
-        articles_doc.as_array().unwrap_or(&empty_vec)
-    } else {
-        articles_doc.get("articles").and_then(|v| v.as_array()).unwrap_or(&empty_vec)
+    let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
+        Ok(a) => a.into_iter().filter(|a| !a.file.is_empty()).collect::<Vec<_>>(),
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to load articles from DB: {}", e),
+                output: None,
+            }
+        }
     };
-
-    let articles: Vec<crate::models::article::Article> = article_values
-        .iter()
-        .filter_map(|v| serde_json::from_value(v.clone()).ok())
-        .filter(|a: &crate::models::article::Article| !a.file.is_empty())
-        .collect();
 
     // --- Build prompt context ---
     let total = scan["total_articles"].as_u64().unwrap_or(0);

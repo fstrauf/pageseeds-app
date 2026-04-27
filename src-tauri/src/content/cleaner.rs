@@ -299,6 +299,57 @@ pub fn insert_faq_schema(body: &str, questions: &[(String, String)]) -> String {
     }
 }
 
+/// Insert a snippet section (H2 + answer + optional list/table) near the top of the body.
+/// Places the section after the first H1 if present, otherwise after the first paragraph.
+pub fn insert_snippet_section(body: &str, heading: &str, answer: &str, list: Option<&[String]>, table: Option<&[Vec<String>]>) -> String {
+    let mut section = format!("\n\n## {}\n\n{}", heading, answer);
+
+    if let Some(rows) = table {
+        if rows.len() >= 2 {
+            // Markdown table with header row
+            let mut table_md = String::new();
+            for (i, row) in rows.iter().enumerate() {
+                let cells = row.join(" | ");
+                table_md.push_str(&format!("| {} |\n", cells));
+                if i == 0 {
+                    let separators: Vec<&str> = row.iter().map(|_| "---").collect();
+                    table_md.push_str(&format!("| {} |\n", separators.join(" | ")));
+                }
+            }
+            section.push_str("\n");
+            section.push_str(&table_md);
+        }
+    }
+
+    if let Some(items) = list {
+        if !items.is_empty() {
+            section.push_str("\n");
+            for (i, item) in items.iter().enumerate() {
+                section.push_str(&format!("{}. {}\n", i + 1, item));
+            }
+        }
+    }
+
+    // Find insertion point: after first H1, or after first paragraph
+    let h1_pattern = regex::Regex::new(r"(?m)^# .+$").unwrap();
+    if let Some(m) = h1_pattern.find(body) {
+        let insert_pos = m.end();
+        let before = &body[..insert_pos];
+        let after = &body[insert_pos..];
+        return format!("{}{}{}", before, section, after);
+    }
+
+    // Fallback: after first paragraph
+    match find_first_paragraph_range(body) {
+        Some((_, end)) => {
+            let before = &body[..end];
+            let after = &body[end..];
+            format!("{}{}{}", before, section, after)
+        }
+        None => format!("{}{}", body, section),
+    }
+}
+
 /// Reconstruct MDX file from frontmatter and body.
 pub fn rebuild_mdx(fm: &str, body: &str) -> String {
     format!("---\n{fm}\n---\n{body}")

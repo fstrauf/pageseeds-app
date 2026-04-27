@@ -227,6 +227,18 @@ pub async fn execute_task_with_token(
                 log::info!("[executor] can_build_context output ({} chars)", out.len());
                 latest_raw_output = result.output.clone();
             }
+        } else if step.name == "merge_extract_sections" {
+            // Pass extracted section inventory to the agentic merge_draft_patch step
+            if let Some(ref out) = result.output {
+                log::info!("[executor] merge_extract_sections output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
+        } else if step.name == "merge_draft_patch" {
+            // Pass drafted ContentMergePatch JSON to the deterministic merge_apply_patch step
+            if let Some(ref out) = result.output {
+                log::info!("[executor] merge_draft_patch output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
         }
 
         progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
@@ -491,6 +503,21 @@ mod tests {
                 provider TEXT, started_at TEXT NOT NULL,
                 finished_at TEXT, success INTEGER, error TEXT,
                 prompt_tokens INTEGER, completion_tokens INTEGER
+             );
+             CREATE TABLE IF NOT EXISTS articles (
+                id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+                url_slug TEXT NOT NULL DEFAULT '', file TEXT NOT NULL DEFAULT '',
+                target_keyword TEXT, keyword_difficulty TEXT,
+                target_volume INTEGER DEFAULT 0, published_date TEXT,
+                word_count INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'draft',
+                review_status TEXT, review_started_at TEXT, last_reviewed_at TEXT,
+                review_count INTEGER NOT NULL DEFAULT 0,
+                content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
+                estimated_traffic_monthly TEXT, project_id TEXT NOT NULL,
+                PRIMARY KEY (id, project_id)
+             );
+             CREATE TABLE IF NOT EXISTS articles_meta (
+                project_id TEXT PRIMARY KEY, next_article_id INTEGER NOT NULL DEFAULT 1
              );",
         )
         .unwrap();
@@ -913,6 +940,38 @@ mod tests {
         .unwrap();
         std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
         let proj = test_project_in_at_path(&conn, &project_dir.to_string_lossy());
+
+        // Ensure articles table exists and has a dummy article so the pre-flight check passes.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS articles (
+                id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+                url_slug TEXT NOT NULL DEFAULT '', file TEXT NOT NULL DEFAULT '',
+                target_keyword TEXT, keyword_difficulty TEXT,
+                target_volume INTEGER DEFAULT 0, published_date TEXT,
+                word_count INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'draft',
+                review_status TEXT, review_started_at TEXT, last_reviewed_at TEXT,
+                review_count INTEGER NOT NULL DEFAULT 0,
+                content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
+                estimated_traffic_monthly TEXT, project_id TEXT NOT NULL,
+                PRIMARY KEY (id, project_id)
+            );
+            CREATE TABLE IF NOT EXISTS articles_meta (
+                project_id TEXT PRIMARY KEY, next_article_id INTEGER NOT NULL DEFAULT 1
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (id, title, url_slug, file, status, content_gaps_addressed, project_id)
+             VALUES (1, 'Test', 'test', './content/001_test.mdx', 'published', '[]', 'proj1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles_meta (project_id, next_article_id) VALUES ('proj1', 2)",
+            [],
+        )
+        .unwrap();
+
         let mut task = make_task("research_keywords", &proj);
         task.description = Some("risk management".to_string());
         let task_id = task.id.clone();

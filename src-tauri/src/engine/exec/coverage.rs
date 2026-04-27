@@ -92,67 +92,29 @@ pub(crate) fn exec_coverage_load_articles(
         };
     }
 
-    let paths = ProjectPaths::from_path(project_path);
-    let articles_path = paths.automation_dir.join("articles.json");
-    
-    log::info!("[coverage_load] Loading articles from {:?}", articles_path);
-
-    let articles_str = match std::fs::read_to_string(&articles_path) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("[coverage_load] articles.json not found: {}", e);
-            return StepResult {
-                success: false,
-                message: format!("articles.json not found: {}", e),
-                output: None,
-            }
-        }
-    };
-    
-    log::info!("[coverage_load] Read {} chars from articles.json", articles_str.len());
-
-    let articles_doc: serde_json::Value = match serde_json::from_str(&articles_str) {
-        Ok(v) => v,
+    // Load articles from SQLite (canonical runtime store) instead of articles.json.
+    let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
+        Ok(a) => a,
         Err(e) => {
             return StepResult {
                 success: false,
-                message: format!("Failed to parse articles.json: {}", e),
+                message: format!("Failed to load articles from DB: {}", e),
                 output: None,
             }
         }
     };
 
-    let empty_vec: Vec<serde_json::Value> = Vec::new();
-    let article_values = if articles_doc.is_array() {
-        articles_doc.as_array().unwrap_or(&empty_vec)
-    } else {
-        articles_doc.get("articles").and_then(|v| v.as_array()).unwrap_or(&empty_vec)
-    };
-
-    // Extract minimal metadata for clustering
-    let article_summaries: Vec<serde_json::Value> = article_values
+    let article_summaries: Vec<serde_json::Value> = articles
         .iter()
-        .filter_map(|a| {
-            let id = a["id"].as_i64()?;
-            let title = a["title"].as_str().unwrap_or("");
-            let slug = a["url_slug"].as_str().unwrap_or("");
-            let keyword = a["target_keyword"].as_str().unwrap_or("");
-            let file = a["file"].as_str().unwrap_or("");
-            let status = a["status"].as_str().unwrap_or("draft");
-
-            // Skip draft articles that aren't published
-            if status == "draft" && !file.is_empty() {
-                // Still include drafts that have files
-            }
-
-            Some(serde_json::json!({
-                "id": id,
-                "title": title,
-                "slug": slug,
-                "target_keyword": keyword,
-                "file": file,
-                "status": status,
-            }))
+        .map(|a| {
+            serde_json::json!({
+                "id": a.id,
+                "title": &a.title,
+                "slug": &a.url_slug,
+                "target_keyword": a.target_keyword.as_deref().unwrap_or(""),
+                "file": &a.file,
+                "status": &a.status,
+            })
         })
         .collect();
 

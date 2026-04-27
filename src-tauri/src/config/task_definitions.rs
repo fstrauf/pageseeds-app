@@ -228,6 +228,13 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
+        task_type: "fix_ctr_schema_renderer",
+        phase: "implementation",
+        execution_mode: ExecutionMode::Manual,
+        review_on_success: true,
+        handler_family: HandlerFamily::Implementation,
+    },
+    TaskDefinition {
         task_type: "fix_content_article",
         phase: "implementation",
         execution_mode: ExecutionMode::Manual,
@@ -294,6 +301,30 @@ const DEFINITIONS: &[TaskDefinition] = &[
         execution_mode: ExecutionMode::Spec,
         review_on_success: true,
         handler_family: HandlerFamily::ConsolidateCluster,
+    },
+    // Hub page creation (stub — full handler in Phase 4)
+    TaskDefinition {
+        task_type: "create_hub_page",
+        phase: "implementation",
+        execution_mode: ExecutionMode::Spec,
+        review_on_success: true,
+        handler_family: HandlerFamily::Implementation,
+    },
+    // Territory research (stub — full handler in Phase 5)
+    TaskDefinition {
+        task_type: "territory_research",
+        phase: "research",
+        execution_mode: ExecutionMode::Spec,
+        review_on_success: true,
+        handler_family: HandlerFamily::Implementation,
+    },
+    // Calculator rollout (stub — full handler in Phase 6)
+    TaskDefinition {
+        task_type: "calculator_rollout",
+        phase: "implementation",
+        execution_mode: ExecutionMode::Spec,
+        review_on_success: true,
+        handler_family: HandlerFamily::Implementation,
     },
     // Indexing diagnostics
     TaskDefinition {

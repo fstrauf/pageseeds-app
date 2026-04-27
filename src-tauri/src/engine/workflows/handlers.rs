@@ -203,6 +203,9 @@ impl WorkflowHandler for ImplementationHandler {
                 | "technical_seo"
                 | "landing_page_spec"
                 | "create_landing_page"
+                | "create_hub_page"
+                | "territory_research"
+                | "calculator_rollout"
         ) || t.starts_with("fix_")
     }
 
@@ -260,6 +263,19 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("ctr_template_apply", StepKind::Manual),
                 // Step 4 (deterministic): re-fetch sample pages and verify duplicate suffix is gone.
                 WorkflowStep::new("ctr_template_verify_render", StepKind::CtrTemplateVerifyRender),
+            ],
+            "fix_ctr_schema_renderer" => vec![
+                // Step 1 (deterministic): identify articles with source FAQ but missing rendered JSON-LD.
+                // Reads rendered audits and source files, produces a structured report.
+                WorkflowStep::new("ctr_schema_detect", StepKind::CtrSchemaDetect),
+                // Step 2 (agentic/manual-review): produce framework-aware schema rendering fix plan.
+                // The agent inspects framework files and suggests how to render FAQPage JSON-LD.
+                WorkflowStep::new("ctr_schema_plan", StepKind::Agentic)
+                    .with_param(step_params::SKILL, "ctr-schema-renderer"),
+                // Step 3 (manual): framework code changes require manual review/application.
+                WorkflowStep::new("ctr_schema_apply", StepKind::Manual),
+                // Step 4 (deterministic): re-fetch sample pages and verify FAQPage JSON-LD is present.
+                WorkflowStep::new("ctr_schema_verify_render", StepKind::CtrSchemaVerifyRender),
             ],
             "indexing_diagnostics" => vec![
                 // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
@@ -457,7 +473,8 @@ impl WorkflowHandler for CannibalizationAuditHandler {
             // Input contract: structured JSON with similarity clusters + article metadata.
             // Output contract: JSON with merge_recommendations, hub_recommendations, territory_recommendations.
             WorkflowStep::new("can_analyze", StepKind::CanAnalyze)
-                .with_param(step_params::SKILL, "cannibalization-strategy"),
+                .with_param(step_params::SKILL, "cannibalization-strategy")
+                .with_param(step_params::ARTIFACT_NAME, "cannibalization_strategy"),
             // No normalizer needed — can_analyze extracts JSON internally.
         ]
     }

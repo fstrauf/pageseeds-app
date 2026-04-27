@@ -104,19 +104,19 @@ pub(crate) fn exec_ctr_build_context(
     // ── Step 0: Clean stale entries from articles.json ───────────────────────
     // The filesystem is the source of truth. Remove entries whose files no longer exist.
     let mut cleaned_summary = Vec::new();
-    match crate::content::ops::clean_stale_articles_json(&paths.automation_dir, std::path::Path::new(project_path)) {
-        Ok(removed) => {
-            if !removed.is_empty() {
+    match crate::content::article_index::clean_stale_articles(conn, &task.project_id, std::path::Path::new(project_path)) {
+        Ok(summary) => {
+            if !summary.removed.is_empty() {
                 log::info!(
-                    "[ctr_audit] Removed {} stale entries from articles.json: {:?}",
-                    removed.len(),
-                    removed
+                    "[ctr_audit] Removed {} stale entries from SQLite + articles.json: {:?}",
+                    summary.removed.len(),
+                    summary.removed
                 );
-                cleaned_summary = removed;
+                cleaned_summary = summary.removed;
             }
         }
         Err(e) => {
-            log::warn!("[ctr_audit] Failed to clean stale articles.json entries: {}", e);
+            log::warn!("[ctr_audit] Failed to clean stale articles: {}", e);
         }
     }
 

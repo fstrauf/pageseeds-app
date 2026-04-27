@@ -545,6 +545,47 @@ pub(crate) fn merge_unknown_fields(exported: &mut serde_json::Value, existing: &
     }
 }
 
+/// Merge sidecar metadata from the `article_metadata` table into the exported JSON.
+/// Each namespace payload (a JSON object) is flattened into the article object.
+pub(crate) fn merge_sidecar_metadata(
+    conn: &Connection,
+    project_id: &str,
+    exported: &mut serde_json::Value,
+) -> Result<()> {
+    let meta_rows = crate::db::list_project_metadata(conn, project_id)?;
+    let Some(articles) = exported.get_mut("articles").and_then(|v| v.as_array_mut()) else {
+        return Ok(());
+    };
+
+    for article in articles.iter_mut() {
+        let Some(article_id) = article.get("id").and_then(|v| v.as_i64()) else { continue };
+        for (id, namespace, payload) in &meta_rows {
+            if *id != article_id {
+                continue;
+            }
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(payload) {
+                if let Some(obj_map) = obj.as_object() {
+                    for (key, value) in obj_map {
+                        // Namespace acts as the top-level key (e.g. "gsc")
+                        if namespace == key {
+                            article[key] = value.clone();
+                        } else {
+                            // Flatten nested keys under the namespace key
+                            if !article.get(namespace).map(|v| v.is_object()).unwrap_or(false) {
+                                article[namespace] = serde_json::Value::Object(Default::default());
+                            }
+                            if let Some(ns_obj) = article.get_mut(namespace).and_then(|v| v.as_object_mut()) {
+                                ns_obj.insert(key.clone(), value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Write articles.json to .github/automation/articles.json (CLI-compatible location).
 pub fn write_articles_to_repo(
     conn: &Connection,
@@ -553,6 +594,9 @@ pub fn write_articles_to_repo(
 ) -> Result<()> {
     validate_export_date_policy(conn, project_id)?;
     let mut exported: serde_json::Value = serde_json::from_str(&export_articles(conn, project_id)?)?;
+
+    // Merge sidecar metadata (e.g. GSC metrics) from SQLite into the export.
+    merge_sidecar_metadata(conn, project_id, &mut exported)?;
 
     let out_path = articles_json_path(project_path);
     if let Ok(existing_json) = std::fs::read_to_string(&out_path) {

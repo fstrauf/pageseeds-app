@@ -113,7 +113,7 @@ pub fn get_content_health(
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
     let automation_dir = repo_root.join(".github").join("automation");
-    crate::content::ops::content_health_check(&automation_dir, repo_root)
+    crate::content::ops::content_health_check(&automation_dir, repo_root, &db, &project_id)
 }
 
 #[tauri::command]
@@ -137,7 +137,7 @@ pub fn fix_date_mismatches(
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
     let automation_dir = repo_root.join(".github").join("automation");
-    crate::content::ops::apply_date_fixes(&automation_dir, repo_root)
+    crate::content::ops::apply_date_fixes(&automation_dir, repo_root, &db, &project_id)
 }
 
 #[tauri::command]
@@ -277,9 +277,9 @@ pub fn clean_stale_articles(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
-    let automation_dir = repo_root.join(".github").join("automation");
-    crate::content::ops::clean_stale_articles_json(&automation_dir, repo_root)
-        .map_err(|e| e.to_string())
+    let summary = crate::content::article_index::clean_stale_articles(&db, &project_id, repo_root)
+        .map_err(|e| e.to_string())?;
+    Ok(summary.removed)
 }
 
 #[tauri::command]

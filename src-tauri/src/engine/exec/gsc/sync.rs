@@ -65,11 +65,27 @@ pub(crate) fn exec_gsc_sync_articles(
         },
     };
 
-    // 3. articles.json
-    let articles_path = paths.automation_dir.join("articles.json");
-    let mut doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
+    // 3. Load articles from SQLite (canonical runtime store)
+    let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to open app database: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
+        Ok(a) => a,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to load articles from DB: {}", e),
+                output: None,
+            };
+        }
     };
 
     // 4. site_url from manifest.json
@@ -160,18 +176,15 @@ pub(crate) fn exec_gsc_sync_articles(
         }
     }
 
-    // 7. Match articles and write gsc block
+    // 7. Match articles and store GSC metadata in SQLite sidecar table
     let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let articles = doc["articles"].as_array_mut()
-        .ok_or("no articles array")
-        .unwrap();
 
     let mut matched = 0usize;
     let mut unmatched = 0usize;
 
-    for article in articles.iter_mut() {
-        let slug = article["url_slug"].as_str().unwrap_or("").to_string();
-        let file_ref = article["file"].as_str().unwrap_or("").to_string();
+    for article in &articles {
+        let slug = article.url_slug.clone();
+        let file_ref = article.file.clone();
 
         let article_path: String = if !slug.is_empty() {
             let s = slug.trim_matches('/').replace('_', "-").to_lowercase();
@@ -182,7 +195,6 @@ pub(crate) fn exec_gsc_sync_articles(
             let s = num_prefix_re.replace(&stem, "").to_string();
             format!("/{}", s.replace('_', "-").to_lowercase())
         } else {
-            article["gsc"] = serde_json::Value::Null;
             unmatched += 1;
             continue;
         };
@@ -191,7 +203,7 @@ pub(crate) fn exec_gsc_sync_articles(
             .or_else(|| gsc_by_segment.get(article_path.trim_start_matches('/')));
 
         if let Some(m) = metrics {
-            article["gsc"] = serde_json::json!({
+            let payload = serde_json::json!({
                 "impressions": m.impressions,
                 "clicks": m.clicks,
                 "ctr": (m.ctr * 10000.0).round() / 10000.0,
@@ -199,16 +211,26 @@ pub(crate) fn exec_gsc_sync_articles(
                 "last_synced": now_iso,
                 "period_days": days,
             });
+            let _ = crate::content::article_index::set_metadata(
+                &db,
+                &task.project_id,
+                article.id,
+                "gsc",
+                &payload.to_string(),
+            );
             matched += 1;
         } else {
-            article["gsc"] = serde_json::Value::Null;
             unmatched += 1;
         }
     }
 
-    // 8. Write back
-    if let Err(e) = crate::engine::exec::common::write_json(&articles_path, &doc, "articles.json") {
-        return e;
+    // 8. Re-export projection so articles.json gets the new GSC metadata
+    if let Err(e) = crate::content::article_index::export_projection(&db, &task.project_id, std::path::Path::new(project_path)) {
+        return StepResult {
+            success: false,
+            message: format!("GSC sync succeeded but projection export failed: {}", e),
+            output: None,
+        };
     }
 
     let summary = serde_json::json!({
