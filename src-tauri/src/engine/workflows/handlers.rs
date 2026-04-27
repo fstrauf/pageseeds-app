@@ -402,7 +402,8 @@ impl WorkflowHandler for CtrAuditHandler {
             // Input contract: structured JSON with per-article raw data + CTR metrics.
             // Output contract: JSON with recommendations array.
             WorkflowStep::new("ctr_analyze", StepKind::CtrAnalyze)
-                .with_param(step_params::SKILL, "ctr-optimization"),
+                .with_param(step_params::SKILL, "ctr-optimization")
+                .with_param(step_params::ARTIFACT_NAME, "ctr_recommendations"),
             // No normalizer needed — ctr_analyze extracts JSON internally.
         ]
     }
