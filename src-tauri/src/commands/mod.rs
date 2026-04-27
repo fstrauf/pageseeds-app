@@ -29,6 +29,7 @@ pub mod settings;
 pub mod skills;
 pub mod social;
 pub mod tasks;
+pub mod cannibalization;
 
 pub use articles::*;
 pub use content::*;
@@ -44,3 +45,4 @@ pub use settings::*;
 pub use skills::*;
 pub use social::*;
 pub use tasks::*;
+pub use cannibalization::*;

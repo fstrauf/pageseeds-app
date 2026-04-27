@@ -309,6 +309,28 @@ ALTER TABLE task_runs ADD COLUMN prompt_tokens INTEGER;
 ALTER TABLE task_runs ADD COLUMN completion_tokens INTEGER;
 "#;
 
+static MIGRATION_V24: &str = r#"
+-- Approval state for cannibalization strategy recommendations
+CREATE TABLE IF NOT EXISTS strategy_reviews (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy_id         TEXT NOT NULL,
+    project_id          TEXT NOT NULL,
+    recommendation_type TEXT NOT NULL,
+    recommendation_id   TEXT NOT NULL,
+    approval_status     TEXT NOT NULL DEFAULT 'pending',
+    approved_by         TEXT,
+    approved_at         TEXT,
+    notes               TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    UNIQUE(strategy_id, recommendation_type, recommendation_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_reviews_project ON strategy_reviews(project_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_reviews_strategy ON strategy_reviews(strategy_id);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -715,6 +737,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 24 {
+        conn.execute_batch(MIGRATION_V24)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (24, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn
@@ -875,4 +905,141 @@ pub fn list_article_audit_states(
         results.push(row?);
     }
     Ok(results)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Strategy Review CRUD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+use crate::models::cannibalization::{ApprovalStatus, StrategyReview};
+
+/// Upsert a strategy review decision.
+pub fn set_strategy_review(
+    conn: &Connection,
+    strategy_id: &str,
+    project_id: &str,
+    recommendation_type: &str,
+    recommendation_id: &str,
+    status: ApprovalStatus,
+    approved_by: Option<&str>,
+    notes: Option<&str>,
+) -> Result<StrategyReview> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let approved_at = if status == ApprovalStatus::Approved {
+        Some(now.clone())
+    } else {
+        None
+    };
+
+    conn.execute(
+        "INSERT INTO strategy_reviews
+         (strategy_id, project_id, recommendation_type, recommendation_id, approval_status, approved_by, approved_at, notes, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+         ON CONFLICT(strategy_id, recommendation_type, recommendation_id)
+         DO UPDATE SET
+             approval_status = excluded.approval_status,
+             approved_by = excluded.approved_by,
+             approved_at = excluded.approved_at,
+             notes = excluded.notes,
+             updated_at = excluded.updated_at",
+        rusqlite::params![
+            strategy_id,
+            project_id,
+            recommendation_type,
+            recommendation_id,
+            status,
+            approved_by,
+            approved_at,
+            notes,
+            now,
+        ],
+    )?;
+
+    get_strategy_review(conn, strategy_id, recommendation_type, recommendation_id)
+        .and_then(|opt| opt.ok_or_else(|| crate::error::Error::Database(rusqlite::Error::QueryReturnedNoRows)))
+}
+
+/// Get a single strategy review by composite key.
+pub fn get_strategy_review(
+    conn: &Connection,
+    strategy_id: &str,
+    recommendation_type: &str,
+    recommendation_id: &str,
+) -> Result<Option<StrategyReview>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, strategy_id, project_id, recommendation_type, recommendation_id,
+                approval_status, approved_by, approved_at, notes, created_at, updated_at
+         FROM strategy_reviews
+         WHERE strategy_id = ?1 AND recommendation_type = ?2 AND recommendation_id = ?3",
+    )?;
+
+    let row = stmt.query_row(
+        rusqlite::params![strategy_id, recommendation_type, recommendation_id],
+        |row| {
+            Ok(StrategyReview {
+                id: row.get(0)?,
+                strategy_id: row.get(1)?,
+                project_id: row.get(2)?,
+                recommendation_type: row.get(3)?,
+                recommendation_id: row.get(4)?,
+                approval_status: row.get(5)?,
+                approved_by: row.get(6)?,
+                approved_at: row.get(7)?,
+                notes: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        },
+    );
+
+    match row {
+        Ok(review) => Ok(Some(review)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// List all reviews for a given strategy.
+pub fn list_strategy_reviews(
+    conn: &Connection,
+    strategy_id: &str,
+) -> Result<Vec<StrategyReview>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, strategy_id, project_id, recommendation_type, recommendation_id,
+                approval_status, approved_by, approved_at, notes, created_at, updated_at
+         FROM strategy_reviews
+         WHERE strategy_id = ?1
+         ORDER BY updated_at DESC",
+    )?;
+
+    let rows = stmt.query_map([strategy_id], |row| {
+        Ok(StrategyReview {
+            id: row.get(0)?,
+            strategy_id: row.get(1)?,
+            project_id: row.get(2)?,
+            recommendation_type: row.get(3)?,
+            recommendation_id: row.get(4)?,
+            approval_status: row.get(5)?,
+            approved_by: row.get(6)?,
+            approved_at: row.get(7)?,
+            notes: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
+/// Delete all reviews for a strategy (e.g. when strategy is regenerated).
+pub fn delete_strategy_reviews(conn: &Connection, strategy_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM strategy_reviews WHERE strategy_id = ?1",
+        [strategy_id],
+    )?;
+    Ok(())
 }

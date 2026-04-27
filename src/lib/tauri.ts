@@ -832,3 +832,44 @@ export const analyzeKeywordDensity = (
   targetKeyword: string,
 ): Promise<KeywordDensityReport> =>
   invoke('analyze_keyword_density', { projectId, slug, targetKeyword })
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Cannibalization Review & Approval
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import type {
+  StrategyWithReviews,
+  StrategyReview,
+} from './types'
+
+export const getCannibalizationStrategy = (
+  projectId: string,
+): Promise<StrategyWithReviews | null> =>
+  invoke('get_cannibalization_strategy', { projectId })
+
+export const setRecommendationApproval = (args: {
+  strategyId: string
+  projectId: string
+  recommendationType: string
+  recommendationId: string
+  status: 'pending' | 'approved' | 'rejected' | 'needs_review'
+  notes?: string
+}): Promise<StrategyReview> =>
+  invoke('set_recommendation_approval', {
+    strategyId: args.strategyId,
+    projectId: args.projectId,
+    recommendationType: args.recommendationType,
+    recommendationId: args.recommendationId,
+    status: args.status,
+    notes: args.notes,
+  })
+
+export const getStrategyReviews = (strategyId: string): Promise<StrategyReview[]> =>
+  invoke('get_strategy_reviews', { strategyId })
+
+export const createTasksFromApprovedRecommendations = (
+  strategyId: string,
+  projectId: string,
+): Promise<string[]> =>
+  invoke('create_tasks_from_approved_recommendations', { strategyId, projectId })

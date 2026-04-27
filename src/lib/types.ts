@@ -92,6 +92,18 @@ export type {
   IntentClassification,
   OpportunityScore,
   
+  // Cannibalization Models
+  ApprovalStatus,
+  CalculatorRecommendation,
+  CannibalizationStrategy,
+  Confidence,
+  HubRecommendation,
+  MergeRecommendation,
+  StrategyReview,
+  StrategyRisk,
+  StrategyWithReviews,
+  TerritoryRecommendation,
+  
   // CTR Models
   CtrAgentOutput,
   CtrFix,
@@ -789,6 +801,7 @@ export type View =
   | 'gsc'
   | 'seo'
   | 'social'
+  | 'cannibalization'
   | 'settings'
   | 'scheduler'
   | 'history'

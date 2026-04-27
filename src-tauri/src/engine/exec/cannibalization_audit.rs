@@ -13,8 +13,7 @@ use rusqlite::Connection;
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::engine::{agent, skills};
-use crate::engine::spawner::{TaskSpawner, TaskSpec};
-use crate::models::task::{ExecutionMode, Task, TaskArtifact};
+use crate::models::task::Task;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Data structures
@@ -915,90 +914,21 @@ pub(crate) fn exec_can_analyze(
 // Step 3: Create Fix Tasks
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Spawn up to 3 cannibalization fix tasks based on the strategy artifact.
+/// No longer auto-spawns destructive fix tasks.
 ///
-/// Looks for a `cannibalization_strategy` artifact on the parent task; falls
-/// back to reading `cannibalization_strategy.json` from the automation directory.
+/// Phase 2 requires explicit approval via the review UI before any merge,
+/// hub, or territory tasks are created. The strategy is persisted as an
+/// artifact and in `cannibalization_strategy.json` for review.
 pub(crate) fn create_can_fix_tasks(
-    conn: &Connection,
+    _conn: &Connection,
     parent_task: &Task,
-    project_path: &str,
+    _project_path: &str,
 ) -> Vec<String> {
-    let paths = ProjectPaths::from_path(project_path);
-
-    // Try to find the artifact on the parent task first
-    let strategy_json = parent_task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "cannibalization_strategy")
-        .and_then(|a| a.content.clone())
-        .or_else(|| {
-            // Fallback: read from automation dir
-            let fallback_path = paths.automation_dir.join("cannibalization_strategy.json");
-            std::fs::read_to_string(&fallback_path).ok()
-        })
-        .unwrap_or_default();
-
-    if strategy_json.is_empty() {
-        log::warn!(
-            "[cannibalization_audit] No cannibalization_strategy artifact found for task {}",
-            parent_task.id
-        );
-        return Vec::new();
-    }
-
-    let artifact = TaskArtifact {
-        key: "cannibalization_strategy".to_string(),
-        path: None,
-        artifact_type: Some("json".to_string()),
-        source: Some("cannibalization_audit".to_string()),
-        content: Some(strategy_json),
-    };
-
-    let fix_task_types = [
-        ("fix_content_merge", format!("can_fix:merge:{}:{}", parent_task.project_id, parent_task.id)),
-        ("fix_hub_page", format!("can_fix:hub:{}:{}", parent_task.project_id, parent_task.id)),
-        ("research_territory", format!("can_fix:territory:{}:{}", parent_task.project_id, parent_task.id)),
-    ];
-
-    let mut created_ids = Vec::new();
-
-    for (task_type, idempotency_key) in &fix_task_types {
-        let spec = TaskSpec {
-            project_id: parent_task.project_id.clone(),
-            task_type: task_type.to_string(),
-            title: Some(format!("Cannibalization fix: {}", task_type)),
-            description: Some(format!(
-                "Follow-up cannibalization fix task from {} (parent: {})",
-                task_type, parent_task.id
-            )),
-            priority: crate::models::task::Priority::Medium,
-            execution_mode: Some(ExecutionMode::Automatic),
-            agent_policy: crate::models::task::AgentPolicy::Optional,
-            depends_on: vec![parent_task.id.clone()],
-            artifacts: vec![artifact.clone()],
-            idempotency_key: Some(idempotency_key.clone()),
-            ..Default::default()
-        };
-
-        match TaskSpawner::spawn(conn, spec) {
-            Ok(task) => {
-                log::info!(
-                    "[cannibalization_audit] Created fix task {} (type: {})",
-                    task.id, task_type
-                );
-                created_ids.push(task.id);
-            }
-            Err(e) => {
-                log::warn!(
-                    "[cannibalization_audit] Failed to create fix task {}: {}",
-                    task_type, e
-                );
-            }
-        }
-    }
-
-    created_ids
+    log::info!(
+        "[cannibalization_audit] Task {} completed. Review required before spawning fix tasks.",
+        parent_task.id
+    );
+    Vec::new()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -8,6 +8,7 @@ import { LiveSitePageTable } from './components/articles/LiveSitePageTable'
 import { ContentHealth } from './components/articles/ContentHealth'
 import { CtrHealthPanel } from './components/articles/CtrHealthPanel'
 import { LinkingMap } from './components/articles/LinkingMap'
+import { CannibalizationReview } from './components/cannibalization/CannibalizationReview'
 import { Reddit } from './components/reddit/Reddit'
 import { GSC } from './components/gsc/GSC'
 import { SEO } from './components/seo/SEO'
@@ -41,6 +42,7 @@ const VALID_VIEWS: View[] = [
   'scheduler',
   'history',
   'social',
+  'cannibalization',
 ]
 
 function parseUrlHash(): { view: View | null; projectId: string | null } {
@@ -336,6 +338,9 @@ export default function App() {
           <SocialDashboard
             projectId={activeProject?.id ?? ''}
           />
+        )}
+        {activeView === 'cannibalization' && (
+          <CannibalizationReview projectId={activeProject?.id ?? ''} />
         )}
       </Shell>
 
