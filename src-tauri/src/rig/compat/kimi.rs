@@ -313,24 +313,50 @@ async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatRespon
         serde_json::to_string_pretty(&request).unwrap_or_default()
     );
 
+    let start = std::time::Instant::now();
+    log::info!("[kimi::send_request] >>> START POST {}", url);
+
     let resp = client
         .post(&url)
         .header("Authorization", "Bearer dummy")
         .json(&request)
         .send()
         .await
-        .map_err(|e| format!("Kimi request failed: {}", e))?;
+        .map_err(|e| {
+            log::error!("[kimi::send_request] Request failed after {:?}: {}", start.elapsed(), e);
+            format!("Kimi request failed: {}", e)
+        })?;
 
     let status = resp.status();
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| {
+        log::error!("[kimi::send_request] Body read failed after {:?}: {}", start.elapsed(), e);
+        e.to_string()
+    })?;
+
+    let elapsed = start.elapsed();
 
     if !status.is_success() {
+        log::error!(
+            "[kimi::send_request] <<< END ERROR status={} duration={:?}",
+            status, elapsed
+        );
         return Err(format!("Kimi API error {}: {}", status, body));
     }
 
-    serde_json::from_str(&body).map_err(|e| {
+    let parsed: ChatResponse = serde_json::from_str(&body).map_err(|e| {
+        log::error!("[kimi::send_request] Parse error after {:?}: {}", elapsed, e);
         format!("Kimi response parse error: {} | body: {}", e, body)
-    })
+    })?;
+
+    log::info!(
+        "[kimi::send_request] <<< END OK request_id={} duration={:?} prompt_tokens={:?} completion_tokens={:?}",
+        parsed.id,
+        elapsed,
+        parsed.usage.as_ref().map(|u| u.prompt_tokens),
+        parsed.usage.as_ref().map(|u| u.completion_tokens)
+    );
+
+    Ok(parsed)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
