@@ -295,15 +295,10 @@ pub(crate) fn exec_ctr_build_context(
         log::warn!("[ctr_audit] Failed to write ctr_audit_context.json: {}", e);
     }
 
-    // Return only the top 20 as step output to keep the agentic prompt small
-    let summary_doc = serde_json::json!({
-        "generated_at": now_iso,
-        "total_articles": article_records.len(),
-        "top_20_by_clicks_lost": top_20,
-        "cleaned_stale_entries": cleaned_summary.len(),
-        "cleaned_files": cleaned_summary,
-    });
-    let summary_str = serde_json::to_string_pretty(&summary_doc).unwrap_or_default() + "\n";
+    // Return the full document as step output so the post-task spawner can read
+    // the complete articles array (with issues_detected) to decide which ones
+    // need fix_ctr_article tasks. The full document is also written to disk above.
+    let full_str = serde_json::to_string_pretty(&full_doc).unwrap_or_default() + "\n";
 
     let clean_msg = if cleaned_summary.is_empty() {
         String::new()
@@ -328,7 +323,7 @@ pub(crate) fn exec_ctr_build_context(
     StepResult {
         success: true,
         message: msg,
-        output: Some(summary_str),
+        output: Some(full_str),
     }
 }
 
