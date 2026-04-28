@@ -432,6 +432,27 @@ CREATE INDEX IF NOT EXISTS idx_ctr_outcomes_project ON ctr_outcomes(project_id);
 CREATE INDEX IF NOT EXISTS idx_ctr_outcomes_task ON ctr_outcomes(fix_task_id);
 "#;
 
+static MIGRATION_V30: &str = r#"
+-- CTR issue lifecycle: durable state for per-article CTR issues
+CREATE TABLE IF NOT EXISTS article_ctr_issues (
+    project_id                  TEXT NOT NULL,
+    article_id                  INTEGER NOT NULL,
+    issue_type                  TEXT NOT NULL,
+    status                      TEXT NOT NULL DEFAULT 'open',
+    detected_at                 TEXT NOT NULL,
+    last_verified_at            TEXT,
+    content_hash_at_detection   TEXT NOT NULL DEFAULT '',
+    fix_task_id                 TEXT,
+    failure_reason              TEXT,
+    verified_hash               TEXT,
+    PRIMARY KEY (project_id, article_id, issue_type),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_ctr_issues_project ON article_ctr_issues(project_id);
+CREATE INDEX IF NOT EXISTS idx_article_ctr_issues_status ON article_ctr_issues(status);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -882,6 +903,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V29)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (29, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 30 {
+        conn.execute_batch(MIGRATION_V30)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (30, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

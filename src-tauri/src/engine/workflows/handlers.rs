@@ -203,7 +203,6 @@ impl WorkflowHandler for ImplementationHandler {
                 | "technical_seo"
                 | "landing_page_spec"
                 | "create_landing_page"
-                | "create_hub_page"
                 | "territory_research"
                 | "calculator_rollout"
         ) || t.starts_with("fix_")
@@ -260,9 +259,9 @@ impl WorkflowHandler for ImplementationHandler {
                     .with_param(step_params::SKILL, "ctr-template-fix"),
                 // Step 3 (manual): framework code changes require manual review/application.
                 // The task cannot auto-apply changes to the target repo's layout/metadata code.
+                // The workflow ends here; verification happens via a subsequent ctr_audit run after
+                // the user applies the fix in the target repo.
                 WorkflowStep::new("ctr_template_apply", StepKind::Manual),
-                // Step 4 (deterministic): re-fetch sample pages and verify duplicate suffix is gone.
-                WorkflowStep::new("ctr_template_verify_render", StepKind::CtrTemplateVerifyRender),
             ],
             "fix_ctr_schema_renderer" => vec![
                 // Step 1 (deterministic): identify articles with source FAQ but missing rendered JSON-LD.
@@ -273,9 +272,9 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("ctr_schema_plan", StepKind::Agentic)
                     .with_param(step_params::SKILL, "ctr-schema-renderer"),
                 // Step 3 (manual): framework code changes require manual review/application.
+                // The workflow ends here; verification happens via a subsequent ctr_audit run after
+                // the user applies the fix in the target repo.
                 WorkflowStep::new("ctr_schema_apply", StepKind::Manual),
-                // Step 4 (deterministic): re-fetch sample pages and verify FAQPage JSON-LD is present.
-                WorkflowStep::new("ctr_schema_verify_render", StepKind::CtrSchemaVerifyRender),
             ],
             "indexing_diagnostics" => vec![
                 // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
@@ -561,6 +560,29 @@ impl WorkflowHandler for ConsolidateClusterHandler {
     }
 }
 
+// ─── Hub Page ────────────────────────────────────────────────────────────────
+
+pub struct HubPageHandler;
+
+impl WorkflowHandler for HubPageHandler {
+    fn supports(&self, task: &Task) -> bool {
+        let t = task_type(task);
+        t == "create_hub_page" || t == "refresh_hub_page"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            WorkflowStep::new("hub_load_recommendation", StepKind::HubLoadRecommendation),
+            WorkflowStep::new("hub_build_brief", StepKind::HubBuildBrief),
+            WorkflowStep::new("hub_write", StepKind::HubWrite)
+                .with_param(step_params::SKILL, "hub-write"),
+            WorkflowStep::new("hub_apply_draft", StepKind::HubApplyDraft),
+            WorkflowStep::new("hub_apply_links", StepKind::HubApplyLinks),
+            WorkflowStep::new("hub_validate", StepKind::HubValidate),
+        ]
+    }
+}
+
 // ─── Manual Fallback ─────────────────────────────────────────────────────────
 
 pub struct ManualFallbackHandler;
@@ -592,6 +614,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(CtrAuditHandler),
         Box::new(CannibalizationAuditHandler),
         Box::new(ConsolidateClusterHandler),
+        Box::new(HubPageHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
     ]

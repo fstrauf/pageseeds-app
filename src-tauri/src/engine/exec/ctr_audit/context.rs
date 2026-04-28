@@ -257,6 +257,14 @@ pub(crate) fn exec_ctr_build_context(
         );
     }
 
+    // Sort by clicks_lost descending BEFORE query enrichment so the top candidates
+    // (which are the ones we want query data for) are at the front of the array.
+    article_records.sort_by(|a, b| {
+        let ca = a["clicks_lost"].as_f64().unwrap_or(0.0);
+        let cb = b["clicks_lost"].as_f64().unwrap_or(0.0);
+        cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     // ── Optional: fetch query-level GSC data for top candidates ────────────────
     let query_enriched = if !article_records.is_empty() {
         enrich_with_query_metrics(
@@ -269,13 +277,6 @@ pub(crate) fn exec_ctr_build_context(
     } else {
         0
     };
-
-    // Sort by clicks_lost descending
-    article_records.sort_by(|a, b| {
-        let ca = a["clicks_lost"].as_f64().unwrap_or(0.0);
-        let cb = b["clicks_lost"].as_f64().unwrap_or(0.0);
-        cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
-    });
 
     let top_20: Vec<&serde_json::Value> = article_records.iter().take(20).collect();
 

@@ -239,6 +239,12 @@ pub async fn execute_task_with_token(
                 log::info!("[executor] merge_draft_patch output ({} chars)", out.len());
                 latest_raw_output = result.output.clone();
             }
+        } else if step.name == "hub_build_brief" {
+            // Pass structured hub brief to the agentic hub_write step
+            if let Some(ref out) = result.output {
+                log::info!("[executor] hub_build_brief output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
         }
 
         progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };

@@ -18,11 +18,13 @@ mod review;
 mod sync;
 mod cluster_link;
 mod task_spawner;
+pub mod hub_page;
 
 pub(crate) use review::*;
 pub(crate) use sync::*;
 pub(crate) use cluster_link::*;
 pub(crate) use task_spawner::*;
+pub(crate) use hub_page::*;
 
 #[cfg(test)]
 use rusqlite::Connection;

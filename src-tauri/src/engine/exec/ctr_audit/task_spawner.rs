@@ -44,6 +44,26 @@ pub(crate) fn create_ctr_fix_tasks(
         }
     };
 
+    // Pre-load articles.json for field enrichment (file / target_keyword fallback)
+    let articles_lookup: std::collections::HashMap<i64, (String, String, String)> =
+        std::fs::read_to_string(&paths.articles_json)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("articles").cloned())
+            .and_then(|a| a.as_array().cloned())
+            .map(|arr| {
+                arr.into_iter()
+                    .filter_map(|article| {
+                        let id = article.get("id")?.as_i64()?;
+                        let file = article.get("file")?.as_str()?.to_string();
+                        let url_slug = article.get("url_slug")?.as_str()?.to_string();
+                        let target_keyword = article.get("target_keyword")?.as_str()?.to_string();
+                        Some((id, (file, url_slug, target_keyword)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
     let mut created_ids = Vec::new();
     let mut schema_renderer_needed = false;
 
@@ -52,17 +72,34 @@ pub(crate) fn create_ctr_fix_tasks(
             continue;
         }
 
+        // Enrich missing fields from trusted article context.
+        let mut rec = rec;
+        if let Some((article_file, article_slug, article_keyword)) = articles_lookup.get(&rec.article_id) {
+            if rec.file.is_empty() {
+                rec.file = article_file.clone();
+                log::info!("[ctr_audit] Enriched missing 'file' for article {} from articles.json: {}", rec.article_id, rec.file);
+            }
+            if rec.url_slug.is_empty() {
+                rec.url_slug = article_slug.clone();
+                log::info!("[ctr_audit] Enriched missing 'url_slug' for article {} from articles.json: {}", rec.article_id, rec.url_slug);
+            }
+            if rec.target_keyword.is_empty() {
+                rec.target_keyword = article_keyword.clone();
+                log::info!("[ctr_audit] Enriched missing 'target_keyword' for article {} from articles.json: {}", rec.article_id, rec.target_keyword);
+            }
+        }
+
         // Phase 1 contract enforcement: file and target_keyword are required.
         if rec.file.is_empty() {
             log::warn!(
-                "[ctr_audit] Skipping recommendation for article {}: missing required 'file' field",
+                "[ctr_audit] Skipping recommendation for article {}: missing required 'file' field and no enrichment available",
                 rec.article_id
             );
             continue;
         }
         if rec.target_keyword.is_empty() {
             log::warn!(
-                "[ctr_audit] Skipping recommendation for article {} ({}): missing required 'target_keyword' field",
+                "[ctr_audit] Skipping recommendation for article {} ({}): missing required 'target_keyword' field and no enrichment available",
                 rec.article_id,
                 rec.file
             );

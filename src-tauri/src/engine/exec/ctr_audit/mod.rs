@@ -926,16 +926,16 @@ A: This is a test.
         cleanup(&path);
     }
 
-    /// Phase 1 contract enforcement: recommendations missing required `file` or
-    /// `target_keyword` fields must be rejected rather than spawning broken fix tasks.
+    /// Missing `file` or `target_keyword` fields are enriched from articles.json.
+    /// Recommendations for articles not in articles.json with empty fields are skipped.
     #[test]
-    fn create_ctr_fix_tasks_rejects_incomplete_recommendations() {
+    fn create_ctr_fix_tasks_enriches_and_rejects_incomplete_recommendations() {
         let path = test_dir();
         setup_project(&path);
         let conn = test_db();
 
         let parent_task = crate::models::task::Task {
-            id: "parent-reject".to_string(),
+            id: "parent-enrich".to_string(),
             project_id: "proj-test".to_string(),
             task_type: "ctr_audit".to_string(),
             phase: "investigation".to_string(),
@@ -943,7 +943,7 @@ A: This is a test.
             priority: crate::models::task::Priority::Medium,
             execution_mode: crate::models::task::ExecutionMode::Automatic,
             agent_policy: crate::models::task::AgentPolicy::None,
-            title: Some("Reject Test".to_string()),
+            title: Some("Enrich Test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![crate::models::task::TaskArtifact {
@@ -968,10 +968,10 @@ A: This is a test.
                             "fixes": [{"type": "meta_description", "recommended": "New meta"}]
                         },
                         {
-                            "article_id": 3,
-                            "url_slug": "valid-article",
-                            "file": "content/001_test_article.mdx",
-                            "target_keyword": "test article",
+                            "article_id": 999,
+                            "url_slug": "missing-article",
+                            "file": "",
+                            "target_keyword": "",
                             "fixes": [{"type": "title_rewrite", "recommended": "Good Title"}]
                         }
                     ]
@@ -999,10 +999,8 @@ A: This is a test.
         crate::engine::task_store::create_task(&conn, &parent_task).unwrap();
 
         let ids = create_ctr_fix_tasks(&conn, &parent_task, &path);
-        assert_eq!(ids.len(), 1, "Should create exactly 1 fix task (only the valid recommendation), got {}", ids.len());
-
-        let task = crate::engine::task_store::get_task(&conn, &ids[0]).unwrap();
-        assert!(task.description.as_ref().unwrap().contains("valid-article"));
+        // Articles 1 and 2 are enriched from articles.json; article 999 is not present and has empty fields, so skipped.
+        assert_eq!(ids.len(), 2, "Should create exactly 2 fix tasks (enriched recommendations), got {}", ids.len());
 
         cleanup(&path);
     }

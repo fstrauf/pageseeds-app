@@ -94,6 +94,18 @@ pub enum StepKind {
     MergeGenerateRedirects,
     /// Validate merged keeper and redirect map.
     MergeValidateOutput,
+    /// Load approved hub recommendation from strategy artifact.
+    HubLoadRecommendation,
+    /// Gather spoke metadata, excerpts, and GSC metrics into HubBrief.
+    HubBuildBrief,
+    /// Agentic: generate full MDX hub page from HubBrief using hub-write skill.
+    HubWrite,
+    /// Write MDX file to content dir, register in SQLite and articles.json.
+    HubApplyDraft,
+    /// Add hub↔spoke Related Articles links.
+    HubApplyLinks,
+    /// Validate hub page: frontmatter, H1, word count ≥1500, spoke links.
+    HubValidate,
     /// Sanitize content: rename .md → .mdx, repair paths, validate frontmatter (read-only report).
     SanitizeContent,
     /// Fallback for unknown strings during deserialization.
@@ -168,6 +180,12 @@ impl StepKind {
             Self::MergeApplyPatch => "merge_apply_patch",
             Self::MergeGenerateRedirects => "merge_generate_redirects",
             Self::MergeValidateOutput => "merge_validate_output",
+            Self::HubLoadRecommendation => "hub_load_recommendation",
+            Self::HubBuildBrief => "hub_build_brief",
+            Self::HubWrite => "hub_write",
+            Self::HubApplyDraft => "hub_apply_draft",
+            Self::HubApplyLinks => "hub_apply_links",
+            Self::HubValidate => "hub_validate",
             Self::SanitizeContent => "sanitize_content",
             Self::Unknown => "unknown",
         }
@@ -255,6 +273,12 @@ impl FromStr for StepKind {
             "merge_apply_patch" => Ok(Self::MergeApplyPatch),
             "merge_generate_redirects" => Ok(Self::MergeGenerateRedirects),
             "merge_validate_output" => Ok(Self::MergeValidateOutput),
+            "hub_load_recommendation" => Ok(Self::HubLoadRecommendation),
+            "hub_build_brief" => Ok(Self::HubBuildBrief),
+            "hub_write" => Ok(Self::HubWrite),
+            "hub_apply_draft" => Ok(Self::HubApplyDraft),
+            "hub_apply_links" => Ok(Self::HubApplyLinks),
+            "hub_validate" => Ok(Self::HubValidate),
             "sanitize_content" => Ok(Self::SanitizeContent),
             _ => Err(()),
         }
@@ -352,6 +376,12 @@ mod tests {
             StepKind::MergeApplyPatch,
             StepKind::MergeGenerateRedirects,
             StepKind::MergeValidateOutput,
+            StepKind::HubLoadRecommendation,
+            StepKind::HubBuildBrief,
+            StepKind::HubWrite,
+            StepKind::HubApplyDraft,
+            StepKind::HubApplyLinks,
+            StepKind::HubValidate,
             StepKind::SanitizeContent,
         ];
 

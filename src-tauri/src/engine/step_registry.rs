@@ -621,6 +621,40 @@ impl StepRegistry {
         register_blocking!(handlers, StepKind::MergeValidateOutput,
             crate::engine::exec::consolidate_cluster::exec_merge_validate_output);
 
+        // ─── Hub Page ───────────────────────────────────────────────────────────
+
+        register_blocking!(handlers, StepKind::HubLoadRecommendation,
+            crate::engine::exec::content::hub_page::exec_hub_load_recommendation);
+
+        register_blocking!(handlers, StepKind::HubBuildBrief,
+            crate::engine::exec::content::hub_page::exec_hub_build_brief);
+
+        register_blocking!(handlers, StepKind::HubWrite,
+            crate::engine::exec::content::hub_page::exec_hub_write, agent_provider, context_json);
+
+        handlers.insert(StepKind::HubApplyDraft, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let mdx_content = ctx.latest_raw.unwrap_or("").to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::content::hub_page::exec_hub_apply_draft(&task, &project_path, &mdx_content)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
+        register_blocking!(handlers, StepKind::HubApplyLinks,
+            crate::engine::exec::content::hub_page::exec_hub_apply_links);
+
+        register_blocking!(handlers, StepKind::HubValidate,
+            crate::engine::exec::content::hub_page::exec_hub_validate);
+
         Self { handlers }
     }
 
