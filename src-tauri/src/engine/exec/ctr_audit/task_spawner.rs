@@ -22,8 +22,8 @@ pub(crate) fn create_ctr_fix_tasks(
         .find(|a| a.key == "ctr_build_context")
         .and_then(|a| a.content.clone())
         .or_else(|| {
-            // Fallback: read from automation dir
-            let fallback_path = paths.automation_dir.join("ctr_build_context.json");
+            // Fallback: read from automation dir (matches context.rs out_path)
+            let fallback_path = paths.automation_dir.join("ctr_audit_context.json");
             std::fs::read_to_string(&fallback_path).ok()
         })
         .unwrap_or_default();
@@ -53,6 +53,7 @@ pub(crate) fn create_ctr_fix_tasks(
     };
 
     let mut created_ids = Vec::new();
+    let mut skipped_healthy = 0usize;
 
     for article in articles {
         let id = article["id"].as_i64().unwrap_or(0);
@@ -68,6 +69,7 @@ pub(crate) fn create_ctr_fix_tasks(
             || issues["missing_faq_schema"].as_bool().unwrap_or(false);
 
         if !has_issues {
+            skipped_healthy += 1;
             continue;
         }
 
@@ -132,6 +134,23 @@ pub(crate) fn create_ctr_fix_tasks(
     // Create a schema renderer task if any articles need it
     if let Some(task_id) = create_ctr_schema_renderer_task(conn, parent_task, project_path) {
         created_ids.push(task_id);
+    }
+
+    let total_scanned = articles.len();
+    let spawned = created_ids.len();
+    log::info!(
+        "[ctr_audit] Spawner result: {} scanned, {} healthy skipped, {} fix task(s) created",
+        total_scanned,
+        skipped_healthy,
+        spawned
+    );
+
+    if spawned == 0 && total_scanned > 0 {
+        log::warn!(
+            "[ctr_audit] CTR audit found {} article(s) but created 0 fix tasks. \
+             All may be healthy, or the handoff may be broken.",
+            total_scanned
+        );
     }
 
     created_ids
