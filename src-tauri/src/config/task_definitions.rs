@@ -230,13 +230,6 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
-        task_type: "fix_ctr_schema_renderer",
-        phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: true,
-        handler_family: HandlerFamily::Implementation,
-    },
-    TaskDefinition {
         task_type: "ctr_outcome_review",
         phase: "investigation",
         execution_mode: ExecutionMode::Manual,

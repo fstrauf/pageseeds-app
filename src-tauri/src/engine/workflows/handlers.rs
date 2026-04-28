@@ -268,19 +268,6 @@ impl WorkflowHandler for ImplementationHandler {
                 // the user applies the fix in the target repo.
                 WorkflowStep::new("ctr_template_apply", StepKind::Manual),
             ],
-            "fix_ctr_schema_renderer" => vec![
-                // Step 1 (deterministic): identify articles with source FAQ but missing rendered JSON-LD.
-                // Reads rendered audits and source files, produces a structured report.
-                WorkflowStep::new("ctr_schema_detect", StepKind::CtrSchemaDetect),
-                // Step 2 (agentic/manual-review): produce framework-aware schema rendering fix plan.
-                // The agent inspects framework files and suggests how to render FAQPage JSON-LD.
-                WorkflowStep::new("ctr_schema_plan", StepKind::Agentic)
-                    .with_param(step_params::SKILL, "ctr-schema-renderer"),
-                // Step 3 (manual): framework code changes require manual review/application.
-                // The workflow ends here; verification happens via a subsequent ctr_audit run after
-                // the user applies the fix in the target repo.
-                WorkflowStep::new("ctr_schema_apply", StepKind::Manual),
-            ],
             "indexing_diagnostics" => vec![
                 // Stateful GSC indexing diagnostics: native Rust, tracks per-URL history in SQLite,
                 // only re-checks stale or known-bad URLs, and spawns fix tasks for new/regressed

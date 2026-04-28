@@ -138,10 +138,11 @@ pub(crate) fn create_ctr_fix_tasks(
         }
     }
 
-    // Create a schema renderer task if any articles need it
-    if let Some(task_id) = create_ctr_schema_renderer_task(conn, parent_task, project_path) {
-        created_ids.push(task_id);
-    }
+    // Record schema rendering compatibility warning if source FAQ exists but
+    // rendered HTML lacks FAQPage JSON-LD. We do NOT spawn an agentic task
+    // for this — the fix belongs in the target repo's parser/layout/head code.
+    // See PAGESEEDS_REPO_INTEGRATION.md for the ownership contract.
+    record_ctr_schema_warning(conn, parent_task, project_path);
 
     let total_scanned = articles.len();
     let spawned = created_ids.len();
@@ -163,83 +164,64 @@ pub(crate) fn create_ctr_fix_tasks(
     created_ids
 }
 
-/// Spawn a `fix_ctr_schema_renderer` task if rendered audits show missing FAQPage JSON-LD.
-fn create_ctr_schema_renderer_task(
+/// Detect articles where source FAQ exists but rendered HTML has no FAQPage JSON-LD.
+/// Instead of spawning an agentic fix task (which cannot reliably edit arbitrary
+/// target-repo framework code), store the result as a warning artifact on the
+/// parent task so the UI can surface a compatibility message.
+fn record_ctr_schema_warning(
     conn: &rusqlite::Connection,
     parent_task: &Task,
     project_path: &str,
-) -> Option<String> {
+) {
     let result = crate::engine::exec::ctr_audit::exec_ctr_schema_detect(
         parent_task, project_path, conn,
     );
 
     if !result.success {
         log::warn!("[ctr_schema] Schema detection failed: {}", result.message);
-        return None;
+        return;
     }
 
     let affected: Vec<serde_json::Value> = match result.output.as_deref() {
         Some(json) => serde_json::from_str(json).unwrap_or_default(),
-        None => return None,
+        None => return,
     };
 
     if affected.is_empty() {
-        return None;
+        return;
     }
 
-    let detection_json = match serde_json::to_string_pretty(&affected) {
-        Ok(j) => j,
-        Err(e) => {
-            log::warn!("[ctr_schema] Failed to serialize detection: {}", e);
-            return None;
-        }
-    };
+    let warning = serde_json::json!({
+        "level": "warning",
+        "category": "repo_compatibility",
+        "message": format!(
+            "{} article(s) have source FAQ content but the rendered pages do not emit FAQPage JSON-LD. \
+             The target repo's schema rendering code needs to be updated. \
+             See PAGESEEDS_REPO_INTEGRATION.md for setup instructions.",
+            affected.len()
+        ),
+        "affected_count": affected.len(),
+        "affected_sample": affected,
+        "doc_ref": "PAGESEEDS_REPO_INTEGRATION.md",
+    });
 
     let artifact = TaskArtifact {
-        key: "ctr_schema_detection".to_string(),
+        key: "ctr_schema_compatibility_warning".to_string(),
         path: None,
-        artifact_type: Some("json".to_string()),
+        artifact_type: Some("warning".to_string()),
         source: Some("ctr_schema_detect".to_string()),
-        content: Some(detection_json),
+        content: Some(warning.to_string()),
     };
 
-    let idempotency_key = format!(
-        "ctr_fix:schema_renderer:{}:{}",
-        parent_task.project_id, parent_task.id
-    );
-
-    let spec = TaskSpec {
-        project_id: parent_task.project_id.clone(),
-        task_type: "fix_ctr_schema_renderer".to_string(),
-        title: Some(format!(
-            "Fix schema renderer: {} article(s) missing FAQPage JSON-LD",
-            affected.len()
-        )),
-        description: Some(format!(
-            "Detected {} article(s) with source FAQ content but no rendered FAQPage JSON-LD. \
-             The target repo's schema rendering code needs to be fixed.",
-            affected.len()
-        )),
-        priority: crate::models::task::Priority::High,
-        execution_mode: Some(ExecutionMode::Manual),
-        agent_policy: crate::models::task::AgentPolicy::Optional,
-        depends_on: vec![parent_task.id.clone()],
-        artifacts: vec![artifact],
-        idempotency_key: Some(idempotency_key),
-        ..Default::default()
-    };
-
-    match TaskSpawner::spawn(conn, spec) {
-        Ok(task) => {
-            log::info!(
-                "[ctr_schema] Created schema renderer fix task {} ({} articles)",
-                task.id, affected.len()
-            );
-            Some(task.id)
-        }
-        Err(e) => {
-            log::warn!("[ctr_schema] Failed to create schema renderer fix task: {}", e);
-            None
-        }
+    if let Err(e) = crate::engine::task_store::append_task_artifact(conn, &parent_task.id, &artifact) {
+        log::warn!("[ctr_schema] Failed to append warning artifact: {}", e);
+        return;
     }
+
+    log::warn!(
+        "[ctr_schema] Compatibility warning: {} article(s) missing rendered FAQPage JSON-LD. \
+         Stored on parent task {} as ctr_schema_compatibility_warning.",
+        affected.len(),
+        parent_task.id
+    );
 }
