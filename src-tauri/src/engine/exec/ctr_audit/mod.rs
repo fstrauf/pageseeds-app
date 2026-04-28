@@ -750,29 +750,38 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             description: None,
             depends_on: vec![],
             artifacts: vec![crate::models::task::TaskArtifact {
-                key: "ctr_recommendations".to_string(),
+                key: "ctr_build_context".to_string(),
                 path: None,
                 artifact_type: Some("json".to_string()),
                 source: Some("ctr_audit".to_string()),
                 content: Some(serde_json::json!({
-                    "recommendations": [
+                    "total_articles": 2,
+                    "articles": [
                         {
-                            "article_id": 1,
+                            "id": 1,
                             "url_slug": "test-article",
                             "file": "content/001_test_article.mdx",
                             "target_keyword": "test article",
-                            "fixes": [
-                                {"type": "title_rewrite", "recommended": "New Title"}
-                            ]
+                            "issues_detected": {
+                                "file_not_found": false,
+                                "title_too_long": true,
+                                "meta_too_short": false,
+                                "snippet_suboptimal": false,
+                                "missing_faq_schema": false
+                            }
                         },
                         {
-                            "article_id": 2,
+                            "id": 2,
                             "url_slug": "another-article",
                             "file": "content/002_another_article.mdx",
                             "target_keyword": "another article",
-                            "fixes": [
-                                {"type": "meta_description", "recommended": "New meta"}
-                            ]
+                            "issues_detected": {
+                                "file_not_found": false,
+                                "title_too_long": false,
+                                "meta_too_short": true,
+                                "snippet_suboptimal": false,
+                                "missing_faq_schema": false
+                            }
                         }
                     ]
                 }).to_string()),
@@ -802,10 +811,12 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
         let ids = create_ctr_fix_tasks(&conn, &parent_task, &path);
         assert_eq!(ids.len(), 2, "Should create 2 fix tasks, got {}", ids.len());
 
-        // Verify tasks are correct type
+        // Verify tasks are correct type and have ctr_context artifact
         for id in &ids {
             let task = crate::engine::task_store::get_task(&conn, id).unwrap();
             assert_eq!(task.task_type, "fix_ctr_article");
+            let has_context = task.artifacts.iter().any(|a| a.key == "ctr_context");
+            assert!(has_context, "fix_ctr_article task should have ctr_context artifact");
         }
 
         cleanup(&path);
@@ -926,16 +937,15 @@ A: This is a test.
         cleanup(&path);
     }
 
-    /// Missing `file` or `target_keyword` fields are enriched from articles.json.
-    /// Recommendations for articles not in articles.json with empty fields are skipped.
+    /// Articles without detected issues are skipped; articles with issues get individual tasks.
     #[test]
-    fn create_ctr_fix_tasks_enriches_and_rejects_incomplete_recommendations() {
+    fn create_ctr_fix_tasks_skips_healthy_articles() {
         let path = test_dir();
         setup_project(&path);
         let conn = test_db();
 
         let parent_task = crate::models::task::Task {
-            id: "parent-enrich".to_string(),
+            id: "parent-skip".to_string(),
             project_id: "proj-test".to_string(),
             task_type: "ctr_audit".to_string(),
             phase: "investigation".to_string(),
@@ -943,36 +953,55 @@ A: This is a test.
             priority: crate::models::task::Priority::Medium,
             execution_mode: crate::models::task::ExecutionMode::Automatic,
             agent_policy: crate::models::task::AgentPolicy::None,
-            title: Some("Enrich Test".to_string()),
+            title: Some("Skip Test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![crate::models::task::TaskArtifact {
-                key: "ctr_recommendations".to_string(),
+                key: "ctr_build_context".to_string(),
                 path: None,
                 artifact_type: Some("json".to_string()),
                 source: Some("ctr_audit".to_string()),
                 content: Some(serde_json::json!({
-                    "recommendations": [
+                    "total_articles": 3,
+                    "articles": [
                         {
-                            "article_id": 1,
+                            "id": 1,
                             "url_slug": "test-article",
-                            "file": "",
+                            "file": "content/001_test_article.mdx",
                             "target_keyword": "test article",
-                            "fixes": [{"type": "title_rewrite", "recommended": "New Title"}]
+                            "issues_detected": {
+                                "file_not_found": false,
+                                "title_too_long": true,
+                                "meta_too_short": false,
+                                "snippet_suboptimal": false,
+                                "missing_faq_schema": false
+                            }
                         },
                         {
-                            "article_id": 2,
+                            "id": 2,
                             "url_slug": "another-article",
                             "file": "content/002_another_article.mdx",
-                            "target_keyword": "",
-                            "fixes": [{"type": "meta_description", "recommended": "New meta"}]
+                            "target_keyword": "another article",
+                            "issues_detected": {
+                                "file_not_found": false,
+                                "title_too_long": false,
+                                "meta_too_short": false,
+                                "snippet_suboptimal": false,
+                                "missing_faq_schema": false
+                            }
                         },
                         {
-                            "article_id": 999,
+                            "id": 999,
                             "url_slug": "missing-article",
                             "file": "",
                             "target_keyword": "",
-                            "fixes": [{"type": "title_rewrite", "recommended": "Good Title"}]
+                            "issues_detected": {
+                                "file_not_found": true,
+                                "title_too_long": false,
+                                "meta_too_short": false,
+                                "snippet_suboptimal": false,
+                                "missing_faq_schema": false
+                            }
                         }
                     ]
                 }).to_string()),
@@ -999,8 +1028,8 @@ A: This is a test.
         crate::engine::task_store::create_task(&conn, &parent_task).unwrap();
 
         let ids = create_ctr_fix_tasks(&conn, &parent_task, &path);
-        // Articles 1 and 2 are enriched from articles.json; article 999 is not present and has empty fields, so skipped.
-        assert_eq!(ids.len(), 2, "Should create exactly 2 fix tasks (enriched recommendations), got {}", ids.len());
+        // Article 1 has title issue, article 2 is healthy, article 999 has file_not_found issue.
+        assert_eq!(ids.len(), 2, "Should create exactly 2 fix tasks (skip healthy article 2), got {}", ids.len());
 
         cleanup(&path);
     }

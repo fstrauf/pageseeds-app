@@ -232,17 +232,23 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("fix_content_article_apply", StepKind::Agentic),
             ],
             "fix_ctr_article" => vec![
-                // Step 1 (agentic): read file + recommendations, produce structured CtrFixPatch JSON.
+                // Step 1 (agentic): Analyze the single article's CTR context and produce a
+                // CtrRecommendation. Reads ctr_context from the task's artifacts.
+                // Output contract: single CtrRecommendation JSON (stored as ctr_recommendations artifact).
+                WorkflowStep::new("ctr_analyze_single", StepKind::CtrAnalyze)
+                    .with_param(step_params::SKILL, "ctr-optimization")
+                    .with_param(step_params::ARTIFACT_NAME, "ctr_recommendations"),
+                // Step 2 (agentic): read file + recommendations, produce structured CtrFixPatch JSON.
                 // Cannot be deterministic: the agent must read the article and write prose that
                 // satisfies SERP intent, brand voice, and keyword context.
                 // Input contract: single CtrRecommendation artifact + file contents.
                 // Output contract: CtrFixPatch JSON.
                 WorkflowStep::new("fix_ctr_article_generate", StepKind::Agentic)
                     .with_param(step_params::SKILL, "ctr-fix-apply"),
-                // Step 2 (deterministic): apply the patch to the MDX file.
+                // Step 3 (deterministic): apply the patch to the MDX file.
                 // Snapshots original, replaces frontmatter/body, validates structure, restores on corruption.
                 WorkflowStep::new("fix_ctr_article_apply", StepKind::CtrFixApply),
-                // Step 3 (deterministic): re-run health checks to verify fixes meet thresholds.
+                // Step 4 (deterministic): re-run health checks to verify fixes meet thresholds.
                 // Produces CtrFixVerificationReport. Status = done if all pass, review if partial.
                 WorkflowStep::new("fix_ctr_article_verify", StepKind::CtrVerifyFix),
             ],
@@ -439,16 +445,8 @@ impl WorkflowHandler for CtrAuditHandler {
                 // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
                 // and deterministic math: clicks_lost = impressions * max(0, target_ctr - actual_ctr).
                 WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext),
-                // Step 4 (agentic): Analyze titles, meta descriptions, FAQ schema, snippet readiness.
-                // Cannot be deterministic: assessing title quality, brand patterns, snippet suitability
-                // requires intelligence that varies per site. Hard-coding rules would silently fail
-                // on inputs they were never tested against.
-                // Input contract: structured JSON with per-article raw data + CTR metrics + rendered audit.
-                // Output contract: JSON with recommendations array.
-                WorkflowStep::new("ctr_analyze", StepKind::CtrAnalyze)
-                    .with_param(step_params::SKILL, "ctr-optimization")
-                    .with_param(step_params::ARTIFACT_NAME, "ctr_recommendations"),
-                // No normalizer needed — ctr_analyze extracts JSON internally.
+                // Per-article fix tasks are spawned in post_actions::after_task_success
+                // after this task completes, reading the ctr_build_context artifact.
             ],
         }
     }
