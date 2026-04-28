@@ -147,8 +147,8 @@ pub(crate) fn exec_ctr_fix_apply(
             .into_iter()
             .map(|q| (q.question, q.answer))
             .collect();
-        new_body = crate::content::cleaner::insert_faq_schema(&new_body, &qa);
-        applied.push(format!("faq_schema ({} questions)", qa.len()));
+        new_fm = crate::content::frontmatter::replace_faq_block(&new_fm, &qa);
+        applied.push(format!("faq_frontmatter ({} questions)", qa.len()));
     }
 
     if let Some(snippet) = snippet_patch {

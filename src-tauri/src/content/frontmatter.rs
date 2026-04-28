@@ -183,6 +183,96 @@ pub fn update_scalar(raw_fm: &str, key: &str, new_value: &str) -> Option<String>
     }
 }
 
+/// Replace or insert a YAML `faq:` block in raw frontmatter text.
+///
+/// Behaviour:
+/// - Finds the existing `faq:` block (and any immediately preceding comment line)
+///   and replaces it with the new block.
+/// - If `faq:` does not exist, inserts it after the `title` line (or at the top).
+/// - Each question/answer is YAML-quoted and indented as a standard list.
+///
+/// Returns the updated frontmatter text.
+pub fn replace_faq_block(raw_fm: &str, questions: &[(String, String)]) -> String {
+    let mut lines: Vec<String> = raw_fm.lines().map(|s| s.to_string()).collect();
+    let mut faq_start = None;
+    let mut title_idx = None;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+
+        // Track title position for insertion fallback
+        if let Some((k, _)) = split_field_line(trimmed) {
+            if k == "title" {
+                title_idx = Some(i);
+            }
+        }
+
+        // Find the faq: line
+        if trimmed == "faq:" || trimmed.starts_with("faq: ") {
+            faq_start = Some(i);
+            break;
+        }
+    }
+
+    let mut new_block = vec!["faq:".to_string()];
+    for (q, a) in questions {
+        let q_escaped = q.replace('"', "\\\"");
+        let a_escaped = a.replace('"', "\\\"");
+        new_block.push(format!("  - question: \"{}\"", q_escaped));
+        new_block.push(format!("    answer: \"{}\"", a_escaped));
+    }
+
+    if let Some(start) = faq_start {
+        // Find end of the existing faq block
+        let mut end = start + 1;
+        while end < lines.len() {
+            let line = &lines[end];
+            // If line is empty or a comment, keep scanning (it belongs to the block)
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                end += 1;
+                continue;
+            }
+            // If line is indented, it's part of the block
+            if line.starts_with(' ') || line.starts_with('\t') {
+                end += 1;
+                continue;
+            }
+            // Otherwise it's a new top-level key — block ends before this line
+            break;
+        }
+
+        // Check if there's a comment line immediately before faq: — keep it
+        let actual_start = if start > 0 {
+            let prev = lines[start - 1].trim_start();
+            if prev.starts_with('#') {
+                start - 1
+            } else {
+                start
+            }
+        } else {
+            start
+        };
+
+        // Replace [actual_start, end) with new block
+        let mut replacement = Vec::new();
+        if actual_start < start {
+            replacement.push(lines[actual_start].clone());
+        }
+        replacement.extend(new_block);
+        lines.splice(actual_start..end, replacement);
+    } else {
+        // Insert after title (or at top)
+        let insert_idx = title_idx.map(|i| i + 1).unwrap_or(0);
+        lines.insert(insert_idx, String::new());
+        for line in new_block.into_iter().rev() {
+            lines.insert(insert_idx + 1, line);
+        }
+    }
+
+    lines.join("\n")
+}
+
 /// Replace a top-level scalar field, with alias handling and insertion fallback.
 ///
 /// This is the safe replacement for `cleaner::replace_frontmatter_field`.
@@ -428,5 +518,66 @@ title: "Hello"
         assert!(updated.contains("title: \"New Title\""));
         // nested answer should NOT be touched
         assert!(updated.contains("    answer: \"A\""));
+    }
+
+    #[test]
+    fn replace_faq_block_replaces_existing() {
+        let raw = r#"title: "Hello"
+# AI SEO: FAQ Schema
+faq:
+  - question: "Old Q?"
+    answer: "Old A"
+description: "Desc"
+"#;
+        let updated = replace_faq_block(raw, &[("New Q?".to_string(), "New A".to_string())]);
+        assert!(updated.contains("title: \"Hello\""));
+        assert!(updated.contains("description: \"Desc\""));
+        assert!(updated.contains("# AI SEO: FAQ Schema"));
+        assert!(updated.contains("  - question: \"New Q?\""));
+        assert!(updated.contains("    answer: \"New A\""));
+        assert!(!updated.contains("Old Q?"));
+    }
+
+    #[test]
+    fn replace_faq_block_inserts_after_title() {
+        let raw = r#"title: "Hello"
+description: "Desc"
+"#;
+        let updated = replace_faq_block(raw, &[("Q1?".to_string(), "A1".to_string())]);
+        assert!(updated.contains("title: \"Hello\""));
+        assert!(updated.contains("description: \"Desc\""));
+        assert!(updated.contains("faq:"));
+        assert!(updated.contains("  - question: \"Q1?\""));
+        // faq should come after title
+        let title_pos = updated.find("title:").unwrap();
+        let faq_pos = updated.find("faq:").unwrap();
+        assert!(faq_pos > title_pos);
+    }
+
+    #[test]
+    fn replace_faq_block_escapes_quotes() {
+        let updated = replace_faq_block(
+            "title: \"Hello\"\n",
+            &[("Q with \"quotes\"?".to_string(), "A with \"quotes\"".to_string())],
+        );
+        assert!(updated.contains("  - question: \"Q with \\\"quotes\\\"?\""));
+        assert!(updated.contains("    answer: \"A with \\\"quotes\\\"\""));
+    }
+
+    #[test]
+    fn replace_faq_block_multiple_questions() {
+        let raw = "title: \"Hello\"\n";
+        let updated = replace_faq_block(
+            raw,
+            &[
+                ("Q1?".to_string(), "A1".to_string()),
+                ("Q2?".to_string(), "A2".to_string()),
+            ],
+        );
+        let q1_pos = updated.find("Q1?").unwrap();
+        let q2_pos = updated.find("Q2?").unwrap();
+        assert!(q2_pos > q1_pos);
+        assert!(updated.contains("  - question: \"Q1?\""));
+        assert!(updated.contains("  - question: \"Q2?\""));
     }
 }
