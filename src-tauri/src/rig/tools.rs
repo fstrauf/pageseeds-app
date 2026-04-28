@@ -25,6 +25,7 @@ use rig::tool::ToolSet;
 ///     .tools(tool_set)
 ///     .build();
 /// ```
+#[allow(dead_code)]
 pub fn boxed_tool_set(tools: Vec<Box<dyn ToolDyn>>) -> ToolSet {
     ToolSet::from_tools_boxed(tools)
 }

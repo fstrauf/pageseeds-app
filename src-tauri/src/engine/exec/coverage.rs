@@ -16,7 +16,7 @@ use std::path::Path;
 /// for clustering.
 pub(crate) fn exec_coverage_load_articles(
     task: &Task,
-    project_path: &str,
+    _project_path: &str,
 ) -> StepResult {
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,

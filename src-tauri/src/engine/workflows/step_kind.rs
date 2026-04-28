@@ -108,6 +108,14 @@ pub enum StepKind {
     HubApplyLinks,
     /// Validate hub page: frontmatter, H1, word count ≥1500, spoke links.
     HubValidate,
+    /// Load approved territory recommendation from strategy artifact.
+    TerritoryLoadRecommendation,
+    /// Gather existing articles, excerpts, and GSC metrics for territory context.
+    TerritoryBuildContext,
+    /// Agentic: generate TerritoryStrategy JSON from context.
+    TerritoryStrategy,
+    /// Write territory strategy JSON to automation dir.
+    TerritoryApply,
     /// Sanitize content: rename .md → .mdx, repair paths, validate frontmatter (read-only report).
     SanitizeContent,
     /// Fallback for unknown strings during deserialization.
@@ -189,6 +197,10 @@ impl StepKind {
             Self::HubApplyDraft => "hub_apply_draft",
             Self::HubApplyLinks => "hub_apply_links",
             Self::HubValidate => "hub_validate",
+            Self::TerritoryLoadRecommendation => "territory_load_recommendation",
+            Self::TerritoryBuildContext => "territory_build_context",
+            Self::TerritoryStrategy => "territory_strategy",
+            Self::TerritoryApply => "territory_apply",
             Self::SanitizeContent => "sanitize_content",
             Self::Unknown => "unknown",
         }
@@ -283,6 +295,10 @@ impl FromStr for StepKind {
             "hub_apply_draft" => Ok(Self::HubApplyDraft),
             "hub_apply_links" => Ok(Self::HubApplyLinks),
             "hub_validate" => Ok(Self::HubValidate),
+            "territory_load_recommendation" => Ok(Self::TerritoryLoadRecommendation),
+            "territory_build_context" => Ok(Self::TerritoryBuildContext),
+            "territory_strategy" => Ok(Self::TerritoryStrategy),
+            "territory_apply" => Ok(Self::TerritoryApply),
             "sanitize_content" => Ok(Self::SanitizeContent),
             _ => Err(()),
         }
@@ -387,6 +403,10 @@ mod tests {
             StepKind::HubApplyDraft,
             StepKind::HubApplyLinks,
             StepKind::HubValidate,
+            StepKind::TerritoryLoadRecommendation,
+            StepKind::TerritoryBuildContext,
+            StepKind::TerritoryStrategy,
+            StepKind::TerritoryApply,
             StepKind::SanitizeContent,
         ];
 

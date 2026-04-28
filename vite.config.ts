@@ -14,5 +14,6 @@ export default defineConfig({
   server: {
     port: 3080,
     strictPort: true,
+    hmr: process.env.NO_HMR !== 'true',
   },
 })

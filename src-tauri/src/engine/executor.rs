@@ -251,6 +251,24 @@ pub async fn execute_task_with_token(
                 log::info!("[executor] hub_outline output ({} chars)", out.len());
                 latest_raw_output = result.output.clone();
             }
+        } else if step.name == "territory_load_recommendation" {
+            // Pass loaded recommendation to territory_build_context
+            if let Some(ref out) = result.output {
+                log::info!("[executor] territory_load_recommendation output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
+        } else if step.name == "territory_build_context" {
+            // Pass structured context to the agentic territory_strategy step
+            if let Some(ref out) = result.output {
+                log::info!("[executor] territory_build_context output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
+        } else if step.name == "territory_strategy" {
+            // Pass strategy JSON to territory_apply
+            if let Some(ref out) = result.output {
+                log::info!("[executor] territory_strategy output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
         }
 
         progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
@@ -659,7 +677,29 @@ mod tests {
         }
     }
 
-    // 5. Unknown task types fall through to ManualFallbackHandler, not ImplementationHandler.
+    // 5. territory_research routes to TerritoryResearchHandler, not ImplementationHandler.
+    #[test]
+    fn territory_research_routes_to_territory_handler() {
+        let task = make_task("territory_research", "proj1");
+        let handlers = default_handlers();
+        let matched = handlers.iter().find(|h| h.supports(&task));
+        assert!(matched.is_some(), "No handler for territory_research");
+        let steps = matched.unwrap().plan(&task);
+        assert!(!steps.is_empty(), "TerritoryResearchHandler produced no steps");
+        let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_ref()).collect();
+        assert!(
+            kinds.contains(&"territory_load_recommendation"),
+            "Expected territory steps, got: {:?}",
+            kinds
+        );
+        assert!(
+            !kinds.contains(&"manual"),
+            "Expected TerritoryResearchHandler steps, got manual: {:?}",
+            kinds
+        );
+    }
+
+    // 6. Unknown task types fall through to ManualFallbackHandler, not ImplementationHandler.
     #[test]
     fn unknown_type_routes_to_manual_fallback() {
         let task = make_task("totally_unknown_type_xyz", "proj1");

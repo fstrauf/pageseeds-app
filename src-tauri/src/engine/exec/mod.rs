@@ -18,6 +18,7 @@ pub mod quality_rater;
 pub mod reddit;
 pub mod research;
 pub mod social;
+pub mod territory_research;
 pub mod utils;
 
 #[cfg(test)]

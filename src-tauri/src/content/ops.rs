@@ -344,6 +344,7 @@ pub fn sync_and_validate(
 
 /// Clean stale entries from articles.json — remove articles whose files no longer exist.
 /// The source of truth is the filesystem. Returns the list of removed article titles.
+#[allow(dead_code)]
 pub fn clean_stale_articles_json(
     automation_dir: &Path,
     repo_root: &Path,

@@ -77,16 +77,6 @@ pub fn existing_keywords(conn: &Connection, project_id: &str) -> Result<HashSet<
 // Import / Export projection
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Import `articles.json` from the repo into SQLite.
-pub fn import_projection(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &Path,
-) -> Result<ImportSummary> {
-    let imported = crate::db::export::read_articles_from_repo(conn, project_id, project_path)?;
-    Ok(ImportSummary { imported })
-}
-
 /// Export SQLite article records to `articles.json` in the repo.
 /// Preserves unknown/custom fields from the existing JSON file.
 pub fn export_projection(
@@ -176,6 +166,7 @@ pub fn clean_stale_articles(
 /// 1. Scans the content directory for files missing from SQLite.
 /// 2. Inserts new rows into SQLite.
 /// 3. Re-exports the projection so `articles.json` stays in sync.
+#[allow(dead_code)]
 pub fn ingest_orphans(
     conn: &Connection,
     project_id: &str,
@@ -316,50 +307,13 @@ pub fn set_metadata(
     crate::db::set_article_metadata(conn, project_id, article_id, namespace, payload)
 }
 
-/// Retrieve sidecar metadata for an article namespace.
-pub fn get_metadata(
-    conn: &Connection,
-    project_id: &str,
-    article_id: i64,
-    namespace: &str,
-) -> Result<Option<String>> {
-    crate::db::get_article_metadata(conn, project_id, article_id, namespace)
-}
-
-/// List all metadata namespaces for an article.
-pub fn list_metadata(
-    conn: &Connection,
-    project_id: &str,
-    article_id: i64,
-) -> Result<Vec<(String, String)>> {
-    crate::db::list_article_metadata(conn, project_id, article_id)
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Metadata sync from disk
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Re-scan all MDX files and update SQLite when frontmatter differs from disk.
-pub fn sync_metadata_from_disk(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &Path,
-) -> Result<SyncSummary> {
-    let updated = crate::content::ops::sync_article_metadata_from_disk(
-        project_path,
-        project_id,
-        conn,
-    )
-    .map_err(|e| crate::error::Error::Other(e))?;
-    Ok(SyncSummary { updated })
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Derive a URL slug from an MDX filename.
 /// "242_pour_over_coffee_cafes_auckland.mdx" → "pour-over-coffee-cafes-auckland"
+#[allow(dead_code)]
 fn derive_url_slug(filename: &str) -> String {
     let base = std::path::Path::new(filename)
         .file_stem()

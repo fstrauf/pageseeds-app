@@ -369,6 +369,7 @@ fn enrich_with_query_metrics(
         }
     };
 
+    let site_url_for_api = site_url.clone(); // keep original for GSC API calls
     let base_url = if site_url.starts_with("sc-domain:") {
         format!("https://{}/", &site_url["sc-domain:".len()..])
     } else if !site_url.ends_with('/') {
@@ -396,7 +397,7 @@ fn enrich_with_query_metrics(
         let page_url = format!("{}{}", base_url, url_slug);
         let page_url_for_thread = page_url.clone();
         let token_clone = token.clone();
-        let site_url_clone = base_url.clone();
+        let site_url_clone = site_url_for_api.clone(); // pass original (may be sc-domain:) to GSC API
         let start_clone = start_str.clone();
         let end_clone = end_str.clone();
 

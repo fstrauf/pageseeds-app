@@ -83,25 +83,17 @@ pub(crate) fn create_ctr_fix_tasks(
                 rec.url_slug = article_slug.clone();
                 log::info!("[ctr_audit] Enriched missing 'url_slug' for article {} from articles.json: {}", rec.article_id, rec.url_slug);
             }
-            if rec.target_keyword.is_empty() {
+            if rec.target_keyword.is_empty() && !article_keyword.is_empty() {
                 rec.target_keyword = article_keyword.clone();
                 log::info!("[ctr_audit] Enriched missing 'target_keyword' for article {} from articles.json: {}", rec.article_id, rec.target_keyword);
             }
         }
 
-        // Phase 1 contract enforcement: file and target_keyword are required.
+        // Phase 1 contract enforcement: file is required.
         if rec.file.is_empty() {
             log::warn!(
                 "[ctr_audit] Skipping recommendation for article {}: missing required 'file' field and no enrichment available",
                 rec.article_id
-            );
-            continue;
-        }
-        if rec.target_keyword.is_empty() {
-            log::warn!(
-                "[ctr_audit] Skipping recommendation for article {} ({}): missing required 'target_keyword' field and no enrichment available",
-                rec.article_id,
-                rec.file
             );
             continue;
         }

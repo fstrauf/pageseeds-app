@@ -658,6 +658,34 @@ impl StepRegistry {
         register_blocking!(handlers, StepKind::HubValidate,
             crate::engine::exec::content::hub_page::exec_hub_validate);
 
+        // ─── Territory Research ─────────────────────────────────────────────────
+
+        register_blocking!(handlers, StepKind::TerritoryLoadRecommendation,
+            crate::engine::exec::territory_research::exec_territory_load_recommendation);
+
+        register_blocking!(handlers, StepKind::TerritoryBuildContext,
+            crate::engine::exec::territory_research::exec_territory_build_context);
+
+        register_blocking!(handlers, StepKind::TerritoryStrategy,
+            crate::engine::exec::territory_research::exec_territory_strategy, agent_provider, context_json);
+
+        handlers.insert(StepKind::TerritoryApply, Box::new(|_step, ctx| {
+            let task = ctx.task.clone();
+            let project_path = ctx.project_path.to_string();
+            let strategy_json = ctx.latest_raw.unwrap_or("{}").to_string();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::engine::exec::territory_research::exec_territory_apply(&task, &project_path, &strategy_json)
+                })
+                .await
+                .unwrap_or_else(|e| StepResult {
+                    success: false,
+                    message: format!("Step panicked: {}", e),
+                    output: None,
+                })
+            })
+        }));
+
         Self { handlers }
     }
 

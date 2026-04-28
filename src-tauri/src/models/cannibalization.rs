@@ -197,6 +197,44 @@ pub struct CannibalizationStrategy {
     pub risks: Vec<StrategyRisk>,
 }
 
+// ─── Territory Strategy ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct TerritoryStrategy {
+    pub theme: String,
+    pub priority: String,
+    #[serde(default)]
+    pub target_keywords: Vec<String>,
+    #[serde(default)]
+    pub competitor_gaps: Vec<String>,
+    #[serde(default)]
+    pub content_recommendations: Vec<TerritoryContentRec>,
+    #[serde(default)]
+    pub existing_coverage: Vec<TerritoryCoverageItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct TerritoryContentRec {
+    pub title: String,
+    pub url_slug: String,
+    pub intent: String,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct TerritoryCoverageItem {
+    pub article_id: i64,
+    pub title: String,
+    pub url_slug: String,
+    pub overlap: String,
+}
+
 // ─── Review state (DB row) ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

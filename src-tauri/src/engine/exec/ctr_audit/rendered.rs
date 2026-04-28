@@ -236,11 +236,6 @@ fn extract_h1(document: &Html) -> Option<String> {
     if cleaned.is_empty() { None } else { Some(cleaned) }
 }
 
-fn extract_json_ld_schema_types(document: &Html) -> Vec<String> {
-    let (types, _) = extract_json_ld_schema_types_with_faq_count(document);
-    types
-}
-
 pub(crate) fn extract_json_ld_schema_types_with_faq_count(document: &Html) -> (Vec<String>, usize) {
     let selector = match Selector::parse("script[type='application/ld+json']") {
         Ok(s) => s,

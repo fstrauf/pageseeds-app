@@ -17,6 +17,7 @@ pub enum HandlerFamily {
     ConsolidateCluster,
     HubPage,
     Implementation,
+    TerritoryResearch,
     #[allow(dead_code)]
     Manual,
 }
@@ -332,7 +333,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
         phase: "research",
         execution_mode: ExecutionMode::Spec,
         review_on_success: true,
-        handler_family: HandlerFamily::Implementation,
+        handler_family: HandlerFamily::TerritoryResearch,
     },
     // Calculator rollout (stub — full handler in Phase 6)
     TaskDefinition {

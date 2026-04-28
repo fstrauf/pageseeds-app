@@ -203,7 +203,6 @@ impl WorkflowHandler for ImplementationHandler {
                 | "technical_seo"
                 | "landing_page_spec"
                 | "create_landing_page"
-                | "territory_research"
                 | "calculator_rollout"
         ) || t.starts_with("fix_")
     }
@@ -587,6 +586,36 @@ impl WorkflowHandler for HubPageHandler {
 
 // ─── Manual Fallback ─────────────────────────────────────────────────────────
 
+// ─── Territory Research ───────────────────────────────────────────────────────
+
+pub struct TerritoryResearchHandler;
+
+impl WorkflowHandler for TerritoryResearchHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task) == "territory_research"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            // Step 1 (deterministic): Load approved territory recommendation from strategy artifact.
+            // Extracts theme from task title and finds the matching recommendation.
+            WorkflowStep::new("territory_load_recommendation", StepKind::TerritoryLoadRecommendation),
+            // Step 2 (deterministic): Query SQLite for existing articles matching theme, read excerpts.
+            // Pure data collection — no judgment. Outputs structured TerritoryContext JSON.
+            WorkflowStep::new("territory_build_context", StepKind::TerritoryBuildContext),
+            // Step 3 (agentic): Generate TerritoryStrategy JSON from context.
+            // Cannot be deterministic: deciding which gaps to fill, what competitors cover,
+            // and how to avoid cannibalization requires semantic judgment.
+            // Input contract: structured TerritoryContext JSON.
+            // Output contract: TerritoryStrategy JSON.
+            WorkflowStep::new("territory_strategy", StepKind::TerritoryStrategy)
+                .with_param(step_params::SKILL, "territory-strategy"),
+            // Step 4 (deterministic): Write strategy JSON to automation dir.
+            WorkflowStep::new("territory_apply", StepKind::TerritoryApply),
+        ]
+    }
+}
+
 pub struct ManualFallbackHandler;
 
 impl WorkflowHandler for ManualFallbackHandler {
@@ -617,6 +646,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(CannibalizationAuditHandler),
         Box::new(ConsolidateClusterHandler),
         Box::new(HubPageHandler),
+        Box::new(TerritoryResearchHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
     ]

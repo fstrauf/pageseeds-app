@@ -1,7 +1,6 @@
 /// CTR outcome tracking — compare before/after metrics and generate reports.
 
 use crate::engine::workflows::StepResult;
-use crate::models::ctr::CtrOutcome;
 use crate::models::task::Task;
 
 /// Minimum days after deployment before judging outcomes.
