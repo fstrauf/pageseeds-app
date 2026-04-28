@@ -4,6 +4,7 @@
 //! `agent.rs` interface. It is the single point of contact between the
 //! workflow engine and external LLM providers.
 
+pub mod compat;
 pub mod embeddings;
 pub mod extraction;
 pub mod provider;

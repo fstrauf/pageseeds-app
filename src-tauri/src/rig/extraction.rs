@@ -85,17 +85,13 @@ where
 
     match backend {
         LlmBackend::KimiBridge { base_url, model } => {
-            let client = rig::providers::openai::Client::builder()
-                .base_url(base_url)
-                .api_key("dummy")
-                .build()
-                .map_err(|e| format!("Failed to build OpenAI client for bridge: {}", e))?;
-            let completion_client = client.completions_api();
-            let extractor = completion_client
-                .extractor::<T>(model)
-                .preamble(preamble.unwrap_or(default_preamble))
-                .build();
-            extractor.extract(prompt).await.map_err(|e| e.to_string())
+            crate::rig::compat::kimi::extract_structured::<T>(
+                base_url,
+                model,
+                prompt,
+                preamble,
+            )
+            .await
         }
         LlmBackend::Claude { api_key, model } => {
             let client = rig::providers::anthropic::Client::new(api_key)

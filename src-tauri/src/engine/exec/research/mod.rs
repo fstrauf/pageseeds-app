@@ -197,13 +197,15 @@ pub async fn exec_keyword_research_with_tools(
                     };
                 }
             };
+            // Kimi bridge rejects array-form system message content. Fold preamble
+            // into the user prompt and skip the .preamble() call.
+            let full_prompt = format!("{}\n\n{}", preamble, prompt);
             let agent = client
                 .completions_api()
                 .agent(model)
-                .preamble(preamble)
                 .tools(crate::engine::tools::boxed_keyword_tools())
                 .build();
-            run_tool_agent_prompt(agent, prompt).await
+            run_tool_agent_prompt(agent, &full_prompt).await
         }
         crate::rig::provider::LlmBackend::Claude { api_key, model } => {
             let client = match rig::providers::anthropic::Client::new(api_key) {

@@ -207,30 +207,16 @@ async fn run_kimi_bridge(
     base_url: &str,
     model: &str,
     prompt: &str,
-    _preamble: Option<&str>,
+    preamble: Option<&str>,
 ) -> Result<AgentResponse, String> {
-    let client = rig::providers::openai::Client::builder()
-        .base_url(base_url)
-        .api_key("dummy")
-        .build()
-        .map_err(|e| format!("Failed to build bridge client: {}", e))?
-        .completions_api();
-
-    // The bridge does not support system messages (preamble is ignored by ACP).
-    // Sending a system message causes a 422 because the bridge expects string
-    // content, not the content-parts array that rig's OpenAI provider uses.
-    let agent = client.agent(model).build();
-
-    let resp = agent
-        .prompt(prompt)
-        .extended_details()
+    let result = crate::rig::compat::kimi::run_prompt(base_url, model, prompt, preamble)
         .await
-        .map_err(|e| format!("Bridge prompt failed: {}", e))?;
+        .map_err(|e| format!("Kimi bridge prompt failed: {}", e))?;
 
     Ok(AgentResponse::with_usage(
-        resp.output,
-        resp.usage.input_tokens,
-        resp.usage.output_tokens,
+        result.content,
+        result.prompt_tokens.unwrap_or(0),
+        result.completion_tokens.unwrap_or(0),
     ))
 }
 

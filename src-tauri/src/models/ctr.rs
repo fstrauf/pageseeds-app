@@ -26,6 +26,7 @@ pub struct CtrRecommendation {
     pub expected_ctr_improvement: Option<String>,
     /// Target keyword for this article (used by verifier for snippet keyword check).
     /// Guaranteed by Rust context enrichment.
+    #[serde(default)]
     pub target_keyword: String,
     pub fixes: Vec<CtrFix>,
 }
