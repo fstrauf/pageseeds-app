@@ -629,6 +629,9 @@ impl StepRegistry {
         register_blocking!(handlers, StepKind::HubBuildBrief,
             crate::engine::exec::content::hub_page::exec_hub_build_brief);
 
+        register_blocking!(handlers, StepKind::HubOutline,
+            crate::engine::exec::content::hub_page::exec_hub_outline, agent_provider, context_json);
+
         register_blocking!(handlers, StepKind::HubWrite,
             crate::engine::exec::content::hub_page::exec_hub_write, agent_provider, context_json);
 

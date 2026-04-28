@@ -574,6 +574,8 @@ impl WorkflowHandler for HubPageHandler {
         vec![
             WorkflowStep::new("hub_load_recommendation", StepKind::HubLoadRecommendation),
             WorkflowStep::new("hub_build_brief", StepKind::HubBuildBrief),
+            WorkflowStep::new("hub_outline", StepKind::HubOutline)
+                .with_param(step_params::SKILL, "hub-outline"),
             WorkflowStep::new("hub_write", StepKind::HubWrite)
                 .with_param(step_params::SKILL, "hub-write"),
             WorkflowStep::new("hub_apply_draft", StepKind::HubApplyDraft),

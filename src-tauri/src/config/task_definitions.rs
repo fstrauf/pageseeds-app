@@ -310,9 +310,17 @@ const DEFINITIONS: &[TaskDefinition] = &[
         review_on_success: true,
         handler_family: HandlerFamily::ConsolidateCluster,
     },
-    // Hub page creation (stub — full handler in Phase 4)
+    // Hub page creation
     TaskDefinition {
         task_type: "create_hub_page",
+        phase: "implementation",
+        execution_mode: ExecutionMode::Spec,
+        review_on_success: true,
+        handler_family: HandlerFamily::HubPage,
+    },
+    // Hub page refresh
+    TaskDefinition {
+        task_type: "refresh_hub_page",
         phase: "implementation",
         execution_mode: ExecutionMode::Spec,
         review_on_success: true,

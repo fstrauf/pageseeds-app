@@ -98,6 +98,8 @@ pub enum StepKind {
     HubLoadRecommendation,
     /// Gather spoke metadata, excerpts, and GSC metrics into HubBrief.
     HubBuildBrief,
+    /// Agentic: generate structured hub outline and linking strategy from HubBrief.
+    HubOutline,
     /// Agentic: generate full MDX hub page from HubBrief using hub-write skill.
     HubWrite,
     /// Write MDX file to content dir, register in SQLite and articles.json.
@@ -182,6 +184,7 @@ impl StepKind {
             Self::MergeValidateOutput => "merge_validate_output",
             Self::HubLoadRecommendation => "hub_load_recommendation",
             Self::HubBuildBrief => "hub_build_brief",
+            Self::HubOutline => "hub_outline",
             Self::HubWrite => "hub_write",
             Self::HubApplyDraft => "hub_apply_draft",
             Self::HubApplyLinks => "hub_apply_links",
@@ -275,6 +278,7 @@ impl FromStr for StepKind {
             "merge_validate_output" => Ok(Self::MergeValidateOutput),
             "hub_load_recommendation" => Ok(Self::HubLoadRecommendation),
             "hub_build_brief" => Ok(Self::HubBuildBrief),
+            "hub_outline" => Ok(Self::HubOutline),
             "hub_write" => Ok(Self::HubWrite),
             "hub_apply_draft" => Ok(Self::HubApplyDraft),
             "hub_apply_links" => Ok(Self::HubApplyLinks),
@@ -378,6 +382,7 @@ mod tests {
             StepKind::MergeValidateOutput,
             StepKind::HubLoadRecommendation,
             StepKind::HubBuildBrief,
+            StepKind::HubOutline,
             StepKind::HubWrite,
             StepKind::HubApplyDraft,
             StepKind::HubApplyLinks,

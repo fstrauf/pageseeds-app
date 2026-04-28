@@ -240,9 +240,15 @@ pub async fn execute_task_with_token(
                 latest_raw_output = result.output.clone();
             }
         } else if step.name == "hub_build_brief" {
-            // Pass structured hub brief to the agentic hub_write step
+            // Pass structured hub brief to the agentic hub_outline step
             if let Some(ref out) = result.output {
                 log::info!("[executor] hub_build_brief output ({} chars)", out.len());
+                latest_raw_output = result.output.clone();
+            }
+        } else if step.name == "hub_outline" {
+            // Pass structured hub outline to the agentic hub_write step
+            if let Some(ref out) = result.output {
+                log::info!("[executor] hub_outline output ({} chars)", out.len());
                 latest_raw_output = result.output.clone();
             }
         }

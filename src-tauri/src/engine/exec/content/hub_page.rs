@@ -202,16 +202,67 @@ pub(crate) fn exec_hub_build_brief(task: &Task, project_path: &str) -> StepResul
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 3: Agentic Write
+// Step 3: Agentic Outline
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub(crate) fn exec_hub_write(
+pub(crate) fn exec_hub_outline(
     _task: &Task,
     project_path: &str,
     agent_provider: &str,
     context_json: &str,
 ) -> StepResult {
     let repo_root = Path::new(project_path);
+
+    let skill = match skills::load_skill(repo_root, "hub-outline") {
+        Some(s) => s,
+        None => {
+            return StepResult {
+                success: false,
+                message: "Skill 'hub-outline' not found".to_string(),
+                output: None,
+            };
+        }
+    };
+
+    let prompt = skill.content
+        + "\n\n---\n\n## Hub Brief\n\n"
+        + context_json
+        + "\n\nPlease generate a structured HubOutline JSON following the skill instructions."
+        + "\n\nCRITICAL: Return ONLY a single JSON object matching the HubOutline structure."
+        + " Do not include markdown prose, summaries, or explanations outside the JSON.";
+
+    match agent::run_agent(agent_provider, &prompt, repo_root) {
+        Ok(output) => {
+            let outline_json = crate::engine::text::extract_json(&output)
+                .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                .unwrap_or(output);
+
+            StepResult {
+                success: true,
+                message: format!("Hub outline complete: {} chars", outline_json.len()),
+                output: Some(outline_json),
+            }
+        }
+        Err(e) => StepResult {
+            success: false,
+            message: format!("Agent error: {}", e),
+            output: None,
+        },
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 4: Agentic Write
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub(crate) fn exec_hub_write(
+    task: &Task,
+    project_path: &str,
+    agent_provider: &str,
+    context_json: &str,
+) -> StepResult {
+    let repo_root = Path::new(project_path);
+    let paths = ProjectPaths::from_path(project_path);
 
     let skill = match skills::load_skill(repo_root, "hub-write") {
         Some(s) => s,
@@ -224,9 +275,15 @@ pub(crate) fn exec_hub_write(
         }
     };
 
+    // Load brief from disk for spoke details (context_json is the outline)
+    let brief_path = paths.automation_dir.join(format!("hub_brief_{}.json", task.id));
+    let brief_json = std::fs::read_to_string(&brief_path).unwrap_or_default();
+
     let prompt = skill.content
-        + "\n\n---\n\n## Hub Brief\n\n"
+        + "\n\n---\n\n## Hub Outline\n\n"
         + context_json
+        + "\n\n---\n\n## Hub Brief (spoke details)\n\n"
+        + &brief_json
         + "\n\nPlease generate the complete MDX hub page content following the skill instructions."
         + "\n\nCRITICAL: Return ONLY the MDX content. Do not include markdown prose, summaries, or explanations outside the MDX.";
 
@@ -255,7 +312,7 @@ pub(crate) fn exec_hub_write(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 4: Apply Draft
+// Step 5: Apply Draft
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub(crate) fn exec_hub_apply_draft(
@@ -338,6 +395,17 @@ pub(crate) fn exec_hub_apply_draft(
         };
     }
 
+    // Snapshot existing file if refreshing
+    let is_refresh = task.task_type == "refresh_hub_page";
+    if is_refresh && file_path.exists() {
+        let snapshot_path = paths.automation_dir.join(format!("hub_snapshot_{}.mdx", task.id));
+        if let Err(e) = std::fs::copy(&file_path, &snapshot_path) {
+            log::warn!("[hub_apply_draft] failed to snapshot existing hub: {}", e);
+        } else {
+            log::info!("[hub_apply_draft] snapshotted existing hub to {}", snapshot_path.display());
+        }
+    }
+
     if let Err(e) = std::fs::write(&file_path, mdx_content) {
         return StepResult {
             success: false,
@@ -413,7 +481,7 @@ pub(crate) fn exec_hub_apply_draft(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 5: Apply Links
+// Step 6: Apply Links
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResult {
@@ -541,6 +609,30 @@ pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResul
         }
     }
 
+    // Write link plan to automation dir for traceability
+    let link_plan = HubLinkPlan {
+        hub_slug: hub_slug.clone(),
+        hub_file: hub_path.to_string_lossy().to_string(),
+        links: {
+            let mut entries = Vec::new();
+            for (title, slug) in &hub_links {
+                entries.push(HubLinkEntry {
+                    source_file: hub_path.to_string_lossy().to_string(),
+                    target_url: format!("/blog/{}", slug),
+                    anchor_text: title.clone(),
+                    direction: "hub_to_spoke".to_string(),
+                });
+            }
+            entries
+        },
+    };
+    let plan_path = paths.automation_dir.join(format!("hub_link_plan_{}.json", task.id));
+    if let Ok(plan_json) = serde_json::to_string_pretty(&link_plan) {
+        if let Err(e) = std::fs::write(&plan_path, plan_json) {
+            log::warn!("[hub_apply_links] failed to write link plan: {}", e);
+        }
+    }
+
     StepResult {
         success: true,
         message: format!(
@@ -553,7 +645,7 @@ pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResul
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 6: Validate
+// Step 7: Validate
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
@@ -706,6 +798,73 @@ pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
         all_pass = false;
     }
 
+    // Quality gate: hub URL/title must be broader than spokes (not an exact match)
+    let hub_slug_lower = brief.suggested_url.trim_start_matches('/').replace("blog/", "").to_lowercase();
+    let hub_title_lower = brief.suggested_title.to_lowercase();
+    let mut colliding_spoke = None;
+    for spoke in &brief.spokes {
+        if spoke.url_slug.to_lowercase() == hub_slug_lower || spoke.title.to_lowercase() == hub_title_lower {
+            colliding_spoke = Some(spoke.title.clone());
+            break;
+        }
+    }
+    let hub_is_broader = colliding_spoke.is_none();
+    checks.push(HubValidationCheck {
+        name: "hub_broader_than_spokes".to_string(),
+        pass: hub_is_broader,
+        message: if hub_is_broader {
+            "Hub URL/title is broader than spokes".to_string()
+        } else {
+            format!("Hub URL/title collides with spoke: {}", colliding_spoke.unwrap_or_default())
+        },
+    });
+    if !hub_is_broader {
+        all_pass = false;
+    }
+
+    // Quality gate: route collision (simple heuristic — flag if slug looks like a spoke route)
+    let route_collision = brief.suggested_url.contains("/hub/") || brief.suggested_url.contains("/guide/");
+    checks.push(HubValidationCheck {
+        name: "route_collision".to_string(),
+        pass: !route_collision,
+        message: if !route_collision {
+            "No route collision detected".to_string()
+        } else {
+            "Hub URL may collide with project route conventions".to_string()
+        },
+    });
+    if route_collision {
+        all_pass = false;
+    }
+
+    // Quality gate: sub-intent preservation (if outline exists, check excluded intents)
+    let outline_path = paths.automation_dir.join(format!("hub_outline_{}.json", task.id));
+    let mut sub_intents_preserved = true;
+    let mut merged_sub_intents = Vec::new();
+    if let Ok(outline_json) = std::fs::read_to_string(&outline_path) {
+        if let Ok(outline) = serde_json::from_str::<HubOutline>(&outline_json) {
+            for excluded in &outline.excluded_sub_intents {
+                let excluded_lower = excluded.to_lowercase();
+                if content.to_lowercase().contains(&excluded_lower) {
+                    merged_sub_intents.push(excluded.clone());
+                    sub_intents_preserved = false;
+                }
+            }
+        }
+    }
+    checks.push(HubValidationCheck {
+        name: "sub_intents_preserved".to_string(),
+        pass: sub_intents_preserved,
+        message: if sub_intents_preserved {
+            "Excluded sub-intents are not merged into hub".to_string()
+        } else {
+            format!("Hub content may merge excluded sub-intents: {}", merged_sub_intents.join(", "))
+        },
+    });
+    if !sub_intents_preserved {
+        all_pass = false;
+    }
+
     let report = HubValidationReport {
         hub_file: hub_path.to_string_lossy().to_string(),
         word_count,
@@ -757,6 +916,39 @@ pub struct HubSpokeBrief {
     pub file: String,
     pub impressions: f64,
     pub excerpt: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HubOutline {
+    pub title: String,
+    pub slug: String,
+    pub sections: Vec<HubOutlineSection>,
+    pub link_strategy: String,
+    pub excluded_sub_intents: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HubOutlineSection {
+    pub heading: String,
+    pub intent: String,
+    #[serde(default)]
+    pub spoke_ids: Vec<i64>,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HubLinkPlan {
+    pub hub_slug: String,
+    pub hub_file: String,
+    pub links: Vec<HubLinkEntry>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HubLinkEntry {
+    pub source_file: String,
+    pub target_url: String,
+    pub anchor_text: String,
+    pub direction: String, // "hub_to_spoke" or "spoke_to_hub"
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -900,11 +1092,13 @@ fn extract_code_block(text: &str, lang: &str) -> Option<String> {
 fn find_hub_file(content_dir: &Path, suggested_url: &str) -> Option<PathBuf> {
     let slug = suggested_url.trim_start_matches('/').replace("blog/", "");
     let slug_underscore = slug.replace('-', "_");
+    // Also check just the basename (e.g. "my-hub" from "guide/my-hub")
+    let slug_basename = slug.split('/').next_back().unwrap_or(&slug).replace('-', "_");
 
     if let Ok(entries) = std::fs::read_dir(content_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.contains(&slug_underscore) && name.ends_with("_hub.mdx") {
+            if (name.contains(&slug_underscore) || name.contains(&slug_basename)) && name.ends_with("_hub.mdx") {
                 return Some(entry.path());
             }
         }
@@ -1414,5 +1608,237 @@ mod tests {
 
         let report: HubValidationReport = serde_json::from_str(&result.output.unwrap()).unwrap();
         assert!(!report.all_pass);
+    }
+
+    #[test]
+    fn test_hub_refresh_snapshots_existing_file() {
+        let _lock = DB_MUTEX.lock().unwrap();
+        let dir = TempProjectDir::new();
+        let project_path = dir.path().to_string_lossy().to_string();
+        let db_path = dir.path().join("test.db");
+        {
+            let conn = file_db(&db_path);
+            std::env::set_var("PAGESEEDS_DB_PATH", &db_path);
+            create_test_project(&conn, "proj1", &project_path);
+        }
+
+        fs::write(
+            dir.path().join("content").join("000_dummy.mdx"),
+            "---\ntitle: \"Dummy\"\n---\n\nDummy.\n",
+        )
+        .unwrap();
+
+        // Create an existing hub file
+        let existing_hub = dir.path().join("content").join("010_test_topic_hub_hub.mdx");
+        fs::write(&existing_hub, "---\ntitle: \"Old Hub\"\n---\n\nOld content.\n").unwrap();
+
+        let brief = HubBrief {
+            topic: "Test Topic".to_string(),
+            suggested_url: "/blog/test-topic-hub".to_string(),
+            suggested_title: "Test Topic Hub".to_string(),
+            intent: "informational".to_string(),
+            target_keyword: "test topic".to_string(),
+            spokes: vec![],
+        };
+        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-refresh-1.json");
+        fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
+
+        let mdx = "---\ntitle: \"Test Topic Hub\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Test Topic\"\n---\n\n# Test Topic Hub\n\nRefreshed content.\n".to_string();
+
+        let task = Task {
+            id: "task-refresh-1".to_string(),
+            project_id: "proj1".to_string(),
+            task_type: "refresh_hub_page".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Spec,
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            title: Some("Refresh hub: Test Topic Hub".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_hub_apply_draft(&task, &project_path, &mdx);
+        assert!(result.success, "Expected success: {}", result.message);
+
+        // Verify snapshot exists
+        let snapshot = dir.path().join(".github").join("automation").join("hub_snapshot_task-refresh-1.mdx");
+        assert!(snapshot.exists(), "Snapshot should exist for refresh");
+        let snapshot_content = fs::read_to_string(&snapshot).unwrap();
+        assert!(snapshot_content.contains("Old content"));
+    }
+
+    #[test]
+    fn test_hub_link_plan_written() {
+        let dir = TempProjectDir::new();
+        let project_path = dir.path().to_string_lossy().to_string();
+
+        // Create hub file
+        let mdx = "---\ntitle: \"Options Hub\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Options\"\n---\n\n# Options Hub\n\nContent.\n";
+        fs::write(dir.path().join("content").join("010_options_hub.mdx"), mdx).unwrap();
+
+        // Create spoke file
+        fs::write(
+            dir.path().join("content").join("001_spoke_one.mdx"),
+            "---\ntitle: \"Spoke One\"\n---\n\nSpoke content.\n",
+        )
+        .unwrap();
+
+        let brief = HubBrief {
+            topic: "Options".to_string(),
+            suggested_url: "/blog/options-hub".to_string(),
+            suggested_title: "Options Hub".to_string(),
+            intent: "informational".to_string(),
+            target_keyword: "options".to_string(),
+            spokes: vec![
+                HubSpokeBrief {
+                    article_id: 1,
+                    title: "Spoke One".to_string(),
+                    url_slug: "spoke-one".to_string(),
+                    file: "001_spoke_one.mdx".to_string(),
+                    impressions: 0.0,
+                    excerpt: "Excerpt".to_string(),
+                },
+            ],
+        };
+        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-link-1.json");
+        fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
+
+        let task = Task {
+            id: "task-link-1".to_string(),
+            project_id: "proj1".to_string(),
+            task_type: "create_hub_page".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Spec,
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            title: Some("Create hub: Options Hub".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_hub_apply_links(&task, &project_path);
+        assert!(result.success, "Expected success: {}", result.message);
+
+        // Verify link plan exists
+        let plan_path = dir.path().join(".github").join("automation").join("hub_link_plan_task-link-1.json");
+        assert!(plan_path.exists(), "Link plan should be written");
+
+        let plan: HubLinkPlan = serde_json::from_str(&fs::read_to_string(&plan_path).unwrap()).unwrap();
+        assert_eq!(plan.hub_slug, "options-hub");
+        assert!(!plan.links.is_empty());
+        assert_eq!(plan.links[0].direction, "hub_to_spoke");
+    }
+
+    #[test]
+    fn test_hub_validation_route_collision() {
+        let dir = TempProjectDir::new();
+        let project_path = dir.path().to_string_lossy().to_string();
+
+        let mdx = "---\ntitle: \"Guide Hub\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Guide\"\n---\n\n# Guide Hub\n\nContent.\n";
+        fs::write(dir.path().join("content").join("010_my_hub_hub.mdx"), mdx).unwrap();
+
+        // URL with /guide/ should trigger route collision
+        let brief = HubBrief {
+            topic: "Guide".to_string(),
+            suggested_url: "/guide/my-hub".to_string(),
+            suggested_title: "Guide Hub".to_string(),
+            intent: "informational".to_string(),
+            target_keyword: "guide".to_string(),
+            spokes: vec![],
+        };
+        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-route-1.json");
+        fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
+
+        let task = Task {
+            id: "task-route-1".to_string(),
+            project_id: "proj1".to_string(),
+            task_type: "create_hub_page".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Spec,
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            title: Some("Create hub: Guide Hub".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_hub_validate(&task, &project_path);
+        // Should fail due to route collision
+        assert!(!result.success, "Expected validation to fail due to route collision");
+
+        let report: HubValidationReport = serde_json::from_str(&result.output.unwrap()).unwrap();
+        let route_check = report.checks.iter().find(|c| c.name == "route_collision").unwrap();
+        assert!(!route_check.pass);
+    }
+
+    #[test]
+    fn test_hub_validation_hub_broader_than_spokes() {
+        let dir = TempProjectDir::new();
+        let project_path = dir.path().to_string_lossy().to_string();
+
+        let mdx = "---\ntitle: \"Spoke One\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Spoke\"\n---\n\n# Spoke One\n\nContent.\n- [Spoke One](/blog/spoke-one)\n";
+        fs::write(dir.path().join("content").join("010_spoke_one_hub.mdx"), mdx).unwrap();
+
+        // Hub title collides with spoke title
+        let brief = HubBrief {
+            topic: "Spoke".to_string(),
+            suggested_url: "/blog/spoke-one-hub".to_string(),
+            suggested_title: "Spoke One".to_string(),
+            intent: "informational".to_string(),
+            target_keyword: "spoke".to_string(),
+            spokes: vec![
+                HubSpokeBrief {
+                    article_id: 1,
+                    title: "Spoke One".to_string(),
+                    url_slug: "spoke-one".to_string(),
+                    file: "001_spoke_one.mdx".to_string(),
+                    impressions: 0.0,
+                    excerpt: "Excerpt".to_string(),
+                },
+            ],
+        };
+        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-broad-1.json");
+        fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
+
+        let task = Task {
+            id: "task-broad-1".to_string(),
+            project_id: "proj1".to_string(),
+            task_type: "create_hub_page".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Spec,
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            title: Some("Create hub: Spoke One".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_hub_validate(&task, &project_path);
+        assert!(!result.success, "Expected validation to fail: hub title matches spoke");
+
+        let report: HubValidationReport = serde_json::from_str(&result.output.unwrap()).unwrap();
+        let broad_check = report.checks.iter().find(|c| c.name == "hub_broader_than_spokes").unwrap();
+        assert!(!broad_check.pass);
     }
 }

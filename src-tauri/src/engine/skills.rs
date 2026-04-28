@@ -33,6 +33,7 @@ const EMBEDDED_SKILL_NAMES: &[&str] = &[
     "ctr-optimization",
     "ctr-schema-renderer",
     "ctr-template-fix",
+    "hub-outline",
     "hub-write",
 ];
 
@@ -45,6 +46,7 @@ fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
         "ctr-optimization" => include_str!("../../skills/ctr-optimization/SKILL.md"),
         "ctr-schema-renderer" => include_str!("../../skills/ctr-schema-renderer/SKILL.md"),
         "ctr-template-fix" => include_str!("../../skills/ctr-template-fix/SKILL.md"),
+        "hub-outline" => include_str!("../../skills/hub-outline/SKILL.md"),
         "hub-write" => include_str!("../../skills/hub-write/SKILL.md"),
         _ => return None,
     };
