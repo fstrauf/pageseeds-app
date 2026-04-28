@@ -103,6 +103,17 @@ pub(crate) fn exec_ctr_fix_apply(
         }
     };
 
+    let validation_errors = validate_patch_before_write(&patch, _task, &original_content);
+    if !validation_errors.is_empty() {
+        return StepResult {
+            success: false,
+            message: format!(
+                "Agent returned invalid CtrFixPatch values: {}. No changes written.",
+                validation_errors.join("; ")
+            ),
+            output: None,
+        };
+    }
 
     let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
         Some((f, b)) => (f.to_string(), b.to_string()),
@@ -207,6 +218,118 @@ pub(crate) fn exec_ctr_fix_apply(
         ),
         output: Some(new_content),
     }
+}
+
+fn validate_patch_before_write(
+    patch: &CtrFixPatch,
+    task: &Task,
+    original_content: &str,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    if let Some(title) = patch.changes.title.as_deref() {
+        let title_len = title.chars().count();
+        if title.trim().is_empty() {
+            errors.push("title is empty".to_string());
+        } else if title_len > crate::engine::exec::audit_health::TITLE_MAX_LEN {
+            errors.push(format!(
+                "title is {} chars, expected <= {}",
+                title_len,
+                crate::engine::exec::audit_health::TITLE_MAX_LEN
+            ));
+        }
+    }
+
+    if let Some(description) = patch.changes.description.as_deref() {
+        let description_len = description.chars().count();
+        if description_len < crate::engine::exec::audit_health::META_MIN_LEN
+            || description_len > crate::engine::exec::audit_health::META_MAX_LEN
+        {
+            errors.push(format!(
+                "description is {} chars, expected {}-{}",
+                description_len,
+                crate::engine::exec::audit_health::META_MIN_LEN,
+                crate::engine::exec::audit_health::META_MAX_LEN
+            ));
+        }
+    }
+
+    if let Some(first_paragraph) = patch.changes.first_paragraph.as_deref() {
+        let word_count = first_paragraph.split_whitespace().count();
+        if word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+            || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+        {
+            errors.push(format!(
+                "first_paragraph is {} words, expected {}-{}",
+                word_count,
+                crate::engine::exec::audit_health::SNIPPET_MIN_WORDS,
+                crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+            ));
+        }
+
+        if first_paragraph.contains("\n\n") {
+            errors.push("first_paragraph contains blank lines".to_string());
+        }
+
+        if let Some(rec) = extract_recommendation(task) {
+            let keyword_lower = rec.target_keyword.to_lowercase();
+            let has_kw_or_question = keyword_lower.is_empty()
+                || first_paragraph.to_lowercase().contains(&keyword_lower)
+                || first_paragraph.contains('?');
+            if !has_kw_or_question {
+                errors.push(format!(
+                    "first_paragraph must contain target keyword '{}' or a question mark",
+                    rec.target_keyword
+                ));
+            }
+        }
+    }
+
+    if let Some(questions) = patch.changes.faq_questions.as_ref() {
+        if !crate::engine::exec::audit_health::has_frontmatter_faq(original_content) {
+            if questions.len() < 3 || questions.len() > 5 {
+                errors.push(format!(
+                    "faq_questions has {} questions, expected 3-5",
+                    questions.len()
+                ));
+            }
+            for (index, question) in questions.iter().enumerate() {
+                if question.question.trim().is_empty() {
+                    errors.push(format!("faq_questions[{}].question is empty", index));
+                } else if !question.question.trim().ends_with('?') {
+                    errors.push(format!(
+                        "faq_questions[{}].question must end with '?'",
+                        index
+                    ));
+                }
+                if question.answer.trim().is_empty() {
+                    errors.push(format!("faq_questions[{}].answer is empty", index));
+                }
+            }
+        }
+    }
+
+    if let Some(snippet) = patch.changes.snippet_patch.as_ref() {
+        let answer_word_count = snippet.answer_paragraph.split_whitespace().count();
+        if answer_word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+            || answer_word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+        {
+            errors.push(format!(
+                "snippet_patch.answer_paragraph is {} words, expected {}-{}",
+                answer_word_count,
+                crate::engine::exec::audit_health::SNIPPET_MIN_WORDS,
+                crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+            ));
+        }
+        if snippet.heading.trim().is_empty() {
+            errors.push("snippet_patch.heading is empty".to_string());
+        }
+        if snippet.answer_paragraph.contains("\n\n") {
+            errors.push("snippet_patch.answer_paragraph contains blank lines".to_string());
+        }
+    }
+
+    errors
 }
 
 /// Deterministic verification that applied CTR fixes meet health thresholds.

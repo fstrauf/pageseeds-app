@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText, Globe } from 'lucide-react'
+import { CheckCircle, XCircle, RefreshCw, Copy, Bot, FolderOpen, FileText, ExternalLink, ScrollText, Globe, BookOpen, Download } from 'lucide-react'
 import { LogViewer } from './LogViewer'
 import { getSecretsStatus, getSecretsFilePath, checkAgentStatus, setAgentProvider, importEnvFile, openFolderDialog, getProjectConfigFilesStatus, getSeoProvider, setSeoProvider } from '../../lib/tauri'
 import type { AgentStatus, ProjectConfigFileStatus, SecretsStatus, SeoProvider } from '../../lib/types'
@@ -8,6 +8,14 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   Table,
   TableBody,
@@ -46,6 +54,12 @@ export function Settings({ projectId }: SettingsProps) {
   const [seoLoading, setSeoLoading] = useState(false)
   const [seoSaving, setSeoSaving] = useState(false)
   const [seoSaved, setSeoSaved] = useState(false)
+
+  // Integration instructions state
+  const [integrationOpen, setIntegrationOpen] = useState(false)
+  const [integrationContent, setIntegrationContent] = useState('')
+  const [integrationLoading, setIntegrationLoading] = useState(false)
+  const [integrationCopied, setIntegrationCopied] = useState(false)
 
   const load = useCallback(async () => {
     if (!projectId) return
@@ -140,6 +154,41 @@ export function Settings({ projectId }: SettingsProps) {
       setSeoSaving(false)
     }
   }, [projectId, seoProvider, loadSeoProvider, showError])
+
+  const loadIntegrationContent = useCallback(async () => {
+    if (integrationContent) return
+    setIntegrationLoading(true)
+    try {
+      const response = await fetch('/PAGESEEDS_REPO_INTEGRATION.md')
+      if (!response.ok) throw new Error('Failed to load integration instructions')
+      const text = await response.text()
+      setIntegrationContent(text)
+    } catch (e) {
+      showError(String(e))
+    } finally {
+      setIntegrationLoading(false)
+    }
+  }, [integrationContent, showError])
+
+  const copyIntegration = useCallback(async () => {
+    if (!integrationContent) return
+    await navigator.clipboard.writeText(integrationContent)
+    setIntegrationCopied(true)
+    setTimeout(() => setIntegrationCopied(false), 2000)
+  }, [integrationContent])
+
+  const downloadIntegration = useCallback(() => {
+    if (!integrationContent) return
+    const blob = new Blob([integrationContent], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'PAGESEEDS_REPO_INTEGRATION.md'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, [integrationContent])
 
   // Load global settings once on mount
   useEffect(() => {
@@ -371,6 +420,82 @@ export function Settings({ projectId }: SettingsProps) {
                         {configLoading ? 'Checking configuration files…' : 'No project config files detected.'}
                       </p>
                     )}
+                  </CardContent>
+                </Card>
+
+                <Separator className="bg-border" />
+
+                {/* Target Repo Integration Instructions */}
+                <Card className="bg-card border-border">
+                  <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                      <BookOpen size={14} className="text-muted-foreground" />
+                      Target Repo Integration Instructions
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-xs text-muted-foreground">
+                      Copy these instructions into your content repository so your app knows how to render PageSeeds frontmatter, metadata, FAQ schema, HowTo schema, citations, and canonical SEO fields.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={() => {
+                          void loadIntegrationContent()
+                          setIntegrationOpen(true)
+                        }}
+                        className="border-border text-foreground"
+                      >
+                        <FileText size={12} className="mr-1.5" />
+                        View &amp; Copy
+                      </Button>
+                    </div>
+
+                    <Dialog open={integrationOpen} onOpenChange={setIntegrationOpen}>
+                      <DialogContent className="sm:max-w-3xl max-h-[85vh] flex flex-col p-0 gap-0">
+                        <DialogHeader className="px-6 pt-6 pb-4">
+                          <DialogTitle className="text-base font-semibold">
+                            PageSeeds Content Rendering Contract
+                          </DialogTitle>
+                          <DialogDescription className="text-xs">
+                            Copy or download these instructions into your target repository.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="flex-1 min-h-0 px-6 pb-4">
+                          <ScrollArea className="h-[50vh] rounded-md border border-border bg-secondary/30">
+                            {integrationLoading ? (
+                              <div className="p-4 text-sm text-muted-foreground">Loading…</div>
+                            ) : (
+                              <pre className="p-4 text-xs font-mono whitespace-pre-wrap text-foreground">
+                                {integrationContent}
+                              </pre>
+                            )}
+                          </ScrollArea>
+                        </div>
+                        <DialogFooter className="px-6 pb-6 pt-2">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={copyIntegration}
+                            disabled={!integrationContent || integrationLoading}
+                            className="border-border text-foreground"
+                          >
+                            {integrationCopied ? 'Copied!' : <Copy size={12} className="mr-1.5" />}
+                            {integrationCopied ? '' : 'Copy to Clipboard'}
+                          </Button>
+                          <Button
+                            variant="default"
+                            size="xs"
+                            onClick={downloadIntegration}
+                            disabled={!integrationContent || integrationLoading}
+                          >
+                            <Download size={12} className="mr-1.5" />
+                            Download .md
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
                   </CardContent>
                 </Card>
 

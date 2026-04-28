@@ -157,8 +157,13 @@ pub async fn execute_queue_internal(
         log::info!("[queue_runner] Task execution completed, handling result");
         match result {
             Ok(Ok(exec_result)) => {
-                log::info!("[queue_runner] Task {} succeeded: {}",
-                    item.task_id, exec_result.message);
+                if exec_result.success {
+                    log::info!("[queue_runner] Task {} completed: {}",
+                        item.task_id, exec_result.message);
+                } else {
+                    log::warn!("[queue_runner] Task {} finished with workflow failure: {}",
+                        item.task_id, exec_result.message);
+                }
 
                 let event = QueueProgressEvent {
                     event_type: if exec_result.success { "completed" } else { "failed" }.to_string(),
@@ -166,6 +171,7 @@ pub async fn execute_queue_internal(
                     project_id: item.project_id.clone(),
                     payload: serde_json::json!({
                         "message": exec_result.message,
+                        "error": if exec_result.success { serde_json::Value::Null } else { serde_json::Value::String(exec_result.message.clone()) },
                         "success": exec_result.success,
                         "started_at": exec_result.started_at,
                         "finished_at": exec_result.finished_at,
@@ -173,10 +179,11 @@ pub async fn execute_queue_internal(
                     }),
                 };
 
-                log::info!("[queue_runner] Emitting queue:task-completed for task {}", item.task_id);
-                match app_handle.emit("queue:task-completed", &event) {
-                    Ok(_) => log::info!("[queue_runner] Successfully emitted completed event"),
-                    Err(e) => log::error!("[queue_runner] Failed to emit completed event: {}", e),
+                let event_name = if exec_result.success { "queue:task-completed" } else { "queue:task-failed" };
+                log::info!("[queue_runner] Emitting {} for task {}", event_name, item.task_id);
+                match app_handle.emit(event_name, &event) {
+                    Ok(_) => log::info!("[queue_runner] Successfully emitted {} event", event.event_type),
+                    Err(e) => log::error!("[queue_runner] Failed to emit {} event: {}", event.event_type, e),
                 }
 
                 // Emit follow-up created events for automatic/batchable follow-ups
