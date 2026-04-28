@@ -304,7 +304,11 @@ fn schema_to_parameters<T: JsonSchema>() -> Result<serde_json::Value, String> {
 }
 
 async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatResponse, String> {
-    let client = reqwest::Client::new();
+    // 10-minute timeout to avoid hung ACP sessions silently blocking forever.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     log::debug!(

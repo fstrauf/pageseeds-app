@@ -202,3 +202,112 @@ With the bridge instrumentation in place, compare one `request_id` across these 
 - `chat_completion_complete`
 
 If `acp_prompt_finished` accounts for nearly all runtime, the slow part is Kimi CLI/API/model behavior. If there is a large gap before `chat_completion_request`, the issue is in PageSeeds before the HTTP request. If `chat_completion_complete` is fast but PageSeeds remains slow, instrument PageSeeds around `send_request()` and `exec_ctr_analyze()` to catch post-response parsing or workflow persistence delays.
+
+## Working Conclusion: ACP Prompt Size Is the Failure Boundary
+
+The latest bridge/API-side run narrows the issue enough to choose a product fix:
+
+- The bridge received the CTR request and launched Kimi with `--no-thinking acp` correctly.
+- The Kimi ACP child accepted the prompt and emitted ACP session events, but never emitted `acp_first_content_chunk`.
+- The child then sat mostly idle until killed. After that, the bridge completed with empty content, which PageSeeds surfaced downstream as `No ctr_recommendations artifact found`.
+- The bridge now treats this empty-response case as a 503, which is the right behavior. It prevents PageSeeds from interpreting a dead ACP generation as a successful empty assistant message.
+- A tiny prompt succeeds through the same bridge in a few seconds, so the bridge is healthy enough for small requests.
+- `--no-thinking` does not fix the CTR-size stall. Streaming also would not fix this specific failure, because the model never reaches first content.
+
+That points to the Kimi ACP code path itself, not Rig as an abstraction and not the Python bridge translation layer. PageSeeds is sending one large CTR prompt through ACP: about 46 KB / 11.5K estimated tokens for the failing run. The current code caps by article count (`top_20_by_clicks_lost`) but not by byte or token budget, so a "top 20" audit can still become one oversized ACP request once rendered audit data, excerpts, GSC metrics, and query data are included.
+
+The exact black-box failure is inside `kimi acp` / the Kimi backend after `session/prompt` is accepted. The actionable PageSeeds root cause is simpler: `ctr_analyze` packages too much audit context into one ACP turn.
+
+## Hypotheses Ruled Out
+
+| Hypothesis | Current read |
+|---|---|
+| Rig itself is causing the stall | Unlikely. The CTR path uses the local strict Kimi compatibility adapter and sends one plain OpenAI-compatible chat request. Rig is only the provider boundary here. |
+| Bridge `response_format` schema injection bloated the prompt | Unlikely for CTR. `ctr_analyze` does not currently use Rig `Extractor<T>`, tools, or `response_format`. |
+| Bridge history folding duplicates CTR context | Unlikely for CTR. PageSeeds sends a single user message, so `_build_prompt_text()` wraps it as one `User:` block rather than replaying a large conversation. |
+| `--no-thinking` solves it | Ruled out by the retry: ACP still stalled before first content. |
+| Streaming solves it | No. Streaming helps visibility and time-to-first-token only after generation starts; this failure never emits a first content chunk. |
+| The bridge should return success with empty content | Ruled out and fixed. Empty Kimi ACP output should be a 503/error, not a successful assistant response. |
+
+## Best Path Forward
+
+Keep the Rig/bridge architecture, but change CTR analysis from one large request into deterministic micro-batches.
+
+The low-risk implementation is inside `exec_ctr_analyze`, without changing the workflow graph:
+
+1. Parse the existing `context_json`.
+2. Read `top_20_by_clicks_lost` in priority order.
+3. Split articles into batches by serialized prompt size, not only by count.
+4. Send each batch through the same provider path.
+5. Parse each batch response as JSON.
+6. Merge all batch `recommendations` into one final `CtrAgentOutput` artifact.
+7. Fail the step if any batch returns invalid JSON or a provider error, rather than silently producing a partial audit.
+
+Recommended first thresholds:
+
+| Setting | Value |
+|---|---:|
+| Target full prompt size per batch | 10-15 KB |
+| Hard max full prompt size per batch | 18-20 KB |
+| Default max articles per batch | 4 |
+| Fallback if still slow | 3 articles per batch |
+| Do not exceed without fresh evidence | 5 articles per batch |
+
+For the failing run, this turns one 46 KB request into roughly five requests of four articles each. That keeps the output contract the same for downstream task spawning while avoiding the observed ACP stall zone.
+
+## Suggested Code Shape
+
+Minimal PageSeeds patch:
+
+- Add a small `CtrAnalyzeBatch` helper in `src-tauri/src/engine/exec/ctr_audit/analyze.rs` or a sibling module.
+- Add constants such as:
+   - `CTR_ANALYZE_TARGET_PROMPT_BYTES: usize = 15_000`
+   - `CTR_ANALYZE_HARD_PROMPT_BYTES: usize = 20_000`
+   - `CTR_ANALYZE_MAX_ARTICLES_PER_BATCH: usize = 4`
+- Build batch context documents with the same top-level metadata plus a sliced `top_20_by_clicks_lost` array.
+- Include batch metadata in the prompt: `batch_index`, `batch_count`, and `article_count`.
+- Log each batch's prompt bytes and article IDs before the provider call.
+- Parse each response through `extract_json`, then deserialize into `CtrAgentOutput`.
+- Merge by preserving input priority order; optionally dedupe by `(article_id, fix_type)` if a future overlapping batch strategy is added.
+
+Important detail: do not switch CTR to schema/tool extraction as the first fix. That may be a good later cleanup, but it would add tool/schema overhead to the same ACP path we are trying to stabilize. First make the plain prompt smaller and reliable, then consider typed extraction/validation once the transport is boring again.
+
+## Secondary Guardrail
+
+PageSeeds should also add a request timeout for the Kimi bridge HTTP client. The current `reqwest::Client::new()` in `rig/compat/kimi.rs` has no timeout for plain prompt calls, so PageSeeds can wait indefinitely if ACP stalls.
+
+A conservative guardrail is:
+
+- `connect_timeout`: 10 seconds
+- total request timeout: slightly above bridge `KIMI_BRIDGE_SESSION_TIMEOUT`, or a configurable default such as 330 seconds
+
+This timeout should be treated as a failure signal, not a recovery mechanism. The real reliability fix is still batching. The timeout just prevents another unbounded hung task.
+
+## Role of Direct `kimi --print`
+
+The old `kimi --print --no-thinking --final-message-only` path remains useful as an A/B test and emergency escape hatch, because it is a different Kimi CLI code path and has already worked for PageSeeds tasks.
+
+It should not be the primary fix if the goal is to keep a unified Rig/provider architecture. The clean approach is:
+
+1. Default CTR to batched Rig/bridge calls.
+2. Keep `kimi_backend_mode = "direct"` available for manual fallback.
+3. Consider automatic direct fallback only for explicit bridge failures such as 503/timeout, and only if the user accepts that token usage/structured provider behavior will differ from the Rig path.
+
+## Validation Plan
+
+After implementing batching:
+
+1. Unit-test the chunking helper with synthetic article records, including one oversized article.
+2. Unit-test merge behavior to ensure the final artifact still matches `CtrAgentOutput`.
+3. Run `cargo test test_exec_ctr_build_context_preserves_resolved_issues_on_healthy_rerun` to protect the existing healthy/unchanged skip behavior.
+4. Run `cargo test --manifest-path src-tauri/Cargo.toml` if time allows.
+5. Live-test CTR audit through the bridge and compare these log fields per batch:
+    - PageSeeds prompt bytes
+    - bridge `acp_prompt_prepared.prompt_bytes`
+    - `acp_first_content_chunk.duration_ms`
+    - `chat_completion_complete.duration_ms`
+6. If any 4-article batch still has no first content within 60-90 seconds, reduce to 3 articles or lower the byte budget before changing bridge internals.
+
+## Decision
+
+Proceed with CTR byte-budget batching plus a Kimi bridge HTTP timeout in PageSeeds. Keep the bridge 503 empty-response patch and instrumentation. Do not spend more time on streaming or `--no-thinking` for this issue unless new evidence shows Kimi ACP reaches first content and then stalls mid-generation.
