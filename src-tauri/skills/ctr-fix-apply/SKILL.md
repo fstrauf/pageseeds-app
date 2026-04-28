@@ -42,7 +42,8 @@ A JSON artifact (`ctr_recommendations`) containing a single article recommendati
 ### `faq_schema`
 - Return 3–5 question/answer pairs in `changes.faq_questions`.
 - Each item: `{ "question": "...?", "answer": "..." }`.
-- If no FAQ changes are needed, return `null` or omit the field.
+- **CRITICAL — PRESERVATION RULE**: If the input context shows the article already has frontmatter `faq:` YAML with valid Q/A pairs, return `null` for `faq_questions`. Do not overwrite existing FAQ even if `faq_schema` is listed in the fixes.
+- Only generate FAQ when the article has no structured FAQ source at all, or when explicitly told the existing FAQ is empty/malformed.
 
 ### `snippet_bait`
 - Return the new first paragraph text in `changes.first_paragraph`.

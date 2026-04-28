@@ -143,12 +143,26 @@ pub(crate) fn exec_ctr_fix_apply(
     }
 
     if let Some(questions) = faq_questions {
-        let qa: Vec<(String, String)> = questions
-            .into_iter()
-            .map(|q| (q.question, q.answer))
-            .collect();
-        new_fm = crate::content::frontmatter::replace_faq_block(&new_fm, &qa);
-        applied.push(format!("faq_frontmatter ({} questions)", qa.len()));
+        // Phase 1 safety net: do not overwrite existing frontmatter FAQ.
+        // If the file already has valid frontmatter `faq:`, skip the FAQ patch
+        // even if the agent generated one. This prevents quality regression
+        // where rich existing FAQ gets replaced with generic generated answers.
+        let file_has_frontmatter_faq = crate::engine::exec::audit_health::has_frontmatter_faq(&original_content);
+        if file_has_frontmatter_faq {
+            log::info!(
+                "[ctr_fix_apply] Skipping FAQ patch for {} — file already has frontmatter FAQ. \
+                 If the existing FAQ needs improvement, handle it manually.",
+                patch.file
+            );
+            applied.push("faq_frontmatter (skipped — existing frontmatter FAQ preserved)".to_string());
+        } else {
+            let qa: Vec<(String, String)> = questions
+                .into_iter()
+                .map(|q| (q.question, q.answer))
+                .collect();
+            new_fm = crate::content::frontmatter::replace_faq_block(&new_fm, &qa);
+            applied.push(format!("faq_frontmatter ({} questions)", qa.len()));
+        }
     }
 
     if let Some(snippet) = snippet_patch {

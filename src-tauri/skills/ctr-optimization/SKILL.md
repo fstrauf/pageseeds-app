@@ -28,8 +28,13 @@ For each article, evaluate the title for CTR issues:
 
 ### 3. FAQ Schema
 - Check for FAQ schema presence.
-- If present, verify 3–5 relevant questions that match actual search queries.
-- If missing or thin, recommend adding 3–5 questions.
+- **CRITICAL — PRESERVATION RULE**: If the article already has frontmatter `faq:` YAML with valid question/answer pairs, do NOT recommend `faq_schema` fixes. Existing FAQ is preserved by default.
+- Only recommend `faq_schema` fixes when:
+  - No FAQ content exists at all (no frontmatter `faq:`, no inline JSON-LD, no visible FAQ section)
+  - OR the existing FAQ is clearly empty/malformed (zero valid Q/A pairs)
+  - OR the existing FAQ is obviously thin generic filler with no article-specific detail
+- When generating FAQ is allowed, create 3–5 questions grounded in the article content with specific facts, prices, ranges, or named entities. Avoid generic restatements.
+- Do not judge existing rich FAQ as "thin" just because you think you could write different questions.
 
 ### 4. Featured Snippet Readiness
 - First paragraph should contain a 40–60 word direct answer.

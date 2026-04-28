@@ -243,7 +243,11 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
 /// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage, markdown FAQ section,
 /// or frontmatter `faq:` YAML list).
 pub fn has_faq_schema(content: &str) -> bool {
-    // 1. Check frontmatter for `faq:` YAML list
+    has_frontmatter_faq(content) || has_inline_json_ld_faq(content) || has_visible_faq_section(content)
+}
+
+/// Check whether frontmatter contains a valid `faq:` YAML list with at least one entry.
+pub fn has_frontmatter_faq(content: &str) -> bool {
     if let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(content) {
         if let Ok(fm) = crate::content::frontmatter::parse(fm_raw) {
             if let Some(faq) = fm.parsed.get("faq") {
@@ -253,18 +257,34 @@ pub fn has_faq_schema(content: &str) -> bool {
             }
         }
     }
+    false
+}
 
-    // 2. Check for JSON-LD FAQPage schema in body
+/// Count valid Q/A pairs in frontmatter `faq:`.
+pub fn frontmatter_faq_count(content: &str) -> usize {
+    if let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(content) {
+        if let Ok(fm) = crate::content::frontmatter::parse(fm_raw) {
+            if let Some(faq) = fm.parsed.get("faq") {
+                if let Some(seq) = faq.as_sequence() {
+                    return seq.len();
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Check for JSON-LD FAQPage schema in the body.
+pub fn has_inline_json_ld_faq(content: &str) -> bool {
     let content_lower = content.to_lowercase();
-    if content_lower.contains("faqpage")
+    content_lower.contains("faqpage")
         || content_lower.contains("\"@type\": \"question\"")
         || content_lower.contains("'@type': 'question'")
         || content_lower.contains("\"@type\":\"question\"")
-    {
-        return true;
-    }
+}
 
-    // 3. Check for markdown FAQ headings
+/// Check for markdown FAQ headings in the body.
+pub fn has_visible_faq_section(content: &str) -> bool {
     content.lines().any(|line| {
         let trimmed = line.trim().to_lowercase();
         trimmed.starts_with("# faq")

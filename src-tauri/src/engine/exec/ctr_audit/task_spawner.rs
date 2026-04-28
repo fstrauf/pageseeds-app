@@ -62,11 +62,18 @@ pub(crate) fn create_ctr_fix_tasks(
 
         // Skip articles with no detected issues
         let issues = &article["issues_detected"];
+        let has_frontmatter_faq = article["has_frontmatter_faq"].as_bool().unwrap_or(false);
+
+        // FAQ issue is only a source-level issue when frontmatter FAQ is missing.
+        // If frontmatter FAQ exists but rendered schema is missing, that's a render-level
+        // issue handled by the schema renderer task, not a per-article fix.
+        let missing_source_faq = issues["missing_faq_schema"].as_bool().unwrap_or(false) && !has_frontmatter_faq;
+
         let has_issues = issues["file_not_found"].as_bool().unwrap_or(false)
             || issues["title_too_long"].as_bool().unwrap_or(false)
             || issues["meta_too_short"].as_bool().unwrap_or(false)
             || issues["snippet_suboptimal"].as_bool().unwrap_or(false)
-            || issues["missing_faq_schema"].as_bool().unwrap_or(false);
+            || missing_source_faq;
 
         if !has_issues {
             skipped_healthy += 1;

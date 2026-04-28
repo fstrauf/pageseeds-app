@@ -148,6 +148,14 @@ pub(crate) fn exec_ctr_build_context(
         let (current_title, meta_description, first_paragraph, h1, has_faq_schema, file_found) =
             crate::engine::exec::audit_health::read_article_excerpt(project_path, &file_ref);
 
+        // Check frontmatter FAQ state directly from file (read_article_excerpt doesn't return this)
+        let repo_root = std::path::Path::new(project_path);
+        let file_content = crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref)
+            .and_then(|p| std::fs::read_to_string(&p).ok())
+            .unwrap_or_default();
+        let has_frontmatter_faq = crate::engine::exec::audit_health::has_frontmatter_faq(&file_content);
+        let faq_question_count = crate::engine::exec::audit_health::frontmatter_faq_count(&file_content);
+
         // Compute content hash for change detection (includes FAQ/schema state)
         let content_hash = crate::engine::exec::audit_health::compute_content_hash(
             &current_title,
@@ -244,6 +252,8 @@ pub(crate) fn exec_ctr_build_context(
                 "snippet_suboptimal": !health.snippet_ok,
                 "missing_faq_schema": !health.faq_ok,
             },
+            "has_frontmatter_faq": has_frontmatter_faq,
+            "faq_question_count": faq_question_count,
             "top_queries": serde_json::Value::Null,
             "rendered_audit": rendered_json,
         }));

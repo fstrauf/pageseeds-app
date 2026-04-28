@@ -258,6 +258,7 @@ pub fn replace_first_paragraph(body: &str, new_text: &str) -> String {
 
 /// Insert JSON-LD FAQPage schema before last `---` separator or at end of body.
 /// If an FAQPage schema already exists, replaces it rather than appending a duplicate.
+#[allow(dead_code)] // Kept for potential Phase 3 inline JSON-LD cleanup/migration
 pub fn insert_faq_schema(body: &str, questions: &[(String, String)]) -> String {
     let mut entity_parts = Vec::new();
     for (i, (q, a)) in questions.iter().enumerate() {
