@@ -465,6 +465,27 @@ pub fn append_task_artifact(
     Ok(())
 }
 
+pub fn upsert_task_artifact(
+    conn: &Connection,
+    task_id: &str,
+    artifact: &TaskArtifact,
+) -> Result<()> {
+    let task = get_task(conn, task_id)?;
+    let mut artifacts = task.artifacts;
+    if let Some(existing) = artifacts.iter_mut().find(|a| a.key == artifact.key) {
+        *existing = artifact.clone();
+    } else {
+        artifacts.push(artifact.clone());
+    }
+    let json = serde_json::to_string(&artifacts)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE tasks SET artifacts = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![json, now, task_id],
+    )?;
+    Ok(())
+}
+
 /// Record a task_run row and bump the attempt counter on the task.
 pub fn record_task_run(
     conn: &Connection,

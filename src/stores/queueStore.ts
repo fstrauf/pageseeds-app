@@ -76,11 +76,9 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   enqueue: (newItems: QueueItem[]) => {
     logger.entry('enqueue', { count: newItems.length });
-    console.log('[QueueStore] enqueue called with', newItems.length, 'items');
     
     if (newItems.length === 0) {
       logger.debug('enqueue - no items to add');
-      console.log('[QueueStore] enqueue - no items, returning');
       return;
     }
     
@@ -92,7 +90,6 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       );
       
       logger.debug('enqueue - deduped', { toAdd: deduped.length, existing: state.items.length });
-      console.log('[QueueStore] enqueue - deduped:', deduped.length, 'items to add');
       
       if (deduped.length === 0) return state;
       
@@ -110,21 +107,17 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     
     // Mark added tasks as queued in the database
     if (addedTaskIds.length > 0) {
-      console.log('[QueueStore] enqueue - marking tasks as queued:', addedTaskIds);
       markTasksQueued(addedTaskIds).catch(err => {
         console.error('[QueueStore] enqueue - failed to mark tasks as queued:', err);
       });
     }
     
     const { isRunning, start } = get();
-    console.log('[QueueStore] enqueue - isRunning:', isRunning);
     if (!isRunning) {
       logger.info('enqueue - auto-starting queue');
-      console.log('[QueueStore] enqueue - auto-starting queue...');
       void start();
-      console.log('[QueueStore] enqueue - start() called');
     } else {
-      console.log('[QueueStore] enqueue - already running, not starting');
+      logger.debug('enqueue - already running');
     }
     
     logger.exit('enqueue');
@@ -175,7 +168,6 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     
     // Reset task status back to todo in the database
     if (wasPending) {
-      console.log('[QueueStore] removeItem - resetting task to todo:', taskId);
       markTasksTodo([taskId]).catch(err => {
         console.error('[QueueStore] removeItem - failed to reset task status:', err);
       });
@@ -216,42 +208,31 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   start: async () => {
     logger.entry('start', { itemCount: get().items.length, isRunning: get().isRunning });
-    console.log('[QueueStore] start() called');
     
     const { items, isRunning, setupEventListeners } = get();
-    console.log('[QueueStore] start - items:', items.length, 'isRunning:', isRunning);
     
     if (items.length === 0 || isRunning) {
       logger.debug('start - early return', { reason: items.length === 0 ? 'no items' : 'already running' });
-      console.log('[QueueStore] start - early return, reason:', items.length === 0 ? 'no items' : 'already running');
       return;
     }
     
     const pendingItems = items.filter((i: QueueItem) => i.status === 'pending');
     logger.info('start - pending items to execute', { count: pendingItems.length });
-    console.log('[QueueStore] start - pending items:', pendingItems.length);
     
     if (pendingItems.length === 0) {
       logger.debug('start - no pending items');
-      console.log('[QueueStore] start - no pending items, returning');
       return;
     }
-    
-    console.log('[QueueStore] start - setting up event listeners...');
 
     // Set isRunning BEFORE await to close the race window where concurrent
     // start() calls could both pass the isRunning check.
     set({ isRunning: true, isPaused: false });
 
     await setupEventListeners();
-    console.log('[QueueStore] start - event listeners ready');
-    console.log('[QueueStore] start - isRunning set to true');
     
     try {
       logger.info('start - calling executeQueue()');
-      console.log('[QueueStore] start - calling executeQueue() with', pendingItems.length, 'items');
       await executeQueue(pendingItems);
-      console.log('[QueueStore] start - executeQueue() returned successfully');
       logger.info('start - executeQueue() returned');
     } catch (error) {
       console.error('[QueueStore] start - executeQueue() failed:', error);
@@ -288,19 +269,16 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   setupEventListeners: async () => {
     logger.entry('setupEventListeners');
-    console.log('[QueueStore] Setting up event listeners...');
     const { onTaskStarted, onTaskCompleted, onTaskFailed, onTaskSkipped, onFollowUpCreated, cleanupEventListeners } = get();
     
     cleanupEventListeners();
     const unlisteners: UnlistenFn[] = [];
     
     logger.debug('setupEventListeners - registering listeners');
-    console.log('[QueueStore] Registering Tauri event listeners...');
     
     const unlistenStarted = await listen<QueueProgressEvent>('queue:task-started', (event) => {
       // event.payload is the QueueProgressEvent (Tauri wraps it)
       const payload = event.payload;
-      console.log('[QueueStore] Received queue:task-started', payload);
       logger.event('queue:task-started', { taskId: payload.taskId });
       onTaskStarted(payload);
     });
@@ -308,7 +286,6 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     
     const unlistenCompleted = await listen<QueueProgressEvent>('queue:task-completed', (event) => {
       const payload = event.payload;
-      console.log('[QueueStore] Received queue:task-completed', payload);
       logger.event('queue:task-completed', { taskId: payload.taskId, type: payload.eventType });
       if (payload.eventType === 'completed') {
         onTaskCompleted(payload);
@@ -342,20 +319,17 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     const unlistenFinished = await listen<{ status?: string; reason?: string }>('queue:finished', (event) => {
       const payload = event.payload;
       logger.event('queue:finished', { status: payload?.status, reason: payload?.reason });
-      console.log('[QueueStore] Queue finished event received', payload);
       cleanupEventListeners();
       set({ isRunning: false });
       
       // Do NOT auto-restart if queue was halted or is paused
       if (payload?.status === 'halted') {
-        console.log('[QueueStore] Queue was halted, not restarting');
         logger.warn('queue:finished - queue halted, not restarting');
         return;
       }
       
       const { items, start, isPaused } = get();
       if (isPaused) {
-        console.log('[QueueStore] Queue is paused, not restarting');
         logger.info('queue:finished - queue is paused, not restarting');
         return;
       }
@@ -363,7 +337,6 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       // Check if there are any pending items that were added while queue was running
       const pendingItems = items.filter((i: QueueItem) => i.status === 'pending');
       if (pendingItems.length > 0) {
-        console.log('[QueueStore] Found', pendingItems.length, 'pending items after queue finished, restarting...');
         logger.info('queue:finished - restarting for pending items', { count: pendingItems.length });
         void start();
       }
@@ -385,7 +358,6 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   },
 
   onTaskStarted: (event: QueueProgressEvent) => {
-    console.log('[QueueStore] Task started:', event.taskId);
     logger.entry('onTaskStarted', { taskId: event.taskId, title: event.payload.title });
     set((state: QueueState) => {
       const idx = state.items.findIndex((i: QueueItem) => i.taskId === event.taskId);
@@ -402,7 +374,6 @@ export const useQueueStore = create<QueueState>((set, get) => ({
 
   onTaskCompleted: (event: QueueProgressEvent) => {
     logger.entry('onTaskCompleted', { taskId: event.taskId });
-    console.log('[QueueStore] Task completed:', event.taskId);
     set((state: QueueState) => {
       const idx = state.items.findIndex((i: QueueItem) => i.taskId === event.taskId);
       if (idx === -1) {

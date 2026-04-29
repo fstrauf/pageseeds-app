@@ -721,6 +721,23 @@ impl StepRegistry {
             context_json
         );
 
+        handlers.insert(
+            StepKind::CtrFixGenerate,
+            Box::new(|_step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                let agent_provider = ctx.agent_provider.to_string();
+                Box::pin(async move {
+                    crate::engine::exec::ctr_audit::exec_ctr_fix_generate(
+                        &task,
+                        &project_path,
+                        &agent_provider,
+                    )
+                    .await
+                })
+            }),
+        );
+
         register_blocking!(
             handlers,
             StepKind::CanBuildContext,

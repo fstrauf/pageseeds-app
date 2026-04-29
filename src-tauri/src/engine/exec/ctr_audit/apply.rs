@@ -8,7 +8,7 @@ use crate::models::task::Task;
 
 /// Deterministic application of agent-generated CTR fix patch.
 ///
-/// 1. Parse CtrFixPatch from latest_raw (agent output)
+/// 1. Parse CtrFixPatch from ctr_fix_patch artifact (preferred) or latest_raw (legacy)
 /// 2. Resolve absolute file path from project_path + patch.file
 /// 3. Read original file content
 /// 4. Validate original can be read
@@ -17,62 +17,17 @@ use crate::models::task::Task;
 /// 7. rebuild_mdx → write file
 /// 8. validate_mdx_structure → if fail, restore snapshot, return failed
 /// 9. Return success with summary
-#[allow(deprecated)]
 pub(crate) fn exec_ctr_fix_apply(
-    _task: &Task,
+    task: &Task,
     project_path: &str,
     latest_raw: Option<&str>,
 ) -> StepResult {
-    let raw = match latest_raw {
-        Some(r) => r,
-        None => {
-            return StepResult {
-                success: false,
-                message: "Agent did not return valid CtrFixPatch JSON".to_string(),
-                output: None,
-            };
-        }
-    };
-
-    // Extract JSON from agent output
-    let json_str = match crate::engine::text::extract_json(raw) {
-        Some(v) => match serde_json::to_string(&v) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("[ctr_fix_apply] Failed to serialize extracted JSON: {}", e);
-                return StepResult {
-                    success: false,
-                    message: format!("Agent did not return valid CtrFixPatch JSON: {}", e),
-                    output: None,
-                };
-            }
-        },
-        None => {
-            log::warn!("[ctr_fix_apply] No JSON found in agent output");
-            return StepResult {
-                success: false,
-                message: "Agent did not return valid CtrFixPatch JSON — no JSON found".to_string(),
-                output: None,
-            };
-        }
-    };
-
-    let patch: CtrFixPatch = match serde_json::from_str(&json_str) {
+    let mut patch = match resolve_patch(task, latest_raw) {
         Ok(p) => p,
-        Err(e) => {
-            log::warn!(
-                "[ctr_fix_apply] Failed to parse agent output as CtrFixPatch: {}",
-                e
-            );
-            return StepResult {
-                success: false,
-                message: format!("Agent did not return valid CtrFixPatch JSON: {}", e),
-                output: None,
-            };
-        }
+        Err(result) => return result,
     };
 
-    if let Some(error) = patch.error {
+    if let Some(error) = patch.error.as_ref() {
         return StepResult {
             success: false,
             message: format!("Agent reported error: {}", error),
@@ -107,7 +62,16 @@ pub(crate) fn exec_ctr_fix_apply(
         }
     };
 
-    let validation_errors = validate_patch_before_write(&patch, _task, &original_content);
+    let repair_notes = super::normalize_patch_before_validation(&mut patch, task);
+    if !repair_notes.is_empty() {
+        log::info!(
+            "[ctr_fix_apply] Normalized agent patch for {}: {}",
+            patch.file,
+            repair_notes.join("; ")
+        );
+    }
+
+    let validation_errors = super::validate_patch_before_write(&patch, task, &original_content);
     if !validation_errors.is_empty() {
         return StepResult {
             success: false,
@@ -233,127 +197,98 @@ pub(crate) fn exec_ctr_fix_apply(
         };
     }
 
+    let normalization_suffix = if repair_notes.is_empty() {
+        String::new()
+    } else {
+        format!(" (normalized: {})", repair_notes.join(", "))
+    };
+
     StepResult {
         success: true,
         message: format!(
-            "Applied CTR fixes to {}: {}",
+            "Applied CTR fixes to {}: {}{}",
             patch.file,
-            applied.join(", ")
+            applied.join(", "),
+            normalization_suffix
         ),
         output: Some(new_content),
     }
 }
 
-fn validate_patch_before_write(
-    patch: &CtrFixPatch,
-    task: &Task,
-    original_content: &str,
-) -> Vec<String> {
-    let mut errors = Vec::new();
-
-    if let Some(title) = patch.changes.title.as_deref() {
-        let title_len = title.chars().count();
-        if title.trim().is_empty() {
-            errors.push("title is empty".to_string());
-        } else if title_len > crate::engine::exec::audit_health::TITLE_MAX_LEN {
-            errors.push(format!(
-                "title is {} chars, expected <= {}",
-                title_len,
-                crate::engine::exec::audit_health::TITLE_MAX_LEN
-            ));
-        }
-    }
-
-    if let Some(description) = patch.changes.description.as_deref() {
-        let description_len = description.chars().count();
-        if description_len < crate::engine::exec::audit_health::META_MIN_LEN
-            || description_len > crate::engine::exec::audit_health::META_MAX_LEN
-        {
-            errors.push(format!(
-                "description is {} chars, expected {}-{}",
-                description_len,
-                crate::engine::exec::audit_health::META_MIN_LEN,
-                crate::engine::exec::audit_health::META_MAX_LEN
-            ));
-        }
-    }
-
-    if let Some(first_paragraph) = patch.changes.first_paragraph.as_deref() {
-        let word_count = first_paragraph.split_whitespace().count();
-        if word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
-            || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
-        {
-            errors.push(format!(
-                "first_paragraph is {} words, expected {}-{}",
-                word_count,
-                crate::engine::exec::audit_health::SNIPPET_MIN_WORDS,
-                crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
-            ));
-        }
-
-        if first_paragraph.contains("\n\n") {
-            errors.push("first_paragraph contains blank lines".to_string());
-        }
-
-        if let Ok(Some(rec)) = extract_recommendation(task) {
-            let keyword_lower = rec.target_keyword.to_lowercase();
-            let has_kw_or_question = keyword_lower.is_empty()
-                || first_paragraph.to_lowercase().contains(&keyword_lower)
-                || first_paragraph.contains('?');
-            if !has_kw_or_question {
-                errors.push(format!(
-                    "first_paragraph must contain target keyword '{}' or a question mark",
-                    rec.target_keyword
-                ));
-            }
-        }
-    }
-
-    if let Some(questions) = patch.changes.faq_questions.as_ref() {
-        if !crate::engine::exec::audit_health::has_frontmatter_faq(original_content) {
-            if questions.len() < 3 || questions.len() > 5 {
-                errors.push(format!(
-                    "faq_questions has {} questions, expected 3-5",
-                    questions.len()
-                ));
-            }
-            for (index, question) in questions.iter().enumerate() {
-                if question.question.trim().is_empty() {
-                    errors.push(format!("faq_questions[{}].question is empty", index));
-                } else if !question.question.trim().ends_with('?') {
-                    errors.push(format!(
-                        "faq_questions[{}].question must end with '?'",
-                        index
-                    ));
-                }
-                if question.answer.trim().is_empty() {
-                    errors.push(format!("faq_questions[{}].answer is empty", index));
+/// Resolve a CtrFixPatch from the task artifact (preferred) or legacy raw output.
+fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<CtrFixPatch, StepResult> {
+    // Prefer typed artifact from CtrFixGenerate
+    if let Some(artifact) = task.artifacts.iter().find(|a| a.key == "ctr_fix_patch") {
+        if let Some(content) = artifact.content.as_ref() {
+            log::info!("[ctr_fix_apply] Using typed ctr_fix_patch artifact");
+            match serde_json::from_str(content) {
+                Ok(p) => return Ok(p),
+                Err(e) => {
+                    log::warn!(
+                        "[ctr_fix_apply] Failed to parse ctr_fix_patch artifact: {}. Falling back to legacy raw output.",
+                        e
+                    );
                 }
             }
+        } else {
+            log::warn!(
+                "[ctr_fix_apply] ctr_fix_patch artifact has no content; falling back to legacy raw output"
+            );
         }
+    } else {
+        log::info!(
+            "[ctr_fix_apply] No ctr_fix_patch artifact found; falling back to legacy raw output"
+        );
     }
 
-    if let Some(snippet) = patch.changes.snippet_patch.as_ref() {
-        let answer_word_count = snippet.answer_paragraph.split_whitespace().count();
-        if answer_word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
-            || answer_word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
-        {
-            errors.push(format!(
-                "snippet_patch.answer_paragraph is {} words, expected {}-{}",
-                answer_word_count,
-                crate::engine::exec::audit_health::SNIPPET_MIN_WORDS,
-                crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
-            ));
+    // Legacy fallback: extract JSON from raw agent text
+    let raw = match latest_raw {
+        Some(r) => r,
+        None => {
+            return Err(StepResult {
+                success: false,
+                message: "Agent did not return valid CtrFixPatch JSON".to_string(),
+                output: None,
+            });
         }
-        if snippet.heading.trim().is_empty() {
-            errors.push("snippet_patch.heading is empty".to_string());
+    };
+
+    let json_str = match crate::engine::text::extract_json(raw) {
+        Some(v) => match serde_json::to_string(&v) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[ctr_fix_apply] Failed to serialize extracted JSON: {}", e);
+                return Err(StepResult {
+                    success: false,
+                    message: format!("Agent did not return valid CtrFixPatch JSON: {}", e),
+                    output: None,
+                });
+            }
+        },
+        None => {
+            log::warn!("[ctr_fix_apply] No JSON found in agent output");
+            return Err(StepResult {
+                success: false,
+                message: "Agent did not return valid CtrFixPatch JSON — no JSON found".to_string(),
+                output: None,
+            });
         }
-        if snippet.answer_paragraph.contains("\n\n") {
-            errors.push("snippet_patch.answer_paragraph contains blank lines".to_string());
+    };
+
+    match serde_json::from_str(&json_str) {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            log::warn!(
+                "[ctr_fix_apply] Failed to parse agent output as CtrFixPatch: {}",
+                e
+            );
+            Err(StepResult {
+                success: false,
+                message: format!("Agent did not return valid CtrFixPatch JSON: {}", e),
+                output: None,
+            })
         }
     }
-
-    errors
 }
 
 /// Deterministic verification that applied CTR fixes meet health thresholds.
@@ -368,7 +303,7 @@ fn validate_patch_before_write(
 ///    If SOME fail → success=false (soft), message includes per-fix detail, status review
 ///    If file missing → failed
 pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult {
-    let rec = match extract_recommendation(task) {
+    let rec = match super::extract_recommendation(task) {
         Ok(Some(r)) => r,
         Ok(None) => {
             return StepResult {
@@ -620,31 +555,6 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
             ),
             output: Some(report_json),
         }
-    }
-}
-
-/// Extract the single CtrRecommendation from the task's ctr_recommendations artifact.
-/// Returns Ok(Some(rec)) on success, Ok(None) if the artifact is missing,
-/// Err(parse_error) if the artifact exists but cannot be parsed.
-fn extract_recommendation(
-    task: &Task,
-) -> Result<Option<crate::models::ctr::CtrRecommendation>, String> {
-    let artifact = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "ctr_recommendations");
-
-    let json = match artifact {
-        Some(a) => match a.content.as_ref() {
-            Some(c) => c,
-            None => return Err("ctr_recommendations artifact has no content".to_string()),
-        },
-        None => return Ok(None),
-    };
-
-    match serde_json::from_str(json) {
-        Ok(r) => Ok(Some(r)),
-        Err(e) => Err(format!("JSON parse error: {}", e)),
     }
 }
 

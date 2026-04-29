@@ -245,10 +245,12 @@ impl WorkflowHandler for ImplementationHandler {
                 // Step 2 (agentic): read file + recommendations, produce structured CtrFixPatch JSON.
                 // Cannot be deterministic: the agent must read the article and write prose that
                 // satisfies SERP intent, brand voice, and keyword context.
+                // Uses rig structured extraction (CtrFixGenerate) instead of raw agentic text.
                 // Input contract: single CtrRecommendation artifact + file contents.
                 // Output contract: CtrFixPatch JSON.
-                WorkflowStep::new("fix_ctr_article_generate", StepKind::Agentic)
-                    .with_param(step_params::SKILL, "ctr-fix-apply"),
+                WorkflowStep::new("fix_ctr_article_generate", StepKind::CtrFixGenerate)
+                    .with_param(step_params::SKILL, "ctr-fix-apply")
+                    .with_param(step_params::ARTIFACT_NAME, "ctr_fix_patch"),
                 // Step 3 (deterministic): apply the patch to the MDX file.
                 // Snapshots original, replaces frontmatter/body, validates structure, restores on corruption.
                 WorkflowStep::new("fix_ctr_article_apply", StepKind::CtrFixApply),

@@ -404,7 +404,10 @@ pub(crate) fn exec_hub_apply_draft(
         .suggested_url
         .trim_start_matches('/')
         .replace("blog/", "");
-    let filename = format!("{:03}_{}_hub.mdx", article_id, slug.replace('-', "_"));
+    // Sanitize slug for use as a filename — URL paths like "hub/coffee" must not
+    // create spurious subdirectories (e.g. "001_hub/coffee_hub.mdx").
+    let safe_slug = slug.replace(['/', '\\'], "_").replace('-', "_");
+    let filename = format!("{:03}_{}_hub.mdx", article_id, safe_slug);
     let file_path = content_dir.join(&filename);
 
     if let Err(e) = std::fs::create_dir_all(&content_dir) {

@@ -307,7 +307,7 @@ export default function App() {
                   <LinkingMap projectId={activeProject?.id ?? ''} />
                 </TabsContent>
                 <TabsContent value="ctr" className="flex-1 overflow-y-auto mt-0 p-0">
-                  <CtrHealthPanel projectId={activeProject?.id ?? ''} />
+                  <CtrHealthPanel projectId={activeProject?.id ?? ''} runCompletedTick={runCompletedTick} />
                 </TabsContent>
               </Tabs>
             </div>

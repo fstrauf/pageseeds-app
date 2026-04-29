@@ -29,6 +29,14 @@ struct ChatRequest {
     tools: Option<Vec<ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    format_type: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -147,6 +155,7 @@ pub async fn run_prompt(
         max_tokens: None,
         tools: None,
         tool_choice: None,
+        response_format: None,
     };
 
     let response = send_request(base_url, request).await?;
@@ -169,10 +178,11 @@ pub async fn run_prompt(
     })
 }
 
-/// Extract structured data via tool-calling.
+/// Extract structured data from Kimi.
 ///
-/// Builds a `submit` tool from the JSON schema of `T`, sends it to Kimi,
-/// and parses the tool call arguments back into `T`.
+/// First tries tool-calling (preferred for ACP mode). If the bridge is running
+/// in direct mode and rejects tool calls, transparently falls back to JSON mode
+/// (`response_format: { type: "json_object" }`) and parses the response content.
 ///
 /// Retries up to 2 times on parse failures.
 pub async fn extract_structured<T>(
@@ -191,7 +201,7 @@ where
         function: FunctionDefinition {
             name: "submit".to_string(),
             description: "Submit the extracted structured data.".to_string(),
-            parameters: schema_value,
+            parameters: schema_value.clone(),
         },
     };
 
@@ -207,7 +217,7 @@ where
 
     let user_content = format!("{}\n\n{}", default_preamble, full_prompt);
 
-    let request = ChatRequest {
+    let tool_request = ChatRequest {
         model: model.to_string(),
         messages: vec![RequestMessage {
             role: "user".to_string(),
@@ -217,19 +227,83 @@ where
         max_tokens: None,
         tools: Some(vec![tool]),
         tool_choice: Some("auto".to_string()),
+        response_format: None,
     };
 
-    // Retry loop for robustness.
+    // Attempt tool-calling first.
     let mut last_error = String::new();
-    for attempt in 0..3 {
-        let response = send_request(base_url, request.clone()).await?;
+    match send_request(base_url, tool_request.clone()).await {
+        Ok(response) => {
+            let choice = response
+                .choices
+                .into_iter()
+                .next()
+                .ok_or("No choices in Kimi response")?;
+
+            // Prefer tool call.
+            if let Some(tool_call) = choice
+                .message
+                .tool_calls
+                .into_iter()
+                .find(|tc| tc.function.name == "submit")
+            {
+                match serde_json::from_str::<T>(&tool_call.function.arguments) {
+                    Ok(value) => return Ok(value),
+                    Err(e) => {
+                        last_error = format!(
+                            "Tool call parse error: {} | raw: {}",
+                            e,
+                            tool_call.function.arguments
+                        );
+                        log::warn!("[kimi::extract_structured] {}", last_error);
+                    }
+                }
+            }
+
+            // Fallback within same response: parse content as JSON.
+            if let Some(content) = choice.message.content {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    match serde_json::from_str::<T>(trimmed) {
+                        Ok(value) => return Ok(value),
+                        Err(e) => {
+                            last_error = format!(
+                                "Content parse error: {} | raw: {}",
+                                e, trimmed
+                            );
+                            log::warn!("[kimi::extract_structured] {}", last_error);
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) if is_tools_not_supported(&e) => {
+            log::info!(
+                "[kimi::extract_structured] Tool calls not supported (direct mode). \
+                 Falling back to JSON mode."
+            );
+            return extract_structured_json_mode::<T>(
+                base_url,
+                model,
+                prompt,
+                preamble,
+                &schema_value,
+            )
+            .await;
+        }
+        Err(e) => return Err(e),
+    }
+
+    // If we reach here, the tool request returned OK but parsing failed.
+    // Retry up to 2 more times with the same tool request.
+    for attempt in 1..3 {
+        let response = send_request(base_url, tool_request.clone()).await?;
         let choice = response
             .choices
             .into_iter()
             .next()
             .ok_or("No choices in Kimi response")?;
 
-        // Prefer tool call.
         if let Some(tool_call) = choice
             .message
             .tool_calls
@@ -251,7 +325,6 @@ where
             }
         }
 
-        // Fallback: parse content as JSON.
         if let Some(content) = choice.message.content {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
@@ -282,6 +355,128 @@ where
         "Kimi structured extraction failed after 3 attempts. Last error: {}",
         last_error
     ))
+}
+
+/// Extract structured data using JSON mode (no tool calls).
+///
+/// Used as a fallback when the Kimi bridge is running in direct mode.
+/// The JSON schema is injected into the prompt; `response_format` forces
+/// the model to emit valid JSON.
+async fn extract_structured_json_mode<T>(
+    base_url: &str,
+    model: &str,
+    prompt: &str,
+    preamble: Option<&str>,
+    schema: &serde_json::Value,
+) -> Result<T, String>
+where
+    T: JsonSchema + for<'a> Deserialize<'a> + Send + Sync,
+{
+    let schema_str = serde_json::to_string_pretty(schema)
+        .map_err(|e| format!("Failed to serialize schema: {}", e))?;
+
+    let json_preamble = format!(
+        "You are a structured data extraction assistant. \
+         Respond ONLY with a valid JSON object that conforms to the following schema. \
+         Do not include markdown code fences, explanations, or any text outside the JSON.\n\n\
+         Schema:\n{}\n\n\
+         Your response must be a single JSON object. Fill out every field.",
+        schema_str
+    );
+
+    let full_prompt = if let Some(preamble) = preamble {
+        format!("{}\n\n{}", preamble, prompt)
+    } else {
+        prompt.to_string()
+    };
+
+    let user_content = format!("{}\n\n{}", json_preamble, full_prompt);
+
+    let request = ChatRequest {
+        model: model.to_string(),
+        messages: vec![RequestMessage {
+            role: "user".to_string(),
+            content: user_content,
+        }],
+        temperature: Some(0.1),
+        max_tokens: None,
+        tools: None,
+        tool_choice: None,
+        response_format: Some(ResponseFormat {
+            format_type: "json_object".to_string(),
+        }),
+    };
+
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        let response = send_request(base_url, request.clone()).await?;
+        let choice = response
+            .choices
+            .into_iter()
+            .next()
+            .ok_or("No choices in Kimi response")?;
+
+        if let Some(content) = choice.message.content {
+            let trimmed = content.trim();
+            // Strip markdown fences if the model included them despite instructions.
+            let cleaned = strip_json_fences(trimmed);
+            if !cleaned.is_empty() {
+                match serde_json::from_str::<T>(cleaned) {
+                    Ok(value) => return Ok(value),
+                    Err(e) => {
+                        last_error = format!(
+                            "JSON mode parse error (attempt {}): {} | raw: {}",
+                            attempt + 1,
+                            e,
+                            cleaned
+                        );
+                        log::warn!("[kimi::extract_structured_json_mode] {}", last_error);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        last_error = format!(
+            "JSON mode attempt {}: Response contained no parseable content",
+            attempt + 1
+        );
+        log::warn!("[kimi::extract_structured_json_mode] {}", last_error);
+    }
+
+    Err(format!(
+        "Kimi JSON-mode structured extraction failed after 3 attempts. Last error: {}",
+        last_error
+    ))
+}
+
+/// Check whether an error indicates tool calls are not supported.
+fn is_tools_not_supported(error: &str) -> bool {
+    error.contains("tools_not_supported")
+        || error.contains("does not support native tool calls")
+        || error.contains("does not support structured extraction")
+        || error.contains("tool_calls")
+        || error.contains("Tool calling")
+}
+
+/// Strip markdown JSON code fences from a string.
+fn strip_json_fences(text: &str) -> &str {
+    let trimmed = text.trim();
+    if trimmed.starts_with("```json") {
+        trimmed
+            .strip_prefix("```json")
+            .and_then(|s| s.strip_suffix("```"))
+            .map(|s| s.trim())
+            .unwrap_or(trimmed)
+    } else if trimmed.starts_with("```") {
+        trimmed
+            .strip_prefix("```")
+            .and_then(|s| s.strip_suffix("```"))
+            .map(|s| s.trim())
+            .unwrap_or(trimmed)
+    } else {
+        trimmed
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,6 +542,15 @@ async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatRespon
             status,
             elapsed
         );
+        // Detect bridge-in-direct-mode so callers can surface a clear action.
+        if body.contains("tools_not_supported") || body.contains("does not support native tool calls")
+        {
+            return Err(
+                "Kimi bridge is running in direct mode, which does not support structured extraction (native tool calls). \
+                 Restart the bridge with --backend acp (or set KIMI_BACKEND=acp) and try again."
+                    .to_string(),
+            );
+        }
         return Err(format!("Kimi API error {}: {}", status, body));
     }
 
@@ -608,6 +812,7 @@ mod tests {
             max_tokens: None,
             tools: None,
             tool_choice: None,
+            response_format: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         let messages = json["messages"].as_array().unwrap();
@@ -750,6 +955,125 @@ mod tests {
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].label, "a");
         assert_eq!(result.total, 1);
+    }
+
+    #[tokio::test]
+    async fn test_extract_structured_fallback_to_json_mode_on_tools_not_supported() {
+        let mock_server = MockServer::start().await;
+
+        // First request (tool-calling) fails with direct-mode error.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "detail": {
+                    "error": {
+                        "message": "Kimi direct backend does not support native tool calls. Use tool_choice='none' or backend='acp'."
+                    }
+                }
+            })))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        // Second request (JSON mode) succeeds.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-json",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "{\"name\":\"json-mode-name\",\"count\":77}"
+                        },
+                        "finish_reason": "stop"
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result: TestOutput = extract_structured(
+            &format!("{}/v1", mock_server.uri()),
+            "test-model",
+            "Extract name and count.",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.name, "json-mode-name");
+        assert_eq!(result.count, 77);
+    }
+
+    #[tokio::test]
+    async fn test_extract_structured_json_mode_strips_markdown_fences() {
+        let mock_server = MockServer::start().await;
+
+        // Tool request fails.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string(
+                r#"{"detail":{"error":{"message":"tools_not_supported"}}}"#
+            ))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        // JSON mode returns fenced JSON.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-fenced",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "```json\n{\"name\":\"fenced-name\",\"count\":88}\n```"
+                        },
+                        "finish_reason": "stop"
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result: TestOutput = extract_structured(
+            &format!("{}/v1", mock_server.uri()),
+            "test-model",
+            "Extract name and count.",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.name, "fenced-name");
+        assert_eq!(result.count, 88);
+    }
+
+    #[test]
+    fn test_is_tools_not_supported_detects_variants() {
+        assert!(is_tools_not_supported("tools_not_supported"));
+        assert!(is_tools_not_supported("does not support native tool calls"));
+        assert!(is_tools_not_supported("tool_calls not allowed"));
+        assert!(!is_tools_not_supported("rate limit exceeded"));
+        assert!(!is_tools_not_supported(""));
+    }
+
+    #[test]
+    fn test_strip_json_fences() {
+        assert_eq!(
+            strip_json_fences("```json\n{\"a\":1}\n```"),
+            "{\"a\":1}"
+        );
+        assert_eq!(
+            strip_json_fences("```\n{\"a\":1}\n```"),
+            "{\"a\":1}"
+        );
+        assert_eq!(
+            strip_json_fences("{\"a\":1}"),
+            "{\"a\":1}"
+        );
     }
 
     /// Recursively collect all `$ref` values from a JSON value.

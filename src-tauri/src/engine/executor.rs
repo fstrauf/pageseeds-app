@@ -63,6 +63,8 @@ pub struct FollowUpTask {
     pub priority: String,
 }
 
+const MAX_PROGRESS_OUTPUT_CHARS: usize = 4_000;
+
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 pub async fn execute_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult, String> {
@@ -193,6 +195,7 @@ pub async fn execute_task_with_token(
         // Track the raw output of agentic steps for downstream consumers
         if step.kind == StepKind::Agentic
             || step.kind == StepKind::CtrAnalyze
+            || step.kind == StepKind::CtrFixGenerate
             || step.kind == StepKind::CanAnalyze
         {
             if let Some(ref out) = result.output {
@@ -305,7 +308,7 @@ pub async fn execute_task_with_token(
             "failed".to_string()
         };
         progress[i].message = result.message.clone();
-        progress[i].output = result.output.clone();
+        progress[i].output = result.output.as_deref().map(compact_progress_output);
 
         // Emit step progress event for live UI updates
         if let Some(ref handle) = app_handle {
@@ -320,9 +323,9 @@ pub async fn execute_task_with_token(
             );
         }
 
-        // Persist agentic / deterministic output as artifact.
-        // We write to SQLite but do NOT push into task.artifacts — the in-memory
-        // Task struct would grow monotonically and bloat memory on every run.
+        // Persist step output as the durable artifact. Keep the in-memory task
+        // in sync for downstream steps, but replace by key so reruns do not
+        // accumulate duplicate historical payloads.
         if let Some(ref out) = result.output {
             let artifact_key = step
                 .params
@@ -336,8 +339,8 @@ pub async fn execute_task_with_token(
                 source: Some(step.kind.to_string()),
                 content: Some(out.clone()),
             };
-            let _ = task_store::append_task_artifact(conn, task_id, &artifact);
-            task.artifacts.push(artifact);
+            let _ = task_store::upsert_task_artifact(conn, task_id, &artifact);
+            upsert_artifact_in_memory(&mut task.artifacts, artifact);
         }
 
         // Run domain-specific post-step side effects.
@@ -358,11 +361,11 @@ pub async fn execute_task_with_token(
             progress[i].message = message;
         }
         if let Some(output) = post.output {
-            progress[i].output = Some(output);
+            progress[i].output = Some(compact_progress_output(&output));
         }
         if let Some(artifact) = post.artifact {
-            let _ = task_store::append_task_artifact(conn, task_id, &artifact);
-            task.artifacts.push(artifact);
+            let _ = task_store::upsert_task_artifact(conn, task_id, &artifact);
+            upsert_artifact_in_memory(&mut task.artifacts, artifact);
         }
 
         if !result.success {
@@ -518,6 +521,26 @@ fn add_optional(a: Option<u64>, b: Option<u64>) -> Option<u64> {
         (Some(x), None) => Some(x),
         (None, Some(y)) => Some(y),
         (None, None) => None,
+    }
+}
+
+fn compact_progress_output(output: &str) -> String {
+    if output.chars().count() <= MAX_PROGRESS_OUTPUT_CHARS {
+        return output.to_string();
+    }
+
+    let preview: String = output.chars().take(MAX_PROGRESS_OUTPUT_CHARS).collect();
+    format!(
+        "{}\n\n[output truncated in execution progress; full output is stored as a task artifact]",
+        preview
+    )
+}
+
+fn upsert_artifact_in_memory(artifacts: &mut Vec<TaskArtifact>, artifact: TaskArtifact) {
+    if let Some(existing) = artifacts.iter_mut().find(|a| a.key == artifact.key) {
+        *existing = artifact;
+    } else {
+        artifacts.push(artifact);
     }
 }
 

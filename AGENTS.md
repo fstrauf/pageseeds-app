@@ -230,6 +230,57 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 
 ---
 
+## DRY: Core Reusable Functions
+
+**Before writing new logic, verify the capability does not already exist.** The most common agent mistake in this repo is re-implementing article writing, file I/O, or DB export because the existing function was not discovered.
+
+### Content / Article Operations (`content/`)
+
+| Function | File | What it does | Use instead of writing... |
+|---|---|---|---|
+| `ingest_orphan_files()` | `content/ops.rs` | Discovers untracked MDX files, assigns next ID, inserts into SQLite, exports `articles.json` | A new "save article to DB + disk" function |
+| `sync_and_validate()` | `content/ops.rs` | Cross-checks SQLite ↔ MDX files, patches dates, finds orphans | Ad-hoc file discovery or date-sync logic |
+| `read_file_metadata()` | `content/ops.rs` | Reads frontmatter + counts words from any MDX file | Inline `std::fs::read_to_string` + regex word counting |
+| `load_article_by_slug()` | `content/ops.rs` | DB lookup → resolve content dir → read file | Manual article lookup + path construction |
+| `resolve_content_dir()` | `content/ops.rs` | Finds content directory (project override → heuristics) | Any content path guessing logic |
+| `slug_from_filename()` | `content/ops.rs` | Strips numeric prefix, returns slug | String manipulation on filenames |
+| `apply_publish()` | `content/publish.rs` | Transitions articles to published, assigns safe dates, syncs frontmatter, exports JSON | Any publish/status-change workflow |
+| `content_health_check()` | `content/ops.rs` | Read-only sync check for UI health display | One-off file existence checks in UI code |
+
+### Database / Export (`db/`)
+
+| Function | File | What it does | Use instead of writing... |
+|---|---|---|---|
+| `export::write_articles_to_repo()` | `db/export.rs` | Exports SQLite articles → `.github/automation/articles.json` | Any `fs::write` of articles.json |
+| `export::export_articles()` | `db/export.rs` | Returns articles JSON string (no disk write) | Manual SQL → JSON serialization |
+| `export::merge_unknown_fields()` | `db/export.rs` | Preserves custom fields (e.g. `gsc`) across export rounds | Naive JSON overwrite that drops extra fields |
+| `task_store::list_articles()` | `engine/task_store.rs` | Lists all articles for a project | Raw SQL `SELECT * FROM articles` |
+
+### Article Writing / Workflow (`engine/`)
+
+| Function / Handler | File | What it does | Use instead of writing... |
+|---|---|---|---|
+| `ContentHandler` | `engine/workflows/handlers.rs` | Plans `write_article`, `optimize_article`, `create_content` as a single agentic step | A new handler for "write an MDX file" |
+| `exec_agentic()` | `engine/workflows/handlers.rs` | Loads skill, builds prompt, calls agent, enforces MDX naming, returns raw output | Custom agent invocation code |
+| `TaskSpawner::spawn()` | `engine/spawner.rs` | Creates tasks with idempotency, dependency validation | Direct `task_store::create_task` calls |
+| `TaskSpawner::spawn_follow_up()` | `engine/spawner.rs` | Idempotent follow-up creation | Manual follow-up task logic |
+| `compute_next_publish_date()` | `engine/workflows/handlers.rs` | Finds the next safe past date for publishing | Date math in article writing code |
+
+### Linking / Clustering (`engine/exec/content/`)
+
+| Function | File | What it does | Use instead of writing... |
+|---|---|---|---|
+| `append_related_section()` | `engine/exec/content/cluster_link.rs` | Appends "Related Articles" section to MDX | Inline string manipulation for link sections |
+| `exec_cluster_link_scan()` | `engine/exec/content/cluster_link.rs` | Native Rust link graph scan | Custom file traversal for internal links |
+
+### Validation / Audit (`engine/exec/`)
+
+| Function | File | What it does | Use instead of writing... |
+|---|---|---|---|
+| `exec_content_audit()` | `engine/exec/content_audit.rs` | 13-rule deterministic audit | One-off frontmatter/check structure validators |
+
+---
+
 ## How to Add a Feature
 
 ### New Rust module (e.g. a new data source)
@@ -251,6 +302,24 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 
 ### New workflow task type
 
+#### Step 0 — Before you create a new task type, answer these questions
+
+**If any answer is "yes", you probably do NOT need a new task type.**
+
+| Question | If yes → |
+|---|---|
+| Does the output go into the content directory as an MDX file? | Reuse `write_article` with a different `skill` parameter. Do not create a new handler. |
+| Does it apply structured recommendations to existing MDX files? | Reuse `fix_content_article` or `content_review_apply`. |
+| Does it add/remove internal links between articles? | Reuse `cluster_and_link` (or its deterministic steps). |
+| Does it read GSC data and spawn fix tasks? | Reuse `collect_gsc` or `indexing_diagnostics`. |
+| Does it audit article health? | Reuse `content_audit` or `content_review`. |
+| Does it analyze keyword coverage? | Reuse `analyze_keyword_coverage`. |
+| Is the only difference from an existing task the prompt/skill used? | Reuse the existing handler — change the skill param, not the handler. |
+
+**Rule:** A new skill file (`.github/automation/skills/*.md`) is ~20 lines. A new task type + handler + exec module is ~200+ lines. Prefer the skill.
+
+#### If you still need a new task type
+
 1. Register the task type in `config/task_definitions.rs` (phase, execution mode, review behavior, handler family).
 2. Add a `WorkflowHandler` impl in `engine/workflows/handlers.rs`.
 3. Register it in `default_handlers()` (same file).
@@ -258,6 +327,40 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 5. Execution runs through `engine/executor.rs` unchanged.
 
 **Step constructors are typed:** Use `WorkflowStep::new("name", StepKind::X)` — never pass string step kinds.
+
+---
+
+## Anti-Pattern Case Study: Hub Page Creation
+
+**What happened:** An agent implemented `create_hub_page` as a completely new workflow task type with its own handler (`HubPageHandler`), 7 new step kinds, and a ~2,000-line execution module (`engine/exec/content/hub_page.rs`).
+
+**Why it was wrong:** The hub page is just an article. It is written to the content directory as an MDX file, registered in SQLite, exported to `articles.json`, and linked to other articles. All of this already existed.
+
+| Hub page "needed" | What already existed |
+|---|---|
+| Write MDX content via agent | `write_article` task + `ContentHandler` |
+| Register new article in SQLite + assign ID | `content::ops::ingest_orphan_files()` |
+| Export to `articles.json` | `db::export::write_articles_to_repo()` |
+| Add "Related Articles" links | `cluster_and_link` task + `append_related_section()` |
+| Validate frontmatter / word count | `content_audit` + `content::ops::read_file_metadata()` |
+
+**What the correct implementation should have been:**
+
+1. **Skill-only approach (preferred):** Create a `hub-write` skill (`.github/automation/skills/hub-write.md`). The hub page task becomes a `write_article` task whose spec includes spoke metadata as a task artifact. The existing `ContentHandler` plans a single agentic step with `"skill": "hub-write"`. The agent writes the MDX. Done.
+
+2. **If hub-specific deterministic prep is needed:** Add ONE deterministic step (`hub_build_brief`) that reads the strategy artifact and assembles a JSON brief. Then the existing `write_article` agentic step consumes that brief via the normal artifact-loading mechanism. No new handler family. No new article-persistence logic.
+
+3. **Linking:** After the hub article is written, auto-spawn a `cluster_and_link` follow-up task (or reuse `append_related_section()` directly in a post-action).
+
+**The cost of the mistake:**
+- ~2,000 lines of duplicated code to maintain
+- 7 new `StepKind` variants bloating the step registry
+- A new `HandlerFamily::HubPage` and handler registry entry
+- Custom SQLite insertion logic that diverged from `content::ops` conventions
+- Custom file naming (`_hub.mdx`) that bypassed the standard numbering pipeline
+- Tests that tested the duplication, not the reuse
+
+**Lesson:** When the task output is an MDX article, the answer is almost always "reuse `write_article` with a different skill", not "build a new pipeline".
 
 ---
 
@@ -617,6 +720,7 @@ See `docs/async-architecture.md` for detailed comparison.
 ## Pre-Change Checklist
 
 ### Rust backend
+- [ ] **Checked for reuse**: Reviewed the "DRY: Core Reusable Functions" catalog above. If the feature writes MDX, reuses `write_article`; if it links articles, reuses `cluster_and_link`; if it exports articles.json, reuses `db::export::write_articles_to_repo`; etc.
 - [ ] `cargo check` passes before touching the frontend
 - [ ] `cargo test` passes — especially workflow routing and task definition tests
 - [ ] New SQLite columns added via a new migration, not by altering existing ones

@@ -22,6 +22,7 @@ import { Separator } from '@/components/ui/separator'
 
 interface CtrHealthPanelProps {
   projectId: string
+  runCompletedTick?: number
 }
 
 const ISSUE_ICONS: Record<string, React.ReactNode> = {
@@ -163,7 +164,7 @@ function ArticleRow({ article }: { article: CtrHealthArticle }) {
   )
 }
 
-export function CtrHealthPanel({ projectId }: CtrHealthPanelProps) {
+export function CtrHealthPanel({ projectId, runCompletedTick }: CtrHealthPanelProps) {
   const [summary, setSummary] = useState<CtrHealthSummary | null>(null)
   const [loading, setLoading] = useState(false)
   const { showError } = useErrorHandler()
@@ -184,6 +185,12 @@ export function CtrHealthPanel({ projectId }: CtrHealthPanelProps) {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    if (runCompletedTick && runCompletedTick > 0) {
+      load()
+    }
+  }, [runCompletedTick, load])
 
   const healthyPct = summary
     ? Math.round((summary.healthy_count / Math.max(summary.total_articles, 1)) * 100)

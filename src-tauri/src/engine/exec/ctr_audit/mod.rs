@@ -7,7 +7,9 @@
 mod analyze;
 mod apply;
 mod context;
+mod generate;
 mod outcome;
+mod patch;
 mod rendered;
 mod task_spawner;
 mod template;
@@ -15,7 +17,9 @@ mod template;
 pub(crate) use analyze::*;
 pub(crate) use apply::*;
 pub(crate) use context::*;
+pub(crate) use generate::*;
 pub(crate) use outcome::*;
+pub(crate) use patch::*;
 pub(crate) use rendered::*;
 pub(crate) use task_spawner::*;
 pub(crate) use template::*;
@@ -650,7 +654,102 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
     }
 
     #[test]
-    fn exec_ctr_fix_apply_rejects_overlong_first_paragraph_before_write() {
+    fn exec_ctr_fix_apply_repairs_near_miss_patch_values() {
+        let path = test_dir();
+        setup_project(&path);
+
+        let patch = serde_json::json!({
+            "article_id": 1,
+            "file": "content/001_test_article.mdx",
+            "changes": {
+                "title": "Coffee Grind Size Chart: Complete Guide with Micron Ranges",
+                "description": "Coffee grind size chart with exact micron ranges for espresso, pour over, French press, AeroPress, moka pot, and cold brew so you can dial in flavor fast every morning without guessing.",
+                "first_paragraph": "Fresh brewing starts with consistent particles and practical timing. This guide shows the exact texture, common mistakes, and simple adjustment cues that help home brewers match each method with a repeatable grind size for better cups every day at home."
+            }
+        });
+
+        let artifact_json = serde_json::json!({
+            "article_id": 1,
+            "url_slug": "test-article",
+            "file": "content/001_test_article.mdx",
+            "target_keyword": "test article",
+            "fixes": [
+                {"type": "title_rewrite", "recommended": "Coffee Grind Size Chart: Complete Guide with Micron Ranges"},
+                {"type": "meta_description", "recommended": "Coffee grind size chart with exact micron ranges for espresso, pour over, French press, AeroPress, moka pot, and cold brew so you can dial in flavor fast every morning without guessing."},
+                {"type": "snippet_bait", "recommended": "Fresh brewing starts with consistent particles..."}
+            ]
+        });
+
+        let task = crate::models::task::Task {
+            id: "task-fix-near-miss".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "fix_ctr_article".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Fix near miss test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "ctr_recommendations".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("ctr_audit".to_string()),
+                content: Some(artifact_json.to_string()),
+            }],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_fix_apply(&task, &path, Some(&patch.to_string()));
+        assert!(result.success, "Apply failed: {}", result.message);
+        assert!(
+            result.message.contains("normalized"),
+            "Expected normalization message, got: {}",
+            result.message
+        );
+
+        let content = std::fs::read_to_string(
+            std::path::Path::new(&path)
+                .join("content")
+                .join("001_test_article.mdx"),
+        )
+        .unwrap();
+        let (frontmatter, body) = crate::content::frontmatter::split_mdx(&content).unwrap();
+        let scalars = crate::content::frontmatter::top_level_scalars(frontmatter);
+        let title = scalars
+            .iter()
+            .find(|field| field.key == "title")
+            .map(|field| field.raw_value.trim_matches('"').trim_matches('\''))
+            .unwrap();
+        let description = scalars
+            .iter()
+            .find(|field| field.key == "description")
+            .map(|field| field.raw_value.trim_matches('"').trim_matches('\''))
+            .unwrap();
+        let first_paragraph = crate::content::cleaner::find_first_paragraph_range(body)
+            .map(|(start, end)| body[start..end].trim().to_string())
+            .unwrap();
+
+        assert!(title.chars().count() <= crate::engine::exec::audit_health::TITLE_MAX_LEN);
+        assert!(
+            description.chars().count() >= crate::engine::exec::audit_health::META_MIN_LEN
+                && description.chars().count() <= crate::engine::exec::audit_health::META_MAX_LEN
+        );
+        assert!(first_paragraph.contains("test article?") || first_paragraph.contains('?'));
+        assert!(
+            first_paragraph.split_whitespace().count()
+                <= crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+        );
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn exec_ctr_fix_apply_rejects_severely_overlong_first_paragraph_before_write() {
         let path = test_dir();
         setup_project(&path);
 
@@ -658,7 +757,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             .join("content")
             .join("001_test_article.mdx");
         let original = std::fs::read_to_string(&file_path).unwrap();
-        let overlong = (1..=61)
+        let overlong = (1..=66)
             .map(|i| format!("word{}", i))
             .collect::<Vec<_>>()
             .join(" ");
@@ -692,7 +791,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
         let result = exec_ctr_fix_apply(&task, &path, Some(&patch.to_string()));
         assert!(!result.success, "Overlong snippet should be rejected");
         assert!(
-            result.message.contains("first_paragraph is 61 words"),
+            result.message.contains("first_paragraph is 66 words"),
             "Expected word-count validation failure, got: {}",
             result.message
         );
@@ -1389,5 +1488,184 @@ A: This is a test.
         );
 
         cleanup(&path);
+    }
+
+    #[test]
+    fn apply_prefers_ctr_fix_patch_artifact() {
+        let path = test_dir();
+        setup_project(&path);
+
+        // Artifact contains a valid patch; legacy raw contains garbage
+        let artifact_patch = serde_json::json!({
+            "article_id": 1,
+            "file": "content/001_test_article.mdx",
+            "changes": {
+                "title": "Artifact Title"
+            }
+        });
+
+        let task = crate::models::task::Task {
+            id: "task-artifact".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "fix_ctr_article".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Artifact test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![
+                crate::models::task::TaskArtifact {
+                    key: "ctr_fix_patch".to_string(),
+                    path: None,
+                    artifact_type: Some("json".to_string()),
+                    source: Some("ctr_fix_generate".to_string()),
+                    content: Some(artifact_patch.to_string()),
+                },
+            ],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_fix_apply(&task, &path, Some("this is garbage not json"));
+        assert!(result.success, "Apply failed: {}", result.message);
+
+        let content = std::fs::read_to_string(
+            std::path::Path::new(&path)
+                .join("content")
+                .join("001_test_article.mdx"),
+        )
+        .unwrap();
+        assert!(content.contains("Artifact Title"), "Should use artifact patch, not legacy raw");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn apply_falls_back_to_legacy_raw_output() {
+        let path = test_dir();
+        setup_project(&path);
+
+        let legacy_patch = serde_json::json!({
+            "article_id": 1,
+            "file": "content/001_test_article.mdx",
+            "changes": {
+                "title": "Legacy Title"
+            }
+        });
+
+        let task = crate::models::task::Task {
+            id: "task-legacy".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "fix_ctr_article".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Automatic,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Legacy test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_fix_apply(&task, &path, Some(&legacy_patch.to_string()));
+        assert!(result.success, "Apply failed: {}", result.message);
+
+        let content = std::fs::read_to_string(
+            std::path::Path::new(&path)
+                .join("content")
+                .join("001_test_article.mdx"),
+        )
+        .unwrap();
+        assert!(content.contains("Legacy Title"), "Should fall back to legacy raw output");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn validate_patch_against_recommendation_mismatch() {
+        let rec = crate::models::ctr::CtrRecommendation {
+            article_id: 1,
+            url_slug: "test".to_string(),
+            file: "content/test.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "test keyword".to_string(),
+            fixes: vec![
+                crate::models::ctr::CtrFix {
+                    fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
+                    current: Some("Old Title".to_string()),
+                    recommended: serde_json::json!("New Title"),
+                    reason: None,
+                },
+            ],
+        };
+
+        let mdx = r#"---
+title: "Old Title That Is Way Way Way Way Way Way Way Way Way Way Way Way Way Way Way Way Too Long"
+description: "desc"
+date: "2024-01-01"
+---
+
+# Old Title That Is Way Way Way Way Way Way Way Way Way Way Way Way Way Way Way Way Too Long
+
+This is the first paragraph of the test article. It contains some content.
+"#;
+
+        // Wrong article_id
+        let patch_bad_id = crate::models::ctr::CtrFixPatch {
+            article_id: 99,
+            file: "content/test.mdx".to_string(),
+            error: None,
+            changes: crate::models::ctr::CtrFixPatchChanges {
+                title: Some("New Title".to_string()),
+                ..Default::default()
+            },
+        };
+        let errors = super::patch::validate_patch_against_recommendation(&patch_bad_id, &rec, mdx);
+        assert!(
+            errors.iter().any(|e| e.contains("article_id")),
+            "Should error on article_id mismatch: {:?}",
+            errors
+        );
+
+        // Missing requested title fix
+        let patch_missing_title = crate::models::ctr::CtrFixPatch {
+            article_id: 1,
+            file: "content/test.mdx".to_string(),
+            error: None,
+            changes: crate::models::ctr::CtrFixPatchChanges::default(),
+        };
+        let errors = super::patch::validate_patch_against_recommendation(&patch_missing_title, &rec, mdx);
+        assert!(
+            errors.iter().any(|e| e.contains("title_rewrite")),
+            "Should error when requested title fix is missing: {:?}",
+            errors
+        );
+
+        // Unrequested description change
+        let patch_unrequested = crate::models::ctr::CtrFixPatch {
+            article_id: 1,
+            file: "content/test.mdx".to_string(),
+            error: None,
+            changes: crate::models::ctr::CtrFixPatchChanges {
+                title: Some("New Title".to_string()),
+                description: Some("New desc".to_string()),
+                ..Default::default()
+            },
+        };
+        let errors = super::patch::validate_patch_against_recommendation(&patch_unrequested, &rec, mdx);
+        assert!(
+            errors.iter().any(|e| e.contains("meta_description was not requested")),
+            "Should error on unrequested description change: {:?}",
+            errors
+        );
     }
 }

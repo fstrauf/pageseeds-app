@@ -400,7 +400,12 @@ export function Overview({
   useEffect(() => {
     if (!project || runCompletedTick === 0) return
     load()
-  }, [project, runCompletedTick, load])
+    if (!isLiveSiteProject) {
+      refetchCtrHealth()
+    } else {
+      refetchLiveSitePages()
+    }
+  }, [project, runCompletedTick, load, isLiveSiteProject, refetchCtrHealth, refetchLiveSitePages])
 
   async function handleOpenPublish() {
     if (!project || loadingPublish) return

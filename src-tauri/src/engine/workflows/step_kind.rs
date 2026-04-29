@@ -60,6 +60,8 @@ pub enum StepKind {
     CanBuildContext,
     /// Agentic cannibalization strategy — merges, hubs, territories (agentic).
     CanAnalyze,
+    /// Typed structured extraction of a CtrFixPatch from an LLM.
+    CtrFixGenerate,
     /// Deterministic application of agent-generated CTR fix patch.
     CtrFixApply,
     /// Deterministic verification that applied CTR fixes meet health thresholds.
@@ -173,6 +175,7 @@ impl StepKind {
             Self::CtrAnalyze => "ctr_analyze",
             Self::CanBuildContext => "can_build_context",
             Self::CanAnalyze => "can_analyze",
+            Self::CtrFixGenerate => "ctr_fix_generate",
             Self::CtrFixApply => "ctr_fix_apply",
             Self::CtrVerifyFix => "ctr_verify_fix",
             Self::CtrRenderedSerpAudit => "ctr_rendered_serp_audit",
@@ -271,6 +274,7 @@ impl FromStr for StepKind {
             "ctr_analyze" => Ok(Self::CtrAnalyze),
             "can_build_context" => Ok(Self::CanBuildContext),
             "can_analyze" => Ok(Self::CanAnalyze),
+            "ctr_fix_generate" => Ok(Self::CtrFixGenerate),
             "ctr_fix_apply" => Ok(Self::CtrFixApply),
             "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
             "ctr_rendered_serp_audit" => Ok(Self::CtrRenderedSerpAudit),
@@ -377,8 +381,10 @@ mod tests {
             StepKind::KeywordResearchToolAgent,
             StepKind::CtrBuildContext,
             StepKind::CtrAnalyze,
+            StepKind::CtrFixGenerate,
             StepKind::CanBuildContext,
             StepKind::CanAnalyze,
+            StepKind::CtrFixGenerate,
             StepKind::CtrFixApply,
             StepKind::CtrVerifyFix,
             StepKind::CtrRenderedSerpAudit,

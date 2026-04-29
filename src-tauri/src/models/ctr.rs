@@ -2,6 +2,7 @@
 ///
 /// These structs replace loose serde_json::Value handoffs between the
 /// normalizer, fix task creator, and verification step.
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -84,7 +85,7 @@ pub struct CtrFix {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, PartialEq)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum CtrFixType {
@@ -136,7 +137,7 @@ pub struct CtrFixSkipped {
 // ─── Agent Patch Output (structured replacement values) ───────────────────────
 
 /// The agent returns this instead of raw MDX. Rust applies it deterministically.
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatch {
@@ -147,7 +148,7 @@ pub struct CtrFixPatch {
     pub changes: CtrFixPatchChanges,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS, JsonSchema)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatchChanges {
@@ -163,7 +164,7 @@ pub struct CtrFixPatchChanges {
     pub snippet_patch: Option<CtrSnippetPatch>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrSnippetPatch {
@@ -177,7 +178,7 @@ pub struct CtrSnippetPatch {
     pub comparison_table: Option<Vec<Vec<String>>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum CtrSnippetFormat {
@@ -188,7 +189,7 @@ pub enum CtrSnippetFormat {
     DefinitionWithSteps,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatchFaqQuestion {
