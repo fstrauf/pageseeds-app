@@ -8,6 +8,7 @@ pub mod ledger;
 pub mod post_actions;
 pub mod project_paths;
 pub mod prompts;
+pub mod queue;
 pub mod queue_runner;
 pub mod runtime;
 pub mod scheduler;

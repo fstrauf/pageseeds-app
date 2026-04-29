@@ -18,6 +18,7 @@ interface Props {
   items: RunnerItem[]
   isRunning: boolean
   isPaused: boolean
+  isStarting?: boolean
   onPause: () => void
   onResume: () => void
   onRemove: (taskId: string) => void
@@ -29,6 +30,7 @@ export function TaskRunner({
   items,
   isRunning,
   isPaused,
+  isStarting,
   onPause,
   onResume,
   onRemove,
@@ -119,13 +121,15 @@ export function TaskRunner({
     })
   }
 
-  const headerLabel = isRunning
-    ? isPaused
-      ? 'Task queue paused'
-      : 'Running task queue'
-    : isDone
-      ? 'Task queue finished'
-      : 'Task queue pending'
+  const headerLabel = isStarting
+    ? 'Starting task queue...'
+    : isRunning
+      ? isPaused
+        ? 'Task queue paused'
+        : 'Running task queue'
+      : isDone
+        ? 'Task queue finished'
+        : 'Task queue pending'
 
   const summary = isDone
     ? [
@@ -139,10 +143,11 @@ export function TaskRunner({
       <div className="px-6 py-3 border-b border-border">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0 flex items-center gap-2">
-            {isRunning && <Loader2 size={14} className="animate-spin text-blue-600 shrink-0" />}
+            {isStarting && <Loader2 size={14} className="animate-spin text-amber-500 shrink-0" />}
+            {isRunning && !isStarting && <Loader2 size={14} className="animate-spin text-blue-600 shrink-0" />}
             {isDone && failed === 0 && <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />}
             {isDone && failed > 0 && <XCircle size={14} className="text-red-500 shrink-0" />}
-            {!isRunning && !isDone && <Clock size={14} className="text-muted-foreground shrink-0" />}
+            {!isRunning && !isDone && !isStarting && <Clock size={14} className="text-muted-foreground shrink-0" />}
 
             <span className="text-sm font-medium text-foreground truncate">{headerLabel}</span>
             <Badge variant="outline" className="text-xs border-border text-muted-foreground shrink-0">
@@ -151,7 +156,7 @@ export function TaskRunner({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
-            {isRunning && (
+            {(isRunning || isPaused) && (
               <Button
                 variant="ghost"
                 size="xs"
@@ -228,10 +233,20 @@ export function TaskRunner({
           </div>
 
           <div className="px-6 py-3 border-t border-border flex items-center justify-between">
-            {isRunning ? (
+            {isStarting ? (
+              <span className="text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 size={12} className="animate-spin" />
+                Starting queue...
+              </span>
+            ) : isRunning ? (
               <span className="text-xs text-muted-foreground flex items-center gap-2">
                 <Loader2 size={12} className="animate-spin" />
                 Running in background while you continue using the app
+              </span>
+            ) : isPaused ? (
+              <span className="text-xs text-muted-foreground flex items-center gap-2">
+                <Pause size={12} />
+                Queue paused — click Resume to continue
               </span>
             ) : (
               <span className="text-xs text-muted-foreground">Queue complete</span>

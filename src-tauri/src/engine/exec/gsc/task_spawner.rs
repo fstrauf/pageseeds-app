@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
@@ -42,6 +42,83 @@ pub(crate) fn create_tasks_from_collection_after_exec(
 ///   not_indexed_*                                               → fix_indexing
 ///   api_error                                                   → fix_gsc_access (batched)
 ///   (all indexed)                                               → investigate_gsc
+/// Check whether an existing fix task for this issue should be skipped
+/// because it is still active or was completed recently (<14 days).
+/// Returns `true` if we should skip creating a new task.
+fn should_skip_issue(conn: &Connection, idempotency_key: &str) -> bool {
+    // Look up existing task by idempotency key
+    let existing_task_id: Option<String> = conn
+        .query_row(
+            "SELECT task_id FROM task_idempotency_keys WHERE key = ?1",
+            [idempotency_key],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .unwrap_or(None);
+
+    let task_id = match existing_task_id {
+        Some(id) => id,
+        None => return false,
+    };
+
+    let task = match crate::engine::task_store::get_task(conn, &task_id) {
+        Ok(t) => t,
+        Err(_) => {
+            // Task was deleted but key remains — clean up
+            let _ = conn.execute(
+                "DELETE FROM task_idempotency_keys WHERE key = ?1",
+                [idempotency_key],
+            );
+            return false;
+        }
+    };
+
+    use crate::models::task::TaskStatus;
+    match task.status {
+        // Still being worked on — don't spawn another
+        TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Review => {
+            log::info!(
+                "[collect_gsc] Skipping {} — existing task {} is still active ({})",
+                idempotency_key,
+                task.id,
+                task.status
+            );
+            true
+        }
+        // Completed — apply 14-day cooldown so GSC has time to re-crawl
+        TaskStatus::Done | TaskStatus::Cancelled => {
+            let cooldown_days = 14;
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(cooldown_days);
+            let updated = chrono::DateTime::parse_from_rfc3339(&task.updated_at)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::DateTime::UNIX_EPOCH);
+            if updated > cutoff {
+                log::info!(
+                    "[collect_gsc] Skipping {} — task {} completed {} (within {}-day cooldown)",
+                    idempotency_key,
+                    task.id,
+                    task.updated_at,
+                    cooldown_days
+                );
+                true
+            } else {
+                log::info!(
+                    "[collect_gsc] {} cooldown expired for task {} ({}). Creating new task.",
+                    idempotency_key,
+                    task.id,
+                    task.updated_at
+                );
+                // Delete old idempotency key so a new task can be created
+                let _ = conn.execute(
+                    "DELETE FROM task_idempotency_keys WHERE key = ?1",
+                    [idempotency_key],
+                );
+                false
+            }
+        }
+    }
+}
+
 pub(crate) fn create_tasks_from_collection(
     conn: &Connection,
     parent_task: &Task,
@@ -108,6 +185,11 @@ pub(crate) fn create_tasks_from_collection(
 
         // Idempotency key includes URL to prevent duplicate tasks for same URL+reason
         let idempotency_key = format!("gsc:{}:{}", reason, url);
+
+        // Apply cooldown / active-task check BEFORE spawning
+        if should_skip_issue(conn, &idempotency_key) {
+            continue;
+        }
 
         let spec = TaskSpec {
             project_id: parent_task.project_id.clone(),

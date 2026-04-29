@@ -23,6 +23,17 @@ pub struct QueryMetrics {
     pub position: f64,
 }
 
+/// Combined page + query metrics from a single GSC Search Analytics call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageQueryMetrics {
+    pub page: String,
+    pub query: String,
+    pub clicks: f64,
+    pub impressions: f64,
+    pub ctr: f64,
+    pub position: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

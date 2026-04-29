@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useQueueRunner } from './useQueueRunner'
 import { useQueueStore } from '../stores/queueStore'
+import type { QueueSnapshot } from '../lib/types'
 
 // Mock Tauri event system
 vi.mock('@tauri-apps/api/event', () => ({
@@ -13,23 +14,30 @@ vi.mock('@/lib/tauri', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri')>('@/lib/tauri')
   return {
     ...actual,
-    executeQueue: vi.fn(() => Promise.resolve()),
-    markTasksQueued: vi.fn(() => Promise.resolve()),
-    markTasksTodo: vi.fn(() => Promise.resolve()),
-    pauseQueue: vi.fn(() => Promise.resolve()),
-    resumeQueue: vi.fn(() => Promise.resolve()),
-    clearCompletedQueueItems: vi.fn(() => Promise.resolve()),
+    getQueueSnapshot: vi.fn(() => Promise.resolve({ run: null, items: [] })),
+    enqueueTasks: vi.fn(() => Promise.resolve({ run: null, items: [] })),
+    removeQueueItem: vi.fn(() => Promise.resolve({ run: null, items: [] })),
+    pauseQueue: vi.fn(() => Promise.resolve({ run: null, items: [] })),
+    resumeQueue: vi.fn(() => Promise.resolve({ run: null, items: [] })),
+    clearCompletedQueueItems: vi.fn(() => Promise.resolve({ run: null, items: [] })),
   }
 })
+
+function makeSnapshot(overrides: Partial<QueueSnapshot> = {}): QueueSnapshot {
+  return {
+    items: [],
+    ...overrides,
+  }
+}
 
 describe('useQueueRunner', () => {
   beforeEach(() => {
     // Reset store to a clean state
     useQueueStore.setState({
-      items: [],
-      isRunning: false,
-      isPaused: false,
+      snapshot: null,
       isVisible: false,
+      unlisteners: [],
+      expandedTaskIds: new Set(),
     })
   })
 
@@ -48,16 +56,22 @@ describe('useQueueRunner', () => {
     const onCompleted = vi.fn()
 
     useQueueStore.setState({
-      items: [
-        {
-          taskId: '1',
-          projectId: 'p1',
-          title: 'Task 1',
-          taskType: 'test',
-          status: 'completed',
-        },
-      ],
-      isRunning: false,
+      snapshot: makeSnapshot({
+        run: { id: 'run-1', status: 'finished', pause_on_error: true, created_at: '', updated_at: '' },
+        items: [
+          {
+            run_id: 'run-1',
+            position: 0,
+            task_id: '1',
+            project_id: 'p1',
+            status: 'completed',
+            title: 'Task 1',
+            task_type: 'test',
+            created_at: '',
+            updated_at: '',
+          },
+        ],
+      }),
     })
 
     renderHook(() => useQueueRunner(onCompleted))
@@ -69,16 +83,22 @@ describe('useQueueRunner', () => {
     const onCompleted = vi.fn()
 
     useQueueStore.setState({
-      items: [
-        {
-          taskId: '1',
-          projectId: 'p1',
-          title: 'Task 1',
-          taskType: 'test',
-          status: 'completed',
-        },
-      ],
-      isRunning: true,
+      snapshot: makeSnapshot({
+        run: { id: 'run-1', status: 'running', pause_on_error: true, created_at: '', updated_at: '' },
+        items: [
+          {
+            run_id: 'run-1',
+            position: 0,
+            task_id: '1',
+            project_id: 'p1',
+            status: 'completed',
+            title: 'Task 1',
+            task_type: 'test',
+            created_at: '',
+            updated_at: '',
+          },
+        ],
+      }),
     })
 
     renderHook(() => useQueueRunner(onCompleted))
@@ -91,14 +111,20 @@ it('does not cascade when parent re-renders with completed items in store', () =
   const onCompleted = vi.fn()
 
   useQueueStore.setState({
-    items: [{
-      taskId: '1',
-      projectId: 'p1',
-      title: 'T1',
-      taskType: 'test',
-      status: 'completed',
-    }],
-    isRunning: false,
+    snapshot: makeSnapshot({
+      run: { id: 'run-1', status: 'finished', pause_on_error: true, created_at: '', updated_at: '' },
+      items: [{
+        run_id: 'run-1',
+        position: 0,
+        task_id: '1',
+        project_id: 'p1',
+        status: 'completed',
+        title: 'T1',
+        task_type: 'test',
+        created_at: '',
+        updated_at: '',
+      }],
+    }),
   })
 
   const { rerender } = renderHook(

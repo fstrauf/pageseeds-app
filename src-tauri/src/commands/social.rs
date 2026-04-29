@@ -206,9 +206,8 @@ pub fn run_social_campaign(
     state: State<'_, AppState>,
     campaign_id: String,
 ) -> std::result::Result<crate::models::task::Task, String> {
-    use crate::engine::task_store;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
-    use chrono::Utc;
+    use crate::engine::spawner::{TaskSpec, TaskSpawner};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority};
 
     // Get campaign details first
     let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -225,27 +224,19 @@ pub fn run_social_campaign(
     })
     .to_string();
 
-    // Create the task
-    let now = Utc::now().to_rfc3339();
-    let task = Task {
-        id: uuid::Uuid::new_v4().to_string(),
+    let spec = TaskSpec {
+        project_id: campaign.project_id,
         task_type: "social_generate_campaign".to_string(),
-        phase: "implementation".to_string(),
-        status: TaskStatus::Todo,
-        priority: Priority::Medium,
-        execution_mode: ExecutionMode::Automatic,
-        agent_policy: AgentPolicy::Required,
         title: Some(format!("Generate posts for campaign: {}", campaign.name)),
         description: Some(description),
-        project_id: campaign.project_id,
-        depends_on: Vec::new(),
-        artifacts: Vec::new(),
-        run: TaskRun::default(),
-        created_at: now.clone(),
-        updated_at: now,
+        execution_mode: Some(ExecutionMode::Automatic),
+        priority: Priority::Medium,
+        agent_policy: AgentPolicy::Required,
+        idempotency_key: Some(format!("social_campaign:{}", campaign_id)),
+        ..Default::default()
     };
 
-    let created_task = task_store::create_task(&conn, &task).map_err(|e| e.to_string())?;
+    let created_task = TaskSpawner::spawn(&conn, spec).map_err(|e| e.to_string())?;
 
     Ok(created_task)
 }

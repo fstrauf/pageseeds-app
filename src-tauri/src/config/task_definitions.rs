@@ -303,7 +303,9 @@ const DEFINITIONS: &[TaskDefinition] = &[
         review_on_success: true,
         handler_family: HandlerFamily::ConsolidateCluster,
     },
-    // Hub page creation
+    // LEGACY: Hub page creation.
+    // Preferred path is write_article with hub-write skill + structured hub_brief artifact.
+    // Kept for backward compatibility until hub_spoke_context moves to a deterministic pre-step.
     TaskDefinition {
         task_type: "create_hub_page",
         phase: "implementation",
@@ -311,7 +313,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
         review_on_success: true,
         handler_family: HandlerFamily::Content,
     },
-    // Hub page refresh
+    // LEGACY: Hub page refresh.
     TaskDefinition {
         task_type: "refresh_hub_page",
         phase: "implementation",

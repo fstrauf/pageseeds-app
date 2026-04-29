@@ -230,41 +230,30 @@ pub fn run_cycle(conn: &Connection, project_id: &str) -> Result<SchedulerCycleRe
 }
 
 fn create_task_for_rule(conn: &Connection, rule: &SchedulerRule) -> Result<String, String> {
-    use crate::config::{default_execution_mode, default_phase};
-    use crate::models::task::{AgentPolicy, Priority, TaskStatus};
+    use crate::engine::spawner::{TaskSpec, TaskSpawner};
+    use crate::models::task::{AgentPolicy, Priority};
 
-    let now = Utc::now().to_rfc3339();
-    let id = format!(
-        "sched-{}-{}",
-        rule.task_type.replace('_', "-"),
-        Utc::now().timestamp()
-    );
     let priority_enum = match rule.priority.as_str() {
         "high" => Priority::High,
         "low" => Priority::Low,
         _ => Priority::Medium,
     };
 
-    let task = crate::models::task::Task {
-        id: id.clone(),
+    let idempotency_key = format!("scheduler:{}:{}", rule.rule_id, Utc::now().format("%Y%m%d"));
+
+    let spec = TaskSpec {
+        project_id: rule.project_id.clone(),
         task_type: rule.task_type.clone(),
-        phase: default_phase(&rule.task_type).to_string(),
-        status: TaskStatus::Todo,
-        priority: priority_enum,
-        execution_mode: default_execution_mode(&rule.task_type),
-        agent_policy: AgentPolicy::None,
         title: Some(format!("Scheduled: {}", rule.task_type.replace('_', " "))),
         description: Some(format!("Auto-created by scheduler rule '{}'", rule.rule_id)),
-        project_id: rule.project_id.clone(),
-        depends_on: vec![],
-        artifacts: vec![],
-        run: Default::default(),
-        created_at: now.clone(),
-        updated_at: now,
+        priority: priority_enum,
+        agent_policy: AgentPolicy::None,
+        idempotency_key: Some(idempotency_key),
+        ..Default::default()
     };
 
-    task_store::create_task(conn, &task).map_err(|e| e.to_string())?;
-    Ok(id)
+    let task = TaskSpawner::spawn(conn, spec).map_err(|e| e.to_string())?;
+    Ok(task.id)
 }
 
 // ─── Background timer ─────────────────────────────────────────────────────────

@@ -12,7 +12,6 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::content::{cleaner, dates};
-use crate::db::export;
 use crate::engine::task_store;
 use crate::models::article::Article;
 
@@ -321,7 +320,7 @@ pub fn apply_publish(
     }
 
     // Export the updated SQLite state to articles.json so the projection stays in sync.
-    if let Err(e) = export::write_articles_to_repo(conn, project_id, project_path) {
+    if let Err(e) = crate::content::article_index::export_projection(conn, project_id, project_path) {
         errors.push(format!("Failed to write articles.json: {e}"));
     }
 
@@ -387,7 +386,7 @@ OR
     let raw = crate::engine::agent::run_agent(provider, &prompt, project_path)?;
 
     // Extract the JSON object from the response (agent may include prose before/after).
-    let json_str = extract_json_object(&raw).ok_or_else(|| {
+    let json_str = crate::engine::text::extract_json_string(&raw).ok_or_else(|| {
         format!(
             "Agent response did not contain a JSON object. Got: {}",
             raw.trim()
@@ -472,16 +471,7 @@ fn assign_free_date(
     cursor.format("%Y-%m-%d").to_string()
 }
 
-/// Extract the first JSON object `{...}` from a string (handles agent prose wrapping).
-fn extract_json_object(text: &str) -> Option<String> {
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end >= start {
-        Some(text[start..=end].to_string())
-    } else {
-        None
-    }
-}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Regression tests for publish date consistency (Phase 5)

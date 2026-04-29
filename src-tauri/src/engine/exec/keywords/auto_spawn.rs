@@ -1,4 +1,5 @@
-use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
+use crate::engine::spawner::{TaskSpec, TaskSpawner};
+use crate::models::task::{AgentPolicy, Priority, TaskArtifact};
 use std::collections::HashSet;
 
 /// Auto-create `write_article` tasks from keyword research results.
@@ -19,9 +20,6 @@ pub fn auto_create_article_tasks_from_research(
     research_task: &crate::models::task::Task,
     max_tasks: Option<usize>,
 ) -> crate::error::Result<usize> {
-    use crate::config::{default_execution_mode, default_phase};
-    use crate::engine::task_store;
-
     let max_tasks = max_tasks.unwrap_or(5);
     if max_tasks == 0 {
         return Ok(0);
@@ -52,9 +50,7 @@ pub fn auto_create_article_tasks_from_research(
     let selected = keyword_data.into_iter().take(max_tasks).collect::<Vec<_>>();
 
     let mut created_count = 0usize;
-    for (idx, kw_data) in selected.iter().enumerate() {
-        let now = chrono::Utc::now().to_rfc3339();
-        let id = format!("task-{}-{}", chrono::Utc::now().timestamp_millis(), idx);
+    for kw_data in &selected {
         let title = to_title_case(&kw_data.keyword);
 
         // Determine priority based on difficulty
@@ -90,26 +86,27 @@ pub fn auto_create_article_tasks_from_research(
             )),
         };
 
-        let task = Task {
-            id,
-            phase: default_phase("write_article").to_string(),
-            execution_mode: default_execution_mode("write_article"),
+        let idempotency_key = format!(
+            "auto_article:{}:{}",
+            research_task.id,
+            kw_data.keyword.to_lowercase().replace(' ', "_")
+        );
+
+        let spec = TaskSpec {
+            project_id: research_task.project_id.clone(),
             task_type: "write_article".to_string(),
-            status: TaskStatus::Todo,
-            priority: priority_enum,
-            agent_policy: AgentPolicy::None,
             title: Some(title),
             description: Some(description),
-            project_id: research_task.project_id.clone(),
+            priority: priority_enum,
+            agent_policy: AgentPolicy::None,
             depends_on: vec![research_task.id.clone()],
             artifacts: vec![provenance],
-            run: TaskRun::default(),
-            created_at: now.clone(),
-            updated_at: now,
+            idempotency_key: Some(idempotency_key),
+            ..Default::default()
         };
 
-        match task_store::create_task(conn, &task) {
-            Ok(_) => {
+        match TaskSpawner::spawn(conn, spec) {
+            Ok(task) => {
                 log::info!(
                     "[auto_create_articles] Created write_article task {} for keyword '{}'",
                     task.id,

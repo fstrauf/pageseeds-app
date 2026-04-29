@@ -131,6 +131,14 @@ mod tests {
             CREATE TABLE articles_meta (
                 project_id TEXT PRIMARY KEY,
                 next_article_id INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE article_metadata (
+                project_id TEXT NOT NULL,
+                article_id INTEGER NOT NULL,
+                namespace TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, article_id, namespace)
             );",
         )
         .unwrap();

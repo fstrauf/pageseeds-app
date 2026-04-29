@@ -493,9 +493,10 @@ fn schema_to_parameters<T: JsonSchema>() -> Result<serde_json::Value, String> {
 }
 
 async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatResponse, String> {
-    // 10-minute timeout to avoid hung ACP sessions silently blocking forever.
+    // Use a 180-second timeout so we fail faster than the bridge's own 300s timeout.
+    // This lets us retry promptly instead of waiting 5 minutes for a 500.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
@@ -506,72 +507,120 @@ async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatRespon
         serde_json::to_string_pretty(&request).unwrap_or_default()
     );
 
-    let start = std::time::Instant::now();
-    log::info!("[kimi::send_request] >>> START POST {}", url);
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
+        let start = std::time::Instant::now();
+        log::info!(
+            "[kimi::send_request] >>> START POST {} (attempt {}/3)",
+            url,
+            attempt
+        );
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", "Bearer dummy")
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| {
+        let resp = match client
+            .post(&url)
+            .header("Authorization", "Bearer dummy")
+            .json(&request)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) if e.is_timeout() => {
+                log::warn!(
+                    "[kimi::send_request] Attempt {}/3 timed out after {:?}: {}",
+                    attempt,
+                    start.elapsed(),
+                    e
+                );
+                last_error = format!("Kimi request timed out: {}", e);
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2_u64.pow(attempt))).await;
+                    continue;
+                }
+                return Err(last_error);
+            }
+            Err(e) => {
+                log::error!(
+                    "[kimi::send_request] Request failed after {:?}: {}",
+                    start.elapsed(),
+                    e
+                );
+                return Err(format!("Kimi request failed: {}", e));
+            }
+        };
+
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| {
             log::error!(
-                "[kimi::send_request] Request failed after {:?}: {}",
+                "[kimi::send_request] Body read failed after {:?}: {}",
                 start.elapsed(),
                 e
             );
-            format!("Kimi request failed: {}", e)
+            e.to_string()
         })?;
 
-    let status = resp.status();
-    let body = resp.text().await.map_err(|e| {
-        log::error!(
-            "[kimi::send_request] Body read failed after {:?}: {}",
-            start.elapsed(),
-            e
-        );
-        e.to_string()
-    })?;
+        let elapsed = start.elapsed();
 
-    let elapsed = start.elapsed();
-
-    if !status.is_success() {
-        log::error!(
-            "[kimi::send_request] <<< END ERROR status={} duration={:?}",
-            status,
-            elapsed
-        );
-        // Detect bridge-in-direct-mode so callers can surface a clear action.
-        if body.contains("tools_not_supported") || body.contains("does not support native tool calls")
-        {
-            return Err(
-                "Kimi bridge is running in direct mode, which does not support structured extraction (native tool calls). \
-                 Restart the bridge with --backend acp (or set KIMI_BACKEND=acp) and try again."
-                    .to_string(),
+        if !status.is_success() {
+            log::error!(
+                "[kimi::send_request] <<< END ERROR status={} duration={:?} body={}",
+                status,
+                elapsed,
+                body
             );
+
+            // Detect bridge-in-direct-mode so callers can surface a clear action.
+            if body.contains("tools_not_supported")
+                || body.contains("does not support native tool calls")
+            {
+                return Err(
+                    "Kimi bridge is running in direct mode, which does not support structured extraction (native tool calls). \
+                     Restart the bridge with --backend acp (or set KIMI_BACKEND=acp) and try again."
+                        .to_string(),
+                );
+            }
+
+            last_error = format!("Kimi API error {}: {}", status, body);
+
+            // Retry on 5xx (server / bridge errors) and 429 (rate limit).
+            let should_retry = status.is_server_error() || status.as_u16() == 429;
+            if should_retry && attempt < 3 {
+                let backoff = 2_u64.pow(attempt);
+                log::info!(
+                    "[kimi::send_request] Retrying in {}s due to status {}",
+                    backoff,
+                    status
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                continue;
+            }
+
+            return Err(last_error);
         }
-        return Err(format!("Kimi API error {}: {}", status, body));
+
+        let parsed: ChatResponse = serde_json::from_str(&body).map_err(|e| {
+            log::error!(
+                "[kimi::send_request] Parse error after {:?}: {}",
+                elapsed,
+                e
+            );
+            format!("Kimi response parse error: {} | body: {}", e, body)
+        })?;
+
+        log::info!(
+            "[kimi::send_request] <<< END OK request_id={} duration={:?} prompt_tokens={:?} completion_tokens={:?}",
+            parsed.id,
+            elapsed,
+            parsed.usage.as_ref().map(|u| u.prompt_tokens),
+            parsed.usage.as_ref().map(|u| u.completion_tokens)
+        );
+
+        return Ok(parsed);
     }
 
-    let parsed: ChatResponse = serde_json::from_str(&body).map_err(|e| {
-        log::error!(
-            "[kimi::send_request] Parse error after {:?}: {}",
-            elapsed,
-            e
-        );
-        format!("Kimi response parse error: {} | body: {}", e, body)
-    })?;
-
-    log::info!(
-        "[kimi::send_request] <<< END OK request_id={} duration={:?} prompt_tokens={:?} completion_tokens={:?}",
-        parsed.id,
-        elapsed,
-        parsed.usage.as_ref().map(|u| u.prompt_tokens),
-        parsed.usage.as_ref().map(|u| u.completion_tokens)
-    );
-
-    Ok(parsed)
+    Err(format!(
+        "Kimi request failed after 3 attempts. Last error: {}",
+        last_error
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -276,7 +276,6 @@ pub fn repair_article_paths_in_batch(
     project_id: &str,
     conn: &rusqlite::Connection,
 ) -> Result<crate::models::article::RepairPathResult, String> {
-    use crate::db::export;
     use crate::engine::task_store;
     use crate::models::article::RepairPathResult;
 
@@ -309,7 +308,7 @@ pub fn repair_article_paths_in_batch(
     }
 
     if repaired > 0 || removed > 0 {
-        export::write_articles_to_repo(conn, project_id, repo_root)
+        crate::content::article_index::export_projection(conn, project_id, repo_root)
             .map_err(|e| format!("Failed to export articles.json: {}", e))?;
     }
 

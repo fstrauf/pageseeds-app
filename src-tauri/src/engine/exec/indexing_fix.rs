@@ -83,7 +83,7 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
 
     if let Some(ref path) = file_match {
         if let Ok(content) = std::fs::read_to_string(path) {
-            ctx.word_count = count_words(&content);
+            ctx.word_count = crate::content::ops::count_words(&content);
             ctx.h1 = extract_first_h1(&content);
             ctx.title = extract_frontmatter_string(&content, "title");
             ctx.meta_description = extract_frontmatter_string(&content, "description");
@@ -284,10 +284,6 @@ fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf
 fn strip_numeric_prefix(s: &str) -> String {
     let re = regex::Regex::new(r"^\d+[_\-]+").unwrap();
     re.replace(s, "").to_string()
-}
-
-fn count_words(content: &str) -> usize {
-    content.split_whitespace().count()
 }
 
 fn extract_first_h1(content: &str) -> Option<String> {

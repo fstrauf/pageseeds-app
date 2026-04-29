@@ -427,7 +427,7 @@ async fn test_full_reddit_flow_with_real_apis() {
 /// Tests that our JSON extraction logic handles various Kimi output formats correctly.
 #[test]
 fn test_json_extraction_from_kimi_output() {
-    use pageseeds_lib::engine::exec::reddit::extract_json_object;
+    use pageseeds_lib::engine::text::extract_json_string;
 
     println!("\n========================================");
     println!("TEST 3: JSON Extraction from Kimi Output");
@@ -435,7 +435,7 @@ fn test_json_extraction_from_kimi_output() {
 
     // Test case 1: Clean JSON
     let clean = r#"{"product_name": "Test", "mention_stance": "OPTIONAL"}"#;
-    let result = extract_json_object(clean).expect("Should extract clean JSON");
+    let result = extract_json_string(clean).expect("Should extract clean JSON");
     assert!(result.contains("product_name"));
     println!("✅ Clean JSON extraction works");
 
@@ -445,7 +445,7 @@ fn test_json_extraction_from_kimi_output() {
     {"product_name": "Test", "mention_stance": "OPTIONAL"}
     ```
     "#;
-    let result = extract_json_object(wrapped).expect("Should extract wrapped JSON");
+    let result = extract_json_string(wrapped).expect("Should extract wrapped JSON");
     assert!(result.contains("product_name"));
     println!("✅ Wrapped JSON extraction works");
 
@@ -457,13 +457,13 @@ fn test_json_extraction_from_kimi_output() {
     
     This JSON contains the search parameters.
     "#;
-    let result = extract_json_object(with_text).expect("Should extract JSON from text");
+    let result = extract_json_string(with_text).expect("Should extract JSON from text");
     assert!(result.contains("Days to Expiry"));
     println!("✅ JSON with surrounding text extraction works");
 
     // Test case 4: Realistic Kimi output (simulated)
     let kimi_like = r#"{"product_name": "Days to Expiry", "mention_stance": "OPTIONAL", "trigger_topics": ["expiration date tracking", "food waste reduction"], "query_keywords": ["expiration date tracking", "food waste reduction"], "seed_subreddits": ["personalfinance", "EatCheapAndHealthy"], "excluded_subreddits": ["politics", "news"]}"#;
-    let result = extract_json_object(kimi_like).expect("Should extract Kimi-like output");
+    let result = extract_json_string(kimi_like).expect("Should extract Kimi-like output");
 
     // Verify it parses as valid JSON
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("Should parse as JSON");

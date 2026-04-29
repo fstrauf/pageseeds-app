@@ -77,7 +77,7 @@ Steps are declarative. The executor dispatches based on `kind`.
 ```rust
 pub struct WorkflowStep {
     pub name: String,
-    pub kind: String,        // "agentic" | "normalizer" | "deterministic" | ...
+    pub kind: StepKind,      // Deterministic | Agentic | Manual | RedditSearch | ...
     pub params: HashMap<String, String>,
 }
 ```
@@ -86,30 +86,29 @@ pub struct WorkflowStep {
 
 | Kind | What It Does | Produces | Special Rules |
 |------|--------------|----------|---------------|
-| `"agentic"` | Calls LLM agent | Sets `latest_raw_output` | Must precede normalizer |
-| `"normalizer"` | Parses raw output → JSON | Artifact | Consumes `latest_raw_output` |
-| `"deterministic"` | Runs Rust code | Optional output | No side effects (ideally) |
-| `"manual"` | Marks user action required | Nothing | Blocks execution |
-| `"reddit_search"` | Reddit API + scoring | DB records | Triggers inline enrichment |
-| `"reddit_enrich"` | AI scoring + reply drafting | Updates DB rows | Requires DB connection |
-| `"content_review_recommend"` | Article selection + agent | recommendations.json | Hybrid: det + agentic |
+| `Agentic` | Calls LLM agent | Sets `latest_raw_output` | — |
+| `Deterministic` | Runs Rust code | Optional output | No side effects (ideally) |
+| `Manual` | Marks user action required | Nothing | Blocks execution |
+| `RedditSearch` | Reddit API + scoring | DB records | Triggers inline enrichment |
+| `RedditEnrich` | AI scoring + reply drafting | Updates DB rows | Requires DB connection |
+| `ContentReviewRecommend` | Article selection + agent | recommendations.json | Hybrid: det + agentic |
 
-**Research Workflow Steps (3-Step Agentic Flow):**
+**Research Workflow Steps (Hybrid Flow):**
 
 | Step Name | Kind | Handler | Output |
 |-----------|------|---------|--------|
-| `research_seed_extraction` | `"agentic"` | `exec_research_workflow_step` | `{"themes": [...]}` |
-| `research_keyword_discovery` | `"agentic"` | `exec_research_workflow_step` | `{"keywords": [...]}` or `{"landing_page_keywords": [...]}` |
-| `research_final_selection` | `"agentic"` | `exec_research_workflow_step` | `{"difficulty": {...}}` or `{"landing_page_candidates": [...]}` |
+| `research_autocomplete` | `ResearchAutocomplete` | `exec_research_autocomplete` | Autocomplete suggestions per theme |
+| `research_seed_validation` | `ResearchSeedValidation` | `exec_research_seed_validation` | Validated seeds with domain relevance |
+| `keyword_research_native` | `KeywordResearchNative` | `exec_keyword_research_native` | `{"difficulty": {...}}` |
+| `research_final_selection` | `ResearchFinalSelection` | `exec_research_final_selection` | `{"landing_page_candidates": [...]}` |
 
 **Research Flow:**
-1. Seed extraction → extracts themes from project brief
-2. Keyword discovery → uses Ahrefs API tools (`keyword_generator`, `keyword_difficulty`) to find keywords with volume/KD data
-3. Final selection → filters and selects best candidates
+1. Autocomplete → gathers search suggestions per theme (deterministic)
+2. Seed validation → LLM filters suggestions for domain relevance (agentic)
+3. Keyword research → uses Ahrefs API tools to find keywords with volume/KD data (deterministic)
+4. Final selection → selects best candidates (deterministic)
 
-**Data Flow:** Step 1 output → Step 2 input → Step 3 input (via `latest_raw_output`)
-
-**Critical:** Agentic → Normalizer ordering is mandatory. The executor passes `latest_raw_output` to the normalizer. If the normalizer runs without a preceding agentic step, it gets `None`.
+**Data Flow:** Step output flows to the next step via `latest_raw_output` when the step kind is in the `latest_raw` carry list.
 
 ---
 
@@ -144,13 +143,21 @@ Business logic is split by domain:
 
 ```
 engine/exec/
-├── mod.rs              # Re-exports
-├── keywords.rs         # Keyword research (~400 lines)
-├── content.rs          # Content review/apply (~550 lines)
-├── content_audit.rs    # 13-rule audit (~300 lines)
-├── reddit.rs           # Search + enrichment (~700 lines)
-├── gsc.rs              # GSC collection + sync (~600 lines)
-└── utils.rs            # Shared helpers (~50 lines)
+├── mod.rs                        # Re-exports
+├── keywords.rs                   # Keyword research
+├── content/
+│   ├── mod.rs                    # Content review/apply
+│   ├── cluster_link.rs           # Internal link graph
+│   └── hub_page.rs               # Legacy hub creation (deprecated)
+├── content_audit.rs              # 13-rule audit
+├── reddit.rs                     # Search + enrichment
+├── gsc.rs                        # GSC collection + sync
+├── social/                       # Social media campaign steps
+├── ctr_audit.rs                  # CTR audit + fix pipeline
+├── cannibalization_audit.rs      # Cannibalization detection
+├── consolidate_cluster.rs        # Merge + redirect workflow
+├── territory_research.rs         # Territory strategy
+└── utils.rs                      # Shared helpers
 ```
 
 **Rule:** The executor calls these; they don't call each other.
@@ -187,10 +194,8 @@ Keys consumed by executor dispatch:
 
 | Param | Used By | Purpose |
 |-------|---------|---------|
-| `"skill"` | `"agentic"` | Names the SKILL.md file to load as prompt |
-| `"normalizer_id"` | `"normalizer"` | Selects which normalizer to run |
-| `"artifact_name"` | `"normalizer"` | Names the output artifact |
-| `"runner"` | `"deterministic"` | (legacy) CLI runner selector |
+| `"skill"` | `Agentic` | Names the SKILL.md file to load as prompt |
+| `"artifact_name"` | any | Names the output artifact persisted to SQLite |
 
 ---
 

@@ -239,7 +239,12 @@ pub fn ingest_orphans(
 
         let url_slug = derive_url_slug(&basename);
         let title = meta.title.unwrap_or_else(|| url_slug.replace('-', " "));
-        let file_ref = format!("./content/{}", basename);
+        let content_rel = content_dir
+            .strip_prefix(project_path)
+            .unwrap_or(std::path::Path::new("content"))
+            .to_string_lossy()
+            .replace('\\', "/");
+        let file_ref = format!("./{}/{}", content_rel, basename);
 
         conn.execute(
             "INSERT INTO articles (

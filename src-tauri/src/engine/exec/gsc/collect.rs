@@ -340,12 +340,32 @@ pub(crate) fn exec_collect_gsc(
         issues_found
     );
 
+    // ── Also sync Search Analytics metrics so downstream tasks
+    // (cannibalization_audit, content_review, etc.) have impression data.
+    // This reuses the existing gsc_sync_articles logic rather than
+    // duplicating it in a separate manual step.
+    let sync_result = crate::engine::exec::gsc::exec_gsc_sync_articles(task, project_path, gsc_token);
+    let (sync_ok, sync_msg) = (sync_result.success, sync_result.message);
+    if sync_ok {
+        log::info!("[collect_gsc] analytics sync succeeded: {}", sync_msg);
+    } else {
+        log::warn!(
+            "[collect_gsc] analytics sync failed — downstream tasks may lack GSC metrics: {}",
+            sync_msg
+        );
+    }
+
     StepResult {
         success: true,
         message: format!(
-            "{} URLs inspected, {} issues found",
+            "{} URLs inspected, {} issues found. {}",
             records.len(),
-            issues_found
+            issues_found,
+            if sync_ok {
+                format!("Analytics synced: {}.", sync_msg)
+            } else {
+                format!("Analytics sync failed: {}.", sync_msg)
+            }
         ),
         output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
     }

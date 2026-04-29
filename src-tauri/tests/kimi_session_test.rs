@@ -33,7 +33,7 @@ fn test_kimi_multiple_calls_no_context_accumulation() {
         println!("  Output preview: {}", &output[..output.len().min(100)]);
 
         // Validate it's valid JSON
-        let json_str = pageseeds_lib::engine::exec::reddit::extract_json_object(&output)
+        let json_str = pageseeds_lib::engine::text::extract_json_string(&output)
             .expect(&format!("Should extract valid JSON from call {}", i));
 
         let parsed: serde_json::Value =
@@ -142,8 +142,8 @@ fn test_kimi_reddit_config_parsing_multiple_times() {
         );
 
         // Try to extract and parse
-        match pageseeds_lib::engine::exec::reddit::extract_json_object(&output) {
-            Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
+        match pageseeds_lib::engine::text::extract_json_string(&output) {
+            Some(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
                 Ok(parsed) => {
                     let topics = parsed
                         .get("trigger_topics")
@@ -158,8 +158,8 @@ fn test_kimi_reddit_config_parsing_multiple_times() {
                     results.push((size, false, 0));
                 }
             },
-            Err(e) => {
-                println!("  ❌ Extraction error: {}", e);
+            None => {
+                println!("  ❌ JSON extraction returned none");
                 results.push((size, false, 0));
             }
         }

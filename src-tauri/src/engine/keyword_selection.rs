@@ -241,7 +241,7 @@ pub fn extract_selectable_keywords(task: &Task) -> Vec<String> {
     };
 
     // Strip markdown code fences if present (e.g., ```json ... ```)
-    let raw_clean = extract_json_from_markdown(raw);
+    let raw_clean = crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
 
     let v = match serde_json::from_str::<Value>(&raw_clean) {
         Ok(v) => v,
@@ -362,7 +362,7 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
     };
 
     // Strip markdown code fences if present
-    let raw_clean = extract_json_from_markdown(raw);
+    let raw_clean = crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
     let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
     if let Some(v) = parsed_json {
         // Standard keyword research format
@@ -484,7 +484,7 @@ pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCand
         return out;
     };
 
-    let raw_clean = extract_json_from_markdown(raw);
+    let raw_clean = crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
     let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
     if let Some(v) = parsed_json {
         if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
@@ -519,30 +519,7 @@ pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCand
     out
 }
 
-/// Extract JSON from markdown code fences if present.
-/// Handles ```json ... ``` and ``` ... ``` wrappers.
-pub fn extract_json_from_markdown(content: &str) -> String {
-    // Try to find JSON in code fences
-    if let Some(start) = content.find("```json") {
-        let after_start = start + 7; // len of "```json"
-        if let Some(end) = content[after_start..].find("```") {
-            return content[after_start..after_start + end].trim().to_string();
-        }
-    }
 
-    // Try generic code block
-    if let Some(start) = content.find("```") {
-        let after_start = start + 3; // len of "```"
-        if let Some(end) = content[after_start..].find("```") {
-            // Strip language identifier if present (e.g., "json\n{...}")
-            let block = &content[after_start..after_start + end];
-            return block.trim_start_matches("json").trim().to_string();
-        }
-    }
-
-    // No code fences found, return as-is
-    content.trim().to_string()
-}
 
 pub fn compute_task_priority(metric: Option<&KeywordMetric>) -> Priority {
     match metric.and_then(|m| m.difficulty) {

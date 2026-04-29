@@ -128,8 +128,12 @@ pub fn ingest_orphan_articles(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
-    let automation_dir = repo_root.join(".github").join("automation");
-    crate::content::ops::ingest_orphan_files(&automation_dir, repo_root, &project_id, &db)
+    let summary = crate::content::article_index::ingest_orphans(&db, &project_id, repo_root)
+        .map_err(|e| e.to_string())?;
+    Ok(crate::content::ops::IngestOrphanResult {
+        ingested: summary.ingested,
+        files: summary.files,
+    })
 }
 
 #[tauri::command]

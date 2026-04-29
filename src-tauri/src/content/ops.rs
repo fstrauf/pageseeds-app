@@ -71,7 +71,7 @@ pub fn read_file_metadata(path: &Path) -> Result<FileMetadata> {
 }
 
 /// Count words in markdown body (strips basic markdown syntax before counting).
-fn count_words(text: &str) -> usize {
+pub fn count_words(text: &str) -> usize {
     // Strip front matter leftovers, headings, link syntax
     let re_md = Regex::new(r"[#*_`\[\]<>]|https?://\S+").unwrap();
     let stripped = re_md.replace_all(text, " ");
@@ -495,181 +495,15 @@ fn patch_frontmatter_date(content: &str, new_date: &str) -> std::result::Result<
     Ok(format!("---\n{}\n---\n{}", new_fm, body))
 }
 
-// ─── ingest_orphan_files ──────────────────────────────────────────────────────
+// ─── IngestOrphanResult ───────────────────────────────────────────────────────
 
-/// Result returned by `ingest_orphan_files`.
+/// Result returned by orphan ingestion.
 #[derive(Debug, Serialize)]
 pub struct IngestOrphanResult {
     /// Number of files successfully ingested into articles.json + SQLite.
     pub ingested: usize,
     /// Basenames of newly added files.
     pub files: Vec<String>,
-}
-
-/// Auto-ingest MDX files that exist on disk but are not tracked in articles.json.
-///
-/// Mirrors `apply_import_from_repo` from the Python CLI
-/// (`packages/seo-content-cli/src/seo_content_mcp/seo_ops.py`).
-///
-/// For each orphan file:
-///   1. Parses frontmatter to extract title, slug, and date.
-///   2. Derives a URL slug from the filename if not present in frontmatter.
-///   3. Assigns the next available article ID.
-///   4. Inserts into SQLite and updates articles.json.
-pub fn ingest_orphan_files(
-    automation_dir: &Path,
-    repo_root: &Path,
-    project_id: &str,
-    conn: &Connection,
-) -> std::result::Result<IngestOrphanResult, String> {
-    // 1. Identify orphan files via sync_and_validate.
-    let sync_result = sync_and_validate(automation_dir, repo_root, false, conn, project_id)?;
-    if sync_result.orphan_files.is_empty() {
-        return Ok(IngestOrphanResult {
-            ingested: 0,
-            files: vec![],
-        });
-    }
-
-    // 2. Resolve content directory.
-    let content_dir = resolve_content_dir(automation_dir, repo_root)?;
-
-    // 3. Build a map of all content files: basename → full path.
-    let content_files: HashMap<String, PathBuf> =
-        crate::content::locator::collect_markdown_files(&content_dir)
-            .into_iter()
-            .filter_map(|p| {
-                let name = p.file_name()?.to_str()?.to_string();
-                Some((name, p))
-            })
-            .collect();
-
-    // 4. Compute a safe starting ID: take the max of articles_meta.next_article_id
-    //    and MAX(existing id) + 1. articles_meta can be stale if articles were added
-    //    externally (e.g. via the Python CLI) without bumping nextArticleId.
-    let max_existing_id: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(id), 0) FROM articles WHERE project_id = ?1",
-            [project_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let meta_next_id: i64 = conn
-        .query_row(
-            "SELECT next_article_id FROM articles_meta WHERE project_id = ?1",
-            [project_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let mut next_id = std::cmp::max(max_existing_id + 1, meta_next_id.max(1));
-
-    // 5. Insert a new article row for each orphan.
-    let mut ingested_files = Vec::new();
-    for basename in &sync_result.orphan_files {
-        let file_path = match content_files.get(basename) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        let meta = match read_file_metadata(file_path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        let url_slug = derive_url_slug(basename);
-        let title = meta.title.unwrap_or_else(|| url_slug.replace('-', " "));
-        let file_ref = format!("./content/{}", basename);
-
-        // No ON CONFLICT clause — if the ID somehow already exists, surface the error
-        // rather than silently skipping the row (which would cause a phantom orphan).
-        conn.execute(
-            "INSERT INTO articles (
-                id, title, url_slug, file, target_keyword, keyword_difficulty,
-                target_volume, published_date, word_count, status,
-                content_gaps_addressed, estimated_traffic_monthly, project_id
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
-            rusqlite::params![
-                next_id,
-                title,
-                url_slug,
-                file_ref,
-                Option::<String>::None,
-                Option::<String>::None,
-                0i64,
-                meta.published_date,
-                meta.word_count as i64,
-                "published",
-                "[]",
-                Option::<String>::None,
-                project_id,
-            ],
-        )
-        .map_err(|e| format!("Failed to insert '{}' (id {}): {}", basename, next_id, e))?;
-
-        ingested_files.push(basename.clone());
-        next_id += 1;
-    }
-
-    if ingested_files.is_empty() {
-        return Ok(IngestOrphanResult {
-            ingested: 0,
-            files: vec![],
-        });
-    }
-
-    // 6. Update articles_meta with the new next_article_id.
-    conn.execute(
-        "INSERT INTO articles_meta (project_id, next_article_id)
-         VALUES (?1, ?2)
-         ON CONFLICT(project_id) DO UPDATE SET next_article_id = excluded.next_article_id",
-        rusqlite::params![project_id, next_id],
-    )
-    .map_err(|e| e.to_string())?;
-
-    // 7. Write articles.json back to the repo (bypassing the date-policy gate since
-    //    we may be ingesting old published content that hasn't been date-indexed yet).
-    //    Preserve unknown/custom fields from the existing JSON.
-    let exported_json =
-        crate::db::export::export_articles(conn, project_id).map_err(|e| e.to_string())?;
-    let mut exported: serde_json::Value =
-        serde_json::from_str(&exported_json).map_err(|e| e.to_string())?;
-
-    let articles_json_path = repo_root
-        .join(".github")
-        .join("automation")
-        .join("articles.json");
-    if let Ok(existing_json) = std::fs::read_to_string(&articles_json_path) {
-        if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_json) {
-            crate::db::export::merge_unknown_fields(&mut exported, &existing);
-        }
-    }
-
-    std::fs::create_dir_all(articles_json_path.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(
-        &articles_json_path,
-        serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let count = ingested_files.len();
-    Ok(IngestOrphanResult {
-        ingested: count,
-        files: ingested_files,
-    })
-}
-
-/// Derive a URL slug for an MDX file, mirroring the Python CLI convention.
-///
-/// "242_pour_over_coffee_cafes_auckland.mdx" → "pour-over-coffee-cafes-auckland"
-fn derive_url_slug(filename: &str) -> String {
-    let base = std::path::Path::new(filename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(filename);
-    // Strip leading numeric prefix (matches Python CLI: `re.sub(r"^\d+[_-]+", "", base)`)
-    let re = Regex::new(r"^\d+[_\-]+").unwrap();
-    let stripped = re.replace(base, "");
-    stripped.to_lowercase().replace('_', "-")
 }
 
 /// Re-scan all MDX files for a project and update the DB when frontmatter

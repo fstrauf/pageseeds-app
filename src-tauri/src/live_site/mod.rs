@@ -624,7 +624,7 @@ async fn fetch_page_snapshot(
     let h1 = extract_h1(&document);
     let meta_description = extract_meta_description(&document);
     let text_content = extract_main_content(&document);
-    let word_count = count_words(&text_content) as i64;
+    let word_count = crate::content::ops::count_words(&text_content) as i64;
     let heading_count = count_headings(&document) as i64;
     let excerpt = build_excerpt(&text_content);
     let outgoing_links = extract_internal_links(&document, &canonical_url, base_url);
@@ -818,10 +818,6 @@ fn count_headings(document: &Html) -> usize {
         return 0;
     };
     document.select(&selector).count()
-}
-
-fn count_words(content: &str) -> usize {
-    content.split_whitespace().count()
 }
 
 fn build_excerpt(content: &str) -> Option<String> {

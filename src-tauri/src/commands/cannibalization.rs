@@ -224,6 +224,9 @@ pub fn create_tasks_from_approved_recommendations(
             continue;
         }
         let idempotency_key = format!("can_fix:hub:{}:{}:{}", project_id, strategy_id, rec.topic);
+        // LEGACY: create_hub_page is retained until hub_spoke_context moves to a
+        // deterministic pre-step that writes a hub_brief artifact. At that point
+        // this should become a normal write_article task with skill: hub-write.
         let spec = crate::engine::spawner::TaskSpec {
             project_id: project_id.clone(),
             task_type: "create_hub_page".to_string(),

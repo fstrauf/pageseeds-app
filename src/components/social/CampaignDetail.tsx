@@ -97,12 +97,11 @@ export function CampaignDetail({ campaign, onBack }: Props) {
       
       // Auto-queue the task for immediate execution
       const queueItem = {
-        taskId: task.id,
-        projectId: task.project_id,
+        task_id: task.id,
+        project_id: task.project_id,
         title: task.title || 'Generate posts',
-        taskType: task.type,
-        projectName: campaign.name,
-        status: 'pending' as const,
+        task_type: task.type,
+        project_name: campaign.name,
       }
       
       useQueueStore.getState().enqueue([queueItem])

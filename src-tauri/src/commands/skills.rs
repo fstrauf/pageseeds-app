@@ -72,7 +72,7 @@ pub async fn quick_run_workflow(
     title: String,
     themes: Option<Vec<String>>,
 ) -> Result<executor::ExecutionResult, String> {
-    use crate::config::{default_execution_mode, default_phase};
+    use crate::engine::spawner::{TaskSpec, TaskSpawner};
     use crate::models::task::{AgentPolicy, Priority, TaskStatus};
 
     let task_id = {
@@ -91,33 +91,23 @@ pub async fn quick_run_workflow(
                 existing.id
             }
             None => {
-                let now = chrono::Utc::now().to_rfc3339();
-                let id = format!("task-{}", chrono::Utc::now().timestamp_millis());
-
                 let description: Option<String> = themes
                     .as_ref()
                     .filter(|t| !t.is_empty())
                     .map(|t| serde_json::json!({ "themes": t }).to_string());
 
-                let task = crate::models::task::Task {
-                    id,
-                    phase: default_phase(&task_type).to_string(),
-                    execution_mode: default_execution_mode(&task_type),
+                let spec = TaskSpec {
+                    project_id,
                     task_type: task_type.clone(),
-                    status: TaskStatus::Todo,
-                    priority: Priority::High,
-                    agent_policy: AgentPolicy::Optional,
                     title: Some(title),
                     description,
-                    project_id,
-                    depends_on: vec![],
-                    artifacts: vec![],
-                    run: crate::models::task::TaskRun::default(),
-                    created_at: now.clone(),
-                    updated_at: now,
+                    priority: Priority::High,
+                    agent_policy: AgentPolicy::Optional,
+                    idempotency_key: Some(format!("quick_run:{}:{}", task_type, chrono::Utc::now().timestamp())),
+                    ..Default::default()
                 };
 
-                task_store::create_task(&db, &task)
+                TaskSpawner::spawn(&db, spec)
                     .map_err(|e| e.to_string())?
                     .id
             }

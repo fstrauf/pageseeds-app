@@ -10,7 +10,7 @@ use tauri::Emitter as _;
 
 use crate::engine::step_registry::{StepContext, StepRegistry};
 use crate::engine::workflows::{
-    handlers::default_handlers, step_params, StepKind, StepResult, WorkflowStep,
+    handlers::default_handlers, step_params, StepResult, WorkflowStep,
 };
 use crate::engine::{agent, task_store};
 use crate::models::task::{Task, TaskArtifact, TaskStatus};
@@ -192,113 +192,29 @@ pub async fn execute_task_with_token(
         total_prompt_tokens = add_optional(total_prompt_tokens, pt);
         total_completion_tokens = add_optional(total_completion_tokens, ct);
 
-        // Track the raw output of agentic steps for downstream consumers
-        if step.kind == StepKind::Agentic
-            || step.kind == StepKind::CtrAnalyze
-            || step.kind == StepKind::CtrFixGenerate
-            || step.kind == StepKind::CanAnalyze
-        {
-            if let Some(ref out) = result.output {
-                let preview = crate::engine::text::char_prefix(out, 300);
-                log::info!(
-                    "[executor] agentic step '{}' output ({} chars): {:?}",
-                    step.name,
-                    out.len(),
-                    preview
-                );
-            } else {
-                log::warn!("[executor] agentic step '{}' produced no output", step.name);
+        // Apply the step's latest_raw_policy to the pipeline variable.
+        match step.latest_raw_policy {
+            crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput => {
+                if let Some(ref out) = result.output {
+                    let preview = crate::engine::text::char_prefix(out, 300);
+                    log::info!(
+                        "[executor] step '{}' sets latest_raw ({} chars): {:?}",
+                        step.name,
+                        out.len(),
+                        preview
+                    );
+                    latest_raw_output = Some(out.clone());
+                } else {
+                    log::warn!("[executor] step '{}' expected output for latest_raw but produced none", step.name);
+                    latest_raw_output = None;
+                }
             }
-            latest_raw_output = result.output.clone();
-        } else if step.name == "indexing_fix_context" {
-            // Pass deterministic context to the agentic step that follows
-            if let Some(ref out) = result.output {
-                log::info!(
-                    "[executor] indexing_fix_context output ({} chars)",
-                    out.len()
-                );
-                latest_raw_output = result.output.clone();
+            crate::engine::workflows::LatestRawPolicy::Clear => {
+                log::info!("[executor] step '{}' clears latest_raw", step.name);
+                latest_raw_output = None;
             }
-        } else if step.name == "coverage_load_articles" {
-            // Track coverage_load_articles output for coverage_cluster_analysis
-            if let Some(ref out) = result.output {
-                log::info!(
-                    "[executor] coverage_load_articles output ({} chars)",
-                    out.len()
-                );
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "research_ahrefs_pipeline" {
-            // Track keyword research output for research_final_selection
-            if let Some(ref out) = result.output {
-                log::info!(
-                    "[executor] research_ahrefs_pipeline output ({} chars)",
-                    out.len()
-                );
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "ctr_build_context" {
-            // Pass deterministic context to the agentic ctr_analyze step that follows
-            if let Some(ref out) = result.output {
-                log::info!("[executor] ctr_build_context output ({} chars)", out.len());
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "can_build_context" {
-            // Pass deterministic context to the agentic can_analyze step that follows
-            if let Some(ref out) = result.output {
-                log::info!("[executor] can_build_context output ({} chars)", out.len());
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "merge_extract_sections" {
-            // Pass extracted section inventory to the agentic merge_draft_patch step
-            if let Some(ref out) = result.output {
-                log::info!(
-                    "[executor] merge_extract_sections output ({} chars)",
-                    out.len()
-                );
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "merge_draft_patch" {
-            // Pass drafted ContentMergePatch JSON to the deterministic merge_apply_patch step
-            if let Some(ref out) = result.output {
-                log::info!("[executor] merge_draft_patch output ({} chars)", out.len());
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "hub_build_brief" {
-            // Pass structured hub brief to the agentic hub_outline step
-            if let Some(ref out) = result.output {
-                log::info!("[executor] hub_build_brief output ({} chars)", out.len());
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "hub_outline" {
-            // Pass structured hub outline to the agentic hub_write step
-            if let Some(ref out) = result.output {
-                log::info!("[executor] hub_outline output ({} chars)", out.len());
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "territory_load_recommendation" {
-            // Pass loaded recommendation to territory_build_context
-            if let Some(ref out) = result.output {
-                log::info!(
-                    "[executor] territory_load_recommendation output ({} chars)",
-                    out.len()
-                );
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "territory_build_context" {
-            // Pass structured context to the agentic territory_strategy step
-            if let Some(ref out) = result.output {
-                log::info!(
-                    "[executor] territory_build_context output ({} chars)",
-                    out.len()
-                );
-                latest_raw_output = result.output.clone();
-            }
-        } else if step.name == "territory_strategy" {
-            // Pass strategy JSON to territory_apply
-            if let Some(ref out) = result.output {
-                log::info!("[executor] territory_strategy output ({} chars)", out.len());
-                latest_raw_output = result.output.clone();
+            crate::engine::workflows::LatestRawPolicy::Preserve => {
+                // Nothing to do — downstream steps see the previous latest_raw.
             }
         }
 
@@ -571,6 +487,7 @@ mod tests {
     use super::*;
     use crate::engine::task_store;
     use crate::engine::workflows::handlers::default_handlers;
+    use crate::engine::workflows::StepKind;
     use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
     use rusqlite::Connection;
     use std::sync::Mutex;
@@ -1396,7 +1313,7 @@ mod tests {
 
     #[test]
     fn content_write_registers_article_in_articles_json() {
-        use crate::content::ops::ingest_orphan_files;
+        use crate::content::article_index;
         use crate::db::export::export_articles;
 
         let dir = unique_temp_dir("ps_content_register");
@@ -1446,6 +1363,14 @@ mod tests {
             CREATE TABLE IF NOT EXISTS articles_meta (
                 project_id TEXT PRIMARY KEY,
                 next_article_id INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS article_metadata (
+                project_id TEXT NOT NULL,
+                article_id INTEGER NOT NULL,
+                namespace TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, article_id, namespace)
             );",
         )
         .unwrap();
@@ -1463,9 +1388,9 @@ mod tests {
         )
         .unwrap();
 
-        // --- Step 1: ingest_orphan_files finds and registers the new file.
-        let ingested = ingest_orphan_files(&auto_dir, &dir, "p1", &conn)
-            .expect("ingest_orphan_files should succeed");
+        // --- Step 1: ingest_orphans finds and registers the new file.
+        let ingested = article_index::ingest_orphans(&conn, "p1", &dir)
+            .expect("ingest_orphans should succeed");
         assert_eq!(ingested.ingested, 1, "expected 1 article to be ingested");
         assert_eq!(ingested.files, vec!["001_test_article.mdx"]);
 

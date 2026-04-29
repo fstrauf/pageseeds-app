@@ -94,83 +94,44 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
     // ─── Content write orphan ingestion ──────────────────────────────────────
 
     if ctx.step.name == "content_write_stage" && ctx.result.success {
-        let is_hub = matches!(
-            ctx.task.task_type.as_str(),
-            "create_hub_page" | "refresh_hub_page"
-        );
-
-        if is_hub {
-            if let Some(ref output) = ctx.result.output {
-                match crate::engine::exec::content::hub_page::apply_hub_output(
-                    ctx.task,
-                    ctx.project_path,
-                    output,
-                    ctx.conn,
-                ) {
-                    Ok(filename) => {
-                        let project_path = std::path::Path::new(ctx.project_path);
-                        let _ = crate::content::article_index::export_projection(
-                            ctx.conn,
+        let project_path = std::path::Path::new(ctx.project_path);
+        match crate::content::article_index::ingest_orphans(
+            ctx.conn,
+            &ctx.task.project_id,
+            project_path,
+        ) {
+            Ok(ingested) if ingested.ingested > 0 => {
+                let (keyword, kd_str, vol) = parse_content_task_keyword_meta(ctx.task);
+                for filename in &ingested.files {
+                    let _ = ctx.conn.execute(
+                        "UPDATE articles
+                         SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                             status='draft'
+                         WHERE project_id=?4 AND file LIKE ?5",
+                        rusqlite::params![
+                            keyword.as_deref(),
+                            kd_str.as_deref(),
+                            vol,
                             &ctx.task.project_id,
-                            project_path,
-                        );
-                        log::info!("[hub_register] applied hub output: {}", filename);
-                    }
-                    Err(e) => {
-                        log::warn!("[hub_register] failed to apply hub output: {}", e);
-                        return StepOutcomeOverride {
-                            status: Some("failed".to_string()),
-                            message: Some(format!("Hub file write failed: {}", e)),
-                            output: None,
-                            artifact: None,
-                        };
-                    }
-                }
-            }
-        } else {
-            let automation_dir = std::path::Path::new(ctx.project_path)
-                .join(".github")
-                .join("automation");
-            match crate::content::ops::ingest_orphan_files(
-                &automation_dir,
-                std::path::Path::new(ctx.project_path),
-                &ctx.task.project_id,
-                ctx.conn,
-            ) {
-                Ok(ingested) if ingested.ingested > 0 => {
-                    let (keyword, kd_str, vol) = parse_content_task_keyword_meta(ctx.task);
-                    for filename in &ingested.files {
-                        let _ = ctx.conn.execute(
-                            "UPDATE articles
-                             SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                                 status='draft'
-                             WHERE project_id=?4 AND file LIKE ?5",
-                            rusqlite::params![
-                                keyword.as_deref(),
-                                kd_str.as_deref(),
-                                vol,
-                                &ctx.task.project_id,
-                                format!("%{}", filename),
-                            ],
-                        );
-                    }
-                    let project_path = std::path::Path::new(ctx.project_path);
-                    let _ = crate::content::article_index::export_projection(
-                        ctx.conn,
-                        &ctx.task.project_id,
-                        project_path,
-                    );
-                    log::info!(
-                        "[content_register] registered {} article(s): {:?}",
-                        ingested.ingested,
-                        ingested.files
+                            format!("%{}", filename),
+                        ],
                     );
                 }
-                Ok(_) => {
-                    log::info!("[content_register] no new orphan files to register after content write")
-                }
-                Err(e) => log::warn!("[content_register] article registration failed: {}", e),
+                let _ = crate::content::article_index::export_projection(
+                    ctx.conn,
+                    &ctx.task.project_id,
+                    project_path,
+                );
+                log::info!(
+                    "[content_register] registered {} article(s): {:?}",
+                    ingested.ingested,
+                    ingested.files
+                );
             }
+            Ok(_) => {
+                log::info!("[content_register] no new orphan files to register after content write")
+            }
+            Err(e) => log::warn!("[content_register] article registration failed: {}", e),
         }
     }
 
@@ -214,8 +175,11 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         follow_up_ids.extend(fix_task_ids);
     }
 
-    // Write article → cluster_and_link task
-    if ctx.task.task_type == "write_article" {
+    // Write article (or hub page) → cluster_and_link task
+    if matches!(
+        ctx.task.task_type.as_str(),
+        "write_article" | "create_hub_page" | "refresh_hub_page"
+    ) {
         if let Some(task_id) = crate::engine::exec::content::create_cluster_and_link_task(
             ctx.conn,
             ctx.task,

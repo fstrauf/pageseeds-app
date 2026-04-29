@@ -746,15 +746,56 @@ fn enrich_link_metrics(records: &mut [ArticleRecord], project_path: &str) {
 
 /// Detect clusters that lack a hub/pillar page.
 fn detect_hub_gaps(records: &[ArticleRecord], clusters: &[Cluster]) -> Vec<serde_json::Value> {
-    // Find existing hub-like pages across the whole site
+    // Find existing hub-like pages across the whole site.
+    // Recognise both URL-path prefixes (hub/) and slug prefixes (hub_).
     let existing_hubs: HashSet<String> = records
         .iter()
         .filter(|r| {
             let slug = &r.url_slug;
-            slug.starts_with("hub/") || slug.starts_with("guide/")
+            slug.starts_with("hub/")
+                || slug.starts_with("guide/")
+                || slug.starts_with("hub_")
+                || slug.starts_with("guide_")
         })
-        .map(|r| r.target_keyword.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
+        .flat_map(|r| {
+            let mut topics = Vec::new();
+            // 1. target_keyword if populated
+            let kw = r.target_keyword.trim().to_lowercase();
+            if !kw.is_empty() {
+                topics.push(kw);
+            }
+            // 2. Derive topic from slug by stripping prefix
+            let slug = &r.url_slug;
+            let stripped = if slug.starts_with("hub/") {
+                &slug[4..]
+            } else if slug.starts_with("guide/") {
+                &slug[6..]
+            } else if slug.starts_with("hub_") {
+                &slug[4..]
+            } else if slug.starts_with("guide_") {
+                &slug[6..]
+            } else {
+                ""
+            };
+            let stripped = stripped.trim().replace('_', " ").to_lowercase();
+            if !stripped.is_empty() {
+                topics.push(stripped);
+            }
+            // 3. Fall back to title words (without common suffixes)
+            let title = r.title.trim().to_lowercase();
+            let title_topic = title
+                .trim_end_matches(": complete guide")
+                .trim_end_matches(": the complete guide")
+                .trim_end_matches(" complete guide")
+                .trim()
+                .to_string();
+            if !title_topic.is_empty() && title_topic != title {
+                topics.push(title_topic);
+            } else if !title.is_empty() {
+                topics.push(title);
+            }
+            topics
+        })
         .collect();
 
     let mut gaps: Vec<serde_json::Value> = Vec::new();

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::error::{Error, Result};
 use crate::gsc::client::GscClient;
-use crate::models::gsc::{MoverMetrics, PageMetrics, QueryMetrics};
+use crate::models::gsc::{MoverMetrics, PageMetrics, PageQueryMetrics, QueryMetrics};
 
 /// Fetch top pages by clicks for a date range.
 pub async fn fetch_page_rows(
@@ -50,6 +50,27 @@ pub async fn fetch_queries_for_page(
     });
     let resp = client.search_analytics_query(site_url, &body).await?;
     parse_query_rows(&resp)
+}
+
+/// Fetch top page + query combinations for a date range.
+/// A single API call returns the highest-click page+query pairs across the site.
+pub async fn fetch_page_query_rows(
+    token: &str,
+    site_url: &str,
+    start_date: &str,
+    end_date: &str,
+    row_limit: u32,
+) -> Result<Vec<PageQueryMetrics>> {
+    let client = GscClient::new(token);
+    let body = serde_json::json!({
+        "startDate": start_date,
+        "endDate": end_date,
+        "dimensions": ["page", "query"],
+        "rowLimit": row_limit,
+        "orderBy": [{"fieldName": "clicks", "sortOrder": "DESCENDING"}]
+    });
+    let resp = client.search_analytics_query(site_url, &body).await?;
+    parse_page_query_rows(&resp)
 }
 
 /// Compute traffic movers by comparing two date periods.
@@ -138,6 +159,34 @@ fn parse_query_rows(resp: &serde_json::Value) -> Result<Vec<QueryMetrics>> {
                 .ok_or_else(|| Error::Other("Missing query key".to_string()))?
                 .to_string();
             Ok(QueryMetrics {
+                query,
+                clicks: row["clicks"].as_f64().unwrap_or(0.0),
+                impressions: row["impressions"].as_f64().unwrap_or(0.0),
+                ctr: row["ctr"].as_f64().unwrap_or(0.0),
+                position: row["position"].as_f64().unwrap_or(0.0),
+            })
+        })
+        .collect()
+}
+
+fn parse_page_query_rows(resp: &serde_json::Value) -> Result<Vec<PageQueryMetrics>> {
+    let rows = match resp.get("rows").and_then(|r| r.as_array()) {
+        Some(r) => r,
+        None => return Ok(vec![]),
+    };
+
+    rows.iter()
+        .map(|row| {
+            let page = row["keys"][0]
+                .as_str()
+                .ok_or_else(|| Error::Other("Missing page key".to_string()))?
+                .to_string();
+            let query = row["keys"][1]
+                .as_str()
+                .ok_or_else(|| Error::Other("Missing query key".to_string()))?
+                .to_string();
+            Ok(PageQueryMetrics {
+                page,
                 query,
                 clicks: row["clicks"].as_f64().unwrap_or(0.0),
                 impressions: row["impressions"].as_f64().unwrap_or(0.0),

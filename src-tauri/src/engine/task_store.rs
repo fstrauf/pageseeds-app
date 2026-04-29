@@ -179,6 +179,27 @@ pub fn list_tasks_filtered_light(
     Ok(tasks)
 }
 
+/// List tasks across ALL projects filtered by one or more statuses.
+/// Used to rehydrate the task queue after a frontend reload.
+pub fn list_all_tasks_by_statuses(conn: &Connection, statuses: &[&str]) -> Result<Vec<Task>> {
+    if statuses.is_empty() {
+        return Ok(vec![]);
+    }
+    let placeholders: Vec<String> = statuses.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM tasks WHERE status IN ({}) ORDER BY
+         CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+            updated_at DESC, created_at DESC",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let tasks: Vec<Task> = stmt
+        .query_map(rusqlite::params_from_iter(statuses.iter()), row_to_task_light)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(tasks)
+}
+
 pub fn get_task(conn: &Connection, id: &str) -> Result<Task> {
     let sql = format!("SELECT {SELECT_COLS} FROM tasks WHERE id = ?1");
     conn.query_row(&sql, [id], row_to_task)

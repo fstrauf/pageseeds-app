@@ -453,6 +453,38 @@ CREATE INDEX IF NOT EXISTS idx_article_ctr_issues_project ON article_ctr_issues(
 CREATE INDEX IF NOT EXISTS idx_article_ctr_issues_status ON article_ctr_issues(status);
 "#;
 
+static MIGRATION_V31: &str = r#"
+-- Backend-owned task queue: durable queue runs and items
+CREATE TABLE IF NOT EXISTS queue_runs (
+    id              TEXT PRIMARY KEY,
+    status          TEXT NOT NULL DEFAULT 'idle',
+    pause_on_error  INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    started_at      TEXT,
+    finished_at     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS queue_items (
+    run_id          TEXT NOT NULL,
+    position        INTEGER NOT NULL,
+    task_id         TEXT NOT NULL,
+    project_id      TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    error           TEXT,
+    result_json     TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (run_id, task_id),
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES queue_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_queue_items_run ON queue_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_queue_items_task ON queue_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_queue_items_status ON queue_items(status);
+"#;
+
 static MIGRATION_V6: &str = r#"
 -- Social media marketing campaigns
 CREATE TABLE IF NOT EXISTS social_campaigns (
@@ -923,6 +955,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V30)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (30, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 31 {
+        conn.execute_batch(MIGRATION_V31)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (31, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

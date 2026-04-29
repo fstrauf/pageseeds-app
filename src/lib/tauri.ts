@@ -19,7 +19,9 @@ import type {
   ProjectMode,
   ProjectConfigFileStatus,
   ProjectSetup,
-  QueueItem,
+  QueueSnapshot,
+  EnqueueItem,
+  EnqueueMode,
   RedditOpportunity,
   RedditStats,
   ScoredSkill,
@@ -463,25 +465,69 @@ export const runBatch = (
 ): Promise<BatchResult> =>
   invoke('run_batch', { projectId, maxTasks, pauseOnError })
 
-/** Execute a queue of tasks across projects. Emits events for progress tracking. */
-export const executeQueue = (items: QueueItem[]): Promise<void> =>
+/** Get current queue snapshot from the backend. */
+export const getQueueSnapshot = (): Promise<QueueSnapshot> =>
+  invoke('get_queue_snapshot')
+
+/** Enqueue tasks into the backend-owned queue. */
+export const enqueueTasks = (items: EnqueueItem[], mode: EnqueueMode = 'append'): Promise<QueueSnapshot> =>
+  invoke('enqueue_tasks', { items, mode })
+
+/** Remove a pending item from the queue. */
+export const removeQueueItem = (taskId: string): Promise<QueueSnapshot> =>
+  invoke('remove_queue_item', { taskId })
+
+/** Dismiss/hide the active queue run. */
+export const dismissQueue = (): Promise<void> =>
+  invoke('dismiss_queue')
+
+// ── Legacy queue commands (delegate to backend queue) ─────────────────────────
+
+/** Legacy queue item returned by get_queue_state. */
+export interface LegacyQueueStateItem {
+  taskId: string
+  projectId: string
+  title: string
+  taskType: string
+  projectName?: string
+  status?: string
+  error?: string
+}
+
+/** Legacy: get queue state by status. Delegates to get_queue_snapshot. */
+export const getQueueState = (): Promise<LegacyQueueStateItem[]> =>
+  invoke('get_queue_state')
+
+/** Legacy queue item shape for execute_queue compatibility. */
+export interface LegacyQueueItem {
+  taskId: string
+  projectId: string
+  title: string
+  taskType: string
+  projectName?: string
+  status?: string
+  error?: string
+}
+
+/** Legacy: execute a queue of tasks. Delegates to enqueue_tasks. */
+export const executeQueue = (items: LegacyQueueItem[]): Promise<void> =>
   invoke('execute_queue', { items })
 
-/** Mark tasks as queued in the database when added to the queue. */
+/** Legacy: no-op, queue manages statuses internally. */
 export const markTasksQueued = (taskIds: string[]): Promise<void> =>
   invoke('mark_tasks_queued', { taskIds })
 
-/** Reset queued tasks back to todo when removed from queue. */
+/** Legacy: reset queued tasks back to todo. Delegates to remove_queue_item. */
 export const markTasksTodo = (taskIds: string[]): Promise<void> =>
   invoke('mark_tasks_todo', { taskIds })
 
-export const pauseQueue = (): Promise<void> =>
+export const pauseQueue = (): Promise<QueueSnapshot> =>
   invoke('pause_queue')
 
-export const resumeQueue = (): Promise<void> =>
+export const resumeQueue = (): Promise<QueueSnapshot> =>
   invoke('resume_queue')
 
-export const clearCompletedQueueItems = (): Promise<void> =>
+export const clearCompletedQueueItems = (): Promise<QueueSnapshot> =>
   invoke('clear_completed_queue_items')
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────

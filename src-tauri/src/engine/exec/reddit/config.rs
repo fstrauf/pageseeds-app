@@ -254,16 +254,16 @@ pub fn exec_reddit_config_parse(
             );
 
             // Try to extract JSON object from the output
-            let json_str = match extract_json_object(&output) {
-                Ok(json) => {
+            let json_str = match crate::engine::text::extract_json_string(&output) {
+                Some(json) => {
                     log::info!(
                         "[reddit_config_parse] extracted JSON ({} chars)",
                         json.len()
                     );
                     json
                 }
-                Err(e) => {
-                    log::warn!("[reddit_config_parse] JSON extraction failed: {}", e);
+                None => {
+                    log::warn!("[reddit_config_parse] JSON extraction failed: no valid JSON found");
 
                     // Save full output for debugging
                     let debug_path = std::env::temp_dir().join(format!(
@@ -278,7 +278,7 @@ pub fn exec_reddit_config_parse(
 
                     return crate::engine::workflows::StepResult {
                         success: false,
-                        message: format!("Failed to extract JSON from agent output: {}", e),
+                        message: "Failed to extract JSON from agent output: no valid JSON found".to_string(),
                         output: Some(output),
                     };
                 }
@@ -375,85 +375,4 @@ pub(crate) fn extract_json_array(output: &str) -> String {
     trimmed.to_string()
 }
 
-/// Extract a JSON object from text (looks for {...})
-/// Extract and validate JSON from agent output.
-///
-/// Tries multiple strategies in order:
-/// 1. Markdown code block (```json ... ```)
-/// 2. Plain code block (``` ... ```)
-/// 3. Raw JSON object ({...})
-///
-/// Returns Err if no valid JSON found or if extracted content isn't valid JSON.
-pub fn extract_json_object(output: &str) -> Result<String, String> {
-    let trimmed = output.trim();
 
-    if trimmed.is_empty() {
-        return Err("Agent output is empty".to_string());
-    }
-
-    // Strategy 1: Look for ```json ... ``` code block
-    for opener in ["```json\n", "```json\r\n", "```JSON\n", "```Json\n"] {
-        if let Some(start) = trimmed.find(opener) {
-            let after_open = start + opener.len();
-            let rest = &trimmed[after_open..];
-            if let Some(end) = rest.find("```") {
-                let candidate = rest[..end].trim();
-                if is_valid_json(candidate) {
-                    return Ok(candidate.to_string());
-                }
-            }
-        }
-    }
-
-    // Strategy 2: Look for plain ``` ... ``` code block
-    if let Some(start) = trimmed.find("```\n") {
-        let after_open = start + 4;
-        let rest = &trimmed[after_open..];
-        if let Some(end) = rest.find("```") {
-            let candidate = rest[..end].trim();
-            if is_valid_json(candidate) {
-                return Ok(candidate.to_string());
-            }
-        }
-    }
-
-    // Strategy 3: Look for raw JSON object (outermost braces)
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            if end > start {
-                let candidate = &trimmed[start..=end];
-                if is_valid_json(candidate) {
-                    return Ok(candidate.to_string());
-                }
-            }
-        }
-    }
-
-    // Strategy 4: Look for raw JSON array
-    if let Some(start) = trimmed.find('[') {
-        if let Some(end) = trimmed.rfind(']') {
-            if end > start {
-                let candidate = &trimmed[start..=end];
-                if is_valid_json(candidate) {
-                    return Ok(candidate.to_string());
-                }
-            }
-        }
-    }
-
-    // Nothing worked - provide helpful error
-    let preview = if trimmed.len() > 500 {
-        format!("{}... ({} total chars)", &trimmed[..500], trimmed.len())
-    } else {
-        trimmed.to_string()
-    };
-    Err(format!(
-        "No valid JSON found in agent output. Preview: {}",
-        preview
-    ))
-}
-
-/// Quick validation that a string is valid JSON
-fn is_valid_json(s: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(s).is_ok()
-}

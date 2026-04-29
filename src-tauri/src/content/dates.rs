@@ -197,5 +197,6 @@ pub fn apply_fixes_to_db_and_export(
             rusqlite::params![fix.new_date, fix.article_id, project_id],
         )?;
     }
-    crate::db::export::write_articles_to_repo(conn, project_id, project_path)
+    crate::content::article_index::export_projection(conn, project_id, project_path)
+        .map(|_| ())
 }

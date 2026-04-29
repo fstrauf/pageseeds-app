@@ -19,7 +19,7 @@ pub fn extract_from_article(path: &Path) -> Result<ContentSource> {
         title: frontmatter.get("title").cloned(),
         url_slug: frontmatter.get("slug").cloned(),
         published_date: frontmatter.get("date").cloned(),
-        word_count: Some(count_words(&body)),
+        word_count: Some(crate::content::ops::count_words(&body) as u32),
         ..Default::default()
     };
 
@@ -85,11 +85,6 @@ fn parse_frontmatter(content: &str) -> (std::collections::HashMap<String, String
 
     // No frontmatter found, return all as body
     (frontmatter, content.to_string())
-}
-
-/// Count words in text
-fn count_words(text: &str) -> u32 {
-    text.split_whitespace().count() as u32
 }
 
 /// Extract key points from article content for carousel slides

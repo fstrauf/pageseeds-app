@@ -9,4 +9,5 @@ pub mod project;
 pub mod reddit;
 pub mod research;
 pub mod social;
+pub mod queue;
 pub mod task;

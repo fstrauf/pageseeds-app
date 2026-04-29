@@ -55,7 +55,7 @@ The task queue is the **single execution path** for all task processing. All tas
 - **One queue per app session**, not per project
 - Tasks from any project can be added
 - Queue continues running when switching projects/views
-- Queue is **frontend-only state** (not persisted to SQLite)
+- Queue state is **managed by the backend** (`enqueue_tasks`, `get_queue_snapshot`, `pause_queue`, `resume_queue` in `tauri.ts:468`). The frontend subscribes to events and renders progress, but does not own execution.
 
 ### Execution Order
 
@@ -305,4 +305,4 @@ Shows:
 
 - [Workflow Engine](./WORKFLOW_ENGINE.md) — How tasks are planned and executed
 - [Business Processes](./BUSINESS_PROCESSES.md) — What tasks accomplish
-- [QUEUE_DEBUG.md](../QUEUE_DEBUG.md) — Detailed debugging guide
+- Check the task detail panel → Run History for step-by-step failure diagnostics

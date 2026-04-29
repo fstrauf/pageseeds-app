@@ -11,16 +11,10 @@ PageSeeds uses LLM agents (Kimi, Copilot) for judgment-heavy tasks. This documen
 │                         AGENT INTEGRATION                               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐             │
-│   │   Handler    │───▶│   Agent      │───▶│  Normalizer  │             │
-│   │   (planner)  │    │   (LLM call) │    │  (parse)     │             │
-│   └──────────────┘    └──────────────┘    └──────────────┘             │
-│         │                                          │                    │
-│         │                                          ▼                    │
-│         │                              ┌──────────────────┐            │
-│         │                              │   Artifact       │            │
-│         │                              │   (JSON)         │            │
-│         │                              └──────────────────┘            │
+│   ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐         │
+│   │   Handler    │───▶│   Agent      │───▶│   Artifact       │         │
+│   │   (planner)  │    │   (LLM call) │    │   (JSON)         │         │
+│   └──────────────┘    └──────────────┘    └──────────────────┘         │
 │         │                                                               │
 │         ▼                                                               │
 │   ┌──────────────────────────────────────────────────────────────┐     │
@@ -76,25 +70,6 @@ WorkflowStep::new("analyze_content", StepKind::Agentic)
 3. Call agent provider
 4. Store raw output in `latest_raw_output`
 5. Return StepResult
-
-### 2. Normalizer Step
-
-Parses `latest_raw_output` into structured JSON artifact.
-
-```rust
-WorkflowStep::new("parse_analysis", StepKind::Normalizer)
-    .with_param("normalizer_id", "content_analysis_parser")
-    .with_param("artifact_name", "content_analysis_result")
-```
-
-**Executor behavior:**
-1. Read `latest_raw_output`
-2. Call matching normalizer function
-3. Parse JSON (with fallback extraction)
-4. Create artifact with parsed content
-5. Clear `latest_raw_output`
-
-**Important:** Normalizer **must** follow agentic step. If no prior agentic step, `latest_raw_output` is `None`.
 
 ---
 
@@ -159,32 +134,25 @@ Return ONLY valid JSON matching this schema:
 
 ---
 
-## Normalizers
+## JSON Extraction
 
-Normalizers handle the messy reality of LLM output — markdown fences, explanatory text, partial JSON.
+Agent output often contains markdown fences or explanatory text. The shared helper in `engine/text.rs` handles this:
 
 ```rust
-// engine/normalizer.rs
+// engine/text.rs
 
-pub fn normalize_json_output(raw: &str) -> Result<Value> {
-    // 1. Try direct parse
-    if let Ok(v) = serde_json::from_str(raw) {
-        return Ok(v);
-    }
-    
-    // 2. Extract from markdown fences
-    if let Some(extracted) = extract_json_from_markdown(raw) {
-        return serde_json::from_str(&extracted)
-            .map_err(|e| Error::Normalization(e.to_string()));
-    }
-    
-    // 3. Extract first { ... } block
-    if let Some(extracted) = extract_json_braces(raw) {
-        return serde_json::from_str(&extracted)
-            .map_err(|e| Error::Normalization(e.to_string()));
-    }
-    
-    Err(Error::Normalization("Could not extract valid JSON".into()))
+pub fn extract_json(text: &str) -> Option<Value> {
+    // 1. Whole text is JSON
+    // 2. Fenced code block (```json ... ```)
+    // 3. Bare JSON object/array
+}
+```
+
+For typed extraction, use:
+
+```rust
+pub fn extract_json_as<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
+    extract_json(text)?.as_object()?. ...
 }
 ```
 
@@ -193,7 +161,6 @@ pub fn normalize_json_output(raw: &str) -> Result<Value> {
 1. **Clean JSON** — Direct parse
 2. **Markdown fences** — Extract from ```json ... ```
 3. **Brace matching** — Find first `{` to last `}`
-4. **Regex patterns** — Extract known schema structures
 
 ---
 
@@ -378,7 +345,7 @@ Every agentic step must document expected output:
 |-----------|------|
 | Agent invocation | `src-tauri/src/engine/agent.rs` |
 | Prompt assembly | `src-tauri/src/engine/prompts.rs` |
-| Normalizers | `src-tauri/src/engine/normalizer.rs` |
+| JSON extraction | `src-tauri/src/engine/text.rs` |
 | Skill loading | `src-tauri/src/engine/skills.rs` |
 | Reddit execution | `src-tauri/src/engine/exec/reddit.rs` |
 | Content execution | `src-tauri/src/engine/exec/content.rs` |

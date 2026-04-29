@@ -22,6 +22,18 @@ pub mod step_params {
     pub const ARTIFACT: &str = "artifact";
 }
 
+/// Policy for how a step affects the `latest_raw_output` pipeline variable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LatestRawPolicy {
+    /// Keep the existing `latest_raw_output` from a previous step (default).
+    #[default]
+    Preserve,
+    /// Replace `latest_raw_output` with this step's `output`.
+    ReplaceWithOutput,
+    /// Clear `latest_raw_output` so downstream steps see `None`.
+    Clear,
+}
+
 /// A single step in a workflow plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowStep {
@@ -29,15 +41,25 @@ pub struct WorkflowStep {
     pub kind: StepKind,
     pub params: std::collections::HashMap<String, String>,
     pub optional: bool,
+    pub latest_raw_policy: LatestRawPolicy,
 }
 
 impl WorkflowStep {
     pub fn new(name: &str, kind: StepKind) -> Self {
+        // Agentic steps typically produce output that downstream steps consume.
+        let latest_raw_policy = match kind {
+            StepKind::Agentic
+            | StepKind::CtrAnalyze
+            | StepKind::CtrFixGenerate
+            | StepKind::CanAnalyze => LatestRawPolicy::ReplaceWithOutput,
+            _ => LatestRawPolicy::Preserve,
+        };
         Self {
             name: name.to_string(),
             kind,
             params: Default::default(),
             optional: false,
+            latest_raw_policy,
         }
     }
 
@@ -54,6 +76,11 @@ impl WorkflowStep {
 
     pub fn optional(mut self) -> Self {
         self.optional = true;
+        self
+    }
+
+    pub fn with_latest_raw_policy(mut self, policy: LatestRawPolicy) -> Self {
+        self.latest_raw_policy = policy;
         self
     }
 }

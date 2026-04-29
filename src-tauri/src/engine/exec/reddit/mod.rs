@@ -25,7 +25,6 @@ pub(crate) use search::*;
 
 // Public re-exports for integration tests
 pub use config::exec_reddit_config_parse;
-pub use config::extract_json_object;
 
 /// Load structured search params from the reddit_config_parse_stage artifact.
 /// Returns None if no artifact found or parsing fails.

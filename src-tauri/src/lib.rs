@@ -40,6 +40,8 @@ pub fn run() {
                 "UPDATE tasks SET status='todo', updated_at=?1 WHERE status='in_progress'",
                 rusqlite::params![chrono::Utc::now().to_rfc3339()],
             );
+            // Recover queue state: reset running items to pending and active runs to paused
+            let _ = engine::queue::recover_queue_on_startup(&conn);
             // Startup self-check: log registry counts for debugging silent misconfigurations
             let handlers = engine::workflows::handlers::default_handlers();
             log::info!(
@@ -193,12 +195,18 @@ pub fn run() {
             commands::get_social_posts_by_project,
             commands::run_social_campaign,
             // Task Queue
+            commands::enqueue_tasks,
+            commands::remove_queue_item,
+            commands::pause_queue,
+            commands::resume_queue,
+            commands::get_queue_snapshot,
+            commands::clear_completed_queue_items,
+            commands::dismiss_queue,
+            // Legacy queue commands
             commands::execute_queue,
             commands::mark_tasks_queued,
             commands::mark_tasks_todo,
-            commands::pause_queue,
-            commands::resume_queue,
-            commands::clear_completed_queue_items,
+            commands::get_queue_state,
             // Logging
             commands::get_log_file_path,
             commands::submit_log,

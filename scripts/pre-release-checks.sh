@@ -81,6 +81,39 @@ else
     echo "⚠️  TypeScript errors found (non-blocking)"
 fi
 
+# ── Agent discipline checks ──────────────────────────────────────────────────
+echo ""
+echo "🔨 Running agent discipline checks..."
+
+if ./scripts/check-task-store-usage.sh 2>/dev/null; then
+    echo "✅ Task store usage check passed"
+else
+    echo "❌ Task store usage check failed"
+    ERRORS=$((ERRORS + 1))
+fi
+
+if ./scripts/check-skill-paths.sh 2>/dev/null; then
+    echo "✅ Skill paths check passed"
+else
+    echo "❌ Skill paths check failed"
+    ERRORS=$((ERRORS + 1))
+fi
+
+if ./scripts/check-invoke-usage.sh 2>/dev/null; then
+    echo "✅ Invoke usage check passed"
+else
+    echo "❌ Invoke usage check failed"
+    ERRORS=$((ERRORS + 1))
+fi
+
+if ./scripts/check-docs-links.sh 2>/dev/null; then
+    echo "✅ Documentation links check passed"
+else
+    echo "⚠️  Documentation links check found issues (non-blocking)"
+fi
+
+./scripts/check-extraction-helpers.sh 2>/dev/null || true  # Advisory only
+
 echo ""
 if [ $ERRORS -gt 0 ]; then
     echo "❌ $ERRORS check(s) failed — fix them before releasing"

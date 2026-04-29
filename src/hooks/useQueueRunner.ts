@@ -1,7 +1,8 @@
 /**
  * Queue Runner Hook
- * 
- * Bridge between legacy context API and new Zustand store.
+ *
+ * Bridge between the backend-owned queue and the TaskRunner UI.
+ * Maps QueueSnapshot to the component props expected by TaskRunner.
  */
 
 import { useQueueStore } from '../stores/queueStore';
@@ -11,80 +12,88 @@ import { createLogger, LogTarget } from '../lib/logging';
 
 const logger = createLogger(LogTarget.QUEUE);
 
+function mapQueueItemToRunnerItem(item: QueueItem): RunnerItem {
+  const statusMap: Record<string, RunnerItem['status']> = {
+    pending: 'queued',
+    running: 'running',
+    completed: 'done',
+    failed: 'failed',
+    skipped: 'failed',
+  };
+
+  return {
+    task: {
+      id: item.task_id,
+      title: item.title,
+      type: item.task_type,
+      projectId: item.project_id,
+      projectName: item.project_name,
+    },
+    status: statusMap[item.status] ?? 'queued',
+    error: item.error,
+    liveSteps: [],
+    result: item.result_json ? undefined : undefined, // TODO: parse result_json if needed
+  };
+}
+
 export function useQueueRunner(onCompleted?: () => void) {
   logger.entry('useQueueRunner');
 
-  // Guard to prevent calling onCompleted multiple times for the same completion
   const completedRef = useRef(false);
 
-  // Use selectors to avoid re-rendering on unrelated store changes
-  const itemsRaw = useQueueStore(s => s.items);
-  const isRunning = useQueueStore(s => s.isRunning);
-  const isPaused = useQueueStore(s => s.isPaused);
-  const isVisible = useQueueStore(s => s.isVisible);
+  const snapshot = useQueueStore((s) => s.snapshot);
+  const isVisible = useQueueStore((s) => s.isVisible);
+  const isStarting = useQueueStore((s) => s.isStarting);
+  const sync = useQueueStore((s) => s.sync);
+  const enqueueStore = useQueueStore((s) => s.enqueue);
+  const removeItemStore = useQueueStore((s) => s.removeItem);
+  const pauseStore = useQueueStore((s) => s.pause);
+  const resumeStore = useQueueStore((s) => s.resume);
+  const closeStore = useQueueStore((s) => s.close);
+  const setupEventListeners = useQueueStore((s) => s.setupEventListeners);
 
-  // Get action methods from store (stable references from Zustand)
-  const enqueueStore = useQueueStore(s => s.enqueue);
-  const enqueueNextStore = useQueueStore(s => s.enqueueNext);
-  const removeItemStore = useQueueStore(s => s.removeItem);
-  const pauseStore = useQueueStore(s => s.pause);
-  const resumeStore = useQueueStore(s => s.resume);
-  const closeStore = useQueueStore(s => s.close);
+  const isRunning = snapshot?.run?.status === 'running' || isStarting;
+  const isPaused = snapshot?.run?.status === 'paused' && !isStarting;
+  const itemsRaw = useMemo(() => snapshot?.items ?? [], [snapshot]);
 
   logger.debug('render', {
     isRunning,
     isPaused,
     itemCount: itemsRaw.length,
-    items: itemsRaw.map(i => ({ id: i.taskId, status: i.status })),
   });
 
+  // Sync on mount and setup listeners
   useEffect(() => {
-    logger.debug('useEffect - state changed', {
-      isRunning,
-      items: itemsRaw.length,
-    });
+    logger.info('useQueueRunner - mounting, syncing and setting up listeners');
+    void sync();
+    void setupEventListeners();
+    return () => {
+      useQueueStore.getState().cleanupEventListeners();
+    };
+  }, [sync, setupEventListeners]);
 
+  // Call onCompleted when queue finishes
+  useEffect(() => {
     if (!isRunning && itemsRaw.length > 0) {
-      const allDone = itemsRaw.every((i: QueueItem) => i.status === 'completed' || i.status === 'failed');
-      logger.debug('useEffect - allDone check', { allDone });
-
+      const allDone = itemsRaw.every(
+        (i: QueueItem) => i.status === 'completed' || i.status === 'failed' || i.status === 'skipped'
+      );
       if (allDone && !completedRef.current) {
-        logger.info('useEffect - queue complete, calling onCompleted');
         completedRef.current = true;
         onCompleted?.();
       }
     }
-
-    // Reset the guard when the queue becomes active again or is cleared
     if (isRunning || itemsRaw.length === 0) {
       completedRef.current = false;
     }
   }, [isRunning, itemsRaw, onCompleted]);
 
   const items: RunnerItem[] = useMemo(
-    () =>
-      itemsRaw.map((item: QueueItem) => ({
-        task: {
-          id: item.taskId,
-          title: item.title,
-          type: item.taskType,
-          projectId: item.projectId,
-          projectName: item.projectName,
-        },
-        status:
-          item.status === 'pending'
-            ? 'queued'
-            : item.status === 'completed'
-              ? 'done'
-              : item.status === 'running'
-                ? 'running'
-                : 'failed',
-        error: item.error,
-        liveSteps: [],
-        result: item.result,
-      })),
-    [itemsRaw],
+    () => itemsRaw.map(mapQueueItemToRunnerItem),
+    [itemsRaw]
   );
+
+
 
   logger.exit('useQueueRunner');
 
@@ -94,18 +103,31 @@ export function useQueueRunner(onCompleted?: () => void) {
       isRunning,
       isPaused,
       isVisible,
+      isStarting,
 
-      enqueue: (newItems: QueueItem[]) => {
+      enqueue: (newItems: { taskId: string; projectId: string; title?: string; taskType?: string; projectName?: string }[]) => {
         logger.entry('enqueue', { count: newItems.length });
-        const itemsWithStatus = newItems.map((i) => ({ ...i, status: 'pending' as const }));
-        enqueueStore(itemsWithStatus);
+        const enqueueItems = newItems.map((i) => ({
+          task_id: i.taskId,
+          project_id: i.projectId,
+          title: i.title,
+          task_type: i.taskType,
+          project_name: i.projectName,
+        }));
+        enqueueStore(enqueueItems, 'append');
         logger.exit('enqueue');
       },
 
-      enqueueNext: (newItems: QueueItem[]) => {
+      enqueueNext: (newItems: { taskId: string; projectId: string; title?: string; taskType?: string; projectName?: string }[]) => {
         logger.entry('enqueueNext', { count: newItems.length });
-        const itemsWithStatus = newItems.map((i) => ({ ...i, status: 'pending' as const }));
-        enqueueNextStore(itemsWithStatus);
+        const enqueueItems = newItems.map((i) => ({
+          task_id: i.taskId,
+          project_id: i.projectId,
+          title: i.title,
+          task_type: i.taskType,
+          project_name: i.projectName,
+        }));
+        enqueueStore(enqueueItems, 'next');
         logger.exit('enqueueNext');
       },
 
@@ -133,6 +155,6 @@ export function useQueueRunner(onCompleted?: () => void) {
         logger.exit('close');
       },
     }),
-    [items, isRunning, isPaused, isVisible, enqueueStore, enqueueNextStore, removeItemStore, pauseStore, resumeStore, closeStore],
+    [items, isRunning, isPaused, isVisible, isStarting, enqueueStore, removeItemStore, pauseStore, resumeStore, closeStore]
   );
 }

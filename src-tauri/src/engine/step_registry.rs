@@ -924,12 +924,19 @@ impl StepRegistry {
             crate::engine::exec::territory_research::exec_territory_build_context
         );
 
-        register_blocking!(
-            handlers,
+        handlers.insert(
             StepKind::TerritoryStrategy,
-            crate::engine::exec::territory_research::exec_territory_strategy,
-            agent_provider,
-            context_json
+            Box::new(|_step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                let agent_provider = ctx.agent_provider.to_string();
+                let context_json = ctx.latest_raw.unwrap_or("{}").to_string();
+                Box::pin(async move {
+                    crate::engine::exec::territory_research::exec_territory_strategy(
+                        &task, &project_path, &agent_provider, &context_json,
+                    ).await
+                })
+            }),
         );
 
         handlers.insert(

@@ -2,6 +2,8 @@
 
 Concise reference for AI agents adding or maintaining features in this repo.
 
+> **Fast path:** If you know what you're building, skip to the [Agent Development Playbook](./docs/AGENT_DEVELOPMENT_PLAYBOOK.md) for scenario-specific instructions. Read this file for architecture, rules, and reference material.
+
 ---
 
 ## What This Repo Is
@@ -12,6 +14,29 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 - **Frontend**: React + TypeScript + Vite + Tailwind v4 + shadcn/ui (`src/`)
 - **Store**: SQLite (runtime state) + JSON in the user's repo (committed content data)
 - **Not related to `pageseeds-cli`**: business logic is re-implemented here in Rust, not imported
+
+---
+
+## Read This First: Common Development Moves
+
+**Before you open any file, find your scenario:**
+
+| If you need to... | Use this path | Do NOT |
+|---|---|---|
+| **Adjust how an AI writes/reviews content** | Edit or add a skill in `.github/skills/{skill}/SKILL.md` (or embedded defaults in `src-tauri/src/skills/`). Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
+| **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
+| **Attach tasks to execution** | Use backend queue commands through `tauri.ts` (`enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`). | Call `executeTask` directly from components |
+| **Programmatically create tasks** | Use `TaskSpawner::spawn` or `TaskSpawner::spawn_follow_up`. | Call `task_store::create_task` directly |
+| **Pass downstream context/data** | Use task artifacts + deterministic prep steps. | Make the agent rediscover file paths or metrics from prose |
+| **Get JSON from an agent** | Use shared extraction helpers (`engine::text` in Rust; `artifacts.ts` on frontend). | Write new regex parsers or normalizer paths |
+| **Sync article state to repo JSON** | Use `db::export::write_articles_to_repo()` or `content::ops::sync_and_validate()`. | Write raw SQL + manual `fs::write` of `articles.json` |
+| **Add a new workflow step** | Add `StepKind` variant → register in `step_registry.rs` → add match arm in `executor.rs` → implement in `engine/exec/`. | Put business logic in `commands/` or the handler |
+| **Add frontend UI around backend data** | Add command wrapper in `tauri.ts` → add type in `types.ts` → build component in `src/components/`. | Call `invoke()` inline in components |
+
+**Golden rules:**
+1. A new skill file is ~20 lines. A new task type + handler + exec module is ~200+ lines. **Prefer the skill.**
+2. When the output is an MDX article, reuse `write_article` with a different skill — do not build a new pipeline.
+3. The queue is backend-managed. Components enqueue; they do not execute.
 
 ---
 
@@ -316,7 +341,7 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 | Does it analyze keyword coverage? | Reuse `analyze_keyword_coverage`. |
 | Is the only difference from an existing task the prompt/skill used? | Reuse the existing handler — change the skill param, not the handler. |
 
-**Rule:** A new skill file (`.github/automation/skills/*.md`) is ~20 lines. A new task type + handler + exec module is ~200+ lines. Prefer the skill.
+**Rule:** A new skill file (`.github/skills/{skill_name}/SKILL.md`) is ~20 lines. A new task type + handler + exec module is ~200+ lines. Prefer the skill.
 
 #### If you still need a new task type
 
@@ -346,7 +371,7 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 
 **What the correct implementation should have been:**
 
-1. **Skill-only approach (preferred):** Create a `hub-write` skill (`.github/automation/skills/hub-write.md`). The hub page task becomes a `write_article` task whose spec includes spoke metadata as a task artifact. The existing `ContentHandler` plans a single agentic step with `"skill": "hub-write"`. The agent writes the MDX. Done.
+1. **Skill-only approach (preferred):** Create a `hub-write` skill (`.github/skills/hub-write/SKILL.md`). The hub page task becomes a `write_article` task whose spec includes spoke metadata as a task artifact. The existing `ContentHandler` plans a single agentic step with `"skill": "hub-write"`. The agent writes the MDX. Done.
 
 2. **If hub-specific deterministic prep is needed:** Add ONE deterministic step (`hub_build_brief`) that reads the strategy artifact and assembles a JSON brief. Then the existing `write_article` agentic step consumes that brief via the normal artifact-loading mechanism. No new handler family. No new article-persistence logic.
 
@@ -462,7 +487,7 @@ Three managed states declared in `lib.rs` and available as `State<'_>` in comman
 
 ## Development Process
 
-Read [docs/dev-process.md](docs/dev-process.md) before starting multi-step features. Key rules:
+Before starting multi-step features, write a spec in `docs/`. Key rules:
 
 1. **Port behavior, not architecture** — identify inputs/outputs first, not class hierarchies.
 2. **Test the agent prompt before writing the executor** — paste it into the CLI manually.
@@ -472,6 +497,10 @@ Read [docs/dev-process.md](docs/dev-process.md) before starting multi-step featu
 6. **Ship one thing at a time** — verify it works, then start the next.
 
 Feature specs live in `docs/`. Write one before writing code.
+
+### Legacy Code Warning
+
+The `create_hub_page` and `refresh_hub_page` task types, along with their dedicated `Hub*` step kinds and `engine/exec/content/hub_page.rs` module, are **legacy**. They exist only for backward compatibility during migration. New work must NOT copy this pattern. Hub pages should be created using the standard `write_article` task type with a `hub-write` skill and structured artifacts. See the "Anti-Pattern Case Study: Hub Page Creation" section above for details.
 
 ---
 

@@ -801,12 +801,11 @@ export function Overview({
                               )
                               const queue = useQueueStore.getState()
                               queue.enqueue([{
-                                taskId: task.id,
-                                projectId: project.id,
+                                task_id: task.id,
+                                project_id: project.id,
                                 title: task.title ?? 'CTR Audit',
-                                taskType: 'ctr_audit',
-                                projectName: project.name,
-                                status: 'pending',
+                                task_type: 'ctr_audit',
+                                project_name: project.name,
                               }])
                               // Refresh CTR health after queue starts
                               await refetchCtrHealth?.()

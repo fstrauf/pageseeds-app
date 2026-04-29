@@ -625,15 +625,17 @@ pub fn write_articles_to_repo(
     let mut exported: serde_json::Value =
         serde_json::from_str(&export_articles(conn, project_id)?)?;
 
-    // Merge sidecar metadata (e.g. GSC metrics) from SQLite into the export.
-    merge_sidecar_metadata(conn, project_id, &mut exported)?;
-
     let out_path = articles_json_path(project_path);
     if let Ok(existing_json) = std::fs::read_to_string(&out_path) {
         if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_json) {
             merge_unknown_fields(&mut exported, &existing);
         }
     }
+
+    // Merge sidecar metadata (e.g. GSC metrics) from SQLite into the export.
+    // This MUST run after merge_unknown_fields so fresh SQLite data wins
+    // over stale null values from the old articles.json on disk.
+    merge_sidecar_metadata(conn, project_id, &mut exported)?;
 
     std::fs::create_dir_all(out_path.parent().unwrap())?;
     std::fs::write(out_path, serde_json::to_string_pretty(&exported)?)?;

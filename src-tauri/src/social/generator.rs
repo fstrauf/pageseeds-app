@@ -118,7 +118,8 @@ fn parse_post_output(
     output_dir: &Path,
 ) -> Result<SocialPost> {
     // Extract JSON from output
-    let json_str = extract_json_block(output)?;
+    let json_str = crate::engine::text::extract_json_string(output)
+        .ok_or_else(|| crate::error::Error::Other("No JSON found in output".to_string()))?;
     let parsed: serde_json::Value = serde_json::from_str(&json_str)?;
     
     let hook = parsed["hook"].as_str().unwrap_or(&article.title).to_string();
@@ -164,25 +165,7 @@ fn parse_post_output(
     })
 }
 
-/// Extract JSON block from agent output
-fn extract_json_block(output: &str) -> Result<String> {
-    // Find JSON block between ```json and ```
-    if let Some(start) = output.find("```json") {
-        let after_start = &output[start + 7..];
-        if let Some(end) = after_start.find("```") {
-            return Ok(after_start[..end].trim().to_string());
-        }
-    }
-    
-    // Try just finding { and }
-    if let Some(start) = output.find('{') {
-        if let Some(end) = output.rfind('}') {
-            return Ok(output[start..=end].to_string());
-        }
-    }
-    
-    Err(crate::error::Error::Other("No JSON found in output".to_string()))
-}
+
 
 /// Image generation prompt for external AI services
 pub fn generate_image_prompt(post: &SocialPost) -> String {

@@ -107,7 +107,8 @@ impl WorkflowHandler for ResearchHandler {
                     WorkflowStep::new("research_seed_validation", StepKind::Agentic),
                     // Step 4 (deterministic): DataForSEO related_keywords per validated seed.
                     // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
-                    WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative),
+                    WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
+                        .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
                     // Step 5 (deterministic): Select best candidates from structured data.
                     // Outputs clean JSON directly — no normalizer needed because upstream
                     // agentic steps now use Extractor<T>.
@@ -152,7 +153,13 @@ impl WorkflowHandler for ContentHandler {
             )];
         }
         // Agentic: the agent reads the article spec and writes the MDX file.
-        vec![WorkflowStep::new("content_write_stage", StepKind::Agentic)]
+        let is_hub = matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
+        let step = WorkflowStep::new("content_write_stage", StepKind::Agentic);
+        if is_hub {
+            vec![step.with_param(step_params::SKILL, "hub-write")]
+        } else {
+            vec![step]
+        }
     }
 }
 
@@ -286,7 +293,8 @@ impl WorkflowHandler for ImplementationHandler {
                 // Step 1 (deterministic): load the target MDX file and extract structured context
                 // (word count, H1, title, internal links, canonical). This is obvious file I/O —
                 // no judgment required — and saves the agent from hunting around the repo.
-                WorkflowStep::new("indexing_fix_context", StepKind::IndexingFixContext),
+                WorkflowStep::new("indexing_fix_context", StepKind::IndexingFixContext)
+                    .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
                 // Step 2 (agentic): apply the fix. The agent gets the GSC issue + structured
                 // context and edits the MDX file directly. Judgment is required because the fix
                 // depends on intent, content quality, and site-specific conventions.
@@ -380,7 +388,8 @@ impl WorkflowHandler for CoverageHandler {
     fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
         vec![
             // Step 1 (deterministic): Load articles from articles.json
-            WorkflowStep::new("coverage_load_articles", StepKind::CoverageLoadArticles),
+            WorkflowStep::new("coverage_load_articles", StepKind::CoverageLoadArticles)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
             // Step 2 (agentic): Cluster articles by semantic similarity
             // Cannot be deterministic: understanding topic relationships and naming
             // clusters requires semantic judgment about content themes.
@@ -446,7 +455,8 @@ impl WorkflowHandler for CtrAuditHandler {
                 // Includes rendered audit results from DB if available.
                 // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
                 // and deterministic math: clicks_lost = impressions * max(0, target_ctr - actual_ctr).
-                WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext),
+                WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
                 // Per-article fix tasks are spawned in post_actions::after_task_success
                 // after this task completes, reading the ctr_build_context artifact.
             ],
@@ -466,14 +476,17 @@ impl WorkflowHandler for CannibalizationAuditHandler {
     fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
         vec![
             // Step 1 (deterministic): Sync latest GSC data.
-            WorkflowStep::new("can_gsc_sync", StepKind::GscSyncArticles).optional(),
+            // Non-optional: cannibalization analysis is meaningless without
+            // impression/click/position data. If this fails, the task fails loud.
+            WorkflowStep::new("can_gsc_sync", StepKind::GscSyncArticles),
             // Step 2 (deterministic): Load articles from articles.json or live-site inventory.
             WorkflowStep::new("can_coverage_load", StepKind::CoverageLoadArticles),
             // Step 3 (deterministic): Compute TF-IDF similarity matrix + format structured context.
             // Pure math: TF-IDF vectorization on [title, h1, target_keyword, first_200_words],
             // cosine similarity between pairs, group by shared keyword. NO judgment about what
             // to do with the clusters.
-            WorkflowStep::new("can_build_context", StepKind::CanBuildContext),
+            WorkflowStep::new("can_build_context", StepKind::CanBuildContext)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
             // Step 4 (agentic): Generate merge strategy + expansion plan.
             // Cannot be deterministic: deciding which article to keep in a merge requires
             // judgment about authority (impressions, internal links), content quality, and
@@ -545,12 +558,14 @@ impl WorkflowHandler for ConsolidateClusterHandler {
             // Step 2 (deterministic): Preflight checks — files exist, no redirect cycles, keeper indexable.
             WorkflowStep::new("merge_preflight", StepKind::MergePreflight),
             // Step 3 (deterministic): Extract unique sections (headings, tables, examples, FAQs) from redirect pages.
-            WorkflowStep::new("merge_extract_sections", StepKind::MergeExtractSections),
+            WorkflowStep::new("merge_extract_sections", StepKind::MergeExtractSections)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
             // Step 4 (agentic): Draft ContentMergePatch JSON deciding which unique content belongs in keeper.
             // Cannot be deterministic: understanding whether a section adds unique value requires judgment.
             // Input contract: structured JSON with keeper content + extracted unique sections.
             // Output contract: ContentMergePatch JSON.
             WorkflowStep::new("merge_draft_patch", StepKind::MergeDraftPatch)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput)
                 .with_param(step_params::SKILL, "merge-content"),
             // Step 5 (deterministic): Apply structured patch, snapshot original, validate MDX/frontmatter.
             WorkflowStep::new("merge_apply_patch", StepKind::MergeApplyPatch),
@@ -583,13 +598,15 @@ impl WorkflowHandler for TerritoryResearchHandler {
             ),
             // Step 2 (deterministic): Query SQLite for existing articles matching theme, read excerpts.
             // Pure data collection — no judgment. Outputs structured TerritoryContext JSON.
-            WorkflowStep::new("territory_build_context", StepKind::TerritoryBuildContext),
+            WorkflowStep::new("territory_build_context", StepKind::TerritoryBuildContext)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
             // Step 3 (agentic): Generate TerritoryStrategy JSON from context.
             // Cannot be deterministic: deciding which gaps to fill, what competitors cover,
             // and how to avoid cannibalization requires semantic judgment.
             // Input contract: structured TerritoryContext JSON.
             // Output contract: TerritoryStrategy JSON.
             WorkflowStep::new("territory_strategy", StepKind::TerritoryStrategy)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput)
                 .with_param(step_params::SKILL, "territory-strategy"),
             // Step 4 (deterministic): Write strategy JSON to automation dir.
             WorkflowStep::new("territory_apply", StepKind::TerritoryApply),

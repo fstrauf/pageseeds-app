@@ -1,9 +1,9 @@
-use chrono::Utc;
 use rusqlite::Connection;
 
+use crate::engine::spawner::{TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::models::reddit::RedditOpportunity;
-use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskStatus};
 
 /// Create `reddit_reply` tasks from selected opportunities in a completed search task.
 ///
@@ -48,11 +48,8 @@ pub fn create_reply_tasks_from_opportunities(
     }
 
     let mut created_tasks = Vec::new();
-    let now = Utc::now().to_rfc3339();
 
-    for (idx, opp) in selected_opps.iter().enumerate() {
-        let task_id = format!("task-{}", Utc::now().timestamp_millis() + idx as i64);
-
+    for opp in &selected_opps {
         let priority = match opp.severity.as_deref() {
             Some("CRITICAL") | Some("HIGH") => Priority::High,
             _ => Priority::Medium,
@@ -77,32 +74,27 @@ pub fn create_reply_tasks_from_opportunities(
             opp.post_id
         );
 
-        let task = Task {
-            id: task_id,
+        let idempotency_key = format!(
+            "reddit_reply:{}:{}",
+            parent_task.project_id, opp.post_id
+        );
+
+        let spec = TaskSpec {
             project_id: parent_task.project_id.clone(),
             task_type: "reddit_reply".to_string(),
-            phase: "engagement".to_string(),
-            status: TaskStatus::Todo,
-            priority,
-            execution_mode: ExecutionMode::Manual,
-            agent_policy: AgentPolicy::Optional,
             title: Some(title),
             description: Some(description),
+            phase: Some("engagement".to_string()),
+            execution_mode: Some(ExecutionMode::Manual),
+            priority,
+            agent_policy: AgentPolicy::Optional,
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun {
-                attempts: 0,
-                last_error: None,
-                provider: None,
-                ..Default::default()
-            },
-            created_at: now.clone(),
-            updated_at: now.clone(),
+            idempotency_key: Some(idempotency_key),
         };
 
-        task_store::create_task(conn, &task)
-            .map_err(|e| format!("Failed to create task: {}", e))?;
-
+        let task = TaskSpawner::spawn(conn, spec)
+            .map_err(|e| format!("Failed to spawn reply task for post {}: {}", opp.post_id, e))?;
         created_tasks.push(task);
     }
 

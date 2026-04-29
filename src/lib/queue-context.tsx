@@ -1,11 +1,19 @@
 import { createContext, useContext } from 'react'
-import type { QueueItem } from './types'
+
+export interface QueueContextTask {
+  taskId: string
+  projectId: string
+  title?: string
+  taskType?: string
+  projectName?: string
+  status?: string
+}
 
 export interface QueueContextValue {
   /** Append tasks to the end of the queue. Starts the runner if not already active. */
-  enqueue: (items: QueueItem[]) => void
+  enqueue: (items: QueueContextTask[]) => void
   /** Insert tasks at the front of the pending section (ahead of other queued items). */
-  enqueueNext: (items: QueueItem[]) => void
+  enqueueNext: (items: QueueContextTask[]) => void
   /** Whether the runner panel is currently visible. */
   isActive: boolean
 }

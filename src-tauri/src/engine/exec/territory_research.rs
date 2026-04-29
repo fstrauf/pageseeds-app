@@ -1,6 +1,6 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
-use crate::engine::{agent, skills};
+use crate::engine::skills;
 use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
 use crate::models::task::Task;
 /// Territory research execution module.
@@ -201,7 +201,7 @@ pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> S
 // Step 3: Agentic Strategy
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub(crate) fn exec_territory_strategy(
+pub(crate) async fn exec_territory_strategy(
     _task: &Task,
     project_path: &str,
     agent_provider: &str,
@@ -223,25 +223,47 @@ pub(crate) fn exec_territory_strategy(
     let prompt = skill.content
         + "\n\n---\n\n## Territory Context\n\n"
         + context_json
-        + "\n\nPlease generate a structured TerritoryStrategy JSON following the skill instructions."
-        + "\n\nCRITICAL: Return ONLY a single JSON object matching the TerritoryStrategy structure."
-        + " Do not include markdown prose, summaries, or explanations outside the JSON.";
+        + "\n\nGenerate a structured TerritoryStrategy by calling the submit tool.";
 
-    match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => {
-            let strategy_json = crate::engine::text::extract_json(&output)
-                .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                .unwrap_or(output);
+    let preamble = "You are an expert SEO strategist. Analyze the territory context and generate a structured strategy using the submit tool.";
 
+    log::info!(
+        "[territory_strategy] running structured extraction ({} chars prompt, provider={})",
+        prompt.len(),
+        agent_provider
+    );
+
+    match crate::rig::extraction::extract_structured::<TerritoryStrategy>(
+        agent_provider,
+        &prompt,
+        Some(preamble),
+    )
+    .await
+    {
+        Ok(strategy) => {
+            let strategy_json = match serde_json::to_string_pretty(&strategy) {
+                Ok(j) => j,
+                Err(e) => {
+                    return StepResult {
+                        success: false,
+                        message: format!("Failed to serialize strategy: {}", e),
+                        output: None,
+                    };
+                }
+            };
             StepResult {
                 success: true,
-                message: format!("Territory strategy complete: {} chars", strategy_json.len()),
+                message: format!(
+                    "Territory strategy complete: {} recommendations for '{}'",
+                    strategy.content_recommendations.len(),
+                    strategy.theme
+                ),
                 output: Some(strategy_json),
             }
         }
         Err(e) => StepResult {
             success: false,
-            message: format!("Agent error: {}", e),
+            message: format!("Structured extraction failed: {}", e),
             output: None,
         },
     }
@@ -630,4 +652,6 @@ mod tests {
             .join("territory_strategy_task-tr-3.json");
         assert!(out_path.exists(), "Strategy file should be written");
     }
+
+
 }

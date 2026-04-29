@@ -135,35 +135,51 @@ pub(crate) fn exec_gsc_sync_articles(
     let start_str = start.format("%Y-%m-%d").to_string();
     let end_str = end.format("%Y-%m-%d").to_string();
 
-    let page_rows_result = std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async move {
-            crate::gsc::analytics::fetch_page_rows(
-                &token_clone,
-                &site_url_clone,
-                &start_str,
-                &end_str,
-                1000,
-            )
-            .await
-        })
-    })
-    .join();
+    let (page_rows, query_rows) = {
+        let token_inner = token_clone;
+        let site_url_inner = site_url_clone;
+        let start_inner = start_str.clone();
+        let end_inner = end_str.clone();
 
-    let page_rows = match page_rows_result {
-        Ok(Ok(rows)) => rows,
-        Ok(Err(e)) => {
-            return StepResult {
-                success: false,
-                message: format!("GSC fetch failed: {}", e),
-                output: None,
+        let fetch_result = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async move {
+                let pages = crate::gsc::analytics::fetch_page_rows(
+                    &token_inner,
+                    &site_url_inner,
+                    &start_inner,
+                    &end_inner,
+                    1000,
+                )
+                .await?;
+                let queries = crate::gsc::analytics::fetch_page_query_rows(
+                    &token_inner,
+                    &site_url_inner,
+                    &start_inner,
+                    &end_inner,
+                    10000,
+                )
+                .await?;
+                Ok::<_, crate::error::Error>((pages, queries))
+            })
+        })
+        .join();
+
+        match fetch_result {
+            Ok(Ok((p, q))) => (p, q),
+            Ok(Err(e)) => {
+                return StepResult {
+                    success: false,
+                    message: format!("GSC fetch failed: {}", e),
+                    output: None,
+                }
             }
-        }
-        Err(_) => {
-            return StepResult {
-                success: false,
-                message: "GSC fetch thread panicked".to_string(),
-                output: None,
+            Err(_) => {
+                return StepResult {
+                    success: false,
+                    message: "GSC fetch thread panicked".to_string(),
+                    output: None,
+                }
             }
         }
     };
@@ -263,7 +279,139 @@ pub(crate) fn exec_gsc_sync_articles(
         }
     }
 
-    // 8. Re-export projection so articles.json gets the new GSC metadata
+    // 8. Match query-level data and store in ctr_query_metrics + target_keyword
+    let mut queries_by_article: HashMap<i64, Vec<&crate::models::gsc::PageQueryMetrics>> =
+        HashMap::new();
+    let mut path_to_article_id: HashMap<String, i64> = HashMap::new();
+
+    for article in &articles {
+        let slug = article.url_slug.clone();
+        let file_ref = article.file.clone();
+        let article_path: String = if !slug.is_empty() {
+            let s = slug.trim_matches('/').replace('_', "-").to_lowercase();
+            format!("/{}", s)
+        } else if !file_ref.is_empty() {
+            let stem = std::path::Path::new(&file_ref)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let s = num_prefix_re.replace(&stem, "").to_string();
+            format!("/{}", s.replace('_', "-").to_lowercase())
+        } else {
+            continue;
+        };
+
+        // Insert full path and segment variants for query matching
+        path_to_article_id.insert(article_path.clone(), article.id);
+        let last = article_path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+        if !last.is_empty() {
+            path_to_article_id.insert(last.clone(), article.id);
+            let stripped = num_prefix_re.replace(&last, "").to_string();
+            if stripped != last && !stripped.is_empty() {
+                path_to_article_id.insert(stripped, article.id);
+            }
+        }
+    }
+
+    for q in &query_rows {
+        let normalized_page = normalize_path(&q.page);
+        let article_id = path_to_article_id
+            .get(&normalized_page)
+            .copied()
+            .or_else(|| {
+                let last = normalized_page
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                path_to_article_id.get(&last).copied().or_else(|| {
+                    let stripped = num_prefix_re.replace(&last, "").to_string();
+                    path_to_article_id.get(&stripped).copied()
+                })
+            });
+
+        if let Some(id) = article_id {
+            queries_by_article.entry(id).or_default().push(q);
+        }
+    }
+
+    let mut query_matched = 0usize;
+    let mut target_keyword_updated = 0usize;
+
+    for (article_id, queries) in &mut queries_by_article {
+        // Sort by clicks descending so top query is first
+        queries.sort_by(|a, b| {
+            b.clicks
+                .partial_cmp(&a.clicks)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let page_url = queries.first().map(|q| q.page.as_str()).unwrap_or("");
+        let db_metrics: Vec<(String, f64, f64, f64, f64, Option<String>)> = queries
+            .iter()
+            .map(|q| {
+                (
+                    q.query.clone(),
+                    q.impressions,
+                    q.clicks,
+                    q.ctr,
+                    q.position,
+                    None, // intent — not classified here
+                )
+            })
+            .collect();
+
+        if let Err(e) = crate::db::set_ctr_query_metrics(
+            &db,
+            &task.project_id,
+            *article_id,
+            page_url,
+            &db_metrics,
+            Some(&start_str),
+            Some(&end_str),
+        ) {
+            log::warn!(
+                "[gsc_sync] Failed to store query metrics for article {}: {}",
+                article_id,
+                e
+            );
+        } else {
+            query_matched += 1;
+        }
+
+        // Update target_keyword from top query if currently empty
+        if let Ok(top_query) = queries.first().map(|q| q.query.as_str()).ok_or("") {
+            if !top_query.is_empty() {
+                let updated = db.execute(
+                    "UPDATE articles SET target_keyword = ?1
+                     WHERE project_id = ?2 AND id = ?3
+                       AND (target_keyword IS NULL OR target_keyword = '')",
+                    rusqlite::params![top_query, task.project_id, article_id],
+                );
+                if let Ok(rows) = updated {
+                    if rows > 0 {
+                        target_keyword_updated += 1;
+                    }
+                } else if let Err(e) = updated {
+                    log::warn!(
+                        "[gsc_sync] Failed to update target_keyword for article {}: {}",
+                        article_id,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    log::info!(
+        "[gsc_sync] Query metrics stored for {} articles, target_keyword updated for {} articles",
+        query_matched,
+        target_keyword_updated
+    );
+
+    // 9. Re-export projection so articles.json gets the new GSC metadata
     if let Err(e) = crate::content::article_index::export_projection(
         &db,
         &task.project_id,
@@ -281,6 +429,9 @@ pub(crate) fn exec_gsc_sync_articles(
         "unmatched": unmatched,
         "total": matched + unmatched,
         "gsc_rows": page_rows.len(),
+        "query_rows": query_rows.len(),
+        "query_articles": query_matched,
+        "target_keywords_updated": target_keyword_updated,
         "site": site_url,
         "period_days": days,
     });
@@ -288,10 +439,13 @@ pub(crate) fn exec_gsc_sync_articles(
     StepResult {
         success: true,
         message: format!(
-            "GSC sync: matched {}/{} articles ({} GSC pages fetched)",
+            "GSC sync: matched {}/{} articles ({} GSC pages, {} query rows, {} articles with query data, {} target keywords updated)",
             matched,
             matched + unmatched,
-            page_rows.len()
+            page_rows.len(),
+            query_rows.len(),
+            query_matched,
+            target_keyword_updated
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
     }

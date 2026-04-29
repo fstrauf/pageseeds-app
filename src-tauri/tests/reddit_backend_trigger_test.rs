@@ -246,7 +246,7 @@ fn test_reddit_config_parse_step_only() {
 
     // Try to parse the output as RedditSearchParams
     if let Some(ref output) = result.output {
-        match pageseeds_lib::engine::exec::reddit::extract_json_object(output) {
+        match pageseeds_lib::engine::text::extract_json_string(output).ok_or("No JSON found") {
             Ok(json_str) => {
                 println!("\n✅ Extracted JSON ({} chars)", json_str.len());
 
@@ -358,7 +358,7 @@ fn test_reddit_config_parse_simulate_app_call() {
 
             // Now extract JSON
             println!("\nExtracting JSON...");
-            match pageseeds_lib::engine::exec::reddit::extract_json_object(&content) {
+            match pageseeds_lib::engine::text::extract_json_string(&content).ok_or("No JSON found") {
                 Ok(json_str) => {
                     println!("✅ Extracted JSON ({} chars)", json_str.len());
                     println!(

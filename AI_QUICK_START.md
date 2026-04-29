@@ -33,8 +33,6 @@ A **Tauri 2 desktop app** for SEO content workflows. Self-contained binary — n
 - **[AGENTS.md](./AGENTS.md)** — Full agent guide with directory map, coding rules, and development process
 
 ### Debugging
-- **[QUEUE_DEBUG.md](./QUEUE_DEBUG.md)** — Diagnose task execution issues
-
 ---
 
 ## Directory Structure
@@ -266,4 +264,4 @@ pnpm build            # Production build
 | How do LLM agents work? | [Agent Integration](./docs/AGENT_INTEGRATION.md) |
 | What are the runtime invariants? | [CONTRACTS.md](./CONTRACTS.md) |
 | How do I add a feature? | [AGENTS.md](./AGENTS.md) |
-| Why did my task fail? | [QUEUE_DEBUG.md](./QUEUE_DEBUG.md) |
+| Why did my task fail? | Check the task detail panel → Run History |

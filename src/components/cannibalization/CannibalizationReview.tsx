@@ -201,9 +201,10 @@ export function CannibalizationReview({ projectId }: Props) {
         </Button>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="p-6">
-          <Tabs defaultValue="merge">
+      <div className="flex-1 min-h-0">
+        <ScrollArea className="h-full">
+          <div className="p-6">
+            <Tabs defaultValue="merge">
             <TabsList className="mb-4">
               <TabsTrigger value="merge">
                 <GitMerge size={14} className="mr-1.5" />
@@ -294,6 +295,7 @@ export function CannibalizationReview({ projectId }: Props) {
         </div>
       </ScrollArea>
     </div>
+  </div>
   )
 }
 

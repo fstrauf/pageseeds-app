@@ -319,33 +319,18 @@ fn _create_default_template(id: &str) -> Result<ContentTemplate, String> {
 
 fn parse_agent_post_output(output: &str) -> Result<AgentPostOutput, String> {
     // Extract JSON from agent output
-    let json_str = extract_json_block(output)?;
+    let json_str = crate::engine::text::extract_json_string(output)
+        .ok_or_else(|| "No JSON block found in output".to_string())?;
     serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
 fn parse_agent_template_output(output: &str) -> Result<AgentTemplateOutput, String> {
-    let json_str = extract_json_block(output)?;
+    let json_str = crate::engine::text::extract_json_string(output)
+        .ok_or_else(|| "No JSON block found in output".to_string())?;
     serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
-fn extract_json_block(output: &str) -> Result<String, String> {
-    // Find JSON block between ```json and ```
-    if let Some(start) = output.find("```json") {
-        let after_start = &output[start + 7..];
-        if let Some(end) = after_start.find("```") {
-            return Ok(after_start[..end].trim().to_string());
-        }
-    }
 
-    // Try just finding { and }
-    if let Some(start) = output.find('{') {
-        if let Some(end) = output.rfind('}') {
-            return Ok(output[start..=end].to_string());
-        }
-    }
-
-    Err("No JSON block found in output".to_string())
-}
 
 fn create_social_post_from_agent_output(
     campaign_id: &str,

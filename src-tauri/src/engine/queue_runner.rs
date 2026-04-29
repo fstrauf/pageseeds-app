@@ -62,6 +62,7 @@ pub async fn execute_queue_internal(
     items: Vec<QueueItem>,
     db_path: PathBuf,
     app_handle: AppHandle,
+    gsc_token: Option<String>,
 ) {
     log::info!("[queue_runner] ==========================================");
     log::info!("[queue_runner] STARTING EXECUTION OF {} TASKS", items.len());
@@ -126,6 +127,7 @@ pub async fn execute_queue_internal(
         let task_id = item.task_id.clone();
         let db_path_clone = db_path.clone();
         let app_handle_clone = app_handle.clone();
+        let gsc_token_clone = gsc_token.clone();
 
         log::info!("[queue_runner] Spawning blocking task for {}", item.task_id);
         let result = tokio::task::spawn_blocking(move || {
@@ -153,7 +155,7 @@ pub async fn execute_queue_internal(
                 executor::execute_task_with_token(
                     &conn,
                     &task_id,
-                    None,
+                    gsc_token_clone.as_deref(),
                     Some(app_handle_clone),
                     false,
                 )

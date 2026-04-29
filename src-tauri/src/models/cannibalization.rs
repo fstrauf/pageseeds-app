@@ -194,7 +194,7 @@ pub struct CannibalizationStrategy {
 
 // ─── Territory Strategy ───────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TerritoryStrategy {
@@ -210,7 +210,7 @@ pub struct TerritoryStrategy {
     pub existing_coverage: Vec<TerritoryCoverageItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TerritoryContentRec {
@@ -220,7 +220,7 @@ pub struct TerritoryContentRec {
     pub rationale: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TerritoryCoverageItem {

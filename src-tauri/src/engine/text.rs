@@ -1,6 +1,7 @@
 /// Text utilities shared across engine modules.
 ///
 /// Purpose: avoid UTF-8 panics from byte slicing like `s[..300]`.
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Returns a valid UTF-8 prefix with at most `max_chars` Unicode scalar values.
@@ -52,6 +53,58 @@ pub fn extract_json(text: &str) -> Option<Value> {
                     let candidate = &trimmed[start..=end];
                     if let Ok(v) = serde_json::from_str::<Value>(candidate) {
                         return Some(v);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Typed JSON extraction: attempts to parse the extracted JSON into a specific type.
+///
+/// This is a thin wrapper around `extract_json` that adds type safety. Prefer this
+/// over manual `serde_json::from_str` when parsing agent output.
+pub fn extract_json_as<T: DeserializeOwned>(text: &str) -> Option<T> {
+    let value = extract_json(text)?;
+    serde_json::from_value(value).ok()
+}
+
+/// Extract the raw JSON string from agent output without parsing.
+///
+/// Returns the first valid JSON substring found (fenced or bare), or None.
+/// Useful when you need the raw string for further processing.
+pub fn extract_json_string(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+
+    // 1. Whole text is JSON
+    if serde_json::from_str::<Value>(trimmed).is_ok() {
+        return Some(trimmed.to_string());
+    }
+
+    // 2. Fenced code block
+    for pat in ["```json\n", "```json\r\n", "```JSON\n", "```\n"] {
+        if let Some(start) = text.find(pat) {
+            let after_open = start + pat.len();
+            let rest = &text[after_open..];
+            if let Some(end) = rest.find("```") {
+                let candidate = rest[..end].trim();
+                if serde_json::from_str::<Value>(candidate).is_ok() {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+
+    // 3. Bare JSON object/array
+    for (open, close) in [('{', '}'), ('[', ']')] {
+        if let Some(start) = trimmed.find(open) {
+            if let Some(end) = trimmed.rfind(close) {
+                if end > start {
+                    let candidate = &trimmed[start..=end];
+                    if serde_json::from_str::<Value>(candidate).is_ok() {
+                        return Some(candidate.to_string());
                     }
                 }
             }

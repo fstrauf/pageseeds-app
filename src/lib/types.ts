@@ -122,6 +122,13 @@ export type {
   CtrVerifiedArticle,
   CtrVerifiedFix,
   
+  // Queue Models
+  EnqueueItem,
+  EnqueueMode,
+  QueueItem,
+  QueueRun,
+  QueueSnapshot,
+  
   // Workflow
   ExecutionResult,
   FollowUpTask,
@@ -457,17 +464,6 @@ export interface RepairPathResult {
 }
 
 // ─── Global Task Queue ────────────────────────────────────────────────────────
-
-export interface QueueItem {
-  taskId: string
-  projectId: string
-  title: string
-  taskType: string
-  projectName?: string
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
-  error?: string
-  result?: import('./bindings').ExecutionResult
-}
 
 export interface RunnerItem {
   task: {

@@ -38,13 +38,11 @@ fn sync_article_review_state_to_repo(
     project_id: &str,
     project_path: &str,
 ) -> crate::error::Result<()> {
-    let json = crate::db::export::export_articles(conn, project_id)?;
-    let out_path = std::path::Path::new(project_path)
-        .join(".github")
-        .join("automation")
-        .join("articles.json");
-    std::fs::create_dir_all(out_path.parent().unwrap())?;
-    std::fs::write(out_path, json)?;
+    crate::content::article_index::export_projection(
+        conn,
+        project_id,
+        std::path::Path::new(project_path),
+    )?;
     Ok(())
 }
 

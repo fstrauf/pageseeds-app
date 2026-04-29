@@ -34,6 +34,8 @@ const EMBEDDED_SKILL_NAMES: &[&str] = &[
     "ctr-template-fix",
     "hub-outline",
     "hub-write",
+    "merge-content",
+    "territory-strategy",
 ];
 
 fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
@@ -47,6 +49,8 @@ fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
         "ctr-template-fix" => include_str!("../../skills/ctr-template-fix/SKILL.md"),
         "hub-outline" => include_str!("../../skills/hub-outline/SKILL.md"),
         "hub-write" => include_str!("../../skills/hub-write/SKILL.md"),
+        "merge-content" => include_str!("../../skills/merge-content/SKILL.md"),
+        "territory-strategy" => include_str!("../../skills/territory-strategy/SKILL.md"),
         _ => return None,
     };
 

@@ -12,6 +12,7 @@ vi.mock('@/lib/tauri', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri')>('@/lib/tauri')
   return {
     ...actual,
+    getQueueSnapshot: vi.fn(() => Promise.resolve({ run: null, items: [] })),
     listTasks: vi.fn(() => Promise.resolve([])),
     getTask: vi.fn(() => Promise.resolve(null)),
     deleteTask: vi.fn(() => Promise.resolve()),
@@ -43,10 +44,10 @@ vi.mock('@/components/ui/sheet', () => ({
 describe('TaskBoard', () => {
   beforeEach(() => {
     useQueueStore.setState({
-      items: [],
-      isRunning: false,
-      isPaused: false,
+      snapshot: null,
       isVisible: false,
+      unlisteners: [],
+      expandedTaskIds: new Set(),
     })
   })
 

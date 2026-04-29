@@ -82,7 +82,7 @@ pub async fn analyze_competitor_page(
 
     // Extract main content
     let text_content = extract_main_content(&document);
-    let word_count = count_words(&text_content);
+    let word_count = crate::content::ops::count_words(&text_content);
 
     // Extract headings and sections
     let sections = extract_sections(&document, &text_content);
@@ -265,11 +265,6 @@ fn clean_text(text: &str) -> String {
     cleaned.trim().to_string()
 }
 
-/// Count words in text.
-fn count_words(text: &str) -> usize {
-    text.split_whitespace().count()
-}
-
 /// Extract domain from URL.
 fn extract_domain(url: &str) -> String {
     url.parse::<url::Url>()
@@ -324,12 +319,6 @@ mod tests {
     }
 
     #[test]
-    fn test_count_words() {
-        assert_eq!(count_words("Hello world"), 2);
-        assert_eq!(count_words("  Multiple   spaces   here  "), 3);
-        assert_eq!(count_words(""), 0);
-    }
-
     #[test]
     fn test_extract_domain() {
         assert_eq!(extract_domain("https://example.com/path"), "example.com");

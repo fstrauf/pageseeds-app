@@ -350,6 +350,7 @@ export default function App() {
           items={queue.items}
           isRunning={queue.isRunning}
           isPaused={queue.isPaused}
+          isStarting={queue.isStarting}
           onPause={queue.pause}
           onResume={queue.resume}
           onRemove={queue.removeItem}

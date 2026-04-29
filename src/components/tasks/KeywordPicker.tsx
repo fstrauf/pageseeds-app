@@ -4,89 +4,28 @@ import { useErrorHandler } from '../../lib/toast-context'
 import { createArticleTasksFromKeywords } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
 import type { KeywordDifficultyEntry, KeywordResearchResult, Task } from '../../lib/types'
+import {
+  kdValue,
+  kdLabel,
+  kdColor,
+  opportunityScore,
+  opportunityTier,
+  opportunityTierClass,
+  parseMetric,
+  formatMetric,
+  type KeywordRow,
+} from '../../lib/keywords'
+import { extractJsonString } from '../../lib/artifacts'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '../../lib/utils'
-
-interface KeywordRow {
-  keyword: string
-  difficulty: number | null
-  volume: number | null
-  traffic: number | null
-  shortage: number | null
-  has_data: boolean
-  serp_count?: number
-  intent?: string | null
-  intent_confidence?: number | null
-}
 
 interface KeywordPickerProps {
   task: Task
   onTasksCreated: (tasks: Task[]) => void
 }
 
-// ─── KD helpers ───────────────────────────────────────────────────────────────
-
-function kdValue(raw: number | string | null | undefined): number | null {
-  if (raw == null) return null
-  const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10)
-  return isNaN(n) ? null : n
-}
-
-function kdLabel(kd: number | null): string {
-  if (kd == null) return '—'
-  if (kd < 10) return 'Very Easy'
-  if (kd < 30) return 'Easy'
-  if (kd < 50) return 'Medium'
-  if (kd < 70) return 'Hard'
-  return 'Very Hard'
-}
-
-function kdColor(kd: number | null): string {
-  if (kd == null) return 'bg-secondary text-secondary-foreground border-transparent'
-  if (kd < 10) return 'bg-emerald-100 text-emerald-700 border-transparent'
-  if (kd < 30) return 'bg-green-100 text-green-700 border-transparent'
-  if (kd < 50) return 'bg-amber-100 text-amber-700 border-transparent'
-  if (kd < 70) return 'bg-orange-100 text-orange-700 border-transparent'
-  return 'bg-red-100 text-red-700 border-transparent'
-}
-
-function parseMetric(raw: number | string | null | undefined): number | null {
-  if (raw == null) return null
-  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null
-  const cleaned = String(raw).replace(/,/g, '').trim()
-  if (!cleaned) return null
-  const n = Number.parseInt(cleaned, 10)
-  return Number.isNaN(n) ? null : n
-}
-
-function formatMetric(n: number | null): string {
-  if (n == null) return '—'
-  return n.toLocaleString('en-US')
-}
-
-function opportunityScore(row: KeywordRow): number {
-  const kd = row.difficulty
-  const kdScore = kd == null ? 40 : Math.max(0, 100 - kd)
-  // Use traffic or volume only — never use shortage as a traffic proxy.
-  const trafficSignal = Math.max(0, row.traffic ?? row.volume ?? 0)
-  const trafficScore = Math.min(100, Math.log10(trafficSignal + 1) * 25)
-  return kdScore * 0.6 + trafficScore * 0.4
-}
-
-function opportunityTier(row: KeywordRow): 'High' | 'Medium' | 'Low' {
-  const score = opportunityScore(row)
-  if (score >= 70) return 'High'
-  if (score >= 45) return 'Medium'
-  return 'Low'
-}
-
-function opportunityTierClass(tier: 'High' | 'Medium' | 'Low'): string {
-  if (tier === 'High') return 'bg-emerald-100 text-emerald-700 border-transparent'
-  if (tier === 'Medium') return 'bg-amber-100 text-amber-700 border-transparent'
-  return 'bg-slate-100 text-slate-700 border-transparent'
-}
 
 // ─── Intent helpers ───────────────────────────────────────────────────────────
 
@@ -183,15 +122,6 @@ function buildFromMarkdownTable(content: string): KeywordResearchResult | null {
 
 // ─── Parse artifact ─────────────────────────────────────────────────────────--
 
-function extractJsonFromMarkdown(content: string): string {
-  const trimmed = content.trim()
-  const codeFenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/)
-  if (codeFenceMatch) {
-    return codeFenceMatch[1].trim()
-  }
-  return trimmed
-}
-
 interface LandingPageCandidateArtifact {
   keyword: string
   estimated_kd?: number | string | null
@@ -225,7 +155,12 @@ type KeywordArtifact = {
 
 function parseArtifact(content: string): KeywordResearchResult | null {
   try {
-    const cleanContent = extractJsonFromMarkdown(content)
+    const cleanContent = extractJsonString(content)
+    if (!cleanContent) {
+      // Agentic output can be markdown tables instead of JSON. Build a compatible
+      // synthetic result so the picker still works.
+      return buildFromMarkdownTable(content)
+    }
     const parsed = JSON.parse(cleanContent)
     
     // Handle new unified format: landing_page_candidates (from research_final_selection step)
