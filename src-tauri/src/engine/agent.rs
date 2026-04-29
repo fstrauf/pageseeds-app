@@ -120,25 +120,28 @@ enum RigError {
 
 /// Try to run the prompt through a rig async backend.
 fn try_rig_backend(provider: &str, prompt: &str) -> Result<String, RigError> {
-    // We need an async runtime to resolve the backend and call rig.
-    // First try the current runtime handle (works inside spawn_blocking too).
-    let handle = match tokio::runtime::Handle::try_current() {
-        Ok(h) => h,
-        Err(_) => {
-            // No runtime available — create a temporary one.
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(r) => r,
-                Err(e) => {
-                    log::warn!("[agent] Failed to create tokio runtime: {}", e);
-                    return Err(RigError::FallbackToCli);
-                }
-            };
-            return rt.block_on(run_rig_prompt(provider, prompt));
-        }
-    };
+    // Spawn a dedicated thread with its own runtime to avoid all block_on issues:
+    // - called from an async task on a worker thread
+    // - called from a spawn_blocking thread (block_in_place panics there)
+    // - called from a current_thread runtime
+    let provider = provider.to_string();
+    let prompt = prompt.to_string();
 
-    // We have a runtime handle — block_on the async work.
-    handle.block_on(run_rig_prompt(provider, prompt))
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("[agent] Failed to create tokio runtime: {}", e);
+                return Err(RigError::FallbackToCli);
+            }
+        };
+        rt.block_on(run_rig_prompt(&provider, &prompt))
+    })
+    .join()
+    .unwrap_or_else(|e| {
+        log::error!("[agent] Rig thread panicked: {:?}", e);
+        Err(RigError::Other("Agent thread panicked".to_string()))
+    })
 }
 
 /// Resolve backend and run prompt via rig.

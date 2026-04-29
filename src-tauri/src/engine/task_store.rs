@@ -119,9 +119,17 @@ pub fn list_tasks_filtered(
     let mut binds: Vec<String> = vec![project_id.to_string()];
 
     if let Some(s) = status {
-        conditions.push(format!("status = ?{idx}"));
-        binds.push(s.to_string());
-        idx += 1;
+        // The frontend treats 'queued' as part of the todo bucket — mirror that in SQL.
+        if s == "todo" {
+            conditions.push(format!("status IN (?{idx}, ?{})", idx + 1));
+            binds.push("todo".to_string());
+            binds.push("queued".to_string());
+            idx += 2;
+        } else {
+            conditions.push(format!("status = ?{idx}"));
+            binds.push(s.to_string());
+            idx += 1;
+        }
     }
     if let Some(p) = phase {
         conditions.push(format!("phase = ?{idx}"));

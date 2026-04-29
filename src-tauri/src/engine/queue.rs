@@ -361,8 +361,11 @@ pub fn enqueue_tasks(
     let run = get_or_create_active_run(conn)?;
     insert_queue_items(conn, &run.id, items, mode)?;
 
-    // If run was finished/failed, resurrect it as idle so runner can pick it up
-    if run.status == QueueRunStatus::Finished || run.status == QueueRunStatus::Failed {
+    // If run was finished/failed/paused, resurrect it as idle so runner can pick it up
+    if run.status == QueueRunStatus::Finished
+        || run.status == QueueRunStatus::Failed
+        || run.status == QueueRunStatus::Paused
+    {
         update_run_status(conn, &run.id, QueueRunStatus::Idle)?;
     }
 
@@ -671,6 +674,8 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
             Ok(Err(e)) => {
                 update_item_status(&conn, &run.id, &item.task_id, QueueItemStatus::Failed, Some(&e), None)
                     .ok();
+                // Ensure the underlying task is reset to todo so it can be retried.
+                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Todo).ok();
                 emit_failed(&app_handle, &item, &e);
 
                 if run.pause_on_error {
@@ -684,6 +689,8 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                 let err = format!("Task panicked: {:?}", e);
                 update_item_status(&conn, &run.id, &item.task_id, QueueItemStatus::Failed, Some(&err), None)
                     .ok();
+                // Panic means the executor never got to reset task status — do it here.
+                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Todo).ok();
                 emit_failed(&app_handle, &item, &err);
 
                 if run.pause_on_error {

@@ -72,6 +72,8 @@ Return JSON exactly matching this structure:
   - `title` (string): The article title
   - `url_slug` (string): The article URL slug
   - `overlap` (string): Brief description of how this article overlaps with the territory
+- If there are no existing articles, `existing_coverage` MUST be an empty array: `[]`.
+- Never return summary objects for array fields. `target_keywords`, `competitor_gaps`, `content_recommendations`, and `existing_coverage` must always be JSON arrays.
 
 ## Constraints
 

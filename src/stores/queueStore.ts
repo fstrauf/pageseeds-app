@@ -103,9 +103,11 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   applySnapshot: (snapshot: QueueSnapshot) => {
     logger.debug('applySnapshot', { itemCount: snapshot.items.length, runStatus: snapshot.run?.status });
     const isVisible = snapshotToVisible(snapshot);
-    // Clear optimistic starting state once backend confirms running
-    const isActuallyRunning = snapshot.run?.status === 'running';
-    set({ snapshot, isVisible, isStarting: isActuallyRunning ? false : get().isStarting });
+    // Clear optimistic starting state once backend confirms running or a terminal state.
+    // Keep it only while the run is idle (runner still spawning) so we don't flicker.
+    const runStatus = snapshot.run?.status;
+    const shouldKeepStarting = runStatus === 'idle' && get().isStarting;
+    set({ snapshot, isVisible, isStarting: shouldKeepStarting });
   },
 
   sync: async () => {

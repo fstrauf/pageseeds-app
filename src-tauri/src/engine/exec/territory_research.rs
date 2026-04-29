@@ -1,6 +1,6 @@
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::workflows::StepResult;
 use crate::engine::skills;
+use crate::engine::workflows::StepResult;
 use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
 use crate::models::task::Task;
 /// Territory research execution module.
@@ -11,6 +11,7 @@ use crate::models::task::Task;
 ///   3. territory_strategy             — agentic: generate TerritoryStrategy via skill
 ///   4. territory_apply                — write strategy JSON to automation dir
 use rusqlite::Connection;
+use serde_json::Value;
 use std::path::Path;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -280,19 +281,8 @@ pub(crate) fn exec_territory_apply(
 ) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    let out_path = paths
-        .automation_dir
-        .join(format!("territory_strategy_{}.json", task.id));
-    if let Err(e) = std::fs::write(&out_path, strategy_json) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write territory strategy: {}", e),
-            output: None,
-        };
-    }
-
-    let strategy: TerritoryStrategy = match serde_json::from_str(strategy_json) {
-        Ok(s) => s,
+    let (strategy, normalized_json, warnings) = match parse_territory_strategy(strategy_json) {
+        Ok(parsed) => parsed,
         Err(e) => {
             return StepResult {
                 success: false,
@@ -302,14 +292,32 @@ pub(crate) fn exec_territory_apply(
         }
     };
 
+    let out_path = paths
+        .automation_dir
+        .join(format!("territory_strategy_{}.json", task.id));
+    if let Err(e) = std::fs::write(&out_path, &normalized_json) {
+        return StepResult {
+            success: false,
+            message: format!("Failed to write territory strategy: {}", e),
+            output: None,
+        };
+    }
+
+    let warning_suffix = if warnings.is_empty() {
+        String::new()
+    } else {
+        format!(" (normalized: {})", warnings.join(", "))
+    };
+
     StepResult {
         success: true,
         message: format!(
-            "Territory strategy applied: {} recommendations for '{}'",
+            "Territory strategy applied: {} recommendations for '{}'{}",
             strategy.content_recommendations.len(),
-            strategy.theme
+            strategy.theme,
+            warning_suffix
         ),
-        output: Some(strategy_json.to_string()),
+        output: Some(normalized_json),
     }
 }
 
@@ -357,6 +365,111 @@ fn gather_matching_articles(
     }
 
     Ok(serde_json::Value::Array(articles))
+}
+
+fn parse_territory_strategy(
+    strategy_json: &str,
+) -> Result<(TerritoryStrategy, String, Vec<String>), String> {
+    match serde_json::from_str::<TerritoryStrategy>(strategy_json) {
+        Ok(strategy) => {
+            let normalized_json = serde_json::to_string_pretty(&strategy)
+                .map_err(|e| format!("failed to serialize typed strategy: {}", e))?;
+            Ok((strategy, normalized_json, Vec::new()))
+        }
+        Err(initial_error) => {
+            let mut value: Value = serde_json::from_str(strategy_json).map_err(|e| {
+                format!(
+                    "{}; also failed to parse as JSON value: {}",
+                    initial_error, e
+                )
+            })?;
+            let warnings = normalize_territory_strategy_value(&mut value);
+            let strategy: TerritoryStrategy = serde_json::from_value(value).map_err(|e| {
+                format!(
+                    "{}; normalization could not produce TerritoryStrategy: {}",
+                    initial_error, e
+                )
+            })?;
+            let normalized_json = serde_json::to_string_pretty(&strategy)
+                .map_err(|e| format!("failed to serialize normalized strategy: {}", e))?;
+            Ok((strategy, normalized_json, warnings))
+        }
+    }
+}
+
+fn normalize_territory_strategy_value(value: &mut Value) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(object) = value.as_object_mut() else {
+        return warnings;
+    };
+
+    normalize_string_array_field(object, "target_keywords", &mut warnings);
+    normalize_string_array_field(object, "competitor_gaps", &mut warnings);
+    normalize_object_array_field(object, "content_recommendations", &mut warnings);
+    normalize_object_array_field(object, "existing_coverage", &mut warnings);
+
+    warnings
+}
+
+fn normalize_string_array_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    warnings: &mut Vec<String>,
+) {
+    match object.get_mut(field) {
+        Some(Value::Null) | None => {
+            object.insert(field.to_string(), Value::Array(Vec::new()));
+            warnings.push(format!("{} null/missing to []", field));
+        }
+        Some(Value::Array(_)) => {}
+        Some(Value::Object(map)) => {
+            let items = map
+                .values()
+                .filter_map(|value| value.as_str().map(|s| Value::String(s.to_string())))
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                *object.get_mut(field).expect("field exists") = Value::Array(items);
+                warnings.push(format!("{} object values to array", field));
+            }
+        }
+        Some(_) => {}
+    }
+}
+
+fn normalize_object_array_field(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+    warnings: &mut Vec<String>,
+) {
+    match object.get_mut(field) {
+        Some(Value::Null) | None => {
+            object.insert(field.to_string(), Value::Array(Vec::new()));
+            warnings.push(format!("{} null/missing to []", field));
+        }
+        Some(Value::Array(_)) => {}
+        Some(Value::Object(map)) => {
+            let items = if looks_like_object_array_item(map) {
+                vec![Value::Object(map.clone())]
+            } else {
+                map.values()
+                    .filter_map(|value| match value {
+                        Value::Object(item) if looks_like_object_array_item(item) => {
+                            Some(Value::Object(item.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            *object.get_mut(field).expect("field exists") = Value::Array(items);
+            warnings.push(format!("{} object to array", field));
+        }
+        Some(_) => {}
+    }
+}
+
+fn looks_like_object_array_item(map: &serde_json::Map<String, Value>) -> bool {
+    map.contains_key("title") || map.contains_key("url_slug") || map.contains_key("article_id")
 }
 
 fn read_excerpt_from_file(file: &str) -> String {
@@ -653,5 +766,64 @@ mod tests {
         assert!(out_path.exists(), "Strategy file should be written");
     }
 
+    #[test]
+    fn test_territory_apply_normalizes_existing_coverage_summary_object() {
+        let dir = TempProjectDir::new();
+        let project_path = dir.path().to_string_lossy().to_string();
 
+        let strategy = serde_json::json!({
+            "theme": "coffee-health",
+            "priority": "high",
+            "target_keywords": ["coffee health benefits"],
+            "competitor_gaps": ["No dedicated health coverage"],
+            "content_recommendations": [
+                {
+                    "title": "The Real Health Benefits of Coffee",
+                    "url_slug": "coffee-health-benefits",
+                    "intent": "informational",
+                    "rationale": "Fills the health gap"
+                }
+            ],
+            "existing_coverage": {
+                "summary": "No existing articles cover the coffee-health theme.",
+                "overlap_risks": []
+            }
+        });
+
+        let task = Task {
+            id: "task-tr-4".to_string(),
+            project_id: "proj1".to_string(),
+            task_type: "territory_research".to_string(),
+            phase: "research".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            execution_mode: crate::models::task::ExecutionMode::Spec,
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            title: Some("Research territory: coffee-health".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_territory_apply(&task, &project_path, &strategy.to_string());
+        assert!(result.success, "Expected success: {}", result.message);
+        assert!(result
+            .message
+            .contains("normalized: existing_coverage object to array"));
+
+        let normalized: TerritoryStrategy = serde_json::from_str(&result.output.unwrap()).unwrap();
+        assert!(normalized.existing_coverage.is_empty());
+
+        let out_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("territory_strategy_task-tr-4.json");
+        let written: TerritoryStrategy =
+            serde_json::from_str(&fs::read_to_string(out_path).unwrap()).unwrap();
+        assert!(written.existing_coverage.is_empty());
+    }
 }
