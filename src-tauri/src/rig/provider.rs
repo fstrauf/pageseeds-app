@@ -20,27 +20,15 @@ use rig::completion::Prompt;
 pub enum LlmBackend {
     /// Kimi via the local ACP bridge (OpenAI-compatible endpoint).
     /// Uses `rig::providers::openai` with custom base URL.
-    KimiBridge {
-        base_url: String,
-        model: String,
-    },
+    KimiBridge { base_url: String, model: String },
     /// Kimi via direct CLI subprocess (legacy fallback).
     KimiDirect,
     /// Claude via Anthropic API (native rig provider).
-    Claude {
-        api_key: String,
-        model: String,
-    },
+    Claude { api_key: String, model: String },
     /// OpenAI via native API.
-    OpenAi {
-        api_key: String,
-        model: String,
-    },
+    OpenAi { api_key: String, model: String },
     /// Ollama via OpenAI-compatible endpoint.
-    Ollama {
-        base_url: String,
-        model: String,
-    },
+    Ollama { base_url: String, model: String },
 }
 
 /// Result of an agent run.
@@ -87,12 +75,8 @@ pub async fn run_agent(
             run_kimi_bridge(base_url, model, prompt, preamble).await
         }
         LlmBackend::KimiDirect => run_kimi_direct(prompt, preamble),
-        LlmBackend::Claude { api_key, model } => {
-            run_claude(api_key, model, prompt, preamble).await
-        }
-        LlmBackend::OpenAi { api_key, model } => {
-            run_openai(api_key, model, prompt, preamble).await
-        }
+        LlmBackend::Claude { api_key, model } => run_claude(api_key, model, prompt, preamble).await,
+        LlmBackend::OpenAi { api_key, model } => run_openai(api_key, model, prompt, preamble).await,
         LlmBackend::Ollama { base_url, model } => {
             run_ollama(base_url, model, prompt, preamble).await
         }
@@ -180,12 +164,10 @@ pub async fn resolve_backend(
             base_url: bridge_url.unwrap_or("http://localhost:11434").to_string(),
             model,
         }),
-        other => {
-            Err(format!(
-                "Unknown provider '{}'. Valid providers: kimi, claude, openai, ollama",
-                other
-            ))
-        }
+        other => Err(format!(
+            "Unknown provider '{}'. Valid providers: kimi, claude, openai, ollama",
+            other
+        )),
     }
 }
 
@@ -229,7 +211,9 @@ fn run_kimi_direct(prompt: &str, _preamble: Option<&str>) -> Result<AgentRespons
     if result.success {
         Ok(AgentResponse::from_content(result.raw_output))
     } else {
-        Err(result.error.unwrap_or_else(|| "Unknown agent error".to_string()))
+        Err(result
+            .error
+            .unwrap_or_else(|| "Unknown agent error".to_string()))
     }
 }
 
@@ -239,8 +223,8 @@ async fn run_claude(
     prompt: &str,
     preamble: Option<&str>,
 ) -> Result<AgentResponse, String> {
-    let client =
-        rig::providers::anthropic::Client::new(api_key).map_err(|e| format!("Failed to build Claude client: {}", e))?;
+    let client = rig::providers::anthropic::Client::new(api_key)
+        .map_err(|e| format!("Failed to build Claude client: {}", e))?;
 
     let agent = client
         .agent(model)
@@ -348,15 +332,11 @@ mod tests {
 
         // OpenAI
         let backend = resolve_backend("openai", None, None, None).await.unwrap();
-        assert!(
-            matches!(backend, LlmBackend::OpenAi { model, .. } if model == "gpt-4o")
-        );
+        assert!(matches!(backend, LlmBackend::OpenAi { model, .. } if model == "gpt-4o"));
 
         // Ollama
         let backend = resolve_backend("ollama", None, None, None).await.unwrap();
-        assert!(
-            matches!(backend, LlmBackend::Ollama { model, .. } if model == "llama3.2")
-        );
+        assert!(matches!(backend, LlmBackend::Ollama { model, .. } if model == "llama3.2"));
     }
 
     #[tokio::test]
@@ -376,7 +356,9 @@ mod tests {
         // Set KIMI_BRIDGE_URL to a fake URL. With mode "bridge", it should use it directly.
         let old = std::env::var("KIMI_BRIDGE_URL").ok();
         std::env::set_var("KIMI_BRIDGE_URL", "http://fake-bridge:9999/v1");
-        let backend = resolve_backend("kimi", None, None, Some("bridge")).await.unwrap();
+        let backend = resolve_backend("kimi", None, None, Some("bridge"))
+            .await
+            .unwrap();
         assert!(
             matches!(backend, LlmBackend::KimiBridge { base_url, .. } if base_url == "http://fake-bridge:9999/v1")
         );

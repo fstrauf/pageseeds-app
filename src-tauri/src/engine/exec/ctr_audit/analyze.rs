@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::engine::workflows::StepResult;
 use crate::engine::{agent, skills};
+use crate::models::ctr::CtrRecommendation;
 use crate::models::task::Task;
 
 /// Run the CTR optimization analysis using an LLM agent.
@@ -57,7 +58,8 @@ pub(crate) fn exec_ctr_analyze(
         None => {
             return StepResult {
                 success: false,
-                message: "Skill 'ctr-optimization' not found in .github/skills/ or app defaults".to_string(),
+                message: "Skill 'ctr-optimization' not found in .github/skills/ or app defaults"
+                    .to_string(),
                 output: None,
             };
         }
@@ -84,9 +86,33 @@ pub(crate) fn exec_ctr_analyze(
                     if is_single_article {
                         if let Some(recs) = val["recommendations"].as_array() {
                             if let Some(first) = recs.first() {
-                                serde_json::to_string_pretty(first).unwrap_or_else(|_| output.clone())
+                                serde_json::to_string_pretty(first)
+                                    .unwrap_or_else(|_| output.clone())
                             } else {
-                                serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
+                                // Empty recommendations array: agent found no fixes.
+                                // Construct a valid CtrRecommendation with fixes: [] so
+                                // downstream steps can parse it and short-circuit gracefully.
+                                let article = context_doc["articles"]
+                                    .as_array()
+                                    .and_then(|a| a.first())
+                                    .unwrap_or(&serde_json::Value::Null);
+                                let rec = CtrRecommendation {
+                                    article_id: article["id"].as_i64().unwrap_or(0),
+                                    url_slug: article["url_slug"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    file: article["file"].as_str().unwrap_or("").to_string(),
+                                    target_keyword: article["target_keyword"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    fixes: vec![],
+                                    priority: None,
+                                    expected_ctr_improvement: None,
+                                };
+                                serde_json::to_string_pretty(&rec)
+                                    .unwrap_or_else(|_| output.clone())
                             }
                         } else {
                             serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())

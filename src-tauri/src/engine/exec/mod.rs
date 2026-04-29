@@ -1,9 +1,9 @@
 // Domain-specific execution modules extracted from executor.rs.
 // executor.rs orchestrates; these modules implement.
 
-pub mod common;
 pub mod audit_health;
 pub mod cannibalization_audit;
+pub mod common;
 pub mod consolidate_cluster;
 pub mod content;
 pub mod content_audit;

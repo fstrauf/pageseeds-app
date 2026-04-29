@@ -3,7 +3,6 @@
 /// Finds the correct handler for a task, plans the step graph,
 /// executes each step sequentially, persists artifacts, and
 /// updates task status in SQLite.
-
 use chrono::Utc;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -11,10 +10,7 @@ use tauri::Emitter as _;
 
 use crate::engine::step_registry::{StepContext, StepRegistry};
 use crate::engine::workflows::{
-    handlers::default_handlers,
-    step_params,
-    StepKind, StepResult,
-    WorkflowStep,
+    handlers::default_handlers, step_params, StepKind, StepResult, WorkflowStep,
 };
 use crate::engine::{agent, task_store};
 use crate::models::task::{Task, TaskArtifact, TaskStatus};
@@ -91,16 +87,18 @@ pub async fn execute_task_with_token(
     let started_at = Utc::now().to_rfc3339();
 
     // Transition to in_progress
-    if task.status == TaskStatus::Todo {
+    if task.status == TaskStatus::Todo || task.status == TaskStatus::Review {
         task.status = TaskStatus::InProgress;
         task.updated_at = started_at.clone();
-        task_store::update_task_status(conn, task_id, TaskStatus::InProgress).map_err(|e| e.to_string())?;
+        task.run.last_error = None;
+        task_store::update_task_status(conn, task_id, TaskStatus::InProgress)
+            .map_err(|e| e.to_string())?;
     }
 
     let (project_path, site_url, agent_provider, seo_provider) = {
         use crate::db::global_settings;
         let project = task_store::get_project(conn, &task.project_id).map_err(|e| e.to_string())?;
-        
+
         // Agent provider is now global (user preference), but check for legacy project-specific setting
         let agent_provider = if let Some(legacy) = &project.agent_provider {
             log::debug!("[executor] Using legacy project agent_provider: {}", legacy);
@@ -108,12 +106,15 @@ pub async fn execute_task_with_token(
         } else {
             global_settings::get_agent_provider(conn)
         };
-        
+
         (
             project.path.clone(),
             project.site_url.clone().unwrap_or_default(),
             agent_provider,
-            project.seo_provider.clone().unwrap_or_else(|| "ahrefs".to_string()),
+            project
+                .seo_provider
+                .clone()
+                .unwrap_or_else(|| "ahrefs".to_string()),
         )
     };
 
@@ -150,7 +151,11 @@ pub async fn execute_task_with_token(
         return Ok(ExecutionResult {
             task_id: task_id.to_string(),
             success: true,
-            message: format!("dry-run: {} steps planned for '{}'", progress.len(), task.task_type),
+            message: format!(
+                "dry-run: {} steps planned for '{}'",
+                progress.len(),
+                task.task_type
+            ),
             steps: progress,
             follow_up_tasks: vec![],
             started_at,
@@ -177,7 +182,8 @@ pub async fn execute_task_with_token(
             latest_raw_output.as_deref(),
             gsc_token,
             conn,
-        ).await;
+        )
+        .await;
 
         // Capture token usage from any agentic step that used a rig backend
         let (pt, ct) = agent::take_last_tokens();
@@ -191,8 +197,12 @@ pub async fn execute_task_with_token(
         {
             if let Some(ref out) = result.output {
                 let preview = crate::engine::text::char_prefix(out, 300);
-                log::info!("[executor] agentic step '{}' output ({} chars): {:?}",
-                    step.name, out.len(), preview);
+                log::info!(
+                    "[executor] agentic step '{}' output ({} chars): {:?}",
+                    step.name,
+                    out.len(),
+                    preview
+                );
             } else {
                 log::warn!("[executor] agentic step '{}' produced no output", step.name);
             }
@@ -200,19 +210,28 @@ pub async fn execute_task_with_token(
         } else if step.name == "indexing_fix_context" {
             // Pass deterministic context to the agentic step that follows
             if let Some(ref out) = result.output {
-                log::info!("[executor] indexing_fix_context output ({} chars)", out.len());
+                log::info!(
+                    "[executor] indexing_fix_context output ({} chars)",
+                    out.len()
+                );
                 latest_raw_output = result.output.clone();
             }
         } else if step.name == "coverage_load_articles" {
             // Track coverage_load_articles output for coverage_cluster_analysis
             if let Some(ref out) = result.output {
-                log::info!("[executor] coverage_load_articles output ({} chars)", out.len());
+                log::info!(
+                    "[executor] coverage_load_articles output ({} chars)",
+                    out.len()
+                );
                 latest_raw_output = result.output.clone();
             }
         } else if step.name == "research_ahrefs_pipeline" {
             // Track keyword research output for research_final_selection
             if let Some(ref out) = result.output {
-                log::info!("[executor] research_ahrefs_pipeline output ({} chars)", out.len());
+                log::info!(
+                    "[executor] research_ahrefs_pipeline output ({} chars)",
+                    out.len()
+                );
                 latest_raw_output = result.output.clone();
             }
         } else if step.name == "ctr_build_context" {
@@ -230,7 +249,10 @@ pub async fn execute_task_with_token(
         } else if step.name == "merge_extract_sections" {
             // Pass extracted section inventory to the agentic merge_draft_patch step
             if let Some(ref out) = result.output {
-                log::info!("[executor] merge_extract_sections output ({} chars)", out.len());
+                log::info!(
+                    "[executor] merge_extract_sections output ({} chars)",
+                    out.len()
+                );
                 latest_raw_output = result.output.clone();
             }
         } else if step.name == "merge_draft_patch" {
@@ -254,13 +276,19 @@ pub async fn execute_task_with_token(
         } else if step.name == "territory_load_recommendation" {
             // Pass loaded recommendation to territory_build_context
             if let Some(ref out) = result.output {
-                log::info!("[executor] territory_load_recommendation output ({} chars)", out.len());
+                log::info!(
+                    "[executor] territory_load_recommendation output ({} chars)",
+                    out.len()
+                );
                 latest_raw_output = result.output.clone();
             }
         } else if step.name == "territory_build_context" {
             // Pass structured context to the agentic territory_strategy step
             if let Some(ref out) = result.output {
-                log::info!("[executor] territory_build_context output ({} chars)", out.len());
+                log::info!(
+                    "[executor] territory_build_context output ({} chars)",
+                    out.len()
+                );
                 latest_raw_output = result.output.clone();
             }
         } else if step.name == "territory_strategy" {
@@ -271,25 +299,34 @@ pub async fn execute_task_with_token(
             }
         }
 
-        progress[i].status = if result.success { "ok".to_string() } else { "failed".to_string() };
+        progress[i].status = if result.success {
+            "ok".to_string()
+        } else {
+            "failed".to_string()
+        };
         progress[i].message = result.message.clone();
         progress[i].output = result.output.clone();
 
         // Emit step progress event for live UI updates
         if let Some(ref handle) = app_handle {
-            let _ = handle.emit("task_step_progress", &TaskStepEvent {
-                task_id: task_id.to_string(),
-                step_name: progress[i].step_name.clone(),
-                status: progress[i].status.clone(),
-                message: progress[i].message.clone(),
-            });
+            let _ = handle.emit(
+                "task_step_progress",
+                &TaskStepEvent {
+                    task_id: task_id.to_string(),
+                    step_name: progress[i].step_name.clone(),
+                    status: progress[i].status.clone(),
+                    message: progress[i].message.clone(),
+                },
+            );
         }
 
         // Persist agentic / deterministic output as artifact.
         // We write to SQLite but do NOT push into task.artifacts — the in-memory
         // Task struct would grow monotonically and bloat memory on every run.
         if let Some(ref out) = result.output {
-            let artifact_key = step.params.get(step_params::ARTIFACT_NAME)
+            let artifact_key = step
+                .params
+                .get(step_params::ARTIFACT_NAME)
                 .cloned()
                 .unwrap_or_else(|| step.name.clone());
             let artifact = TaskArtifact {
@@ -304,14 +341,16 @@ pub async fn execute_task_with_token(
         }
 
         // Run domain-specific post-step side effects.
-        let post = crate::engine::post_actions::after_step(&crate::engine::post_actions::PostStepContext {
-            conn,
-            task: &task,
-            step,
-            result: &result,
-            project_path: &project_path,
-            agent_provider: &agent_provider,
-        });
+        let post = crate::engine::post_actions::after_step(
+            &crate::engine::post_actions::PostStepContext {
+                conn,
+                task: &task,
+                step,
+                result: &result,
+                project_path: &project_path,
+                agent_provider: &agent_provider,
+            },
+        );
         if let Some(status) = post.status {
             progress[i].status = status;
         }
@@ -349,16 +388,14 @@ pub async fn execute_task_with_token(
 
     // Run domain-specific post-task side effects.
     if all_ok {
-        follow_up_ids.extend(
-            crate::engine::post_actions::after_task_success(
-                &crate::engine::post_actions::PostTaskContext {
-                    conn,
-                    task: &task,
-                    project_path: &project_path,
-                    progress: &progress,
-                }
-            )
-        );
+        follow_up_ids.extend(crate::engine::post_actions::after_task_success(
+            &crate::engine::post_actions::PostTaskContext {
+                conn,
+                task: &task,
+                project_path: &project_path,
+                progress: &progress,
+            },
+        ));
     }
     let follow_up_tasks: Vec<FollowUpTask> = follow_up_ids
         .iter()
@@ -381,7 +418,10 @@ pub async fn execute_task_with_token(
         fups.push(FollowUpTask {
             id: task_id.to_string(),
             task_type: task.task_type.clone(),
-            title: task.title.clone().unwrap_or_else(|| "Review results".to_string()),
+            title: task
+                .title
+                .clone()
+                .unwrap_or_else(|| "Review results".to_string()),
             status: "review".to_string(),
             execution_mode: "manual".to_string(),
             priority: task.priority.to_string(),
@@ -392,17 +432,37 @@ pub async fn execute_task_with_token(
     };
 
     if !all_ok {
-        task_store::record_task_run(conn, task_id, false, Some(&last_error), None, total_prompt_tokens, total_completion_tokens)
-            .map_err(|e| e.to_string())?;
+        task_store::record_task_run(
+            conn,
+            task_id,
+            false,
+            Some(&last_error),
+            None,
+            total_prompt_tokens,
+            total_completion_tokens,
+        )
+        .map_err(|e| e.to_string())?;
     } else {
-        task_store::record_task_run(conn, task_id, true, None, None, total_prompt_tokens, total_completion_tokens)
-            .map_err(|e| e.to_string())?;
+        task_store::record_task_run(
+            conn,
+            task_id,
+            true,
+            None,
+            None,
+            total_prompt_tokens,
+            total_completion_tokens,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     Ok(ExecutionResult {
         task_id: task_id.to_string(),
         success: all_ok,
-        message: if all_ok { "Task completed".to_string() } else { last_error },
+        message: if all_ok {
+            "Task completed".to_string()
+        } else {
+            last_error
+        },
         steps: progress,
         follow_up_tasks,
         started_at,
@@ -575,7 +635,9 @@ mod tests {
     fn setup_dummy_keyword_project(dir: &std::path::Path, theme: &str) {
         let automation = dir.join(".github").join("automation");
         std::fs::create_dir_all(&automation).unwrap();
-        let brief = format!("# Test Project\n\n## Content Clusters & Status\n\n### Cluster 1: {theme} (PLANNED)\n");
+        let brief = format!(
+            "# Test Project\n\n## Content Clusters & Status\n\n### Cluster 1: {theme} (PLANNED)\n"
+        );
         std::fs::write(automation.join("project.md"), brief).unwrap();
         std::fs::write(automation.join("articles.json"), "[]").unwrap();
         std::fs::write(
@@ -613,7 +675,12 @@ mod tests {
             project_id: project_id.to_string(),
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
+            run: TaskRun {
+                attempts: 0,
+                last_error: None,
+                provider: None,
+                ..Default::default()
+            },
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
         }
@@ -622,33 +689,63 @@ mod tests {
     // 1. Keyword research and Reddit tasks end with "review" status, not "done".
     #[test]
     fn review_tasks_go_to_review_status() {
-        assert_eq!(completed_task_status("research_keywords", true), TaskStatus::Review);
-        assert_eq!(completed_task_status("custom_keyword_research", true), TaskStatus::Review);
-        assert_eq!(completed_task_status("research_landing_pages", true), TaskStatus::Review);
-        assert_eq!(completed_task_status("reddit_opportunity_search", true), TaskStatus::Review);
+        assert_eq!(
+            completed_task_status("research_keywords", true),
+            TaskStatus::Review
+        );
+        assert_eq!(
+            completed_task_status("custom_keyword_research", true),
+            TaskStatus::Review
+        );
+        assert_eq!(
+            completed_task_status("research_landing_pages", true),
+            TaskStatus::Review
+        );
+        assert_eq!(
+            completed_task_status("reddit_opportunity_search", true),
+            TaskStatus::Review
+        );
     }
 
     // 2. All other successful tasks go to "done", not "review".
     #[test]
     fn non_research_task_goes_to_done() {
-        assert_eq!(completed_task_status("content_review", true), TaskStatus::Done);
+        assert_eq!(
+            completed_task_status("content_review", true),
+            TaskStatus::Done
+        );
         assert_eq!(completed_task_status("collect_gsc", true), TaskStatus::Done);
-        assert_eq!(completed_task_status("fix_indexing", true), TaskStatus::Done);
+        assert_eq!(
+            completed_task_status("fix_indexing", true),
+            TaskStatus::Done
+        );
     }
 
     // 3. Most failed tasks reset to "todo" so they can be retried.
     #[test]
     fn failed_task_resets_to_todo() {
-        assert_eq!(completed_task_status("research_keywords", false), TaskStatus::Todo);
-        assert_eq!(completed_task_status("content_review", false), TaskStatus::Todo);
-        assert_eq!(completed_task_status("fix_indexing", false), TaskStatus::Todo);
+        assert_eq!(
+            completed_task_status("research_keywords", false),
+            TaskStatus::Todo
+        );
+        assert_eq!(
+            completed_task_status("content_review", false),
+            TaskStatus::Todo
+        );
+        assert_eq!(
+            completed_task_status("fix_indexing", false),
+            TaskStatus::Todo
+        );
     }
 
     // 4. CTR fix failures land in Review (soft failure, retryable) rather than Todo,
     //    so they don't get blindly re-queued by the batch executor.
     #[test]
     fn fix_ctr_article_failure_goes_to_review() {
-        assert_eq!(completed_task_status("fix_ctr_article", false), TaskStatus::Review);
+        assert_eq!(
+            completed_task_status("fix_ctr_article", false),
+            TaskStatus::Review
+        );
     }
 
     // 4. Handler registry routes fix_* task types to ImplementationHandler.
@@ -662,10 +759,7 @@ mod tests {
             assert!(matched.is_some(), "No handler for task type '{tt}'");
             // ImplementationHandler produces specific step kinds for fix_* types.
             let steps = matched.unwrap().plan(&task);
-            assert!(
-                !steps.is_empty(),
-                "Handler for '{tt}' produced no steps"
-            );
+            assert!(!steps.is_empty(), "Handler for '{tt}' produced no steps");
             // ManualFallbackHandler would produce a "manual" step; ImplementationHandler
             // produces specific step kinds (not "manual").
             let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_ref()).collect();
@@ -685,7 +779,10 @@ mod tests {
         let matched = handlers.iter().find(|h| h.supports(&task));
         assert!(matched.is_some(), "No handler for territory_research");
         let steps = matched.unwrap().plan(&task);
-        assert!(!steps.is_empty(), "TerritoryResearchHandler produced no steps");
+        assert!(
+            !steps.is_empty(),
+            "TerritoryResearchHandler produced no steps"
+        );
         let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_ref()).collect();
         assert!(
             kinds.contains(&"territory_load_recommendation"),
@@ -714,18 +811,18 @@ mod tests {
     #[test]
     fn reddit_workflow_step_kinds_are_recognized() {
         use crate::engine::workflows::{StepKind, WorkflowStep};
-        
+
         let reddit_steps = vec![
-            (StepKind::RedditConfigParse, true),   // Should be recognized
-            (StepKind::RedditSearch, true),          // Should be recognized
-            (StepKind::RedditEnrich, true),          // Should be recognized
-            (StepKind::RedditFetchResults, true),   // Should be recognized
-            (StepKind::Unknown, false),        // Should NOT be recognized
+            (StepKind::RedditConfigParse, true),  // Should be recognized
+            (StepKind::RedditSearch, true),       // Should be recognized
+            (StepKind::RedditEnrich, true),       // Should be recognized
+            (StepKind::RedditFetchResults, true), // Should be recognized
+            (StepKind::Unknown, false),           // Should NOT be recognized
         ];
-        
+
         for (kind, should_be_recognized) in reddit_steps {
             let step = WorkflowStep::new("test_step", kind);
-            
+
             // Simulate what run_step does - match on step.kind
             let result = match step.kind {
                 StepKind::RedditConfigParse => Some(true),
@@ -734,16 +831,18 @@ mod tests {
                 StepKind::RedditFetchResults => Some(true),
                 _ => None,
             };
-            
+
             if should_be_recognized {
                 assert!(
                     result.is_some(),
-                    "Step kind '{:?}' should be recognized by run_step", kind
+                    "Step kind '{:?}' should be recognized by run_step",
+                    kind
                 );
             } else {
                 assert!(
                     result.is_none(),
-                    "Step kind '{:?}' should NOT be recognized by run_step", kind
+                    "Step kind '{:?}' should NOT be recognized by run_step",
+                    kind
                 );
             }
         }
@@ -1032,7 +1131,9 @@ mod tests {
         let result = {
             let _entered = rt.handle().enter();
             rt.block_on(async {
-                execute_task(&conn, &task_id).await.expect("execute_task should return Ok")
+                execute_task(&conn, &task_id)
+                    .await
+                    .expect("execute_task should return Ok")
             })
         };
 
@@ -1091,17 +1192,46 @@ mod tests {
             .expect("final selection should have content");
         let final_json: serde_json::Value = serde_json::from_str(final_selection).unwrap();
         assert!(
-            final_json.get("difficulty").is_some() || final_json.get("landing_page_candidates").is_some(),
+            final_json.get("difficulty").is_some()
+                || final_json.get("landing_page_candidates").is_some(),
             "final selection should contain keyword output"
         );
 
-        if let Some(v) = old_key { std::env::set_var("CAPSOLVER_API_KEY", v); } else { std::env::remove_var("CAPSOLVER_API_KEY"); }
-        if let Some(v) = old_create { std::env::set_var("PAGESEEDS_CAPSOLVER_CREATE_URL", v); } else { std::env::remove_var("PAGESEEDS_CAPSOLVER_CREATE_URL"); }
-        if let Some(v) = old_result { std::env::set_var("PAGESEEDS_CAPSOLVER_RESULT_URL", v); } else { std::env::remove_var("PAGESEEDS_CAPSOLVER_RESULT_URL"); }
-        if let Some(v) = old_ahrefs { std::env::set_var("PAGESEEDS_AHREFS_BASE_URL", v); } else { std::env::remove_var("PAGESEEDS_AHREFS_BASE_URL"); }
-        if let Some(v) = old_bridge { std::env::set_var("KIMI_BRIDGE_URL", v); } else { std::env::remove_var("KIMI_BRIDGE_URL"); }
-        if let Some(v) = old_db { std::env::set_var("PAGESEEDS_DB_PATH", v); } else { std::env::remove_var("PAGESEEDS_DB_PATH"); }
-        if let Some(v) = old_autocomplete { std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", v); } else { std::env::remove_var("GOOGLE_AUTOCOMPLETE_BASE_URL"); }
+        if let Some(v) = old_key {
+            std::env::set_var("CAPSOLVER_API_KEY", v);
+        } else {
+            std::env::remove_var("CAPSOLVER_API_KEY");
+        }
+        if let Some(v) = old_create {
+            std::env::set_var("PAGESEEDS_CAPSOLVER_CREATE_URL", v);
+        } else {
+            std::env::remove_var("PAGESEEDS_CAPSOLVER_CREATE_URL");
+        }
+        if let Some(v) = old_result {
+            std::env::set_var("PAGESEEDS_CAPSOLVER_RESULT_URL", v);
+        } else {
+            std::env::remove_var("PAGESEEDS_CAPSOLVER_RESULT_URL");
+        }
+        if let Some(v) = old_ahrefs {
+            std::env::set_var("PAGESEEDS_AHREFS_BASE_URL", v);
+        } else {
+            std::env::remove_var("PAGESEEDS_AHREFS_BASE_URL");
+        }
+        if let Some(v) = old_bridge {
+            std::env::set_var("KIMI_BRIDGE_URL", v);
+        } else {
+            std::env::remove_var("KIMI_BRIDGE_URL");
+        }
+        if let Some(v) = old_db {
+            std::env::set_var("PAGESEEDS_DB_PATH", v);
+        } else {
+            std::env::remove_var("PAGESEEDS_DB_PATH");
+        }
+        if let Some(v) = old_autocomplete {
+            std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", v);
+        } else {
+            std::env::remove_var("GOOGLE_AUTOCOMPLETE_BASE_URL");
+        }
 
         std::fs::remove_dir_all(&project_dir).ok();
     }
@@ -1117,18 +1247,17 @@ mod tests {
         let dir = unique_temp_dir("ps_date_empty");
         std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
         let articles_path = dir.join(".github").join("automation").join("articles.json");
-        std::fs::write(
-            &articles_path,
-            r#"{"nextArticleId":1,"articles":[]}"#,
-        )
-        .unwrap();
+        std::fs::write(&articles_path, r#"{"nextArticleId":1,"articles":[]}"#).unwrap();
 
         let result = compute_next_publish_date(&dir.to_string_lossy()).unwrap();
 
         let yesterday = (Utc::now().date_naive() - Duration::days(1))
             .format("%Y-%m-%d")
             .to_string();
-        assert_eq!(result, yesterday, "empty articles.json should return yesterday");
+        assert_eq!(
+            result, yesterday,
+            "empty articles.json should return yesterday"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1352,4 +1481,3 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
-

@@ -1,5 +1,5 @@
-use crate::models::task::Task;
 use super::{load_search_params_from_artifact, parse_config_fallback};
+use crate::models::task::Task;
 
 /// Compute engagement, accessibility, and overall scores.
 ///
@@ -7,24 +7,37 @@ use super::{load_search_params_from_artifact, parse_config_fallback};
 /// - accessibility = <10 comments→10, 10–30→8, 30–100→6, 100+→2
 /// - relevance   = 5.0 (placeholder; AI pass upgrades it via `exec_reddit_enrich`)
 /// - final_score = average of three components
-pub(crate) fn compute_scores(upvotes: i64, comment_count: i64, days_old: i64)
-    -> (f64, f64, f64, f64, &'static str)
-{
+pub(crate) fn compute_scores(
+    upvotes: i64,
+    comment_count: i64,
+    days_old: i64,
+) -> (f64, f64, f64, f64, &'static str) {
     let relevance_score: f64 = 5.0;
     let age = days_old.max(1) as f64;
     let engagement_score = (upvotes as f64 / age / 10.0).min(10.0).max(0.0);
     let accessibility_score: f64 = match comment_count {
-        c if c < 10  => 10.0,
-        c if c < 30  => 8.0,
+        c if c < 10 => 10.0,
+        c if c < 30 => 8.0,
         c if c < 100 => 6.0,
-        _            => 2.0,
+        _ => 2.0,
     };
     let final_score = (relevance_score + engagement_score + accessibility_score) / 3.0;
-    let severity = if final_score >= 8.5 { "CRITICAL" }
-        else if final_score >= 7.0 { "HIGH" }
-        else if final_score >= 5.0 { "MEDIUM" }
-        else { "LOW" };
-    (relevance_score, engagement_score, accessibility_score, final_score, severity)
+    let severity = if final_score >= 8.5 {
+        "CRITICAL"
+    } else if final_score >= 7.0 {
+        "HIGH"
+    } else if final_score >= 5.0 {
+        "MEDIUM"
+    } else {
+        "LOW"
+    };
+    (
+        relevance_score,
+        engagement_score,
+        accessibility_score,
+        final_score,
+        severity,
+    )
 }
 
 // ─── Search ───────────────────────────────────────────────────────────────────
@@ -34,15 +47,22 @@ pub(crate) fn compute_scores(upvotes: i64, comment_count: i64, days_old: i64)
 /// Reads queries/subreddits from the structured search params artifact (produced by
 /// reddit_config_parse_stage), calls the Reddit API, applies the 14-day filter and
 /// MEDIUM+ score filter, deduplicates, and returns the full filtered candidate pool.
-pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
+pub(crate) async fn exec_reddit_search(
+    task: &Task,
+    project_path: &str,
+) -> crate::engine::workflows::StepResult {
     const MAX_AGE_DAYS: i64 = 14;
     const MAX_SEARCH_PAIRS: usize = 50;
 
-    log::info!("[reddit_search] starting for project={} path={}", task.project_id, project_path);
+    log::info!(
+        "[reddit_search] starting for project={} path={}",
+        task.project_id,
+        project_path
+    );
 
     // Try to load structured search params from artifact (produced by reddit_config_parse_stage)
     let params = load_search_params_from_artifact(task, project_path);
-    
+
     // Fallback: parse config directly if no artifact (backward compatibility)
     let params = match params {
         Some(p) => p,
@@ -51,11 +71,16 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
             let config_path = format!("{}/.github/automation/reddit_config.md", project_path);
             match std::fs::read_to_string(&config_path) {
                 Ok(config) => parse_config_fallback(&config),
-                Err(e) => return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: format!("reddit_config.md not found at {} — create it first: {}", config_path, e),
-                    output: None,
-                },
+                Err(e) => {
+                    return crate::engine::workflows::StepResult {
+                        success: false,
+                        message: format!(
+                            "reddit_config.md not found at {} — create it first: {}",
+                            config_path, e
+                        ),
+                        output: None,
+                    }
+                }
             }
         }
     };
@@ -73,8 +98,10 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
 
     log::info!(
         "[reddit_search] queries ({}) {:?}  seed_subreddits ({}) {:?}",
-        queries.len(), &queries[..queries.len().min(5)],
-        seed_subs.len(), &seed_subs[..seed_subs.len().min(5)]
+        queries.len(),
+        &queries[..queries.len().min(5)],
+        seed_subs.len(),
+        &seed_subs[..seed_subs.len().min(5)]
     );
 
     if queries.is_empty() {
@@ -87,7 +114,11 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
 
     let search_pairs: Vec<(String, String)> = if seed_subs.is_empty() {
         log::warn!("[reddit_search] no seed subreddits — falling back to global search");
-        queries.iter().take(MAX_SEARCH_PAIRS).map(|q| (String::new(), q.clone())).collect()
+        queries
+            .iter()
+            .take(MAX_SEARCH_PAIRS)
+            .map(|q| (String::new(), q.clone()))
+            .collect()
     } else {
         // Round-robin across subreddits so each gets a fair share of queries.
         // With 50 pairs and 15 subreddits, each gets ~3 queries instead of
@@ -96,7 +127,9 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
         let mut query_idx = 0usize;
         while pairs.len() < MAX_SEARCH_PAIRS && query_idx < queries.len() {
             for sub in &seed_subs {
-                if pairs.len() >= MAX_SEARCH_PAIRS { break; }
+                if pairs.len() >= MAX_SEARCH_PAIRS {
+                    break;
+                }
                 pairs.push((sub.clone(), queries[query_idx].clone()));
             }
             query_idx += 1;
@@ -115,9 +148,8 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
     let mut history_filtered = 0usize;
     let mut subreddit_capped = 0usize;
 
-    let history_manager = crate::reddit::history::RedditHistoryManager::new(
-        std::path::Path::new(project_path)
-    );
+    let history_manager =
+        crate::reddit::history::RedditHistoryManager::new(std::path::Path::new(project_path));
     let handled_ids = history_manager.get_all_handled_ids();
 
     // Resolve Reddit OAuth credentials if available — OAuth search avoids the
@@ -127,16 +159,31 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
     log::info!(
         "[reddit_search] resolver env_files ({}): {:?}",
         env_files.len(),
-        env_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()
+        env_files
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
     );
     let resolved_id = resolver.resolve("REDDIT_CLIENT_ID");
     let resolved_secret = resolver.resolve("REDDIT_CLIENT_SECRET");
     let resolved_token = resolver.resolve("REDDIT_REFRESH_TOKEN");
     log::info!(
         "[reddit_search] credential resolution: client_id={} client_secret={} refresh_token={}",
-        if resolved_id.is_some() { "found" } else { "missing" },
-        if resolved_secret.is_some() { "found" } else { "missing" },
-        if resolved_token.is_some() { "found" } else { "missing" }
+        if resolved_id.is_some() {
+            "found"
+        } else {
+            "missing"
+        },
+        if resolved_secret.is_some() {
+            "found"
+        } else {
+            "missing"
+        },
+        if resolved_token.is_some() {
+            "found"
+        } else {
+            "missing"
+        }
     );
     let reddit_creds = match (resolved_id, resolved_secret, resolved_token) {
         (Some((id, _)), Some((secret, _)), Some((token, _))) => {
@@ -171,11 +218,24 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
         }
 
         let result = match crate::reddit::search::search_submissions(
-            query, subreddit, 10, "relevance", "week", REQUEST_DELAY_MS, reddit_creds.as_ref()
-        ).await {
+            query,
+            subreddit,
+            10,
+            "relevance",
+            "week",
+            REQUEST_DELAY_MS,
+            reddit_creds.as_ref(),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("[reddit_search] search failed sub={:?} q={:?}: {}", subreddit, query, e);
+                log::warn!(
+                    "[reddit_search] search failed sub={:?} q={:?}: {}",
+                    subreddit,
+                    query,
+                    e
+                );
                 consecutive_failures += 1;
                 continue;
             }
@@ -206,7 +266,9 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
                 continue;
             }
 
-            if !seen_ids.insert(post_id.clone()) { continue; }
+            if !seen_ids.insert(post_id.clone()) {
+                continue;
+            }
 
             if handled_ids.contains(&post_id) {
                 history_filtered += 1;
@@ -252,7 +314,11 @@ pub(crate) async fn exec_reddit_search(task: &Task, project_path: &str) -> crate
                 "mention_stance": mention_stance,
             }));
         }
-        log::info!("[reddit_search] +{} accepted (total {})", all_posts.len() - before, all_posts.len());
+        log::info!(
+            "[reddit_search] +{} accepted (total {})",
+            all_posts.len() - before,
+            all_posts.len()
+        );
     }
 
     all_posts.sort_by(|a, b| {

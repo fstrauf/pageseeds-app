@@ -1,5 +1,5 @@
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
 use std::collections::HashSet;
-use crate::models::task::{Task, TaskArtifact, TaskRun, TaskStatus, Priority, AgentPolicy};
 
 /// Auto-create `write_article` tasks from keyword research results.
 ///
@@ -21,7 +21,6 @@ pub fn auto_create_article_tasks_from_research(
 ) -> crate::error::Result<usize> {
     use crate::config::{default_execution_mode, default_phase};
     use crate::engine::task_store;
-    
 
     let max_tasks = max_tasks.unwrap_or(5);
     if max_tasks == 0 {
@@ -44,7 +43,9 @@ pub fn auto_create_article_tasks_from_research(
     keyword_data.sort_by(|a, b| {
         let score_a = calculate_opportunity_score(a);
         let score_b = calculate_opportunity_score(b);
-        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Take top N keywords
@@ -153,8 +154,16 @@ fn extract_keywords_with_metrics(task: &crate::models::task::Task) -> Vec<Keywor
         .artifacts
         .iter()
         .find(|a| a.key == "research_normalize_stage")
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_keywords_cli")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_agent_stage")
+        });
 
     let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
         return Vec::new();
@@ -186,7 +195,10 @@ fn extract_keywords_with_metrics(task: &crate::models::task::Task) -> Vec<Keywor
                         difficulty: item.get("difficulty").and_then(|x| x.as_i64()),
                         volume: item.get("volume").and_then(|x| x.as_i64()),
                         traffic: item.get("traffic").and_then(|x| x.as_i64()),
-                        has_data: item.get("has_data").and_then(|x| x.as_bool()).unwrap_or(true),
+                        has_data: item
+                            .get("has_data")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(true),
                     });
                 }
             }
@@ -206,7 +218,10 @@ fn extract_keywords_with_metrics(task: &crate::models::task::Task) -> Vec<Keywor
                         difficulty: item.get("difficulty").and_then(|x| x.as_i64()),
                         volume: item.get("volume").and_then(|x| x.as_i64()),
                         traffic: item.get("traffic").and_then(|x| x.as_i64()),
-                        has_data: item.get("has_data").and_then(|x| x.as_bool()).unwrap_or(true),
+                        has_data: item
+                            .get("has_data")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(true),
                     });
                 }
             }

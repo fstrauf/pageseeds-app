@@ -119,10 +119,12 @@ pub fn init_logs_table(conn: &Connection) -> Result<(), String> {
 
 /// Store a log entry in the database
 pub fn store_log(conn: &Connection, entry: &LogEntry) -> Result<i64, String> {
-    let metadata_json = entry.metadata.as_ref()
+    let metadata_json = entry
+        .metadata
+        .as_ref()
         .map(|m| serde_json::to_string(m).unwrap_or_default())
         .unwrap_or_default();
-    
+
     conn.execute(
         "INSERT INTO app_logs (timestamp, level, source, component, message, metadata, session_id, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -138,21 +140,21 @@ pub fn store_log(conn: &Connection, entry: &LogEntry) -> Result<i64, String> {
         ],
     )
     .map_err(|e| format!("Failed to store log: {}", e))?;
-    
+
     let id = conn.last_insert_rowid();
-    
+
     // Also add to in-memory buffer
     if let Ok(mut buffer) = get_log_buffer().lock() {
         let mut entry_with_id = entry.clone();
         entry_with_id.id = Some(id);
         buffer.push(entry_with_id);
-        
+
         // Keep only last 1000 entries in memory
         if buffer.len() > 1000 {
             buffer.remove(0);
         }
     }
-    
+
     Ok(id)
 }
 
@@ -183,7 +185,7 @@ pub fn log(
         metadata,
         session_id: get_session_id(),
     };
-    
+
     let _ = store_log(conn, &entry);
 }
 
@@ -191,12 +193,12 @@ pub fn log(
 fn get_session_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
-    
+
     thread_local! {
-        static SESSION_ID: String = format!("session-{}", 
+        static SESSION_ID: String = format!("session-{}",
             SESSION_COUNTER.fetch_add(1, Ordering::SeqCst));
     }
-    
+
     SESSION_ID.with(|id| id.clone())
 }
 
@@ -209,67 +211,67 @@ pub fn query_logs(
 ) -> Result<Vec<LogEntry>, String> {
     let mut sql = String::from(
         "SELECT id, timestamp, level, source, component, message, metadata, session_id 
-         FROM app_logs WHERE 1=1"
+         FROM app_logs WHERE 1=1",
     );
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    
+
     if let Some(level) = &filters.level {
         sql.push_str(" AND level = ?");
         params.push(Box::new(level.to_string()));
     }
-    
+
     if let Some(source) = &filters.source {
         sql.push_str(" AND source = ?");
         params.push(Box::new(source.to_string()));
     }
-    
+
     if let Some(component) = &filters.component {
         sql.push_str(" AND component LIKE ?");
         params.push(Box::new(format!("%{}%", component)));
     }
-    
+
     if let Some(session_id) = &filters.session_id {
         sql.push_str(" AND session_id = ?");
         params.push(Box::new(session_id.clone()));
     }
-    
+
     if let Some(query) = &filters.search_query {
         sql.push_str(" AND (message LIKE ? OR component LIKE ?)");
         let pattern = format!("%{}%", query);
         params.push(Box::new(pattern.clone()));
         params.push(Box::new(pattern));
     }
-    
+
     sql.push_str(" ORDER BY timestamp DESC LIMIT ? OFFSET ?");
     params.push(Box::new(limit as i64));
     params.push(Box::new(offset as i64));
-    
-    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter()
-        .map(|p| p.as_ref())
-        .collect();
-    
-    let mut stmt = conn.prepare(&sql)
+
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+    let mut stmt = conn
+        .prepare(&sql)
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
-    
-    let logs = stmt.query_map(rusqlite::params_from_iter(param_refs), |row| {
-        let metadata_str: Option<String> = row.get(6)?;
-        let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
-        
-        Ok(LogEntry {
-            id: Some(row.get(0)?),
-            timestamp: row.get(1)?,
-            level: LogLevel::from_str(row.get::<_, String>(2)?.as_str()),
-            source: LogSource::from_str(row.get::<_, String>(3)?.as_str()),
-            component: row.get(4)?,
-            message: row.get(5)?,
-            metadata,
-            session_id: row.get(7)?,
+
+    let logs = stmt
+        .query_map(rusqlite::params_from_iter(param_refs), |row| {
+            let metadata_str: Option<String> = row.get(6)?;
+            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
+            Ok(LogEntry {
+                id: Some(row.get(0)?),
+                timestamp: row.get(1)?,
+                level: LogLevel::from_str(row.get::<_, String>(2)?.as_str()),
+                source: LogSource::from_str(row.get::<_, String>(3)?.as_str()),
+                component: row.get(4)?,
+                message: row.get(5)?,
+                metadata,
+                session_id: row.get(7)?,
+            })
         })
-    })
-    .map_err(|e| format!("Query failed: {}", e))?
-    .filter_map(|r| r.ok())
-    .collect();
-    
+        .map_err(|e| format!("Query failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
     Ok(logs)
 }
 
@@ -285,13 +287,11 @@ pub fn get_recent_logs(limit: usize) -> Vec<LogEntry> {
 /// Clear old logs from database
 pub fn clear_old_logs(conn: &Connection, days_to_keep: i64) -> Result<usize, String> {
     let cutoff = (Utc::now() - chrono::Duration::days(days_to_keep)).to_rfc3339();
-    
-    let count = conn.execute(
-        "DELETE FROM app_logs WHERE timestamp < ?1",
-        [&cutoff],
-    )
-    .map_err(|e| format!("Failed to clear old logs: {}", e))?;
-    
+
+    let count = conn
+        .execute("DELETE FROM app_logs WHERE timestamp < ?1", [&cutoff])
+        .map_err(|e| format!("Failed to clear old logs: {}", e))?;
+
     Ok(count)
 }
 
@@ -319,30 +319,40 @@ pub struct LogStats {
 }
 
 pub fn get_log_stats(conn: &Connection) -> Result<LogStats, String> {
-    let stats: (i64, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = conn.query_row(
-        "SELECT 
+    let stats: (i64, Option<i64>, Option<i64>, Option<i64>, Option<i64>) = conn
+        .query_row(
+            "SELECT 
             COUNT(*),
             SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END),
             SUM(CASE WHEN level = 'warn' THEN 1 ELSE 0 END),
             SUM(CASE WHEN level = 'info' THEN 1 ELSE 0 END),
             SUM(CASE WHEN level = 'debug' THEN 1 ELSE 0 END)
          FROM app_logs",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-    )
-    .map_err(|e| format!("Failed to get level stats: {}", e))?;
-    
-    let source_stats: (Option<i64>, Option<i64>, Option<i64>) = conn.query_row(
-        "SELECT 
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("Failed to get level stats: {}", e))?;
+
+    let source_stats: (Option<i64>, Option<i64>, Option<i64>) = conn
+        .query_row(
+            "SELECT 
             SUM(CASE WHEN source = 'frontend' THEN 1 ELSE 0 END),
             SUM(CASE WHEN source = 'backend' THEN 1 ELSE 0 END),
             SUM(CASE WHEN source = 'agent' THEN 1 ELSE 0 END)
          FROM app_logs",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )
-    .map_err(|e| format!("Failed to get source stats: {}", e))?;
-    
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|e| format!("Failed to get source stats: {}", e))?;
+
     Ok(LogStats {
         total_count: stats.0,
         error_count: stats.1.unwrap_or(0),
@@ -358,6 +368,5 @@ pub fn get_log_stats(conn: &Connection) -> Result<LogStats, String> {
 /// Export logs to JSON string
 pub fn export_logs_to_json(conn: &Connection, filters: &LogQueryFilters) -> Result<String, String> {
     let logs = query_logs(conn, filters, 10000, 0)?;
-    serde_json::to_string_pretty(&logs)
-        .map_err(|e| format!("Failed to serialize logs: {}", e))
+    serde_json::to_string_pretty(&logs).map_err(|e| format!("Failed to serialize logs: {}", e))
 }

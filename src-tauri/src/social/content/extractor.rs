@@ -4,16 +4,16 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::social::models::{ContentMetadata, ContentSource};
 use crate::models::social::SourceType;
+use crate::social::models::{ContentMetadata, ContentSource};
 
 /// Extract content from an MDX article file
 pub fn extract_from_article(path: &Path) -> Result<ContentSource> {
     let content = std::fs::read_to_string(path)?;
-    
+
     // Parse frontmatter
     let (frontmatter, body) = parse_frontmatter(&content);
-    
+
     // Extract metadata from frontmatter
     let metadata = ContentMetadata {
         title: frontmatter.get("title").cloned(),
@@ -22,13 +22,13 @@ pub fn extract_from_article(path: &Path) -> Result<ContentSource> {
         word_count: Some(count_words(&body)),
         ..Default::default()
     };
-    
+
     let source_id = metadata
         .url_slug
         .clone()
         .or_else(|| path.file_stem()?.to_str().map(String::from))
         .unwrap_or_else(|| "unknown".to_string());
-    
+
     Ok(ContentSource::new(
         SourceType::Article,
         source_id,
@@ -41,13 +41,13 @@ pub fn extract_from_article(path: &Path) -> Result<ContentSource> {
 /// Extract content from a spec document
 pub fn extract_from_spec(path: &Path) -> Result<ContentSource> {
     let content = std::fs::read_to_string(path)?;
-    
+
     let source_id = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("spec")
         .to_string();
-    
+
     Ok(ContentSource::new(
         SourceType::Spec,
         source_id,
@@ -63,12 +63,12 @@ pub fn extract_from_spec(path: &Path) -> Result<ContentSource> {
 /// Parse YAML frontmatter from markdown content
 fn parse_frontmatter(content: &str) -> (std::collections::HashMap<String, String>, String) {
     let mut frontmatter = std::collections::HashMap::new();
-    
+
     // Check for --- delimited frontmatter
     if let Some(start) = content.find("---") {
         if let Some(end) = content[start + 3..].find("---") {
             let fm_text = &content[start + 3..start + 3 + end];
-            
+
             // Simple line-by-line parsing (key: value)
             for line in fm_text.lines() {
                 if let Some(colon_pos) = line.find(':') {
@@ -77,12 +77,12 @@ fn parse_frontmatter(content: &str) -> (std::collections::HashMap<String, String
                     frontmatter.insert(key, value);
                 }
             }
-            
+
             let body = content[start + 3 + end + 3..].trim().to_string();
             return (frontmatter, body);
         }
     }
-    
+
     // No frontmatter found, return all as body
     (frontmatter, content.to_string())
 }
@@ -95,7 +95,7 @@ fn count_words(text: &str) -> u32 {
 /// Extract key points from article content for carousel slides
 pub fn extract_key_points(content: &str, max_points: usize) -> Vec<String> {
     let mut points = Vec::new();
-    
+
     // Extract headings as key points
     for line in content.lines() {
         let trimmed = line.trim();
@@ -109,7 +109,7 @@ pub fn extract_key_points(content: &str, max_points: usize) -> Vec<String> {
             }
         }
     }
-    
+
     // If not enough headings, extract first sentences of paragraphs
     if points.len() < max_points {
         for paragraph in content.split("\n\n") {
@@ -124,6 +124,6 @@ pub fn extract_key_points(content: &str, max_points: usize) -> Vec<String> {
             }
         }
     }
-    
+
     points
 }

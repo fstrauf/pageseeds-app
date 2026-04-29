@@ -2,7 +2,6 @@
 ///
 /// Provides deterministic checks for common CTR / on-page SEO issues,
 /// plus utilities for reading article excerpts and FAQ schema detection.
-
 use std::path::{Path, PathBuf};
 
 /// Resolve a content file path.
@@ -99,9 +98,12 @@ pub fn check_article_health(
     let snippet_word_count = first_paragraph.split_whitespace().count();
     let first_lower = first_paragraph.to_lowercase();
     let keyword_lower = target_keyword.to_lowercase();
-    let snippet_has_keyword_or_question =
-        keyword_lower.is_empty() || first_lower.contains(&keyword_lower) || first_paragraph.contains('?');
-    let snippet_ok = snippet_word_count >= SNIPPET_MIN_WORDS && snippet_word_count <= SNIPPET_MAX_WORDS && snippet_has_keyword_or_question;
+    let snippet_has_keyword_or_question = keyword_lower.is_empty()
+        || first_lower.contains(&keyword_lower)
+        || first_paragraph.contains('?');
+    let snippet_ok = snippet_word_count >= SNIPPET_MIN_WORDS
+        && snippet_word_count <= SNIPPET_MAX_WORDS
+        && snippet_has_keyword_or_question;
 
     let faq_ok = has_faq_schema;
 
@@ -138,7 +140,12 @@ pub fn check_article_health(
 ///
 /// Hashes the concatenation of title + meta + first_paragraph + has_faq_schema
 /// so that any change to health-relevant fields invalidates the previous audit state.
-pub fn compute_content_hash(title: &str, meta: &str, first_paragraph: &str, has_faq_schema: bool) -> String {
+pub fn compute_content_hash(
+    title: &str,
+    meta: &str,
+    first_paragraph: &str,
+    has_faq_schema: bool,
+) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -151,7 +158,10 @@ pub fn compute_content_hash(title: &str, meta: &str, first_paragraph: &str, has_
 }
 
 /// Read an MDX file and extract (title, meta_description, first_paragraph, h1, has_faq_schema, file_found).
-pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, String, String, String, bool, bool) {
+pub fn read_article_excerpt(
+    project_path: &str,
+    file_ref: &str,
+) -> (String, String, String, String, bool, bool) {
     if file_ref.is_empty() {
         return (
             String::new(),
@@ -207,7 +217,11 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
         .find(|s| s.key == "title")
         .and_then(|s| {
             let v = s.raw_value.trim_matches('"').trim_matches('\'');
-            if !v.is_empty() { Some(v.to_string()) } else { None }
+            if !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or_default();
     let meta_description = scalars
@@ -215,7 +229,11 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
         .find(|s| s.key == "description")
         .and_then(|s| {
             let v = s.raw_value.trim_matches('"').trim_matches('\'');
-            if !v.is_empty() { Some(v.to_string()) } else { None }
+            if !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or_default();
 
@@ -243,7 +261,9 @@ pub fn read_article_excerpt(project_path: &str, file_ref: &str) -> (String, Stri
 /// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage, markdown FAQ section,
 /// or frontmatter `faq:` YAML list).
 pub fn has_faq_schema(content: &str) -> bool {
-    has_frontmatter_faq(content) || has_inline_json_ld_faq(content) || has_visible_faq_section(content)
+    has_frontmatter_faq(content)
+        || has_inline_json_ld_faq(content)
+        || has_visible_faq_section(content)
 }
 
 /// Check whether frontmatter contains a valid `faq:` YAML list with at least one entry.

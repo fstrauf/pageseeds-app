@@ -1,7 +1,6 @@
 /// Rendered SERP audit — fetch live HTML, extract metadata, compare with source files.
 ///
 /// Detects whether CTR issues belong to source content or target-repo rendering code.
-
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::models::ctr::{CtrRenderedPageAudit, CtrSnippetMarkup};
@@ -40,10 +39,11 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
 
     // Read articles.json
     let articles_path = paths.automation_dir.join("articles.json");
-    let doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let empty = vec![];
     let articles = doc["articles"].as_array().unwrap_or(&empty);
@@ -72,12 +72,21 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
         let page_url_clone = page_url.clone();
         let result = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async move {
-                fetch_and_audit_page(&page_url_clone).await
-            })
-        }).join();
+            rt.block_on(async move { fetch_and_audit_page(&page_url_clone).await })
+        })
+        .join();
 
-        let (rendered_title, rendered_desc, canonical, h1, schema_types, has_faq, faq_count, snippet, _fetch_error) = match result {
+        let (
+            rendered_title,
+            rendered_desc,
+            canonical,
+            h1,
+            schema_types,
+            has_faq,
+            faq_count,
+            snippet,
+            _fetch_error,
+        ) = match result {
             Ok(Ok(data)) => data,
             Ok(Err(e)) => {
                 log::warn!("[ctr_rendered_audit] Failed to fetch {}: {}", page_url, e);
@@ -85,7 +94,10 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
                 continue;
             }
             Err(_) => {
-                log::warn!("[ctr_rendered_audit] Fetch thread panicked for {}", page_url);
+                log::warn!(
+                    "[ctr_rendered_audit] Fetch thread panicked for {}",
+                    page_url
+                );
                 failed += 1;
                 continue;
             }
@@ -130,7 +142,11 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
         };
 
         if let Err(e) = crate::db::set_ctr_rendered_audit(conn, &task.project_id, &audit) {
-            log::warn!("[ctr_rendered_audit] Failed to store audit for article {}: {}", id, e);
+            log::warn!(
+                "[ctr_rendered_audit] Failed to store audit for article {}: {}",
+                id,
+                e
+            );
         }
 
         audited += 1;
@@ -144,7 +160,10 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
 
     StepResult {
         success: true,
-        message: format!("Rendered SERP audit: {} pages audited, {} failed", audited, failed),
+        message: format!(
+            "Rendered SERP audit: {} pages audited, {} failed",
+            audited, failed
+        ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
     }
 }
@@ -156,7 +175,12 @@ fn resolve_site_url(automation_dir: &std::path::Path) -> Option<String> {
     std::fs::read_to_string(&manifest_path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("gsc_site").or_else(|| v.get("url")).and_then(|u| u.as_str()).map(String::from))
+        .and_then(|v| {
+            v.get("gsc_site")
+                .or_else(|| v.get("url"))
+                .and_then(|u| u.as_str())
+                .map(String::from)
+        })
 }
 
 fn normalize_base_url(site_url: &str) -> String {
@@ -176,14 +200,31 @@ fn normalize_base_url(site_url: &str) -> String {
 
 async fn fetch_and_audit_page(
     page_url: &str,
-) -> Result<(String, Option<String>, Option<String>, Option<String>, Vec<String>, bool, usize, CtrSnippetMarkup, Option<String>), crate::error::Error> {
+) -> Result<
+    (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Vec<String>,
+        bool,
+        usize,
+        CtrSnippetMarkup,
+        Option<String>,
+    ),
+    crate::error::Error,
+> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("Mozilla/5.0 (compatible; PageSeeds/1.0)")
         .build()
         .map_err(crate::error::Error::Http)?;
 
-    let response = client.get(page_url).send().await.map_err(crate::error::Error::Http)?;
+    let response = client
+        .get(page_url)
+        .send()
+        .await
+        .map_err(crate::error::Error::Http)?;
     if !response.status().is_success() {
         return Err(crate::error::Error::Other(format!(
             "HTTP {}",
@@ -202,21 +243,43 @@ async fn fetch_and_audit_page(
     let has_faq = schema_types.iter().any(|t| t == "FAQPage");
     let snippet = extract_snippet_markup(&document);
 
-    Ok((rendered_title, rendered_desc, canonical, h1, schema_types, has_faq, faq_count, snippet, None))
+    Ok((
+        rendered_title,
+        rendered_desc,
+        canonical,
+        h1,
+        schema_types,
+        has_faq,
+        faq_count,
+        snippet,
+        None,
+    ))
 }
 
 fn extract_title(document: &Html) -> Option<String> {
     let selector = Selector::parse("title").ok()?;
-    let value = document.select(&selector).next()?.text().collect::<String>();
+    let value = document
+        .select(&selector)
+        .next()?
+        .text()
+        .collect::<String>();
     let cleaned = value.trim().to_string();
-    if cleaned.is_empty() { None } else { Some(cleaned) }
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
 }
 
 fn extract_meta_description(document: &Html) -> Option<String> {
     let selector = Selector::parse("meta[name='description']").ok()?;
     let element = document.select(&selector).next()?;
     let value = element.value().attr("content")?.trim();
-    if value.is_empty() { None } else { Some(value.to_string()) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 fn extract_canonical_url(document: &Html, fallback: &str) -> Option<String> {
@@ -231,9 +294,17 @@ fn extract_canonical_url(document: &Html, fallback: &str) -> Option<String> {
 
 fn extract_h1(document: &Html) -> Option<String> {
     let selector = Selector::parse("h1").ok()?;
-    let value = document.select(&selector).next()?.text().collect::<String>();
+    let value = document
+        .select(&selector)
+        .next()?
+        .text()
+        .collect::<String>();
     let cleaned = value.trim().to_string();
-    if cleaned.is_empty() { None } else { Some(cleaned) }
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
 }
 
 pub(crate) fn extract_json_ld_schema_types_with_faq_count(document: &Html) -> (Vec<String>, usize) {
@@ -291,26 +362,30 @@ fn count_faq_questions(json: &serde_json::Value) -> usize {
 }
 
 fn extract_snippet_markup(document: &Html) -> CtrSnippetMarkup {
-    let has_question_h2 = document
-        .select(&Selector::parse("h2").unwrap())
-        .any(|el| {
-            let text = el.text().collect::<String>().to_lowercase();
-            text.ends_with('?')
-                || text.starts_with("what ")
-                || text.starts_with("how ")
-                || text.starts_with("why ")
-                || text.starts_with("when ")
-                || text.starts_with("where ")
-                || text.starts_with("who ")
-                || text.starts_with("which ")
-                || text.starts_with("can ")
-                || text.starts_with("does ")
-                || text.starts_with("is ")
-                || text.starts_with("are ")
-        });
+    let has_question_h2 = document.select(&Selector::parse("h2").unwrap()).any(|el| {
+        let text = el.text().collect::<String>().to_lowercase();
+        text.ends_with('?')
+            || text.starts_with("what ")
+            || text.starts_with("how ")
+            || text.starts_with("why ")
+            || text.starts_with("when ")
+            || text.starts_with("where ")
+            || text.starts_with("who ")
+            || text.starts_with("which ")
+            || text.starts_with("can ")
+            || text.starts_with("does ")
+            || text.starts_with("is ")
+            || text.starts_with("are ")
+    });
 
-    let has_ordered_list = document.select(&Selector::parse("ol").unwrap()).next().is_some();
-    let has_table = document.select(&Selector::parse("table").unwrap()).next().is_some();
+    let has_ordered_list = document
+        .select(&Selector::parse("ol").unwrap())
+        .next()
+        .is_some();
+    let has_table = document
+        .select(&Selector::parse("table").unwrap())
+        .next()
+        .is_some();
 
     CtrSnippetMarkup {
         has_question_h2,
@@ -344,7 +419,10 @@ fn is_brand_duplicated(title: &str) -> bool {
     }
     let mut counts = std::collections::HashMap::new();
     for word in words {
-        let lower = word.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+        let lower = word
+            .to_lowercase()
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_string();
         if !lower.is_empty() {
             *counts.entry(lower).or_insert(0) += 1;
         }
@@ -354,7 +432,9 @@ fn is_brand_duplicated(title: &str) -> bool {
 
 fn has_source_faq(file_ref: &str, project_path: &str) -> bool {
     let repo_root = std::path::Path::new(project_path);
-    if let Some(full_path) = crate::engine::exec::audit_health::resolve_content_file(repo_root, file_ref) {
+    if let Some(full_path) =
+        crate::engine::exec::audit_health::resolve_content_file(repo_root, file_ref)
+    {
         if let Ok(content) = std::fs::read_to_string(&full_path) {
             return crate::engine::exec::audit_health::has_faq_schema(&content);
         }

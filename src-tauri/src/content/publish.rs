@@ -76,11 +76,12 @@ pub fn preflight(
     content_dir: &Path,
 ) -> PublishPreflightResult {
     // Structural scan (dry-run only).
-    let structural_issues = cleaner::scan_and_clean(content_dir, true).unwrap_or_else(|_| cleaner::CleaningResult {
-        files_checked: 0,
-        issues: vec![],
-        issues_fixed: 0,
-    });
+    let structural_issues =
+        cleaner::scan_and_clean(content_dir, true).unwrap_or_else(|_| cleaner::CleaningResult {
+            files_checked: 0,
+            issues: vec![],
+            issues_fixed: 0,
+        });
     let structural_issue_count = structural_issues.issues.len();
 
     // Date analysis for ALL articles — needed for duplicate detection.
@@ -214,7 +215,9 @@ pub fn apply_publish(
                 }
             }
             other => {
-                errors.push(format!("Unknown year mismatch action '{other}' for article {id}"));
+                errors.push(format!(
+                    "Unknown year mismatch action '{other}' for article {id}"
+                ));
             }
         }
     }
@@ -307,7 +310,13 @@ pub fn apply_publish(
 
     // Patch MDX frontmatter dates from SQLite (canonical runtime source of truth).
     let automation_dir = project_path.join(".github").join("automation");
-    if let Err(e) = crate::content::ops::sync_and_validate(&automation_dir, project_path, true, conn, project_id) {
+    if let Err(e) = crate::content::ops::sync_and_validate(
+        &automation_dir,
+        project_path,
+        true,
+        conn,
+        project_id,
+    ) {
         errors.push(format!("MDX frontmatter sync warning: {e}"));
     }
 
@@ -379,7 +388,10 @@ OR
 
     // Extract the JSON object from the response (agent may include prose before/after).
     let json_str = extract_json_object(&raw).ok_or_else(|| {
-        format!("Agent response did not contain a JSON object. Got: {}", raw.trim())
+        format!(
+            "Agent response did not contain a JSON object. Got: {}",
+            raw.trim()
+        )
     })?;
 
     let parsed: serde_json::Value = serde_json::from_str(&json_str)
@@ -396,7 +408,9 @@ OR
         .to_string();
 
     if action != "update_title" && action != "backdate" {
-        return Err(format!("Unknown action '{action}' from agent. Expected update_title or backdate."));
+        return Err(format!(
+            "Unknown action '{action}' from agent. Expected update_title or backdate."
+        ));
     }
 
     Ok(YearMismatchResolution {
@@ -533,15 +547,7 @@ mod tests {
         .unwrap();
 
         // Publish the article
-        let result = apply_publish(
-            &conn,
-            "p1",
-            &[1],
-            &HashMap::new(),
-            &[],
-            &content_dir,
-            &dir,
-        );
+        let result = apply_publish(&conn, "p1", &[1], &HashMap::new(), &[], &content_dir, &dir);
 
         assert_eq!(result.published.len(), 1);
         let assigned_date = &result.published[0].published_date;

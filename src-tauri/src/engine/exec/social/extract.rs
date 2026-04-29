@@ -42,18 +42,25 @@ pub fn exec_social_extract_article(task: &Task, project_path: &str) -> StepResul
 // Step 1: Collect Content Sources
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn exec_social_collect_sources(
-    task: &Task,
-    project_path: &str,
-) -> StepResult {
+pub fn exec_social_collect_sources(task: &Task, project_path: &str) -> StepResult {
     // Parse source config from task description
     let config = super::parse_source_config_from_task(task);
 
-    log::info!("[social_collect_sources] discovering sources for project {}", task.project_id);
+    log::info!(
+        "[social_collect_sources] discovering sources for project {}",
+        task.project_id
+    );
     log::info!("[social_collect_sources] project_path: {}", project_path);
-    log::info!("[social_collect_sources] config: articles={}, screenshots={}, specs={}", 
-        config.include_articles, config.include_screenshots, config.include_specs);
-    log::debug!("[social_collect_sources] task description: {:?}", task.description);
+    log::info!(
+        "[social_collect_sources] config: articles={}, screenshots={}, specs={}",
+        config.include_articles,
+        config.include_screenshots,
+        config.include_specs
+    );
+    log::debug!(
+        "[social_collect_sources] task description: {:?}",
+        task.description
+    );
 
     let manifest = match discover_sources(Path::new(project_path), &config) {
         Ok(m) => m,
@@ -67,7 +74,8 @@ pub fn exec_social_collect_sources(
     };
 
     let total = manifest.total_sources();
-    log::info!("[social_collect_sources] found {} sources ({} articles, {} screenshots, {} specs)",
+    log::info!(
+        "[social_collect_sources] found {} sources ({} articles, {} screenshots, {} specs)",
         total,
         manifest.articles.len(),
         manifest.screenshots.len(),

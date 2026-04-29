@@ -195,8 +195,7 @@ where
         },
     };
 
-    let default_preamble =
-        "Extract structured data from the provided text. \
+    let default_preamble = "Extract structured data from the provided text. \
          Always use the submit tool to return your answer. \
          Fill out every field and do not omit any required information.";
 
@@ -206,10 +205,7 @@ where
         prompt.to_string()
     };
 
-    let user_content = format!(
-        "{}\n\n{}",
-        default_preamble, full_prompt
-    );
+    let user_content = format!("{}\n\n{}", default_preamble, full_prompt);
 
     let request = ChatRequest {
         model: model.to_string(),
@@ -298,9 +294,7 @@ where
 /// nested types. Stripping `$defs` would leave dangling `$ref` pointers.
 fn schema_to_parameters<T: JsonSchema>() -> Result<serde_json::Value, String> {
     let schema = schemars::schema_for!(T);
-    serde_json::to_value(&schema).map_err(|e| {
-        format!("Failed to serialize JSON schema: {}", e)
-    })
+    serde_json::to_value(&schema).map_err(|e| format!("Failed to serialize JSON schema: {}", e))
 }
 
 async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatResponse, String> {
@@ -327,13 +321,21 @@ async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatRespon
         .send()
         .await
         .map_err(|e| {
-            log::error!("[kimi::send_request] Request failed after {:?}: {}", start.elapsed(), e);
+            log::error!(
+                "[kimi::send_request] Request failed after {:?}: {}",
+                start.elapsed(),
+                e
+            );
             format!("Kimi request failed: {}", e)
         })?;
 
     let status = resp.status();
     let body = resp.text().await.map_err(|e| {
-        log::error!("[kimi::send_request] Body read failed after {:?}: {}", start.elapsed(), e);
+        log::error!(
+            "[kimi::send_request] Body read failed after {:?}: {}",
+            start.elapsed(),
+            e
+        );
         e.to_string()
     })?;
 
@@ -342,13 +344,18 @@ async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatRespon
     if !status.is_success() {
         log::error!(
             "[kimi::send_request] <<< END ERROR status={} duration={:?}",
-            status, elapsed
+            status,
+            elapsed
         );
         return Err(format!("Kimi API error {}: {}", status, body));
     }
 
     let parsed: ChatResponse = serde_json::from_str(&body).map_err(|e| {
-        log::error!("[kimi::send_request] Parse error after {:?}: {}", elapsed, e);
+        log::error!(
+            "[kimi::send_request] Parse error after {:?}: {}",
+            elapsed,
+            e
+        );
         format!("Kimi response parse error: {} | body: {}", e, body)
     })?;
 

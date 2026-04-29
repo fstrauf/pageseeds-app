@@ -15,11 +15,14 @@ mod tests {
 
     #[test]
     fn brief_goal_markers_extract_topic_names() {
-        let path = write_tmp("brief_goals", "\
+        let path = write_tmp(
+            "brief_goals",
+            "\
 ## Gap Analysis\n\
 - [ ] 🎯 SEO Tools for Beginners (PLANNED)\n\
 - [ ] 🎯 Content Marketing Strategy\n\
-- No marker here\n");
+- No marker here\n",
+        );
         let themes = extract_from_brief(&path);
         assert!(
             themes.contains(&"SEO Tools for Beginners".to_string()),
@@ -38,27 +41,51 @@ mod tests {
         // Exact format from the failing brief: "### Cluster N: Topic (annotation) 🎯"
         // Old code returned ["### Cluster 7", "### Cluster 8"] — sending markdown
         // heading tokens straight to Ahrefs.
-        let path = write_tmp("brief_goals_heading", "\
+        let path = write_tmp(
+            "brief_goals_heading",
+            "\
 ### Cluster 7: Risk Management (EMERGING) 🎯\n\
 ### Cluster 8: Advanced Topics (EMERGING) 🎯\n\
 **Cluster 9: IRA / Retirement Account Options (NEW) 🎯**\n\
-**Cluster 10: Protective Put / Portfolio Hedging (NEW) 🎯**\n");
+**Cluster 10: Protective Put / Portfolio Hedging (NEW) 🎯**\n",
+        );
         let themes = extract_from_brief(&path);
-        assert!(!themes.iter().any(|t| t.contains('#')), "no # markers: {themes:?}");
-        assert!(!themes.iter().any(|t| t.starts_with("Cluster ")), "no bare cluster labels: {themes:?}");
-        assert!(themes.contains(&"Risk Management".to_string()), "got: {themes:?}");
-        assert!(themes.contains(&"Advanced Topics".to_string()), "got: {themes:?}");
-        assert!(themes.contains(&"IRA / Retirement Account Options".to_string()), "got: {themes:?}");
-        assert!(themes.contains(&"Protective Put / Portfolio Hedging".to_string()), "got: {themes:?}");
+        assert!(
+            !themes.iter().any(|t| t.contains('#')),
+            "no # markers: {themes:?}"
+        );
+        assert!(
+            !themes.iter().any(|t| t.starts_with("Cluster ")),
+            "no bare cluster labels: {themes:?}"
+        );
+        assert!(
+            themes.contains(&"Risk Management".to_string()),
+            "got: {themes:?}"
+        );
+        assert!(
+            themes.contains(&"Advanced Topics".to_string()),
+            "got: {themes:?}"
+        );
+        assert!(
+            themes.contains(&"IRA / Retirement Account Options".to_string()),
+            "got: {themes:?}"
+        );
+        assert!(
+            themes.contains(&"Protective Put / Portfolio Hedging".to_string()),
+            "got: {themes:?}"
+        );
     }
 
     // ── extract_from_brief: PLANNED clusters ──────────────────────────────────
 
     #[test]
     fn brief_planned_cluster_with_colon_extracts_topic() {
-        let path = write_tmp("brief_planned", "\
+        let path = write_tmp(
+            "brief_planned",
+            "\
 ### Cluster 4: Advanced SEO Tactics (PLANNED)\n\
-### Cluster 5: Link Building (PLANNED)\n");
+### Cluster 5: Link Building (PLANNED)\n",
+        );
         let themes = extract_from_brief(&path);
         assert!(
             themes.contains(&"Advanced SEO Tactics".to_string()),
@@ -75,16 +102,22 @@ mod tests {
         // "### Cluster 7 (PLANNED)" has no colon → no real topic → must be dropped.
         let path = write_tmp("brief_planned_no_colon", "### Cluster 7 (PLANNED)\n");
         let themes = extract_from_brief(&path);
-        assert!(themes.is_empty(), "bare cluster label should be filtered: {themes:?}");
+        assert!(
+            themes.is_empty(),
+            "bare cluster label should be filtered: {themes:?}"
+        );
     }
 
     // ── extract_from_brief: all-clusters fallback ─────────────────────────────
 
     #[test]
     fn brief_cluster_headings_without_planned_uses_last_resort() {
-        let path = write_tmp("brief_clusters", "\
+        let path = write_tmp(
+            "brief_clusters",
+            "\
 ### Cluster 1: On-Page SEO\n\
-### Cluster 2: Technical SEO\n");
+### Cluster 2: Technical SEO\n",
+        );
         let themes = extract_from_brief(&path);
         assert!(
             themes.contains(&"On-Page SEO".to_string()),
@@ -104,17 +137,22 @@ mod tests {
 
     #[test]
     fn brief_missing_file_returns_empty() {
-        assert!(extract_from_brief(std::path::Path::new("/nonexistent/ps_kw_missing.md")).is_empty());
+        assert!(
+            extract_from_brief(std::path::Path::new("/nonexistent/ps_kw_missing.md")).is_empty()
+        );
     }
 
     // ── extract_from_summary ──────────────────────────────────────────────────
 
     #[test]
     fn summary_pillar_headings_extract_names() {
-        let path = write_tmp("summary_pillars", "\
+        let path = write_tmp(
+            "summary_pillars",
+            "\
 ### Pillar 1: Keyword Research\n\
 ### Pillar 2: Content Creation\n\
-## Other section\n");
+## Other section\n",
+        );
         let themes = extract_from_summary(&path);
         assert!(
             themes.contains(&"Keyword Research".to_string()),
@@ -128,16 +166,16 @@ mod tests {
 
     #[test]
     fn summary_search_keywords_list_fallback() {
-        let path = write_tmp("summary_keywords", "\
+        let path = write_tmp(
+            "summary_keywords",
+            "\
 ## Search Keywords\n\
 - seo tips\n\
 - content strategy\n\
-## Other\n");
-        let themes = extract_from_summary(&path);
-        assert!(
-            themes.contains(&"seo tips".to_string()),
-            "got: {themes:?}"
+## Other\n",
         );
+        let themes = extract_from_summary(&path);
+        assert!(themes.contains(&"seo tips".to_string()), "got: {themes:?}");
         assert!(
             themes.contains(&"content strategy".to_string()),
             "got: {themes:?}"
@@ -234,13 +272,19 @@ mod tests {
     fn parse_desc_plain_comma_list_passes_through() {
         let raw = "seo tools, content marketing, link building";
         let themes = parse_desc_themes(raw);
-        assert_eq!(themes, vec!["seo tools", "content marketing", "link building"]);
+        assert_eq!(
+            themes,
+            vec!["seo tools", "content marketing", "link building"]
+        );
     }
 
     #[test]
     fn parse_desc_newline_separated_works() {
         let raw = "seo tools\ncontent marketing\n";
-        assert_eq!(parse_desc_themes(raw), vec!["seo tools", "content marketing"]);
+        assert_eq!(
+            parse_desc_themes(raw),
+            vec!["seo tools", "content marketing"]
+        );
     }
 
     #[test]
@@ -285,14 +329,29 @@ mod tests {
         assert!(
             !themes.iter().any(|t| {
                 let w: Vec<_> = t.split_whitespace().collect();
-                w.len() <= 2 && w.first().map(|s| s.eq_ignore_ascii_case("cluster")).unwrap_or(false)
+                w.len() <= 2
+                    && w.first()
+                        .map(|s| s.eq_ignore_ascii_case("cluster"))
+                        .unwrap_or(false)
             }),
             "no bare 'Cluster N' labels in themes: {themes:?}"
         );
-        assert!(themes.contains(&"Risk Management".to_string()), "got: {themes:?}");
-        assert!(themes.contains(&"Advanced Topics".to_string()), "got: {themes:?}");
-        assert!(themes.contains(&"IRA / Retirement Account Options".to_string()), "got: {themes:?}");
-        assert!(themes.contains(&"Protective Put / Portfolio Hedging".to_string()), "got: {themes:?}");
+        assert!(
+            themes.contains(&"Risk Management".to_string()),
+            "got: {themes:?}"
+        );
+        assert!(
+            themes.contains(&"Advanced Topics".to_string()),
+            "got: {themes:?}"
+        );
+        assert!(
+            themes.contains(&"IRA / Retirement Account Options".to_string()),
+            "got: {themes:?}"
+        );
+        assert!(
+            themes.contains(&"Protective Put / Portfolio Hedging".to_string()),
+            "got: {themes:?}"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -386,7 +445,10 @@ mod tests {
         };
 
         let parsed = parse_seed_extraction_artifact(&task);
-        assert_eq!(parsed.themes, vec!["Protective Put", "IRA Options", "Portfolio Hedging"]);
+        assert_eq!(
+            parsed.themes,
+            vec!["Protective Put", "IRA Options", "Portfolio Hedging"]
+        );
     }
 
     // Note: List fallback ("1. Theme") removed - we now require JSON output contract.
@@ -505,9 +567,11 @@ mod integration_tests {
         // Need a tokio runtime because exec_keyword_research_native uses block_on.
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(async {
-            tokio::task::spawn_blocking(move || exec_keyword_research_native(&task, &project_path, "ahrefs"))
-                .await
-                .unwrap()
+            tokio::task::spawn_blocking(move || {
+                exec_keyword_research_native(&task, &project_path, "ahrefs")
+            })
+            .await
+            .unwrap()
         });
 
         fs::remove_dir_all(&dir).ok();
@@ -526,13 +590,13 @@ mod integration_tests {
             use crate::config::env_resolver::EnvResolver;
             // Use a throwaway project path — we only need the secrets resolution.
             let env = EnvResolver::new("/tmp").build_env(std::collections::HashMap::new());
-            env.get("CAPSOLVER_API_KEY")
-                .cloned()
-                .unwrap_or_default()
+            env.get("CAPSOLVER_API_KEY").cloned().unwrap_or_default()
         };
 
         if capsolver_key.is_empty() {
-            eprintln!("SKIP: CAPSOLVER_API_KEY not set — set it in ~/.config/automation/secrets.env");
+            eprintln!(
+                "SKIP: CAPSOLVER_API_KEY not set — set it in ~/.config/automation/secrets.env"
+            );
             return;
         }
 
@@ -573,7 +637,10 @@ mod integration_tests {
             assert!(!s.contains('#'), "theme contains # marker: {s}");
             assert!(
                 !(s.split_whitespace().count() <= 2
-                    && s.split_whitespace().next().map(|w| w.eq_ignore_ascii_case("cluster")).unwrap_or(false)),
+                    && s.split_whitespace()
+                        .next()
+                        .map(|w| w.eq_ignore_ascii_case("cluster"))
+                        .unwrap_or(false)),
                 "bare cluster label sent to API: {s}"
             );
         }
@@ -581,7 +648,6 @@ mod integration_tests {
         // Must have analysed at least one keyword with KD data.
         let results = output["difficulty"]["results"].as_array().unwrap();
         assert!(!results.is_empty(), "no difficulty results returned");
-
     }
 
     /// Lightweight dummy-project smoke flow that still exercises the full live pipeline.
@@ -591,13 +657,13 @@ mod integration_tests {
         let capsolver_key = {
             use crate::config::env_resolver::EnvResolver;
             let env = EnvResolver::new("/tmp").build_env(std::collections::HashMap::new());
-            env.get("CAPSOLVER_API_KEY")
-                .cloned()
-                .unwrap_or_default()
+            env.get("CAPSOLVER_API_KEY").cloned().unwrap_or_default()
         };
 
         if capsolver_key.is_empty() {
-            eprintln!("SKIP: CAPSOLVER_API_KEY not set — set it in ~/.config/automation/secrets.env");
+            eprintln!(
+                "SKIP: CAPSOLVER_API_KEY not set — set it in ~/.config/automation/secrets.env"
+            );
             return;
         }
 
@@ -618,7 +684,10 @@ mod integration_tests {
 
         let output: serde_json::Value =
             serde_json::from_str(result.output.as_deref().unwrap_or("{}")).unwrap_or_default();
-        assert!(output.is_object(), "expected JSON output object when successful");
+        assert!(
+            output.is_object(),
+            "expected JSON output object when successful"
+        );
     }
 }
 
@@ -645,7 +714,7 @@ mod keyword_workflow_tests {
     use crate::engine::exec::keywords::*;
     use crate::engine::workflows::handlers::default_handlers;
     use crate::engine::workflows::StepKind;
-    use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
     use chrono::Utc;
 
     fn in_memory_db() -> rusqlite::Connection {
@@ -674,7 +743,8 @@ mod keyword_workflow_tests {
                 run_last_error TEXT, run_provider TEXT,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
              );",
-        ).unwrap();
+        )
+        .unwrap();
         conn
     }
 
@@ -683,7 +753,8 @@ mod keyword_workflow_tests {
         conn.execute(
             "INSERT INTO projects (id, name, path, active) VALUES (?1, 'Test', ?2, 1)",
             [&id, path],
-        ).unwrap();
+        )
+        .unwrap();
         id
     }
 
@@ -705,7 +776,12 @@ mod keyword_workflow_tests {
             },
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
+            run: TaskRun {
+                attempts: 0,
+                last_error: None,
+                provider: None,
+                ..Default::default()
+            },
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         }
@@ -715,21 +791,29 @@ mod keyword_workflow_tests {
     #[test]
     fn workflow_uses_four_step_hybrid_workflow() {
         let conn = in_memory_db();
-        let temp_dir = std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("ps_kw_test_{}", Utc::now().timestamp_millis()));
         std::fs::create_dir_all(&temp_dir.join(".github").join("automation")).unwrap();
-        
+
         std::fs::write(
-            temp_dir.join(".github").join("automation").join("articles.json"),
-            r#"{"nextArticleId":1,"articles":[]}"#
-        ).unwrap();
+            temp_dir
+                .join(".github")
+                .join("automation")
+                .join("articles.json"),
+            r#"{"nextArticleId":1,"articles":[]}"#,
+        )
+        .unwrap();
 
         let project_id = create_test_project(&conn, &temp_dir.to_string_lossy());
         let task = create_keyword_research_task(&project_id, &["personal finance", "budgeting"]);
 
         let handlers = default_handlers();
-        let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
+        let handler = handlers
+            .iter()
+            .find(|h| h.supports(&task))
+            .expect("Should find handler");
         let steps = handler.plan(&task);
-        
+
         // 5-step hybrid workflow (normalizer removed — agentic steps use Extractor<T>):
         //   1. seed extraction (agentic, structured)
         //   2. autocomplete (deterministic)
@@ -747,14 +831,14 @@ mod keyword_workflow_tests {
         assert_eq!(steps[3].kind, StepKind::KeywordResearchNative);
         assert_eq!(steps[4].name, "research_final_selection");
         assert_eq!(steps[4].kind, StepKind::ResearchFinalSelection);
-        
+
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 }
 
 #[cfg(test)]
 mod sampling_tests {
-    use crate::engine::exec::keywords::{Candidate, smart_sample_candidates};
+    use crate::engine::exec::keywords::{smart_sample_candidates, Candidate};
 
     fn make(kw: &str, theme: &str, is_question: bool, volume: Option<i64>) -> Candidate {
         Candidate {
@@ -803,7 +887,10 @@ mod sampling_tests {
             make("a3", "t1", false, Some(800)),
         ];
         let result = smart_sample_candidates(candidates, 2);
-        assert!(result.iter().any(|c| c.keyword == "a2" && c.is_question), "question keyword should be sampled");
+        assert!(
+            result.iter().any(|c| c.keyword == "a2" && c.is_question),
+            "question keyword should be sampled"
+        );
     }
 
     #[test]
@@ -816,6 +903,8 @@ mod sampling_tests {
         let result = smart_sample_candidates(candidates, 3);
         assert_eq!(result.len(), 3);
         // The highest-volume keyword should definitely be included.
-        assert!(result.iter().any(|c| c.keyword == "b1" && c.volume == Some(1000)));
+        assert!(result
+            .iter()
+            .any(|c| c.keyword == "b1" && c.volume == Some(1000)));
     }
 }

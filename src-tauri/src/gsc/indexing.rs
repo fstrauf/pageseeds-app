@@ -91,12 +91,7 @@ fn parse_inspection_record(url: &str, resp: &serde_json::Value) -> InspectionRec
         url: url.to_string(),
         verdict: Some(verdict),
         coverage_state: Some(coverage_state),
-        indexing_state: Some(
-            index["indexingState"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-        ),
+        indexing_state: Some(index["indexingState"].as_str().unwrap_or("").to_string()),
         robots_txt_state: Some(robots_txt_state),
         page_fetch_state: Some(page_fetch_state),
         crawl_allowed: Some(crawl_allowed),
@@ -106,7 +101,11 @@ fn parse_inspection_record(url: &str, resp: &serde_json::Value) -> InspectionRec
         user_canonical,
         sitemaps: index["sitemap"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         reason_code: Some(reason_code.to_string()),
         action: Some(action.to_string()),

@@ -1,8 +1,10 @@
-use async_trait::async_trait;
 use crate::error::Result;
+use crate::seo::intent::{classify_batch_by_pattern, IntentClassification};
+use crate::seo::keywords::{
+    get_keyword_difficulty, get_keyword_ideas, KeywordDifficultyResult, KeywordIdeasResult,
+};
 use crate::seo::provider::SeoDataProvider;
-use crate::seo::keywords::{KeywordIdeasResult, KeywordDifficultyResult, get_keyword_ideas, get_keyword_difficulty};
-use crate::seo::intent::{IntentClassification, classify_batch_by_pattern};
+use async_trait::async_trait;
 
 /// Ahrefs SEO data provider implementation.
 pub struct AhrefsProvider {
@@ -17,11 +19,20 @@ impl AhrefsProvider {
 
 #[async_trait]
 impl SeoDataProvider for AhrefsProvider {
-    async fn keyword_ideas(&self, keyword: &str, country: &str, search_engine: &str) -> Result<KeywordIdeasResult> {
+    async fn keyword_ideas(
+        &self,
+        keyword: &str,
+        country: &str,
+        search_engine: &str,
+    ) -> Result<KeywordIdeasResult> {
         get_keyword_ideas(&self.capsolver_key, keyword, country, search_engine).await
     }
 
-    async fn keyword_difficulty(&self, keyword: &str, country: &str) -> Result<KeywordDifficultyResult> {
+    async fn keyword_difficulty(
+        &self,
+        keyword: &str,
+        country: &str,
+    ) -> Result<KeywordDifficultyResult> {
         get_keyword_difficulty(&self.capsolver_key, keyword, country).await
     }
 
@@ -35,7 +46,11 @@ impl SeoDataProvider for AhrefsProvider {
             match self.keyword_difficulty(keyword, country).await {
                 Ok(result) => results.push(result),
                 Err(e) => {
-                    log::warn!("[AhrefsProvider] Failed to get difficulty for '{}': {}", keyword, e);
+                    log::warn!(
+                        "[AhrefsProvider] Failed to get difficulty for '{}': {}",
+                        keyword,
+                        e
+                    );
                     // Push a placeholder with None difficulty to maintain index alignment
                     results.push(KeywordDifficultyResult {
                         keyword: keyword.clone(),

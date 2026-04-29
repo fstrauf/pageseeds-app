@@ -1,7 +1,6 @@
 /// Text utilities shared across engine modules.
 ///
 /// Purpose: avoid UTF-8 panics from byte slicing like `s[..300]`.
-
 use serde_json::Value;
 
 /// Returns a valid UTF-8 prefix with at most `max_chars` Unicode scalar values.

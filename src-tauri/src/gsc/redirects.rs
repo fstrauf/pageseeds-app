@@ -15,9 +15,7 @@ pub fn parse_redirect_csv(csv_content: &str) -> Result<Vec<RedirectRecord>> {
         .clone();
 
     let find = |name: &str| -> Option<usize> {
-        headers
-            .iter()
-            .position(|h| h.to_lowercase().contains(name))
+        headers.iter().position(|h| h.to_lowercase().contains(name))
     };
 
     let url_idx = find("url").or_else(|| find("page")).unwrap_or(0);
@@ -67,8 +65,8 @@ pub fn parse_redirect_csv(csv_content: &str) -> Result<Vec<RedirectRecord>> {
 }
 
 fn classify_redirect(
-    url: &str, 
-    redirect_type_raw: &str, 
+    url: &str,
+    redirect_type_raw: &str,
     final_url: Option<&str>,
 ) -> (String, String, u8, String) {
     let url_lower = url.to_lowercase();
@@ -84,7 +82,10 @@ fn classify_redirect(
     }
 
     // www canonicalization
-    if let (Some(fin), true) = (final_url, url_lower.contains("www.") != url.contains("www.")) {
+    if let (Some(fin), true) = (
+        final_url,
+        url_lower.contains("www.") != url.contains("www."),
+    ) {
         let _ = fin;
         return (
             "www canonicalization".to_string(),

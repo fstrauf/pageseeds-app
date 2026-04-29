@@ -22,17 +22,24 @@ pub fn create_reply_tasks_from_opportunities(
     let parent_task = task_store::get_task(conn, task_id)
         .map_err(|e| format!("Failed to get parent task: {}", e))?;
 
-    let results_artifact = parent_task.artifacts.iter()
+    let results_artifact = parent_task
+        .artifacts
+        .iter()
         .find(|a| a.key == "reddit_results_stage")
-        .ok_or_else(|| "No reddit_results_stage artifact found. Run the search first.".to_string())?;
+        .ok_or_else(|| {
+            "No reddit_results_stage artifact found. Run the search first.".to_string()
+        })?;
 
-    let artifact_content = results_artifact.content.as_ref()
+    let artifact_content = results_artifact
+        .content
+        .as_ref()
         .ok_or_else(|| "reddit_results_stage artifact has no content".to_string())?;
 
     let opportunities: Vec<RedditOpportunity> = serde_json::from_str(artifact_content)
         .map_err(|e| format!("Failed to parse opportunities: {}", e))?;
 
-    let selected_opps: Vec<RedditOpportunity> = opportunities.into_iter()
+    let selected_opps: Vec<RedditOpportunity> = opportunities
+        .into_iter()
         .filter(|o| post_ids.contains(&o.post_id))
         .collect();
 
@@ -53,7 +60,12 @@ pub fn create_reply_tasks_from_opportunities(
 
         let title = format!(
             "Reply to: {}",
-            opp.title.as_deref().unwrap_or("Reddit post").chars().take(50).collect::<String>()
+            opp.title
+                .as_deref()
+                .unwrap_or("Reddit post")
+                .chars()
+                .take(50)
+                .collect::<String>()
         );
 
         let description = format!(
@@ -78,7 +90,12 @@ pub fn create_reply_tasks_from_opportunities(
             description: Some(description),
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
+            run: TaskRun {
+                attempts: 0,
+                last_error: None,
+                provider: None,
+                ..Default::default()
+            },
             created_at: now.clone(),
             updated_at: now.clone(),
         };

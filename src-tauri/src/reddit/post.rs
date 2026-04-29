@@ -6,7 +6,6 @@
 ///
 /// No Python / PRAW required. Credentials are passed in by the caller
 /// (typically resolved from ~/.config/automation/secrets.env via EnvResolver).
-
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
@@ -92,12 +91,9 @@ pub async fn submit_comment(
     client_secret: &str,
     refresh_token: &str,
 ) -> Result<CommentResult> {
-    let client = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
 
-    let access_token =
-        get_access_token(&client, client_id, client_secret, refresh_token).await?;
+    let access_token = get_access_token(&client, client_id, client_secret, refresh_token).await?;
 
     // Reddit fullname for a submission is "t3_<id>"
     let thing_id = format!("t3_{}", post_id);
@@ -126,7 +122,14 @@ pub async fn submit_comment(
             .filter_map(|arr| arr.get(1).and_then(|v| v.as_str()).map(|s| s.to_string()))
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(Error::Other(format!("Reddit API error: {}", if msg.is_empty() { format!("{:?}", resp.json.errors) } else { msg })));
+        return Err(Error::Other(format!(
+            "Reddit API error: {}",
+            if msg.is_empty() {
+                format!("{:?}", resp.json.errors)
+            } else {
+                msg
+            }
+        )));
     }
 
     let thing = resp

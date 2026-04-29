@@ -40,10 +40,7 @@ pub fn exec_landing_page_spec_write(task: &Task, project_path: &str) -> StepResu
 
     match std::fs::write(&spec_path, &spec_content) {
         Ok(()) => {
-            log::info!(
-                "[landing_page_spec] wrote spec: {}",
-                spec_path.display()
-            );
+            log::info!("[landing_page_spec] wrote spec: {}", spec_path.display());
             StepResult {
                 success: true,
                 message: format!("Landing page spec written: specs/{}", filename),
@@ -119,12 +116,13 @@ fn parse_landing_page_meta(desc: &str) -> LandingPageMeta {
 }
 
 fn task_title_fallback(desc: &str) -> Option<String> {
-    desc.lines().find(|l| !l.trim().is_empty()).map(|l| l.trim().to_string())
+    desc.lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
 }
 
 fn build_spec_markdown(meta: &LandingPageMeta, task: &Task) -> String {
-    let title = meta.proposed_title.as_deref()
-        .unwrap_or(&meta.keyword);
+    let title = meta.proposed_title.as_deref().unwrap_or(&meta.keyword);
     let page_type = meta.landing_page_type.as_deref().unwrap_or("category");
     let intent = meta.intent.as_deref().unwrap_or("commercial");
 

@@ -5,7 +5,6 @@
 ///   - detect regressions (was pass, now fail)
 ///   - detect recoveries (was fail, now pass)
 ///   - avoid duplicate fix-task spam
-
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -31,35 +30,41 @@ pub struct UrlIndexingStatus {
 }
 
 /// Get status for a single URL.
-pub fn get_status(conn: &Connection, url: &str, project_id: &str) -> Result<Option<UrlIndexingStatus>> {
+pub fn get_status(
+    conn: &Connection,
+    url: &str,
+    project_id: &str,
+) -> Result<Option<UrlIndexingStatus>> {
     let mut stmt = conn.prepare(
         "SELECT url, project_id, last_inspected_at, last_reason_code, last_verdict,
                 last_action, consecutive_passes, last_task_created_at, last_task_type,
                 last_task_id, last_fix_summary, fix_attempt_count, last_task_resolved_at,
                 created_at, updated_at
          FROM gsc_url_indexing_status
-         WHERE url = ?1 AND project_id = ?2"
+         WHERE url = ?1 AND project_id = ?2",
     )?;
 
-    let row = stmt.query_row([url, project_id], |r| {
-        Ok(UrlIndexingStatus {
-            url: r.get(0)?,
-            project_id: r.get(1)?,
-            last_inspected_at: r.get(2)?,
-            last_reason_code: r.get(3)?,
-            last_verdict: r.get(4)?,
-            last_action: r.get(5)?,
-            consecutive_passes: r.get(6)?,
-            last_task_created_at: r.get(7)?,
-            last_task_type: r.get(8)?,
-            last_task_id: r.get(9)?,
-            last_fix_summary: r.get(10)?,
-            fix_attempt_count: r.get(11)?,
-            last_task_resolved_at: r.get(12)?,
-            created_at: r.get(13)?,
-            updated_at: r.get(14)?,
+    let row = stmt
+        .query_row([url, project_id], |r| {
+            Ok(UrlIndexingStatus {
+                url: r.get(0)?,
+                project_id: r.get(1)?,
+                last_inspected_at: r.get(2)?,
+                last_reason_code: r.get(3)?,
+                last_verdict: r.get(4)?,
+                last_action: r.get(5)?,
+                consecutive_passes: r.get(6)?,
+                last_task_created_at: r.get(7)?,
+                last_task_type: r.get(8)?,
+                last_task_id: r.get(9)?,
+                last_fix_summary: r.get(10)?,
+                fix_attempt_count: r.get(11)?,
+                last_task_resolved_at: r.get(12)?,
+                created_at: r.get(13)?,
+                updated_at: r.get(14)?,
+            })
         })
-    }).optional()?;
+        .optional()?;
 
     Ok(row)
 }
@@ -72,7 +77,7 @@ pub fn list_by_project(conn: &Connection, project_id: &str) -> Result<Vec<UrlInd
                 last_task_id, last_fix_summary, fix_attempt_count, last_task_resolved_at,
                 created_at, updated_at
          FROM gsc_url_indexing_status
-         WHERE project_id = ?1"
+         WHERE project_id = ?1",
     )?;
 
     let rows = stmt.query_map([project_id], |r| {
@@ -103,7 +108,7 @@ pub fn list_by_project(conn: &Connection, project_id: &str) -> Result<Vec<UrlInd
 }
 
 /// Insert or update status for a URL.
-/// Note: last_fix_summary, fix_attempt_count, and last_task_resolved_at are 
+/// Note: last_fix_summary, fix_attempt_count, and last_task_resolved_at are
 /// managed separately by the fix task system and are NOT updated by this function.
 pub fn upsert_status(conn: &Connection, status: &UrlIndexingStatus) -> Result<()> {
     conn.execute(
@@ -184,7 +189,12 @@ pub fn record_fix_resolved(
 /// Check whether an active fix task already exists for a given URL + reason.
 ///
 /// Active means status is 'todo', 'in_progress', or 'review'.
-pub fn has_active_fix_task(conn: &Connection, project_id: &str, url: &str, _reason: &str) -> Result<bool> {
+pub fn has_active_fix_task(
+    conn: &Connection,
+    project_id: &str,
+    url: &str,
+    _reason: &str,
+) -> Result<bool> {
     let pattern = format!("%{}%", url);
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM tasks

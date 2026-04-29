@@ -85,13 +85,8 @@ where
 
     match backend {
         LlmBackend::KimiBridge { base_url, model } => {
-            crate::rig::compat::kimi::extract_structured::<T>(
-                base_url,
-                model,
-                prompt,
-                preamble,
-            )
-            .await
+            crate::rig::compat::kimi::extract_structured::<T>(base_url, model, prompt, preamble)
+                .await
         }
         LlmBackend::Claude { api_key, model } => {
             let client = rig::providers::anthropic::Client::new(api_key)

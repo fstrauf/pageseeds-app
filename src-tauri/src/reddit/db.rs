@@ -185,21 +185,55 @@ pub fn migrate_from_client_ops(
     )?;
 
     type Row = (
-        String, Option<String>, Option<String>, Option<String>, Option<String>,
-        Option<String>, Option<i64>, Option<i64>,
-        Option<f64>, Option<f64>, Option<f64>, Option<f64>,
-        Option<String>, Option<String>, Option<String>, Option<String>,
-        Option<String>, Option<String>, Option<String>, Option<i64>, Option<i64>, Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
     );
 
     let rows: Vec<Row> = stmt
         .query_map([], |row| {
             Ok((
-                row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                row.get(5)?, row.get(6)?, row.get(7)?,
-                row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?,
-                row.get(12)?, row.get(13)?, row.get(14)?, row.get(15)?,
-                row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?, row.get(20)?, row.get(21)?,
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+                row.get(11)?,
+                row.get(12)?,
+                row.get(13)?,
+                row.get(14)?,
+                row.get(15)?,
+                row.get(16)?,
+                row.get(17)?,
+                row.get(18)?,
+                row.get(19)?,
+                row.get(20)?,
+                row.get(21)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -212,12 +246,21 @@ pub fn migrate_from_client_ops(
     for r in rows {
         let opp = RedditOpportunity {
             post_id: r.0.clone(),
-            title: r.1, url: r.2, subreddit: r.3, author: r.4,
-            posted_date: r.5, upvotes: r.6, comment_count: r.7,
-            relevance_score: r.8, engagement_score: r.9,
-            accessibility_score: r.10, final_score: r.11,
-            severity: r.12, why_relevant: r.13,
-            key_pain_points: r.14
+            title: r.1,
+            url: r.2,
+            subreddit: r.3,
+            author: r.4,
+            posted_date: r.5,
+            upvotes: r.6,
+            comment_count: r.7,
+            relevance_score: r.8,
+            engagement_score: r.9,
+            accessibility_score: r.10,
+            final_score: r.11,
+            severity: r.12,
+            why_relevant: r.13,
+            key_pain_points: r
+                .14
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default(),
@@ -225,19 +268,29 @@ pub fn migrate_from_client_ops(
             mention_stance: None,
             product_name: None,
             reply_status: r.16.unwrap_or_else(|| "pending".to_string()),
-            reply_text: r.17, reply_url: r.18,
-            reply_upvotes: r.19, reply_replies: r.20, posted_at: r.21,
+            reply_text: r.17,
+            reply_url: r.18,
+            reply_upvotes: r.19,
+            reply_replies: r.20,
+            posted_at: r.21,
             project_id: project_id.to_string(),
             created_at: now.clone(),
             updated_at: now.clone(),
         };
         match upsert_opportunity(conn, &opp) {
             Ok(_) => migrated += 1,
-            Err(e) => { skipped += 1; errors.push(format!("{}: {}", r.0, e)); }
+            Err(e) => {
+                skipped += 1;
+                errors.push(format!("{}: {}", r.0, e));
+            }
         }
     }
 
-    Ok(MigrationResult { migrated, skipped, errors })
+    Ok(MigrationResult {
+        migrated,
+        skipped,
+        errors,
+    })
 }
 
 fn row_to_opportunity(row: &rusqlite::Row<'_>) -> rusqlite::Result<RedditOpportunity> {

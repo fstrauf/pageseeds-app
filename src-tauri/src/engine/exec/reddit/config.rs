@@ -1,5 +1,5 @@
-use std::path::Path;
 use crate::models::task::Task;
+use std::path::Path;
 
 // ─── Structured Config (from agentic parse step) ──────────────────────────────
 
@@ -46,12 +46,16 @@ pub(crate) fn extract_trigger_topics(config: &str, max: usize) -> Vec<String> {
             continue;
         }
         if in_section {
-            if trimmed.starts_with("##") { break; }
+            if trimmed.starts_with("##") {
+                break;
+            }
             if let Some(topic) = trimmed.strip_prefix("- ") {
                 let topic = topic.split('(').next().unwrap_or(topic).trim().to_string();
                 if !topic.is_empty() {
                     topics.push(topic);
-                    if topics.len() >= max { break; }
+                    if topics.len() >= max {
+                        break;
+                    }
                 }
             }
         }
@@ -65,18 +69,23 @@ pub(crate) fn extract_seed_subreddits(config: &str) -> Vec<String> {
     let mut subs: Vec<String> = Vec::new();
     for line in config.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("## Seed Subreddits") || trimmed.starts_with("## Target Subreddits") {
+        if trimmed.starts_with("## Seed Subreddits") || trimmed.starts_with("## Target Subreddits")
+        {
             in_section = true;
             continue;
         }
         if in_section {
-            if trimmed.starts_with("##") { break; }
+            if trimmed.starts_with("##") {
+                break;
+            }
             if let Some(name) = trimmed.strip_prefix("- ") {
                 let name = name.trim().trim_start_matches("r/");
                 let name = name.split(" — ").next().unwrap_or(name);
                 let name = name.split(" - ").next().unwrap_or(name);
                 let name = name.trim().to_lowercase();
-                if !name.is_empty() { subs.push(name); }
+                if !name.is_empty() {
+                    subs.push(name);
+                }
             }
         }
     }
@@ -99,18 +108,24 @@ pub(crate) fn extract_query_keywords(config: &str) -> Vec<String> {
             continue;
         }
         if in_section {
-            if trimmed.starts_with("##") { break; }
+            if trimmed.starts_with("##") {
+                break;
+            }
             if let Some(raw) = trimmed.strip_prefix("- ") {
                 let raw = raw.trim();
                 if raw.starts_with('"') {
                     if let Some(end) = raw[1..].find('"') {
                         let kw = raw[1..end + 1].trim().to_string();
-                        if !kw.is_empty() { keywords.push(kw); }
+                        if !kw.is_empty() {
+                            keywords.push(kw);
+                        }
                         continue;
                     }
                 }
                 let kw = raw.trim_matches('`').trim().to_string();
-                if !kw.is_empty() { keywords.push(kw); }
+                if !kw.is_empty() {
+                    keywords.push(kw);
+                }
             }
         }
     }
@@ -128,10 +143,14 @@ pub(crate) fn extract_excluded_subreddits(config: &str) -> std::collections::Has
             continue;
         }
         if in_section {
-            if trimmed.starts_with("##") { break; }
+            if trimmed.starts_with("##") {
+                break;
+            }
             if let Some(name) = trimmed.strip_prefix("- ") {
                 let name = name.trim().to_lowercase();
-                if !name.is_empty() { excluded.insert(name); }
+                if !name.is_empty() {
+                    excluded.insert(name);
+                }
             }
         }
     }
@@ -151,27 +170,34 @@ pub fn exec_reddit_config_parse(
     project_path: &str,
     agent_provider: &str,
 ) -> crate::engine::workflows::StepResult {
-    log::info!("[reddit_config_parse] starting for project_path={}", project_path);
+    log::info!(
+        "[reddit_config_parse] starting for project_path={}",
+        project_path
+    );
 
     let automation_dir = Path::new(project_path).join(".github").join("automation");
-    
+
     // Primary: project.md (consolidated). Fallback: legacy files.
     let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
         .or_else(|_| {
             // Legacy fallback: stitch old files together
-            let summary = std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
-            let brand = std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
-            let brief = std::fs::read_to_string(automation_dir.join("seo_content_brief.md")).unwrap_or_default();
+            let summary = std::fs::read_to_string(automation_dir.join("project_summary.md"))
+                .unwrap_or_default();
+            let brand =
+                std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
+            let brief = std::fs::read_to_string(automation_dir.join("seo_content_brief.md"))
+                .unwrap_or_default();
             Ok::<String, std::io::Error>(format!("{}\n\n{}\n\n{}", summary, brand, brief))
         })
         .unwrap_or_default();
-    let reddit_config = std::fs::read_to_string(automation_dir.join("reddit_config.md"))
-        .unwrap_or_default();
+    let reddit_config =
+        std::fs::read_to_string(automation_dir.join("reddit_config.md")).unwrap_or_default();
 
     if reddit_config.is_empty() && project_context.is_empty() {
         return crate::engine::workflows::StepResult {
             success: false,
-            message: "No reddit_config.md or project.md found — create config files first".to_string(),
+            message: "No reddit_config.md or project.md found — create config files first"
+                .to_string(),
             output: None,
         };
     }
@@ -221,23 +247,35 @@ pub fn exec_reddit_config_parse(
     // Call agent
     match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
         Ok(output) => {
-            log::info!("[reddit_config_parse] agent output ({} chars): {:?}", output.len(), &output[..output.len().min(2000)]);
-            
+            log::info!(
+                "[reddit_config_parse] agent output ({} chars): {:?}",
+                output.len(),
+                &output[..output.len().min(2000)]
+            );
+
             // Try to extract JSON object from the output
             let json_str = match extract_json_object(&output) {
                 Ok(json) => {
-                    log::info!("[reddit_config_parse] extracted JSON ({} chars)", json.len());
+                    log::info!(
+                        "[reddit_config_parse] extracted JSON ({} chars)",
+                        json.len()
+                    );
                     json
                 }
                 Err(e) => {
                     log::warn!("[reddit_config_parse] JSON extraction failed: {}", e);
-                    
+
                     // Save full output for debugging
-                    let debug_path = std::env::temp_dir()
-                        .join(format!("kimi_error_{}.txt", chrono::Utc::now().timestamp_millis()));
+                    let debug_path = std::env::temp_dir().join(format!(
+                        "kimi_error_{}.txt",
+                        chrono::Utc::now().timestamp_millis()
+                    ));
                     let _ = std::fs::write(&debug_path, &output);
-                    log::warn!("[reddit_config_parse] full output saved to: {:?}", debug_path);
-                    
+                    log::warn!(
+                        "[reddit_config_parse] full output saved to: {:?}",
+                        debug_path
+                    );
+
                     return crate::engine::workflows::StepResult {
                         success: false,
                         message: format!("Failed to extract JSON from agent output: {}", e),
@@ -245,7 +283,7 @@ pub fn exec_reddit_config_parse(
                     };
                 }
             };
-            
+
             match serde_json::from_str::<RedditSearchParams>(&json_str) {
                 Ok(params) => {
                     // Validate: we need at least some queries or topics
@@ -258,7 +296,8 @@ pub fn exec_reddit_config_parse(
                     } else {
                         crate::engine::workflows::StepResult {
                             success: true,
-                            message: format!("Parsed config: {} keywords, {} topics, {} subreddits",
+                            message: format!(
+                                "Parsed config: {} keywords, {} topics, {} subreddits",
                                 params.query_keywords.len(),
                                 params.trigger_topics.len(),
                                 params.seed_subreddits.len()
@@ -269,8 +308,11 @@ pub fn exec_reddit_config_parse(
                 }
                 Err(e) => {
                     log::warn!("[reddit_config_parse] JSON parse error: {}", e);
-                    log::warn!("[reddit_config_parse] extracted content that failed to parse: {}", &json_str[..json_str.len().min(1000)]);
-                    
+                    log::warn!(
+                        "[reddit_config_parse] extracted content that failed to parse: {}",
+                        &json_str[..json_str.len().min(1000)]
+                    );
+
                     crate::engine::workflows::StepResult {
                         success: false,
                         message: format!("Agent returned invalid JSON structure: {}", e),
@@ -300,18 +342,19 @@ pub fn exec_reddit_config_parse(
 /// **Post ID:** <post_id>
 pub(crate) fn extract_post_details_from_task(task: &Task) -> Option<(String, String)> {
     let desc = task.description.as_ref()?;
-    
+
     // Extract Post ID (last line with "Post ID:")
-    let post_id = desc.lines()
+    let post_id = desc
+        .lines()
         .find(|l| l.trim().starts_with("**Post ID:**"))
         .and_then(|l| l.split("**Post ID:**").nth(1))
         .map(|s| s.trim().to_string())?;
-    
+
     // Extract Draft Reply (everything between "**Draft Reply:**" and "**Post ID:**")
     let reply_start = desc.find("**Draft Reply:**")? + "**Draft Reply:**".len();
     let reply_end = desc.find("**Post ID:**")?;
     let reply_text = desc[reply_start..reply_end].trim().to_string();
-    
+
     if post_id.is_empty() || reply_text.is_empty() {
         None
     } else {
@@ -334,20 +377,20 @@ pub(crate) fn extract_json_array(output: &str) -> String {
 
 /// Extract a JSON object from text (looks for {...})
 /// Extract and validate JSON from agent output.
-/// 
+///
 /// Tries multiple strategies in order:
 /// 1. Markdown code block (```json ... ```)
 /// 2. Plain code block (``` ... ```)
 /// 3. Raw JSON object ({...})
-/// 
+///
 /// Returns Err if no valid JSON found or if extracted content isn't valid JSON.
 pub fn extract_json_object(output: &str) -> Result<String, String> {
     let trimmed = output.trim();
-    
+
     if trimmed.is_empty() {
         return Err("Agent output is empty".to_string());
     }
-    
+
     // Strategy 1: Look for ```json ... ``` code block
     for opener in ["```json\n", "```json\r\n", "```JSON\n", "```Json\n"] {
         if let Some(start) = trimmed.find(opener) {
@@ -361,7 +404,7 @@ pub fn extract_json_object(output: &str) -> Result<String, String> {
             }
         }
     }
-    
+
     // Strategy 2: Look for plain ``` ... ``` code block
     if let Some(start) = trimmed.find("```\n") {
         let after_open = start + 4;
@@ -373,7 +416,7 @@ pub fn extract_json_object(output: &str) -> Result<String, String> {
             }
         }
     }
-    
+
     // Strategy 3: Look for raw JSON object (outermost braces)
     if let Some(start) = trimmed.find('{') {
         if let Some(end) = trimmed.rfind('}') {
@@ -385,7 +428,7 @@ pub fn extract_json_object(output: &str) -> Result<String, String> {
             }
         }
     }
-    
+
     // Strategy 4: Look for raw JSON array
     if let Some(start) = trimmed.find('[') {
         if let Some(end) = trimmed.rfind(']') {
@@ -397,14 +440,17 @@ pub fn extract_json_object(output: &str) -> Result<String, String> {
             }
         }
     }
-    
+
     // Nothing worked - provide helpful error
     let preview = if trimmed.len() > 500 {
         format!("{}... ({} total chars)", &trimmed[..500], trimmed.len())
     } else {
         trimmed.to_string()
     };
-    Err(format!("No valid JSON found in agent output. Preview: {}", preview))
+    Err(format!(
+        "No valid JSON found in agent output. Preview: {}",
+        preview
+    ))
 }
 
 /// Quick validation that a string is valid JSON

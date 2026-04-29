@@ -34,7 +34,9 @@ pub fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
     let close = after_open.find("\n---\n")?;
     let fm = &after_open[..close];
     let body_start = close + 5; // skip \n---\n
-    let body = after_open[body_start..].strip_prefix('\n').unwrap_or(&after_open[body_start..]);
+    let body = after_open[body_start..]
+        .strip_prefix('\n')
+        .unwrap_or(&after_open[body_start..]);
     Some((fm, body))
 }
 
@@ -95,7 +97,8 @@ fn check_file(path: &Path, dry_run: bool) -> Result<Vec<CleaningIssue>> {
                         .strip_prefix(&expected)
                         .map(|s| s.trim_start_matches('\n'))
                         .unwrap_or(body_trimmed);
-                    let _new_content = format!("{}---\n\n{}", &content[..fm_end.unwrap() - 5 + 4], new_body);
+                    let _new_content =
+                        format!("{}---\n\n{}", &content[..fm_end.unwrap() - 5 + 4], new_body);
                     // Make sure closing --- is correct
                     let rebuilt = rebuild_content(&content, new_body, body_start);
                     std::fs::write(path, rebuilt)?;
@@ -223,7 +226,11 @@ pub fn find_first_paragraph_range(body: &str) -> Option<(usize, usize)> {
                 byte_offset += line.len() + 1;
                 continue;
             }
-        } else if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("---") || is_mdx_non_prose_line(trimmed) {
+        } else if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("---")
+            || is_mdx_non_prose_line(trimmed)
+        {
             byte_offset += line.len() + 1;
             continue;
         }
@@ -233,7 +240,11 @@ pub fn find_first_paragraph_range(body: &str) -> Option<(usize, usize)> {
         let mut end_offset = byte_offset + line.len();
         while let Some(next) = lines.peek() {
             let next_trimmed = next.trim();
-            if next_trimmed.is_empty() || next_trimmed.starts_with('#') || next_trimmed.starts_with("---") || is_mdx_non_prose_line(next_trimmed) {
+            if next_trimmed.is_empty()
+                || next_trimmed.starts_with('#')
+                || next_trimmed.starts_with("---")
+                || is_mdx_non_prose_line(next_trimmed)
+            {
                 break;
             }
             end_offset += 1 + next.len(); // +1 for newline before
@@ -302,7 +313,13 @@ pub fn insert_faq_schema(body: &str, questions: &[(String, String)]) -> String {
 
 /// Insert a snippet section (H2 + answer + optional list/table) near the top of the body.
 /// Places the section after the first H1 if present, otherwise after the first paragraph.
-pub fn insert_snippet_section(body: &str, heading: &str, answer: &str, list: Option<&[String]>, table: Option<&[Vec<String>]>) -> String {
+pub fn insert_snippet_section(
+    body: &str,
+    heading: &str,
+    answer: &str,
+    list: Option<&[String]>,
+    table: Option<&[Vec<String>]>,
+) -> String {
     let mut section = format!("\n\n## {}\n\n{}", heading, answer);
 
     if let Some(rows) = table {
@@ -405,7 +422,9 @@ pub fn scan_and_clean(content_dir: &Path, dry_run: bool) -> Result<CleaningResul
 /// Pattern: `...field: "value"---\n` → `...field: "value"\n---\n`
 ///
 /// Returns the list of files that were fixed.
-pub fn fix_malformed_frontmatter_closers(content_dir: &Path) -> std::result::Result<Vec<PathBuf>, String> {
+pub fn fix_malformed_frontmatter_closers(
+    content_dir: &Path,
+) -> std::result::Result<Vec<PathBuf>, String> {
     let files = crate::content::locator::collect_markdown_files(content_dir);
     let mut fixed = Vec::new();
 
@@ -460,7 +479,9 @@ pub fn fix_malformed_frontmatter_closers(content_dir: &Path) -> std::result::Res
 ///
 /// Returns a list of `(old_path, new_path)` for each file renamed.
 /// Skips files where the `.mdx` counterpart already exists.
-pub fn rename_md_to_mdx(content_dir: &Path) -> std::result::Result<Vec<(PathBuf, PathBuf)>, String> {
+pub fn rename_md_to_mdx(
+    content_dir: &Path,
+) -> std::result::Result<Vec<(PathBuf, PathBuf)>, String> {
     let files = crate::content::locator::collect_markdown_files(content_dir);
     let mut renamed = Vec::new();
 

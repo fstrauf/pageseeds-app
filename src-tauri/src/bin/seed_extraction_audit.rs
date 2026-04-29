@@ -16,7 +16,6 @@
 ///   5. Calls the local agent CLI (kimi/copilot/etc.) — no Tauri runtime needed
 ///   6. Parses the JSON output into themes + competitors
 ///   7. Prints a comparison table and writes a JSON report
-
 use std::path::{Path, PathBuf};
 
 use pageseeds_lib::{
@@ -99,7 +98,9 @@ fn parse_seed_extraction(raw: &str) -> SeedExtractionOutput {
 
     // Fallback: extract_json helper
     if let Some(json) = pageseeds_lib::engine::text::extract_json(raw) {
-        if let Ok(parsed) = serde_json::from_str::<SeedExtractionOutput>(&serde_json::to_string(&json).unwrap_or_default()) {
+        if let Ok(parsed) = serde_json::from_str::<SeedExtractionOutput>(
+            &serde_json::to_string(&json).unwrap_or_default(),
+        ) {
             return parsed;
         }
     }
@@ -129,7 +130,10 @@ async fn main() {
     println!("═══════════════════════════════════════════════════════════════\n");
 
     if !db_path.exists() {
-        eprintln!("✗ Database not found at {}. Set DB_PATH to override.", db_path.display());
+        eprintln!(
+            "✗ Database not found at {}. Set DB_PATH to override.",
+            db_path.display()
+        );
         std::process::exit(1);
     }
 
@@ -141,7 +145,10 @@ async fn main() {
         return;
     }
 
-    println!("Found {} project(s). Running seed extraction...\n", projects.len());
+    println!(
+        "Found {} project(s). Running seed extraction...\n",
+        projects.len()
+    );
 
     let mut handles = vec![];
 
@@ -166,8 +173,14 @@ async fn main() {
             let provider_clone2 = provider_clone.clone();
 
             let raw_output = match tokio::task::spawn_blocking(move || {
-                pageseeds_lib::engine::agent::run_agent(&provider_clone2, &full_prompt, Path::new(&project_path_clone))
-            }).await {
+                pageseeds_lib::engine::agent::run_agent(
+                    &provider_clone2,
+                    &full_prompt,
+                    Path::new(&project_path_clone),
+                )
+            })
+            .await
+            {
                 Ok(Ok(output)) => output,
                 Ok(Err(e)) => {
                     println!("  ✗ Agent failed for {}: {}", project_name, e);
@@ -301,7 +314,12 @@ async fn main() {
     } else {
         println!("\n  Themes shared by multiple projects:");
         for (theme, projects) in &shared_themes {
-            println!("    '{}' → {} projects: {}", theme, projects.len(), projects.join(", "));
+            println!(
+                "    '{}' → {} projects: {}",
+                theme,
+                projects.len(),
+                projects.join(", ")
+            );
         }
     }
 
@@ -311,7 +329,13 @@ async fn main() {
         let unique: Vec<_> = r
             .themes
             .iter()
-            .filter(|t| theme_to_projects.get(&t.to_lowercase()).map(|p| p.len()).unwrap_or(0) == 1)
+            .filter(|t| {
+                theme_to_projects
+                    .get(&t.to_lowercase())
+                    .map(|p| p.len())
+                    .unwrap_or(0)
+                    == 1
+            })
             .collect();
         println!("    {}: {} unique", r.project.name, unique.len());
         for t in &unique {

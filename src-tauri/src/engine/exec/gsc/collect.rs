@@ -12,10 +12,7 @@ use crate::models::task::Task;
 /// First tries `manifest.json` in the automation dir (workspace convention).
 /// If that is missing or lacks a site URL, falls back to the `projects` table
 /// (live-site projects store site_url/sitemap_url directly in SQLite).
-fn resolve_site_config(
-    task: &Task,
-    project_path: &str,
-) -> Result<(String, String), StepResult> {
+fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, String), StepResult> {
     let paths = ProjectPaths::from_path(project_path);
     let manifest_path = paths.automation_dir.join("manifest.json");
 
@@ -32,7 +29,12 @@ fn resolve_site_config(
                     .get("sitemap")
                     .and_then(|v| v.as_str())
                     .map(String::from)
-                    .unwrap_or_else(|| format!("{}/sitemap.xml", super::normalize_site_for_url_match(&site_url)));
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{}/sitemap.xml",
+                            super::normalize_site_for_url_match(&site_url)
+                        )
+                    });
                 return Ok((site_url, sitemap_url));
             }
         }
@@ -78,7 +80,12 @@ fn resolve_site_config(
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .map(String::from)
-                .unwrap_or_else(|| format!("{}/sitemap.xml", super::normalize_site_for_url_match(&site_url)));
+                .unwrap_or_else(|| {
+                    format!(
+                        "{}/sitemap.xml",
+                        super::normalize_site_for_url_match(&site_url)
+                    )
+                });
             Ok((site_url, sitemap_url))
         }
         Err(e) => Err(StepResult {
@@ -117,22 +124,34 @@ pub(crate) fn exec_collect_gsc(
         Err(step_result) => return step_result,
     };
 
-    log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
+    log::info!(
+        "[collect_gsc] site_url={} sitemap_url={}",
+        site_url,
+        sitemap_url
+    );
 
-    log::info!("[collect_gsc] site_url={} sitemap_url={}", site_url, sitemap_url);
+    log::info!(
+        "[collect_gsc] site_url={} sitemap_url={}",
+        site_url,
+        sitemap_url
+    );
     let site_match_prefix = super::normalize_site_for_url_match(&site_url);
 
     // 2. Credentials + token
-    let sa_path = match resolver.resolve("GSC_SERVICE_ACCOUNT_PATH")
+    let sa_path = match resolver
+        .resolve("GSC_SERVICE_ACCOUNT_PATH")
         .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS"))
         .map(|(v, _)| v)
     {
         Some(p) => p,
-        None => return StepResult {
-            success: false,
-            message: "GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets".to_string(),
-            output: None,
-        },
+        None => {
+            return StepResult {
+                success: false,
+                message: "GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets"
+                    .to_string(),
+                output: None,
+            }
+        }
     };
 
     // 2-4. Credentials + fetch sitemap + URL Inspection API - All in one thread with own runtime
@@ -140,7 +159,7 @@ pub(crate) fn exec_collect_gsc(
     let sa_path_owned = sa_path.clone();
     let sitemap_url_owned = sitemap_url.clone();
     let site_url_owned = site_url.clone();
-    
+
     let gsc_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
@@ -152,22 +171,25 @@ pub(crate) fn exec_collect_gsc(
                     .await
                     .map(|t| t.access_token)?
             };
-            
+
             // Fetch sitemap URLs
             let urls = crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url_owned, 200).await?;
             if urls.is_empty() {
-                return Err(crate::error::Error::Other(
-                    format!("Sitemap at '{}' is empty or unreachable", sitemap_url_owned)
-                ));
+                return Err(crate::error::Error::Other(format!(
+                    "Sitemap at '{}' is empty or unreachable",
+                    sitemap_url_owned
+                )));
             }
-            
+
             // URL Inspection API
-            let records = crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls).await?;
-            
+            let records =
+                crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls).await?;
+
             Ok::<_, crate::error::Error>((records, token))
         })
-    }).join();
-    
+    })
+    .join();
+
     let (records, _token) = match gsc_result {
         Ok(Ok((r, t))) => (r, t),
         Ok(Err(e)) => {
@@ -184,32 +206,45 @@ pub(crate) fn exec_collect_gsc(
                 output: None,
             };
         }
-        Err(_) => return StepResult {
-            success: false,
-            message: "GSC collection thread panicked".to_string(),
-            output: None,
-        },
+        Err(_) => {
+            return StepResult {
+                success: false,
+                message: "GSC collection thread panicked".to_string(),
+                output: None,
+            }
+        }
     };
 
     log::info!("[collect_gsc] {} URLs inspected", records.len());
 
     // Fast-fail: check that records domain matches gsc_site
     let sample_size = records.len().min(10);
-    
+
     // Normalize for comparison (strip scheme and www.)
     let site_normalized = super::normalize_url_for_comparison(&site_match_prefix);
-    let sample_matches = records.iter().take(sample_size)
-        .filter(|r| super::normalize_url_for_comparison(&r.url).starts_with(&site_normalized)).count();
-    
+    let sample_matches = records
+        .iter()
+        .take(sample_size)
+        .filter(|r| super::normalize_url_for_comparison(&r.url).starts_with(&site_normalized))
+        .count();
+
     // Debug: log the comparison
     if sample_size > 0 {
         let first_urls: Vec<&str> = records.iter().take(3).map(|s| s.url.as_str()).collect();
-        log::info!("[collect_gsc] site_match_prefix='{}' (normalized: '{}'), sample URLs: {:?}", 
-            site_match_prefix, site_normalized, first_urls);
-        log::info!("[collect_gsc] URL match check: {}/{} match normalized prefix '{}'", 
-            sample_matches, sample_size, site_normalized);
+        log::info!(
+            "[collect_gsc] site_match_prefix='{}' (normalized: '{}'), sample URLs: {:?}",
+            site_match_prefix,
+            site_normalized,
+            first_urls
+        );
+        log::info!(
+            "[collect_gsc] URL match check: {}/{} match normalized prefix '{}'",
+            sample_matches,
+            sample_size,
+            site_normalized
+        );
     }
-    
+
     if sample_size > 0 && sample_matches == 0 {
         return StepResult {
             success: false,
@@ -223,15 +258,20 @@ pub(crate) fn exec_collect_gsc(
 
     // 5. Domain validation (normalize for www. comparison)
     let site_domain_normalized = super::normalize_url_for_comparison(&site_match_prefix);
-    let url_matching = records.iter()
-        .filter(|r| super::normalize_url_for_comparison(&r.url).starts_with(&site_domain_normalized))
+    let url_matching = records
+        .iter()
+        .filter(|r| {
+            super::normalize_url_for_comparison(&r.url).starts_with(&site_domain_normalized)
+        })
         .count();
     if records.len() > 5 && url_matching < records.len() / 2 {
         return StepResult {
             success: false,
             message: format!(
                 "GSC site URL mismatch: only {}/{} URLs match '{}'. Check 'url' in manifest.json.",
-                url_matching, records.len(), site_match_prefix
+                url_matching,
+                records.len(),
+                site_match_prefix
             ),
             output: None,
         };
@@ -240,21 +280,29 @@ pub(crate) fn exec_collect_gsc(
     // 6. Build output
     let mut counts: HashMap<String, u32> = HashMap::new();
     for rec in &records {
-        *counts.entry(rec.reason_code.as_deref().unwrap_or("unknown").to_string()).or_insert(0) += 1;
+        *counts
+            .entry(rec.reason_code.as_deref().unwrap_or("unknown").to_string())
+            .or_insert(0) += 1;
     }
 
-    let issues_found = records.iter()
+    let issues_found = records
+        .iter()
         .filter(|r| r.reason_code.as_deref().unwrap_or("") != "indexed_pass")
         .count();
 
-    let mut items: Vec<serde_json::Value> = records.iter().map(|r| serde_json::json!({
-        "url": r.url,
-        "verdict": r.verdict,
-        "coverage_state": r.coverage_state,
-        "reason_code": r.reason_code,
-        "action": r.action,
-        "priority": r.priority,
-    })).collect();
+    let mut items: Vec<serde_json::Value> = records
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "url": r.url,
+                "verdict": r.verdict,
+                "coverage_state": r.coverage_state,
+                "reason_code": r.reason_code,
+                "action": r.action,
+                "priority": r.priority,
+            })
+        })
+        .collect();
     items.sort_by_key(|item| item["priority"].as_i64().unwrap_or(999));
 
     let now_iso = chrono::Utc::now().to_rfc3339();
@@ -279,15 +327,26 @@ pub(crate) fn exec_collect_gsc(
             output: None,
         };
     }
-    if let Err(e) = crate::engine::exec::common::write_json(&output_path, &collection, "gsc_collection.json") {
+    if let Err(e) =
+        crate::engine::exec::common::write_json(&output_path, &collection, "gsc_collection.json")
+    {
         return e;
     }
 
-    log::info!("[collect_gsc] wrote {} — {} URLs, {} issues", output_path.display(), records.len(), issues_found);
+    log::info!(
+        "[collect_gsc] wrote {} — {} URLs, {} issues",
+        output_path.display(),
+        records.len(),
+        issues_found
+    );
 
     StepResult {
         success: true,
-        message: format!("{} URLs inspected, {} issues found", records.len(), issues_found),
+        message: format!(
+            "{} URLs inspected, {} issues found",
+            records.len(),
+            issues_found
+        ),
         output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
     }
 }

@@ -17,7 +17,8 @@ pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult
     if seed_artifact.themes.is_empty() {
         return StepResult {
             success: false,
-            message: "No themes found in research_seed_extraction artifact. Step 1 must run first.".to_string(),
+            message: "No themes found in research_seed_extraction artifact. Step 1 must run first."
+                .to_string(),
             output: None,
         };
     }
@@ -40,13 +41,20 @@ pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult
             for theme in &themes {
                 tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
-                let suggestions = match crate::seo::google_autocomplete::fetch_suggestions(theme, "us", "en").await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::warn!("[research_autocomplete] Autocomplete failed for '{}': {}", theme, e);
-                        vec![]
-                    }
-                };
+                let suggestions =
+                    match crate::seo::google_autocomplete::fetch_suggestions(theme, "us", "en")
+                        .await
+                    {
+                        Ok(s) => s,
+                        Err(e) => {
+                            log::warn!(
+                                "[research_autocomplete] Autocomplete failed for '{}': {}",
+                                theme,
+                                e
+                            );
+                            vec![]
+                        }
+                    };
 
                 let suggestion_list: Vec<String> = suggestions
                     .iter()
@@ -75,8 +83,7 @@ pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult
 
     match thread_result {
         Ok(Ok(results)) => {
-            let json = serde_json::to_string_pretty(&results)
-                .unwrap_or_else(|_| "[]".to_string());
+            let json = serde_json::to_string_pretty(&results).unwrap_or_else(|_| "[]".to_string());
             log::info!(
                 "[research_autocomplete] Complete — {} theme entries ({} chars)",
                 results.len(),
@@ -102,7 +109,7 @@ pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult
 }
 
 /// Output format matching what the frontend KeywordPicker expects.
-/// 
+///
 /// The frontend expects either:
 /// - `landing_page_candidates` for landing page research
 /// - `difficulty.results` for keyword research (wrapped in difficulty object)
@@ -150,7 +157,9 @@ pub fn select_keywords_deterministic(
             let has_data = k.has_data.unwrap_or(false);
             let kd_ok = k.kd.map(|d| d as i64 <= target_kd).unwrap_or(false);
             // Reject navigational intent (brand searches like "nike air force 1")
-            let intent_ok = k.intent.as_deref()
+            let intent_ok = k
+                .intent
+                .as_deref()
                 .map(|i| !i.eq_ignore_ascii_case("navigational"))
                 .unwrap_or(true);
             has_data && kd_ok && intent_ok
@@ -180,7 +189,10 @@ pub fn select_keywords_deterministic(
                     keyword: k.keyword.clone(),
                     estimated_volume: k.volume.unwrap_or(0),
                     estimated_kd: k.kd.unwrap_or(0.0) as i64,
-                    intent: k.intent.clone().unwrap_or_else(|| "informational".to_string()),
+                    intent: k
+                        .intent
+                        .clone()
+                        .unwrap_or_else(|| "informational".to_string()),
                     landing_page_type: infer_landing_page_type(&k.keyword),
                     opportunity_score: "high".to_string(),
                     opportunity_reason: format!(
@@ -256,9 +268,9 @@ fn generate_title(keyword: &str) -> String {
             }
         })
         .collect();
-    
+
     let title = words.join(" ");
-    
+
     // Add suffix based on keyword type
     let lower = keyword.to_lowercase();
     if lower.contains("how to") {
@@ -275,7 +287,18 @@ fn generate_title(keyword: &str) -> String {
 fn is_stop_word(word: &str) -> bool {
     matches!(
         word.to_lowercase().as_str(),
-        "a" | "an" | "the" | "and" | "or" | "but" | "in" | "on" | "at" | "to" | "for" | "of" | "with"
+        "a" | "an"
+            | "the"
+            | "and"
+            | "or"
+            | "but"
+            | "in"
+            | "on"
+            | "at"
+            | "to"
+            | "for"
+            | "of"
+            | "with"
     )
 }
 
@@ -302,7 +325,8 @@ pub fn exec_research_final_selection(
         None => {
             return StepResult {
                 success: false,
-                message: "No previous step output found — expected keyword pipeline results".to_string(),
+                message: "No previous step output found — expected keyword pipeline results"
+                    .to_string(),
                 output: None,
             };
         }
@@ -332,7 +356,11 @@ pub fn exec_research_final_selection(
             let count = if is_landing_page {
                 output.landing_page_candidates.len()
             } else {
-                output.difficulty.as_ref().map(|d| d.results.len()).unwrap_or(0)
+                output
+                    .difficulty
+                    .as_ref()
+                    .map(|d| d.results.len())
+                    .unwrap_or(0)
             };
 
             StepResult {

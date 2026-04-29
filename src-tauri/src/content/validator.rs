@@ -8,7 +8,6 @@
 /// Usage:
 ///   let result = validate_project(repo_root, content_dir, None)?;
 ///   let fixed  = apply_fixes(&result.issues, repo_root)?;
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -49,7 +48,11 @@ impl FrontmatterSchema {
         ]
         .into_iter()
         .collect();
-        alias_map.get(lower.as_str()).copied().unwrap_or_else(|| lower.as_str()).to_string()
+        alias_map
+            .get(lower.as_str())
+            .copied()
+            .unwrap_or_else(|| lower.as_str())
+            .to_string()
     }
 
     /// All known fields (required + optional).
@@ -126,7 +129,9 @@ pub fn validate_project(
     content_dir: &Path,
     schema: Option<&FrontmatterSchema>,
 ) -> std::result::Result<FormatValidationResult, String> {
-    let schema = schema.map(|s| s.clone()).unwrap_or_else(FrontmatterSchema::default_schema);
+    let schema = schema
+        .map(|s| s.clone())
+        .unwrap_or_else(FrontmatterSchema::default_schema);
     let files = crate::content::locator::collect_markdown_files(content_dir);
 
     let mut issues = Vec::new();
@@ -151,9 +156,18 @@ pub fn validate_project(
     // Format drift: detect files whose frontmatter keys differ from the majority pattern
     issues.extend(detect_format_drift(&files, &schema)?);
 
-    let error_count = issues.iter().filter(|i| i.severity == Severity::Error).count();
-    let warn_count = issues.iter().filter(|i| i.severity == Severity::Warn).count();
-    let info_count = issues.iter().filter(|i| i.severity == Severity::Info).count();
+    let error_count = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count();
+    let warn_count = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Warn)
+        .count();
+    let info_count = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Info)
+        .count();
     let auto_fixable_count = issues.iter().filter(|i| i.auto_fixable).count();
 
     Ok(FormatValidationResult {
@@ -324,7 +338,11 @@ fn validate_file(
                 issue_type: "duplicate_field".into(),
                 field: Some(canonical.clone()),
                 severity: Severity::Warn,
-                message: format!("Field '{}' appears {} times in frontmatter", canonical, occurrences.len()),
+                message: format!(
+                    "Field '{}' appears {} times in frontmatter",
+                    canonical,
+                    occurrences.len()
+                ),
                 auto_fixable: !is_complex,
             });
         }
@@ -339,7 +357,10 @@ fn validate_file(
                 issue_type: "unquoted_value".into(),
                 field: Some(scalar.key.to_string()),
                 severity: Severity::Info,
-                message: format!("Value '{}' should be quoted to avoid YAML parsing issues", val),
+                message: format!(
+                    "Value '{}' should be quoted to avoid YAML parsing issues",
+                    val
+                ),
                 auto_fixable: !is_complex,
             });
         }
@@ -458,10 +479,7 @@ pub fn apply_fixes(
     // Group issues by file
     let mut by_file: HashMap<String, Vec<&FormatIssue>> = HashMap::new();
     for issue in issues.iter().filter(|i| i.auto_fixable) {
-        by_file
-            .entry(issue.file.clone())
-            .or_default()
-            .push(issue);
+        by_file.entry(issue.file.clone()).or_default().push(issue);
     }
 
     let mut files_fixed = 0usize;
@@ -529,7 +547,10 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
         for issue in issues {
             if issue.issue_type == "missing_field" {
                 if let Some(field) = &issue.field {
-                    if !fm_lines.iter().any(|l| l.starts_with(&format!("{}:", field))) {
+                    if !fm_lines
+                        .iter()
+                        .any(|l| l.starts_with(&format!("{}:", field)))
+                    {
                         fm_lines.push(format!("{}: \"\"", field));
                     }
                 }
@@ -554,7 +575,10 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
         if let Some(mapping) = fm_parsed.parsed.as_mapping() {
             for (_k, v) in mapping {
                 match v {
-                    serde_yaml::Value::String(_) | serde_yaml::Value::Number(_) | serde_yaml::Value::Bool(_) | serde_yaml::Value::Null => {}
+                    serde_yaml::Value::String(_)
+                    | serde_yaml::Value::Number(_)
+                    | serde_yaml::Value::Bool(_)
+                    | serde_yaml::Value::Null => {}
                     _ => return None,
                 }
             }
@@ -576,7 +600,8 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
                     for scalar in &scalars {
                         if scalar.key == field {
                             let old_val = scalar.raw_value;
-                            let needs_quotes = old_val.starts_with('"') || old_val.starts_with('\'');
+                            let needs_quotes =
+                                old_val.starts_with('"') || old_val.starts_with('\'');
                             let new_val = if needs_quotes {
                                 format!("\"{}\"", old_val.trim_matches('"').trim_matches('\''))
                             } else {
@@ -623,7 +648,8 @@ fn apply_file_fixes(content: &str, issues: &[&FormatIssue]) -> Option<String> {
                         if scalar.key == *field {
                             let val = scalar.raw_value;
                             if !is_quoted(val) && needs_quoting(val) {
-                                new_fm_lines[scalar.line_idx] = format!("{}: \"{}\"", scalar.key, val);
+                                new_fm_lines[scalar.line_idx] =
+                                    format!("{}: \"{}\"", scalar.key, val);
                             }
                         }
                     }
@@ -698,7 +724,11 @@ fn canonical_key(key: &str) -> String {
     ]
     .into_iter()
     .collect();
-    alias_map.get(lower.as_str()).copied().unwrap_or_else(|| lower.as_str()).to_string()
+    alias_map
+        .get(lower.as_str())
+        .copied()
+        .unwrap_or_else(|| lower.as_str())
+        .to_string()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -720,8 +750,12 @@ mod tests {
         let schema = FrontmatterSchema::default_schema();
         let content = "---\ntitle: \"Foo\"\n---\n\nBody.";
         let issues = validate_file_content(content, &schema);
-        assert!(issues.iter().any(|i| i.issue_type == "missing_field" && i.field == Some("date".into())));
-        assert!(issues.iter().any(|i| i.issue_type == "missing_field" && i.field == Some("description".into())));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == "missing_field" && i.field == Some("date".into())));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == "missing_field" && i.field == Some("description".into())));
     }
 
     #[test]
@@ -729,13 +763,16 @@ mod tests {
         let schema = FrontmatterSchema::default_schema();
         let content = "---\ntitle: \"Foo\"\nmetaDescription: \"Bar\"\ndate: \"2024-01-01\"\ndescription: \"Baz\"\n---\n\nBody.";
         let issues = validate_file_content(content, &schema);
-        assert!(issues.iter().any(|i| i.issue_type == "unknown_alias" && i.field == Some("metaDescription".into())));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == "unknown_alias" && i.field == Some("metaDescription".into())));
     }
 
     #[test]
     fn validate_invalid_date() {
         let schema = FrontmatterSchema::default_schema();
-        let content = "---\ntitle: \"Foo\"\ndate: \"not-a-date\"\ndescription: \"Bar\"\n---\n\nBody.";
+        let content =
+            "---\ntitle: \"Foo\"\ndate: \"not-a-date\"\ndescription: \"Bar\"\n---\n\nBody.";
         let issues = validate_file_content(content, &schema);
         assert!(issues.iter().any(|i| i.issue_type == "invalid_date"));
     }
@@ -745,7 +782,9 @@ mod tests {
         let schema = FrontmatterSchema::default_schema();
         let content = "---\ntitle: \"Foo\"\ntitle: \"Bar\"\ndate: \"2024-01-01\"\ndescription: \"Baz\"\n---\n\nBody.";
         let issues = validate_file_content(content, &schema);
-        assert!(issues.iter().any(|i| i.issue_type == "duplicate_field" && i.field == Some("title".into())));
+        assert!(issues
+            .iter()
+            .any(|i| i.issue_type == "duplicate_field" && i.field == Some("title".into())));
     }
 
     #[test]
@@ -836,10 +875,10 @@ mod tests {
         let mut fields: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for scalar in &scalars {
             let canonical = schema.canonical(scalar.key);
-            fields.entry(canonical).or_default().push((
-                scalar.key.to_string(),
-                scalar.raw_value.to_string(),
-            ));
+            fields
+                .entry(canonical)
+                .or_default()
+                .push((scalar.key.to_string(), scalar.raw_value.to_string()));
         }
 
         for req in &schema.required {

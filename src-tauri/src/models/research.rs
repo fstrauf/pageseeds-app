@@ -4,13 +4,12 @@
 ///   Step 1 (agentic): seed_extraction → SeedExtractionOutput
 ///   Step 2 (deterministic): ahrefs_pipeline → KeywordPipelineOutput  
 ///   Step 3 (agentic): final_selection → ResearchFinalOutput
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Output from Step 1: research_seed_extraction
-/// 
+///
 /// The LLM reads the project brief and extracts research themes and competitor domains.
 /// Contract: MUST return valid JSON with {"themes": [...], "competitors": [...]}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]

@@ -13,7 +13,7 @@ pub fn generate_post_prompt(
 ) -> String {
     let platform_guidance = platform_guidance(platform);
     let canvas_dimensions = canvas_size_description(&template.overlay_config.canvas_size);
-    
+
     format!(
         r##"You are a social media content strategist. Create a {platform} post.
 

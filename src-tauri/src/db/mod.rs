@@ -620,9 +620,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     if version < 4 {
         // Add agent_provider to projects; ignore error if column already exists
         // Note: This is legacy - agent_provider is now global. Default to 'kimi'.
-        let _ = conn.execute_batch(
-            "ALTER TABLE projects ADD COLUMN agent_provider TEXT DEFAULT 'kimi';",
-        );
+        let _ = conn
+            .execute_batch("ALTER TABLE projects ADD COLUMN agent_provider TEXT DEFAULT 'kimi';");
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (4, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -631,9 +630,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 5 {
         // Add mention_stance column to reddit_opportunities; ignore error if already exists
-        let _ = conn.execute_batch(
-            "ALTER TABLE reddit_opportunities ADD COLUMN mention_stance TEXT;",
-        );
+        let _ =
+            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN mention_stance TEXT;");
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (5, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -711,9 +709,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     // Ensure seo_provider column exists regardless of recorded schema version.
     {
         let has_col: bool = conn
-            .prepare("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='seo_provider'")?
+            .prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='seo_provider'",
+            )?
             .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0) > 0;
+            .unwrap_or(0)
+            > 0;
         if !has_col {
             conn.execute_batch(
                 "ALTER TABLE projects ADD COLUMN seo_provider TEXT NOT NULL DEFAULT 'ahrefs';",
@@ -744,9 +745,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 15 {
         // Add product_name column to reddit_opportunities for agentic config consumption
-        let _ = conn.execute_batch(
-            "ALTER TABLE reddit_opportunities ADD COLUMN product_name TEXT;",
-        );
+        let _ =
+            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN product_name TEXT;");
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (15, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -764,9 +764,18 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     // Repair: ensure article review-state columns exist even if V16 partially applied.
     {
         let review_columns = [
-            ("review_status", "ALTER TABLE articles ADD COLUMN review_status TEXT;"),
-            ("review_started_at", "ALTER TABLE articles ADD COLUMN review_started_at TEXT;"),
-            ("last_reviewed_at", "ALTER TABLE articles ADD COLUMN last_reviewed_at TEXT;"),
+            (
+                "review_status",
+                "ALTER TABLE articles ADD COLUMN review_status TEXT;",
+            ),
+            (
+                "review_started_at",
+                "ALTER TABLE articles ADD COLUMN review_started_at TEXT;",
+            ),
+            (
+                "last_reviewed_at",
+                "ALTER TABLE articles ADD COLUMN last_reviewed_at TEXT;",
+            ),
             (
                 "review_count",
                 "ALTER TABLE articles ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0;",
@@ -801,9 +810,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     // Repair: ensure project_mode exists even if the migration was skipped.
     {
         let has_col: bool = conn
-            .prepare("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='project_mode'")?
+            .prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='project_mode'",
+            )?
             .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0) > 0;
+            .unwrap_or(0)
+            > 0;
         if !has_col {
             conn.execute_batch(
                 "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'workspace';",
@@ -920,7 +932,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         let has_col: bool = conn
             .prepare("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='sitemap_url'")?
             .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0) > 0;
+            .unwrap_or(0)
+            > 0;
         if !has_col {
             conn.execute_batch("ALTER TABLE projects ADD COLUMN sitemap_url TEXT;")?;
         }
@@ -928,16 +941,32 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     // Repair: ensure live-site GSC metric columns exist even if the migration was skipped.
     for column in [
-        ("gsc_clicks", "ALTER TABLE live_site_pages ADD COLUMN gsc_clicks REAL;"),
-        ("gsc_impressions", "ALTER TABLE live_site_pages ADD COLUMN gsc_impressions REAL;"),
-        ("gsc_ctr", "ALTER TABLE live_site_pages ADD COLUMN gsc_ctr REAL;"),
-        ("gsc_position", "ALTER TABLE live_site_pages ADD COLUMN gsc_position REAL;"),
-        ("gsc_synced_at", "ALTER TABLE live_site_pages ADD COLUMN gsc_synced_at TEXT;"),
+        (
+            "gsc_clicks",
+            "ALTER TABLE live_site_pages ADD COLUMN gsc_clicks REAL;",
+        ),
+        (
+            "gsc_impressions",
+            "ALTER TABLE live_site_pages ADD COLUMN gsc_impressions REAL;",
+        ),
+        (
+            "gsc_ctr",
+            "ALTER TABLE live_site_pages ADD COLUMN gsc_ctr REAL;",
+        ),
+        (
+            "gsc_position",
+            "ALTER TABLE live_site_pages ADD COLUMN gsc_position REAL;",
+        ),
+        (
+            "gsc_synced_at",
+            "ALTER TABLE live_site_pages ADD COLUMN gsc_synced_at TEXT;",
+        ),
     ] {
         let has_col: bool = conn
             .prepare("SELECT COUNT(*) FROM pragma_table_info('live_site_pages') WHERE name = ?1")?
             .query_row([column.0], |row| row.get::<_, i64>(0))
-            .unwrap_or(0) > 0;
+            .unwrap_or(0)
+            > 0;
         if !has_col {
             conn.execute_batch(column.1)?;
         }
@@ -945,7 +974,6 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     Ok(())
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Article Audit State CRUD
@@ -976,19 +1004,22 @@ pub fn get_article_audit_state(
          WHERE project_id = ?1 AND article_file = ?2 AND audit_type = ?3",
     )?;
 
-    let row = stmt.query_row(rusqlite::params![project_id, article_file, audit_type], |row| {
-        let issues_json: String = row.get(3)?;
-        let issues: Vec<String> = serde_json::from_str(&issues_json).unwrap_or_default();
-        Ok(ArticleAuditState {
-            project_id: project_id.to_string(),
-            article_file: article_file.to_string(),
-            audit_type: audit_type.to_string(),
-            last_audited_at: row.get(0)?,
-            was_healthy: row.get::<_, i64>(1)? != 0,
-            content_hash: row.get(2)?,
-            issues_found: issues,
-        })
-    });
+    let row = stmt.query_row(
+        rusqlite::params![project_id, article_file, audit_type],
+        |row| {
+            let issues_json: String = row.get(3)?;
+            let issues: Vec<String> = serde_json::from_str(&issues_json).unwrap_or_default();
+            Ok(ArticleAuditState {
+                project_id: project_id.to_string(),
+                article_file: article_file.to_string(),
+                audit_type: audit_type.to_string(),
+                last_audited_at: row.get(0)?,
+                was_healthy: row.get::<_, i64>(1)? != 0,
+                content_hash: row.get(2)?,
+                issues_found: issues,
+            })
+        },
+    );
 
     match row {
         Ok(state) => Ok(Some(state)),
@@ -1201,8 +1232,10 @@ pub fn set_ctr_rendered_audit(
     project_id: &str,
     audit: &crate::models::ctr::CtrRenderedPageAudit,
 ) -> Result<()> {
-    let schema_json = serde_json::to_string(&audit.schema_types).unwrap_or_else(|_| "[]".to_string());
-    let snippet_json = serde_json::to_string(&audit.snippet_markup).unwrap_or_else(|_| "{}".to_string());
+    let schema_json =
+        serde_json::to_string(&audit.schema_types).unwrap_or_else(|_| "[]".to_string());
+    let snippet_json =
+        serde_json::to_string(&audit.snippet_markup).unwrap_or_else(|_| "{}".to_string());
     let issues_json = serde_json::to_string(&audit.issues).unwrap_or_else(|_| "[]".to_string());
     let has_faq = if audit.has_rendered_faq_page { 1 } else { 0 };
 
@@ -1359,10 +1392,7 @@ pub fn list_ctr_rendered_audits(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Store a CTR outcome baseline record.
-pub fn set_ctr_outcome(
-    conn: &Connection,
-    outcome: &crate::models::ctr::CtrOutcome,
-) -> Result<()> {
+pub fn set_ctr_outcome(conn: &Connection, outcome: &crate::models::ctr::CtrOutcome) -> Result<()> {
     conn.execute(
         "INSERT INTO ctr_outcomes
          (project_id, article_id, fix_task_id, baseline_start, baseline_end,
@@ -1557,8 +1587,9 @@ pub fn set_strategy_review(
         ],
     )?;
 
-    get_strategy_review(conn, strategy_id, recommendation_type, recommendation_id)
-        .and_then(|opt| opt.ok_or_else(|| crate::error::Error::Database(rusqlite::Error::QueryReturnedNoRows)))
+    get_strategy_review(conn, strategy_id, recommendation_type, recommendation_id).and_then(|opt| {
+        opt.ok_or_else(|| crate::error::Error::Database(rusqlite::Error::QueryReturnedNoRows))
+    })
 }
 
 /// Get a single strategy review by composite key.
@@ -1602,10 +1633,7 @@ pub fn get_strategy_review(
 }
 
 /// List all reviews for a given strategy.
-pub fn list_strategy_reviews(
-    conn: &Connection,
-    strategy_id: &str,
-) -> Result<Vec<StrategyReview>> {
+pub fn list_strategy_reviews(conn: &Connection, strategy_id: &str) -> Result<Vec<StrategyReview>> {
     let mut stmt = conn.prepare(
         "SELECT id, strategy_id, project_id, recommendation_type, recommendation_id,
                 approval_status, approved_by, approved_at, notes, created_at, updated_at
@@ -1724,7 +1752,11 @@ pub fn list_project_metadata(
          ORDER BY article_id, namespace",
     )?;
     let rows = stmt.query_map([project_id], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
     })?;
     let mut results = Vec::new();
     for row in rows {

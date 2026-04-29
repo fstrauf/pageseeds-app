@@ -12,7 +12,6 @@
 ///   6. Prints the created content_review_apply task and its recommendations artifact
 ///
 /// To test with a different project, change PROJECT_PATH below.
-
 use pageseeds_lib::{
     db,
     engine::{executor, task_store},
@@ -27,7 +26,6 @@ const AGENT_PROVIDER: &str = "copilot"; // change to "kimi" if needed
 
 #[tokio::main]
 async fn main() {
-
     // ── Logger ──────────────────────────────────────────────────────────────
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
@@ -57,7 +55,11 @@ async fn main() {
         name: "LearnedLate (smoke test)".to_string(),
         path: PROJECT_PATH.to_string(),
         content_dir: None,
-        site_url: if site_url.is_empty() { None } else { Some(site_url) },
+        site_url: if site_url.is_empty() {
+            None
+        } else {
+            Some(site_url)
+        },
         site_id: None,
         sitemap_url: None,
         project_mode: ProjectMode::Workspace,
@@ -70,7 +72,10 @@ async fn main() {
 
     // ── Task ─────────────────────────────────────────────────────────────────
     let now = chrono::Utc::now().to_rfc3339();
-    let task_id = format!("smoke-content-review-{}", chrono::Utc::now().timestamp_millis());
+    let task_id = format!(
+        "smoke-content-review-{}",
+        chrono::Utc::now().timestamp_millis()
+    );
     let task = Task {
         id: task_id.clone(),
         task_type: "content_review".to_string(),
@@ -97,7 +102,9 @@ async fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     let start = std::time::Instant::now();
-    let result = executor::execute_task(&conn, &task_id).await.expect("execute_task panic");
+    let result = executor::execute_task(&conn, &task_id)
+        .await
+        .expect("execute_task panic");
 
     println!("\n━━━━━━━━━━━━━━━━━━━  Results  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     println!("Success : {}", result.success);
@@ -112,11 +119,16 @@ async fn main() {
             "skipped" => "~",
             _ => "·",
         };
-        println!("  {} [{}] {} — {}", icon, step.status, step.step_name, step.message);
+        println!(
+            "  {} [{}] {} — {}",
+            icon, step.status, step.step_name, step.message
+        );
         if let Some(ref out) = step.output {
             let preview: String = out.chars().take(400).collect();
             println!("    output: {}", preview);
-            if out.len() > 400 { println!("    ... ({} chars total)", out.len()); }
+            if out.len() > 400 {
+                println!("    ... ({} chars total)", out.len());
+            }
         }
         println!();
     }
@@ -140,7 +152,8 @@ async fn main() {
             println!("✓ Apply task created: {} (status={})", t.id, t.status);
             println!("  title: {:?}", t.title);
             for a in &t.artifacts {
-                println!("  artifact: key={} path={:?} content_len={}",
+                println!(
+                    "  artifact: key={} path={:?} content_len={}",
                     a.key,
                     a.path,
                     a.content.as_ref().map(|c| c.len()).unwrap_or(0),
@@ -150,7 +163,9 @@ async fn main() {
                         println!("\n  ── recommendations.json (first 1500 chars) ──");
                         let preview: String = c.as_str().chars().take(1500).collect();
                         println!("{}", preview);
-                        if c.len() > 1500 { println!("  ... ({} chars total)", c.len()); }
+                        if c.len() > 1500 {
+                            println!("  ... ({} chars total)", c.len());
+                        }
                     }
                 }
             }
@@ -168,12 +183,23 @@ async fn main() {
             .ok()
             .and_then(|v| v["articles"].as_array().map(|a| a.len()))
             .unwrap_or(0);
-        println!("\n✓ recommendations.json on disk: {} articles ({} bytes)", n, s.len());
+        println!(
+            "\n✓ recommendations.json on disk: {} articles ({} bytes)",
+            n,
+            s.len()
+        );
     } else {
         println!("\n! recommendations.json not found on disk at {}", rec_path);
     }
 
     // Final verdict
-    println!("\n{}", if result.success { "✓ PASS" } else { "✗ FAIL" });
+    println!(
+        "\n{}",
+        if result.success {
+            "✓ PASS"
+        } else {
+            "✗ FAIL"
+        }
+    );
     std::process::exit(if result.success { 0 } else { 1 });
 }

@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::project::ProjectMode;
 use crate::models::task::Task;
+use std::collections::{HashMap, HashSet};
 
 // ─── Research Mode ────────────────────────────────────────────────────────────
 
@@ -51,7 +51,10 @@ pub(crate) fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
         let themes = themes_from_json(&json);
         let competitors = competitors_from_json(&json);
         if !themes.is_empty() || !competitors.is_empty() {
-            return SeedArtifact { themes, competitors };
+            return SeedArtifact {
+                themes,
+                competitors,
+            };
         }
     }
 
@@ -60,7 +63,10 @@ pub(crate) fn parse_seed_extraction_artifact(task: &Task) -> SeedArtifact {
         let themes = themes_from_json(&json);
         let competitors = competitors_from_json(&json);
         if !themes.is_empty() || !competitors.is_empty() {
-            return SeedArtifact { themes, competitors };
+            return SeedArtifact {
+                themes,
+                competitors,
+            };
         }
     }
 
@@ -93,7 +99,15 @@ fn competitors_from_json(v: &serde_json::Value) -> Vec<String> {
     let extract = |arr: &[serde_json::Value]| {
         arr.iter()
             .filter_map(|x| x.as_str())
-            .map(|s| s.trim().trim_start_matches("https://").trim_start_matches("http://").split('/').next().unwrap_or(s).to_string())
+            .map(|s| {
+                s.trim()
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .split('/')
+                    .next()
+                    .unwrap_or(s)
+                    .to_string()
+            })
             .filter(|s| !s.is_empty() && s.contains('.'))
             .collect::<Vec<String>>()
     };
@@ -131,9 +145,7 @@ fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String)> {
         return vec![];
     };
 
-    let validated = json
-        .get("validated_seeds")
-        .and_then(|v| v.as_array());
+    let validated = json.get("validated_seeds").and_then(|v| v.as_array());
 
     let Some(validated) = validated else {
         return vec![];
@@ -141,7 +153,11 @@ fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String)> {
 
     let mut pairs: Vec<(String, String)> = vec![];
     for entry in validated {
-        let theme = entry.get("theme").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        let theme = entry
+            .get("theme")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
         if theme.is_empty() {
             continue;
         }
@@ -250,7 +266,13 @@ pub(crate) fn smart_sample_candidates(candidates: Vec<Candidate>, budget: usize)
             vb.cmp(&va)
         });
 
-        let quota = base_per_theme + if extra > 0 { extra -= 1; 1 } else { 0 };
+        let quota = base_per_theme
+            + if extra > 0 {
+                extra -= 1;
+                1
+            } else {
+                0
+            };
 
         // Reserve at least 1 slot for a question keyword if available.
         let question_idx = group.iter().position(|c| c.is_question);
@@ -320,7 +342,11 @@ pub(crate) fn exec_keyword_research_native(
 
     // ── Re-use cached results if this step already ran ────────────────────────
     // Prevents burning paid API credits on accidental re-runs.
-    if let Some(existing) = task.artifacts.iter().find(|a| a.key == "research_ahrefs_pipeline") {
+    if let Some(existing) = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "research_ahrefs_pipeline")
+    {
         if let Some(ref content) = existing.content {
             if !content.is_empty() {
                 log::info!(
@@ -375,8 +401,16 @@ pub(crate) fn exec_keyword_research_native(
         };
     }
 
-    log::info!("[keyword_research_native] {} themes: {:?}", themes.len(), themes);
-    log::info!("[keyword_research_native] {} competitors: {:?}", agent_competitors.len(), agent_competitors);
+    log::info!(
+        "[keyword_research_native] {} themes: {:?}",
+        themes.len(),
+        themes
+    );
+    log::info!(
+        "[keyword_research_native] {} competitors: {:?}",
+        agent_competitors.len(),
+        agent_competitors
+    );
 
     // ── Cost estimate (DataForSEO) ────────────────────────────────────────────
     // Two-phase: Phase 1 (Google Autocomplete) is free.
@@ -405,7 +439,8 @@ pub(crate) fn exec_keyword_research_native(
         return crate::engine::workflows::StepResult {
             success: false,
             message: "Workspace not initialised: no articles found in the app index. \
-                 Run 'Init Workspace' from Project Settings first.".into(),
+                 Run 'Init Workspace' from Project Settings first."
+                .into(),
             output: None,
         };
     }
@@ -415,7 +450,8 @@ pub(crate) fn exec_keyword_research_native(
     if !coverage_path.exists() {
         return crate::engine::workflows::StepResult {
             success: false,
-            message: "keyword_coverage.json not found. Run 'Analyze Keyword Coverage' first.".into(),
+            message: "keyword_coverage.json not found. Run 'Analyze Keyword Coverage' first."
+                .into(),
             output: None,
         };
     }
@@ -427,23 +463,31 @@ pub(crate) fn exec_keyword_research_native(
             Err(e) => {
                 return crate::engine::workflows::StepResult {
                     success: false,
-                    message: format!("Failed to load live-site pages for keyword filtering: {}", e),
+                    message: format!(
+                        "Failed to load live-site pages for keyword filtering: {}",
+                        e
+                    ),
                     output: None,
                 }
             }
         }
     } else {
-        crate::content::article_index::existing_keywords(&db, &task.project_id)
-            .unwrap_or_default()
+        crate::content::article_index::existing_keywords(&db, &task.project_id).unwrap_or_default()
     };
 
-    log::info!("[keyword_research_native] {} existing keywords to filter against", existing_keywords.len());
+    log::info!(
+        "[keyword_research_native] {} existing keywords to filter against",
+        existing_keywords.len()
+    );
 
     // ── Load coverage analysis for gap filtering ──────────────────────────────
     let coverage_clusters = super::load_coverage_clusters(project_path);
     let has_coverage = !coverage_clusters.is_empty();
     if has_coverage {
-        log::info!("[keyword_research_native] loaded {} coverage clusters for gap analysis", coverage_clusters.len());
+        log::info!(
+            "[keyword_research_native] loaded {} coverage clusters for gap analysis",
+            coverage_clusters.len()
+        );
     } else {
         log::info!("[keyword_research_native] no coverage analysis found, skipping gap filtering");
     }
@@ -462,7 +506,7 @@ pub(crate) fn exec_keyword_research_native(
     let seo_provider_thread = seo_provider.to_string();
     let project_path_thread = project_path.to_string();
     let validated_seeds_thread = validated_seeds;
-    
+
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
@@ -765,23 +809,24 @@ pub(crate) fn exec_keyword_research_native(
         })
     }).join();
 
-    let (with_data_results, no_data_results, analyzed_count, total_candidates, competitor_insights) = match thread_result {
-        Ok(Ok(result)) => result,
-        Ok(Err(e)) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Keyword research failed: {}", e),
-                output: None,
-            };
-        }
-        Err(_) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "Keyword research thread panicked".to_string(),
-                output: None,
-            };
-        }
-    };
+    let (with_data_results, no_data_results, analyzed_count, total_candidates, competitor_insights) =
+        match thread_result {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: format!("Keyword research failed: {}", e),
+                    output: None,
+                };
+            }
+            Err(_) => {
+                return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: "Keyword research thread panicked".to_string(),
+                    output: None,
+                };
+            }
+        };
 
     if total_candidates == 0 {
         return crate::engine::workflows::StepResult {
@@ -801,20 +846,26 @@ pub(crate) fn exec_keyword_research_native(
 
     log::info!(
         "[keyword_research_native] {} with data, {} total shown (checked {} keywords)",
-        difficulty_results.iter().filter(|r| r["has_data"] == true).count(),
+        difficulty_results
+            .iter()
+            .filter(|r| r["has_data"] == true)
+            .count(),
         difficulty_results.len(),
         analyzed_count,
     );
 
     // total_candidates already captured from pre_filter_count
-    let with_data_count = difficulty_results.iter().filter(|r| r["has_data"] == true).count();
-    
+    let with_data_count = difficulty_results
+        .iter()
+        .filter(|r| r["has_data"] == true)
+        .count();
+
     // Build typed output contract with intent classification
     let keywords: Vec<crate::models::research::ScoredKeyword> = difficulty_results
         .into_iter()
         .map(|r| {
             let keyword = r["keyword"].as_str().unwrap_or("").to_string();
-            
+
             // Use DataForSEO intent if available, otherwise classify by pattern
             let (intent, confidence) = if let Some(api_intent) = r["intent"].as_str() {
                 (api_intent.to_string(), 90.0)
@@ -822,7 +873,7 @@ pub(crate) fn exec_keyword_research_native(
                 let (i, c) = crate::engine::exec::intent_classifier::classify_intent(&keyword);
                 (i.as_str().to_string(), c)
             };
-            
+
             crate::models::research::ScoredKeyword {
                 keyword,
                 volume: r["volume"].as_i64(),
@@ -834,7 +885,7 @@ pub(crate) fn exec_keyword_research_native(
             }
         })
         .collect();
-    
+
     let output = crate::models::research::KeywordPipelineOutput {
         keywords,
         themes: themes.clone(),
@@ -848,7 +899,9 @@ pub(crate) fn exec_keyword_research_native(
         success: true,
         message: format!(
             "Keyword research complete ({} themes, {} candidates, {} analyzed)",
-            themes.len(), total_candidates, analyzed_count
+            themes.len(),
+            total_candidates,
+            analyzed_count
         ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
     }

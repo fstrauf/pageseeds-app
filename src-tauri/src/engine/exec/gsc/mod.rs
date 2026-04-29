@@ -8,7 +8,6 @@
 ///   - create_tasks_from_collection        (parse gsc_collection.json → fix tasks)
 ///   - normalize_site_for_url_match        (sc-domain: normalisation)
 ///   - normalize_url_for_comparison        (URL normalization for domain matching)
-
 mod collect;
 mod investigate;
 mod sync;
@@ -34,7 +33,10 @@ pub(crate) fn normalize_url_for_comparison(url: &str) -> String {
         .strip_prefix("https://")
         .or_else(|| lower.strip_prefix("http://"))
         .unwrap_or(&lower);
-    without_scheme.strip_prefix("www.").unwrap_or(without_scheme).to_string()
+    without_scheme
+        .strip_prefix("www.")
+        .unwrap_or(without_scheme)
+        .to_string()
 }
 
 /// Normalise a GSC property identifier into a URL prefix suitable for `starts_with`.
@@ -50,7 +52,7 @@ pub(crate) fn normalize_url_for_comparison(url: &str) -> String {
 pub(crate) fn normalize_site_for_url_match(site_url: &str) -> String {
     // Strip sc-domain: prefix if present
     let without_prefix = site_url.strip_prefix("sc-domain:").unwrap_or(site_url);
-    
+
     // Use shared normalization for scheme/www stripping, then reconstruct as https://
     let normalized = normalize_url_for_comparison(without_prefix);
     format!("https://{}", normalized.trim_start_matches('/'))

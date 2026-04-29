@@ -2,7 +2,6 @@
 ///
 /// Each row represents one CTR issue (title, meta, snippet, FAQ) for one article.
 /// Status lifecycle: open → recommended → queued → applied → verified | failed | skipped
-
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -181,7 +180,7 @@ pub fn get_ctr_issues_for_article(
                 last_verified_at, content_hash_at_detection, fix_task_id,
                 failure_reason, verified_hash
          FROM article_ctr_issues
-         WHERE project_id = ?1 AND article_id = ?2"
+         WHERE project_id = ?1 AND article_id = ?2",
     )?;
     let rows = stmt.query_map(rusqlite::params![project_id, article_id], row_to_ctr_issue)?;
     rows.collect::<std::result::Result<Vec<_>, _>>()

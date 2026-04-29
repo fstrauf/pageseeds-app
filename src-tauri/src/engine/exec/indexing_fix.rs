@@ -4,7 +4,6 @@
 /// so the agent doesn't waste time hunting for files.
 ///
 /// Step 2 (agentic): Apply the fix based on the GSC issue and page context.
-
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -62,7 +61,10 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
         url,
         content_dir.display(),
         slug,
-        file_match.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "none".to_string())
+        file_match
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none".to_string())
     );
 
     let mut ctx = IndexingFixContext {
@@ -100,11 +102,7 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
             url,
             ctx.word_count,
             ctx.internal_link_count,
-            if ctx.exists {
-                ""
-            } else {
-                " (file not found)"
-            }
+            if ctx.exists { "" } else { " (file not found)" }
         ),
         output: Some(output),
     }
@@ -232,7 +230,7 @@ fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf
         slug.trim_end_matches('/')
             .rsplit('/')
             .next()
-            .unwrap_or(slug)
+            .unwrap_or(slug),
     )
     .replace('_', "-");
 
@@ -267,7 +265,9 @@ fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf
 
         // Also check if the relative path (without extension) matches the slug
         if let Ok(rel) = path.strip_prefix(content_dir) {
-            let rel_str = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+            let rel_str = rel
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
             let rel_without_ext = rel_str.trim_end_matches(".mdx").trim_end_matches(".md");
             let rel_clean = strip_numeric_prefix(rel_without_ext)
                 .replace('/', "-")

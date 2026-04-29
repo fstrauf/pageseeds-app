@@ -6,7 +6,6 @@
 ///
 /// The background timer runs on a dedicated Tokio task (spawned once at app
 /// startup via `start_background_scheduler`). It replaces launchd/launchctl.
-
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -21,7 +20,7 @@ pub struct SchedulerRule {
     pub rule_id: String,
     pub project_id: String,
     pub task_type: String,
-    pub action: String,        // "create_task" | "reminder_only"
+    pub action: String, // "create_task" | "reminder_only"
     pub interval_hours: i64,
     pub priority: String,
     pub phase: String,
@@ -216,7 +215,10 @@ pub fn run_cycle(conn: &Connection, project_id: &str) -> Result<SchedulerCycleRe
             batch::run_batch(conn, project_id, &batch::BatchConfig::default()).await
         }) {
             Ok(batch_result) => {
-                log::info!("[scheduler] batch complete: {} processed", batch_result.processed);
+                log::info!(
+                    "[scheduler] batch complete: {} processed",
+                    batch_result.processed
+                );
             }
             Err(e) => {
                 log::warn!("[scheduler] batch failed: {e}");
@@ -232,7 +234,11 @@ fn create_task_for_rule(conn: &Connection, rule: &SchedulerRule) -> Result<Strin
     use crate::models::task::{AgentPolicy, Priority, TaskStatus};
 
     let now = Utc::now().to_rfc3339();
-    let id = format!("sched-{}-{}", rule.task_type.replace('_', "-"), Utc::now().timestamp());
+    let id = format!(
+        "sched-{}-{}",
+        rule.task_type.replace('_', "-"),
+        Utc::now().timestamp()
+    );
     let priority_enum = match rule.priority.as_str() {
         "high" => Priority::High,
         "low" => Priority::Low,
@@ -286,8 +292,7 @@ pub fn start_background_scheduler(
 
     let state_clone = state.clone();
     tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
         interval.tick().await; // skip the first immediate tick
 
         loop {

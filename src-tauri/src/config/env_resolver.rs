@@ -11,9 +11,18 @@ use std::path::{Path, PathBuf};
 /// Known secrets required by various modules.
 pub const REQUIRED_SECRETS: &[(&str, &str)] = &[
     ("CAPSOLVER_API_KEY", "Ahrefs keyword research (CapSolver)"),
-    ("DATAFORSEO_LOGIN", "DataForSEO API login (optional - use instead of Ahrefs)"),
-    ("DATAFORSEO_PASSWORD", "DataForSEO API password (optional - use instead of Ahrefs)"),
-    ("GSC_SERVICE_ACCOUNT_PATH", "Google Search Console (service account)"),
+    (
+        "DATAFORSEO_LOGIN",
+        "DataForSEO API login (optional - use instead of Ahrefs)",
+    ),
+    (
+        "DATAFORSEO_PASSWORD",
+        "DataForSEO API password (optional - use instead of Ahrefs)",
+    ),
+    (
+        "GSC_SERVICE_ACCOUNT_PATH",
+        "Google Search Console (service account)",
+    ),
     (
         "GSC_REPORT_OAUTH_CLIENT_SECRETS",
         "Google Search Console (OAuth alternative)",
@@ -216,22 +225,17 @@ pub fn import_from_env_file(source_path: &Path) -> Result<Vec<String>, String> {
 
     let dest = secrets_env_path();
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create secrets dir: {}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create secrets dir: {}", e))?;
     }
 
     // Read existing secrets.env lines (or start empty).
     let existing_content = if dest.exists() {
-        std::fs::read_to_string(&dest)
-            .map_err(|e| format!("cannot read secrets.env: {}", e))?
+        std::fs::read_to_string(&dest).map_err(|e| format!("cannot read secrets.env: {}", e))?
     } else {
         String::new()
     };
 
-    let mut output_lines: Vec<String> = existing_content
-        .lines()
-        .map(|l| l.to_string())
-        .collect();
+    let mut output_lines: Vec<String> = existing_content.lines().map(|l| l.to_string()).collect();
 
     let mut written: Vec<String> = Vec::new();
 

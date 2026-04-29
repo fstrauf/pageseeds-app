@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::config::env_resolver::EnvResolver;
-use crate::seo::keywords::{get_keyword_ideas, get_keyword_difficulty};
+use crate::seo::keywords::{get_keyword_difficulty, get_keyword_ideas};
 
 // ─── Keyword Generator Tool ─────────────────────────────────────────────────
 
@@ -102,14 +102,18 @@ impl Tool for KeywordGeneratorTool {
             .get("CAPSOLVER_API_KEY")
             .filter(|k| !k.is_empty())
             .cloned()
-            .ok_or_else(|| KeywordToolError::ConfigError("CAPSOLVER_API_KEY not configured".to_string()))?;
+            .ok_or_else(|| {
+                KeywordToolError::ConfigError("CAPSOLVER_API_KEY not configured".to_string())
+            })?;
 
         let country = args.country.as_deref().unwrap_or("us");
         let search_engine = args.search_engine.as_deref().unwrap_or("Google");
 
         log::info!(
             "[KeywordGeneratorTool] call args: keyword='{}' country='{}' search_engine='{}'",
-            args.keyword, country, search_engine
+            args.keyword,
+            country,
+            search_engine
         );
 
         let result = get_keyword_ideas(&capsolver_key, &args.keyword, country, search_engine)
@@ -201,11 +205,12 @@ impl Tool for KeywordDifficultyTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Check keyword difficulty (KD) score for a specific keyword using Ahrefs API. \
+            description:
+                "Check keyword difficulty (KD) score for a specific keyword using Ahrefs API. \
                 Returns KD score (0-100), SERP overview, and top-ranking pages. \
                 Best for: Validating keyword competitiveness before targeting. \
                 Note: Use sparingly (max 10 calls per research task)."
-                .to_string(),
+                    .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -230,13 +235,16 @@ impl Tool for KeywordDifficultyTool {
             .get("CAPSOLVER_API_KEY")
             .filter(|k| !k.is_empty())
             .cloned()
-            .ok_or_else(|| KeywordToolError::ConfigError("CAPSOLVER_API_KEY not configured".to_string()))?;
+            .ok_or_else(|| {
+                KeywordToolError::ConfigError("CAPSOLVER_API_KEY not configured".to_string())
+            })?;
 
         let country = args.country.as_deref().unwrap_or("us");
 
         log::info!(
             "[KeywordDifficultyTool] call args: keyword='{}' country='{}'",
-            args.keyword, country
+            args.keyword,
+            country
         );
 
         let result = get_keyword_difficulty(&capsolver_key, &args.keyword, country)
@@ -300,7 +308,10 @@ mod tests {
         assert!(def.description.contains("Ahrefs"));
         assert!(def.description.contains("keyword ideas"));
 
-        let params = def.parameters.as_object().expect("parameters should be an object");
+        let params = def
+            .parameters
+            .as_object()
+            .expect("parameters should be an object");
         assert_eq!(params.get("type").and_then(|v| v.as_str()), Some("object"));
 
         let required = params.get("required").and_then(|v| v.as_array());
@@ -321,7 +332,10 @@ mod tests {
         assert!(def.description.contains("difficulty"));
         assert!(def.description.contains("SERP"));
 
-        let params = def.parameters.as_object().expect("parameters should be an object");
+        let params = def
+            .parameters
+            .as_object()
+            .expect("parameters should be an object");
         assert_eq!(params.get("type").and_then(|v| v.as_str()), Some("object"));
 
         let required = params.get("required").and_then(|v| v.as_array());

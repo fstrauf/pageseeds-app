@@ -34,9 +34,7 @@ impl rusqlite::types::ToSql for ProjectMode {
 }
 
 impl rusqlite::types::FromSql for ProjectMode {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "workspace" => Ok(ProjectMode::Workspace),

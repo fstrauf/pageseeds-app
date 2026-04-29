@@ -3,20 +3,38 @@ use crate::models::task::Task;
 use rusqlite::Connection;
 
 /// Native Rust implementation of `pageseeds content sync-and-validate`.
-pub(crate) fn exec_content_sync(task: &Task, project_path: &str, conn: &Connection) -> crate::engine::workflows::StepResult {
+pub(crate) fn exec_content_sync(
+    task: &Task,
+    project_path: &str,
+    conn: &Connection,
+) -> crate::engine::workflows::StepResult {
     use crate::content::ops::sync_and_validate;
 
-    log::info!("[content_sync] starting for project={} path={}", task.project_id, project_path);
+    log::info!(
+        "[content_sync] starting for project={} path={}",
+        task.project_id,
+        project_path
+    );
 
     let paths = ProjectPaths::from_path(project_path);
-    match sync_and_validate(&paths.automation_dir, &paths.repo_root, false, conn, &task.project_id) {
+    match sync_and_validate(
+        &paths.automation_dir,
+        &paths.repo_root,
+        false,
+        conn,
+        &task.project_id,
+    ) {
         Ok(result) => {
-            let output = serde_json::to_string_pretty(&result)
-                .unwrap_or_else(|_| format!("{:?}", result));
+            let output =
+                serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{:?}", result));
             let ok = result.missing_files.is_empty() && result.malformed_file_refs.is_empty();
             crate::engine::workflows::StepResult {
                 success: ok,
-                message: format!("content_sync: {} — {}", if ok { "OK" } else { "issues found" }, result.next_action),
+                message: format!(
+                    "content_sync: {} — {}",
+                    if ok { "OK" } else { "issues found" },
+                    result.next_action
+                ),
                 output: Some(output),
             }
         }
@@ -28,22 +46,32 @@ pub(crate) fn exec_content_sync(task: &Task, project_path: &str, conn: &Connecti
     }
 }
 
-pub(crate) fn exec_format_validation(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
+pub(crate) fn exec_format_validation(
+    task: &Task,
+    project_path: &str,
+) -> crate::engine::workflows::StepResult {
     use crate::content::validator::validate_project;
     use crate::engine::setup_check::load_workspace_config;
 
-    log::info!("[format_validation] starting for project={} path={}", task.project_id, project_path);
+    log::info!(
+        "[format_validation] starting for project={} path={}",
+        task.project_id,
+        project_path
+    );
 
     let paths = ProjectPaths::from_path(project_path);
-    let schema = load_workspace_config(&paths.automation_dir).and_then(|cfg| cfg.frontmatter_schema);
+    let schema =
+        load_workspace_config(&paths.automation_dir).and_then(|cfg| cfg.frontmatter_schema);
 
     let content_dir = match crate::content::locator::resolve(&paths.repo_root, None).selected {
         Some(dir) => dir,
-        None => return crate::engine::workflows::StepResult {
-            success: false,
-            message: "Could not locate content directory for format validation".to_string(),
-            output: None,
-        },
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "Could not locate content directory for format validation".to_string(),
+                output: None,
+            }
+        }
     };
 
     match validate_project(&paths.repo_root, &content_dir, schema.as_ref()) {
@@ -59,14 +87,17 @@ pub(crate) fn exec_format_validation(task: &Task, project_path: &str) -> crate::
                     "Format validation: {} files — {} errors, {} warnings, {} info",
                     result.files_checked, result.error_count, result.warn_count, result.info_count
                 ),
-                output: Some(serde_json::to_string_pretty(&serde_json::json!({
-                    "files_checked": result.files_checked,
-                    "error_count": result.error_count,
-                    "warn_count": result.warn_count,
-                    "info_count": result.info_count,
-                    "auto_fixable_count": result.auto_fixable_count,
-                    "output_path": out_path.display().to_string(),
-                })).unwrap_or_default()),
+                output: Some(
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "files_checked": result.files_checked,
+                        "error_count": result.error_count,
+                        "warn_count": result.warn_count,
+                        "info_count": result.info_count,
+                        "auto_fixable_count": result.auto_fixable_count,
+                        "output_path": out_path.display().to_string(),
+                    }))
+                    .unwrap_or_default(),
+                ),
             }
         }
         Err(e) => crate::engine::workflows::StepResult {
@@ -77,31 +108,43 @@ pub(crate) fn exec_format_validation(task: &Task, project_path: &str) -> crate::
     }
 }
 
-pub(crate) fn exec_format_fix(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
-    use crate::content::validator::{validate_project, apply_fixes};
+pub(crate) fn exec_format_fix(
+    task: &Task,
+    project_path: &str,
+) -> crate::engine::workflows::StepResult {
+    use crate::content::validator::{apply_fixes, validate_project};
     use crate::engine::setup_check::load_workspace_config;
 
-    log::info!("[format_fix] starting for project={} path={}", task.project_id, project_path);
+    log::info!(
+        "[format_fix] starting for project={} path={}",
+        task.project_id,
+        project_path
+    );
 
     let paths = ProjectPaths::from_path(project_path);
-    let schema = load_workspace_config(&paths.automation_dir).and_then(|cfg| cfg.frontmatter_schema);
+    let schema =
+        load_workspace_config(&paths.automation_dir).and_then(|cfg| cfg.frontmatter_schema);
 
     let content_dir = match crate::content::locator::resolve(&paths.repo_root, None).selected {
         Some(dir) => dir,
-        None => return crate::engine::workflows::StepResult {
-            success: false,
-            message: "Could not locate content directory for format fix".to_string(),
-            output: None,
-        },
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "Could not locate content directory for format fix".to_string(),
+                output: None,
+            }
+        }
     };
 
     let validation = match validate_project(&paths.repo_root, &content_dir, schema.as_ref()) {
         Ok(v) => v,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Format fix failed during validation: {}", e),
-            output: None,
-        },
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Format fix failed during validation: {}", e),
+                output: None,
+            }
+        }
     };
 
     match apply_fixes(&validation.issues, &paths.repo_root) {
@@ -114,14 +157,19 @@ pub(crate) fn exec_format_fix(task: &Task, project_path: &str) -> crate::engine:
                 success: true,
                 message: format!(
                     "Format fix: {} files checked, {} files fixed, {} issues remaining",
-                    result.files_checked, result.files_fixed, result.issues_remaining.len()
+                    result.files_checked,
+                    result.files_fixed,
+                    result.issues_remaining.len()
                 ),
-                output: Some(serde_json::to_string_pretty(&serde_json::json!({
-                    "files_checked": result.files_checked,
-                    "files_fixed": result.files_fixed,
-                    "issues_remaining": result.issues_remaining.len(),
-                    "output_path": out_path.display().to_string(),
-                })).unwrap_or_default()),
+                output: Some(
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "files_checked": result.files_checked,
+                        "files_fixed": result.files_fixed,
+                        "issues_remaining": result.issues_remaining.len(),
+                        "output_path": out_path.display().to_string(),
+                    }))
+                    .unwrap_or_default(),
+                ),
             }
         }
         Err(e) => crate::engine::workflows::StepResult {
@@ -133,46 +181,58 @@ pub(crate) fn exec_format_fix(task: &Task, project_path: &str) -> crate::engine:
 }
 
 /// Sanitize content: rename `.md` → `.mdx`, repair article paths, then run read-only format validation.
-pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::engine::workflows::StepResult {
-    use crate::content::cleaner::rename_md_to_mdx;
+pub(crate) fn exec_sanitize_content(
+    task: &Task,
+    project_path: &str,
+) -> crate::engine::workflows::StepResult {
     use crate::content::article_resolver::repair_article_paths_in_batch;
+    use crate::content::cleaner::rename_md_to_mdx;
 
-    log::info!("[sanitize_content] starting for project={} path={}", task.project_id, project_path);
+    log::info!(
+        "[sanitize_content] starting for project={} path={}",
+        task.project_id,
+        project_path
+    );
 
     let paths = ProjectPaths::from_path(project_path);
 
     // 1. Locate content directory
     let content_dir = match crate::content::locator::resolve(&paths.repo_root, None).selected {
         Some(dir) => dir,
-        None => return crate::engine::workflows::StepResult {
-            success: false,
-            message: "Could not locate content directory for sanitize".to_string(),
-            output: None,
-        },
+        None => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: "Could not locate content directory for sanitize".to_string(),
+                output: None,
+            }
+        }
     };
 
     // 2. Fix malformed frontmatter closers BEFORE anything else.
     //    If --- is appended to the last field line, the frontmatter parser will
     //    fail or use the wrong boundary, and downstream validation will corrupt content.
-    let structurally_fixed = match crate::content::cleaner::fix_malformed_frontmatter_closers(&content_dir) {
-        Ok(v) => v,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Sanitize failed during structural fix: {}", e),
-                output: None,
-            };
-        }
-    };
+    let structurally_fixed =
+        match crate::content::cleaner::fix_malformed_frontmatter_closers(&content_dir) {
+            Ok(v) => v,
+            Err(e) => {
+                return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: format!("Sanitize failed during structural fix: {}", e),
+                    output: None,
+                };
+            }
+        };
 
     // 3. Rename .md → .mdx
     let renamed = match rename_md_to_mdx(&content_dir) {
         Ok(v) => v,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Sanitize failed during rename: {}", e),
-            output: None,
-        },
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Sanitize failed during rename: {}", e),
+                output: None,
+            }
+        }
     };
 
     // 4. Repair articles.json / DB paths (in case stored paths were .md or got out of sync)
@@ -217,7 +277,11 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
     let schema = crate::engine::setup_check::load_workspace_config(&paths.automation_dir)
         .and_then(|cfg| cfg.frontmatter_schema);
 
-    let validation = match crate::content::validator::validate_project(&paths.repo_root, &content_dir, schema.as_ref()) {
+    let validation = match crate::content::validator::validate_project(
+        &paths.repo_root,
+        &content_dir,
+        schema.as_ref(),
+    ) {
         Ok(v) => v,
         Err(e) => {
             return crate::engine::workflows::StepResult {
@@ -244,7 +308,12 @@ pub(crate) fn exec_sanitize_content(task: &Task, project_path: &str) -> crate::e
 
     let structurally_fixed_names: Vec<String> = structurally_fixed
         .iter()
-        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+        .map(|p| {
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
         .collect();
 
     crate::engine::workflows::StepResult {

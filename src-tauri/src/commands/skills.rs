@@ -1,7 +1,7 @@
+use super::{AppState, GscState};
+use crate::engine::{executor, prompts, skills, skills_search, task_store};
 use std::sync::Arc;
 use tauri::State;
-use crate::engine::{executor, prompts, skills, skills_search, task_store};
-use super::{AppState, GscState};
 
 #[tauri::command]
 pub fn list_skills(
@@ -94,9 +94,10 @@ pub async fn quick_run_workflow(
                 let now = chrono::Utc::now().to_rfc3339();
                 let id = format!("task-{}", chrono::Utc::now().timestamp_millis());
 
-                let description: Option<String> = themes.as_ref().filter(|t| !t.is_empty()).map(|t| {
-                    serde_json::json!({ "themes": t }).to_string()
-                });
+                let description: Option<String> = themes
+                    .as_ref()
+                    .filter(|t| !t.is_empty())
+                    .map(|t| serde_json::json!({ "themes": t }).to_string());
 
                 let task = crate::models::task::Task {
                     id,
@@ -134,7 +135,7 @@ pub async fn quick_run_workflow(
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        
+
         // Create a new runtime to run the async executor
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         rt.block_on(async {
@@ -156,10 +157,7 @@ pub async fn check_embedding_status() -> Result<skills_search::EmbeddingStatus, 
 /// Index all skills for semantic search.
 /// Returns the number of skills that were indexed (or re-indexed due to changes).
 #[tauri::command]
-pub async fn index_skills(
-    state: State<'_, AppState>,
-    project_id: String,
-) -> Result<usize, String> {
+pub async fn index_skills(state: State<'_, AppState>, project_id: String) -> Result<usize, String> {
     let skills = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
@@ -170,10 +168,8 @@ pub async fn index_skills(
     tokio::task::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-        rt.block_on(async {
-            skills_search::index_skills(&db, &project_id, &skills).await
-        })
-        .map_err(|e| e.to_string())
+        rt.block_on(async { skills_search::index_skills(&db, &project_id, &skills).await })
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

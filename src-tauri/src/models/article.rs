@@ -34,7 +34,7 @@ pub struct Article {
     pub estimated_traffic_monthly: Option<String>,
     #[serde(default)]
     pub project_id: String,
-    
+
     // NEW: Content Quality Rating fields
     /// Overall quality score 0-100
     #[serde(skip_serializing_if = "Option::is_none")]

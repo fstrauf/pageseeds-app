@@ -7,7 +7,11 @@ use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task};
 /// Post-completion hook: reads gsc_collection.json and spawns fix tasks.
 ///
 /// Called from `execute_task_with_token` after a successful `collect_gsc` task.
-pub(crate) fn create_tasks_from_collection_after_exec(conn: &Connection, parent_task: &Task, project_path: &str) -> Vec<String> {
+pub(crate) fn create_tasks_from_collection_after_exec(
+    conn: &Connection,
+    parent_task: &Task,
+    project_path: &str,
+) -> Vec<String> {
     let paths = ProjectPaths::from_path(project_path);
     let collection_path = paths.automation_dir.join("gsc_collection.json");
 
@@ -59,7 +63,9 @@ pub(crate) fn create_tasks_from_collection(
         let verdict = item["verdict"].as_str().unwrap_or("");
         let priority_val = item["priority"].as_i64().unwrap_or(999);
 
-        if reason == "indexed_pass" { continue; }
+        if reason == "indexed_pass" {
+            continue;
+        }
 
         if reason == "api_error" {
             api_error_count += 1;
@@ -67,7 +73,9 @@ pub(crate) fn create_tasks_from_collection(
         }
 
         let issue_key = format!("{}:{}", reason, url);
-        if seen_issues.contains(&issue_key) { continue; }
+        if seen_issues.contains(&issue_key) {
+            continue;
+        }
         seen_issues.insert(issue_key);
 
         let task_type = match reason {
@@ -76,14 +84,27 @@ pub(crate) fn create_tasks_from_collection(
         };
 
         let url_slug = {
-            let without_scheme = url.trim_start_matches("https://").trim_start_matches("http://");
-            if let Some(slash_pos) = without_scheme.find('/') { &without_scheme[slash_pos..] } else { url }
+            let without_scheme = url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            if let Some(slash_pos) = without_scheme.find('/') {
+                &without_scheme[slash_pos..]
+            } else {
+                url
+            }
         };
         let reason_human = reason.replace('_', " ");
         let title = format!("Fix {}: {}", reason_human, url_slug);
-        let description = format!("URL: {}\nIssue: {}\nAction: {}\nVerdict: {}", url, reason, action, verdict);
+        let description = format!(
+            "URL: {}\nIssue: {}\nAction: {}\nVerdict: {}",
+            url, reason, action, verdict
+        );
 
-        let priority_enum = if priority_val <= 30 { Priority::High } else { Priority::Medium };
+        let priority_enum = if priority_val <= 30 {
+            Priority::High
+        } else {
+            Priority::Medium
+        };
 
         // Idempotency key includes URL to prevent duplicate tasks for same URL+reason
         let idempotency_key = format!("gsc:{}:{}", reason, url);
@@ -110,8 +131,13 @@ pub(crate) fn create_tasks_from_collection(
 
     // One batched fix_gsc_access task for all API errors
     if api_error_count > 0 {
-        let title = format!("Fix GSC API access errors ({} URLs affected)", api_error_count);
-        let description = "GSC URL Inspection API returned errors. Check service account property access.".to_string();
+        let title = format!(
+            "Fix GSC API access errors ({} URLs affected)",
+            api_error_count
+        );
+        let description =
+            "GSC URL Inspection API returned errors. Check service account property access."
+                .to_string();
 
         // Use spawn with custom idempotency key to allow specific execution_mode and agent_policy
         let idempotency_key = format!("followup:{}:fix_gsc_access:{}", parent_task.id, title);
@@ -138,7 +164,8 @@ pub(crate) fn create_tasks_from_collection(
 
     // If no issues — all pages indexed — trigger investigation
     if created_ids.is_empty() && api_error_count == 0 {
-        let all_indexed = items.iter()
+        let all_indexed = items
+            .iter()
             .all(|i| i["reason_code"].as_str().unwrap_or("") == "indexed_pass");
         if all_indexed {
             let title = "Investigate GSC — all pages indexed, look for opportunities".to_string();

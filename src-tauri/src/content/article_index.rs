@@ -190,7 +190,10 @@ pub fn ingest_orphans(
     let articles = list_articles(conn, project_id)?;
     let mut tracked_basenames = HashSet::new();
     for article in &articles {
-        if let Some(name) = std::path::Path::new(&article.file).file_name().and_then(|n| n.to_str()) {
+        if let Some(name) = std::path::Path::new(&article.file)
+            .file_name()
+            .and_then(|n| n.to_str())
+        {
             tracked_basenames.insert(name.to_string());
         }
     }
@@ -431,7 +434,11 @@ mod tests {
         write_seo_workspace(&auto_dir, "content");
 
         // An MDX file exists but is not in DB
-        write_mdx(&content_dir.join("001_new.mdx"), "New Article", "2026-02-01");
+        write_mdx(
+            &content_dir.join("001_new.mdx"),
+            "New Article",
+            "2026-02-01",
+        );
 
         let conn = in_memory_db();
         setup_project(&conn, "p1", &dir);

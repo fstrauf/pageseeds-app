@@ -1,7 +1,6 @@
 /// Autonomous batch processing — executes all ready automatic/batchable tasks.
 ///
 /// Mirrors Python `dashboard_ptk/dashboard/batch.py`.
-
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -58,7 +57,10 @@ pub struct BatchSummary {
 // ─── Autonomy mode helpers ────────────────────────────────────────────────────
 
 fn is_autonomous(task: &Task) -> bool {
-    matches!(task.execution_mode, ExecutionMode::Automatic | ExecutionMode::Batchable)
+    matches!(
+        task.execution_mode,
+        ExecutionMode::Automatic | ExecutionMode::Batchable
+    )
 }
 
 // ─── Ready task selection ─────────────────────────────────────────────────────
@@ -95,8 +97,14 @@ pub fn get_batch_summary(conn: &Connection, project_id: &str) -> Result<BatchSum
     let ready = get_ready_tasks(conn, project_id)?;
     Ok(BatchSummary {
         total_ready: ready.len(),
-        automatic: ready.iter().filter(|t| t.execution_mode == ExecutionMode::Automatic).count(),
-        batchable: ready.iter().filter(|t| t.execution_mode == ExecutionMode::Batchable).count(),
+        automatic: ready
+            .iter()
+            .filter(|t| t.execution_mode == ExecutionMode::Automatic)
+            .count(),
+        batchable: ready
+            .iter()
+            .filter(|t| t.execution_mode == ExecutionMode::Batchable)
+            .count(),
     })
 }
 

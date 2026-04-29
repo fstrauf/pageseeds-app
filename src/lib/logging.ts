@@ -2,8 +2,9 @@
  * PageSeeds Logging Module
  * 
  * Provides consistent, AI-friendly logging for the frontend.
- * All logs are sent to the Rust backend for persistent storage in SQLite.
- * This enables full observability for debugging and agentic analysis.
+ * Frontend log persistence is disabled by default to avoid long-running IPC,
+ * console, and SQLite overhead. Set VITE_PAGESEEDS_PERSIST_FRONTEND_LOGS=true
+ * to temporarily persist frontend logs while debugging.
  * 
  * Log Location:
  * - macOS: ~/Library/Application Support/com.pageseeds.app/pageseeds.db (table: app_logs)
@@ -11,7 +12,7 @@
  * - Linux: ~/.local/share/PageSeeds/pageseeds.db
  */
 
-import { queueLog, flushLogs, createLogger as createBridgeLogger } from './logging-bridge';
+import { queueLog, flushLogs, createLogger as createBridgeLogger, isFrontendLogPersistenceEnabled } from './logging-bridge';
 
 // Re-export the bridge functions
 export { flushLogs, queryLogs, getRecentLogs, getLogStats, exportLogs, clearOldLogs } from './logging-bridge';
@@ -169,7 +170,7 @@ export default {
 };
 
 // Auto-flush logs when page unloads
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && isFrontendLogPersistenceEnabled()) {
   window.addEventListener('beforeunload', () => {
     flushLogs();
   });

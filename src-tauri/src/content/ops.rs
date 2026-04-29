@@ -1,10 +1,10 @@
+use rusqlite::Connection;
 /// Sync utilities: reads MDX frontmatter, counts words, derives slugs.
 ///
 /// Mirrors relevant parts of `packages/seo-content-cli/src/seo_content_mcp/seo_ops.py`
 /// and the `pageseeds content sync-and-validate` CLI command.
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use rusqlite::Connection;
 
 use regex::Regex;
 use serde::Serialize;
@@ -75,9 +75,7 @@ fn count_words(text: &str) -> usize {
     // Strip front matter leftovers, headings, link syntax
     let re_md = Regex::new(r"[#*_`\[\]<>]|https?://\S+").unwrap();
     let stripped = re_md.replace_all(text, " ");
-    stripped
-        .split_whitespace()
-        .count()
+    stripped.split_whitespace().count()
 }
 
 fn extract_value<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
@@ -245,7 +243,11 @@ pub fn sync_and_validate(
             malformed_file_refs.push(SyncIssue {
                 id,
                 title,
-                file: if file_ref.is_empty() { None } else { Some(file_ref) },
+                file: if file_ref.is_empty() {
+                    None
+                } else {
+                    Some(file_ref)
+                },
                 issue_type: "missing_file_field".into(),
                 detail: "article has no file reference".into(),
             });
@@ -277,7 +279,12 @@ pub fn sync_and_validate(
         };
 
         // Date consistency check.
-        let expected_date = article.published_date.as_deref().unwrap_or("").trim().to_string();
+        let expected_date = article
+            .published_date
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if expected_date.is_empty() {
             continue;
         }
@@ -350,8 +357,13 @@ pub fn clean_stale_articles_json(
     repo_root: &Path,
 ) -> std::result::Result<Vec<String>, String> {
     let articles_path = automation_dir.join("articles.json");
-    let json_str = std::fs::read_to_string(&articles_path)
-        .map_err(|e| format!("articles.json not found at {}: {}", articles_path.display(), e))?;
+    let json_str = std::fs::read_to_string(&articles_path).map_err(|e| {
+        format!(
+            "articles.json not found at {}: {}",
+            articles_path.display(),
+            e
+        )
+    })?;
     let mut doc: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse articles.json: {}", e))?;
 
@@ -424,8 +436,12 @@ pub fn resolve_content_dir(
     // Load workspace config so setup_check can use it.
     let workspace_config = setup_check::load_workspace_config(automation_dir);
 
-    let result =
-        setup_check::resolve_content_dir(repo_root, automation_dir, workspace_config.as_ref(), None);
+    let result = setup_check::resolve_content_dir(
+        repo_root,
+        automation_dir,
+        workspace_config.as_ref(),
+        None,
+    );
 
     result.path.ok_or_else(|| {
         format!(
@@ -452,10 +468,7 @@ fn extract_frontmatter_date(content: &str) -> Option<String> {
 
 /// Patch the `date:` field in YAML frontmatter.
 /// Replaces an existing date line, or inserts one after the `title:` line.
-fn patch_frontmatter_date(
-    content: &str,
-    new_date: &str,
-) -> std::result::Result<String, String> {
+fn patch_frontmatter_date(content: &str, new_date: &str) -> std::result::Result<String, String> {
     let Some((fm, body)) = crate::content::frontmatter::split_mdx(content) else {
         return Err("no frontmatter found".into());
     };
@@ -512,7 +525,10 @@ pub fn ingest_orphan_files(
     // 1. Identify orphan files via sync_and_validate.
     let sync_result = sync_and_validate(automation_dir, repo_root, false, conn, project_id)?;
     if sync_result.orphan_files.is_empty() {
-        return Ok(IngestOrphanResult { ingested: 0, files: vec![] });
+        return Ok(IngestOrphanResult {
+            ingested: 0,
+            files: vec![],
+        });
     }
 
     // 2. Resolve content directory.
@@ -595,7 +611,10 @@ pub fn ingest_orphan_files(
     }
 
     if ingested_files.is_empty() {
-        return Ok(IngestOrphanResult { ingested: 0, files: vec![] });
+        return Ok(IngestOrphanResult {
+            ingested: 0,
+            files: vec![],
+        });
     }
 
     // 6. Update articles_meta with the new next_article_id.
@@ -610,10 +629,10 @@ pub fn ingest_orphan_files(
     // 7. Write articles.json back to the repo (bypassing the date-policy gate since
     //    we may be ingesting old published content that hasn't been date-indexed yet).
     //    Preserve unknown/custom fields from the existing JSON.
-    let exported_json = crate::db::export::export_articles(conn, project_id)
-        .map_err(|e| e.to_string())?;
-    let mut exported: serde_json::Value = serde_json::from_str(&exported_json)
-        .map_err(|e| e.to_string())?;
+    let exported_json =
+        crate::db::export::export_articles(conn, project_id).map_err(|e| e.to_string())?;
+    let mut exported: serde_json::Value =
+        serde_json::from_str(&exported_json).map_err(|e| e.to_string())?;
 
     let articles_json_path = repo_root
         .join(".github")
@@ -625,8 +644,7 @@ pub fn ingest_orphan_files(
         }
     }
 
-    std::fs::create_dir_all(articles_json_path.parent().unwrap())
-        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(articles_json_path.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(
         &articles_json_path,
         serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?,
@@ -634,7 +652,10 @@ pub fn ingest_orphan_files(
     .map_err(|e| e.to_string())?;
 
     let count = ingested_files.len();
-    Ok(IngestOrphanResult { ingested: count, files: ingested_files })
+    Ok(IngestOrphanResult {
+        ingested: count,
+        files: ingested_files,
+    })
 }
 
 /// Derive a URL slug for an MDX file, mirroring the Python CLI convention.
@@ -737,14 +758,16 @@ pub fn load_article_by_slug(
     content_dir_override: Option<&str>,
     slug: &str,
 ) -> Result<(crate::models::article::Article, String, PathBuf)> {
-    use crate::models::article::Article;
     use crate::engine::task_store;
+    use crate::models::article::Article;
 
     let articles: Vec<Article> = task_store::list_articles(conn, project_id)?;
     let article = articles
         .into_iter()
         .find(|a| a.url_slug == slug)
-        .ok_or_else(|| crate::error::Error::Other(format!("Article with slug '{}' not found", slug)))?;
+        .ok_or_else(|| {
+            crate::error::Error::Other(format!("Article with slug '{}' not found", slug))
+        })?;
 
     let resolution = crate::content::locator::resolve(project_path, content_dir_override);
     let content_dir = resolution
@@ -766,9 +789,8 @@ pub fn analyze_article_readability(
     content_dir_override: Option<&str>,
     slug: &str,
 ) -> Result<crate::content::readability::ReadabilityReport> {
-    let (_article, content, _path) = load_article_by_slug(
-        conn, project_id, project_path, content_dir_override, slug,
-    )?;
+    let (_article, content, _path) =
+        load_article_by_slug(conn, project_id, project_path, content_dir_override, slug)?;
     let cleaned = crate::content::readability::clean_mdx_for_readability(&content);
     crate::content::readability::analyze_readability(&cleaned)
 }
@@ -782,11 +804,13 @@ pub fn analyze_keyword_density(
     slug: &str,
     target_keyword: &str,
 ) -> Result<crate::content::keyword_density::KeywordDensityReport> {
-    let (_article, content, _path) = load_article_by_slug(
-        conn, project_id, project_path, content_dir_override, slug,
-    )?;
+    let (_article, content, _path) =
+        load_article_by_slug(conn, project_id, project_path, content_dir_override, slug)?;
     let (_, body) = crate::engine::exec::utils::parse_frontmatter(&content);
-    Ok(crate::content::keyword_density::analyze_keyword_density(&body, target_keyword))
+    Ok(crate::content::keyword_density::analyze_keyword_density(
+        &body,
+        target_keyword,
+    ))
 }
 
 /// Build a CTR health summary for all articles in a project.
@@ -819,12 +843,14 @@ pub fn build_ctr_health_summary(
         let file_found = audit_health::resolve_content_file(repo_root, &article.file).is_some();
 
         // Load stored audit state for lifecycle tracking
-        let stored_state = crate::db::get_article_audit_state(conn, project_id, &article.file, "ctr_audit")
-            .ok()
-            .flatten();
+        let stored_state =
+            crate::db::get_article_audit_state(conn, project_id, &article.file, "ctr_audit")
+                .ok()
+                .flatten();
 
         let last_audited_at = stored_state.as_ref().map(|s| s.last_audited_at.clone());
-        let last_audit_issues = stored_state.as_ref()
+        let last_audit_issues = stored_state
+            .as_ref()
             .map(|s| s.issues_found.clone())
             .unwrap_or_default();
 
@@ -861,10 +887,7 @@ pub fn build_ctr_health_summary(
         }
 
         let (title, meta, first_paragraph, _h1, has_faq, _found) =
-            audit_health::read_article_excerpt(
-                repo_root.to_str().unwrap_or(""),
-                &article.file,
-            );
+            audit_health::read_article_excerpt(repo_root.to_str().unwrap_or(""), &article.file);
 
         let health = audit_health::check_article_health(
             &title,
@@ -908,7 +931,10 @@ pub fn build_ctr_health_summary(
             .collect();
 
         // Compute improved / regressed / already_healthy
-        let was_healthy = stored_state.as_ref().map(|s| s.was_healthy).unwrap_or(false);
+        let was_healthy = stored_state
+            .as_ref()
+            .map(|s| s.was_healthy)
+            .unwrap_or(false);
         if was_healthy && healthy {
             already_healthy_count += 1;
         } else if !was_healthy && healthy {

@@ -40,7 +40,7 @@ fn create_test_project_in_db(conn: &rusqlite::Connection, path: &str) -> String 
         agent_provider: Some("copilot".to_string()),
         seo_provider: Some("ahrefs".to_string()),
     };
-    
+
     task_store::create_project(conn, &project).expect("Failed to create project");
     project.id
 }
@@ -51,13 +51,13 @@ fn test_queue_enqueue_and_state_management() {
     println!("\n========================================");
     println!("Queue Enqueue & State Management Test");
     println!("========================================\n");
-    
+
     // Setup
     let conn = create_test_db();
     let project_dir = unique_temp_dir("queue_int_test");
     std::fs::create_dir_all(&project_dir).unwrap();
     let project_id = create_test_project_in_db(&conn, &project_dir.to_string_lossy());
-    
+
     // Create tasks
     let now = chrono::Utc::now().to_rfc3339();
     let task1 = Task {
@@ -77,7 +77,7 @@ fn test_queue_enqueue_and_state_management() {
         created_at: now.clone(),
         updated_at: now.clone(),
     };
-    
+
     let task2 = Task {
         id: "task-2".to_string(),
         task_type: "collect_gsc".to_string(),
@@ -95,13 +95,13 @@ fn test_queue_enqueue_and_state_management() {
         created_at: now.clone(),
         updated_at: now,
     };
-    
+
     // Store tasks
     task_store::create_task(&conn, &task1).unwrap();
     task_store::create_task(&conn, &task2).unwrap();
-    
+
     println!("✅ Created 2 tasks");
-    
+
     // Simulate frontend: Log the enqueue action
     pageseeds_lib::logging::log(
         &conn,
@@ -113,19 +113,19 @@ fn test_queue_enqueue_and_state_management() {
             "count": 2
         })),
     );
-    
+
     // Verify tasks are in database
     let tasks = task_store::list_tasks(&conn, &project_id).unwrap();
     assert_eq!(tasks.len(), 2);
     println!("✅ Verified tasks in database");
-    
+
     // Simulate status change (what happens during execution)
     task_store::update_task_status(&conn, "task-1", TaskStatus::InProgress).unwrap();
-    
+
     let updated = task_store::get_task(&conn, "task-1").unwrap();
     assert_eq!(updated.status, TaskStatus::InProgress);
     println!("✅ Task status updated to InProgress");
-    
+
     // Log the status change
     pageseeds_lib::logging::log(
         &conn,
@@ -134,14 +134,14 @@ fn test_queue_enqueue_and_state_management() {
         "Task execution started",
         Some(serde_json::json!({"taskId": "task-1"})),
     );
-    
+
     // Complete the task
     task_store::update_task_status(&conn, "task-1", TaskStatus::Done).unwrap();
-    
+
     let completed = task_store::get_task(&conn, "task-1").unwrap();
     assert_eq!(completed.status, TaskStatus::Done);
     println!("✅ Task status updated to Done");
-    
+
     // Log completion
     pageseeds_lib::logging::log(
         &conn,
@@ -153,15 +153,15 @@ fn test_queue_enqueue_and_state_management() {
             "success": true
         })),
     );
-    
+
     // Verify logs
     let logs = query_logs(&conn, &LogQueryFilters::default(), 100, 0).unwrap();
     assert_eq!(logs.len(), 3);
     println!("✅ Verified 3 logs stored");
-    
+
     // Cleanup
     std::fs::remove_dir_all(&project_dir).ok();
-    
+
     println!("\n========================================");
     println!("✅ QUEUE INTEGRATION TEST PASSED");
     println!("========================================");
@@ -173,9 +173,9 @@ fn test_batch_log_submission() {
     println!("\n========================================");
     println!("Batch Log Submission Test");
     println!("========================================\n");
-    
+
     let conn = create_test_db();
-    
+
     // Simulate frontend batching multiple logs
     let logs_to_store: Vec<pageseeds_lib::logging::LogEntry> = (0..10)
         .map(|i| pageseeds_lib::logging::LogEntry {
@@ -189,25 +189,26 @@ fn test_batch_log_submission() {
             session_id: "test-session".to_string(),
         })
         .collect();
-    
+
     // Store all logs
     for log in &logs_to_store {
         pageseeds_lib::logging::store_log(&conn, log).unwrap();
     }
-    
+
     // Verify all stored
     let stored = query_logs(&conn, &LogQueryFilters::default(), 100, 0).unwrap();
     assert_eq!(stored.len(), 10);
-    
+
     // Verify session grouping
-    let session_logs: Vec<_> = stored.iter()
+    let session_logs: Vec<_> = stored
+        .iter()
         .filter(|l| l.session_id == "test-session")
         .collect();
     assert_eq!(session_logs.len(), 10);
-    
+
     println!("✅ Stored 10 logs in batch");
     println!("✅ All logs have correct session ID");
-    
+
     println!("\n========================================");
     println!("✅ BATCH LOG TEST PASSED");
     println!("========================================");
@@ -219,23 +220,47 @@ fn test_log_querying() {
     println!("\n========================================");
     println!("Log Querying Test");
     println!("========================================\n");
-    
+
     let conn = create_test_db();
-    
+
     // Store logs with different characteristics
     let test_logs = vec![
-        ("frontend::queue", "Task enqueued", pageseeds_lib::logging::LogLevel::Info),
-        ("frontend::queue", "Task started", pageseeds_lib::logging::LogLevel::Info),
-        ("backend::executor", "Executing step 1", pageseeds_lib::logging::LogLevel::Debug),
-        ("backend::executor", "Executing step 2", pageseeds_lib::logging::LogLevel::Debug),
-        ("backend::agent", "Agent timeout", pageseeds_lib::logging::LogLevel::Error),
-        ("frontend::ui", "Button clicked", pageseeds_lib::logging::LogLevel::Info),
+        (
+            "frontend::queue",
+            "Task enqueued",
+            pageseeds_lib::logging::LogLevel::Info,
+        ),
+        (
+            "frontend::queue",
+            "Task started",
+            pageseeds_lib::logging::LogLevel::Info,
+        ),
+        (
+            "backend::executor",
+            "Executing step 1",
+            pageseeds_lib::logging::LogLevel::Debug,
+        ),
+        (
+            "backend::executor",
+            "Executing step 2",
+            pageseeds_lib::logging::LogLevel::Debug,
+        ),
+        (
+            "backend::agent",
+            "Agent timeout",
+            pageseeds_lib::logging::LogLevel::Error,
+        ),
+        (
+            "frontend::ui",
+            "Button clicked",
+            pageseeds_lib::logging::LogLevel::Info,
+        ),
     ];
-    
+
     for (component, message, level) in test_logs {
         pageseeds_lib::logging::log(&conn, level, component, message, None);
     }
-    
+
     // Test level filtering
     let debug_logs = query_logs(
         &conn,
@@ -243,11 +268,13 @@ fn test_log_querying() {
             level: Some(pageseeds_lib::logging::LogLevel::Debug),
             ..Default::default()
         },
-        100, 0
-    ).unwrap();
+        100,
+        0,
+    )
+    .unwrap();
     assert_eq!(debug_logs.len(), 2);
     println!("✅ Level filter works: {} debug logs", debug_logs.len());
-    
+
     // Test component search
     let queue_logs = query_logs(
         &conn,
@@ -255,11 +282,13 @@ fn test_log_querying() {
             component: Some("queue".to_string()),
             ..Default::default()
         },
-        100, 0
-    ).unwrap();
+        100,
+        0,
+    )
+    .unwrap();
     assert_eq!(queue_logs.len(), 2);
     println!("✅ Component filter works: {} queue logs", queue_logs.len());
-    
+
     // Test text search
     let exec_logs = query_logs(
         &conn,
@@ -267,12 +296,21 @@ fn test_log_querying() {
             search_query: Some("execut".to_string()),
             ..Default::default()
         },
-        100, 0
-    ).unwrap();
+        100,
+        0,
+    )
+    .unwrap();
     // Should match "Executing step 1" and "Executing step 2"
-    assert!(exec_logs.len() >= 2, "Expected at least 2 results for 'execut', got {}", exec_logs.len());
-    println!("✅ Text search works: {} results for 'execut'", exec_logs.len());
-    
+    assert!(
+        exec_logs.len() >= 2,
+        "Expected at least 2 results for 'execut', got {}",
+        exec_logs.len()
+    );
+    println!(
+        "✅ Text search works: {} results for 'execut'",
+        exec_logs.len()
+    );
+
     println!("\n========================================");
     println!("✅ LOG QUERYING TEST PASSED");
     println!("========================================");

@@ -11,7 +11,6 @@
 /// - **Structure** (15%): Heading hierarchy, section count
 /// - **Links** (15%): Internal/external link counts
 /// - **Readability** (10%): Sentence length, formatting
-
 use serde::{Deserialize, Serialize};
 
 /// Quality rating result for a piece of content
@@ -177,12 +176,49 @@ pub fn rate_content(content: &ContentToAnalyze) -> ContentQualityRating {
     let mut warnings = Vec::new();
     let mut suggestions = Vec::new();
 
-    collect_content_issues(&content_score, &structure, &guidelines, &mut critical_issues, &mut warnings);
-    collect_keyword_issues(&keyword_score, &structure, content.target_keyword, &guidelines, &mut critical_issues, &mut warnings);
-    collect_meta_issues(&meta_score, content, &guidelines, &mut critical_issues, &mut warnings);
-    collect_structure_issues(&structure_score, &structure, &guidelines, &mut critical_issues, &mut warnings);
-    collect_link_issues(&link_score, content, &guidelines, &mut warnings, &mut suggestions);
-    collect_readability_issues(&readability_score, content, &guidelines, &mut warnings, &mut suggestions);
+    collect_content_issues(
+        &content_score,
+        &structure,
+        &guidelines,
+        &mut critical_issues,
+        &mut warnings,
+    );
+    collect_keyword_issues(
+        &keyword_score,
+        &structure,
+        content.target_keyword,
+        &guidelines,
+        &mut critical_issues,
+        &mut warnings,
+    );
+    collect_meta_issues(
+        &meta_score,
+        content,
+        &guidelines,
+        &mut critical_issues,
+        &mut warnings,
+    );
+    collect_structure_issues(
+        &structure_score,
+        &structure,
+        &guidelines,
+        &mut critical_issues,
+        &mut warnings,
+    );
+    collect_link_issues(
+        &link_score,
+        content,
+        &guidelines,
+        &mut warnings,
+        &mut suggestions,
+    );
+    collect_readability_issues(
+        &readability_score,
+        content,
+        &guidelines,
+        &mut warnings,
+        &mut suggestions,
+    );
 
     let publishing_ready = overall_score >= 80 && critical_issues.is_empty();
 
@@ -233,10 +269,13 @@ fn analyze_structure(content: &ContentToAnalyze) -> QualityDetails {
     let word_count = text.split_whitespace().count();
 
     // Paragraph analysis
-    let _paragraphs: Vec<&str> = text.split("\n\n").filter(|p| {
-        let trimmed = p.trim();
-        !trimmed.is_empty() && !trimmed.starts_with('#')
-    }).collect();
+    let _paragraphs: Vec<&str> = text
+        .split("\n\n")
+        .filter(|p| {
+            let trimmed = p.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .collect();
 
     // Keyword checks
     let keyword_lower = content.target_keyword.to_lowercase();
@@ -244,7 +283,11 @@ fn analyze_structure(content: &ContentToAnalyze) -> QualityDetails {
 
     let keyword_in_h1 = h1_text.to_lowercase().contains(&keyword_lower);
 
-    let first_100_words: String = text.split_whitespace().take(100).collect::<Vec<_>>().join(" ");
+    let first_100_words: String = text
+        .split_whitespace()
+        .take(100)
+        .collect::<Vec<_>>()
+        .join(" ");
     let keyword_in_first_100 = first_100_words.to_lowercase().contains(&keyword_lower);
 
     // Link counts (markdown format)
@@ -252,22 +295,30 @@ fn analyze_structure(content: &ContentToAnalyze) -> QualityDetails {
     let external_link_count = count_external_links(text);
 
     // List count
-    let list_count = text.lines().filter(|l| {
-        let trimmed = l.trim();
-        trimmed.starts_with("- ") ||
-        trimmed.starts_with("* ") ||
-        trimmed.starts_with("1. ") ||
-        trimmed.starts_with("2. ")
-    }).count();
+    let list_count = text
+        .lines()
+        .filter(|l| {
+            let trimmed = l.trim();
+            trimmed.starts_with("- ")
+                || trimmed.starts_with("* ")
+                || trimmed.starts_with("1. ")
+                || trimmed.starts_with("2. ")
+        })
+        .count();
 
     // Sentence analysis
-    let sentences: Vec<&str> = text.split(|c| c == '.' || c == '!' || c == '?')
+    let sentences: Vec<&str> = text
+        .split(|c| c == '.' || c == '!' || c == '?')
         .filter(|s| !s.trim().is_empty())
         .collect();
     let avg_sentence_length = if sentences.is_empty() {
         0.0
     } else {
-        sentences.iter().map(|s| s.split_whitespace().count()).sum::<usize>() as f64 / sentences.len() as f64
+        sentences
+            .iter()
+            .map(|s| s.split_whitespace().count())
+            .sum::<usize>() as f64
+            / sentences.len() as f64
     };
 
     QualityDetails {
@@ -302,7 +353,11 @@ fn score_content(structure: &QualityDetails, guidelines: &SeoGuidelines) -> u8 {
 }
 
 /// Score keyword optimization
-fn score_keywords(content: &ContentToAnalyze, structure: &QualityDetails, guidelines: &SeoGuidelines) -> u8 {
+fn score_keywords(
+    content: &ContentToAnalyze,
+    structure: &QualityDetails,
+    guidelines: &SeoGuidelines,
+) -> u8 {
     let mut score = 100;
 
     // Keyword in H1
@@ -421,14 +476,19 @@ fn score_readability(content: &ContentToAnalyze, guidelines: &SeoGuidelines) -> 
 
     // Sentence length analysis
     let text = content.content;
-    let sentences: Vec<&str> = text.split(|c| c == '.' || c == '!' || c == '?')
+    let sentences: Vec<&str> = text
+        .split(|c| c == '.' || c == '!' || c == '?')
         .filter(|s| !s.trim().is_empty())
         .collect();
 
     let avg_length = if sentences.is_empty() {
         0.0
     } else {
-        sentences.iter().map(|s| s.split_whitespace().count()).sum::<usize>() as f64 / sentences.len() as f64
+        sentences
+            .iter()
+            .map(|s| s.split_whitespace().count())
+            .sum::<usize>() as f64
+            / sentences.len() as f64
     };
 
     if avg_length > guidelines.max_sentence_length as f64 {
@@ -436,7 +496,8 @@ fn score_readability(content: &ContentToAnalyze, guidelines: &SeoGuidelines) -> 
     }
 
     // Check for very long sentences
-    let long_sentences = sentences.iter()
+    let long_sentences = sentences
+        .iter()
         .filter(|s| s.split_whitespace().count() > guidelines.max_sentence_length * 3 / 2)
         .count();
 
@@ -445,12 +506,18 @@ fn score_readability(content: &ContentToAnalyze, guidelines: &SeoGuidelines) -> 
     }
 
     // List usage
-    let list_count = text.lines().filter(|l| {
-        let trimmed = l.trim();
-        trimmed.starts_with("- ") || trimmed.starts_with("* ") ||
-        (trimmed.len() > 2 && trimmed.chars().next().unwrap().is_ascii_digit() &&
-         trimmed.chars().nth(1) == Some('.') && trimmed.chars().nth(2) == Some(' '))
-    }).count();
+    let list_count = text
+        .lines()
+        .filter(|l| {
+            let trimmed = l.trim();
+            trimmed.starts_with("- ")
+                || trimmed.starts_with("* ")
+                || (trimmed.len() > 2
+                    && trimmed.chars().next().unwrap().is_ascii_digit()
+                    && trimmed.chars().nth(1) == Some('.')
+                    && trimmed.chars().nth(2) == Some(' '))
+        })
+        .count();
 
     if list_count == 0 {
         score -= 5;
@@ -468,14 +535,12 @@ fn calculate_overall_score(
     links: u8,
     readability: u8,
 ) -> u8 {
-    let weighted = (
-        content as f64 * 0.20 +
-        keywords as f64 * 0.25 +
-        meta as f64 * 0.15 +
-        structure as f64 * 0.15 +
-        links as f64 * 0.15 +
-        readability as f64 * 0.10
-    ) as u8;
+    let weighted = (content as f64 * 0.20
+        + keywords as f64 * 0.25
+        + meta as f64 * 0.15
+        + structure as f64 * 0.15
+        + links as f64 * 0.15
+        + readability as f64 * 0.10) as u8;
 
     weighted.min(100)
 }
@@ -494,7 +559,8 @@ fn score_to_grade(score: u8) -> String {
 /// Count internal markdown links
 fn count_internal_links(content: &str) -> usize {
     // Internal links: [text](path) where path doesn't start with http
-    content.matches("](")
+    content
+        .matches("](")
         .filter(|_| true) // We'll check each occurrence
         .count()
 }
@@ -502,8 +568,7 @@ fn count_internal_links(content: &str) -> usize {
 /// Count external markdown links
 fn count_external_links(content: &str) -> usize {
     // External links: [text](http...)
-    content.matches("](http")
-        .count()
+    content.matches("](http").count()
 }
 
 // Issue collection functions

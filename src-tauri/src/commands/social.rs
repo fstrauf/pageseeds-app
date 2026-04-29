@@ -33,7 +33,7 @@ pub fn create_social_campaign(
     req: CreateCampaignRequest,
 ) -> std::result::Result<SocialCampaign, String> {
     use chrono::Utc;
-    
+
     let campaign = SocialCampaign {
         id: uuid::Uuid::new_v4().to_string(),
         project_id: req.project_id,
@@ -47,10 +47,10 @@ pub fn create_social_campaign(
         created_at: Utc::now().to_rfc3339(),
         updated_at: Utc::now().to_rfc3339(),
     };
-    
+
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::create_campaign(&conn, &campaign).map_err(|e| e.to_string())?;
-    
+
     Ok(campaign)
 }
 
@@ -207,23 +207,24 @@ pub fn run_social_campaign(
     campaign_id: String,
 ) -> std::result::Result<crate::models::task::Task, String> {
     use crate::engine::task_store;
-    use crate::models::task::{Task, TaskRun, Priority, ExecutionMode, AgentPolicy, TaskStatus};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
     use chrono::Utc;
-    
+
     // Get campaign details first
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let campaign = db::get_campaign(&conn, &campaign_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Campaign not found".to_string())?;
-    
+
     // Build task description with campaign config
     let description = serde_json::json!({
         "campaign_id": campaign_id,
         "source_config": campaign.source_config,
         "target_platforms": campaign.target_platforms,
         "template_ids": campaign.template_ids,
-    }).to_string();
-    
+    })
+    .to_string();
+
     // Create the task
     let now = Utc::now().to_rfc3339();
     let task = Task {
@@ -243,8 +244,8 @@ pub fn run_social_campaign(
         created_at: now.clone(),
         updated_at: now,
     };
-    
+
     let created_task = task_store::create_task(&conn, &task).map_err(|e| e.to_string())?;
-    
+
     Ok(created_task)
 }

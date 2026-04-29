@@ -8,7 +8,6 @@
 /// - **Commercial**: User is researching before buying (best, top, vs, comparison, review)
 /// - **Transactional**: User wants to make a purchase (buy, price, discount, order)
 /// - **Navigational**: User wants to go somewhere (login, website, official, dashboard)
-
 use serde::{Deserialize, Serialize};
 
 /// Search intent classification result
@@ -44,10 +43,10 @@ impl SearchIntent {
     /// Get UI color hint
     pub fn color_hint(&self) -> &'static str {
         match self {
-            SearchIntent::Informational => "blue",      // Blog posts, guides
-            SearchIntent::Commercial => "green",        // Comparison, review pages
-            SearchIntent::Transactional => "orange",    // Landing pages, product pages
-            SearchIntent::Navigational => "gray",       // Usually not content targets
+            SearchIntent::Informational => "blue",   // Blog posts, guides
+            SearchIntent::Commercial => "green",     // Comparison, review pages
+            SearchIntent::Transactional => "orange", // Landing pages, product pages
+            SearchIntent::Navigational => "gray",    // Usually not content targets
         }
     }
 }
@@ -98,34 +97,95 @@ impl IntentScores {
 
         (primary_score / total * 100.0).round()
     }
-
 }
 
 /// Informational intent signal keywords
 const INFORMATIONAL_SIGNALS: &[&str] = &[
-    "what", "why", "how", "when", "where", "who", "guide", "tutorial", "learn",
-    "tips", "best practices", "explained", "definition", "meaning", "examples",
-    "introduction", "overview", "basics", "fundamentals", "beginner",
+    "what",
+    "why",
+    "how",
+    "when",
+    "where",
+    "who",
+    "guide",
+    "tutorial",
+    "learn",
+    "tips",
+    "best practices",
+    "explained",
+    "definition",
+    "meaning",
+    "examples",
+    "introduction",
+    "overview",
+    "basics",
+    "fundamentals",
+    "beginner",
 ];
 
 /// Navigational intent signal keywords
 const NAVIGATIONAL_SIGNALS: &[&str] = &[
-    "login", "sign in", "signin", "website", "official", "home page", "homepage",
-    "account", "dashboard", "portal", "app", "platform", "download",
+    "login",
+    "sign in",
+    "signin",
+    "website",
+    "official",
+    "home page",
+    "homepage",
+    "account",
+    "dashboard",
+    "portal",
+    "app",
+    "platform",
+    "download",
 ];
 
 /// Transactional intent signal keywords
 const TRANSACTIONAL_SIGNALS: &[&str] = &[
-    "buy", "purchase", "order", "download", "get", "pricing", "price", "cost",
-    "free trial", "free", "sign up", "signup", "subscribe", "install", "coupon",
-    "deal", "discount", "cheap", "affordable", "for sale",
+    "buy",
+    "purchase",
+    "order",
+    "download",
+    "get",
+    "pricing",
+    "price",
+    "cost",
+    "free trial",
+    "free",
+    "sign up",
+    "signup",
+    "subscribe",
+    "install",
+    "coupon",
+    "deal",
+    "discount",
+    "cheap",
+    "affordable",
+    "for sale",
 ];
 
 /// Commercial intent signal keywords
 const COMMERCIAL_SIGNALS: &[&str] = &[
-    "best", "top", "review", "reviews", "rated", "vs", "versus", "compare",
-    "comparison", "alternative", "alternatives", "like", "similar", "better than",
-    "instead of", "or", "option", "options", "choice", "features",
+    "best",
+    "top",
+    "review",
+    "reviews",
+    "rated",
+    "vs",
+    "versus",
+    "compare",
+    "comparison",
+    "alternative",
+    "alternatives",
+    "like",
+    "similar",
+    "better than",
+    "instead of",
+    "or",
+    "option",
+    "options",
+    "choice",
+    "features",
 ];
 
 /// Classify the search intent of a keyword
@@ -212,9 +272,8 @@ pub fn classify_intent(keyword: &str) -> (SearchIntent, f64) {
 /// Check if keyword is a question
 fn is_question(keyword: &str) -> bool {
     let question_starters = [
-        "what ", "why ", "how ", "when ", "where ", "who ",
-        "can ", "should ", "is ", "are ", "does ", "do ",
-        "what's ", "whats ", "which ", "will ", "would ",
+        "what ", "why ", "how ", "when ", "where ", "who ", "can ", "should ", "is ", "are ",
+        "does ", "do ", "what's ", "whats ", "which ", "will ", "would ",
     ];
 
     question_starters
@@ -226,8 +285,8 @@ fn is_question(keyword: &str) -> bool {
 fn is_listicle(keyword: &str) -> bool {
     // Patterns like: "10 best", "top 5", "best 10"
     let list_patterns = [
-        r"^\d+\s+(best|top)",     // "10 best", "5 top"
-        r"(best|top)\s+\d+",     // "best 10", "top 5"
+        r"^\d+\s+(best|top)", // "10 best", "5 top"
+        r"(best|top)\s+\d+",  // "best 10", "top 5"
     ];
 
     list_patterns.iter().any(|pattern| {
@@ -370,7 +429,11 @@ mod tests {
     fn test_confidence_calculation() {
         let (intent, confidence) = classify_intent("how to start a podcast");
         assert_eq!(intent, SearchIntent::Informational);
-        assert!(confidence > 50.0, "Confidence should be > 50%, got {}%", confidence);
+        assert!(
+            confidence > 50.0,
+            "Confidence should be > 50%, got {}%",
+            confidence
+        );
     }
 
     #[test]

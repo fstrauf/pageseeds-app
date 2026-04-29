@@ -1,7 +1,6 @@
 /// Prompt-building logic for Reddit reply drafting.
 ///
 /// Business logic extracted from `commands/reddit.rs` so the command layer stays thin.
-
 use crate::models::reddit::RedditOpportunity;
 
 /// Build the full draft-reply prompt from project config and opportunity data.
@@ -43,8 +42,7 @@ pub fn build_draft_reply_prompt(
         ),
     };
 
-    let vague_phrases_block = if mention_stance == "REQUIRED" || mention_stance == "RECOMMENDED"
-    {
+    let vague_phrases_block = if mention_stance == "REQUIRED" || mention_stance == "RECOMMENDED" {
         format!(
             "FORBIDDEN VAGUE PHRASES (replace all with \"{}\"): 'a dedicated tool', 'a platform', 'the app', 'a tracker', 'my tool', 'a tool I built'",
             product_name

@@ -104,7 +104,11 @@ pub(crate) fn exec_ctr_build_context(
     // ── Step 0: Clean stale entries from articles.json ───────────────────────
     // The filesystem is the source of truth. Remove entries whose files no longer exist.
     let mut cleaned_summary = Vec::new();
-    match crate::content::article_index::clean_stale_articles(conn, &task.project_id, std::path::Path::new(project_path)) {
+    match crate::content::article_index::clean_stale_articles(
+        conn,
+        &task.project_id,
+        std::path::Path::new(project_path),
+    ) {
         Ok(summary) => {
             if !summary.removed.is_empty() {
                 log::info!(
@@ -120,10 +124,11 @@ pub(crate) fn exec_ctr_build_context(
         }
     }
 
-    let doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let empty = vec![];
     let articles = doc["articles"].as_array().unwrap_or(&empty);
@@ -150,11 +155,14 @@ pub(crate) fn exec_ctr_build_context(
 
         // Check frontmatter FAQ state directly from file (read_article_excerpt doesn't return this)
         let repo_root = std::path::Path::new(project_path);
-        let file_content = crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref)
-            .and_then(|p| std::fs::read_to_string(&p).ok())
-            .unwrap_or_default();
-        let has_frontmatter_faq = crate::engine::exec::audit_health::has_frontmatter_faq(&file_content);
-        let faq_question_count = crate::engine::exec::audit_health::frontmatter_faq_count(&file_content);
+        let file_content =
+            crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref)
+                .and_then(|p| std::fs::read_to_string(&p).ok())
+                .unwrap_or_default();
+        let has_frontmatter_faq =
+            crate::engine::exec::audit_health::has_frontmatter_faq(&file_content);
+        let faq_question_count =
+            crate::engine::exec::audit_health::frontmatter_faq_count(&file_content);
 
         // Compute content hash for change detection (includes FAQ/schema state)
         let content_hash = crate::engine::exec::audit_health::compute_content_hash(
@@ -165,12 +173,9 @@ pub(crate) fn exec_ctr_build_context(
         );
 
         // Check stored audit state: if hash matches and was healthy, skip
-        if let Ok(Some(stored)) = crate::db::get_article_audit_state(
-            conn,
-            &task.project_id,
-            &file_ref,
-            "ctr_audit",
-        ) {
+        if let Ok(Some(stored)) =
+            crate::db::get_article_audit_state(conn, &task.project_id, &file_ref, "ctr_audit")
+        {
             if stored.content_hash == content_hash && stored.was_healthy {
                 skipped_unchanged += 1;
                 continue;
@@ -237,6 +242,7 @@ pub(crate) fn exec_ctr_build_context(
             "first_paragraph": first_paragraph,
             "h1": h1,
             "file": file_ref,
+            "content_hash": content_hash,
             "gsc": {
                 "impressions": impressions,
                 "clicks": clicks,
@@ -356,8 +362,12 @@ fn enrich_with_query_metrics(
     let site_url: String = match std::fs::read_to_string(&manifest_path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("gsc_site").or_else(|| v.get("url")).and_then(|u| u.as_str()).map(String::from))
-    {
+        .and_then(|v| {
+            v.get("gsc_site")
+                .or_else(|| v.get("url"))
+                .and_then(|u| u.as_str())
+                .map(String::from)
+        }) {
         Some(u) => u,
         None => {
             log::info!("[ctr_audit] No site_url in manifest.json — skipping query fetch");
@@ -416,14 +426,20 @@ fn enrich_with_query_metrics(
                     &start_clone,
                     &end_clone,
                     max_queries_per_page,
-                ).await
+                )
+                .await
             })
-        }).join();
+        })
+        .join();
 
         let metrics = match query_rows {
             Ok(Ok(rows)) => rows,
             Ok(Err(e)) => {
-                log::warn!("[ctr_audit] Failed to fetch queries for {}: {}", page_url, e);
+                log::warn!(
+                    "[ctr_audit] Failed to fetch queries for {}: {}",
+                    page_url,
+                    e
+                );
                 continue;
             }
             Err(_) => {
@@ -457,7 +473,14 @@ fn enrich_with_query_metrics(
             .iter()
             .map(|m| {
                 let intent = classify_query_intent(&m.query);
-                (m.query.clone(), m.impressions, m.clicks, m.ctr, m.position, Some(intent.to_string()))
+                (
+                    m.query.clone(),
+                    m.impressions,
+                    m.clicks,
+                    m.ctr,
+                    m.position,
+                    Some(intent.to_string()),
+                )
             })
             .collect();
 
@@ -470,7 +493,11 @@ fn enrich_with_query_metrics(
             Some(&start_str),
             Some(&end_str),
         ) {
-            log::warn!("[ctr_audit] Failed to store query metrics for article {}: {}", article_id, e);
+            log::warn!(
+                "[ctr_audit] Failed to store query metrics for article {}: {}",
+                article_id,
+                e
+            );
         }
 
         record["top_queries"] = serde_json::json!(query_records);

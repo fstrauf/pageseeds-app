@@ -3,11 +3,10 @@
 /// The TaskSpawner is the ONLY module that should create tasks programmatically.
 /// All follow-up task creation, scheduler task creation, and batch task creation
 /// flows through here to ensure consistent deduplication and validation.
-
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::error::{Error, Result};
 use crate::engine::task_store;
+use crate::error::{Error, Result};
 use crate::models::task::{
     AgentPolicy, ExecutionMode, Priority, Task, TaskArtifact, TaskRun, TaskStatus,
 };
@@ -66,8 +65,11 @@ impl TaskSpawner {
         // 1. Check idempotency if key provided
         if let Some(ref key) = spec.idempotency_key {
             if let Some(existing) = Self::find_by_idempotency_key(conn, key)? {
-                log::info!("[spawner] Idempotency key '{}' exists, returning existing task {}", 
-                    key, existing.id);
+                log::info!(
+                    "[spawner] Idempotency key '{}' exists, returning existing task {}",
+                    key,
+                    existing.id
+                );
                 return Ok(existing);
             }
         }
@@ -114,11 +116,7 @@ impl TaskSpawner {
             Self::record_idempotency_key(conn, &key, &id)?;
         }
 
-        log::info!(
-            "[spawner] Created task {} (type: {})",
-            id,
-            task.task_type
-        );
+        log::info!("[spawner] Created task {} (type: {})", id, task.task_type);
         Ok(task)
     }
 
@@ -204,10 +202,7 @@ impl TaskSpawner {
                 Ok(task) => Ok(Some(task)),
                 Err(_) => {
                     // Task was deleted but key remains - clean it up
-                    let _ = conn.execute(
-                        "DELETE FROM task_idempotency_keys WHERE key = ?1",
-                        [key],
-                    );
+                    let _ = conn.execute("DELETE FROM task_idempotency_keys WHERE key = ?1", [key]);
                     Ok(None)
                 }
             },
@@ -225,11 +220,7 @@ impl TaskSpawner {
     }
 
     /// Validate that all dependencies exist and are in the same project.
-    fn validate_dependencies(
-        conn: &Connection,
-        deps: &[String],
-        project_id: &str,
-    ) -> Result<()> {
+    fn validate_dependencies(conn: &Connection, deps: &[String], project_id: &str) -> Result<()> {
         for dep_id in deps {
             let dep = task_store::get_task(conn, dep_id)?;
             if dep.project_id != project_id {

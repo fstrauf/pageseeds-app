@@ -15,9 +15,7 @@ pub fn parse_coverage_csv(csv_content: &str) -> Result<Vec<Coverage404Record>> {
         .clone();
 
     let find = |name: &str| -> Option<usize> {
-        headers
-            .iter()
-            .position(|h| h.to_lowercase().contains(name))
+        headers.iter().position(|h| h.to_lowercase().contains(name))
     };
 
     let url_idx = find("url").or_else(|| find("page")).unwrap_or(0);

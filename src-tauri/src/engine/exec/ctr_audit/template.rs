@@ -1,12 +1,11 @@
+use crate::engine::exec::ctr_audit::rendered::extract_json_ld_schema_types_with_faq_count;
 /// Site title template detection and fix workflow for CTR recovery.
 ///
 /// Detects repeated brand/title suffix patterns across rendered pages and
 /// produces a framework-aware fix plan for the target repository.
-
 use crate::engine::workflows::StepResult;
 use crate::models::ctr::{CtrRenderedPageAudit, CtrTemplateDetectionResult, CtrTemplatePageDetail};
 use crate::models::task::Task;
-use crate::engine::exec::ctr_audit::rendered::extract_json_ld_schema_types_with_faq_count;
 
 /// Minimum number of pages sharing a pattern to qualify as site-wide.
 const SITE_TEMPLATE_THRESHOLD: usize = 2;
@@ -54,7 +53,10 @@ pub(crate) fn exec_ctr_template_detect(
     let output = serde_json::to_string_pretty(&results).unwrap_or_default();
     StepResult {
         success: true,
-        message: format!("Detected {} site-wide title template pattern(s)", results.len()),
+        message: format!(
+            "Detected {} site-wide title template pattern(s)",
+            results.len()
+        ),
         output: Some(output),
     }
 }
@@ -101,11 +103,7 @@ fn detect_template_patterns(
             "low"
         };
 
-        let verification_urls: Vec<String> = group
-            .iter()
-            .take(5)
-            .map(|a| a.url.clone())
-            .collect();
+        let verification_urls: Vec<String> = group.iter().take(5).map(|a| a.url.clone()).collect();
 
         let pages: Vec<CtrTemplatePageDetail> = group
             .iter()
@@ -229,9 +227,7 @@ fn detect_framework_files(project_path: &str) -> Vec<String> {
 
     let mut candidates = Vec::new();
 
-    let walker = walkdir::WalkDir::new(root)
-        .max_depth(5)
-        .follow_links(false);
+    let walker = walkdir::WalkDir::new(root).max_depth(5).follow_links(false);
 
     for entry in walker {
         let entry = match entry {
@@ -264,7 +260,13 @@ fn detect_framework_files(project_path: &str) -> Vec<String> {
     }
 
     // Content search for metadata-related files — limited to specific directories
-    let content_patterns = ["generateMetadata", "Helmet", "SEO", "<title>", "document.title"];
+    let content_patterns = [
+        "generateMetadata",
+        "Helmet",
+        "SEO",
+        "<title>",
+        "document.title",
+    ];
     let search_dirs = ["src", "app", "pages", "components", "layouts"];
     for dir in &search_dirs {
         let full_dir = root.join(dir);
@@ -287,9 +289,7 @@ fn search_dir_for_patterns(
     let mut matches = Vec::new();
     let extensions = ["tsx", "jsx", "js", "ts", "astro", "vue", "svelte"];
 
-    let walker = walkdir::WalkDir::new(dir)
-        .max_depth(3)
-        .follow_links(false);
+    let walker = walkdir::WalkDir::new(dir).max_depth(3).follow_links(false);
 
     for entry in walker {
         let entry = match entry {
@@ -397,7 +397,8 @@ pub(crate) fn exec_ctr_template_verify_render(
             };
 
             // Check if the detected pattern still applies
-            let still_broken = result.detected_pattern.replace("{title}", "").trim() == current_title.trim()
+            let still_broken = result.detected_pattern.replace("{title}", "").trim()
+                == current_title.trim()
                 || is_brand_duplicated(&current_title);
 
             if still_broken {
@@ -438,9 +439,8 @@ pub(crate) fn exec_ctr_template_verify_render(
 
 fn fetch_current_title(url: &str) -> Result<String, crate::error::Error> {
     let url = url.to_string();
-    let rt = tokio::runtime::Runtime::new().map_err(|e| {
-        crate::error::Error::Other(format!("Failed to create runtime: {}", e))
-    })?;
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| crate::error::Error::Other(format!("Failed to create runtime: {}", e)))?;
 
     rt.block_on(async move {
         let client = reqwest::Client::builder()
@@ -449,7 +449,11 @@ fn fetch_current_title(url: &str) -> Result<String, crate::error::Error> {
             .build()
             .map_err(crate::error::Error::Http)?;
 
-        let response = client.get(&url).send().await.map_err(crate::error::Error::Http)?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(crate::error::Error::Http)?;
         if !response.status().is_success() {
             return Err(crate::error::Error::Other(format!(
                 "HTTP {}",
@@ -518,7 +522,9 @@ pub(crate) fn exec_ctr_schema_detect(
         }
         // Check if source file has FAQ content
         let repo_root = std::path::Path::new(project_path);
-        if let Some(full_path) = crate::engine::exec::audit_health::resolve_content_file(repo_root, &audit.file) {
+        if let Some(full_path) =
+            crate::engine::exec::audit_health::resolve_content_file(repo_root, &audit.file)
+        {
             if let Ok(content) = std::fs::read_to_string(&full_path) {
                 let has_source_faq = crate::engine::exec::audit_health::has_faq_schema(&content);
                 if has_source_faq {
@@ -640,9 +646,8 @@ pub(crate) fn exec_ctr_schema_verify_render(
 
 fn fetch_current_faq_state(url: &str) -> Result<(bool, usize), crate::error::Error> {
     let url = url.to_string();
-    let rt = tokio::runtime::Runtime::new().map_err(|e| {
-        crate::error::Error::Other(format!("Failed to create runtime: {}", e))
-    })?;
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| crate::error::Error::Other(format!("Failed to create runtime: {}", e)))?;
 
     rt.block_on(async move {
         let client = reqwest::Client::builder()
@@ -651,7 +656,11 @@ fn fetch_current_faq_state(url: &str) -> Result<(bool, usize), crate::error::Err
             .build()
             .map_err(crate::error::Error::Http)?;
 
-        let response = client.get(&url).send().await.map_err(crate::error::Error::Http)?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(crate::error::Error::Http)?;
         if !response.status().is_success() {
             return Err(crate::error::Error::Other(format!(
                 "HTTP {}",
@@ -739,12 +748,16 @@ pub(crate) fn create_ctr_site_template_task(
         Ok(task) => {
             log::info!(
                 "[ctr_template] Created site template fix task {} (pattern: {})",
-                task.id, first_result.detected_pattern
+                task.id,
+                first_result.detected_pattern
             );
             Some(task.id)
         }
         Err(e) => {
-            log::warn!("[ctr_template] Failed to create site template fix task: {}", e);
+            log::warn!(
+                "[ctr_template] Failed to create site template fix task: {}",
+                e
+            );
             None
         }
     }
@@ -768,18 +781,12 @@ mod tests {
 
     #[test]
     fn test_extract_template_suffix_no_match() {
-        assert_eq!(
-            extract_template_suffix("Foo", "Bar | Baz"),
-            None
-        );
+        assert_eq!(extract_template_suffix("Foo", "Bar | Baz"), None);
     }
 
     #[test]
     fn test_extract_template_suffix_empty_source() {
-        assert_eq!(
-            extract_template_suffix("", "Some Title"),
-            None
-        );
+        assert_eq!(extract_template_suffix("", "Some Title"), None);
     }
 
     #[test]
@@ -879,29 +886,30 @@ mod tests {
 
     #[test]
     fn test_detect_template_patterns_ignores_content_file_issues() {
-        let audits = vec![
-            CtrRenderedPageAudit {
-                article_id: 1,
-                url: "https://example.com/a".to_string(),
-                file: "content/001_a.mdx".to_string(),
-                source_title: "Article A".to_string(),
-                rendered_title: "Article A | Brand | Brand".to_string(),
-                rendered_title_length: 25,
-                title_issue_source: "content_file".to_string(),
-                source_description: "".to_string(),
-                rendered_description: None,
-                canonical_url: None,
-                rendered_h1: None,
-                schema_types: vec![],
-                has_rendered_faq_page: false,
-                rendered_faq_question_count: 0,
-                snippet_markup: Default::default(),
-                issues: vec![],
-                checked_at: chrono::Utc::now().to_rfc3339(),
-            },
-        ];
+        let audits = vec![CtrRenderedPageAudit {
+            article_id: 1,
+            url: "https://example.com/a".to_string(),
+            file: "content/001_a.mdx".to_string(),
+            source_title: "Article A".to_string(),
+            rendered_title: "Article A | Brand | Brand".to_string(),
+            rendered_title_length: 25,
+            title_issue_source: "content_file".to_string(),
+            source_description: "".to_string(),
+            rendered_description: None,
+            canonical_url: None,
+            rendered_h1: None,
+            schema_types: vec![],
+            has_rendered_faq_page: false,
+            rendered_faq_question_count: 0,
+            snippet_markup: Default::default(),
+            issues: vec![],
+            checked_at: chrono::Utc::now().to_rfc3339(),
+        }];
 
         let results = detect_template_patterns("/tmp", &audits);
-        assert!(results.is_empty(), "Should not detect patterns for content_file issues");
+        assert!(
+            results.is_empty(),
+            "Should not detect patterns for content_file issues"
+        );
     }
 }

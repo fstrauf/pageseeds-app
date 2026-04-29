@@ -2,7 +2,6 @@
 ///
 /// These structs replace loose serde_json::Value handoffs between the
 /// normalizer, fix task creator, and verification step.
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -289,8 +288,7 @@ pub struct CtrRenderedPageAudit {
     pub checked_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, Default)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrSnippetMarkup {

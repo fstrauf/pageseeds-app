@@ -68,14 +68,19 @@ impl TemplateRegistry {
     /// Select the best template definition for a content source (deterministic)
     pub fn select_for_source(&self, source: &ContentSource) -> Option<&TemplateDef> {
         // Score all templates and pick best match
-        self.templates.iter()
+        self.templates
+            .iter()
             .filter(|t| t.source_types.contains(&source.source_type))
             .max_by_key(|t| {
                 // Score based on:
                 // 1. Source type match (already filtered)
                 // 2. Engagement weight alignment with source score
                 // 3. Template ID match with suggested template
-                let suggested_bonus = if t.id == source.suggested_template { 30 } else { 0 };
+                let suggested_bonus = if t.id == source.suggested_template {
+                    30
+                } else {
+                    0
+                };
                 t.engagement_weight + suggested_bonus
             })
     }
@@ -92,8 +97,13 @@ impl TemplateRegistry {
             format: PostFormat::SingleImage,
             prompt_template: feature_hook_prompt(),
             output_schema: OutputSchema {
-                required_fields: vec!["hook".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string(), "overlay_text".to_string()],
+                required_fields: vec![
+                    "hook".to_string(),
+                    "caption".to_string(),
+                    "hashtags".to_string(),
+                    "cta".to_string(),
+                    "overlay_text".to_string(),
+                ],
                 max_hook_length: 100,
                 max_caption_length: 300,
                 hashtag_count_range: (3, 8),
@@ -111,8 +121,14 @@ impl TemplateRegistry {
             format: PostFormat::Carousel,
             prompt_template: educational_carousel_prompt(),
             output_schema: OutputSchema {
-                required_fields: vec!["hook".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string(), "visual_description".to_string(), "overlay_text".to_string()],
+                required_fields: vec![
+                    "hook".to_string(),
+                    "caption".to_string(),
+                    "hashtags".to_string(),
+                    "cta".to_string(),
+                    "visual_description".to_string(),
+                    "overlay_text".to_string(),
+                ],
                 max_hook_length: 150,
                 max_caption_length: 500,
                 hashtag_count_range: (5, 10),
@@ -130,8 +146,14 @@ impl TemplateRegistry {
             format: PostFormat::SingleImage,
             prompt_template: technical_explainer_prompt(),
             output_schema: OutputSchema {
-                required_fields: vec!["hook".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string(), "visual_description".to_string(), "overlay_text".to_string()],
+                required_fields: vec![
+                    "hook".to_string(),
+                    "caption".to_string(),
+                    "hashtags".to_string(),
+                    "cta".to_string(),
+                    "visual_description".to_string(),
+                    "overlay_text".to_string(),
+                ],
                 max_hook_length: 150,
                 max_caption_length: 800,
                 hashtag_count_range: (5, 10),
@@ -149,8 +171,13 @@ impl TemplateRegistry {
             format: PostFormat::SingleImage,
             prompt_template: quick_tip_prompt(),
             output_schema: OutputSchema {
-                required_fields: vec!["hook".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string(), "overlay_text".to_string()],
+                required_fields: vec![
+                    "hook".to_string(),
+                    "caption".to_string(),
+                    "hashtags".to_string(),
+                    "cta".to_string(),
+                    "overlay_text".to_string(),
+                ],
                 max_hook_length: 80,
                 max_caption_length: 200,
                 hashtag_count_range: (3, 6),
@@ -168,8 +195,14 @@ impl TemplateRegistry {
             format: PostFormat::SingleImage,
             prompt_template: behind_scenes_prompt(),
             output_schema: OutputSchema {
-                required_fields: vec!["hook".to_string(), "caption".to_string(), 
-                    "hashtags".to_string(), "cta".to_string(), "visual_description".to_string(), "overlay_text".to_string()],
+                required_fields: vec![
+                    "hook".to_string(),
+                    "caption".to_string(),
+                    "hashtags".to_string(),
+                    "cta".to_string(),
+                    "visual_description".to_string(),
+                    "overlay_text".to_string(),
+                ],
                 max_hook_length: 120,
                 max_caption_length: 400,
                 hashtag_count_range: (3, 8),
@@ -216,7 +249,8 @@ Requirements:
 - Hook: punchy, curiosity-gap or contrarian
 - Caption: max 2 sentences, conversational
 - Hashtags: mix of niche (#pageseeds) and broad (#seo)
-- Overlay text: big, bold, readable at glance"##.to_string()
+- Overlay text: big, bold, readable at glance"##
+        .to_string()
 }
 
 fn educational_carousel_prompt() -> String {
@@ -286,7 +320,8 @@ Requirements:
 - Caption: 150-400 characters optimal
 - Use line breaks for readability
 - Position as educational, not promotional
-- Visual description helps create the image asset"##.to_string()
+- Visual description helps create the image asset"##
+        .to_string()
 }
 
 fn quick_tip_prompt() -> String {
@@ -314,7 +349,8 @@ Create a 15-second worth of content tip.
   "visual_description": "Before/after comparison or process screenshot",
   "overlay_text": "Do this → Get that"
 }
-```"##.to_string()
+```"##
+        .to_string()
 }
 
 fn behind_scenes_prompt() -> String {
@@ -342,47 +378,50 @@ Create authentic behind-the-scenes content.
   "visual_description": "Behind-the-scenes photo or screenshot showing the process",
   "overlay_text": "Real talk 💬"
 }
-```"##.to_string()
+```"##
+        .to_string()
 }
 
 /// Render a prompt template with source context
 pub fn render_prompt(template: &TemplateDef, source: &ContentSource) -> String {
-    template.prompt_template.replace("{source_summary}", &source.content_summary())
+    template
+        .prompt_template
+        .replace("{source_summary}", &source.content_summary())
 }
 
 /// Validate agent output against template schema
 pub fn validate_output(template: &TemplateDef, output: &serde_json::Value) -> Vec<String> {
     let mut errors = Vec::new();
-    
+
     // Check required fields
     for field in &template.output_schema.required_fields {
         if output.get(field).is_none() {
             errors.push(format!("Missing required field: {}", field));
         }
     }
-    
+
     // Check hook length
     if let Some(hook) = output.get("hook").and_then(|v| v.as_str()) {
         if hook.len() > template.output_schema.max_hook_length {
             errors.push(format!(
-                "Hook too long: {} > {} chars", 
-                hook.len(), 
+                "Hook too long: {} > {} chars",
+                hook.len(),
                 template.output_schema.max_hook_length
             ));
         }
     }
-    
+
     // Check hashtag count
     if let Some(hashtags) = output.get("hashtags").and_then(|v| v.as_array()) {
         let count = hashtags.len();
         let (min, max) = template.output_schema.hashtag_count_range;
         if count < min || count > max {
             errors.push(format!(
-                "Hashtag count {} not in range {}-{}", 
+                "Hashtag count {} not in range {}-{}",
                 count, min, max
             ));
         }
     }
-    
+
     errors
 }

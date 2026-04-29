@@ -1,10 +1,9 @@
+use crate::error::{Error, Result};
 /// Global application settings storage.
-/// 
+///
 /// These settings are NOT project-specific and apply to the entire application.
 /// Use this for user preferences like agent provider, UI settings, etc.
-
 use rusqlite::{Connection, OptionalExtension};
-use crate::error::{Error, Result};
 
 /// Default agent provider if none is set globally.
 pub const DEFAULT_AGENT_PROVIDER: &str = "kimi";
@@ -59,7 +58,7 @@ pub fn resolve_agent_provider(conn: &Connection, legacy: Option<&str>) -> String
 pub fn set_agent_provider(conn: &Connection, provider: &str) -> Result<()> {
     log::info!("[global_settings] Setting agent_provider to '{}'", provider);
     set(conn, "agent_provider", provider)?;
-    
+
     // Verify it was saved
     let saved = get_agent_provider(conn);
     if saved != provider {
@@ -68,8 +67,11 @@ pub fn set_agent_provider(conn: &Connection, provider: &str) -> Result<()> {
             provider, saved
         )));
     }
-    
-    log::info!("[global_settings] Successfully saved agent_provider '{}'", provider);
+
+    log::info!(
+        "[global_settings] Successfully saved agent_provider '{}'",
+        provider
+    );
     Ok(())
 }
 
@@ -87,7 +89,7 @@ pub fn get_kimi_backend_mode(conn: &Connection) -> String {
 pub fn set_kimi_backend_mode(conn: &Connection, mode: &str) -> Result<()> {
     log::info!("[global_settings] Setting kimi_backend_mode to '{}'", mode);
     set(conn, "kimi_backend_mode", mode)?;
-    
+
     let saved = get_kimi_backend_mode(conn);
     if saved != mode {
         return Err(Error::Other(format!(
@@ -95,33 +97,29 @@ pub fn set_kimi_backend_mode(conn: &Connection, mode: &str) -> Result<()> {
             mode, saved
         )));
     }
-    
-    log::info!("[global_settings] Successfully saved kimi_backend_mode '{}'", mode);
+
+    log::info!(
+        "[global_settings] Successfully saved kimi_backend_mode '{}'",
+        mode
+    );
     Ok(())
 }
 
 /// Get all global settings as a Vec of (key, value) tuples.
 pub fn get_all(conn: &Connection) -> Result<Vec<(String, String)>> {
-    let mut stmt = conn.prepare(
-        "SELECT key, value FROM global_settings ORDER BY key"
-    )?;
-    
+    let mut stmt = conn.prepare("SELECT key, value FROM global_settings ORDER BY key")?;
+
     let settings: Vec<(String, String)> = stmt
-        .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .filter_map(|r| r.ok())
         .collect();
-    
+
     Ok(settings)
 }
 
 /// Delete a global setting.
 pub fn delete(conn: &Connection, key: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM global_settings WHERE key = ?1",
-        [key],
-    )?;
+    conn.execute("DELETE FROM global_settings WHERE key = ?1", [key])?;
     Ok(())
 }
 
@@ -137,37 +135,44 @@ mod tests {
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );",
-        ).unwrap();
+        )
+        .unwrap();
         conn
     }
 
     #[test]
     fn test_get_set() {
         let conn = in_memory_db();
-        
+
         // Initially not set
         assert_eq!(get(&conn, "test_key").unwrap(), None);
-        
+
         // Set it
         set(&conn, "test_key", "test_value").unwrap();
-        assert_eq!(get(&conn, "test_key").unwrap(), Some("test_value".to_string()));
-        
+        assert_eq!(
+            get(&conn, "test_key").unwrap(),
+            Some("test_value".to_string())
+        );
+
         // Update it
         set(&conn, "test_key", "new_value").unwrap();
-        assert_eq!(get(&conn, "test_key").unwrap(), Some("new_value".to_string()));
+        assert_eq!(
+            get(&conn, "test_key").unwrap(),
+            Some("new_value".to_string())
+        );
     }
 
     #[test]
     fn test_agent_provider() {
         let conn = in_memory_db();
-        
+
         // Default value
         assert_eq!(get_agent_provider(&conn), DEFAULT_AGENT_PROVIDER);
-        
+
         // Set custom value
         set_agent_provider(&conn, "kimi").unwrap();
         assert_eq!(get_agent_provider(&conn), "kimi");
-        
+
         // Set another value
         set_agent_provider(&conn, "claude").unwrap();
         assert_eq!(get_agent_provider(&conn), "claude");
@@ -176,10 +181,10 @@ mod tests {
     #[test]
     fn test_get_all() {
         let conn = in_memory_db();
-        
+
         set(&conn, "key1", "value1").unwrap();
         set(&conn, "key2", "value2").unwrap();
-        
+
         let all = get_all(&conn).unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.contains(&("key1".to_string(), "value1".to_string())));
@@ -189,10 +194,10 @@ mod tests {
     #[test]
     fn test_delete() {
         let conn = in_memory_db();
-        
+
         set(&conn, "to_delete", "value").unwrap();
         assert_eq!(get(&conn, "to_delete").unwrap(), Some("value".to_string()));
-        
+
         delete(&conn, "to_delete").unwrap();
         assert_eq!(get(&conn, "to_delete").unwrap(), None);
     }

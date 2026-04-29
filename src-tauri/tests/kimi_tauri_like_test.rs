@@ -6,14 +6,14 @@ use std::process::Command;
 fn build_prompt() -> String {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let automation_dir = project_path.join(".github/automation");
-    
+
     let reddit_config = std::fs::read_to_string(automation_dir.join("reddit_config.md"))
         .expect("Failed to read reddit_config.md");
-    let project_summary = std::fs::read_to_string(automation_dir.join("project_summary.md"))
-        .unwrap_or_default();
-    let brandvoice = std::fs::read_to_string(automation_dir.join("brandvoice.md"))
-        .unwrap_or_default();
-    
+    let project_summary =
+        std::fs::read_to_string(automation_dir.join("project_summary.md")).unwrap_or_default();
+    let brandvoice =
+        std::fs::read_to_string(automation_dir.join("brandvoice.md")).unwrap_or_default();
+
     format!(
         "Extract Reddit search parameters from the config files below. Return ONLY a JSON object.\n\n\
         ## reddit_config.md\n\n\
@@ -48,42 +48,54 @@ fn build_prompt() -> String {
 }
 
 fn run_agent_direct(prompt: &str, project_path: &Path) -> Result<String, String> {
-    let session_id = format!("test-direct-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis());
-    
+    let session_id = format!(
+        "test-direct-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+
     let mut cmd = Command::new("kimi");
     cmd.arg("--no-thinking")
-       .arg("--print")
-       .arg("-p").arg(prompt)
-       .arg("--output-format").arg("text")
-       .arg("--final-message-only")
-       .arg("--session").arg(&session_id)
-       .arg("--work-dir").arg(project_path);
-    
-    let output = cmd.output().map_err(|e| format!("Failed to execute: {}", e))?;
-    
+        .arg("--print")
+        .arg("-p")
+        .arg(prompt)
+        .arg("--output-format")
+        .arg("text")
+        .arg("--final-message-only")
+        .arg("--session")
+        .arg(&session_id)
+        .arg("--work-dir")
+        .arg(project_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to execute: {}", e))?;
+
     if output.status.success() || !output.stdout.is_empty() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
-        Err(format!("Kimi failed: {}", String::from_utf8_lossy(&output.stderr)))
+        Err(format!(
+            "Kimi failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
     }
 }
 
 fn run_agent_in_thread(prompt: &str, project_path: &Path) -> Result<String, String> {
     use std::sync::mpsc;
     use std::time::Duration;
-    
+
     let (tx, rx) = mpsc::channel();
     let prompt = prompt.to_string();
     let project_path = project_path.to_path_buf();
-    
+
     std::thread::spawn(move || {
         let result = run_agent_direct(&prompt, &project_path);
         let _ = tx.send(result);
     });
-    
+
     match rx.recv_timeout(Duration::from_secs(120)) {
         Ok(result) => result,
         Err(_) => Err("Timeout".to_string()),
@@ -95,7 +107,7 @@ fn run_agent_in_thread(prompt: &str, project_path: &Path) -> Result<String, Stri
 fn test_direct_call() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let prompt = build_prompt();
-    
+
     println!("=== Direct Call Test ===");
     match run_agent_direct(&prompt, project_path) {
         Ok(output) => {
@@ -115,7 +127,7 @@ fn test_direct_call() {
 fn test_thread_spawn() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let prompt = build_prompt();
-    
+
     println!("=== Thread Spawn Test (like Tauri) ===");
     match run_agent_in_thread(&prompt, project_path) {
         Ok(output) => {
@@ -137,19 +149,19 @@ fn test_thread_spawn() {
 fn test_tokio_spawn_blocking() {
     let project_path = Path::new("/Users/fstrauf/01_code/call-analyzer");
     let prompt = build_prompt();
-    
+
     println!("=== Tokio spawn_blocking Test ===");
-    
+
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(async {
         let project_path = project_path.to_path_buf();
         let prompt = prompt.clone();
-        
-        tokio::task::spawn_blocking(move || {
-            run_agent_direct(&prompt, &project_path)
-        }).await.unwrap_or_else(|e| Err(format!("Join error: {:?}", e)))
+
+        tokio::task::spawn_blocking(move || run_agent_direct(&prompt, &project_path))
+            .await
+            .unwrap_or_else(|e| Err(format!("Join error: {:?}", e)))
     });
-    
+
     match result {
         Ok(output) => {
             println!("Output: {} bytes", output.len());

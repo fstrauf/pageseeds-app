@@ -153,8 +153,6 @@ pub fn resolve_article_file(
 
 /// Find a file by basename anywhere under repo_root (limited depth for performance).
 fn find_file_by_basename(repo_root: &Path, basename: &str) -> Option<PathBuf> {
-    
-
     // Common content directories to check first (fast path)
     let common_dirs = ["content", "src", "posts", "blog", "articles", "docs"];
     for dir in &common_dirs {

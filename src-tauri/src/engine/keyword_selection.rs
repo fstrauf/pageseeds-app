@@ -23,7 +23,10 @@ pub fn build_content_tasks_from_keywords(
 
     let allowed_keywords = extract_selectable_keywords(research_task);
     if allowed_keywords.is_empty() {
-        return Err("No selectable keywords found on the research task. Re-run keyword research first.".to_string());
+        return Err(
+            "No selectable keywords found on the research task. Re-run keyword research first."
+                .to_string(),
+        );
     }
 
     let mut seen_requested = HashSet::new();
@@ -202,12 +205,36 @@ pub fn extract_selectable_keywords(task: &Task) -> Vec<String> {
         .artifacts
         .iter()
         .find(|a| a.key == "research_final_selection")
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_normalize_stage"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research_agentic"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_analyze"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_normalize_stage")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_research_agentic")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_analyze")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_research")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_keywords_cli")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_agent_stage")
+        });
 
     let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
         return Vec::new();
@@ -299,12 +326,36 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
         .artifacts
         .iter()
         .find(|a| a.key == "research_final_selection")
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_normalize_stage"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research_agentic"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_analyze"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_keywords_cli"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_agent_stage"));
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_normalize_stage")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_research_agentic")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_analyze")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_research")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_keywords_cli")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_agent_stage")
+        });
 
     let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
         return out;
@@ -315,16 +366,27 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
     let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
     if let Some(v) = parsed_json {
         // Standard keyword research format
-        if let Some(arr) = v.get("difficulty").and_then(|x| x.get("results")).and_then(|x| x.as_array()) {
+        if let Some(arr) = v
+            .get("difficulty")
+            .and_then(|x| x.get("results"))
+            .and_then(|x| x.as_array())
+        {
             for item in arr {
                 if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
-                    let kd = item.get("difficulty").and_then(|x| {
-                        x.as_i64().or_else(|| x.as_f64().map(|n| n.round() as i64))
-                    });
+                    let kd = item
+                        .get("difficulty")
+                        .and_then(|x| x.as_i64().or_else(|| x.as_f64().map(|n| n.round() as i64)));
                     let vol = item.get("volume").and_then(|x| {
-                        x.as_i64().or_else(|| x.as_str().and_then(parse_range_midpoint))
+                        x.as_i64()
+                            .or_else(|| x.as_str().and_then(parse_range_midpoint))
                     });
-                    out.insert(normalize_keyword(kw), KeywordMetric { difficulty: kd, volume: vol });
+                    out.insert(
+                        normalize_keyword(kw),
+                        KeywordMetric {
+                            difficulty: kd,
+                            volume: vol,
+                        },
+                    );
                 }
             }
             return out;
@@ -334,13 +396,21 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
         if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
             for item in arr {
                 if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
-                    let kd = item.get("estimated_kd")
+                    let kd = item
+                        .get("estimated_kd")
                         .and_then(|x| x.as_i64())
                         .or_else(|| item.get("difficulty").and_then(|x| x.as_i64()));
-                    let vol = item.get("estimated_volume")
+                    let vol = item
+                        .get("estimated_volume")
                         .and_then(|x| x.as_i64())
                         .or_else(|| item.get("volume").and_then(|x| x.as_i64()));
-                    out.insert(normalize_keyword(kw), KeywordMetric { difficulty: kd, volume: vol });
+                    out.insert(
+                        normalize_keyword(kw),
+                        KeywordMetric {
+                            difficulty: kd,
+                            volume: vol,
+                        },
+                    );
                 }
             }
             return out;
@@ -366,7 +436,13 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
         let kw = cols[1].clone();
         let vol = parse_range_midpoint(&cols[2]);
         let kd = parse_range_midpoint(&cols[3]);
-        out.insert(normalize_keyword(&kw), KeywordMetric { difficulty: kd, volume: vol });
+        out.insert(
+            normalize_keyword(&kw),
+            KeywordMetric {
+                difficulty: kd,
+                volume: vol,
+            },
+        );
     }
 
     out
@@ -383,10 +459,26 @@ pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCand
         .artifacts
         .iter()
         .find(|a| a.key == "research_final_selection")
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "research_normalize_stage"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research_agentic"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_analyze"))
-        .or_else(|| task.artifacts.iter().find(|a| a.key == "landing_page_research"));
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "research_normalize_stage")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_research_agentic")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_analyze")
+        })
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "landing_page_research")
+        });
 
     let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
         return out;
@@ -398,12 +490,27 @@ pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCand
         if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
             for item in arr {
                 if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
-                    out.insert(normalize_keyword(kw), LandingPageCandidateMeta {
-                        intent: item.get("intent").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                        landing_page_type: item.get("landing_page_type").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                        proposed_title: item.get("proposed_title").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                        opportunity_reason: item.get("opportunity_reason").and_then(|x| x.as_str()).map(|s| s.to_string()),
-                    });
+                    out.insert(
+                        normalize_keyword(kw),
+                        LandingPageCandidateMeta {
+                            intent: item
+                                .get("intent")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            landing_page_type: item
+                                .get("landing_page_type")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            proposed_title: item
+                                .get("proposed_title")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            opportunity_reason: item
+                                .get("opportunity_reason")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                        },
+                    );
                 }
             }
         }
@@ -488,7 +595,10 @@ pub fn build_keyword_provenance_artifact(keyword: &str, research_task_id: &str) 
         path: None,
         artifact_type: Some("json".to_string()),
         source: Some(research_task_id.to_string()),
-        content: Some(format!("{{\"keyword\":\"{}\"}}", keyword.replace('"', "\\\""))),
+        content: Some(format!(
+            "{{\"keyword\":\"{}\"}}",
+            keyword.replace('"', "\\\"")
+        )),
     }
 }
 
@@ -573,7 +683,10 @@ mod tests {
                    | Medium | content marketing | 1,000-5,000 | 45 |\n";
         let kws = extract_keywords_from_markdown_table(raw);
         assert!(kws.contains(&"seo tools".to_string()), "got: {kws:?}");
-        assert!(kws.contains(&"content marketing".to_string()), "got: {kws:?}");
+        assert!(
+            kws.contains(&"content marketing".to_string()),
+            "got: {kws:?}"
+        );
     }
 
     #[test]
@@ -607,7 +720,10 @@ mod tests {
         let task = make_task(vec![artifact("research_keywords_cli", json)]);
         let kws = extract_selectable_keywords(&task);
         assert!(kws.contains(&"seo tools".to_string()), "got: {kws:?}");
-        assert!(kws.contains(&"content strategy".to_string()), "got: {kws:?}");
+        assert!(
+            kws.contains(&"content strategy".to_string()),
+            "got: {kws:?}"
+        );
     }
 
     #[test]

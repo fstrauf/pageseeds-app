@@ -44,9 +44,7 @@ impl rusqlite::types::ToSql for TaskStatus {
 }
 
 impl rusqlite::types::FromSql for TaskStatus {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "todo" => Ok(TaskStatus::Todo),
@@ -101,9 +99,7 @@ impl rusqlite::types::ToSql for ExecutionMode {
 }
 
 impl rusqlite::types::FromSql for ExecutionMode {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "automatic" => Ok(ExecutionMode::Automatic),
@@ -154,9 +150,7 @@ impl rusqlite::types::ToSql for AgentPolicy {
 }
 
 impl rusqlite::types::FromSql for AgentPolicy {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "required" => Ok(AgentPolicy::Required),
@@ -203,9 +197,7 @@ impl rusqlite::types::ToSql for Priority {
 }
 
 impl rusqlite::types::FromSql for Priority {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "high" => Ok(Priority::High),

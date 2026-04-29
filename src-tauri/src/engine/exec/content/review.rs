@@ -17,11 +17,17 @@ fn reviewed_article_revisit_reason(
 
     let review_age_days = chrono::DateTime::parse_from_rfc3339(last_reviewed_at)
         .ok()
-        .map(|reviewed_at| now.signed_duration_since(reviewed_at.with_timezone(&chrono::Utc)).num_days().max(0));
+        .map(|reviewed_at| {
+            now.signed_duration_since(reviewed_at.with_timezone(&chrono::Utc))
+                .num_days()
+                .max(0)
+        });
 
     match review_age_days {
         Some(days) if days >= REVIEW_REVISIT_STALE_DAYS => Some("stale"),
-        Some(days) if days >= REVIEW_REVISIT_REGRESSION_DAYS && has_regression_signal => Some("regressed"),
+        Some(days) if days >= REVIEW_REVISIT_REGRESSION_DAYS && has_regression_signal => {
+            Some("regressed")
+        }
         Some(_) => None,
         None => Some("stale"),
     }
@@ -32,14 +38,20 @@ pub(crate) fn select_priority_articles(
     audit_articles: &[serde_json::Value],
     max_items: usize,
 ) -> Vec<serde_json::Value> {
-    let mut audit_by_file: std::collections::HashMap<String, &serde_json::Value> = Default::default();
-    let mut audit_by_slug: std::collections::HashMap<String, &serde_json::Value> = Default::default();
+    let mut audit_by_file: std::collections::HashMap<String, &serde_json::Value> =
+        Default::default();
+    let mut audit_by_slug: std::collections::HashMap<String, &serde_json::Value> =
+        Default::default();
     for a in audit_articles {
         if let Some(f) = a["file"].as_str() {
-            if !f.is_empty() { audit_by_file.insert(f.to_string(), a); }
+            if !f.is_empty() {
+                audit_by_file.insert(f.to_string(), a);
+            }
         }
         if let Some(s) = a["url_slug"].as_str() {
-            if !s.is_empty() { audit_by_slug.insert(s.to_string(), a); }
+            if !s.is_empty() {
+                audit_by_slug.insert(s.to_string(), a);
+            }
         }
     }
 
@@ -50,7 +62,10 @@ pub(crate) fn select_priority_articles(
 
     for article in raw_articles {
         let status = article["status"].as_str().unwrap_or("").to_lowercase();
-        let review_status = article["review_status"].as_str().unwrap_or("").to_lowercase();
+        let review_status = article["review_status"]
+            .as_str()
+            .unwrap_or("")
+            .to_lowercase();
         let last_reviewed_at = article["last_reviewed_at"].as_str().unwrap_or("").trim();
         let file_rel = article["file"].as_str().unwrap_or("").to_string();
         if status == "draft" || review_status == "in_review" || file_rel.is_empty() {
@@ -63,7 +78,8 @@ pub(crate) fn select_priority_articles(
         let ctr = gsc["ctr"].as_f64().unwrap_or(0.0);
 
         let url_slug = article["url_slug"].as_str().unwrap_or("");
-        let audit_row: &serde_json::Value = audit_by_file.get(&file_rel)
+        let audit_row: &serde_json::Value = audit_by_file
+            .get(&file_rel)
             .or_else(|| audit_by_slug.get(url_slug))
             .copied()
             .unwrap_or(&null_value);
@@ -72,14 +88,18 @@ pub(crate) fn select_priority_articles(
         let checks_failed = audit_row["checks_failed"].as_i64().unwrap_or(0);
         let health_score = audit_row["health_score"].as_i64().unwrap_or(0);
 
-        let failed_checks: Vec<serde_json::Value> = audit_row["checks"].as_object()
+        let failed_checks: Vec<serde_json::Value> = audit_row["checks"]
+            .as_object()
             .map(|checks| {
-                checks.iter()
+                checks
+                    .iter()
                     .filter(|(_, v)| v["pass"].as_bool() == Some(false))
-                    .map(|(k, v)| serde_json::json!({
-                        "check_id": k,
-                        "label": v["label"].as_str().unwrap_or(k),
-                    }))
+                    .map(|(k, v)| {
+                        serde_json::json!({
+                            "check_id": k,
+                            "label": v["label"].as_str().unwrap_or(k),
+                        })
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -98,10 +118,8 @@ pub(crate) fn select_priority_articles(
             score -= 600;
         }
 
-        let has_regression_signal = quick_ctr_opportunity
-            || health == "poor"
-            || checks_failed >= 3
-            || health_score <= 70;
+        let has_regression_signal =
+            quick_ctr_opportunity || health == "poor" || checks_failed >= 3 || health_score <= 70;
 
         let has_review_history = review_status == "reviewed" || !last_reviewed_at.is_empty();
 
@@ -157,25 +175,36 @@ pub(crate) fn build_review_context(
     max_excerpt_chars: usize,
 ) -> serde_json::Value {
     let now = chrono::Utc::now().to_rfc3339();
-    let articles: Vec<serde_json::Value> = selected.iter().filter_map(|article| {
-        let file_ref = article["file"].as_str().unwrap_or("");
-        if file_ref.is_empty() { return None; }
-        let source = crate::engine::exec::utils::read_source_file(repo_root, file_ref);
-        let source_excerpt = source.as_deref()
-            .map(|s| s.char_indices().nth(max_excerpt_chars).map_or(s, |(i, _)| &s[..i]))
-            .unwrap_or("")
-            .to_string();
-        Some(serde_json::json!({
-            "article_id": article["id"],
-            "article_title": article["title"],
-            "article_file": file_ref,
-            "url_slug": article["url_slug"],
-            "target_keyword": article["target_keyword"],
-            "gsc_snapshot": article["gsc"],
-            "failed_checks": article["_failed_checks"],
-            "source_excerpt": source_excerpt,
-        }))
-    }).collect();
+    let articles: Vec<serde_json::Value> = selected
+        .iter()
+        .filter_map(|article| {
+            let file_ref = article["file"].as_str().unwrap_or("");
+            if file_ref.is_empty() {
+                return None;
+            }
+            let source = crate::engine::exec::utils::read_source_file(repo_root, file_ref);
+            let source_excerpt = source
+                .as_deref()
+                .map(|s| {
+                    s.char_indices()
+                        .nth(max_excerpt_chars)
+                        .map_or(s, |(i, _)| &s[..i])
+                })
+                .unwrap_or("")
+                .to_string();
+            Some(serde_json::json!({
+                "article_id": article["id"],
+                "article_title": article["title"],
+                "article_file": file_ref,
+                "url_slug": article["url_slug"],
+                "target_keyword": article["target_keyword"],
+                "published_date": article["published_date"],
+                "gsc_snapshot": article["gsc"],
+                "failed_checks": article["_failed_checks"],
+                "source_excerpt": source_excerpt,
+            }))
+        })
+        .collect();
     serde_json::json!({
         "generated_at": now,
         "articles": articles,
@@ -186,42 +215,29 @@ pub(crate) fn build_review_context(
 pub(crate) fn build_review_prompt(context: &serde_json::Value) -> String {
     let context_json = serde_json::to_string_pretty(context).unwrap_or_default();
     format!(
-        r#"Generate SEO recommendations JSON from the provided article context.
-
-Return ONLY one valid JSON object. No markdown fences, no commentary.
+        r#"Analyze the following articles and generate specific, actionable SEO recommendations.
 
 Input context:
 {context_json}
 
-Output schema:
-{{
-  "generated_at": "<ISO>",
-  "total_articles": <N>,
-  "articles": [
-    {{
-      "article_id": <id>,
-      "article_title": "<title>",
-      "article_file": "<path>",
-      "url_slug": "<slug>",
-      "target_keyword": "<keyword>",
-      "gsc_snapshot": {{}},
-      "failed_checks": [],
-      "suggestions": [
-        {{
-          "category": "title|meta_description|intro|h1|internal_links|faq|eeat|cta",
-          "current": "<what's there now>",
-          "proposed": "<specific replacement>",
-          "reason": "<one sentence why>"
-        }}
-      ]
-    }}
-  ]
-}}
+For each article, examine:
+1. Title and H1 quality — keyword presence, clarity, length
+2. Meta description — presence, length (50-155 chars), keyword inclusion
+3. Introduction — engagement, keyword placement
+4. Content structure — H2 headings, readability
+5. Internal links — quantity, relevance
+6. EEAT signals — credibility, authoritativeness
+7. Call-to-action — clarity and placement
+8. Year freshness — compare any year mentioned in the title or H1 against the published_date. If they differ (e.g., title says "2025" but published_date is "2026-03-15"), suggest either:
+   - Update the title/H1 year to match the published date
+   - Update the published_date to match the title year (only if content is genuinely about the older year)
+
+For each suggestion, use one of these categories: title, meta_description, intro, h1, internal_links, faq, eeat, cta, date.
 
 Requirements:
 - 4-8 actionable suggestions per article.
 - Use only the provided context.
-- Preserve article metadata fields exactly from input."#,
+- Be specific: include the exact current text and proposed replacement."#,
         context_json = context_json,
     )
 }
@@ -237,7 +253,9 @@ pub(crate) fn exec_content_review_apply(
 ) -> crate::engine::workflows::StepResult {
     use std::path::Path;
 
-    let rec_content = task.artifacts.iter()
+    let rec_content = task
+        .artifacts
+        .iter()
         .find(|a| a.key == "recommendations")
         .and_then(|a| a.content.as_deref())
         .unwrap_or("");
@@ -279,6 +297,7 @@ Today's date: {today}
       - faq: add or expand the FAQ section with the suggested Q&As
       - eeat: add the credibility signal described
       - cta: add or strengthen the call-to-action as described
+      - date: update the frontmatter `date:` field to the suggested value
    c. Save the updated file
    d. In {articles_json}, find the article by id and set:
       - review_status → "reviewed"
@@ -299,7 +318,8 @@ IMPORTANT:
 
     log::info!(
         "[content_review_apply] running agent (provider={}, prompt_chars={})",
-        agent_provider, prompt.len()
+        agent_provider,
+        prompt.len()
     );
 
     match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
@@ -321,10 +341,9 @@ IMPORTANT:
 /// 1. Reads content_audit.json + articles.json
 /// 2. Selects top 5 priority articles via `select_priority_articles`
 /// 3. Builds structured context with source excerpts
-/// 4. Makes one agent call with a targeted structured prompt
+/// 4. Makes one rig `Extractor<T>` call for guaranteed structured JSON output
 /// 5. Writes recommendations.json to the automation dir
-#[allow(deprecated)]
-pub(crate) fn exec_content_review_recommend(
+pub(crate) async fn exec_content_review_recommend(
     task: &Task,
     project_path: &str,
     agent_provider: &str,
@@ -335,46 +354,62 @@ pub(crate) fn exec_content_review_recommend(
     let repo_root = Path::new(project_path);
 
     let audit_path = paths.automation_dir.join("content_audit.json");
-    let audit: serde_json::Value = match crate::engine::exec::common::read_json(&audit_path, "content_audit.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let audit: serde_json::Value =
+        match crate::engine::exec::common::read_json(&audit_path, "content_audit.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let articles_path = paths.automation_dir.join("articles.json");
-    let articles_doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let articles_doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let empty_vec: Vec<serde_json::Value> = Vec::new();
     let raw_articles = if articles_doc.is_array() {
         articles_doc.as_array().unwrap_or(&empty_vec)
     } else {
-        articles_doc.get("articles").and_then(|v| v.as_array()).unwrap_or(&empty_vec)
+        articles_doc
+            .get("articles")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&empty_vec)
     };
-    let audit_articles = audit.get("articles").and_then(|v| v.as_array()).unwrap_or(&empty_vec);
+    let audit_articles = audit
+        .get("articles")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty_vec);
 
     let selected = select_priority_articles(raw_articles, audit_articles, 5);
     log::info!(
         "[content_review_recommend] {} priority articles selected (project={})",
-        selected.len(), task.project_id
+        selected.len(),
+        task.project_id
     );
 
     if selected.is_empty() {
         return crate::engine::workflows::StepResult {
             success: true,
-            message: "No eligible articles found for review — all healthy or already in-review".to_string(),
-            output: Some(serde_json::json!({
-                "generated_at": chrono::Utc::now().to_rfc3339(),
-                "total_articles": 0,
-                "articles": []
-            }).to_string()),
+            message: "No eligible articles found for review — all healthy or already in-review"
+                .to_string(),
+            output: Some(
+                serde_json::json!({
+                    "generated_at": chrono::Utc::now().to_rfc3339(),
+                    "total_articles": 0,
+                    "articles": []
+                })
+                .to_string(),
+            ),
         };
     }
 
     let context = build_review_context(&selected, repo_root, 2600);
     let n_context = context["articles"].as_array().map(|a| a.len()).unwrap_or(0);
-    log::info!("[content_review_recommend] context built for {} articles", n_context);
+    log::info!(
+        "[content_review_recommend] context built for {} articles",
+        n_context
+    );
 
     if n_context == 0 {
         return crate::engine::workflows::StepResult {
@@ -385,43 +420,60 @@ pub(crate) fn exec_content_review_recommend(
     }
 
     let prompt = build_review_prompt(&context);
+    let preamble = "You are an expert SEO content reviewer. Analyze articles and generate structured recommendations using the submit tool.";
     log::info!(
-        "[content_review_recommend] running agent ({} chars prompt, provider={})",
-        prompt.len(), agent_provider
+        "[content_review_recommend] running structured extraction ({} chars prompt, provider={})",
+        prompt.len(),
+        agent_provider
     );
 
-    let raw_output = match crate::engine::agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(out) => out,
-        Err(e) => return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Agent failed: {}", e),
-            output: None,
-        },
+    let rec = match crate::rig::extraction::extract_structured::<
+        crate::models::content_review::ContentReviewRecommendations,
+    >(agent_provider, &prompt, Some(preamble))
+    .await
+    {
+        Ok(output) => output,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Structured extraction failed: {}", e),
+                output: None,
+            }
+        }
     };
 
-    let rec = crate::engine::text::extract_json(&raw_output)
-        .unwrap_or_else(|| serde_json::json!({
-        "generated_at": chrono::Utc::now().to_rfc3339(),
-        "total_articles": 0,
-        "articles": [],
-    }));
+    let rec_value = match serde_json::to_value(&rec) {
+        Ok(v) => v,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to serialize recommendations: {}", e),
+                output: None,
+            }
+        }
+    };
 
     let rec_path = paths.automation_dir.join("recommendations.json");
-    let rec_str = serde_json::to_string_pretty(&rec).unwrap_or_default() + "\n";
+    let rec_str = serde_json::to_string_pretty(&rec_value).unwrap_or_default() + "\n";
     if let Err(e) = std::fs::write(&rec_path, &rec_str) {
-        log::warn!("[content_review_recommend] failed to write recommendations.json: {}", e);
+        log::warn!(
+            "[content_review_recommend] failed to write recommendations.json: {}",
+            e
+        );
     } else {
-        let n = rec["articles"].as_array().map(|a| a.len()).unwrap_or(0);
-        log::info!("[content_review_recommend] wrote recommendations.json ({} articles)", n);
+        log::info!(
+            "[content_review_recommend] wrote recommendations.json ({} articles)",
+            rec.articles.len()
+        );
     }
 
-    let article_count = rec["articles"].as_array().map(|a| a.len()).unwrap_or(0);
     crate::engine::workflows::StepResult {
         success: true,
         message: format!(
             "Recommendations generated for {} / {} selected articles",
-            article_count, selected.len()
+            rec.articles.len(),
+            selected.len()
         ),
-        output: Some(serde_json::to_string_pretty(&rec).unwrap_or_default()),
+        output: Some(rec_str),
     }
 }

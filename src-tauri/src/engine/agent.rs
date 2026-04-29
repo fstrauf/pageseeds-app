@@ -3,7 +3,6 @@
 /// This module is a compatibility layer. The actual LLM execution now lives in
 /// `crate::rig::provider`. This file maintains the original `run_agent` sync
 /// interface so that existing step executors do not need to change.
-
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
@@ -106,7 +105,9 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
     if result.success {
         Ok(result.raw_output)
     } else {
-        Err(result.error.unwrap_or_else(|| "Unknown agent error".to_string()))
+        Err(result
+            .error
+            .unwrap_or_else(|| "Unknown agent error".to_string()))
     }
 }
 
@@ -146,22 +147,19 @@ async fn run_rig_prompt(provider: &str, prompt: &str) -> Result<String, RigError
     let kimi_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => crate::db::global_settings::get_kimi_backend_mode(&conn),
         Err(e) => {
-            log::warn!("[agent] Failed to open DB for kimi_backend_mode: {}. Using auto.", e);
+            log::warn!(
+                "[agent] Failed to open DB for kimi_backend_mode: {}. Using auto.",
+                e
+            );
             "auto".to_string()
         }
     };
 
-    let backend = match crate::rig::provider::resolve_backend(
-        provider,
-        None,
-        None,
-        Some(&kimi_mode),
-    )
-    .await
-    {
-        Ok(b) => b,
-        Err(e) => return Err(RigError::Other(e)),
-    };
+    let backend =
+        match crate::rig::provider::resolve_backend(provider, None, None, Some(&kimi_mode)).await {
+            Ok(b) => b,
+            Err(e) => return Err(RigError::Other(e)),
+        };
 
     match &backend {
         crate::rig::provider::LlmBackend::KimiDirect => {
@@ -175,7 +173,9 @@ async fn run_rig_prompt(provider: &str, prompt: &str) -> Result<String, RigError
             if let (Some(pt), Some(ct)) = (response.prompt_tokens, response.completion_tokens) {
                 log::info!(
                     "[agent] tokens — prompt={}, completion={}, total={}",
-                    pt, ct, pt + ct
+                    pt,
+                    ct,
+                    pt + ct
                 );
                 set_last_tokens(Some(pt), Some(ct));
             }

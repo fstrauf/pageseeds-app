@@ -13,7 +13,7 @@ use crate::models::social::*;
 /// Create a new social campaign
 pub fn create_campaign(conn: &Connection, campaign: &SocialCampaign) -> Result<()> {
     let _now = Utc::now().to_rfc3339();
-    
+
     conn.execute(
         r#"INSERT INTO social_campaigns (
             id, project_id, name, description, source_config, target_platforms,
@@ -33,7 +33,7 @@ pub fn create_campaign(conn: &Connection, campaign: &SocialCampaign) -> Result<(
             campaign.updated_at,
         ],
     )?;
-    
+
     Ok(())
 }
 
@@ -45,11 +45,11 @@ pub fn get_campaign(conn: &Connection, campaign_id: &str) -> Result<Option<Socia
             template_ids, status, post_count, created_at, updated_at
         FROM social_campaigns WHERE id = ?1"#,
     )?;
-    
+
     let campaign = stmt
         .query_row(params![campaign_id], row_to_campaign)
         .optional()?;
-    
+
     Ok(campaign)
 }
 
@@ -63,11 +63,11 @@ pub fn list_campaigns(conn: &Connection, project_id: &str) -> Result<Vec<SocialC
         WHERE project_id = ?1
         ORDER BY created_at DESC"#,
     )?;
-    
+
     let campaigns = stmt
         .query_map(params![project_id], row_to_campaign)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    
+
     Ok(campaigns)
 }
 
@@ -78,28 +78,24 @@ pub fn update_campaign_status(
     status: CampaignStatus,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    
+
     conn.execute(
         "UPDATE social_campaigns SET status = ?1, updated_at = ?2 WHERE id = ?3",
         params![status.as_str(), now, campaign_id],
     )?;
-    
+
     Ok(())
 }
 
 /// Update campaign post count
-pub fn update_campaign_post_count(
-    conn: &Connection,
-    campaign_id: &str,
-    count: u32,
-) -> Result<()> {
+pub fn update_campaign_post_count(conn: &Connection, campaign_id: &str, count: u32) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    
+
     conn.execute(
         "UPDATE social_campaigns SET post_count = ?1, updated_at = ?2 WHERE id = ?3",
         params![count, now, campaign_id],
     )?;
-    
+
     Ok(())
 }
 
@@ -154,7 +150,7 @@ pub fn create_post(conn: &Connection, post: &SocialPost) -> Result<()> {
             post.updated_at,
         ],
     )?;
-    
+
     Ok(())
 }
 
@@ -169,7 +165,7 @@ pub fn get_post(conn: &Connection, post_id: &str) -> Result<Option<SocialPost>> 
             generated_by, generation_prompt_hash, created_at, updated_at
         FROM social_posts WHERE id = ?1"#,
     )?;
-    
+
     let post = stmt.query_row(params![post_id], row_to_post).optional()?;
     Ok(post)
 }
@@ -201,9 +197,9 @@ pub fn get_posts_by_campaign(
         WHERE campaign_id = ?1
         ORDER BY created_at DESC"#
     };
-    
+
     let mut stmt = conn.prepare(sql)?;
-    
+
     let posts = if let Some(s) = status {
         stmt.query_map(params![campaign_id, s.as_str()], row_to_post)?
             .collect::<rusqlite::Result<Vec<_>>>()?
@@ -211,7 +207,7 @@ pub fn get_posts_by_campaign(
         stmt.query_map(params![campaign_id], row_to_post)?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
-    
+
     Ok(posts)
 }
 
@@ -242,9 +238,9 @@ pub fn get_posts_by_project(
         WHERE project_id = ?1
         ORDER BY created_at DESC"#
     };
-    
+
     let mut stmt = conn.prepare(sql)?;
-    
+
     let posts = if let Some(s) = status {
         stmt.query_map(params![project_id, s.as_str()], row_to_post)?
             .collect::<rusqlite::Result<Vec<_>>>()?
@@ -252,50 +248,38 @@ pub fn get_posts_by_project(
         stmt.query_map(params![project_id], row_to_post)?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
-    
+
     Ok(posts)
 }
 
 /// Update post status
-pub fn update_post_status(
-    conn: &Connection,
-    post_id: &str,
-    status: PostStatus,
-) -> Result<()> {
+pub fn update_post_status(conn: &Connection, post_id: &str, status: PostStatus) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    
+
     conn.execute(
         "UPDATE social_posts SET status = ?1, updated_at = ?2 WHERE id = ?3",
         params![status.as_str(), now, post_id],
     )?;
-    
+
     Ok(())
 }
 
 /// Schedule a post
-pub fn schedule_post(
-    conn: &Connection,
-    post_id: &str,
-    scheduled_at: &str,
-) -> Result<()> {
+pub fn schedule_post(conn: &Connection, post_id: &str, scheduled_at: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    
+
     conn.execute(
         "UPDATE social_posts SET scheduled_at = ?1, status = 'scheduled', updated_at = ?2 WHERE id = ?3",
         params![scheduled_at, now, post_id],
     )?;
-    
+
     Ok(())
 }
 
 /// Mark a post as posted
-pub fn mark_posted(
-    conn: &Connection,
-    post_id: &str,
-    platform_url: &str,
-) -> Result<()> {
+pub fn mark_posted(conn: &Connection, post_id: &str, platform_url: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    
+
     conn.execute(
         r#"UPDATE social_posts SET 
             status = 'posted', 
@@ -305,14 +289,14 @@ pub fn mark_posted(
         WHERE id = ?4"#,
         params![now, platform_url, now, post_id],
     )?;
-    
+
     Ok(())
 }
 
 /// Update post content
 pub fn update_post(conn: &Connection, post: &SocialPost) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    
+
     conn.execute(
         r#"UPDATE social_posts SET 
             hook = ?1,
@@ -334,16 +318,13 @@ pub fn update_post(conn: &Connection, post: &SocialPost) -> Result<()> {
             post.id,
         ],
     )?;
-    
+
     Ok(())
 }
 
 /// Delete a post
 pub fn delete_post(conn: &Connection, post_id: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM social_posts WHERE id = ?1",
-        params![post_id],
-    )?;
+    conn.execute("DELETE FROM social_posts WHERE id = ?1", params![post_id])?;
     Ok(())
 }
 
@@ -374,7 +355,7 @@ pub fn create_template(conn: &Connection, template: &ContentTemplate) -> Result<
             template.updated_at,
         ],
     )?;
-    
+
     Ok(())
 }
 
@@ -387,19 +368,16 @@ pub fn get_template(conn: &Connection, template_id: &str) -> Result<Option<Conte
             created_at, updated_at
         FROM social_templates WHERE id = ?1"#,
     )?;
-    
+
     let template = stmt
         .query_row(params![template_id], row_to_template)
         .optional()?;
-    
+
     Ok(template)
 }
 
 /// List templates (global + project-specific)
-pub fn list_templates(
-    conn: &Connection,
-    project_id: Option<&str>,
-) -> Result<Vec<ContentTemplate>> {
+pub fn list_templates(conn: &Connection, project_id: Option<&str>) -> Result<Vec<ContentTemplate>> {
     // Get global templates (project_id IS NULL)
     let mut global_stmt = conn.prepare(
         r#"SELECT 
@@ -409,11 +387,11 @@ pub fn list_templates(
         FROM social_templates WHERE project_id IS NULL
         ORDER BY created_at DESC"#,
     )?;
-    
+
     let mut templates: Vec<ContentTemplate> = global_stmt
         .query_map([], row_to_template)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    
+
     // Get project-specific templates if project_id provided
     if let Some(pid) = project_id {
         let mut project_stmt = conn.prepare(
@@ -424,14 +402,14 @@ pub fn list_templates(
             FROM social_templates WHERE project_id = ?1
             ORDER BY created_at DESC"#,
         )?;
-        
+
         let project_templates: Vec<ContentTemplate> = project_stmt
             .query_map(params![pid], row_to_template)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        
+
         templates.extend(project_templates);
     }
-    
+
     Ok(templates)
 }
 
@@ -455,7 +433,7 @@ pub fn get_campaign_stats(conn: &Connection, campaign_id: &str) -> Result<Campai
         params![campaign_id],
         |row| row.get(0),
     )?;
-    
+
     let mut by_status = std::collections::HashMap::new();
     {
         let mut stmt = conn.prepare(
@@ -469,7 +447,7 @@ pub fn get_campaign_stats(conn: &Connection, campaign_id: &str) -> Result<Campai
             by_status.insert(status, count);
         }
     }
-    
+
     let mut by_platform = std::collections::HashMap::new();
     {
         let mut stmt = conn.prepare(
@@ -483,7 +461,7 @@ pub fn get_campaign_stats(conn: &Connection, campaign_id: &str) -> Result<Campai
             by_platform.insert(platform, count);
         }
     }
-    
+
     Ok(CampaignStats {
         total_posts: total,
         by_status,
@@ -497,29 +475,21 @@ pub fn get_campaign_stats(conn: &Connection, campaign_id: &str) -> Result<Campai
 
 fn row_to_campaign(row: &rusqlite::Row<'_>) -> rusqlite::Result<SocialCampaign> {
     let source_config_json: String = row.get("source_config")?;
-    let source_config: SourceConfig = serde_json::from_str(&source_config_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        ))?;
-    
+    let source_config: SourceConfig = serde_json::from_str(&source_config_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+
     let target_platforms_json: String = row.get("target_platforms")?;
-    let target_platforms: Vec<Platform> = serde_json::from_str(&target_platforms_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        ))?;
-    
+    let target_platforms: Vec<Platform> =
+        serde_json::from_str(&target_platforms_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+
     let template_ids_json: String = row.get("template_ids")?;
-    let template_ids: Vec<String> = serde_json::from_str(&template_ids_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        ))?;
-    
+    let template_ids: Vec<String> = serde_json::from_str(&template_ids_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+
     Ok(SocialCampaign {
         id: row.get("id")?,
         project_id: row.get("project_id")?,
@@ -537,25 +507,19 @@ fn row_to_campaign(row: &rusqlite::Row<'_>) -> rusqlite::Result<SocialCampaign> 
 
 fn row_to_post(row: &rusqlite::Row<'_>) -> rusqlite::Result<SocialPost> {
     let hashtags_json: String = row.get("hashtags")?;
-    let hashtags: Vec<String> = serde_json::from_str(&hashtags_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        ))?;
-    
+    let hashtags: Vec<String> = serde_json::from_str(&hashtags_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+
     let visual_assets_json: String = row.get("visual_assets")?;
-    let visual_assets: Vec<VisualAsset> = serde_json::from_str(&visual_assets_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        ))?;
-    
+    let visual_assets: Vec<VisualAsset> =
+        serde_json::from_str(&visual_assets_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+
     let metrics_json: Option<String> = row.get("metrics")?;
-    let metrics: Option<PostMetrics> = metrics_json
-        .and_then(|s| serde_json::from_str(&s).ok());
-    
+    let metrics: Option<PostMetrics> = metrics_json.and_then(|s| serde_json::from_str(&s).ok());
+
     Ok(SocialPost {
         id: row.get("id")?,
         campaign_id: row.get("campaign_id")?,
@@ -587,25 +551,21 @@ fn row_to_post(row: &rusqlite::Row<'_>) -> rusqlite::Result<SocialPost> {
 
 fn row_to_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<ContentTemplate> {
     let overlay_config_json: String = row.get("overlay_config")?;
-    let overlay_config: OverlayConfig = serde_json::from_str(&overlay_config_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        ))?;
-    
+    let overlay_config: OverlayConfig =
+        serde_json::from_str(&overlay_config_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+
     let default_hashtags_json: String = row.get("default_hashtags")?;
-    let default_hashtags: Vec<String> = serde_json::from_str(&default_hashtags_json)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-            0,
-            rusqlite::types::Type::Text,
-            Box::new(e),
-        ))?;
-    
+    let default_hashtags: Vec<String> =
+        serde_json::from_str(&default_hashtags_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+
     let example_output_json: Option<String> = row.get("example_output")?;
-    let example_output: Option<TemplateExample> = example_output_json
-        .and_then(|s| serde_json::from_str(&s).ok());
-    
+    let example_output: Option<TemplateExample> =
+        example_output_json.and_then(|s| serde_json::from_str(&s).ok());
+
     Ok(ContentTemplate {
         id: row.get("id")?,
         project_id: row.get("project_id")?,

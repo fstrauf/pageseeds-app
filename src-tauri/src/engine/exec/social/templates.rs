@@ -25,43 +25,38 @@ pub fn exec_social_design_template(
         &request.description,
     );
 
-    log::info!("[social_design_template] designing template '{}' for {:?}",
-        request.name, request.platform);
+    log::info!(
+        "[social_design_template] designing template '{}' for {:?}",
+        request.name,
+        request.platform
+    );
 
     match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
-        Ok(output) => {
-            match super::parse_agent_template_output(&output) {
-                Ok(agent_output) => {
-                    let template = super::create_template_from_agent_output(
-                        &request,
-                        &agent_output,
-                    );
+        Ok(output) => match super::parse_agent_template_output(&output) {
+            Ok(agent_output) => {
+                let template = super::create_template_from_agent_output(&request, &agent_output);
 
-                    StepResult {
-                        success: true,
-                        message: format!("Template '{}' designed successfully", template.name),
-                        output: Some(serde_json::to_string(&template).unwrap_or_default()),
-                    }
-                }
-                Err(e) => StepResult {
-                    success: false,
-                    message: format!("Failed to parse template output: {}", e),
-                    output: Some(output),
+                StepResult {
+                    success: true,
+                    message: format!("Template '{}' designed successfully", template.name),
+                    output: Some(serde_json::to_string(&template).unwrap_or_default()),
                 }
             }
-        }
+            Err(e) => StepResult {
+                success: false,
+                message: format!("Failed to parse template output: {}", e),
+                output: Some(output),
+            },
+        },
         Err(e) => StepResult {
             success: false,
             message: format!("Agent failed: {}", e),
             output: None,
-        }
+        },
     }
 }
 
-pub fn exec_social_save_template(
-    _task: &Task,
-    _project_path: &str,
-) -> StepResult {
+pub fn exec_social_save_template(_task: &Task, _project_path: &str) -> StepResult {
     StepResult {
         success: true,
         message: "Template saved".to_string(),

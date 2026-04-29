@@ -36,7 +36,10 @@ fn render_markdown(records: &[InspectionRecord], site_url: &str, timestamp: &str
     // Group by verdict
     let mut by_verdict: HashMap<&str, Vec<&InspectionRecord>> = HashMap::new();
     for r in records {
-        by_verdict.entry(r.verdict.as_deref().unwrap_or("UNKNOWN")).or_default().push(r);
+        by_verdict
+            .entry(r.verdict.as_deref().unwrap_or("UNKNOWN"))
+            .or_default()
+            .push(r);
     }
 
     let total = records.len();
@@ -82,7 +85,11 @@ fn render_markdown(records: &[InspectionRecord], site_url: &str, timestamp: &str
         md.push_str("| URL | Coverage State |\n");
         md.push_str("|-----|---------------|\n");
         for r in neutrals.as_slice() {
-            md.push_str(&format!("| {} | {} |\n", r.url, r.coverage_state.as_deref().unwrap_or("")));
+            md.push_str(&format!(
+                "| {} | {} |\n",
+                r.url,
+                r.coverage_state.as_deref().unwrap_or("")
+            ));
         }
         md.push('\n');
     }

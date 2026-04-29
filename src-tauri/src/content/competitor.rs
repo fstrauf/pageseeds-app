@@ -1,12 +1,14 @@
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
-use std::sync::LazyLock;
-use regex::Regex;
 use crate::error::Result;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+use ts_rs::TS;
 
 // Compiled regex patterns for HTML cleaning
-static SCRIPT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<script[^>]*>.*?</script>").unwrap());
-static STYLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<style[^>]*>.*?</style>").unwrap());
+static SCRIPT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<script[^>]*>.*?</script>").unwrap());
+static STYLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<style[^>]*>.*?</style>").unwrap());
 static HTML_TAGS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
 static WHITESPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
@@ -25,9 +27,9 @@ pub struct CompetitorWordCount {
 #[ts(export)]
 pub struct CompetitorSection {
     pub heading: String,
-    pub level: u8,       // 1, 2, or 3
+    pub level: u8, // 1, 2, or 3
     pub word_count: usize,
-    pub is_thin: bool,   // < 150 words
+    pub is_thin: bool, // < 150 words
 }
 
 /// Full structure analysis of a competitor page.
@@ -50,53 +52,55 @@ pub struct WordCountComparison {
     pub p75: usize,
     pub recommended_min: usize,
     pub user_word_count: Option<usize>,
-    pub gap: Option<i64>,  // user_count - recommended_min (negative = needs more)
+    pub gap: Option<i64>, // user_count - recommended_min (negative = needs more)
 }
 
 /// Fetch and analyze a competitor page.
-pub async fn analyze_competitor_page(url: &str, position: i32) -> Result<(CompetitorWordCount, CompetitorStructure)> {
+pub async fn analyze_competitor_page(
+    url: &str,
+    position: i32,
+) -> Result<(CompetitorWordCount, CompetitorStructure)> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(crate::error::Error::Http)?;
-    
-    let resp = client.get(url)
+
+    let resp = client
+        .get(url)
         .send()
         .await
         .map_err(crate::error::Error::Http)?;
-    
-    let html = resp.text()
-        .await
-        .map_err(crate::error::Error::Http)?;
-    
+
+    let html = resp.text().await.map_err(crate::error::Error::Http)?;
+
     // Parse HTML
     let document = scraper::Html::parse_document(&html);
-    
+
     // Extract domain
     let domain = extract_domain(url);
-    
+
     // Extract main content
     let text_content = extract_main_content(&document);
     let word_count = count_words(&text_content);
-    
+
     // Extract headings and sections
     let sections = extract_sections(&document, &text_content);
-    
+
     let word_count_data = CompetitorWordCount {
         url: url.to_string(),
         domain: domain.clone(),
         position,
         word_count,
     };
-    
+
     let structure = CompetitorStructure {
         url: url.to_string(),
         domain,
         sections,
         total_word_count: word_count,
     };
-    
+
     Ok((word_count_data, structure))
 }
 
@@ -107,7 +111,7 @@ pub async fn compare_word_counts(
     user_url: Option<&str>,
 ) -> Result<WordCountComparison> {
     let mut competitors = Vec::with_capacity(competitor_urls.len());
-    
+
     for (idx, url) in competitor_urls.iter().enumerate() {
         match analyze_competitor_page(url, (idx + 1) as i32).await {
             Ok((word_count, _)) => {
@@ -118,19 +122,21 @@ pub async fn compare_word_counts(
             }
         }
     }
-    
+
     if competitors.is_empty() {
-        return Err(crate::error::Error::Other("No competitor pages could be analyzed".to_string()));
+        return Err(crate::error::Error::Other(
+            "No competitor pages could be analyzed".to_string(),
+        ));
     }
-    
+
     // Sort by word count for percentile calculations
     let mut word_counts: Vec<usize> = competitors.iter().map(|c| c.word_count).collect();
     word_counts.sort_unstable();
-    
+
     let median = calculate_median(&word_counts);
     let p75 = calculate_percentile(&word_counts, 75);
     let recommended_min = p75;
-    
+
     // Get user's word count if provided
     let user_word_count = if let Some(url) = user_url {
         match analyze_competitor_page(url, 0).await {
@@ -140,9 +146,9 @@ pub async fn compare_word_counts(
     } else {
         None
     };
-    
+
     let gap = user_word_count.map(|u| u as i64 - recommended_min as i64);
-    
+
     Ok(WordCountComparison {
         keyword: keyword.to_string(),
         competitors,
@@ -167,7 +173,7 @@ fn extract_main_content(document: &scraper::Html) -> String {
         "#content",
         "body",
     ];
-    
+
     for selector_str in &selectors {
         if let Ok(selector) = scraper::Selector::parse(selector_str) {
             if let Some(element) = document.select(&selector).next() {
@@ -179,36 +185,37 @@ fn extract_main_content(document: &scraper::Html) -> String {
             }
         }
     }
-    
+
     // Fallback: get all body text
     if let Ok(body_selector) = scraper::Selector::parse("body") {
         if let Some(body) = document.select(&body_selector).next() {
             return clean_text(&body.text().collect::<Vec<_>>().join(" "));
         }
     }
-    
+
     String::new()
 }
 
 /// Extract headings and their section word counts.
 fn extract_sections(document: &scraper::Html, full_text: &str) -> Vec<CompetitorSection> {
     let mut sections = Vec::new();
-    
+
     // Try to find H1, H2, H3 headings
     let heading_selector = match scraper::Selector::parse("h1, h2, h3") {
         Ok(s) => s,
         Err(_) => return sections,
     };
-    
+
     let headings: Vec<_> = document.select(&heading_selector).collect();
-    
+
     for (idx, heading) in headings.iter().enumerate() {
         let heading_text = heading.text().collect::<String>().trim().to_string();
         let level = heading.value().name().parse().unwrap_or(2);
-        
+
         // Estimate word count for this section (rough approximation)
-        let section_word_count = estimate_section_words(full_text, &heading_text, idx, headings.len());
-        
+        let section_word_count =
+            estimate_section_words(full_text, &heading_text, idx, headings.len());
+
         sections.push(CompetitorSection {
             heading: heading_text,
             level,
@@ -216,7 +223,7 @@ fn extract_sections(document: &scraper::Html, full_text: &str) -> Vec<Competitor
             is_thin: section_word_count < 150,
         });
     }
-    
+
     sections
 }
 
@@ -224,11 +231,11 @@ fn extract_sections(document: &scraper::Html, full_text: &str) -> Vec<Competitor
 fn estimate_section_words(full_text: &str, _heading: &str, idx: usize, total: usize) -> usize {
     let words: Vec<&str> = full_text.split_whitespace().collect();
     let total_words = words.len();
-    
+
     if total <= 1 {
         return total_words;
     }
-    
+
     // Roughly divide text by number of sections
     let avg_section_size = total_words / total;
     let section_words = if idx == total - 1 {
@@ -237,24 +244,24 @@ fn estimate_section_words(full_text: &str, _heading: &str, idx: usize, total: us
     } else {
         avg_section_size
     };
-    
+
     section_words
 }
 
 /// Clean and normalize text.
 fn clean_text(text: &str) -> String {
     let mut cleaned = text.to_string();
-    
+
     // Remove script and style content
     cleaned = SCRIPT_RE.replace_all(&cleaned, " ").to_string();
     cleaned = STYLE_RE.replace_all(&cleaned, " ").to_string();
-    
+
     // Remove HTML tags
     cleaned = HTML_TAGS_RE.replace_all(&cleaned, " ").to_string();
-    
+
     // Normalize whitespace
     cleaned = WHITESPACE_RE.replace_all(&cleaned, " ").to_string();
-    
+
     cleaned.trim().to_string()
 }
 
@@ -290,7 +297,7 @@ fn calculate_percentile(sorted: &[usize], percentile: usize) -> usize {
     if len == 0 {
         return 0;
     }
-    
+
     let index = ((percentile as f64 / 100.0) * (len - 1) as f64).round() as usize;
     sorted[index.min(len - 1)]
 }
@@ -310,9 +317,9 @@ mod tests {
     #[test]
     fn test_calculate_percentile() {
         let data = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-        assert_eq!(calculate_percentile(&data, 50), 60);  // index = round(0.5 * 9) = 5
-        assert_eq!(calculate_percentile(&data, 75), 80);  // 75th percentile
-        assert_eq!(calculate_percentile(&data, 0), 10);   // min
+        assert_eq!(calculate_percentile(&data, 50), 60); // index = round(0.5 * 9) = 5
+        assert_eq!(calculate_percentile(&data, 75), 80); // 75th percentile
+        assert_eq!(calculate_percentile(&data, 0), 10); // min
         assert_eq!(calculate_percentile(&data, 100), 100); // max
     }
 

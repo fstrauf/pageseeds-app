@@ -413,9 +413,16 @@ mod tests {
         for variant in &variants {
             let s = variant.as_str();
             let parsed = StepKind::from_str(s).unwrap_or_else(|_| {
-                panic!("StepKind variant {:?} failed to round-trip through '{}'", variant, s)
+                panic!(
+                    "StepKind variant {:?} failed to round-trip through '{}'",
+                    variant, s
+                )
             });
-            assert_eq!(*variant, parsed, "Round-trip failed for '{}': expected {:?}, got {:?}", s, variant, parsed);
+            assert_eq!(
+                *variant, parsed,
+                "Round-trip failed for '{}': expected {:?}, got {:?}",
+                s, variant, parsed
+            );
         }
     }
 
@@ -432,7 +439,10 @@ mod tests {
     #[test]
     fn display_matches_as_str() {
         assert_eq!(format!("{}", StepKind::Deterministic), "deterministic");
-        assert_eq!(format!("{}", StepKind::CtrBuildContext), "ctr_build_context");
+        assert_eq!(
+            format!("{}", StepKind::CtrBuildContext),
+            "ctr_build_context"
+        );
     }
 
     #[test]

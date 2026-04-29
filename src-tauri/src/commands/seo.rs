@@ -1,11 +1,11 @@
-use tauri::State;
 use crate::commands::{AppState, SeoState};
 use crate::config::env_resolver::EnvResolver;
 use crate::engine::task_store;
-use crate::seo::provider::SeoDataProvider;
-use crate::seo::keywords::{KeywordDifficultyResult, KeywordIdeasResult, KeywordIdea};
 use crate::seo::intent::IntentClassification;
-use crate::seo::scoring::{OpportunityScore, score_opportunities};
+use crate::seo::keywords::{KeywordDifficultyResult, KeywordIdea, KeywordIdeasResult};
+use crate::seo::provider::SeoDataProvider;
+use crate::seo::scoring::{score_opportunities, OpportunityScore};
+use tauri::State;
 
 /// Resolve the SEO provider for a project.
 async fn resolve_provider_for_project(
@@ -15,7 +15,10 @@ async fn resolve_provider_for_project(
     let (project_path, seo_provider) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, project_id).map_err(|e| e.to_string())?;
-        let provider = project.seo_provider.clone().unwrap_or_else(|| "ahrefs".to_string());
+        let provider = project
+            .seo_provider
+            .clone()
+            .unwrap_or_else(|| "ahrefs".to_string());
         (project.path, provider)
     };
 
@@ -33,7 +36,11 @@ pub async fn seo_get_keyword_ideas(
 ) -> Result<KeywordIdeasResult, String> {
     let provider = resolve_provider_for_project(&state, &project_id).await?;
     provider
-        .keyword_ideas(&keyword, country.as_deref().unwrap_or("us"), search_engine.as_deref().unwrap_or("Google"))
+        .keyword_ideas(
+            &keyword,
+            country.as_deref().unwrap_or("us"),
+            search_engine.as_deref().unwrap_or("Google"),
+        )
         .await
         .map_err(|e| e.to_string())
 }
@@ -120,40 +127,51 @@ pub async fn set_seo_provider(
     project_id: String,
     provider: String,
 ) -> Result<String, String> {
-    log::info!("[set_seo_provider] Saving provider '{}' for project '{}'", provider, project_id);
-    
+    log::info!(
+        "[set_seo_provider] Saving provider '{}' for project '{}'",
+        provider,
+        project_id
+    );
+
     let mut db = state.db.lock().map_err(|e| e.to_string())?;
     let mut project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-    
+
     // Validate provider name
     let valid_provider = match provider.to_lowercase().as_str() {
         "dataforseo" => "dataforseo",
         _ => "ahrefs",
     };
-    
+
     project.seo_provider = Some(valid_provider.to_string());
     task_store::update_project(&mut db, &project).map_err(|e| {
         log::error!("[set_seo_provider] Database error: {}", e);
         e.to_string()
     })?;
-    
+
     // Verify the update was persisted
     let saved_project = task_store::get_project(&db, &project_id).map_err(|e| {
         log::error!("[set_seo_provider] Failed to verify save: {}", e);
         e.to_string()
     })?;
-    
+
     let saved_provider = saved_project.seo_provider.unwrap_or_default();
     if saved_provider != valid_provider {
         log::error!(
             "[set_seo_provider] Verification failed: expected '{}', got '{}'",
-            valid_provider, saved_provider
+            valid_provider,
+            saved_provider
         );
-        return Err(format!("Verification failed: expected '{}', got '{}'", valid_provider, saved_provider));
+        return Err(format!(
+            "Verification failed: expected '{}', got '{}'",
+            valid_provider, saved_provider
+        ));
     }
-    
-    log::info!("[set_seo_provider] Successfully saved provider '{}' for project '{}'", 
-        valid_provider, project_id);
+
+    log::info!(
+        "[set_seo_provider] Successfully saved provider '{}' for project '{}'",
+        valid_provider,
+        project_id
+    );
     Ok(valid_provider.to_string())
 }
 
@@ -164,7 +182,10 @@ pub async fn classify_search_intent(
     keywords: Vec<String>,
 ) -> Result<Vec<IntentClassification>, String> {
     let provider = resolve_provider_for_project(&state, &project_id).await?;
-    provider.search_intent(&keywords).await.map_err(|e| e.to_string())
+    provider
+        .search_intent(&keywords)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -184,5 +205,8 @@ fn capsolver_key(db: &rusqlite::Connection, project_id: &str) -> Result<String, 
     resolver
         .resolve("CAPSOLVER_API_KEY")
         .map(|(v, _)| v)
-        .ok_or_else(|| "CAPSOLVER_API_KEY not configured. Add it to ~/.config/automation/secrets.env".to_string())
+        .ok_or_else(|| {
+            "CAPSOLVER_API_KEY not configured. Add it to ~/.config/automation/secrets.env"
+                .to_string()
+        })
 }

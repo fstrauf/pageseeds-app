@@ -37,7 +37,7 @@ impl ContentSource {
         let themes = extract_themes(&content);
         let suggested_template = suggest_template(&source_type, &content);
         let suggested_platform = suggest_platform(&source_type, &content);
-        
+
         Self {
             source_type,
             source_id,
@@ -50,7 +50,7 @@ impl ContentSource {
             suggested_platform,
         }
     }
-    
+
     /// Generate a summary of this content for agent prompts
     pub fn content_summary(&self) -> String {
         match self.source_type {
@@ -65,7 +65,10 @@ impl ContentSource {
                 format!(
                     "Screenshot: {}\nDescription: {}",
                     self.source_id,
-                    self.metadata.description.as_deref().unwrap_or("App screenshot")
+                    self.metadata
+                        .description
+                        .as_deref()
+                        .unwrap_or("App screenshot")
                 )
             }
             crate::models::social::SourceType::Spec => {
@@ -92,7 +95,7 @@ fn compute_engagement_score(
         crate::models::social::SourceType::Article => 40,
         crate::models::social::SourceType::Spec => 30,
     };
-    
+
     // Educational value: based on content length and structure
     let word_count = metadata.word_count.unwrap_or(0);
     let educational_value = if word_count > 500 {
@@ -102,21 +105,19 @@ fn compute_engagement_score(
     } else {
         40
     };
-    
+
     // Recency: default to middle score (can't easily get file mod time here)
     let recency = 50u32;
-    
+
     // Uniqueness: based on content diversity signals
     let has_headings = content.contains("##") || content.contains("###");
     let has_lists = content.contains("- ") || content.contains("1.");
     let uniqueness = if has_headings && has_lists { 80 } else { 50 };
-    
+
     // Weighted average
-    let score = (visual_appeal * 40 
-        + educational_value * 30 
-        + recency * 20 
-        + uniqueness * 10) / 100;
-    
+    let score =
+        (visual_appeal * 40 + educational_value * 30 + recency * 20 + uniqueness * 10) / 100;
+
     score.min(100)
 }
 
@@ -124,30 +125,39 @@ fn compute_engagement_score(
 fn extract_themes(content: &str) -> Vec<String> {
     let content_lower = content.to_lowercase();
     let mut themes = Vec::new();
-    
+
     let theme_keywords: Vec<(&str, &[&str])> = vec![
         ("seo", &["seo", "search", "ranking", "google", "keywords"]),
-        ("automation", &["automation", "automated", "workflow", "task", "queue"]),
+        (
+            "automation",
+            &["automation", "automated", "workflow", "task", "queue"],
+        ),
         ("content", &["content", "article", "blog", "writing", "mdx"]),
-        ("technical", &["rust", "tauri", "architecture", "performance"]),
-        ("analytics", &["analytics", "metrics", "gsc", "search console", "data"]),
-        ("reddit", &["reddit", "community", "engagement", "opportunities"]),
+        (
+            "technical",
+            &["rust", "tauri", "architecture", "performance"],
+        ),
+        (
+            "analytics",
+            &["analytics", "metrics", "gsc", "search console", "data"],
+        ),
+        (
+            "reddit",
+            &["reddit", "community", "engagement", "opportunities"],
+        ),
     ];
-    
+
     for (theme, keywords) in theme_keywords {
         if keywords.iter().any(|kw| content_lower.contains(kw)) {
             themes.push(theme.to_string());
         }
     }
-    
+
     themes
 }
 
 /// Suggest template based on content type
-fn suggest_template(
-    source_type: &crate::models::social::SourceType,
-    _content: &str,
-) -> String {
+fn suggest_template(source_type: &crate::models::social::SourceType, _content: &str) -> String {
     match source_type {
         crate::models::social::SourceType::Screenshot => "feature_hook".to_string(),
         crate::models::social::SourceType::Article => "educational_carousel".to_string(),

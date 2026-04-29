@@ -1,6 +1,6 @@
-use rusqlite::Connection;
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
+use rusqlite::Connection;
 
 /// Native Rust scan for `cluster_and_link_scan` step.
 ///
@@ -25,7 +25,10 @@ pub(crate) fn exec_cluster_link_scan(
     };
 
     let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
-        Ok(a) => a.into_iter().filter(|a| !a.file.is_empty()).collect::<Vec<_>>(),
+        Ok(a) => a
+            .into_iter()
+            .filter(|a| !a.file.is_empty())
+            .collect::<Vec<_>>(),
         Err(e) => {
             return crate::engine::workflows::StepResult {
                 success: false,
@@ -39,7 +42,10 @@ pub(crate) fn exec_cluster_link_scan(
         return crate::engine::workflows::StepResult {
             success: true,
             message: "No articles in app index — nothing to scan".to_string(),
-            output: Some(r#"{"total_articles":0,"total_internal_links":0,"orphan_ids":[],"profiles":[]}"#.to_string()),
+            output: Some(
+                r#"{"total_articles":0,"total_internal_links":0,"orphan_ids":[],"profiles":[]}"#
+                    .to_string(),
+            ),
         };
     }
 
@@ -51,7 +57,8 @@ pub(crate) fn exec_cluster_link_scan(
         None => {
             return crate::engine::workflows::StepResult {
                 success: false,
-                message: "Could not locate content directory — set content_dir in project config".to_string(),
+                message: "Could not locate content directory — set content_dir in project config"
+                    .to_string(),
                 output: None,
             }
         }
@@ -65,8 +72,7 @@ pub(crate) fn exec_cluster_link_scan(
 
     match crate::content::linking::scan_links(&content_dir, &articles) {
         Ok(result) => {
-            let json = serde_json::to_string_pretty(&result)
-                .unwrap_or_else(|_| "{}".to_string());
+            let json = serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
 
             // Persist to link_scan.json so the downstream strategy step can read it.
             let scan_path = paths.automation_dir.join("link_scan.json");
@@ -103,7 +109,7 @@ pub(crate) fn create_cluster_and_link_task(
     _project_path: &str,
 ) -> Option<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{ExecutionMode, Priority, AgentPolicy};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority};
 
     let parent_title = parent_task
         .title
@@ -116,8 +122,7 @@ pub(crate) fn create_cluster_and_link_task(
         "Scan internal link graph and add missing hub-to-spoke, \
          spoke-to-hub, and cross-cluster links following the article: {}. \
          Depends on: {}",
-        parent_title,
-        parent_task.id,
+        parent_title, parent_task.id,
     );
 
     // Use spawn with custom idempotency key to allow specific execution_mode and agent_policy
@@ -147,7 +152,10 @@ pub(crate) fn create_cluster_and_link_task(
             Some(task.id)
         }
         Err(e) => {
-            log::warn!("[cluster_link] failed to create cluster_and_link task: {}", e);
+            log::warn!(
+                "[cluster_link] failed to create cluster_and_link task: {}",
+                e
+            );
             None
         }
     }
@@ -190,10 +198,11 @@ pub(crate) fn exec_cluster_link_strategy(
 
     // --- Load scan output ---
     let scan_path = paths.automation_dir.join("link_scan.json");
-    let scan: serde_json::Value = match crate::engine::exec::common::read_json(&scan_path, "link_scan.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let scan: serde_json::Value =
+        match crate::engine::exec::common::read_json(&scan_path, "link_scan.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     // --- Load articles from SQLite for title/slug map ---
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
@@ -208,7 +217,10 @@ pub(crate) fn exec_cluster_link_strategy(
     };
 
     let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
-        Ok(a) => a.into_iter().filter(|a| !a.file.is_empty()).collect::<Vec<_>>(),
+        Ok(a) => a
+            .into_iter()
+            .filter(|a| !a.file.is_empty())
+            .collect::<Vec<_>>(),
         Err(e) => {
             return crate::engine::workflows::StepResult {
                 success: false,
@@ -228,29 +240,36 @@ pub(crate) fn exec_cluster_link_strategy(
         .unwrap_or_default();
 
     // Compact article index (id, title, slug, file) — cap at 100 to keep prompt bounded
-    let mut index_entries: Vec<serde_json::Value> = articles.iter().map(|a| {
-        let file_basename = std::path::Path::new(&a.file)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&a.file)
-            .to_string();
-        serde_json::json!({
-            "id": a.id,
-            "title": a.title,
-            "slug": a.url_slug,
-            "file": file_basename,
+    let mut index_entries: Vec<serde_json::Value> = articles
+        .iter()
+        .map(|a| {
+            let file_basename = std::path::Path::new(&a.file)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&a.file)
+                .to_string();
+            serde_json::json!({
+                "id": a.id,
+                "title": a.title,
+                "slug": a.url_slug,
+                "file": file_basename,
+            })
         })
-    }).collect();
+        .collect();
     index_entries.truncate(100);
     let index_json = serde_json::to_string(&index_entries).unwrap_or_default();
 
     // Profiles for under-connected articles (incoming < 2) — cap at 40
     let empty_profiles: Vec<serde_json::Value> = Vec::new();
     let profiles_arr = scan["profiles"].as_array().unwrap_or(&empty_profiles);
-    let under_connected: Vec<&serde_json::Value> = profiles_arr.iter().filter(|p| {
-        let incoming = p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0);
-        incoming < 2
-    }).take(40).collect();
+    let under_connected: Vec<&serde_json::Value> = profiles_arr
+        .iter()
+        .filter(|p| {
+            let incoming = p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0);
+            incoming < 2
+        })
+        .take(40)
+        .collect();
     let under_json = serde_json::to_string(&under_connected).unwrap_or_default();
     let orphan_list_json = serde_json::to_string(&orphan_ids).unwrap_or_default();
 
@@ -319,20 +338,27 @@ Requirements:
         }
     };
 
-    let links_json = crate::engine::text::extract_json(&raw_output)
-        .unwrap_or_else(|| serde_json::json!({
-        "generated_at": chrono::Utc::now().to_rfc3339(),
-        "links_to_add": [],
-    }));
+    let links_json = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
+        serde_json::json!({
+            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "links_to_add": [],
+        })
+    });
 
     // Persist to links_to_add.json for the apply step
     let links_path = paths.automation_dir.join("links_to_add.json");
     let links_str = serde_json::to_string_pretty(&links_json).unwrap_or_default() + "\n";
     if let Err(e) = std::fs::write(&links_path, &links_str) {
-        log::warn!("[cluster_link_strategy] failed to write links_to_add.json: {}", e);
+        log::warn!(
+            "[cluster_link_strategy] failed to write links_to_add.json: {}",
+            e
+        );
     }
 
-    let link_count = links_json["links_to_add"].as_array().map(|a| a.len()).unwrap_or(0);
+    let link_count = links_json["links_to_add"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     crate::engine::workflows::StepResult {
         success: true,
         message: format!(
@@ -361,10 +387,11 @@ pub(crate) fn exec_cluster_link_apply(
 
     // --- Load links_to_add.json ---
     let links_path = paths.automation_dir.join("links_to_add.json");
-    let links_doc: serde_json::Value = match crate::engine::exec::common::read_json(&links_path, "links_to_add.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let links_doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&links_path, "links_to_add.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let empty_arr: Vec<serde_json::Value> = Vec::new();
     let links_to_add = links_doc["links_to_add"].as_array().unwrap_or(&empty_arr);
@@ -399,7 +426,10 @@ pub(crate) fn exec_cluster_link_apply(
         if source_file.is_empty() || target_slug.is_empty() {
             continue;
         }
-        by_source.entry(source_file).or_default().push((target_title, target_slug));
+        by_source
+            .entry(source_file)
+            .or_default()
+            .push((target_title, target_slug));
     }
 
     // Build basename → full path map from content dir
@@ -419,14 +449,21 @@ pub(crate) fn exec_cluster_link_apply(
 
     for (source_basename, new_links) in &by_source {
         let Some(file_path) = file_map.get(source_basename) else {
-            log::warn!("[cluster_link_apply] source file not found in content dir: {}", source_basename);
+            log::warn!(
+                "[cluster_link_apply] source file not found in content dir: {}",
+                source_basename
+            );
             continue;
         };
 
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("[cluster_link_apply] cannot read {}: {}", file_path.display(), e);
+                log::warn!(
+                    "[cluster_link_apply] cannot read {}: {}",
+                    file_path.display(),
+                    e
+                );
                 continue;
             }
         };
@@ -437,7 +474,10 @@ pub(crate) fn exec_cluster_link_apply(
             t.starts_with("##") && t.to_lowercase().contains("related")
         });
         if has_related {
-            log::info!("[cluster_link_apply] {} already has Related Articles section — skipping", source_basename);
+            log::info!(
+                "[cluster_link_apply] {} already has Related Articles section — skipping",
+                source_basename
+            );
             continue;
         }
 
@@ -446,7 +486,11 @@ pub(crate) fn exec_cluster_link_apply(
         let mut added_in_file = 0usize;
         for (title, slug) in new_links {
             if content.contains(slug.as_str()) {
-                log::info!("[cluster_link_apply] {} already links to /blog/{} — skipping", source_basename, slug);
+                log::info!(
+                    "[cluster_link_apply] {} already links to /blog/{} — skipping",
+                    source_basename,
+                    slug
+                );
                 continue;
             }
             section.push_str(&format!("- [{}](/blog/{})\n", title, slug));
@@ -462,7 +506,8 @@ pub(crate) fn exec_cluster_link_apply(
             Ok(_) => {
                 files_modified += 1;
                 links_added += added_in_file;
-                let link_entries: Vec<serde_json::Value> = new_links.iter()
+                let link_entries: Vec<serde_json::Value> = new_links
+                    .iter()
                     .map(|(t, s)| serde_json::json!({"title": t, "slug": s}))
                     .collect();
                 change_log.push(serde_json::json!({
@@ -470,9 +515,17 @@ pub(crate) fn exec_cluster_link_apply(
                     "links_added": added_in_file,
                     "links": link_entries,
                 }));
-                log::info!("[cluster_link_apply] {} — added {} Related Articles links", source_basename, added_in_file);
+                log::info!(
+                    "[cluster_link_apply] {} — added {} Related Articles links",
+                    source_basename,
+                    added_in_file
+                );
             }
-            Err(e) => log::warn!("[cluster_link_apply] failed to write {}: {}", file_path.display(), e),
+            Err(e) => log::warn!(
+                "[cluster_link_apply] failed to write {}: {}",
+                file_path.display(),
+                e
+            ),
         }
     }
 

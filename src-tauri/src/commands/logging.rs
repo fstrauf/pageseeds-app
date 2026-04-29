@@ -1,7 +1,7 @@
 //! Logging commands for frontend integration
 
 use crate::commands::AppState;
-use crate::logging::{LogLevel, LogSource, LogQueryFilters, LogStats};
+use crate::logging::{LogLevel, LogQueryFilters, LogSource, LogStats};
 use serde::{Deserialize, Serialize};
 
 /// Submit a log entry from the frontend
@@ -10,8 +10,11 @@ pub async fn submit_log(
     entry: LogEntryInput,
     state: tauri::State<'_, AppState>,
 ) -> Result<i64, String> {
-    let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
-    
+    let conn = state
+        .db
+        .lock()
+        .map_err(|e| format!("DB lock error: {}", e))?;
+
     let log_entry = crate::logging::LogEntry {
         id: None,
         timestamp: entry.timestamp,
@@ -22,7 +25,7 @@ pub async fn submit_log(
         metadata: entry.metadata,
         session_id: entry.session_id,
     };
-    
+
     crate::logging::store_log(&conn, &log_entry)
 }
 
@@ -34,8 +37,11 @@ pub async fn query_logs(
     offset: usize,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<LogEntryOutput>, String> {
-    let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
-    
+    let conn = state
+        .db
+        .lock()
+        .map_err(|e| format!("DB lock error: {}", e))?;
+
     let query_filters = LogQueryFilters {
         level: filters.level.map(|l| LogLevel::from_str(&l)),
         source: filters.source.map(|s| LogSource::from_str(&s)),
@@ -43,46 +49,51 @@ pub async fn query_logs(
         session_id: filters.session_id,
         search_query: filters.search_query,
     };
-    
+
     let logs = crate::logging::query_logs(&conn, &query_filters, limit, offset)?;
-    
-    Ok(logs.into_iter().map(|l| LogEntryOutput {
-        id: l.id,
-        timestamp: l.timestamp,
-        level: l.level.to_string(),
-        source: l.source.to_string(),
-        component: l.component,
-        message: l.message,
-        metadata: l.metadata,
-        session_id: l.session_id,
-    }).collect())
+
+    Ok(logs
+        .into_iter()
+        .map(|l| LogEntryOutput {
+            id: l.id,
+            timestamp: l.timestamp,
+            level: l.level.to_string(),
+            source: l.source.to_string(),
+            component: l.component,
+            message: l.message,
+            metadata: l.metadata,
+            session_id: l.session_id,
+        })
+        .collect())
 }
 
 /// Get recent logs (fast, from memory)
 #[tauri::command]
-pub async fn get_recent_logs(
-    limit: usize,
-) -> Result<Vec<LogEntryOutput>, String> {
+pub async fn get_recent_logs(limit: usize) -> Result<Vec<LogEntryOutput>, String> {
     let logs = crate::logging::get_recent_logs(limit);
-    
-    Ok(logs.into_iter().map(|l| LogEntryOutput {
-        id: l.id,
-        timestamp: l.timestamp,
-        level: l.level.to_string(),
-        source: l.source.to_string(),
-        component: l.component,
-        message: l.message,
-        metadata: l.metadata,
-        session_id: l.session_id,
-    }).collect())
+
+    Ok(logs
+        .into_iter()
+        .map(|l| LogEntryOutput {
+            id: l.id,
+            timestamp: l.timestamp,
+            level: l.level.to_string(),
+            source: l.source.to_string(),
+            component: l.component,
+            message: l.message,
+            metadata: l.metadata,
+            session_id: l.session_id,
+        })
+        .collect())
 }
 
 /// Get log statistics
 #[tauri::command]
-pub async fn get_log_stats(
-    state: tauri::State<'_, AppState>,
-) -> Result<LogStats, String> {
-    let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
+pub async fn get_log_stats(state: tauri::State<'_, AppState>) -> Result<LogStats, String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|e| format!("DB lock error: {}", e))?;
     crate::logging::get_log_stats(&conn)
 }
 
@@ -92,7 +103,10 @@ pub async fn clear_old_logs(
     days_to_keep: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<usize, String> {
-    let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|e| format!("DB lock error: {}", e))?;
     crate::logging::clear_old_logs(&conn, days_to_keep)
 }
 
@@ -102,8 +116,11 @@ pub async fn export_logs(
     filters: LogFiltersInput,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
-    
+    let conn = state
+        .db
+        .lock()
+        .map_err(|e| format!("DB lock error: {}", e))?;
+
     let query_filters = LogQueryFilters {
         level: filters.level.map(|l| LogLevel::from_str(&l)),
         source: filters.source.map(|s| LogSource::from_str(&s)),
@@ -111,7 +128,7 @@ pub async fn export_logs(
         session_id: filters.session_id,
         search_query: filters.search_query,
     };
-    
+
     crate::logging::export_logs_to_json(&conn, &query_filters)
 }
 
@@ -154,8 +171,11 @@ pub async fn submit_logs_batch(
     entries: Vec<LogEntryInput>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<i64>, String> {
-    let conn = state.db.lock().map_err(|e| format!("DB lock error: {}", e))?;
-    
+    let conn = state
+        .db
+        .lock()
+        .map_err(|e| format!("DB lock error: {}", e))?;
+
     let mut ids = Vec::new();
     for entry in entries {
         let log_entry = crate::logging::LogEntry {
@@ -168,12 +188,12 @@ pub async fn submit_logs_batch(
             metadata: entry.metadata,
             session_id: entry.session_id,
         };
-        
+
         match crate::logging::store_log(&conn, &log_entry) {
             Ok(id) => ids.push(id),
             Err(e) => eprintln!("Failed to store log: {}", e),
         }
     }
-    
+
     Ok(ids)
 }

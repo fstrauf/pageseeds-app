@@ -1,13 +1,12 @@
+use rig::Embed;
+use serde::{Deserialize, Serialize};
 /// Skill registry — scans `.github/skills/*/SKILL.md` in a repo root,
 /// parses metadata from the content, and returns typed skill descriptors.
 ///
 /// App-level default skills are embedded into the binary at compile time via
 /// `include_str!`.  Project-level skills in `{repo}/.github/skills/` always
 /// take precedence, allowing per-project overrides.
-
 use std::path::{Path, PathBuf};
-use rig::Embed;
-use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -182,8 +181,11 @@ fn extract_description(content: &str, fallback_name: &str) -> String {
         if !found_h1 {
             continue;
         }
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("```")
-            || trimmed.starts_with("---") || trimmed.starts_with("===")
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("```")
+            || trimmed.starts_with("---")
+            || trimmed.starts_with("===")
         {
             continue;
         }

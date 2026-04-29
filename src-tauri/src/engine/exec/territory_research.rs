@@ -1,3 +1,8 @@
+use crate::engine::project_paths::ProjectPaths;
+use crate::engine::workflows::StepResult;
+use crate::engine::{agent, skills};
+use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
+use crate::models::task::Task;
 /// Territory research execution module.
 ///
 /// Covers the 4-step territory_research pipeline:
@@ -5,23 +10,14 @@
 ///   2. territory_build_context        — gather existing articles, excerpts, metrics
 ///   3. territory_strategy             — agentic: generate TerritoryStrategy via skill
 ///   4. territory_apply                — write strategy JSON to automation dir
-
 use rusqlite::Connection;
-use crate::engine::project_paths::ProjectPaths;
-use crate::engine::workflows::StepResult;
-use crate::engine::{agent, skills};
-use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
-use crate::models::task::Task;
 use std::path::Path;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Load Recommendation
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub(crate) fn exec_territory_load_recommendation(
-    task: &Task,
-    project_path: &str,
-) -> StepResult {
+pub(crate) fn exec_territory_load_recommendation(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
     // Extract theme from task title: "Research territory: {theme}"
@@ -89,10 +85,7 @@ pub(crate) fn exec_territory_load_recommendation(
         None => {
             return StepResult {
                 success: false,
-                message: format!(
-                    "No territory recommendation found matching '{}'",
-                    theme
-                ),
+                message: format!("No territory recommendation found matching '{}'", theme),
                 output: None,
             };
         }
@@ -101,9 +94,10 @@ pub(crate) fn exec_territory_load_recommendation(
     let out_path = paths
         .automation_dir
         .join(format!("territory_recommendation_{}.json", task.id));
-    if let Err(e) =
-        std::fs::write(&out_path, serde_json::to_string_pretty(&rec).unwrap_or_default())
-    {
+    if let Err(e) = std::fs::write(
+        &out_path,
+        serde_json::to_string_pretty(&rec).unwrap_or_default(),
+    ) {
         log::warn!(
             "[territory_load_recommendation] failed to write {}: {}",
             out_path.display(),
@@ -123,10 +117,7 @@ pub(crate) fn exec_territory_load_recommendation(
 // Step 2: Build Context
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub(crate) fn exec_territory_build_context(
-    task: &Task,
-    project_path: &str,
-) -> StepResult {
+pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
     let rec_path = paths
@@ -310,7 +301,7 @@ fn gather_matching_articles(
     theme_lower: &str,
 ) -> Result<serde_json::Value, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, url_slug, target_keyword, file FROM articles WHERE project_id = ?1"
+        "SELECT id, title, url_slug, target_keyword, file FROM articles WHERE project_id = ?1",
     )?;
 
     let rows = stmt.query_map([project_id], |row| {
@@ -397,7 +388,8 @@ mod tests {
 
     impl TempProjectDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("pageseeds-territory-test-{}", Uuid::new_v4()));
+            let path =
+                std::env::temp_dir().join(format!("pageseeds-territory-test-{}", Uuid::new_v4()));
             fs::create_dir_all(path.join(".github").join("automation")).unwrap();
             fs::create_dir_all(path.join("content")).unwrap();
             Self { path }
@@ -456,7 +448,15 @@ mod tests {
         .unwrap();
     }
 
-    fn insert_test_article(conn: &Connection, project_id: &str, id: i64, title: &str, slug: &str, keyword: &str, file: &str) {
+    fn insert_test_article(
+        conn: &Connection,
+        project_id: &str,
+        id: i64,
+        title: &str,
+        slug: &str,
+        keyword: &str,
+        file: &str,
+    ) {
         conn.execute(
             "INSERT INTO articles (id, title, url_slug, file, target_keyword, status, content_gaps_addressed, project_id)
              VALUES (?1, ?2, ?3, ?4, ?5, 'published', '[]', ?6)",
@@ -521,8 +521,24 @@ mod tests {
             let conn = file_db(&db_path);
             std::env::set_var("PAGESEEDS_DB_PATH", &db_path);
             create_test_project(&conn, "proj1", &project_path);
-            insert_test_article(&conn, "proj1", 1, "Dividend Basics", "dividend-basics", "dividend investing", "./content/001_basics.mdx");
-            insert_test_article(&conn, "proj1", 2, "Growth Stocks", "growth-stocks", "growth investing", "./content/002_growth.mdx");
+            insert_test_article(
+                &conn,
+                "proj1",
+                1,
+                "Dividend Basics",
+                "dividend-basics",
+                "dividend investing",
+                "./content/001_basics.mdx",
+            );
+            insert_test_article(
+                &conn,
+                "proj1",
+                2,
+                "Growth Stocks",
+                "growth-stocks",
+                "growth investing",
+                "./content/002_growth.mdx",
+            );
         }
 
         let rec = serde_json::json!({
@@ -531,7 +547,11 @@ mod tests {
             "demand_evidence": [],
             "suggested_tasks": []
         });
-        let rec_path = dir.path().join(".github").join("automation").join("territory_recommendation_task-tr-2.json");
+        let rec_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("territory_recommendation_task-tr-2.json");
         fs::write(&rec_path, rec.to_string()).unwrap();
 
         let task = Task {
@@ -603,7 +623,11 @@ mod tests {
         let result = exec_territory_apply(&task, &project_path, &strategy.to_string());
         assert!(result.success, "Expected success: {}", result.message);
 
-        let out_path = dir.path().join(".github").join("automation").join("territory_strategy_task-tr-3.json");
+        let out_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("territory_strategy_task-tr-3.json");
         assert!(out_path.exists(), "Strategy file should be written");
     }
 }

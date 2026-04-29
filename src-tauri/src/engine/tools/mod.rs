@@ -8,14 +8,7 @@
 
 mod keywords;
 pub use keywords::{
-    boxed_keyword_tools,
-    KeywordDifficultyArgs,
-    KeywordDifficultyOutput,
-    KeywordDifficultyTool,
-    KeywordGeneratorArgs,
-    KeywordGeneratorOutput,
-    KeywordGeneratorTool,
-    KeywordIdea,
-    KeywordToolError,
-    SerpEntry,
+    boxed_keyword_tools, KeywordDifficultyArgs, KeywordDifficultyOutput, KeywordDifficultyTool,
+    KeywordGeneratorArgs, KeywordGeneratorOutput, KeywordGeneratorTool, KeywordIdea,
+    KeywordToolError, SerpEntry,
 };

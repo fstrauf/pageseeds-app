@@ -1,5 +1,4 @@
 /// CTR outcome tracking — compare before/after metrics and generate reports.
-
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
@@ -82,7 +81,11 @@ pub(crate) fn exec_ctr_outcome_compare(
         outcome.reviewed_at = Some(now.to_rfc3339());
 
         if let Err(e) = crate::db::set_ctr_outcome(conn, &outcome) {
-            log::warn!("[ctr_outcome] Failed to update outcome for article {}: {}", outcome.article_id, e);
+            log::warn!(
+                "[ctr_outcome] Failed to update outcome for article {}: {}",
+                outcome.article_id,
+                e
+            );
         }
 
         ready.push(serde_json::json!({
@@ -200,7 +203,9 @@ fn fetch_after_metrics(
     };
 
     // Extract path from URL for live_site_pages lookup
-    let path = url.trim_start_matches("https://").trim_start_matches("http://");
+    let path = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     let path = if let Some(pos) = path.find('/') {
         &path[pos..]
     } else {
@@ -213,14 +218,7 @@ fn fetch_after_metrics(
              FROM live_site_pages
              WHERE project_id = ?1 AND path = ?2",
             rusqlite::params![project_id, path],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                ))
-            },
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         );
 
     match row_result {

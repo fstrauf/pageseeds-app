@@ -16,10 +16,7 @@ use crate::models::task::Task;
 /// The agentic investigation step reads this summary rather than raw collection data,
 /// so the agent interprets patterns and recommends actions instead of re-doing trivial
 /// counting and grouping that a `group_by().count()` handles exactly.
-pub(crate) fn exec_gsc_summarise(
-    task: &Task,
-    project_path: &str,
-) -> StepResult {
+pub(crate) fn exec_gsc_summarise(task: &Task, project_path: &str) -> StepResult {
     use serde_json::{json, Value};
     use std::collections::HashMap;
     let _ = task;
@@ -27,18 +24,21 @@ pub(crate) fn exec_gsc_summarise(
     let paths = ProjectPaths::from_path(project_path);
     let collection_path = paths.automation_dir.join("gsc_collection.json");
 
-    let collection: Value = match crate::engine::exec::common::read_json(&collection_path, "gsc_collection.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let collection: Value =
+        match crate::engine::exec::common::read_json(&collection_path, "gsc_collection.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let items = match collection.get("items").and_then(|v| v.as_array()) {
         Some(arr) => arr.clone(),
-        None => return StepResult {
-            success: false,
-            message: "gsc_collection.json has no 'items' array".to_string(),
-            output: None,
-        },
+        None => {
+            return StepResult {
+                success: false,
+                message: "gsc_collection.json has no 'items' array".to_string(),
+                output: None,
+            }
+        }
     };
 
     let total = items.len();
@@ -46,31 +46,38 @@ pub(crate) fn exec_gsc_summarise(
     let mut indexed_count = 0usize;
 
     for item in &items {
-        let reason = item.get("reason_code")
+        let reason = item
+            .get("reason_code")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let url = item.get("url")
+        let url = item
+            .get("url")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        if reason == "indexed_pass" { indexed_count += 1; }
+        if reason == "indexed_pass" {
+            indexed_count += 1;
+        }
         by_reason.entry(reason).or_default().push(url);
     }
 
     let non_indexed_count = total - indexed_count;
 
-    let mut groups: Vec<Value> = by_reason.iter().map(|(reason, urls)| {
-        let count = urls.len();
-        let pct = if total > 0 { (count * 100) / total } else { 0 };
-        let examples: Vec<&String> = urls.iter().take(5).collect();
-        json!({
-            "reason_code": reason,
-            "count": count,
-            "percentage": pct,
-            "example_urls": examples,
+    let mut groups: Vec<Value> = by_reason
+        .iter()
+        .map(|(reason, urls)| {
+            let count = urls.len();
+            let pct = if total > 0 { (count * 100) / total } else { 0 };
+            let examples: Vec<&String> = urls.iter().take(5).collect();
+            json!({
+                "reason_code": reason,
+                "count": count,
+                "percentage": pct,
+                "example_urls": examples,
+            })
         })
-    }).collect();
+        .collect();
 
     // Sort by count descending so the most common issues appear first.
     groups.sort_by(|a, b| {
@@ -88,7 +95,9 @@ pub(crate) fn exec_gsc_summarise(
 
     let summary_path = paths.automation_dir.join("gsc_summary.json");
     let summary_str = serde_json::to_string_pretty(&summary).unwrap_or_default();
-    if let Err(e) = crate::engine::exec::common::write_json(&summary_path, &summary, "gsc_summary.json") {
+    if let Err(e) =
+        crate::engine::exec::common::write_json(&summary_path, &summary, "gsc_summary.json")
+    {
         return e;
     }
 
@@ -96,7 +105,10 @@ pub(crate) fn exec_gsc_summarise(
         success: true,
         message: format!(
             "GSC summary: {} total, {} indexed, {} non-indexed ({} reason groups)",
-            total, indexed_count, non_indexed_count, by_reason.len()
+            total,
+            indexed_count,
+            non_indexed_count,
+            by_reason.len()
         ),
         output: Some(summary_str),
     }
@@ -133,7 +145,9 @@ pub(crate) fn exec_gsc_investigate(
     } else {
         return StepResult {
             success: false,
-            message: "Neither gsc_summary.json nor gsc_collection.json found — run collect_gsc first".to_string(),
+            message:
+                "Neither gsc_summary.json nor gsc_collection.json found — run collect_gsc first"
+                    .to_string(),
             output: None,
         };
     };
@@ -159,11 +173,7 @@ pub(crate) fn exec_gsc_investigate(
          \"recommendation\": \"...\",\n      \"priority\": \"high|medium|low\"\n    \
          }}\n  ]\n}}\n\
          ```",
-        task.id,
-        project_path,
-        project_path,
-        context_label,
-        context_json,
+        task.id, project_path, project_path, context_label, context_json,
     );
 
     match agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {

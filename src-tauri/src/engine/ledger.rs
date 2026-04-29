@@ -3,7 +3,6 @@
 /// Mirrors Python `dashboard_ptk/dashboard/engine/ledger.py`.
 /// Events are appended to `.github/automation/orchestrator_runs/{run_id}/events.jsonl`.
 /// Summaries are written to `summary.json` and `summary.md`.
-
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

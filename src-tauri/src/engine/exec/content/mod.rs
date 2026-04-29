@@ -1,3 +1,5 @@
+mod cluster_link;
+pub mod hub_page;
 /// Content review and sync execution module.
 ///
 /// Covers:
@@ -12,26 +14,21 @@
 ///   - build_review_prompt         (prompt assembly)
 ///   - create_content_review_apply_task (auto-spawn follow-up task)
 ///   - create_cluster_and_link_task    (auto-spawn follow-up task after write_article)
-
-
 mod review;
 mod sync;
-mod cluster_link;
 mod task_spawner;
-pub mod hub_page;
 
-pub(crate) use review::*;
-pub(crate) use sync::*;
 pub(crate) use cluster_link::*;
-pub(crate) use task_spawner::*;
+pub(crate) use review::*;
 #[cfg(test)]
 use rusqlite::Connection;
+pub(crate) use sync::*;
+pub(crate) use task_spawner::*;
 
 #[cfg(test)]
 use crate::engine::project_paths::ProjectPaths;
 #[cfg(test)]
 use crate::models::task::Task;
-
 
 #[cfg(test)]
 mod tests {
@@ -49,10 +46,8 @@ mod tests {
 
     impl TempProjectDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "pageseeds-content-review-{}",
-                Uuid::new_v4()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("pageseeds-content-review-{}", Uuid::new_v4()));
             fs::create_dir_all(path.join(".github").join("automation")).unwrap();
             Self { path }
         }
@@ -155,7 +150,13 @@ mod tests {
         .unwrap();
     }
 
-    fn insert_test_article(conn: &Connection, project_id: &str, id: i64, status: &str, review_status: Option<&str>) {
+    fn insert_test_article(
+        conn: &Connection,
+        project_id: &str,
+        id: i64,
+        status: &str,
+        review_status: Option<&str>,
+    ) {
         conn.execute(
             "INSERT INTO articles (
                 id, title, url_slug, file, target_keyword, keyword_difficulty,
@@ -202,7 +203,11 @@ mod tests {
             .join(".github")
             .join("automation")
             .join("recommendations.json");
-        fs::write(path, serde_json::to_string_pretty(&recommendations).unwrap()).unwrap();
+        fs::write(
+            path,
+            serde_json::to_string_pretty(&recommendations).unwrap(),
+        )
+        .unwrap();
     }
 
     fn idempotency_keys(conn: &Connection) -> Vec<String> {
@@ -225,7 +230,10 @@ mod tests {
             recommendation_article_id(&json!({ "article_id": 111 })),
             Some(111)
         );
-        assert_eq!(recommendation_article_id(&json!({ "article_id": "   " })), None);
+        assert_eq!(
+            recommendation_article_id(&json!({ "article_id": "   " })),
+            None
+        );
         assert_eq!(recommendation_article_id(&json!({})), None);
     }
 
@@ -253,7 +261,7 @@ mod tests {
                 "url_slug": "unreviewed-backlog",
                 "status": "published",
                 "gsc": { "avg_position": 2.0, "impressions": 10.0, "ctr": 0.2 }
-            })
+            }),
         ];
 
         let audit_articles = vec![
@@ -270,7 +278,7 @@ mod tests {
                 "checks_failed": 0,
                 "health_score": 100,
                 "checks": {}
-            })
+            }),
         ];
 
         let selected = select_priority_articles(&raw_articles, &audit_articles, 2);
@@ -403,15 +411,19 @@ mod tests {
 
         let tasks = task_store::list_tasks(&conn, "proj1").unwrap();
         assert_eq!(tasks.len(), 2);
-        assert!(tasks.iter().all(|task| task.task_type == "fix_content_article"));
+        assert!(tasks
+            .iter()
+            .all(|task| task.task_type == "fix_content_article"));
         assert!(tasks.iter().all(|task| {
-            task.artifacts
-                .iter()
-                .any(|artifact| artifact.key == "recommendations_109" || artifact.key == "recommendations_111")
+            task.artifacts.iter().any(|artifact| {
+                artifact.key == "recommendations_109" || artifact.key == "recommendations_111"
+            })
         }));
 
         let articles = task_store::list_articles(&conn, "proj1").unwrap();
-        assert!(articles.iter().all(|article| article.review_status.as_deref() == Some("in_review")));
+        assert!(articles
+            .iter()
+            .all(|article| article.review_status.as_deref() == Some("in_review")));
 
         let exported: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(
@@ -425,7 +437,9 @@ mod tests {
         )
         .unwrap();
         let exported_articles = exported["articles"].as_array().unwrap();
-        assert!(exported_articles.iter().all(|article| article["review_status"] == "in_review"));
+        assert!(exported_articles
+            .iter()
+            .all(|article| article["review_status"] == "in_review"));
     }
 
     #[test]

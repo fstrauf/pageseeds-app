@@ -1,7 +1,6 @@
 /// Keyword coverage analysis execution module.
 ///
 /// Analyzes existing articles to build a semantic cluster map of keyword coverage.
-
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::task_store;
 use crate::engine::workflows::StepResult;
@@ -14,10 +13,7 @@ use std::path::Path;
 ///
 /// Reads articles.json or live-site inventory and returns normalized metadata
 /// for clustering.
-pub(crate) fn exec_coverage_load_articles(
-    task: &Task,
-    _project_path: &str,
-) -> StepResult {
+pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> StepResult {
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
@@ -125,7 +121,10 @@ pub(crate) fn exec_coverage_load_articles(
 
     StepResult {
         success: true,
-        message: format!("Loaded {} articles for coverage analysis", article_summaries.len()),
+        message: format!(
+            "Loaded {} articles for coverage analysis",
+            article_summaries.len()
+        ),
         output: Some(output.to_string()),
     }
 }
@@ -191,7 +190,7 @@ impl AuthorityLevel {
 }
 
 /// Calculate authority score for a cluster
-/// 
+///
 /// Formula: Coverage (50%) + Position (30%) + Demand (20%)
 pub fn calculate_authority_score(
     keyword_count: usize,
@@ -239,11 +238,9 @@ pub fn calculate_authority_score(
     };
 
     // Weighted total
-    let final_score = (
-        coverage_score as f64 * 0.50 +
-        position_score as f64 * 0.30 +
-        demand_score as f64 * 0.20
-    ) as u8;
+    let final_score = (coverage_score as f64 * 0.50
+        + position_score as f64 * 0.30
+        + demand_score as f64 * 0.20) as u8;
 
     final_score.min(100)
 }
@@ -261,42 +258,50 @@ pub fn enhance_clusters_with_authority(
 
     for cluster in clusters_array.iter_mut() {
         // Get article IDs in this cluster
-        let article_ids: Vec<i64> = cluster.get("article_ids")
+        let article_ids: Vec<i64> = cluster
+            .get("article_ids")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter()
-                .filter_map(|id| id.as_i64())
-                .collect())
+            .map(|arr| arr.iter().filter_map(|id| id.as_i64()).collect())
             .unwrap_or_default();
 
         // Get GSC data for articles in this cluster
         let (avg_position, total_impressions) = calculate_cluster_metrics(&article_ids, articles);
 
         // Calculate authority score
-        let authority_score = calculate_authority_score(
-            article_ids.len(),
-            avg_position,
-            total_impressions,
-        );
+        let authority_score =
+            calculate_authority_score(article_ids.len(), avg_position, total_impressions);
 
         let authority_level = AuthorityLevel::from_score(authority_score);
 
         // Add to cluster
         if let Some(obj) = cluster.as_object_mut() {
-            obj.insert("authority_score".to_string(), serde_json::json!(authority_score));
-            obj.insert("authority_level".to_string(), serde_json::json!(authority_level.as_str()));
-            obj.insert("authority_description".to_string(), serde_json::json!(authority_level.description()));
+            obj.insert(
+                "authority_score".to_string(),
+                serde_json::json!(authority_score),
+            );
+            obj.insert(
+                "authority_level".to_string(),
+                serde_json::json!(authority_level.as_str()),
+            );
+            obj.insert(
+                "authority_description".to_string(),
+                serde_json::json!(authority_level.description()),
+            );
             obj.insert("avg_position".to_string(), serde_json::json!(avg_position));
-            obj.insert("total_impressions".to_string(), serde_json::json!(total_impressions));
-            obj.insert("recommended_action".to_string(), serde_json::json!(authority_level.description()));
+            obj.insert(
+                "total_impressions".to_string(),
+                serde_json::json!(total_impressions),
+            );
+            obj.insert(
+                "recommended_action".to_string(),
+                serde_json::json!(authority_level.description()),
+            );
         }
     }
 }
 
 /// Calculate cluster metrics from GSC data
-fn calculate_cluster_metrics(
-    article_ids: &[i64],
-    articles: &serde_json::Value,
-) -> (f64, i64) {
+fn calculate_cluster_metrics(article_ids: &[i64], articles: &serde_json::Value) -> (f64, i64) {
     let articles_array = match articles.get("articles").and_then(|v| v.as_array()) {
         Some(arr) => arr,
         None => return (100.0, 0),
@@ -308,17 +313,16 @@ fn calculate_cluster_metrics(
 
     for article in articles_array {
         let id = article.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-        
+
         if article_ids.contains(&id) {
             // Try to get GSC data
             if let Some(gsc) = article.get("gsc") {
                 if !gsc.is_null() {
-                    let position = gsc.get("position")
+                    let position = gsc
+                        .get("position")
                         .and_then(|v| v.as_f64())
                         .unwrap_or(100.0);
-                    let impressions = gsc.get("impressions")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
+                    let impressions = gsc.get("impressions").and_then(|v| v.as_i64()).unwrap_or(0);
 
                     total_position += position;
                     total_impressions += impressions;
@@ -351,8 +355,11 @@ pub(crate) fn exec_coverage_cluster_analysis(
     let paths = ProjectPaths::from_path(project_path);
     let repo_root = Path::new(project_path);
 
-    log::info!("[coverage_cluster] received articles_json ({} chars)", articles_json.len());
-    
+    log::info!(
+        "[coverage_cluster] received articles_json ({} chars)",
+        articles_json.len()
+    );
+
     let articles: serde_json::Value = match serde_json::from_str(articles_json) {
         Ok(v) => v,
         Err(e) => {
@@ -361,13 +368,13 @@ pub(crate) fn exec_coverage_cluster_analysis(
                 success: false,
                 message: format!("Failed to parse articles JSON: {}", e),
                 output: None,
-            }
+            };
         }
     };
 
     let article_count = articles["article_count"].as_i64().unwrap_or(0);
     log::info!("[coverage_cluster] article_count: {}", article_count);
-    
+
     if article_count == 0 {
         log::warn!("[coverage_cluster] No articles to cluster");
         return StepResult {
@@ -422,11 +429,17 @@ pub(crate) fn exec_coverage_cluster_analysis(
     let coverage_path = paths.automation_dir.join("keyword_coverage.json");
     let coverage_str = serde_json::to_string_pretty(&clusters).unwrap_or_default() + "\n";
     if let Err(e) = std::fs::write(&coverage_path, &coverage_str) {
-        log::warn!("[coverage_cluster] failed to write keyword_coverage.json: {}", e);
+        log::warn!(
+            "[coverage_cluster] failed to write keyword_coverage.json: {}",
+            e
+        );
     }
 
-    let cluster_count = clusters["clusters"].as_array().map(|a| a.len()).unwrap_or(0);
-    
+    let cluster_count = clusters["clusters"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+
     // Build a summary of cluster names for the message
     let cluster_names: Vec<String> = clusters["clusters"]
         .as_array()
@@ -436,17 +449,25 @@ pub(crate) fn exec_coverage_cluster_analysis(
                 .collect()
         })
         .unwrap_or_default();
-    
+
     let summary = if cluster_names.is_empty() {
         "No clusters identified".to_string()
     } else if cluster_names.len() <= 3 {
         format!("Clusters: {}", cluster_names.join(", "))
     } else {
-        format!("Clusters: {}, ... ({} total)", cluster_names[..3].join(", "), cluster_count)
+        format!(
+            "Clusters: {}, ... ({} total)",
+            cluster_names[..3].join(", "),
+            cluster_count
+        )
     };
-    
-    log::info!("[coverage_cluster] Complete: {} clusters saved to {:?}", cluster_count, coverage_path);
-    
+
+    log::info!(
+        "[coverage_cluster] Complete: {} clusters saved to {:?}",
+        cluster_count,
+        coverage_path
+    );
+
     StepResult {
         success: true,
         message: format!(
@@ -526,10 +547,7 @@ Requirements:
 /// Execute the `coverage_save` step.
 ///
 /// Verifies the coverage JSON was written and returns the final result.
-pub(crate) fn exec_coverage_save(
-    _task: &Task,
-    project_path: &str,
-) -> StepResult {
+pub(crate) fn exec_coverage_save(_task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let coverage_path = paths.automation_dir.join("keyword_coverage.json");
 
@@ -548,7 +566,7 @@ pub(crate) fn exec_coverage_save(
                 Ok(parsed) => {
                     let cluster_count = parsed["clusters"].as_array().map(|a| a.len()).unwrap_or(0);
                     let article_count = parsed["article_count"].as_i64().unwrap_or(0);
-                    
+
                     // Get cluster names for a nice summary
                     let cluster_names: Vec<String> = parsed["clusters"]
                         .as_array()
@@ -559,13 +577,13 @@ pub(crate) fn exec_coverage_save(
                                 .collect()
                         })
                         .unwrap_or_default();
-                    
+
                     let names_str = if cluster_names.is_empty() {
                         "No clusters found".to_string()
                     } else {
                         format!("Found: {}", cluster_names.join(", "))
                     };
-                    
+
                     StepResult {
                         success: true,
                         message: format!(

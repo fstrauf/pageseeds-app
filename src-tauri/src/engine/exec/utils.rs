@@ -2,15 +2,23 @@
 
 /// Read an article source file. Returns None if not found or unreadable.
 pub(crate) fn read_source_file(repo_root: &std::path::Path, file_ref: &str) -> Option<String> {
-    if file_ref.is_empty() { return None; }
+    if file_ref.is_empty() {
+        return None;
+    }
     let p = std::path::Path::new(file_ref);
-    let full = if p.is_absolute() { p.to_path_buf() } else { repo_root.join(p) };
+    let full = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        repo_root.join(p)
+    };
     std::fs::read_to_string(&full).ok()
 }
 
 /// Parse YAML frontmatter from an MDX/markdown source string.
 /// Returns (frontmatter_map, body_string).
-pub(crate) fn parse_frontmatter(source: &str) -> (std::collections::HashMap<String, String>, String) {
+pub(crate) fn parse_frontmatter(
+    source: &str,
+) -> (std::collections::HashMap<String, String>, String) {
     let mut fm = std::collections::HashMap::new();
     if !source.starts_with("---") {
         return (fm, source.to_string());

@@ -5,7 +5,6 @@
 ///   - what steps the task needs (`plan`)
 ///
 /// Step execution happens in `executor.rs`; handlers only describe the plan.
-
 use super::{step_params, StepKind, StepResult, WorkflowStep};
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
@@ -34,9 +33,10 @@ impl WorkflowHandler for CollectionHandler {
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
-            "collect_gsc" => vec![
-                WorkflowStep::new("collect_gsc_inspect", StepKind::CollectGscInspect),
-            ],
+            "collect_gsc" => vec![WorkflowStep::new(
+                "collect_gsc_inspect",
+                StepKind::CollectGscInspect,
+            )],
             // collect_posthog has no CLI implementation yet — fall back to agent.
             _ => vec![WorkflowStep::new("collect_agent_stage", StepKind::Agentic)],
         }
@@ -64,7 +64,10 @@ impl WorkflowHandler for InvestigationHandler {
                 WorkflowStep::new("investigate_gsc_agent", StepKind::GscInvestigateAgentic),
             ],
             // investigate_posthog has no CLI implementation yet — fall back to agent.
-            _ => vec![WorkflowStep::new("investigate_agent_stage", StepKind::Agentic)],
+            _ => vec![WorkflowStep::new(
+                "investigate_agent_stage",
+                StepKind::Agentic,
+            )],
         }
     }
 }
@@ -91,11 +94,9 @@ impl WorkflowHandler for ResearchHandler {
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires reading intent from free-form text.
                     WorkflowStep::new("research_seed_extraction", StepKind::Agentic),
-
                     // Step 2 (deterministic): fetch Google Autocomplete for all themes.
                     // Free API, always returns results. Outputs structured JSON: [{theme, suggestions}].
                     WorkflowStep::new("research_autocomplete", StepKind::ResearchAutocomplete),
-
                     // Step 3 (agentic): LLM filters autocomplete suggestions for domain relevance.
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires understanding what is on-topic for this
@@ -104,11 +105,9 @@ impl WorkflowHandler for ResearchHandler {
                     // Input contract: [{theme, suggestions: [string]}]
                     // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
                     WorkflowStep::new("research_seed_validation", StepKind::Agentic),
-
                     // Step 4 (deterministic): DataForSEO related_keywords per validated seed.
                     // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative),
-
                     // Step 5 (deterministic): Select best candidates from structured data.
                     // Outputs clean JSON directly — no normalizer needed because upstream
                     // agentic steps now use Extractor<T>.
@@ -118,10 +117,8 @@ impl WorkflowHandler for ResearchHandler {
             _ => {
                 // Legacy path: raw agentic call via seo-keyword-research skill.
                 // The output is raw agent text; downstream consumers must parse JSON if needed.
-                vec![
-                    WorkflowStep::new("research_agent_stage", StepKind::Agentic)
-                        .with_param(step_params::SKILL, "seo-keyword-research")
-                ]
+                vec![WorkflowStep::new("research_agent_stage", StepKind::Agentic)
+                    .with_param(step_params::SKILL, "seo-keyword-research")]
             }
         }
     }
@@ -135,7 +132,10 @@ impl WorkflowHandler for ContentHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "write_article" | "optimize_article" | "create_content" | "optimize_content"
+            "write_article"
+                | "optimize_article"
+                | "create_content"
+                | "optimize_content"
                 | "content_review_apply"
         )
     }
@@ -144,7 +144,10 @@ impl WorkflowHandler for ContentHandler {
         if task_type(task) == "content_review_apply" {
             // Dedicated step runner that reads the recommendations artifact and
             // builds a structured apply prompt — not a generic skill/agentic call.
-            return vec![WorkflowStep::new("content_review_apply_execute", StepKind::ContentReviewApplyExecute)];
+            return vec![WorkflowStep::new(
+                "content_review_apply_execute",
+                StepKind::ContentReviewApplyExecute,
+            )];
         }
         // Agentic: the agent reads the article spec and writes the MDX file.
         vec![WorkflowStep::new("content_write_stage", StepKind::Agentic)]
@@ -164,15 +167,12 @@ impl WorkflowHandler for ContentReviewHandler {
         vec![
             // Step 1: fetch GSC page metrics and write into articles.json.
             // Optional — a missing service account skips gracefully rather than aborting.
-            WorkflowStep::new("content_review_gsc_sync", StepKind::GscSyncArticles)
-                .optional(),
+            WorkflowStep::new("content_review_gsc_sync", StepKind::GscSyncArticles).optional(),
             // Step 2: deterministic multi-check audit → writes content_audit.json.
             // Optional — still valuable even without GSC data.
-            WorkflowStep::new("content_review_audit", StepKind::ContentAudit)
-                .optional(),
+            WorkflowStep::new("content_review_audit", StepKind::ContentAudit).optional(),
             // Step 3: native sync — validates articles.json ↔ content files, dates.
-            WorkflowStep::new("content_review_sync", StepKind::ContentSync)
-                .optional(),
+            WorkflowStep::new("content_review_sync", StepKind::ContentSync).optional(),
             // Step 4: select priority articles, build structured context, get agent recommendations.
             // One focused agent call (not N calls). Writes recommendations.json.
             WorkflowStep::new("content_review_recommend", StepKind::ContentReviewRecommend),
@@ -221,10 +221,14 @@ impl WorkflowHandler for ImplementationHandler {
                 // Broad frontmatter auto-fix is intentionally NOT applied here; use format_fix for that.
                 WorkflowStep::new("sanitize_content_run", StepKind::SanitizeContent),
             ],
-            "publish_content" => vec![
-                WorkflowStep::new("publish_content_run", StepKind::Deterministic)
-                    .with_param(step_params::CMD, "pageseeds content validate --workspace-dir {automation_dir}"),
-            ],
+            "publish_content" => {
+                vec![
+                    WorkflowStep::new("publish_content_run", StepKind::Deterministic).with_param(
+                        step_params::CMD,
+                        "pageseeds content validate --workspace-dir {automation_dir}",
+                    ),
+                ]
+            }
             "fix_content_article" => vec![
                 // Per-article content fix: reads the recommendations artifact embedded in the task
                 // and applies SEO improvements (title, meta, intro, internal links, FAQ, EEAT, CTA)
@@ -318,7 +322,10 @@ impl WorkflowHandler for ImplementationHandler {
             //
             // An agentic step alone for fix_404s will ask the LLM to generate redirect
             // rules for patterns that a regex would handle reliably.
-            _ => vec![WorkflowStep::new("implementation_agent_stage", StepKind::Agentic)],
+            _ => vec![WorkflowStep::new(
+                "implementation_agent_stage",
+                StepKind::Agentic,
+            )],
         }
     }
 }
@@ -373,7 +380,10 @@ impl WorkflowHandler for CoverageHandler {
             // Step 2 (agentic): Cluster articles by semantic similarity
             // Cannot be deterministic: understanding topic relationships and naming
             // clusters requires semantic judgment about content themes.
-            WorkflowStep::new("coverage_cluster_analysis", StepKind::CoverageClusterAnalysis),
+            WorkflowStep::new(
+                "coverage_cluster_analysis",
+                StepKind::CoverageClusterAnalysis,
+            ),
             // Step 3 (deterministic): Save results to keyword_coverage.json
             WorkflowStep::new("coverage_save", StepKind::CoverageSave),
         ]
@@ -426,7 +436,8 @@ impl WorkflowHandler for CtrAuditHandler {
                 // Step 2 (deterministic): Fetch live HTML for target pages and compare rendered
                 // title/meta/schema/snippet markup against source files.
                 // Optional — still valuable even if some pages fail to fetch.
-                WorkflowStep::new("ctr_rendered_serp_audit", StepKind::CtrRenderedSerpAudit).optional(),
+                WorkflowStep::new("ctr_rendered_serp_audit", StepKind::CtrRenderedSerpAudit)
+                    .optional(),
                 // Step 3 (deterministic): Collect raw article data + compute CTR scores.
                 // Includes rendered audit results from DB if available.
                 // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
@@ -506,7 +517,10 @@ impl WorkflowHandler for SocialHandler {
                 WorkflowStep::new("social_design_template", StepKind::SocialDesignTemplate),
                 WorkflowStep::new("social_save_template", StepKind::SocialSaveTemplate),
             ],
-            _ => vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), StepKind::Manual)],
+            _ => vec![WorkflowStep::new(
+                &format!("{}_manual", task_type(task)),
+                StepKind::Manual,
+            )],
         }
     }
 }
@@ -584,7 +598,10 @@ impl WorkflowHandler for TerritoryResearchHandler {
         vec![
             // Step 1 (deterministic): Load approved territory recommendation from strategy artifact.
             // Extracts theme from task title and finds the matching recommendation.
-            WorkflowStep::new("territory_load_recommendation", StepKind::TerritoryLoadRecommendation),
+            WorkflowStep::new(
+                "territory_load_recommendation",
+                StepKind::TerritoryLoadRecommendation,
+            ),
             // Step 2 (deterministic): Query SQLite for existing articles matching theme, read excerpts.
             // Pure data collection — no judgment. Outputs structured TerritoryContext JSON.
             WorkflowStep::new("territory_build_context", StepKind::TerritoryBuildContext),
@@ -609,7 +626,10 @@ impl WorkflowHandler for ManualFallbackHandler {
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
-        vec![WorkflowStep::new(&format!("{}_manual", task_type(task)), StepKind::Manual)]
+        vec![WorkflowStep::new(
+            &format!("{}_manual", task_type(task)),
+            StepKind::Manual,
+        )]
     }
 }
 
@@ -649,7 +669,12 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
 /// Supported tokens in `cmd`:
 ///   {project_path}   → repo root
 ///   {automation_dir} → repo/.github/automation
-pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path: &str, _seo_provider: &str) -> StepResult {
+pub async fn exec_deterministic(
+    step: &WorkflowStep,
+    _task: &Task,
+    project_path: &str,
+    _seo_provider: &str,
+) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let automation_dir = paths.automation_dir.to_string_lossy();
 
@@ -683,7 +708,9 @@ pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path:
             .arg(&cmd)
             .current_dir(&project_path)
             .output()
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -693,11 +720,20 @@ pub async fn exec_deterministic(step: &WorkflowStep, _task: &Task, project_path:
                 format!("{}\n[stderr]\n{}", stdout, stderr)
             };
             if out.status.success() {
-                StepResult { success: true, message: format!("Step '{}' OK", step_name), output: Some(combined) }
+                StepResult {
+                    success: true,
+                    message: format!("Step '{}' OK", step_name),
+                    output: Some(combined),
+                }
             } else {
                 StepResult {
                     success: false,
-                    message: format!("Step '{}' failed (exit {}): {}", step_name, out.status, stderr.trim()),
+                    message: format!(
+                        "Step '{}' failed (exit {}): {}",
+                        step_name,
+                        out.status,
+                        stderr.trim()
+                    ),
                     output: Some(combined),
                 }
             }
@@ -730,8 +766,8 @@ pub async fn exec_agentic(
     agent_provider: &str,
     latest_raw_output: Option<&str>,
 ) -> StepResult {
-    use crate::engine::{agent, prompts, skills};
     use crate::engine::project_paths::ProjectPaths;
+    use crate::engine::{agent, prompts, skills};
     use std::path::Path;
 
     let repo_root = Path::new(project_path);
@@ -744,10 +780,13 @@ pub async fn exec_agentic(
 
     let content_context = if is_content_task {
         let resolved = crate::content::locator::resolve(repo_root, None);
-        resolved
-            .selected
-            .as_ref()
-            .map(|dir| (dir.clone(), snapshot_markdown_mtime(dir), detect_numbered_mdx_style(dir)))
+        resolved.selected.as_ref().map(|dir| {
+            (
+                dir.clone(),
+                snapshot_markdown_mtime(dir),
+                detect_numbered_mdx_style(dir),
+            )
+        })
     } else {
         None
     };
@@ -802,7 +841,8 @@ pub async fn exec_agentic(
         // Fallback prompt when no skill is configured.
         // Include description so the agent knows exactly which file to edit and
         // what checks to fix — avoiding any need for shell-based file discovery.
-        let desc_section = task.description
+        let desc_section = task
+            .description
             .as_deref()
             .filter(|d| !d.is_empty())
             .map(|d| format!("\n\n## Task Details\n\n{}", d))
@@ -821,47 +861,51 @@ pub async fn exec_agentic(
 
     // Include embedded task artifacts so follow-up fix tasks receive parent context
     // (e.g. ctr_recommendations, cannibalization_strategy attached by create_*_fix_tasks).
-    let task_artifacts: Vec<String> = task.artifacts.iter().filter_map(|a| {
-        a.content.as_ref().map(|c| {
-            format!("\n\n## Artifact: {}\n\n```\n{}\n```", a.key, c)
+    let task_artifacts: Vec<String> = task
+        .artifacts
+        .iter()
+        .filter_map(|a| {
+            a.content
+                .as_ref()
+                .map(|c| format!("\n\n## Artifact: {}\n\n```\n{}\n```", a.key, c))
         })
-    }).collect();
+        .collect();
     if !task_artifacts.is_empty() {
         prompt.push_str("\n\n## Task Artifacts\n");
         prompt.push_str(&task_artifacts.join("\n"));
     }
 
-            if is_content_task {
-                // Pre-compute the next safe publish date and inject it into the prompt.
-                // Without this, the agent defaults to today's date which conflicts with
-                // articles already in articles.json and breaks the date distribution.
-                // Cannot be deterministic-only: the date depends on the current state of
-                // articles.json and must be computed from the existing occupied slots.
-                if let Some(date) = compute_next_publish_date(project_path) {
-                    prompt.push_str(&format!(
-                        "\n\n## Publish Date (Required)\n\
+    if is_content_task {
+        // Pre-compute the next safe publish date and inject it into the prompt.
+        // Without this, the agent defaults to today's date which conflicts with
+        // articles already in articles.json and breaks the date distribution.
+        // Cannot be deterministic-only: the date depends on the current state of
+        // articles.json and must be computed from the existing occupied slots.
+        if let Some(date) = compute_next_publish_date(project_path) {
+            prompt.push_str(&format!(
+                "\n\n## Publish Date (Required)\n\
                          - The frontmatter `date:` field MUST be exactly: `{date}`\n\
                          - Do not use today's date or any other value — use the date above."
-                    ));
-                }
+            ));
+        }
 
-                prompt.push_str(
-                    "\n\n## Content File Format (Required)\n\
+        prompt.push_str(
+            "\n\n## Content File Format (Required)\n\
                      - New articles must be written as `.mdx` files (never `.md`).\n\
                      - If you propose a filename, it must end in `.mdx`.\n\
-                     - Preserve valid frontmatter and markdown/MDX syntax."
-                );
+                     - Preserve valid frontmatter and markdown/MDX syntax.",
+        );
 
-                if let Some((_dir, _before, Some(style))) = &content_context {
-                    prompt.push_str(&format!(
-                        "\n\n## Content Filename Convention (Required)\n\
+        if let Some((_dir, _before, Some(style))) = &content_context {
+            prompt.push_str(&format!(
+                "\n\n## Content Filename Convention (Required)\n\
                          - Follow this naming format: `{{id}}_topic_slug.mdx`\n\
                          - Use lowercase with underscores in the slug.\n\
                          - Continue numbering from approximately {}.",
-                        style.next_id
-                    ));
-                }
-            }
+                style.next_id
+            ));
+        }
+    }
 
     log::info!(
         "[executor] agentic step '{}' with provider '{}' (skill: {:?})",
@@ -887,8 +931,13 @@ pub async fn exec_agentic(
     if is_research_step {
         // Research steps use the same CLI agent path as all other agentic steps
         return crate::engine::exec::research::exec_research_workflow_step(
-            step, task, project_path, agent_provider, latest_raw_output
-        ).await;
+            step,
+            task,
+            project_path,
+            agent_provider,
+            latest_raw_output,
+        )
+        .await;
     }
 
     // 4. Call agent (blocking subprocess, run in spawn_blocking)
@@ -896,28 +945,46 @@ pub async fn exec_agentic(
     let prompt = prompt.clone();
     let repo_root = repo_root.to_path_buf();
     let step_name = step.name.clone();
-    
+
     match tokio::task::spawn_blocking(move || {
         agent::run_agent(&agent_provider, &prompt, &repo_root)
-    }).await {
+    })
+    .await
+    {
         Ok(Ok(output)) => {
-            let mut message = format!("Agentic step '{}' complete ({} chars)", step_name, output.len());
+            let mut message = format!(
+                "Agentic step '{}' complete ({} chars)",
+                step_name,
+                output.len()
+            );
 
             if let Some((content_dir, before, style)) = content_context {
                 let renamed = rename_new_or_modified_md_to_mdx(&content_dir, &before);
                 if !renamed.is_empty() {
                     message.push_str(&format!(" · enforced MDX on {} file(s)", renamed.len()));
                     for (old, new) in &renamed {
-                        log::info!("[content_mdx] renamed {} -> {}", old.display(), new.display());
+                        log::info!(
+                            "[content_mdx] renamed {} -> {}",
+                            old.display(),
+                            new.display()
+                        );
                     }
                 }
 
                 if let Some(style) = style {
-                    let renamed_style = rename_new_files_to_numbered_mdx(&content_dir, &before, style.next_id);
+                    let renamed_style =
+                        rename_new_files_to_numbered_mdx(&content_dir, &before, style.next_id);
                     if !renamed_style.is_empty() {
-                        message.push_str(&format!(" · normalized naming on {} file(s)", renamed_style.len()));
+                        message.push_str(&format!(
+                            " · normalized naming on {} file(s)",
+                            renamed_style.len()
+                        ));
                         for (old, new) in &renamed_style {
-                            log::info!("[content_name] renamed {} -> {}", old.display(), new.display());
+                            log::info!(
+                                "[content_name] renamed {} -> {}",
+                                old.display(),
+                                new.display()
+                            );
                         }
                     }
                 }
@@ -981,7 +1048,9 @@ fn detect_numbered_mdx_style(dir: &std::path::Path) -> Option<NumberedMdxStyle> 
 
     // Only enforce when this style is clearly established in the repo.
     if count >= 5 {
-        Some(NumberedMdxStyle { next_id: max_id + 1 })
+        Some(NumberedMdxStyle {
+            next_id: max_id + 1,
+        })
     } else {
         None
     }
@@ -1049,7 +1118,10 @@ fn rename_new_files_to_numbered_mdx(
             continue;
         }
 
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("article");
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("article");
         let slug = normalize_slug_underscored(stem);
 
         let target = loop {
@@ -1090,24 +1162,27 @@ fn snapshot_markdown_mtime(
 #[allow(dead_code)]
 fn load_coverage_context(automation_dir: &std::path::Path) -> String {
     let coverage_path = automation_dir.join("keyword_coverage.json");
-    
+
     let content = match std::fs::read_to_string(&coverage_path) {
         Ok(c) => c,
         Err(_) => return String::new(), // No coverage file yet
     };
-    
+
     let coverage: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
         Err(_) => return String::new(),
     };
-    
+
     let clusters = coverage.get("clusters").and_then(|c| c.as_array());
-    let article_count = coverage.get("article_count").and_then(|a| a.as_i64()).unwrap_or(0);
-    
+    let article_count = coverage
+        .get("article_count")
+        .and_then(|a| a.as_i64())
+        .unwrap_or(0);
+
     if clusters.is_none() || clusters.unwrap().is_empty() {
         return String::new();
     }
-    
+
     let clusters = clusters.unwrap();
     let cluster_summaries: Vec<String> = clusters
         .iter()
@@ -1115,12 +1190,9 @@ fn load_coverage_context(automation_dir: &std::path::Path) -> String {
             let name = c.get("cluster_name").and_then(|n| n.as_str())?;
             let keywords = c.get("primary_keywords").and_then(|k| k.as_array())?;
             let count = c.get("article_count").and_then(|n| n.as_i64()).unwrap_or(0);
-            
-            let keyword_list: Vec<&str> = keywords
-                .iter()
-                .filter_map(|k| k.as_str())
-                .collect();
-            
+
+            let keyword_list: Vec<&str> = keywords.iter().filter_map(|k| k.as_str()).collect();
+
             Some(format!(
                 "- {} ({} articles): focus on {}",
                 name,
@@ -1129,11 +1201,11 @@ fn load_coverage_context(automation_dir: &std::path::Path) -> String {
             ))
         })
         .collect();
-    
+
     if cluster_summaries.is_empty() {
         return String::new();
     }
-    
+
     format!(
         "## Current Keyword Coverage (from previous analysis)\n\
          This project has {} articles organized into {} topic clusters:\n\
@@ -1233,7 +1305,6 @@ fn rename_new_or_modified_md_to_mdx(
     renamed
 }
 
-
 #[cfg(test)]
 mod registry_tests {
     use super::*;
@@ -1254,7 +1325,12 @@ mod registry_tests {
             project_id: "proj1".to_string(),
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
+            run: TaskRun {
+                attempts: 0,
+                last_error: None,
+                provider: None,
+                ..Default::default()
+            },
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
         }

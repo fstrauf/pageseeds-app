@@ -209,7 +209,7 @@ export function TaskBoard({
   }
 
   function handleRunSelected() {
-    const toRun = tasks.filter(t => checkedIds.has(t.id) && t.status === 'todo')
+    const toRun = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && t.execution_mode !== 'manual')
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)
@@ -217,7 +217,7 @@ export function TaskBoard({
   }
 
   function handleAddToQueue() {
-    const toQueue = tasks.filter(t => checkedIds.has(t.id) && t.status === 'todo')
+    const toQueue = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && t.execution_mode !== 'manual')
     if (toQueue.length === 0) return
     
     queue.enqueue(
@@ -341,7 +341,7 @@ export function TaskBoard({
   }
 
   function handleRunBatch() {
-    const toRun = tasks.filter(t => t.status === 'todo' && t.execution_mode !== 'manual')
+    const toRun = tasks.filter(t => (t.status === 'todo' || t.status === 'review') && t.execution_mode !== 'manual')
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)

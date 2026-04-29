@@ -2,7 +2,6 @@
 ///
 /// Replaces manual Ollama HTTP + raw f32 blob math with rig's
 /// `EmbeddingModel`, `EmbeddingsBuilder`, and `VectorStoreIndex`.
-
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,9 +9,9 @@ use sha2::{Digest, Sha256};
 use rig::{
     client::EmbeddingsClient,
     embeddings::{Embedding, EmbeddingsBuilder},
-    vector_store::VectorStoreIndex,
     vector_store::in_memory_store::InMemoryVectorStore,
     vector_store::request::VectorSearchRequest,
+    vector_store::VectorStoreIndex,
     OneOrMany,
 };
 
@@ -77,11 +76,7 @@ pub async fn check_status() -> EmbeddingStatus {
 /// Uses rig's `EmbeddingsBuilder` to batch-generate embeddings via the
 /// configured `EmbeddingBackend`. Results are persisted as JSON in SQLite
 /// (no manual f32 byte serialization).
-pub async fn index_skills(
-    conn: &Connection,
-    project_id: &str,
-    skills: &[Skill],
-) -> Result<usize> {
+pub async fn index_skills(conn: &Connection, project_id: &str, skills: &[Skill]) -> Result<usize> {
     if skills.is_empty() {
         return Ok(0);
     }
@@ -89,7 +84,8 @@ pub async fn index_skills(
     let backend = EmbeddingBackend::default_ollama();
 
     // Check backend health
-    let health = crate::rig::embeddings::check_ollama_health(None).await
+    let health = crate::rig::embeddings::check_ollama_health(None)
+        .await
         .map_err(|e| crate::error::Error::Other(e))?;
     if !health {
         return Err(crate::error::Error::Other(
@@ -99,14 +95,20 @@ pub async fn index_skills(
 
     // Generate embeddings using rig's EmbeddingsBuilder
     let embeddings = match &backend {
-        EmbeddingBackend::Ollama { client, model, ndims } => {
+        EmbeddingBackend::Ollama {
+            client,
+            model,
+            ndims,
+        } => {
             let m = client.embedding_model_with_ndims(model.clone(), *ndims);
             EmbeddingsBuilder::new(m)
                 .documents(skills.to_vec())
                 .map_err(|e| crate::error::Error::Other(format!("Embed error: {}", e)))?
                 .build()
                 .await
-                .map_err(|e| crate::error::Error::Other(format!("Embedding generation failed: {}", e)))?
+                .map_err(|e| {
+                    crate::error::Error::Other(format!("Embedding generation failed: {}", e))
+                })?
         }
         EmbeddingBackend::OpenAi { client, model } => {
             let m = client.embedding_model(model.clone());
@@ -115,7 +117,9 @@ pub async fn index_skills(
                 .map_err(|e| crate::error::Error::Other(format!("Embed error: {}", e)))?
                 .build()
                 .await
-                .map_err(|e| crate::error::Error::Other(format!("Embedding generation failed: {}", e)))?
+                .map_err(|e| {
+                    crate::error::Error::Other(format!("Embedding generation failed: {}", e))
+                })?
         }
     };
 
@@ -201,15 +205,15 @@ pub async fn search_skills(
     }
 
     // Load all indexed embeddings for this project
-    let mut stmt = conn.prepare(
-        "SELECT skill_name, embedding_json FROM skill_embeddings WHERE project_id = ?1"
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT skill_name, embedding_json FROM skill_embeddings WHERE project_id = ?1")?;
 
     let rows = stmt.query_map([project_id], |row| {
         let name: String = row.get(0)?;
         let json: String = row.get(1)?;
-        let stored: StoredEmbedding = serde_json::from_str(&json)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+        let stored: StoredEmbedding = serde_json::from_str(&json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
         let embedding = Embedding {
             document: stored.document,
             vec: stored.vec,
@@ -234,7 +238,11 @@ pub async fn search_skills(
     let backend = EmbeddingBackend::default_ollama();
 
     let results = match &backend {
-        EmbeddingBackend::Ollama { client, model, ndims } => {
+        EmbeddingBackend::Ollama {
+            client,
+            model,
+            ndims,
+        } => {
             let m = client.embedding_model_with_ndims(model.clone(), *ndims);
             let index = store.index(m);
             let req = VectorSearchRequest::builder()
@@ -242,7 +250,9 @@ pub async fn search_skills(
                 .samples(limit as u64)
                 .build()
                 .map_err(|e| crate::error::Error::Other(format!("Search request error: {}", e)))?;
-            index.top_n::<Skill>(req).await
+            index
+                .top_n::<Skill>(req)
+                .await
                 .map_err(|e| crate::error::Error::Other(format!("Search failed: {}", e)))?
         }
         EmbeddingBackend::OpenAi { client, model } => {
@@ -253,7 +263,9 @@ pub async fn search_skills(
                 .samples(limit as u64)
                 .build()
                 .map_err(|e| crate::error::Error::Other(format!("Search request error: {}", e)))?;
-            index.top_n::<Skill>(req).await
+            index
+                .top_n::<Skill>(req)
+                .await
                 .map_err(|e| crate::error::Error::Other(format!("Search failed: {}", e)))?
         }
     };

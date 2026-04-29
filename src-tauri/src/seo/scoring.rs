@@ -1,21 +1,21 @@
+use crate::seo::intent::IntentClassification;
+use crate::seo::keywords::KeywordIdea;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use ts_rs::TS;
-use crate::seo::keywords::KeywordIdea;
-use crate::seo::intent::IntentClassification;
 
 /// Multi-factor opportunity score for a keyword.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct OpportunityScore {
     pub keyword: String,
-    pub total_score: f64,        // 0.0–1.0
-    pub tier: String,            // "high" | "medium" | "low"
+    pub total_score: f64, // 0.0–1.0
+    pub tier: String,     // "high" | "medium" | "low"
     pub factor_scores: HashMap<String, f64>,
 }
 
 /// Score a keyword opportunity using the multi-factor model.
-/// 
+///
 /// Factors and weights:
 /// - Volume: 25%
 /// - KD (inverted): 20%
@@ -30,45 +30,44 @@ pub fn score_opportunity(
     existing_slugs: &[String],
 ) -> OpportunityScore {
     let mut factor_scores = HashMap::new();
-    
+
     // 1. Volume score (25%)
     let volume_score = calculate_volume_score(keyword);
     factor_scores.insert("volume".to_string(), volume_score);
-    
+
     // 2. KD score (20%) - inverted so lower KD = higher score
     let kd_score = calculate_kd_score(keyword);
     factor_scores.insert("keyword_difficulty".to_string(), kd_score);
-    
+
     // 3. Intent alignment (20%)
     let intent_score = calculate_intent_score(intent);
     factor_scores.insert("intent_alignment".to_string(), intent_score);
-    
+
     // 4. Competition (15%)
     let competition_score = calculate_competition_score(keyword);
     factor_scores.insert("competition".to_string(), competition_score);
-    
+
     // 5. Content gap (10%)
     let gap_score = calculate_gap_score(keyword, existing_slugs);
     factor_scores.insert("content_gap".to_string(), gap_score);
-    
+
     // 6. CPC signal (5%)
     let cpc_score = calculate_cpc_score(keyword);
     factor_scores.insert("cpc".to_string(), cpc_score);
-    
+
     // 7. Freshness (5%) - default to 0.5 when no data
     let freshness_score = 0.5;
     factor_scores.insert("freshness".to_string(), freshness_score);
-    
+
     // Calculate weighted total
-    let total_score = 
-        volume_score * 0.25 +
-        kd_score * 0.20 +
-        intent_score * 0.20 +
-        competition_score * 0.15 +
-        gap_score * 0.10 +
-        cpc_score * 0.05 +
-        freshness_score * 0.05;
-    
+    let total_score = volume_score * 0.25
+        + kd_score * 0.20
+        + intent_score * 0.20
+        + competition_score * 0.15
+        + gap_score * 0.10
+        + cpc_score * 0.05
+        + freshness_score * 0.05;
+
     // Determine tier
     let tier = if total_score >= 0.7 {
         "high"
@@ -76,8 +75,9 @@ pub fn score_opportunity(
         "medium"
     } else {
         "low"
-    }.to_string();
-    
+    }
+    .to_string();
+
     OpportunityScore {
         keyword: keyword.keyword.clone(),
         total_score,
@@ -92,7 +92,8 @@ pub fn score_opportunities(
     intents: &[IntentClassification],
     existing_slugs: &[String],
 ) -> Vec<OpportunityScore> {
-    keywords.iter()
+    keywords
+        .iter()
         .map(|kw| {
             let intent = intents.iter().find(|i| i.keyword == kw.keyword);
             score_opportunity(kw, intent, existing_slugs)
@@ -110,7 +111,7 @@ fn calculate_volume_score(keyword: &KeywordIdea) -> f64 {
         let normalized = (exact as f64 / 100000.0).min(1.0);
         return normalized;
     }
-    
+
     // Otherwise use Ahrefs categorical volume
     match keyword.volume.as_deref() {
         Some("MoreThanTenThousand") => 0.9,
@@ -135,7 +136,7 @@ fn calculate_kd_score(keyword: &KeywordIdea) -> f64 {
         Some("Very Hard") => 95.0,
         _ => 50.0, // Unknown = medium
     };
-    
+
     // Invert: lower difficulty = higher score
     1.0 - (difficulty / 100.0)
 }
@@ -161,7 +162,7 @@ fn calculate_competition_score(keyword: &KeywordIdea) -> f64 {
         // Invert: lower competition = higher score
         return 1.0 - comp;
     }
-    
+
     // Otherwise derive from difficulty
     let difficulty = match keyword.difficulty.as_deref() {
         Some("Low") => 0.2,
@@ -171,14 +172,14 @@ fn calculate_competition_score(keyword: &KeywordIdea) -> f64 {
         Some("Very Hard") => 0.95,
         _ => 0.5,
     };
-    
+
     1.0 - difficulty
 }
 
 /// Calculate content gap score (0-1).
 fn calculate_gap_score(keyword: &KeywordIdea, existing_slugs: &[String]) -> f64 {
     let kw_normalized = keyword.keyword.to_lowercase().replace(" ", "-");
-    
+
     // Check if keyword exists in existing slugs
     for slug in existing_slugs {
         let slug_lower = slug.to_lowercase();
@@ -186,21 +187,22 @@ fn calculate_gap_score(keyword: &KeywordIdea, existing_slugs: &[String]) -> f64 
             return 0.0; // Already covered
         }
     }
-    
+
     // Check for partial matches (related content)
     let keyword_lower = keyword.keyword.to_lowercase();
     let keyword_words: Vec<&str> = keyword_lower.split_whitespace().collect();
     for slug in existing_slugs {
         let slug_lower = slug.to_lowercase().replace("-", " ");
-        let matching_words = keyword_words.iter()
+        let matching_words = keyword_words
+            .iter()
             .filter(|word| slug_lower.contains(**word))
             .count();
-        
+
         if matching_words > 0 && matching_words >= keyword_words.len() / 2 {
             return 0.5; // Partially covered
         }
     }
-    
+
     1.0 // New keyword
 }
 
@@ -212,7 +214,7 @@ fn calculate_cpc_score(keyword: &KeywordIdea) -> f64 {
         let normalized = (cpc / 10.0).min(1.0);
         return normalized;
     }
-    
+
     // No CPC data available (Ahrefs)
     0.5
 }
@@ -244,9 +246,9 @@ mod tests {
             intent: "informational".to_string(),
             confidence: None,
         };
-        
+
         let score = score_opportunity(&keyword, Some(&intent), &[]);
-        
+
         assert_eq!(score.keyword, "test keyword");
         assert!(score.total_score > 0.0 && score.total_score <= 1.0);
         assert!(score.factor_scores.contains_key("volume"));
@@ -262,7 +264,7 @@ mod tests {
             factor_scores: HashMap::new(),
         };
         assert_eq!(high_score.tier, "high");
-        
+
         let medium_score = OpportunityScore {
             keyword: "medium".to_string(),
             total_score: 0.5,
@@ -270,7 +272,7 @@ mod tests {
             factor_scores: HashMap::new(),
         };
         assert_eq!(medium_score.tier, "medium");
-        
+
         let low_score = OpportunityScore {
             keyword: "low".to_string(),
             total_score: 0.3,
@@ -294,11 +296,11 @@ mod tests {
             competition: Some(0.3),
             country: Some("us".to_string()),
         };
-        
+
         // New keyword should score 1.0
         let score_new = calculate_gap_score(&keyword, &["existing-article".to_string()]);
         assert_eq!(score_new, 1.0);
-        
+
         // Covered keyword should score 0.0
         let score_covered = calculate_gap_score(&keyword, &["new-topic".to_string()]);
         assert_eq!(score_covered, 0.0);

@@ -23,12 +23,12 @@ pub struct KeywordIdea {
     pub keyword: String,
     pub idea_type: String, // "regular" | "question"
     pub difficulty: Option<String>,
-    pub kd: Option<f64>,              // NEW: numeric KD 0-100 (DataForSEO)
-    pub intent: Option<String>,       // NEW: search intent (DataForSEO)
-    pub volume: Option<String>,       // categorical (Ahrefs) — keep for backward compat
-    pub volume_exact: Option<i64>,    // NEW: precise number (DataForSEO)
-    pub cpc: Option<f64>,             // NEW: cost per click (DataForSEO)
-    pub competition: Option<f64>,     // NEW: competition score 0–1 (DataForSEO)
+    pub kd: Option<f64>,           // NEW: numeric KD 0-100 (DataForSEO)
+    pub intent: Option<String>,    // NEW: search intent (DataForSEO)
+    pub volume: Option<String>,    // categorical (Ahrefs) — keep for backward compat
+    pub volume_exact: Option<i64>, // NEW: precise number (DataForSEO)
+    pub cpc: Option<f64>,          // NEW: cost per click (DataForSEO)
+    pub competition: Option<f64>,  // NEW: competition score 0–1 (DataForSEO)
     pub country: Option<String>,
 }
 
@@ -291,37 +291,47 @@ fn normalise_idea(raw: &Value, idea_type: &str) -> Option<KeywordIdea> {
         });
 
     // Extract precise volume for DataForSEO (numeric value)
-    let volume_exact = get_field_as_i64(idea, &["search_volume", "searchVolumeExact", "volume_exact"])
-        .or_else(|| {
-            if metrics.is_object() {
-                get_field_as_i64(metrics, &["search_volume", "searchVolumeExact", "volume_exact"])
-            } else {
-                None
-            }
-        });
+    let volume_exact = get_field_as_i64(
+        idea,
+        &["search_volume", "searchVolumeExact", "volume_exact"],
+    )
+    .or_else(|| {
+        if metrics.is_object() {
+            get_field_as_i64(
+                metrics,
+                &["search_volume", "searchVolumeExact", "volume_exact"],
+            )
+        } else {
+            None
+        }
+    });
 
     // Extract CPC for DataForSEO
-    let cpc = get_field_as_f64(idea, &["cpc", "CPC"])
-        .or_else(|| {
-            if metrics.is_object() {
-                get_field_as_f64(metrics, &["cpc", "CPC"])
-            } else {
-                None
-            }
-        });
+    let cpc = get_field_as_f64(idea, &["cpc", "CPC"]).or_else(|| {
+        if metrics.is_object() {
+            get_field_as_f64(metrics, &["cpc", "CPC"])
+        } else {
+            None
+        }
+    });
 
     // Extract competition score for DataForSEO (0-1 range)
-    let competition = get_field_as_f64(idea, &["competition", "competition_index", "competitionIndex"])
-        .or_else(|| {
-            if metrics.is_object() {
-                get_field_as_f64(metrics, &["competition", "competition_index", "competitionIndex"])
-            } else {
-                None
-            }
-        });
+    let competition = get_field_as_f64(
+        idea,
+        &["competition", "competition_index", "competitionIndex"],
+    )
+    .or_else(|| {
+        if metrics.is_object() {
+            get_field_as_f64(
+                metrics,
+                &["competition", "competition_index", "competitionIndex"],
+            )
+        } else {
+            None
+        }
+    });
 
-    let country =
-        get_field_as_string(idea, &["country", "countryCode", "location"]);
+    let country = get_field_as_string(idea, &["country", "countryCode", "location"]);
 
     Some(KeywordIdea {
         keyword,
@@ -337,7 +347,12 @@ fn normalise_idea(raw: &Value, idea_type: &str) -> Option<KeywordIdea> {
     })
 }
 
-fn parse_ideas_response(data: &Value, keyword: &str, country: &str, search_engine: &str) -> Option<KeywordIdeasResult> {
+fn parse_ideas_response(
+    data: &Value,
+    keyword: &str,
+    country: &str,
+    search_engine: &str,
+) -> Option<KeywordIdeasResult> {
     let payload = extract_payload(data)?;
     let obj = payload.as_object()?;
 
@@ -421,7 +436,10 @@ mod tests {
         assert_eq!(parsed.ideas.len(), 1);
         assert_eq!(parsed.ideas[0].keyword, "ira options strategies");
         assert_eq!(parsed.ideas[0].difficulty.as_deref(), Some("Low"));
-        assert_eq!(parsed.ideas[0].volume.as_deref(), Some("MoreThanOneThousand"));
+        assert_eq!(
+            parsed.ideas[0].volume.as_deref(),
+            Some("MoreThanOneThousand")
+        );
     }
 }
 
@@ -436,10 +454,7 @@ mod live_smoke_tests {
         use crate::config::env_resolver::EnvResolver;
 
         let env = EnvResolver::new(".").build_env(HashMap::new());
-        let capsolver_key = env
-            .get("CAPSOLVER_API_KEY")
-            .cloned()
-            .unwrap_or_default();
+        let capsolver_key = env.get("CAPSOLVER_API_KEY").cloned().unwrap_or_default();
 
         if capsolver_key.is_empty() {
             eprintln!("SKIP: CAPSOLVER_API_KEY not set");
@@ -456,7 +471,8 @@ mod live_smoke_tests {
                 eprintln!("=== isolated_keyword_ideas_live_smoke ===");
                 eprintln!(
                     "{}",
-                    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "<serialize failed>".to_string())
+                    serde_json::to_string_pretty(&payload)
+                        .unwrap_or_else(|_| "<serialize failed>".to_string())
                 );
                 assert!(
                     !payload.ideas.is_empty() || !payload.question_ideas.is_empty(),
@@ -475,10 +491,7 @@ mod live_smoke_tests {
         use crate::config::env_resolver::EnvResolver;
 
         let env = EnvResolver::new(".").build_env(HashMap::new());
-        let capsolver_key = env
-            .get("CAPSOLVER_API_KEY")
-            .cloned()
-            .unwrap_or_default();
+        let capsolver_key = env.get("CAPSOLVER_API_KEY").cloned().unwrap_or_default();
 
         if capsolver_key.is_empty() {
             eprintln!("SKIP: CAPSOLVER_API_KEY not set");
@@ -502,12 +515,13 @@ mod live_smoke_tests {
                 if let Some(first) = payload.serp.first() {
                     eprintln!(
                         "first_result traffic={:?} top_volume={:?} url={}",
-                        first.traffic,
-                        first.top_volume,
-                        first.url
+                        first.traffic, first.top_volume, first.url
                     );
                 }
-                assert!(payload.difficulty.map(|d| d >= 0.0).unwrap_or(true), "difficulty should be numeric");
+                assert!(
+                    payload.difficulty.map(|d| d >= 0.0).unwrap_or(true),
+                    "difficulty should be numeric"
+                );
             }
             Err(err) => {
                 panic!("live keyword difficulty call failed: {err}");
@@ -553,10 +567,18 @@ pub async fn get_keyword_ideas(
 
     let status = resp.status();
     if !status.is_success() {
-        let body_preview = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+        let body_preview = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(500)
+            .collect::<String>();
         log::warn!(
             "[get_keyword_ideas] Ahrefs returned {} for keyword '{}'. Body preview: {}",
-            status, keyword, body_preview
+            status,
+            keyword,
+            body_preview
         );
         return Err(Error::Other(format!(
             "Ahrefs keyword ideas API returned status {}. Body: {}",
@@ -595,7 +617,9 @@ pub async fn get_keyword_difficulty(
         .map_err(Error::Http)?;
 
     let resp = client
-        .post(ahrefs_url("v4/stGetFreeSerpOverviewForKeywordDifficultyChecker"))
+        .post(ahrefs_url(
+            "v4/stGetFreeSerpOverviewForKeywordDifficultyChecker",
+        ))
         .header(
             "referer",
             format!(
@@ -613,10 +637,18 @@ pub async fn get_keyword_difficulty(
 
     let status = resp.status();
     if !status.is_success() {
-        let body_preview = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+        let body_preview = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(500)
+            .collect::<String>();
         log::warn!(
             "[get_keyword_difficulty] Ahrefs returned {} for keyword '{}'. Body preview: {}",
-            status, keyword, body_preview
+            status,
+            keyword,
+            body_preview
         );
         return Err(Error::Other(format!(
             "Ahrefs keyword difficulty API returned status {}. Body: {}",
@@ -665,8 +697,7 @@ pub async fn get_keyword_difficulty(
                         None
                     };
                     if let Some(link_data) = link_data {
-                        let title =
-                            link_data["title"].as_str().unwrap_or("").to_string();
+                        let title = link_data["title"].as_str().unwrap_or("").to_string();
                         // url: direct string, object with url key, or ["Url", {url}]
                         let url = link_data["url"]
                             .as_str()
@@ -686,8 +717,7 @@ pub async fn get_keyword_difficulty(
                                     .map(|s| s.to_string())
                             })
                             .unwrap_or_default();
-                        let domain =
-                            link_data["domain"].as_str().unwrap_or("").to_string();
+                        let domain = link_data["domain"].as_str().unwrap_or("").to_string();
                         let metrics = unwrap_variant(&link_data["metrics"]);
                         let traffic = get_field_as_f64(metrics, &["traffic"]);
                         let top_volume = get_field_as_f64(metrics, &["topVolume", "volume"]);

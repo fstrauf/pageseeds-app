@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use tauri::State;
+use super::AppState;
 use crate::config::env_resolver::EnvResolver;
 use crate::engine::task_store;
 use crate::models::reddit::{
     MigrationResult, RedditOpportunity, RedditStats, SubmissionSummary, ValidationResult,
 };
 use crate::reddit;
-use super::AppState;
+use std::sync::Arc;
+use tauri::State;
 
 #[tauri::command]
 pub async fn search_reddit(
@@ -22,7 +22,7 @@ pub async fn search_reddit(
         limit.unwrap_or(25),
         sort.as_deref().unwrap_or("relevance"),
         time_filter.as_deref().unwrap_or("all"),
-        0, // no delay for manual single searches
+        0,    // no delay for manual single searches
         None, // manual search uses public API; OAuth not needed for single queries
     )
     .await
@@ -37,8 +37,7 @@ pub fn list_reddit_opportunities(
     status: Option<String>,
 ) -> Result<Vec<RedditOpportunity>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    reddit::db::list_opportunities(&db, &project_id, status.as_deref())
-        .map_err(|e| e.to_string())
+    reddit::db::list_opportunities(&db, &project_id, status.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -63,11 +62,15 @@ pub fn mark_reddit_posted(
 
     if let Some(pid) = project_id.as_deref().filter(|s| !s.is_empty()) {
         if let Ok(project) = task_store::get_project(&db, pid) {
-            let manager = crate::reddit::history::RedditHistoryManager::new(
-                std::path::Path::new(&project.path)
-            );
+            let manager = crate::reddit::history::RedditHistoryManager::new(std::path::Path::new(
+                &project.path,
+            ));
             if let Err(e) = manager.mark_posted(&post_id) {
-                log::warn!("[history] failed to write posted history for {}: {}", post_id, e);
+                log::warn!(
+                    "[history] failed to write posted history for {}: {}",
+                    post_id,
+                    e
+                );
             }
         }
     }
@@ -86,11 +89,15 @@ pub fn mark_reddit_skipped(
 
     if let Some(pid) = project_id.as_deref().filter(|s| !s.is_empty()) {
         if let Ok(project) = task_store::get_project(&db, pid) {
-            let manager = crate::reddit::history::RedditHistoryManager::new(
-                std::path::Path::new(&project.path)
-            );
+            let manager = crate::reddit::history::RedditHistoryManager::new(std::path::Path::new(
+                &project.path,
+            ));
             if let Err(e) = manager.mark_skipped(&post_id) {
-                log::warn!("[history] failed to write skipped history for {}: {}", post_id, e);
+                log::warn!(
+                    "[history] failed to write skipped history for {}: {}",
+                    post_id,
+                    e
+                );
             }
         }
     }
@@ -115,15 +122,21 @@ pub async fn post_to_reddit(
     let client_id = resolver
         .resolve("REDDIT_CLIENT_ID")
         .map(|(v, _)| v)
-        .ok_or_else(|| "REDDIT_CLIENT_ID not set — add it to ~/.config/automation/secrets.env".to_string())?;
+        .ok_or_else(|| {
+            "REDDIT_CLIENT_ID not set — add it to ~/.config/automation/secrets.env".to_string()
+        })?;
     let client_secret = resolver
         .resolve("REDDIT_CLIENT_SECRET")
         .map(|(v, _)| v)
-        .ok_or_else(|| "REDDIT_CLIENT_SECRET not set — add it to ~/.config/automation/secrets.env".to_string())?;
+        .ok_or_else(|| {
+            "REDDIT_CLIENT_SECRET not set — add it to ~/.config/automation/secrets.env".to_string()
+        })?;
     let refresh_token = resolver
         .resolve("REDDIT_REFRESH_TOKEN")
         .map(|(v, _)| v)
-        .ok_or_else(|| "REDDIT_REFRESH_TOKEN not set — add it to ~/.config/automation/secrets.env".to_string())?;
+        .ok_or_else(|| {
+            "REDDIT_REFRESH_TOKEN not set — add it to ~/.config/automation/secrets.env".to_string()
+        })?;
 
     let result = crate::reddit::post::submit_comment(
         &post_id,
@@ -138,14 +151,13 @@ pub async fn post_to_reddit(
     let reply_url = result.permalink;
 
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    reddit::db::mark_posted(&db, &post_id, &reply_text, &reply_url)
-        .map_err(|e| e.to_string())?;
+    reddit::db::mark_posted(&db, &post_id, &reply_text, &reply_url).map_err(|e| e.to_string())?;
 
     if !project_id.is_empty() {
         if let Ok(project) = task_store::get_project(&db, &project_id) {
-            let manager = crate::reddit::history::RedditHistoryManager::new(
-                std::path::Path::new(&project.path),
-            );
+            let manager = crate::reddit::history::RedditHistoryManager::new(std::path::Path::new(
+                &project.path,
+            ));
             if let Err(e) = manager.mark_posted(&post_id) {
                 log::warn!("[post_to_reddit] history write failed: {}", e);
             }
@@ -175,14 +187,14 @@ pub async fn draft_reddit_reply(
     let (project_path, agent_provider, opp) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-        let provider = global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
-        let opp = crate::reddit::db::get_opportunity(&db, &post_id)
-            .map_err(|e| e.to_string())?;
+        let provider =
+            global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
+        let opp = crate::reddit::db::get_opportunity(&db, &post_id).map_err(|e| e.to_string())?;
         (project.path.clone(), provider, opp)
     };
 
-    let reply_text = crate::reddit::draft::generate_draft_reply(&project_path, &agent_provider, &opp)
-        .await?;
+    let reply_text =
+        crate::reddit::draft::generate_draft_reply(&project_path, &agent_provider, &opp).await?;
 
     // Persist the generated reply
     {
@@ -191,7 +203,8 @@ pub async fn draft_reddit_reply(
         db.execute(
             "UPDATE reddit_opportunities SET reply_text = ?1, updated_at = ?2 WHERE post_id = ?3",
             rusqlite::params![reply_text, now, post_id],
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     Ok(reply_text)
@@ -214,7 +227,8 @@ pub fn validate_reddit_reply(
                 let automation_dir = std::path::Path::new(&project.path)
                     .join(".github")
                     .join("automation");
-                let stance_check = crate::reddit::validation::validate_project_stance(&text, &automation_dir);
+                let stance_check =
+                    crate::reddit::validation::validate_project_stance(&text, &automation_dir);
                 if !stance_check.valid {
                     return stance_check;
                 }
@@ -222,7 +236,10 @@ pub fn validate_reddit_reply(
         }
     }
 
-    ValidationResult { valid: true, error: None }
+    ValidationResult {
+        valid: true,
+        error: None,
+    }
 }
 
 #[tauri::command]
@@ -231,13 +248,14 @@ pub async fn enrich_reddit_opportunities(
     project_id: String,
 ) -> Result<String, String> {
     use crate::db::global_settings;
-    use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
     use chrono::Utc;
 
     let (project_path, agent_provider) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-        let provider = global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
+        let provider =
+            global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
         (project.path.clone(), provider)
     };
 
@@ -255,7 +273,12 @@ pub async fn enrich_reddit_opportunities(
         description: None,
         depends_on: vec![],
         artifacts: vec![], // Empty - will fall back to deterministic parsing
-        run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
+        run: TaskRun {
+            attempts: 0,
+            last_error: None,
+            provider: None,
+            ..Default::default()
+        },
         created_at: Utc::now().to_rfc3339(),
         updated_at: Utc::now().to_rfc3339(),
     };
@@ -263,7 +286,12 @@ pub async fn enrich_reddit_opportunities(
     let db_arc = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
         let db = db_arc.lock().map_err(|e| e.to_string())?;
-        crate::engine::exec::reddit::exec_reddit_enrich(&db, &synthetic_task, &project_path, &agent_provider);
+        crate::engine::exec::reddit::exec_reddit_enrich(
+            &db,
+            &synthetic_task,
+            &project_path,
+            &agent_provider,
+        );
         Ok::<String, String>("Enrichment complete".to_string())
     })
     .await

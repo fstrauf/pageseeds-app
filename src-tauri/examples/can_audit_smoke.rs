@@ -2,7 +2,6 @@
 ///
 /// Run with:
 ///   cargo run --example can_audit_smoke
-
 use pageseeds_lib::{
     db,
     engine::{executor, task_store},
@@ -70,9 +69,9 @@ fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     let start = std::time::Instant::now();
-    let result = rt.block_on(async {
-        executor::execute_task(&conn, &task_id).await
-    }).expect("execute_task panic");
+    let result = rt
+        .block_on(async { executor::execute_task(&conn, &task_id).await })
+        .expect("execute_task panic");
 
     println!("\n━━━━━━━━━━━━━━━━━━━  Results  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     println!("Success : {}", result.success);
@@ -87,26 +86,52 @@ fn main() {
             "skipped" => "~",
             _ => "·",
         };
-        println!("  {} [{}] {} — {}", icon, step.status, step.step_name, step.message);
+        println!(
+            "  {} [{}] {} — {}",
+            icon, step.status, step.step_name, step.message
+        );
         if let Some(ref out) = step.output {
             let preview: String = out.chars().take(800).collect();
             println!("    output: {}", preview);
-            if out.len() > 800 { println!("    ... ({} chars total)", out.len()); }
+            if out.len() > 800 {
+                println!("    ... ({} chars total)", out.len());
+            }
         }
         println!();
     }
 
-    let ctx_path = format!("{}/.github/automation/cannibalization_audit_context.json", PROJECT_PATH);
+    let ctx_path = format!(
+        "{}/.github/automation/cannibalization_audit_context.json",
+        PROJECT_PATH
+    );
     if let Ok(s) = std::fs::read_to_string(&ctx_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-            let pairs = v["similarity_pairs"].as_array().map(|a| a.len()).unwrap_or(0);
-            let groups = v["keyword_groups"].as_object().map(|o| o.len()).unwrap_or(0);
-            println!("✓ cannibalization_audit_context.json: {} pairs, {} groups ({} bytes)", pairs, groups, s.len());
+            let pairs = v["similarity_pairs"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let groups = v["keyword_groups"]
+                .as_object()
+                .map(|o| o.len())
+                .unwrap_or(0);
+            println!(
+                "✓ cannibalization_audit_context.json: {} pairs, {} groups ({} bytes)",
+                pairs,
+                groups,
+                s.len()
+            );
         }
     } else {
         println!("! context not found");
     }
 
-    println!("\n{}", if result.success { "✓ PASS" } else { "✗ FAIL" });
+    println!(
+        "\n{}",
+        if result.success {
+            "✓ PASS"
+        } else {
+            "✗ FAIL"
+        }
+    );
     std::process::exit(if result.success { 0 } else { 1 });
 }

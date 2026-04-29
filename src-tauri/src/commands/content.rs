@@ -1,7 +1,7 @@
-use tauri::State;
-use crate::engine::task_store;
-use crate::content::date_policy::{self, DatePolicyConfig, DatePolicyReport};
 use super::AppState;
+use crate::content::date_policy::{self, DatePolicyConfig, DatePolicyReport};
+use crate::engine::task_store;
+use tauri::State;
 
 #[tauri::command]
 pub fn resolve_content_dir(
@@ -46,8 +46,12 @@ pub fn fix_content_dates(
     if !dry_run {
         let project_path = std::path::PathBuf::from(&project.path);
         crate::content::dates::apply_fixes_to_db_and_export(
-            &db, &project_id, &project_path, &fix_result.fixes,
-        ).map_err(|e| e.to_string())?;
+            &db,
+            &project_id,
+            &project_path,
+            &fix_result.fixes,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     Ok(fix_result)
@@ -159,7 +163,11 @@ pub fn preflight_publish_articles(
         .filter(|a| article_ids.contains(&a.id))
         .cloned()
         .collect();
-    Ok(crate::content::publish::preflight(&candidates, &all_articles, &content_dir))
+    Ok(crate::content::publish::preflight(
+        &candidates,
+        &all_articles,
+        &content_dir,
+    ))
 }
 
 #[tauri::command]
@@ -201,9 +209,9 @@ pub fn resolve_year_mismatch_agent(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::PathBuf::from(&project.path);
-    
+
     let provider = global_settings::resolve_agent_provider(&db, project.agent_provider.as_deref());
-    
+
     let all_articles = task_store::list_articles(&db, &project_id).map_err(|e| e.to_string())?;
     crate::content::publish::resolve_year_mismatch_with_agent(
         &provider,
@@ -224,13 +232,13 @@ pub fn get_keyword_coverage(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let (exists, last_analyzed) = crate::engine::exec::coverage::get_coverage_status(&project.path);
-    
+
     let coverage = if exists {
         crate::engine::exec::coverage::read_keyword_coverage(&project.path)
     } else {
         None
     };
-    
+
     Ok(serde_json::json!({
         "exists": exists,
         "last_analyzed": last_analyzed,
@@ -248,7 +256,11 @@ pub fn analyze_article_readability(
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
     crate::content::ops::analyze_article_readability(
-        &db, &project_id, repo_root, project.content_dir.as_deref(), &slug,
+        &db,
+        &project_id,
+        repo_root,
+        project.content_dir.as_deref(),
+        &slug,
     )
     .map_err(|e| e.to_string())
 }
@@ -260,13 +272,9 @@ pub async fn compare_competitor_content(
     competitor_urls: Vec<String>,
     user_url: Option<String>,
 ) -> Result<crate::content::competitor::WordCountComparison, String> {
-    crate::content::competitor::compare_word_counts(
-        &keyword,
-        &competitor_urls,
-        user_url.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())
+    crate::content::competitor::compare_word_counts(&keyword, &competitor_urls, user_url.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -293,7 +301,12 @@ pub fn analyze_keyword_density(
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
     crate::content::ops::analyze_keyword_density(
-        &db, &project_id, repo_root, project.content_dir.as_deref(), &slug, &target_keyword,
+        &db,
+        &project_id,
+        repo_root,
+        project.content_dir.as_deref(),
+        &slug,
+        &target_keyword,
     )
     .map_err(|e| e.to_string())
 }
@@ -340,11 +353,11 @@ pub fn fix_content_format(
     let content_dir = crate::content::ops::resolve_content_dir(&automation_dir, repo_root)
         .map_err(|e| e.to_string())?;
 
-    let validation = crate::content::validator::validate_project(repo_root, &content_dir, schema.as_ref())
-        .map_err(|e| e.to_string())?;
+    let validation =
+        crate::content::validator::validate_project(repo_root, &content_dir, schema.as_ref())
+            .map_err(|e| e.to_string())?;
 
-    crate::content::validator::apply_fixes(&validation.issues, repo_root)
-        .map_err(|e| e.to_string())
+    crate::content::validator::apply_fixes(&validation.issues, repo_root).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -373,7 +386,9 @@ pub fn get_ctr_health_summary(
     let all_tasks = task_store::list_tasks_light(&db, &project_id).map_err(|e| e.to_string())?;
     let pending_fix_tasks = all_tasks
         .iter()
-        .filter(|t| t.task_type == "fix_ctr_article" && t.status == crate::models::task::TaskStatus::Todo)
+        .filter(|t| {
+            t.task_type == "fix_ctr_article" && t.status == crate::models::task::TaskStatus::Todo
+        })
         .count();
     let completed_audits = all_tasks
         .iter()
@@ -381,6 +396,11 @@ pub fn get_ctr_health_summary(
         .count();
 
     Ok(crate::content::ops::build_ctr_health_summary(
-        repo_root, &articles, pending_fix_tasks, completed_audits, &db, &project_id,
+        repo_root,
+        &articles,
+        pending_fix_tasks,
+        completed_audits,
+        &db,
+        &project_id,
     ))
 }

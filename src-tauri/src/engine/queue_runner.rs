@@ -2,7 +2,6 @@
 ///
 /// Runs a sequence of tasks sequentially, emitting progress events via Tauri
 /// so the UI can track execution state.
-
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -70,7 +69,12 @@ pub async fn execute_queue_internal(
 
     for (index, item) in items.iter().enumerate() {
         log::info!("[queue_runner] ------------------------------------------");
-        log::info!("[queue_runner] TASK {}/{}: {}", index + 1, items.len(), item.title);
+        log::info!(
+            "[queue_runner] TASK {}/{}: {}",
+            index + 1,
+            items.len(),
+            item.title
+        );
         log::info!("[queue_runner]   ID: {}", item.task_id);
         log::info!("[queue_runner]   Type: {}", item.task_type);
         log::info!("[queue_runner]   Project: {}", item.project_id);
@@ -87,7 +91,10 @@ pub async fn execute_queue_internal(
 
             log::info!("[queue_runner] Task {} marked as in_progress", task_id);
             Ok(())
-        }).await.map_err(|e| format!("Task panicked: {:?}", e)).and_then(|r| r);
+        })
+        .await
+        .map_err(|e| format!("Task panicked: {:?}", e))
+        .and_then(|r| r);
 
         if let Err(e) = update_result {
             log::error!("[queue_runner] Failed to mark task as in_progress: {}", e);
@@ -106,7 +113,10 @@ pub async fn execute_queue_internal(
             }),
         };
 
-        log::info!("[queue_runner] Emitting queue:task-started for task {}", item.task_id);
+        log::info!(
+            "[queue_runner] Emitting queue:task-started for task {}",
+            item.task_id
+        );
         match app_handle.emit("queue:task-started", &event) {
             Ok(_) => log::info!("[queue_runner] Successfully emitted started event"),
             Err(e) => log::error!("[queue_runner] Failed to emit started event: {}", e),
@@ -146,27 +156,43 @@ pub async fn execute_queue_internal(
                     None,
                     Some(app_handle_clone),
                     false,
-                ).await
+                )
+                .await
             });
             log::info!("[queue_runner] Blocking task finished for {}", task_id);
             result
-        }).await;
-        log::info!("[queue_runner] Spawn blocking returned for {}", item.task_id);
+        })
+        .await;
+        log::info!(
+            "[queue_runner] Spawn blocking returned for {}",
+            item.task_id
+        );
 
         // Handle result and emit completion event
         log::info!("[queue_runner] Task execution completed, handling result");
         match result {
             Ok(Ok(exec_result)) => {
                 if exec_result.success {
-                    log::info!("[queue_runner] Task {} completed: {}",
-                        item.task_id, exec_result.message);
+                    log::info!(
+                        "[queue_runner] Task {} completed: {}",
+                        item.task_id,
+                        exec_result.message
+                    );
                 } else {
-                    log::warn!("[queue_runner] Task {} finished with workflow failure: {}",
-                        item.task_id, exec_result.message);
+                    log::warn!(
+                        "[queue_runner] Task {} finished with workflow failure: {}",
+                        item.task_id,
+                        exec_result.message
+                    );
                 }
 
                 let event = QueueProgressEvent {
-                    event_type: if exec_result.success { "completed" } else { "failed" }.to_string(),
+                    event_type: if exec_result.success {
+                        "completed"
+                    } else {
+                        "failed"
+                    }
+                    .to_string(),
                     task_id: item.task_id.clone(),
                     project_id: item.project_id.clone(),
                     payload: serde_json::json!({
@@ -179,17 +205,34 @@ pub async fn execute_queue_internal(
                     }),
                 };
 
-                let event_name = if exec_result.success { "queue:task-completed" } else { "queue:task-failed" };
-                log::info!("[queue_runner] Emitting {} for task {}", event_name, item.task_id);
+                let event_name = if exec_result.success {
+                    "queue:task-completed"
+                } else {
+                    "queue:task-failed"
+                };
+                log::info!(
+                    "[queue_runner] Emitting {} for task {}",
+                    event_name,
+                    item.task_id
+                );
                 match app_handle.emit(event_name, &event) {
-                    Ok(_) => log::info!("[queue_runner] Successfully emitted {} event", event.event_type),
-                    Err(e) => log::error!("[queue_runner] Failed to emit {} event: {}", event.event_type, e),
+                    Ok(_) => log::info!(
+                        "[queue_runner] Successfully emitted {} event",
+                        event.event_type
+                    ),
+                    Err(e) => log::error!(
+                        "[queue_runner] Failed to emit {} event: {}",
+                        event.event_type,
+                        e
+                    ),
                 }
 
                 // Emit follow-up created events for automatic/batchable follow-ups
                 if exec_result.success {
                     for follow_up in &exec_result.follow_up_tasks {
-                        if follow_up.execution_mode == "automatic" || follow_up.execution_mode == "batchable" {
+                        if follow_up.execution_mode == "automatic"
+                            || follow_up.execution_mode == "batchable"
+                        {
                             let follow_up_event = FollowUpCreatedEvent {
                                 task_id: follow_up.id.clone(),
                                 project_id: item.project_id.clone(),
@@ -198,10 +241,15 @@ pub async fn execute_queue_internal(
                                 execution_mode: follow_up.execution_mode.clone(),
                             };
 
-                            log::info!("[queue_runner] Emitting follow-up created: {} (mode: {})",
-                                follow_up.id, follow_up.execution_mode);
+                            log::info!(
+                                "[queue_runner] Emitting follow-up created: {} (mode: {})",
+                                follow_up.id,
+                                follow_up.execution_mode
+                            );
 
-                            if let Err(e) = app_handle.emit("queue:follow-up-created", &follow_up_event) {
+                            if let Err(e) =
+                                app_handle.emit("queue:follow-up-created", &follow_up_event)
+                            {
                                 log::error!("[queue_runner] Failed to emit follow-up event: {}", e);
                             }
                         }
@@ -243,7 +291,11 @@ pub async fn execute_queue_internal(
         }
 
         // Small delay between tasks to prevent database contention
-        log::info!("[queue_runner] Task {}/{} finished, sleeping before next...", index + 1, items.len());
+        log::info!(
+            "[queue_runner] Task {}/{} finished, sleeping before next...",
+            index + 1,
+            items.len()
+        );
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         log::info!("[queue_runner] Continuing to next task...");
     }

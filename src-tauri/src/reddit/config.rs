@@ -6,7 +6,6 @@
 /// - seed subreddits and excluded subreddits
 ///
 /// Section headers follow the same format as the PageSeeds CLI SKILL.md.
-
 use std::path::Path;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -240,7 +239,10 @@ fn extract_list_section(content: &str, section_title: &str) -> Vec<String> {
                 if !item.is_empty() {
                     items.push(item);
                 }
-            } else if trimmed.len() > 2 && trimmed.chars().next().unwrap().is_ascii_digit() && trimmed.chars().nth(1).unwrap() == '.' {
+            } else if trimmed.len() > 2
+                && trimmed.chars().next().unwrap().is_ascii_digit()
+                && trimmed.chars().nth(1).unwrap() == '.'
+            {
                 // Numbered list item: "1. item"
                 let item = trimmed[2..].trim().to_string();
                 if !item.is_empty() {
@@ -350,9 +352,7 @@ mod tests {
     /// Plain text (no markdown) works fine with the deterministic parser.
     #[test]
     fn mention_stance_plain_text() {
-        let cfg = parse_reddit_config(
-            "## Mention Stance\n- REQUIRED\n"
-        );
+        let cfg = parse_reddit_config("## Mention Stance\n- REQUIRED\n");
         assert_eq!(cfg.mention_stance, MentionStance::Required);
     }
 }

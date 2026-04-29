@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;
-use crate::models::social::{VisualAsset, AssetType};
+use crate::models::social::{AssetType, VisualAsset};
 use crate::models::task::Task;
 use crate::social::image::assets::generate_branded_graphic;
 
@@ -9,10 +9,7 @@ use crate::social::image::assets::generate_branded_graphic;
 // Step 4: Build Visuals
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn exec_social_build_visuals(
-    task: &Task,
-    project_path: &str,
-) -> StepResult {
+pub fn exec_social_build_visuals(task: &Task, project_path: &str) -> StepResult {
     // Load generated posts from previous step
     let mut posts = match super::load_posts_from_artifacts(task) {
         Some(p) => p,
@@ -26,18 +23,22 @@ pub fn exec_social_build_visuals(
     };
 
     // Ensure output directory exists
-    let output_dir = match crate::social::content::sources::ensure_output_dir(Path::new(project_path)) {
-        Ok(d) => d,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to create output directory: {}", e),
-                output: None,
-            };
-        }
-    };
+    let output_dir =
+        match crate::social::content::sources::ensure_output_dir(Path::new(project_path)) {
+            Ok(d) => d,
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    message: format!("Failed to create output directory: {}", e),
+                    output: None,
+                };
+            }
+        };
 
-    log::info!("[social_build_visuals] building visuals for {} posts", posts.len());
+    log::info!(
+        "[social_build_visuals] building visuals for {} posts",
+        posts.len()
+    );
 
     // Build visuals for each post
     for post in &mut posts {
@@ -74,14 +75,17 @@ pub fn exec_social_build_visuals(
                             .unwrap_or(&output_path)
                             .to_string_lossy()
                             .to_string();
-                        
+
                         post.visual_assets = vec![VisualAsset {
                             path: relative_path,
                             ..asset
                         }];
                     }
                     Err(e) => {
-                        log::warn!("[social_build_visuals] failed to generate branded graphic: {}", e);
+                        log::warn!(
+                            "[social_build_visuals] failed to generate branded graphic: {}",
+                            e
+                        );
                     }
                 }
             }
@@ -111,10 +115,7 @@ pub fn exec_social_build_visuals(
 // Regenerate Steps
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn exec_social_rebuild_visual(
-    _task: &Task,
-    _project_path: &str,
-) -> StepResult {
+pub fn exec_social_rebuild_visual(_task: &Task, _project_path: &str) -> StepResult {
     StepResult {
         success: true,
         message: "Visual rebuild complete".to_string(),

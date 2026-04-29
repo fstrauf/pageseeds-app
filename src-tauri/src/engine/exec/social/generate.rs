@@ -1,6 +1,5 @@
 use std::path::Path;
 
-
 use crate::engine::workflows::StepResult;
 use crate::engine::workflows::WorkflowStep;
 use crate::models::social::*;
@@ -80,16 +79,20 @@ pub fn exec_social_generate_posts(
     // Limit to max 10 posts per campaign to avoid overwhelming the user
     const MAX_POSTS: usize = 10;
     if jobs.len() > MAX_POSTS {
-        log::info!("[social_generate_posts] limiting from {} to {} posts", jobs.len(), MAX_POSTS);
+        log::info!(
+            "[social_generate_posts] limiting from {} to {} posts",
+            jobs.len(),
+            MAX_POSTS
+        );
         jobs.truncate(MAX_POSTS);
     }
-    
+
     log::info!("[social_generate_posts] generating {} posts", jobs.len());
 
     // Generate each post via agent using template system
     let mut generated_posts: Vec<SocialPost> = Vec::new();
     let campaign_id = super::extract_campaign_id_from_task(task).unwrap_or_else(|| task.id.clone());
-    
+
     // Use new template registry for better template selection
     let _registry = crate::social::templates::TemplateRegistry::default();
 
@@ -97,7 +100,8 @@ pub fn exec_social_generate_posts(
         // Use new template system to render prompt
         let prompt = render_prompt(&job.template, &job.source);
 
-        log::info!("[social_generate_posts] job {}/{}: generating for source {:?} using template {:?}",
+        log::info!(
+            "[social_generate_posts] job {}/{}: generating for source {:?} using template {:?}",
             idx + 1,
             jobs.len(),
             job.source.source_id,
@@ -113,11 +117,14 @@ pub fn exec_social_generate_posts(
                         // Validate against template schema
                         let json_output = serde_json::to_value(&agent_output).unwrap_or_default();
                         let validation_errors = validate_output(&job.template, &json_output);
-                        
+
                         if !validation_errors.is_empty() {
-                            log::warn!("[social_generate_posts] validation errors: {:?}", validation_errors);
+                            log::warn!(
+                                "[social_generate_posts] validation errors: {:?}",
+                                validation_errors
+                            );
                         }
-                        
+
                         let post = super::create_social_post_from_agent_output(
                             &campaign_id,
                             &task.project_id,
@@ -128,7 +135,10 @@ pub fn exec_social_generate_posts(
                         generated_posts.push(post);
                     }
                     Err(e) => {
-                        log::warn!("[social_generate_posts] failed to parse agent output: {}", e);
+                        log::warn!(
+                            "[social_generate_posts] failed to parse agent output: {}",
+                            e
+                        );
                     }
                 }
             }

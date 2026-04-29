@@ -6,10 +6,10 @@
 //! 2. User-provided screenshots (screenshots/ folder)
 //! 3. Generated branded graphics (deterministic fallback)
 
-use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::models::article::Article;
-use crate::models::social::{VisualAsset, AssetType};
+use crate::models::social::{AssetType, VisualAsset};
+use std::path::{Path, PathBuf};
 
 /// Resolve image assets for a social post
 pub fn resolve_post_images(
@@ -19,7 +19,7 @@ pub fn resolve_post_images(
     hook_text: &str,
 ) -> Result<Vec<VisualAsset>> {
     let mut assets = Vec::new();
-    
+
     // 1. Try article's content directory for images (using url_slug)
     let article_images = find_images_for_article(article, project_path);
     if !article_images.is_empty() {
@@ -33,7 +33,7 @@ pub fn resolve_post_images(
         }
         return Ok(assets);
     }
-    
+
     // 2. Try user-provided screenshots
     let screenshots = find_screenshots(project_path);
     if !screenshots.is_empty() {
@@ -46,33 +46,33 @@ pub fn resolve_post_images(
         });
         return Ok(assets);
     }
-    
+
     // 3. Generate branded graphic as fallback
     let generated = generate_branded_graphic(output_dir, hook_text)?;
     assets.push(generated);
-    
+
     Ok(assets)
 }
 
 /// Find images associated with an article
 fn find_images_for_article(article: &Article, project_path: &Path) -> Vec<PathBuf> {
     let mut images = Vec::new();
-    
+
     // Use url_slug for directory lookup
     let slug = &article.url_slug;
-    
+
     // Common locations for article images
     let possible_dirs = vec![
         project_path.join("public").join(slug),
         project_path.join("content").join(slug),
         project_path.join("src/content").join(slug),
     ];
-    
+
     for dir in possible_dirs {
         if !dir.exists() {
             continue;
         }
-        
+
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
@@ -82,25 +82,25 @@ fn find_images_for_article(article: &Article, project_path: &Path) -> Vec<PathBu
             }
         }
     }
-    
+
     images
 }
 
 /// Find user-provided screenshots
 fn find_screenshots(project_path: &Path) -> Vec<PathBuf> {
     let mut screenshots = Vec::new();
-    
+
     let screenshot_dirs = vec![
         project_path.join("screenshots"),
         project_path.join("public/screenshots"),
         project_path.join("assets/screenshots"),
     ];
-    
+
     for dir in screenshot_dirs {
         if !dir.exists() {
             continue;
         }
-        
+
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
@@ -110,7 +110,7 @@ fn find_screenshots(project_path: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    
+
     // Sort by modification time (newest first)
     screenshots.sort_by(|a, b| {
         let meta_a = std::fs::metadata(a).ok();
@@ -124,7 +124,7 @@ fn find_screenshots(project_path: &Path) -> Vec<PathBuf> {
             _ => std::cmp::Ordering::Equal,
         }
     });
-    
+
     screenshots
 }
 
@@ -139,16 +139,16 @@ fn is_image_file(path: &Path) -> bool {
 /// Generate a branded graphic as fallback
 pub fn generate_branded_graphic(output_dir: &Path, text: &str) -> Result<VisualAsset> {
     use image::{ImageBuffer, Rgb};
-    
+
     // PageSeeds brand colors
-    let forest_green = Rgb([33, 54, 41]);     // #213629
-    let clay = Rgb([181, 101, 43]);           // #b5652b
-    let _cream = Rgb([250, 243, 232]);         // #faf3e8
-    
+    let forest_green = Rgb([33, 54, 41]); // #213629
+    let clay = Rgb([181, 101, 43]); // #b5652b
+    let _cream = Rgb([250, 243, 232]); // #faf3e8
+
     // Create 1080x1080 square image (Instagram optimal)
     let width = 1080u32;
     let height = 1080u32;
-    
+
     // Create gradient from forest green to clay
     let mut img = ImageBuffer::new(width, height);
     for y in 0..height {
@@ -156,27 +156,30 @@ pub fn generate_branded_graphic(output_dir: &Path, text: &str) -> Result<VisualA
         let r = (forest_green.0[0] as f32 * (1.0 - ratio) + clay.0[0] as f32 * ratio) as u8;
         let g = (forest_green.0[1] as f32 * (1.0 - ratio) + clay.0[1] as f32 * ratio) as u8;
         let b = (forest_green.0[2] as f32 * (1.0 - ratio) + clay.0[2] as f32 * ratio) as u8;
-        
+
         for x in 0..width {
             img.put_pixel(x, y, Rgb([r, g, b]));
         }
     }
-    
+
     // Note: Text rendering requires font library. For now, we create the background.
     // Text overlay can be added when we integrate ab_glyph or similar.
-    
+
     // Save the image
     std::fs::create_dir_all(output_dir)?;
     let filename = format!("generated_{}.png", generate_id(text));
     let output_path = output_dir.join(&filename);
     img.save(&output_path)?;
-    
+
     let relative_path = output_path.to_string_lossy().to_string();
-    
+
     Ok(VisualAsset {
         path: relative_path,
         asset_type: AssetType::Image,
-        description: format!("Generated graphic: {}", text.chars().take(50).collect::<String>()),
+        description: format!(
+            "Generated graphic: {}",
+            text.chars().take(50).collect::<String>()
+        ),
         overlay_text: Some(text.chars().take(80).collect()),
     })
 }
@@ -185,7 +188,7 @@ pub fn generate_branded_graphic(output_dir: &Path, text: &str) -> Result<VisualA
 fn generate_id(text: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    
+
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     format!("{:x}", hasher.finish())[..8].to_string()

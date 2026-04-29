@@ -10,7 +10,6 @@
 ///   4. Executes the task (deterministic build_context + optional agentic analyze)
 ///   5. Prints each step result + context JSON
 ///   6. Prints any spawned fix tasks
-
 use pageseeds_lib::{
     db,
     engine::{executor, task_store},
@@ -54,7 +53,10 @@ fn main() {
         seo_provider: Some("ahrefs".to_string()),
     };
     task_store::create_project(&conn, &project).expect("create_project failed");
-    println!("✓ Project registered: {} ({})\n", project.name, PROJECT_PATH);
+    println!(
+        "✓ Project registered: {} ({})\n",
+        project.name, PROJECT_PATH
+    );
 
     // ── Task ──────────────────────────────────────────────────────────────────
     let now = chrono::Utc::now().to_rfc3339();
@@ -85,9 +87,9 @@ fn main() {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
     let start = std::time::Instant::now();
-    let result = rt.block_on(async {
-        executor::execute_task(&conn, &task_id).await
-    }).expect("execute_task panic");
+    let result = rt
+        .block_on(async { executor::execute_task(&conn, &task_id).await })
+        .expect("execute_task panic");
 
     println!("\n━━━━━━━━━━━━━━━━━━━  Results  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     println!("Success : {}", result.success);
@@ -102,11 +104,16 @@ fn main() {
             "skipped" => "~",
             _ => "·",
         };
-        println!("  {} [{}] {} — {}", icon, step.status, step.step_name, step.message);
+        println!(
+            "  {} [{}] {} — {}",
+            icon, step.status, step.step_name, step.message
+        );
         if let Some(ref out) = step.output {
             let preview: String = out.chars().take(800).collect();
             println!("    output: {}", preview);
-            if out.len() > 800 { println!("    ... ({} chars total)", out.len()); }
+            if out.len() > 800 {
+                println!("    ... ({} chars total)", out.len());
+            }
         }
         println!();
     }
@@ -118,7 +125,11 @@ fn main() {
             .ok()
             .and_then(|v| v["total_articles"].as_i64().map(|n| n as usize))
             .unwrap_or(0);
-        println!("✓ ctr_audit_context.json on disk: {} articles ({} bytes)", n, s.len());
+        println!(
+            "✓ ctr_audit_context.json on disk: {} articles ({} bytes)",
+            n,
+            s.len()
+        );
     } else {
         println!("! ctr_audit_context.json not found on disk at {}", ctx_path);
     }
@@ -135,7 +146,10 @@ fn main() {
         println!("! No fix tasks were spawned.");
     } else {
         for t in &fix_tasks {
-            println!("✓ Fix task created: {} (type={} status={})", t.id, t.task_type, t.status);
+            println!(
+                "✓ Fix task created: {} (type={} status={})",
+                t.id, t.task_type, t.status
+            );
             if let Some(ref title) = t.title {
                 println!("  title: {}", title);
             }
@@ -143,6 +157,13 @@ fn main() {
     }
 
     // Final verdict
-    println!("\n{}", if result.success { "✓ PASS" } else { "✗ FAIL" });
+    println!(
+        "\n{}",
+        if result.success {
+            "✓ PASS"
+        } else {
+            "✗ FAIL"
+        }
+    );
     std::process::exit(if result.success { 0 } else { 1 });
 }

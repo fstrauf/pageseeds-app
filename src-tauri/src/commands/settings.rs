@@ -1,8 +1,8 @@
-use tauri::State;
+use super::AppState;
 use crate::config::env_resolver::{EnvResolver, SecretsStatus};
 use crate::db::global_settings;
 use crate::engine::{agent, task_store};
-use super::AppState;
+use tauri::State;
 
 #[tauri::command]
 pub fn get_secrets_status(
@@ -24,9 +24,7 @@ pub fn get_secrets_file_path() -> String {
 
 #[tauri::command]
 pub fn import_env_file(source_path: String) -> Result<Vec<String>, String> {
-    crate::config::env_resolver::import_from_env_file(
-        std::path::Path::new(&source_path)
-    )
+    crate::config::env_resolver::import_from_env_file(std::path::Path::new(&source_path))
 }
 
 #[tauri::command]
@@ -81,7 +79,7 @@ pub fn init_workspace_config(
 /// Initialize a complete project workspace with all required files.
 /// This is called automatically when a project is created or when
 /// the user clicks "Initialize Project" from setup warnings.
-/// 
+///
 /// Creates:
 /// - .github/automation/ directory structure
 /// - seo_workspace.json (with auto-discovered content_dir)
@@ -91,7 +89,7 @@ pub fn init_workspace_config(
 /// - reddit/_reply_guardrails.md (template)
 /// - artifacts/, task_results/ directories
 /// - Updates .gitignore
-/// 
+///
 /// Returns a list of files that were created.
 #[tauri::command]
 pub fn initialize_project_workspace(
@@ -101,10 +99,10 @@ pub fn initialize_project_workspace(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
-    
+
     let site_url_hint = project.site_url.as_deref();
     let project_name = Some(project.name.as_str());
-    
+
     crate::engine::setup_check::initialize_project_workspace(repo_root, site_url_hint, project_name)
         .map_err(|e| e.to_string())
 }
@@ -116,9 +114,7 @@ pub fn initialize_project_workspace(
 /// Check agent status using the GLOBAL agent provider setting.
 /// This is the preferred way - agent provider is a user preference, not project-specific.
 #[tauri::command]
-pub async fn check_agent_status(
-    state: State<'_, AppState>,
-) -> Result<agent::AgentStatus, String> {
+pub async fn check_agent_status(state: State<'_, AppState>) -> Result<agent::AgentStatus, String> {
     let provider = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         global_settings::get_agent_provider(&db)
@@ -130,57 +126,50 @@ pub async fn check_agent_status(
 /// Set the GLOBAL agent provider.
 /// This applies to ALL projects since it's a user tool preference.
 #[tauri::command]
-pub fn set_agent_provider(
-    state: State<'_, AppState>,
-    provider: String,
-) -> Result<String, String> {
-    log::info!("[set_agent_provider] Setting global agent provider to '{}'", provider);
-    
+pub fn set_agent_provider(state: State<'_, AppState>, provider: String) -> Result<String, String> {
+    log::info!(
+        "[set_agent_provider] Setting global agent provider to '{}'",
+        provider
+    );
+
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    
-    global_settings::set_agent_provider(&db, &provider)
-        .map_err(|e| {
-            log::error!("[set_agent_provider] Failed to save: {}", e);
-            e.to_string()
-        })?;
-    
-    log::info!("[set_agent_provider] Successfully set global agent provider to '{}'", provider);
+
+    global_settings::set_agent_provider(&db, &provider).map_err(|e| {
+        log::error!("[set_agent_provider] Failed to save: {}", e);
+        e.to_string()
+    })?;
+
+    log::info!(
+        "[set_agent_provider] Successfully set global agent provider to '{}'",
+        provider
+    );
     Ok(provider)
 }
 
 /// Get the global agent provider (for UI initialization).
 #[tauri::command]
-pub fn get_global_agent_provider(
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+pub fn get_global_agent_provider(state: State<'_, AppState>) -> Result<String, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     Ok(global_settings::get_agent_provider(&db))
 }
 
 /// Get all global settings (for debugging/admin).
 #[tauri::command]
-pub fn get_global_settings(
-    state: State<'_, AppState>,
-) -> Result<Vec<(String, String)>, String> {
+pub fn get_global_settings(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     global_settings::get_all(&db).map_err(|e| e.to_string())
 }
 
 /// Get the global Kimi backend mode (for UI initialization).
 #[tauri::command]
-pub fn get_kimi_backend_mode(
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+pub fn get_kimi_backend_mode(state: State<'_, AppState>) -> Result<String, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     Ok(global_settings::get_kimi_backend_mode(&db))
 }
 
 /// Set the global Kimi backend mode.
 #[tauri::command]
-pub fn set_kimi_backend_mode(
-    state: State<'_, AppState>,
-    mode: String,
-) -> Result<String, String> {
+pub fn set_kimi_backend_mode(state: State<'_, AppState>, mode: String) -> Result<String, String> {
     log::info!("[set_kimi_backend_mode] Setting to '{}'", mode);
     let db = state.db.lock().map_err(|e| e.to_string())?;
     global_settings::set_kimi_backend_mode(&db, &mode).map_err(|e| e.to_string())?;
@@ -193,7 +182,7 @@ pub fn set_kimi_backend_mode(
 
 /// DEPRECATED: Check agent status for a specific project.
 /// Uses project's agent_provider if set, falls back to global.
-/// 
+///
 /// This is kept for backward compatibility but new code should use check_agent_status().
 #[tauri::command]
 pub async fn check_agent_status_for_project(
@@ -219,9 +208,9 @@ pub fn get_log_file_path() -> Result<String, String> {
         .ok_or("Could not determine log directory")?
         .join("com.pageseeds.app")
         .join("logs");
-    
+
     // Log files are named pageseeds.log (the plugin handles rotation)
     let log_file = log_dir.join("pageseeds.log");
-    
+
     Ok(log_file.to_string_lossy().to_string())
 }

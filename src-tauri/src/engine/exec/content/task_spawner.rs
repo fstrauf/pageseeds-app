@@ -1,6 +1,6 @@
-use rusqlite::Connection;
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
+use rusqlite::Connection;
 
 pub(crate) fn recommendation_article_id(article: &serde_json::Value) -> Option<i64> {
     match article.get("article_id") {
@@ -18,21 +18,19 @@ pub(crate) fn recommendation_article_id(article: &serde_json::Value) -> Option<i
 }
 
 fn fix_content_article_id(task: &Task) -> Option<i64> {
-    task.artifacts
-        .iter()
-        .find_map(|artifact| {
-            artifact
-                .content
-                .as_deref()
-                .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
-                .and_then(|article| recommendation_article_id(&article))
-                .or_else(|| {
-                    artifact
-                        .key
-                        .strip_prefix("recommendations_")
-                        .and_then(|suffix| suffix.parse::<i64>().ok())
-                })
-        })
+    task.artifacts.iter().find_map(|artifact| {
+        artifact
+            .content
+            .as_deref()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+            .and_then(|article| recommendation_article_id(&article))
+            .or_else(|| {
+                artifact
+                    .key
+                    .strip_prefix("recommendations_")
+                    .and_then(|suffix| suffix.parse::<i64>().ok())
+            })
+    })
 }
 
 fn sync_article_review_state_to_repo(
@@ -113,7 +111,11 @@ pub(crate) fn mark_fix_content_article_reviewed(
 /// per-article tasks that can be run independently.
 ///
 /// Skips if recommendations.json is absent (review found nothing).
-pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &Task, project_path: &str) -> Vec<String> {
+pub(crate) fn create_content_review_apply_task(
+    conn: &Connection,
+    parent_task: &Task,
+    project_path: &str,
+) -> Vec<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
     use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskArtifact, TaskStatus};
     use std::collections::HashSet;
@@ -124,14 +126,19 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
     let rec_str = match std::fs::read_to_string(&rec_path) {
         Ok(s) => s,
         Err(_) => {
-            log::info!("[create_apply_task] recommendations.json not found — no apply tasks created");
+            log::info!(
+                "[create_apply_task] recommendations.json not found — no apply tasks created"
+            );
             return Vec::new();
         }
     };
     let rec: serde_json::Value = match serde_json::from_str(&rec_str) {
         Ok(v) => v,
         Err(e) => {
-            log::warn!("[create_apply_task] failed to parse recommendations.json: {}", e);
+            log::warn!(
+                "[create_apply_task] failed to parse recommendations.json: {}",
+                e
+            );
             return Vec::new();
         }
     };
@@ -193,10 +200,16 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
         };
 
         // Idempotency key per article: content_review_apply:{project_id}:{article_id}
-        let idempotency_key = format!("content_review_apply:{}:{}", parent_task.project_id, article_id_str);
+        let idempotency_key = format!(
+            "content_review_apply:{}:{}",
+            parent_task.project_id, article_id_str
+        );
 
         // Calculate priority based on issue count
-        let issue_count = article["suggestions"].as_array().map(|s| s.len()).unwrap_or(0);
+        let issue_count = article["suggestions"]
+            .as_array()
+            .map(|s| s.len())
+            .unwrap_or(0);
         let priority = if issue_count >= 5 {
             Priority::High
         } else if issue_count >= 2 {
@@ -228,10 +241,15 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
 
         match TaskSpawner::spawn(conn, spec) {
             Ok(task) => {
-                if matches!(task.status, TaskStatus::Todo | TaskStatus::InProgress | TaskStatus::Review) {
+                if matches!(
+                    task.status,
+                    TaskStatus::Todo | TaskStatus::InProgress | TaskStatus::Review
+                ) {
                     log::info!(
                         "[create_apply_task] created {} for article '{}' ({} issues)",
-                        task.id, article_title, issue_count
+                        task.id,
+                        article_title,
+                        issue_count
                     );
                     created_task_ids.push(task.id);
                     in_review_article_ids.push(article_id);
@@ -247,14 +265,23 @@ pub(crate) fn create_content_review_apply_task(conn: &Connection, parent_task: &
             Err(e) => {
                 log::warn!(
                     "[create_apply_task] failed to create task for article '{}': {}",
-                    article_title, e
+                    article_title,
+                    e
                 );
             }
         }
     }
 
-    if let Err(e) = mark_articles_in_review(conn, &parent_task.project_id, project_path, &in_review_article_ids) {
-        log::warn!("[create_apply_task] failed to mark articles in_review: {}", e);
+    if let Err(e) = mark_articles_in_review(
+        conn,
+        &parent_task.project_id,
+        project_path,
+        &in_review_article_ids,
+    ) {
+        log::warn!(
+            "[create_apply_task] failed to mark articles in_review: {}",
+            e
+        );
     }
 
     log::info!(

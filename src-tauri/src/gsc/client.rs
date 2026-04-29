@@ -73,7 +73,9 @@ impl GscClient {
             }
         }
 
-        Err(Error::Other("GSC inspection request failed after retries".to_string()))
+        Err(Error::Other(
+            "GSC inspection request failed after retries".to_string(),
+        ))
     }
 
     async fn post(&self, url: &str, body: &Value) -> Result<Value> {

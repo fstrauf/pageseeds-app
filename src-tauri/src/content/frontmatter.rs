@@ -5,7 +5,6 @@
 /// - Use raw text surgery only for narrow top-level scalar edits.
 /// - Never regenerate the whole frontmatter unless it is missing entirely.
 /// - Skip complex YAML (lists, nested objects, comments) during auto-fix.
-
 use serde_yaml::Value;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -42,7 +41,9 @@ pub fn split_mdx(content: &str) -> Option<(&str, &str)> {
     let close = after_open.find("\n---\n")?;
     let fm = &after_open[..close];
     let body_start = close + 5; // skip \n---\n
-    let body = after_open[body_start..].strip_prefix('\n').unwrap_or(&after_open[body_start..]);
+    let body = after_open[body_start..]
+        .strip_prefix('\n')
+        .unwrap_or(&after_open[body_start..]);
     Some((fm, body))
 }
 
@@ -558,7 +559,10 @@ description: "Desc"
     fn replace_faq_block_escapes_quotes() {
         let updated = replace_faq_block(
             "title: \"Hello\"\n",
-            &[("Q with \"quotes\"?".to_string(), "A with \"quotes\"".to_string())],
+            &[(
+                "Q with \"quotes\"?".to_string(),
+                "A with \"quotes\"".to_string(),
+            )],
         );
         assert!(updated.contains("  - question: \"Q with \\\"quotes\\\"?\""));
         assert!(updated.contains("    answer: \"A with \\\"quotes\\\"\""));

@@ -16,8 +16,15 @@ use rig::{
 #[derive(Clone)]
 #[allow(dead_code)]
 pub enum EmbeddingBackend {
-    Ollama { client: ollama::Client, model: String, ndims: usize },
-    OpenAi { client: openai::Client, model: String },
+    Ollama {
+        client: ollama::Client,
+        model: String,
+        ndims: usize,
+    },
+    OpenAi {
+        client: openai::Client,
+        model: String,
+    },
 }
 
 #[allow(dead_code)]
@@ -70,7 +77,11 @@ impl EmbeddingBackend {
     /// Embed a single text.
     pub async fn embed_text(&self, text: &str) -> Result<Embedding, EmbeddingError> {
         match self {
-            Self::Ollama { client, model, ndims } => {
+            Self::Ollama {
+                client,
+                model,
+                ndims,
+            } => {
                 let m = client.embedding_model_with_ndims(model.clone(), *ndims);
                 m.embed_text(text).await
             }
@@ -84,7 +95,11 @@ impl EmbeddingBackend {
     /// Embed multiple texts.
     pub async fn embed_texts(&self, texts: Vec<String>) -> Result<Vec<Embedding>, EmbeddingError> {
         match self {
-            Self::Ollama { client, model, ndims } => {
+            Self::Ollama {
+                client,
+                model,
+                ndims,
+            } => {
                 let m = client.embedding_model_with_ndims(model.clone(), *ndims);
                 m.embed_texts(texts).await
             }

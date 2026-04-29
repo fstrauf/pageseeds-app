@@ -49,7 +49,10 @@ pub struct ImportedSiteInventory {
     pages_failed: usize,
 }
 
-pub async fn import_project_site(project: &Project, limit: Option<usize>) -> Result<ImportedSiteInventory> {
+pub async fn import_project_site(
+    project: &Project,
+    limit: Option<usize>,
+) -> Result<ImportedSiteInventory> {
     let site_url = project
         .site_url
         .as_deref()
@@ -388,7 +391,9 @@ pub fn apply_live_site_gsc_metrics(
             continue;
         };
         let normalized_url = normalize_url_string(&url);
-        metrics_by_path.entry(url.path().to_string()).or_insert_with(|| row.clone());
+        metrics_by_path
+            .entry(url.path().to_string())
+            .or_insert_with(|| row.clone());
         metrics_by_url.entry(normalized_url).or_insert(row);
     }
 
@@ -488,7 +493,11 @@ pub fn scan_live_site_links(conn: &Connection, project_id: &str) -> Result<LiveS
         })
         .collect();
 
-    profiles.sort_by(|left, right| left.path.cmp(&right.path).then_with(|| left.url.cmp(&right.url)));
+    profiles.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.url.cmp(&right.url))
+    });
 
     let mut orphan_urls: Vec<String> = pages
         .iter()
@@ -500,8 +509,14 @@ pub fn scan_live_site_links(conn: &Connection, project_id: &str) -> Result<LiveS
     Ok(LiveSiteLinkScanResult {
         total_pages: pages.len(),
         total_internal_links: links.len(),
-        pages_with_outgoing: profiles.iter().filter(|profile| !profile.outgoing_urls.is_empty()).count(),
-        pages_with_incoming: profiles.iter().filter(|profile| !profile.incoming_urls.is_empty()).count(),
+        pages_with_outgoing: profiles
+            .iter()
+            .filter(|profile| !profile.outgoing_urls.is_empty())
+            .count(),
+        pages_with_incoming: profiles
+            .iter()
+            .filter(|profile| !profile.incoming_urls.is_empty())
+            .count(),
         orphan_urls,
         profiles,
     })
@@ -571,7 +586,11 @@ async fn fetch_page_snapshot(
     base_url: &Url,
     page_url: &Url,
 ) -> Result<(ImportedPage, Vec<ImportedLink>)> {
-    let response = client.get(page_url.clone()).send().await.map_err(Error::Http)?;
+    let response = client
+        .get(page_url.clone())
+        .send()
+        .await
+        .map_err(Error::Http)?;
     let status_code = i64::from(response.status().as_u16());
     if !response.status().is_success() {
         return Err(Error::Other(format!(
@@ -692,13 +711,21 @@ fn normalize_host(host: Option<&str>) -> Option<String> {
 
 fn extract_title(document: &Html) -> Option<String> {
     let selector = Selector::parse("title").ok()?;
-    let value = document.select(&selector).next()?.text().collect::<String>();
+    let value = document
+        .select(&selector)
+        .next()?
+        .text()
+        .collect::<String>();
     clean_text(&value).trim().to_owned().into()
 }
 
 fn extract_h1(document: &Html) -> Option<String> {
     let selector = Selector::parse("h1").ok()?;
-    let value = document.select(&selector).next()?.text().collect::<String>();
+    let value = document
+        .select(&selector)
+        .next()?
+        .text()
+        .collect::<String>();
     let cleaned = clean_text(&value);
     if cleaned.is_empty() {
         None
@@ -751,7 +778,11 @@ fn extract_main_content(document: &Html) -> String {
     String::new()
 }
 
-fn extract_internal_links(document: &Html, page_url: &Url, base_url: &Url) -> Vec<(String, String)> {
+fn extract_internal_links(
+    document: &Html,
+    page_url: &Url,
+    base_url: &Url,
+) -> Vec<(String, String)> {
     let Ok(selector) = Selector::parse("a[href]") else {
         return Vec::new();
     };
@@ -823,7 +854,8 @@ mod tests {
     #[test]
     fn normalizes_same_host_urls() {
         let base = normalize_site_url("https://www.example.com/blog/").unwrap();
-        let url = normalize_same_site_url(&base, "https://example.com/post/?utm_source=test#top").unwrap();
+        let url = normalize_same_site_url(&base, "https://example.com/post/?utm_source=test#top")
+            .unwrap();
         assert_eq!(url.as_str(), "https://example.com/post");
     }
 

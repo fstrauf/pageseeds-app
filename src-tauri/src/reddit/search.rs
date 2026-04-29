@@ -122,7 +122,9 @@ pub async fn search_submissions(
             &creds.client_id,
             &creds.client_secret,
             &creds.refresh_token,
-        ).await {
+        )
+        .await
+        {
             Ok(token) => Some(token),
             Err(e) => {
                 log::warn!(
@@ -192,10 +194,7 @@ pub async fn search_submissions(
                     if let Some(retry_after) = response.headers().get("retry-after") {
                         if let Ok(sec_str) = retry_after.to_str() {
                             if let Ok(secs) = sec_str.parse::<u64>() {
-                                log::info!(
-                                    "[reddit_search] honoring Retry-After: {}s",
-                                    secs
-                                );
+                                log::info!("[reddit_search] honoring Retry-After: {}s", secs);
                                 tokio::time::sleep(Duration::from_secs(secs)).await;
                                 continue;
                             }
@@ -231,9 +230,7 @@ pub async fn search_submissions(
                 match response.error_for_status() {
                     Ok(ok_resp) => {
                         let resp: SearchResponse = ok_resp.json().await.map_err(|e| {
-                            crate::error::Error::Other(format!(
-                                "JSON parse error: {}"
-                            , e))
+                            crate::error::Error::Other(format!("JSON parse error: {}", e))
                         })?;
                         let posts = parse_posts(resp);
                         return Ok(SearchResult {
@@ -258,8 +255,9 @@ pub async fn search_submissions(
     // All retries exhausted
     if let Some(e) = last_err {
         Err(crate::error::Error::Other(format!(
-            "Reddit search failed after retries: {}"
-        , e)))
+            "Reddit search failed after retries: {}",
+            e
+        )))
     } else {
         Ok(SearchResult {
             posts: vec![],
@@ -277,13 +275,12 @@ fn parse_posts(resp: SearchResponse) -> Vec<SubmissionSummary> {
         .map(|child| {
             let p = child.data;
 
-            let created_at = p.created_utc.and_then(|ts| {
-                DateTime::from_timestamp(ts as i64, 0).map(|dt| dt.to_rfc3339())
-            });
+            let created_at = p
+                .created_utc
+                .and_then(|ts| DateTime::from_timestamp(ts as i64, 0).map(|dt| dt.to_rfc3339()));
 
             let days_old = p.created_utc.and_then(|ts| {
-                DateTime::from_timestamp(ts as i64, 0)
-                    .map(|created| (now - created).num_days())
+                DateTime::from_timestamp(ts as i64, 0).map(|created| (now - created).num_days())
             });
 
             let url = p.permalink.map(|permalink| {
@@ -295,9 +292,9 @@ fn parse_posts(resp: SearchResponse) -> Vec<SubmissionSummary> {
             });
 
             // Suppress "[removed]" / "[deleted]" boilerplate
-            let selftext = p.selftext.filter(|s| {
-                !s.is_empty() && s != "[removed]" && s != "[deleted]"
-            });
+            let selftext = p
+                .selftext
+                .filter(|s| !s.is_empty() && s != "[removed]" && s != "[deleted]");
 
             SubmissionSummary {
                 post_id: p.id,

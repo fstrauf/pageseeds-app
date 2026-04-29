@@ -1,7 +1,6 @@
 /// Typed models for cannibalization strategy review and approval.
 ///
 /// These cross the Tauri IPC boundary to the frontend review UI.
-
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -42,9 +41,7 @@ impl rusqlite::types::ToSql for Confidence {
 }
 
 impl rusqlite::types::FromSql for Confidence {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "high" => Ok(Confidence::High),
@@ -91,9 +88,7 @@ impl rusqlite::types::ToSql for ApprovalStatus {
 }
 
 impl rusqlite::types::FromSql for ApprovalStatus {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "approved" => Ok(ApprovalStatus::Approved),

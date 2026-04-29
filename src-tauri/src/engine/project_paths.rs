@@ -18,7 +18,6 @@
 ///       project.md
 ///       reddit_config.md
 /// ```
-
 use std::path::{Path, PathBuf};
 
 use crate::models::project::Project;

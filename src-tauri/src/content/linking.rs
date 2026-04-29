@@ -62,14 +62,12 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
         .map(|a| (a.url_slug.clone(), a.id))
         .collect();
 
-    let id_to_article: HashMap<i64, &Article> =
-        articles.iter().map(|a| (a.id, a)).collect();
+    let id_to_article: HashMap<i64, &Article> = articles.iter().map(|a| (a.id, a)).collect();
 
     // Regex patterns for internal links
     let re_canonical = Regex::new(r"\[([^\]]+)\]\(/blog/([^/)]+)/?[^)]*\)").unwrap();
     let re_relative = Regex::new(r"\[([^\]]+)\]\(\./([^)]+\.mdx?)\)").unwrap();
-    let re_related_heading =
-        Regex::new(r"(?im)^#{1,4}\s+Related\s+Articles").unwrap();
+    let re_related_heading = Regex::new(r"(?im)^#{1,4}\s+Related\s+Articles").unwrap();
 
     let mut all_links: Vec<InternalLink> = Vec::new();
     // Map from article id → set of (outgoing target ids)
@@ -117,15 +115,20 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
                 let (target_id, target_file) = if let Some(&tid) = slug_to_id.get(&slug) {
                     let tfile = id_to_article
                         .get(&tid)
-                        .map(|a| Path::new(&a.file)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or(&a.file)
-                            .to_string())
+                        .map(|a| {
+                            Path::new(&a.file)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(&a.file)
+                                .to_string()
+                        })
                         .unwrap_or_default();
                     (tid, tfile)
                 } else {
-                    unresolved_map.entry(source_id).or_default().push(slug.clone());
+                    unresolved_map
+                        .entry(source_id)
+                        .or_default()
+                        .push(slug.clone());
                     (-1, slug)
                 };
 
@@ -149,16 +152,15 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
             for cap in re_relative.captures_iter(line) {
                 let anchor = cap[1].to_string();
                 let target_file = cap[2].to_string();
-                let (target_id, resolved_file) =
-                    if let Some(&tid) = file_to_id.get(&target_file) {
-                        (tid, target_file.clone())
-                    } else {
-                        unresolved_map
-                            .entry(source_id)
-                            .or_default()
-                            .push(target_file.clone());
-                        (-1, target_file)
-                    };
+                let (target_id, resolved_file) = if let Some(&tid) = file_to_id.get(&target_file) {
+                    (tid, target_file.clone())
+                } else {
+                    unresolved_map
+                        .entry(source_id)
+                        .or_default()
+                        .push(target_file.clone());
+                    (-1, target_file)
+                };
 
                 if target_id > 0 {
                     outgoing.entry(source_id).or_default().insert(target_id);
@@ -215,8 +217,14 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
         })
         .collect();
 
-    let articles_with_outgoing = profiles.iter().filter(|p| !p.outgoing_ids.is_empty()).count();
-    let articles_with_incoming = profiles.iter().filter(|p| !p.incoming_ids.is_empty()).count();
+    let articles_with_outgoing = profiles
+        .iter()
+        .filter(|p| !p.outgoing_ids.is_empty())
+        .count();
+    let articles_with_incoming = profiles
+        .iter()
+        .filter(|p| !p.incoming_ids.is_empty())
+        .count();
     let orphan_ids: Vec<i64> = profiles
         .iter()
         .filter(|p| p.incoming_ids.is_empty() && p.outgoing_ids.is_empty())

@@ -159,9 +159,10 @@ export default function App() {
   }, [activeProject])
 
   const handleRunTasks = useCallback((tasks: Task[]) => {
-    if (tasks.length === 0) return
+    const runnableTasks = tasks.filter(task => task.execution_mode !== 'manual')
+    if (runnableTasks.length === 0) return
     queue.enqueue(
-      tasks.map(t => ({
+      runnableTasks.map(t => ({
         taskId: t.id,
         projectId: t.project_id,
         title: t.title ?? t.type ?? 'Untitled',

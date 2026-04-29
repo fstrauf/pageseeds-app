@@ -168,7 +168,10 @@ pub fn validate_no_future_dates(articles: &[Article]) -> DatePolicyReport {
         .into_iter()
         .filter(|i| i.issue_type != "duplicate_date")
         .collect();
-    let future_count = issues.iter().filter(|i| i.issue_type == "future_date").count();
+    let future_count = issues
+        .iter()
+        .filter(|i| i.issue_type == "future_date")
+        .count();
     DatePolicyReport {
         total_checked: report.total_checked,
         future_count,

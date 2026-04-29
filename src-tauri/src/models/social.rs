@@ -44,9 +44,7 @@ impl rusqlite::types::ToSql for Platform {
 }
 
 impl rusqlite::types::FromSql for Platform {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "tiktok" => Ok(Platform::TikTok),
@@ -98,9 +96,7 @@ impl rusqlite::types::ToSql for PostStatus {
 }
 
 impl rusqlite::types::FromSql for PostStatus {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "draft" => Ok(PostStatus::Draft),
@@ -148,9 +144,7 @@ impl rusqlite::types::ToSql for SourceType {
 }
 
 impl rusqlite::types::FromSql for SourceType {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "article" => Ok(SourceType::Article),
@@ -195,9 +189,7 @@ impl rusqlite::types::ToSql for PostFormat {
 }
 
 impl rusqlite::types::FromSql for PostFormat {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "single_image" => Ok(PostFormat::SingleImage),
@@ -244,9 +236,7 @@ impl rusqlite::types::ToSql for CampaignStatus {
 }
 
 impl rusqlite::types::FromSql for CampaignStatus {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "draft" => Ok(CampaignStatus::Draft),
@@ -284,9 +274,7 @@ impl rusqlite::types::ToSql for AssetType {
 }
 
 impl rusqlite::types::FromSql for AssetType {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "image" => Ok(AssetType::Image),
@@ -300,10 +288,10 @@ impl rusqlite::types::FromSql for AssetType {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum CanvasSize {
-    TikTok,      // 9:16 (1080x1920)
-    Square,      // 1:1 (1080x1080)
-    Portrait,    // 4:5 (1080x1350)
-    Story,       // 9:16 (1080x1920)
+    TikTok,   // 9:16 (1080x1920)
+    Square,   // 1:1 (1080x1080)
+    Portrait, // 4:5 (1080x1350)
+    Story,    // 9:16 (1080x1920)
 }
 
 impl CanvasSize {
@@ -326,9 +314,7 @@ impl rusqlite::types::ToSql for CanvasSize {
 }
 
 impl rusqlite::types::FromSql for CanvasSize {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "tiktok" => Ok(CanvasSize::TikTok),
@@ -368,9 +354,7 @@ impl rusqlite::types::ToSql for TextPosition {
 }
 
 impl rusqlite::types::FromSql for TextPosition {
-    fn column_result(
-        value: rusqlite::types::ValueRef<'_>,
-    ) -> rusqlite::types::FromSqlResult<Self> {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
             "top" => Ok(TextPosition::Top),

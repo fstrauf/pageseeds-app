@@ -6,8 +6,8 @@ use ts_rs::TS;
 #[ts(export)]
 pub struct IntentClassification {
     pub keyword: String,
-    pub intent: String,           // "informational" | "navigational" | "transactional" | "commercial"
-    pub confidence: Option<f64>,  // DataForSEO only
+    pub intent: String, // "informational" | "navigational" | "transactional" | "commercial"
+    pub confidence: Option<f64>, // DataForSEO only
 }
 
 /// Check if a keyword contains a pattern with word-boundary awareness.
@@ -28,30 +28,81 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
 
     // Informational patterns
     let informational_patterns = [
-        "how to", "what is", "what are", "guide", "tutorial", "why ", "tips",
-        "explain", "meaning", "definition", "examples", "learn", "understand",
-        "beginner", "beginners", "introduction", "overview", "basics",
+        "how to",
+        "what is",
+        "what are",
+        "guide",
+        "tutorial",
+        "why ",
+        "tips",
+        "explain",
+        "meaning",
+        "definition",
+        "examples",
+        "learn",
+        "understand",
+        "beginner",
+        "beginners",
+        "introduction",
+        "overview",
+        "basics",
     ];
 
     // Transactional patterns
     let transactional_patterns = [
-        "buy", "price", "discount", "coupon", "deal", "cheap", "order",
-        "purchase", "shop", "sale", "free shipping", "add to cart",
-        "subscription", "subscribe", "sign up", "register", "download",
+        "buy",
+        "price",
+        "discount",
+        "coupon",
+        "deal",
+        "cheap",
+        "order",
+        "purchase",
+        "shop",
+        "sale",
+        "free shipping",
+        "add to cart",
+        "subscription",
+        "subscribe",
+        "sign up",
+        "register",
+        "download",
     ];
 
     // Commercial patterns
     let commercial_patterns = [
-        "best", "top", "review", "reviews", "vs", "versus", "comparison",
-        "compare", "alternative", "alternatives", "recommendation",
-        "recommended", "rated", "rating", "pros and cons",
+        "best",
+        "top",
+        "review",
+        "reviews",
+        "vs",
+        "versus",
+        "comparison",
+        "compare",
+        "alternative",
+        "alternatives",
+        "recommendation",
+        "recommended",
+        "rated",
+        "rating",
+        "pros and cons",
     ];
 
     // Navigational patterns (brand names, login, specific sites)
     let navigational_patterns = [
-        "login", "sign in", "log in", "signup", "register", "account",
-        "customer service", "contact", "phone number", "address",
-        "hours", "location", "directions",
+        "login",
+        "sign in",
+        "log in",
+        "signup",
+        "register",
+        "account",
+        "customer service",
+        "contact",
+        "phone number",
+        "address",
+        "hours",
+        "location",
+        "directions",
     ];
 
     // Check patterns in order of specificity
@@ -94,9 +145,9 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
             };
         }
     }
-    
+
     // Check for question words at the start
-    if kw_lower.starts_with("how ") 
+    if kw_lower.starts_with("how ")
         || kw_lower.starts_with("what ")
         || kw_lower.starts_with("why ")
         || kw_lower.starts_with("when ")
@@ -115,7 +166,7 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
             confidence: None,
         };
     }
-    
+
     // Default to informational for unknown keywords
     IntentClassification {
         keyword: keyword.to_string(),
@@ -126,9 +177,7 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
 
 /// Batch classify keywords using pattern matching.
 pub fn classify_batch_by_pattern(keywords: &[String]) -> Vec<IntentClassification> {
-    keywords.iter()
-        .map(|kw| classify_by_pattern(kw))
-        .collect()
+    keywords.iter().map(|kw| classify_by_pattern(kw)).collect()
 }
 
 #[cfg(test)]
@@ -143,7 +192,7 @@ mod tests {
             ("beginner guide to rust", "informational"),
             ("tips for better sleep", "informational"),
         ];
-        
+
         for (keyword, expected) in cases {
             let result = classify_by_pattern(keyword);
             assert_eq!(result.intent, expected, "Failed for: {}", keyword);
@@ -158,7 +207,7 @@ mod tests {
             ("order pizza online", "transactional"),
             ("discount codes", "transactional"),
         ];
-        
+
         for (keyword, expected) in cases {
             let result = classify_by_pattern(keyword);
             assert_eq!(result.intent, expected, "Failed for: {}", keyword);
@@ -173,7 +222,7 @@ mod tests {
             ("iphone vs samsung review", "commercial"),
             ("alternative to photoshop", "commercial"),
         ];
-        
+
         for (keyword, expected) in cases {
             let result = classify_by_pattern(keyword);
             assert_eq!(result.intent, expected, "Failed for: {}", keyword);
@@ -187,7 +236,7 @@ mod tests {
             ("can dogs eat chocolate", "informational"),
             ("what time is it", "informational"),
         ];
-        
+
         for (keyword, expected) in cases {
             let result = classify_by_pattern(keyword);
             assert_eq!(result.intent, expected, "Failed for: {}", keyword);

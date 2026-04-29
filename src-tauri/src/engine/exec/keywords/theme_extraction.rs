@@ -1,4 +1,3 @@
-
 // ─── Theme string cleaning ──────────────────────────────────────────────────
 
 /// Strip markdown heading markers (`###`), resolve `Cluster N: Topic` → `"Topic"`,
@@ -106,12 +105,17 @@ pub(crate) fn derive_themes_from_project(automation_dir: &std::path::Path) -> Ve
 }
 
 /// Find the first file in `dir` whose name contains `suffix` (case-insensitive).
-pub(crate) fn find_file_by_suffix(dir: &std::path::Path, suffix: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn find_file_by_suffix(
+    dir: &std::path::Path,
+    suffix: &str,
+) -> Option<std::path::PathBuf> {
     let exact = dir.join(suffix);
     if exact.exists() {
         return Some(exact);
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return None };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return None;
+    };
     let suffix_lower = suffix.to_lowercase();
     entries
         .flatten()
@@ -127,7 +131,9 @@ pub(crate) fn find_file_by_suffix(dir: &std::path::Path, suffix: &str) -> Option
 
 /// Extract themes from `seo_content_brief.md`.
 pub(crate) fn extract_from_brief(path: &std::path::Path) -> Vec<String> {
-    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
 
     let planned_items: Vec<String> = content
         .lines()
@@ -137,7 +143,8 @@ pub(crate) fn extract_from_brief(path: &std::path::Path) -> Vec<String> {
             // - strips '#' heading markers
             // - resolves "Cluster N: Topic (annotation)" → "Topic"
             // - rejects bare "Cluster N" / "### Cluster N" labels
-            let stripped = l.trim()
+            let stripped = l
+                .trim()
                 .trim_start_matches("- [ ] ")
                 .trim_start_matches("- [x] ")
                 .trim_start_matches("- ")
@@ -176,7 +183,9 @@ pub(crate) fn extract_from_brief(path: &std::path::Path) -> Vec<String> {
 
 /// Extract content pillar topics from `project_summary.md`.
 pub(crate) fn extract_from_summary(path: &std::path::Path) -> Vec<String> {
-    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
 
     let mut themes: Vec<String> = content
         .lines()
@@ -202,7 +211,8 @@ pub(crate) fn extract_from_summary(path: &std::path::Path) -> Vec<String> {
             }
             if in_keywords {
                 if line.trim().starts_with('-') || line.trim().starts_with('*') {
-                    let kw = line.trim()
+                    let kw = line
+                        .trim()
                         .trim_start_matches('-')
                         .trim_start_matches('*')
                         .trim()
@@ -211,7 +221,9 @@ pub(crate) fn extract_from_summary(path: &std::path::Path) -> Vec<String> {
                     if !kw.is_empty() {
                         themes.push(kw);
                     }
-                    if themes.len() >= 8 { break; }
+                    if themes.len() >= 8 {
+                        break;
+                    }
                 } else if line.trim().is_empty() || line.starts_with('#') {
                     in_keywords = false;
                 }
@@ -224,22 +236,30 @@ pub(crate) fn extract_from_summary(path: &std::path::Path) -> Vec<String> {
 
 /// Extract unique target_keywords from `articles.json` as theme seeds.
 pub(crate) fn extract_from_articles(path: &std::path::Path) -> Vec<String> {
-    let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
-    let Ok(articles) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else { return vec![] };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
+    let Ok(articles) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else {
+        return vec![];
+    };
 
     let mut seen = std::collections::HashSet::new();
     let mut themes = Vec::new();
 
     for article in &articles {
         if let Some(kw) = article.get("target_keyword").and_then(|v| v.as_str()) {
-            if kw.is_empty() { continue; }
+            if kw.is_empty() {
+                continue;
+            }
             let short: String = kw.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
             let lower = short.to_lowercase();
             if seen.insert(lower.clone()) {
                 themes.push(short);
             }
         }
-        if themes.len() >= 6 { break; }
+        if themes.len() >= 6 {
+            break;
+        }
     }
 
     themes

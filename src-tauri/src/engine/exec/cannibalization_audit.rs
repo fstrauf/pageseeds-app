@@ -4,7 +4,6 @@
 ///   - exec_can_build_context   (deterministic TF-IDF clustering + link graph + hub gaps + territory analysis)
 ///   - exec_can_analyze         (agentic analysis with cannibalization-strategy skill)
 ///   - create_can_fix_tasks     (spawn follow-up fix tasks)
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -114,10 +113,11 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     }
     let articles_path = paths.automation_dir.join("articles.json");
 
-    let doc: serde_json::Value = match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let empty = vec![];
     let articles = doc["articles"].as_array().unwrap_or(&empty);
@@ -141,8 +141,13 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         let gsc = article["gsc"].clone();
         let published_date = article["published_date"].as_str().unwrap_or("").to_string();
 
-        let (h1, first_200_words, date_from_file) = read_article_head_and_words(project_path, &file_ref);
-        let published_date = if published_date.is_empty() { date_from_file } else { published_date };
+        let (h1, first_200_words, date_from_file) =
+            read_article_head_and_words(project_path, &file_ref);
+        let published_date = if published_date.is_empty() {
+            date_from_file
+        } else {
+            published_date
+        };
         let word_count = first_200_words.split_whitespace().count();
 
         let combined_text = format!("{} {} {} {}", title, h1, target_keyword, first_200_words);
@@ -300,16 +305,22 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         "keyword_groups": &keyword_groups_json,
     });
 
-    let out_path = paths.automation_dir.join("cannibalization_audit_context.json");
+    let out_path = paths
+        .automation_dir
+        .join("cannibalization_audit_context.json");
     let full_str = serde_json::to_string_pretty(&full_doc).unwrap_or_default() + "\n";
     if let Err(e) = std::fs::write(&out_path, &full_str) {
-        log::warn!("[cannibalization_audit] Failed to write cannibalization_audit_context.json: {}", e);
+        log::warn!(
+            "[cannibalization_audit] Failed to write cannibalization_audit_context.json: {}",
+            e
+        );
     }
 
     let clusters_json: Vec<serde_json::Value> = clusters
         .iter()
         .map(|c| {
-            let pages: Vec<serde_json::Value> = c.page_ids
+            let pages: Vec<serde_json::Value> = c
+                .page_ids
                 .iter()
                 .filter_map(|&pid| records.iter().find(|r| r.id == pid))
                 .map(|r| {
@@ -351,8 +362,14 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         "generated_at": &now_iso,
         "clusters": &clusters_json,
     });
-    if let Err(e) = std::fs::write(&clusters_path, serde_json::to_string_pretty(&clusters_doc).unwrap_or_default() + "\n") {
-        log::warn!("[cannibalization_audit] Failed to write cannibalization_clusters.json: {}", e);
+    if let Err(e) = std::fs::write(
+        &clusters_path,
+        serde_json::to_string_pretty(&clusters_doc).unwrap_or_default() + "\n",
+    ) {
+        log::warn!(
+            "[cannibalization_audit] Failed to write cannibalization_clusters.json: {}",
+            e
+        );
     }
 
     let hub_gaps_path = paths.automation_dir.join("hub_gaps.json");
@@ -360,8 +377,14 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         "generated_at": &now_iso,
         "hub_gaps": &hub_gaps,
     });
-    if let Err(e) = std::fs::write(&hub_gaps_path, serde_json::to_string_pretty(&hub_gaps_doc).unwrap_or_default() + "\n") {
-        log::warn!("[cannibalization_audit] Failed to write hub_gaps.json: {}", e);
+    if let Err(e) = std::fs::write(
+        &hub_gaps_path,
+        serde_json::to_string_pretty(&hub_gaps_doc).unwrap_or_default() + "\n",
+    ) {
+        log::warn!(
+            "[cannibalization_audit] Failed to write hub_gaps.json: {}",
+            e
+        );
     }
 
     let territory_path = paths.automation_dir.join("territory_analysis.json");
@@ -369,8 +392,14 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         "generated_at": &now_iso,
         "territory_analysis": &territory_analysis,
     });
-    if let Err(e) = std::fs::write(&territory_path, serde_json::to_string_pretty(&territory_doc).unwrap_or_default() + "\n") {
-        log::warn!("[cannibalization_audit] Failed to write territory_analysis.json: {}", e);
+    if let Err(e) = std::fs::write(
+        &territory_path,
+        serde_json::to_string_pretty(&territory_doc).unwrap_or_default() + "\n",
+    ) {
+        log::warn!(
+            "[cannibalization_audit] Failed to write territory_analysis.json: {}",
+            e
+        );
     }
 
     // ── 12. Build full structured cluster context for the agent ───────────────
@@ -500,7 +529,8 @@ fn compute_query_overlap(
             if let Ok(rows) = crate::db::get_ctr_query_metrics(conn, project_id, article_id) {
                 if !rows.is_empty() {
                     has_db_data = true;
-                    let queries: HashSet<String> = rows.into_iter().map(|r| r.query.to_lowercase()).collect();
+                    let queries: HashSet<String> =
+                        rows.into_iter().map(|r| r.query.to_lowercase()).collect();
                     query_sets.push(queries);
                 }
             }
@@ -737,9 +767,9 @@ fn detect_hub_gaps(records: &[ArticleRecord], clusters: &[Cluster]) -> Vec<serde
         }
 
         let theme_kw = cluster.theme.trim().to_lowercase();
-        let has_related_hub = existing_hubs.iter().any(|hub_kw| {
-            theme_kw.contains(hub_kw) || hub_kw.contains(&theme_kw)
-        });
+        let has_related_hub = existing_hubs
+            .iter()
+            .any(|hub_kw| theme_kw.contains(hub_kw) || hub_kw.contains(&theme_kw));
 
         if has_related_hub {
             continue;
@@ -786,7 +816,9 @@ fn capitalize_words(text: &str) -> String {
             let mut chars = word.chars();
             match chars.next() {
                 None => String::new(),
-                Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                }
             }
         })
         .collect::<Vec<_>>()
@@ -878,7 +910,11 @@ fn read_article_head_and_words(project_path: &str, file_ref: &str) -> (String, S
     let content = match std::fs::read_to_string(&full) {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("[cannibalization_audit] Could not read {}: {}", full.display(), e);
+            log::warn!(
+                "[cannibalization_audit] Could not read {}: {}",
+                full.display(),
+                e
+            );
             return (String::new(), String::new(), String::new());
         }
     };
@@ -942,7 +978,9 @@ pub(crate) fn exec_can_analyze(
         None => {
             return StepResult {
                 success: false,
-                message: "Skill 'cannibalization-strategy' not found in .github/skills/ or app defaults".to_string(),
+                message:
+                    "Skill 'cannibalization-strategy' not found in .github/skills/ or app defaults"
+                        .to_string(),
                 output: None,
             };
         }
@@ -960,9 +998,8 @@ pub(crate) fn exec_can_analyze(
     match agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(output) => {
             // Extract JSON if present so downstream steps receive clean structured data
-            let mut value = crate::engine::text::extract_json(&output).unwrap_or_else(|| {
-                serde_json::Value::String(output)
-            });
+            let mut value = crate::engine::text::extract_json(&output)
+                .unwrap_or_else(|| serde_json::Value::String(output));
 
             // Inject generated_at if missing so deserialization always succeeds
             if let serde_json::Value::Object(ref mut map) = value {
@@ -980,11 +1017,20 @@ pub(crate) fn exec_can_analyze(
             let paths = ProjectPaths::from_path(project_path);
             let strategy_path = paths.automation_dir.join("cannibalization_strategy.json");
             if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
-                log::warn!("[cannibalization_audit] Failed to create automation dir: {}", e);
+                log::warn!(
+                    "[cannibalization_audit] Failed to create automation dir: {}",
+                    e
+                );
             } else if let Err(e) = std::fs::write(&strategy_path, &final_output) {
-                log::warn!("[cannibalization_audit] Failed to write strategy file: {}", e);
+                log::warn!(
+                    "[cannibalization_audit] Failed to write strategy file: {}",
+                    e
+                );
             } else {
-                log::info!("[cannibalization_audit] Wrote strategy to {:?}", strategy_path);
+                log::info!(
+                    "[cannibalization_audit] Wrote strategy to {:?}",
+                    strategy_path
+                );
             }
 
             StepResult {
@@ -1084,7 +1130,11 @@ mod tests {
                 }
             ]
         });
-        std::fs::write(auto_dir.join("articles.json"), serde_json::to_string_pretty(&articles).unwrap()).unwrap();
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            serde_json::to_string_pretty(&articles).unwrap(),
+        )
+        .unwrap();
 
         let mdx1 = r#"---
 title: "Best Stocks for Cash-Secured Puts"
@@ -1154,11 +1204,15 @@ Cash secured puts are a great way to generate income.
     #[test]
     fn test_cosine_similarity_range() {
         let a = TfIdfVector {
-            weights: [("apple".to_string(), 1.0), ("banana".to_string(), 1.0)].into_iter().collect(),
+            weights: [("apple".to_string(), 1.0), ("banana".to_string(), 1.0)]
+                .into_iter()
+                .collect(),
             norm: (2.0f64).sqrt(),
         };
         let b = TfIdfVector {
-            weights: [("apple".to_string(), 1.0), ("banana".to_string(), 1.0)].into_iter().collect(),
+            weights: [("apple".to_string(), 1.0), ("banana".to_string(), 1.0)]
+                .into_iter()
+                .collect(),
             norm: (2.0f64).sqrt(),
         };
         assert!((cosine_similarity(&a, &b) - 1.0).abs() < 0.001);
@@ -1195,11 +1249,17 @@ Cash secured puts are a great way to generate income.
         let result = exec_can_build_context(&task, &path);
         assert!(result.success, "build_context failed: {}", result.message);
 
-        let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
 
         // Site summary
         assert_eq!(output["site_summary"]["total_pages"].as_i64().unwrap(), 4);
-        assert!(output["site_summary"]["total_impressions"].as_f64().unwrap() > 0.0);
+        assert!(
+            output["site_summary"]["total_impressions"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
 
         // Clusters
         let clusters = output["clusters"].as_array().unwrap();
@@ -1207,9 +1267,15 @@ Cash secured puts are a great way to generate income.
 
         // The cash-secured-puts cluster should have 3 articles
         let csp_cluster = clusters.iter().find(|c| {
-            c["theme"].as_str().unwrap_or("").contains("cash secured puts")
+            c["theme"]
+                .as_str()
+                .unwrap_or("")
+                .contains("cash secured puts")
         });
-        assert!(csp_cluster.is_some(), "Should find cash secured puts cluster");
+        assert!(
+            csp_cluster.is_some(),
+            "Should find cash secured puts cluster"
+        );
         let csp_cluster = csp_cluster.unwrap();
         assert_eq!(csp_cluster["pages"].as_array().unwrap().len(), 3);
         assert!(csp_cluster["total_impressions"].as_f64().unwrap() > 46000.0);
@@ -1218,11 +1284,17 @@ Cash secured puts are a great way to generate income.
         assert_eq!(csp_cluster["shared_query_count"].as_i64().unwrap(), 1);
         let top_queries = csp_cluster["top_shared_queries"].as_array().unwrap();
         assert!(!top_queries.is_empty());
-        assert!(top_queries[0].as_str().unwrap().contains("cash secured puts"));
+        assert!(top_queries[0]
+            .as_str()
+            .unwrap()
+            .contains("cash secured puts"));
 
         // Hub gaps
         let hub_gaps = output["hub_gaps"].as_array().unwrap();
-        assert!(!hub_gaps.is_empty(), "Should detect hub gaps for 3+ article clusters");
+        assert!(
+            !hub_gaps.is_empty(),
+            "Should detect hub gaps for 3+ article clusters"
+        );
 
         // Territory analysis
         let territory = &output["territory_analysis"];
@@ -1267,7 +1339,11 @@ Cash secured puts are a great way to generate income.
                 }
             ]
         });
-        std::fs::write(auto_dir.join("articles.json"), serde_json::to_string_pretty(&articles).unwrap()).unwrap();
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            serde_json::to_string_pretty(&articles).unwrap(),
+        )
+        .unwrap();
 
         let mdx = r#"---
 title: "Article"
@@ -1299,11 +1375,21 @@ Some content here.
         };
 
         let result = exec_can_build_context(&task, &path);
-        assert!(result.success, "Should succeed even with missing GSC data: {}", result.message);
+        assert!(
+            result.success,
+            "Should succeed even with missing GSC data: {}",
+            result.message
+        );
 
-        let output: serde_json::Value = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
         assert_eq!(output["site_summary"]["total_pages"].as_i64().unwrap(), 2);
-        assert_eq!(output["site_summary"]["total_impressions"].as_f64().unwrap(), 0.0);
+        assert_eq!(
+            output["site_summary"]["total_impressions"]
+                .as_f64()
+                .unwrap(),
+            0.0
+        );
 
         let clusters = output["clusters"].as_array().unwrap();
         assert!(!clusters.is_empty());
@@ -1377,11 +1463,26 @@ Some content here.
             },
         ];
 
-        let clusters = build_clusters(&records, &[(0, 1, 0.5), (1, 2, 0.5), (0, 2, 0.5), (0, 3, 0.5), (1, 3, 0.5), (2, 3, 0.5)], None, "");
+        let clusters = build_clusters(
+            &records,
+            &[
+                (0, 1, 0.5),
+                (1, 2, 0.5),
+                (0, 2, 0.5),
+                (0, 3, 0.5),
+                (1, 3, 0.5),
+                (2, 3, 0.5),
+            ],
+            None,
+            "",
+        );
         let gaps = detect_hub_gaps(&records, &clusters);
 
         // Cluster includes hub page (id 4), so no gap should be reported
-        assert!(gaps.is_empty(), "Should not report hub gap when hub exists in cluster");
+        assert!(
+            gaps.is_empty(),
+            "Should not report hub gap when hub exists in cluster"
+        );
     }
 
     #[test]
@@ -1501,7 +1602,11 @@ Some content here.
         assert_eq!(saturated.len(), 1, "Should detect saturated theme");
         assert_eq!(saturated[0]["theme"].as_str().unwrap(), "saturated theme");
 
-        assert_eq!(open.len(), 1, "Should detect open territory with impressions");
+        assert_eq!(
+            open.len(),
+            1,
+            "Should detect open territory with impressions"
+        );
         assert_eq!(open[0]["theme"].as_str().unwrap(), "open territory");
     }
 
@@ -1521,61 +1626,97 @@ Some content here.
         // Insert query metrics for 3 articles
         // Article 1: queries A, B, C
         crate::db::set_ctr_query_metrics(
-            &conn, project_id, 1, "/a",
+            &conn,
+            project_id,
+            1,
+            "/a",
             &[
                 ("query a".to_string(), 100.0, 1.0, 0.01, 5.0, None),
                 ("query b".to_string(), 80.0, 1.0, 0.01, 6.0, None),
                 ("query c".to_string(), 60.0, 1.0, 0.01, 7.0, None),
             ],
-            Some("2026-01-01"), Some("2026-03-31"),
-        ).unwrap();
+            Some("2026-01-01"),
+            Some("2026-03-31"),
+        )
+        .unwrap();
 
         // Article 2: queries B, C, D
         crate::db::set_ctr_query_metrics(
-            &conn, project_id, 2, "/b",
+            &conn,
+            project_id,
+            2,
+            "/b",
             &[
                 ("query b".to_string(), 90.0, 1.0, 0.01, 4.0, None),
                 ("query c".to_string(), 70.0, 1.0, 0.01, 5.0, None),
                 ("query d".to_string(), 50.0, 1.0, 0.01, 8.0, None),
             ],
-            Some("2026-01-01"), Some("2026-03-31"),
-        ).unwrap();
+            Some("2026-01-01"),
+            Some("2026-03-31"),
+        )
+        .unwrap();
 
         // Article 3: queries C, D, E (no overlap with article 1 except C)
         crate::db::set_ctr_query_metrics(
-            &conn, project_id, 3, "/c",
+            &conn,
+            project_id,
+            3,
+            "/c",
             &[
                 ("query c".to_string(), 85.0, 1.0, 0.01, 3.0, None),
                 ("query d".to_string(), 65.0, 1.0, 0.01, 6.0, None),
                 ("query e".to_string(), 45.0, 1.0, 0.01, 9.0, None),
             ],
-            Some("2026-01-01"), Some("2026-03-31"),
-        ).unwrap();
+            Some("2026-01-01"),
+            Some("2026-03-31"),
+        )
+        .unwrap();
 
         let records = vec![
             ArticleRecord {
-                id: 1, url_slug: "a".to_string(), title: "A".to_string(),
-                h1: "A".to_string(), target_keyword: "kw".to_string(),
-                first_200_words: "".to_string(), file: "a.mdx".to_string(),
-                gsc: serde_json::Value::Null, tokens: vec![],
-                incoming_links: 0, outgoing_links: 0,
-                published_date: "".to_string(), word_count: 0,
+                id: 1,
+                url_slug: "a".to_string(),
+                title: "A".to_string(),
+                h1: "A".to_string(),
+                target_keyword: "kw".to_string(),
+                first_200_words: "".to_string(),
+                file: "a.mdx".to_string(),
+                gsc: serde_json::Value::Null,
+                tokens: vec![],
+                incoming_links: 0,
+                outgoing_links: 0,
+                published_date: "".to_string(),
+                word_count: 0,
             },
             ArticleRecord {
-                id: 2, url_slug: "b".to_string(), title: "B".to_string(),
-                h1: "B".to_string(), target_keyword: "kw".to_string(),
-                first_200_words: "".to_string(), file: "b.mdx".to_string(),
-                gsc: serde_json::Value::Null, tokens: vec![],
-                incoming_links: 0, outgoing_links: 0,
-                published_date: "".to_string(), word_count: 0,
+                id: 2,
+                url_slug: "b".to_string(),
+                title: "B".to_string(),
+                h1: "B".to_string(),
+                target_keyword: "kw".to_string(),
+                first_200_words: "".to_string(),
+                file: "b.mdx".to_string(),
+                gsc: serde_json::Value::Null,
+                tokens: vec![],
+                incoming_links: 0,
+                outgoing_links: 0,
+                published_date: "".to_string(),
+                word_count: 0,
             },
             ArticleRecord {
-                id: 3, url_slug: "c".to_string(), title: "C".to_string(),
-                h1: "C".to_string(), target_keyword: "kw".to_string(),
-                first_200_words: "".to_string(), file: "c.mdx".to_string(),
-                gsc: serde_json::Value::Null, tokens: vec![],
-                incoming_links: 0, outgoing_links: 0,
-                published_date: "".to_string(), word_count: 0,
+                id: 3,
+                url_slug: "c".to_string(),
+                title: "C".to_string(),
+                h1: "C".to_string(),
+                target_keyword: "kw".to_string(),
+                first_200_words: "".to_string(),
+                file: "c.mdx".to_string(),
+                gsc: serde_json::Value::Null,
+                tokens: vec![],
+                incoming_links: 0,
+                outgoing_links: 0,
+                published_date: "".to_string(),
+                word_count: 0,
             },
         ];
 
@@ -1592,20 +1733,34 @@ Some content here.
     fn test_compute_query_overlap_fallback_to_proxy() {
         let records = vec![
             ArticleRecord {
-                id: 1, url_slug: "a".to_string(), title: "A".to_string(),
-                h1: "A".to_string(), target_keyword: "cash secured puts".to_string(),
-                first_200_words: "".to_string(), file: "a.mdx".to_string(),
-                gsc: serde_json::Value::Null, tokens: vec![],
-                incoming_links: 0, outgoing_links: 0,
-                published_date: "".to_string(), word_count: 0,
+                id: 1,
+                url_slug: "a".to_string(),
+                title: "A".to_string(),
+                h1: "A".to_string(),
+                target_keyword: "cash secured puts".to_string(),
+                first_200_words: "".to_string(),
+                file: "a.mdx".to_string(),
+                gsc: serde_json::Value::Null,
+                tokens: vec![],
+                incoming_links: 0,
+                outgoing_links: 0,
+                published_date: "".to_string(),
+                word_count: 0,
             },
             ArticleRecord {
-                id: 2, url_slug: "b".to_string(), title: "B".to_string(),
-                h1: "B".to_string(), target_keyword: "cash secured puts".to_string(),
-                first_200_words: "".to_string(), file: "b.mdx".to_string(),
-                gsc: serde_json::Value::Null, tokens: vec![],
-                incoming_links: 0, outgoing_links: 0,
-                published_date: "".to_string(), word_count: 0,
+                id: 2,
+                url_slug: "b".to_string(),
+                title: "B".to_string(),
+                h1: "B".to_string(),
+                target_keyword: "cash secured puts".to_string(),
+                first_200_words: "".to_string(),
+                file: "b.mdx".to_string(),
+                gsc: serde_json::Value::Null,
+                tokens: vec![],
+                incoming_links: 0,
+                outgoing_links: 0,
+                published_date: "".to_string(),
+                word_count: 0,
             },
         ];
 

@@ -1,6 +1,5 @@
 /// Types for content merge patches produced by the agentic `merge_draft_patch`
 /// step and applied deterministically by `merge_apply_patch`.
-
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 

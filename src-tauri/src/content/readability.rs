@@ -1,13 +1,12 @@
+use crate::error::Result;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
-use crate::error::Result;
-use regex::Regex;
-use once_cell::sync::Lazy;
 
 // Compiled regex patterns for MDX cleaning
-static IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new("(?m)^import\\s+.*?from\\s+['\"].*?['\"];?\\s*$").unwrap()
-});
+static IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new("(?m)^import\\s+.*?from\\s+['\"].*?['\"];?\\s*$").unwrap());
 static JSX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[A-Z][^>]*>.*?</[A-Z][^>]*>").unwrap());
 static SELF_CLOSING_JSX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[A-Z][^>]*/>").unwrap());
 static HTML_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap());
@@ -35,7 +34,7 @@ pub struct ReadabilityReport {
 pub fn analyze_readability(text: &str) -> Result<ReadabilityReport> {
     let result = writing_analysis::analyze_all(text)
         .map_err(|e| crate::error::Error::Other(format!("Readability analysis failed: {e}")))?;
-    
+
     Ok(ReadabilityReport {
         flesch_reading_ease: result.readability.flesch_reading_ease,
         flesch_kincaid_grade: result.readability.flesch_kincaid_grade,
@@ -53,28 +52,28 @@ pub fn analyze_readability(text: &str) -> Result<ReadabilityReport> {
 /// Strip MDX/JSX components from text for readability analysis.
 pub fn clean_mdx_for_readability(content: &str) -> String {
     let mut cleaned = content.to_string();
-    
+
     // Remove import statements
     cleaned = IMPORT_RE.replace_all(&cleaned, "").to_string();
-    
+
     // Remove JSX components (tags starting with capital letters)
     cleaned = JSX_RE.replace_all(&cleaned, "").to_string();
-    
+
     // Remove self-closing JSX components
     cleaned = SELF_CLOSING_JSX_RE.replace_all(&cleaned, "").to_string();
-    
+
     // Remove HTML tags
     cleaned = HTML_RE.replace_all(&cleaned, "").to_string();
-    
+
     // Remove markdown links, keeping the text
     cleaned = MD_LINKS_RE.replace_all(&cleaned, "$1").to_string();
-    
+
     // Remove markdown images
     cleaned = MD_IMAGES_RE.replace_all(&cleaned, "").to_string();
-    
+
     // Normalize whitespace
     cleaned = WHITESPACE_RE.replace_all(&cleaned, " ").to_string();
-    
+
     cleaned.trim().to_string()
 }
 
@@ -101,7 +100,7 @@ This is a paragraph with <Component>nested content</Component> inside.
 More text here."#;
 
         let cleaned = clean_mdx_for_readability(input);
-        
+
         assert!(!cleaned.contains("import"));
         assert!(!cleaned.contains("<Component>"));
         assert!(!cleaned.contains("![alt text]"));
@@ -113,9 +112,9 @@ More text here."#;
     #[test]
     fn test_analyze_readability() {
         let text = "The quick brown fox jumps over the lazy dog. This is a simple sentence for testing readability analysis.";
-        
+
         let report = analyze_readability(text).expect("Should analyze readability");
-        
+
         // Basic sanity checks
         assert!(report.flesch_reading_ease > 0.0);
         assert!(report.flesch_kincaid_grade >= 0.0);

@@ -6,7 +6,6 @@
 /// The Python CLI stores entries as objects: `{"post_id": "...", "title": "...", "posted_at": "..."}`.
 /// We read the `post_id` field from objects, or the string directly if the entry is a bare string.
 /// When writing new entries from the Tauri app we also use the object format to stay compatible.
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -71,8 +70,12 @@ impl RedditHistoryManager {
     pub fn get_all_handled_ids(&self) -> HashSet<String> {
         let history = self.load();
         let mut ids: HashSet<String> = HashSet::new();
-        for e in &history.posted  { ids.insert(e.post_id().to_string()); }
-        for e in &history.skipped { ids.insert(e.post_id().to_string()); }
+        for e in &history.posted {
+            ids.insert(e.post_id().to_string());
+        }
+        for e in &history.skipped {
+            ids.insert(e.post_id().to_string());
+        }
         ids
     }
 
@@ -130,7 +133,10 @@ impl RedditHistoryManager {
             Err(_) => return HistoryFile::default(),
         };
         serde_json::from_str(&content).unwrap_or_else(|e| {
-            log::warn!("[history] failed to parse history file: {} — treating as empty", e);
+            log::warn!(
+                "[history] failed to parse history file: {} — treating as empty",
+                e
+            );
             HistoryFile::default()
         })
     }
@@ -143,7 +149,6 @@ impl RedditHistoryManager {
         }
         let json = serde_json::to_string_pretty(history)
             .map_err(|e| format!("Failed to serialize history: {}", e))?;
-        std::fs::write(&self.path, json)
-            .map_err(|e| format!("Failed to write history file: {}", e))
+        std::fs::write(&self.path, json).map_err(|e| format!("Failed to write history file: {}", e))
     }
 }

@@ -1,9 +1,8 @@
+use crate::error::{Error, Result};
 /// Google Autocomplete API integration for keyword research.
 /// Uses the undocumented but stable suggestqueries.google.com endpoint.
 /// No authentication required, no rate limits (within reason).
-
 use serde_json::Value;
-use crate::error::{Error, Result};
 
 /// A keyword suggestion from Google Autocomplete.
 #[derive(Debug, Clone)]
@@ -20,7 +19,7 @@ pub enum SuggestionType {
 }
 
 /// Fetch autocomplete suggestions from Google for a seed keyword.
-/// 
+///
 /// # Arguments
 /// * `keyword` - The seed keyword to expand
 /// * `country` - Country code (e.g., "us", "uk", "au")
@@ -46,11 +45,7 @@ pub async fn fetch_suggestions(
         urlencoding::encode(keyword)
     );
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(Error::Http)?;
+    let resp = client.get(&url).send().await.map_err(Error::Http)?;
 
     if !resp.status().is_success() {
         return Err(Error::Other(format!(
@@ -70,7 +65,7 @@ pub async fn fetch_question_suggestions(
     language: &str,
 ) -> Result<Vec<AutocompleteSuggestion>> {
     let mut all = vec![];
-    
+
     // Common question prefixes
     let prefixes = [
         format!("what is {}", keyword),
@@ -82,7 +77,7 @@ pub async fn fetch_question_suggestions(
         format!("{} tutorial", keyword),
         format!("{} for beginners", keyword),
     ];
-    
+
     for prefixed in &prefixes {
         match fetch_suggestions(prefixed, country, language).await {
             Ok(suggestions) => {
@@ -94,20 +89,21 @@ pub async fn fetch_question_suggestions(
             Err(e) => {
                 log::warn!(
                     "[google_autocomplete] Failed for prefix '{}': {}",
-                    prefixed, e
+                    prefixed,
+                    e
                 );
             }
         }
-        
+
         // Small delay to be polite
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
-    
+
     Ok(all)
 }
 
 /// Parse the Firefox-format JSON response from Google.
-/// 
+///
 /// Response format:
 /// ```json
 /// [
@@ -120,13 +116,13 @@ pub async fn fetch_question_suggestions(
 fn parse_firefox_response(text: &str, source_keyword: &str) -> Result<Vec<AutocompleteSuggestion>> {
     let parsed: Value = serde_json::from_str(text)
         .map_err(|e| Error::Other(format!("Failed to parse Google response: {}", e)))?;
-    
+
     let suggestions = parsed
         .as_array()
         .and_then(|arr| arr.get(1))
         .and_then(|v| v.as_array())
         .ok_or_else(|| Error::Other("Invalid Google autocomplete response format".to_string()))?;
-    
+
     let mut result = vec![];
     for item in suggestions {
         if let Some(keyword) = item.as_str() {
@@ -134,14 +130,14 @@ fn parse_firefox_response(text: &str, source_keyword: &str) -> Result<Vec<Autoco
             if keyword.to_lowercase() == source_keyword.to_lowercase() {
                 continue;
             }
-            
+
             result.push(AutocompleteSuggestion {
                 keyword: keyword.to_string(),
                 suggestion_type: SuggestionType::Regular,
             });
         }
     }
-    
+
     Ok(result)
 }
 
@@ -163,25 +159,26 @@ pub async fn get_keyword_ideas_google(
         "jp" => "ja",
         _ => "en",
     };
-    
+
     log::info!(
         "[google_autocomplete] Fetching ideas for '{}' (country: {})",
-        keyword, country
+        keyword,
+        country
     );
-    
+
     // Fetch regular suggestions
     let regular = fetch_suggestions(keyword, country, language).await?;
-    
+
     // Fetch question-based suggestions
     let questions = fetch_question_suggestions(keyword, country, language).await?;
-    
+
     log::info!(
         "[google_autocomplete] Found {} regular + {} question suggestions for '{}'",
         regular.len(),
         questions.len(),
         keyword
     );
-    
+
     Ok(GoogleKeywordIdeasResult {
         keyword: keyword.to_string(),
         country: country.to_string(),
@@ -207,9 +204,9 @@ mod tests {
     #[test]
     fn test_parse_firefox_response() {
         let json = r#"["options trading",["options trading","options trading for beginners","options trading strategies"],[],{"google:suggestsubtypes":[[512],[512],[512]]}]"#;
-        
+
         let result = parse_firefox_response(json, "options trading").unwrap();
-        
+
         assert_eq!(result.len(), 2); // excluding the exact match
         assert_eq!(result[0].keyword, "options trading for beginners");
         assert_eq!(result[1].keyword, "options trading strategies");
@@ -218,9 +215,9 @@ mod tests {
     #[test]
     fn test_parse_empty_response() {
         let json = r#"["xyz123",[],[],{}]"#;
-        
+
         let result = parse_firefox_response(json, "xyz123").unwrap();
-        
+
         assert!(result.is_empty());
     }
 }

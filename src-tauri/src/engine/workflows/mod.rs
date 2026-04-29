@@ -1,9 +1,9 @@
 pub mod handlers;
 pub mod step_kind;
 
-pub use step_kind::StepKind;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+pub use step_kind::StepKind;
 
 /// Param keys consumed by the executor's step dispatch logic.
 /// Use these constants instead of inline string literals in handler `plan()` implementations.
@@ -42,9 +42,8 @@ impl WorkflowStep {
     }
 
     pub fn from_kind_str(name: &str, kind: &str) -> Self {
-        let parsed = StepKind::from_str(kind).unwrap_or_else(|_| {
-            panic!("Unknown step kind '{}'", kind)
-        });
+        let parsed =
+            StepKind::from_str(kind).unwrap_or_else(|_| panic!("Unknown step kind '{}'", kind));
         Self::new(name, parsed)
     }
 

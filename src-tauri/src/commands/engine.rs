@@ -1,7 +1,7 @@
-use tauri::State;
-use crate::engine::{batch, executor, ledger, scheduler, task_store};
 use super::{AppState, GscState};
+use crate::engine::{batch, executor, ledger, scheduler, task_store};
 use std::time::Duration;
+use tauri::State;
 
 #[tauri::command]
 pub async fn execute_task(
@@ -25,12 +25,20 @@ pub async fn execute_task(
         // Use a dedicated connection for long-running task execution so UI
         // reads (e.g., list_tasks filter switches) are not blocked on AppState.db.
         let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
-        db.busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
-        
+        db.busy_timeout(Duration::from_secs(10))
+            .map_err(|e| e.to_string())?;
+
         // Create a new runtime to run the async executor
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         rt.block_on(async {
-            executor::execute_task_with_token(&db, &task_id, token.as_deref(), Some(app_handle), false).await
+            executor::execute_task_with_token(
+                &db,
+                &task_id,
+                token.as_deref(),
+                Some(app_handle),
+                false,
+            )
+            .await
         })
     })
     .await
@@ -47,12 +55,10 @@ pub async fn dry_run_task(
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
-        
+
         // Create a new runtime to run the async executor
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-        rt.block_on(async {
-            executor::dry_run_task(&db, &task_id).await
-        })
+        rt.block_on(async { executor::dry_run_task(&db, &task_id).await })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -94,8 +100,9 @@ pub async fn run_batch(
         // Use a dedicated connection for long-running batch execution for the
         // same reason as execute_task: keep AppState.db responsive for reads.
         let db = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
-        db.busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
-        
+        db.busy_timeout(Duration::from_secs(10))
+            .map_err(|e| e.to_string())?;
+
         // Create a new runtime to run the async batch
         let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
         rt.block_on(async {
@@ -125,10 +132,7 @@ pub fn upsert_scheduler_rule(
 }
 
 #[tauri::command]
-pub fn delete_scheduler_rule(
-    state: State<'_, AppState>,
-    rule_id: String,
-) -> Result<(), String> {
+pub fn delete_scheduler_rule(state: State<'_, AppState>, rule_id: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     scheduler::delete_rule(&db, &rule_id)
 }

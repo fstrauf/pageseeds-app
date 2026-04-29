@@ -1,11 +1,11 @@
-use tauri::State;
+use super::{AppState, GscState};
 use crate::config::env_resolver::EnvResolver;
 use crate::engine::task_store;
 use crate::models::gsc::{
     Coverage404Record, GscAuthStatus, InspectionRecord, MoverMetrics, PageMetrics, QueryMetrics,
     RedirectRecord,
 };
-use super::{AppState, GscState};
+use tauri::State;
 
 #[tauri::command]
 pub fn gsc_get_auth_status(
@@ -21,8 +21,14 @@ pub fn gsc_get_auth_status(
     let sa_path = resolver
         .resolve("GSC_SERVICE_ACCOUNT_PATH")
         .map(|(v, _)| v)
-        .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS").map(|(v, _)| v));
-    let oauth_path = resolver.resolve("GSC_REPORT_OAUTH_CLIENT_SECRETS").map(|(v, _)| v);
+        .or_else(|| {
+            resolver
+                .resolve("GOOGLE_APPLICATION_CREDENTIALS")
+                .map(|(v, _)| v)
+        });
+    let oauth_path = resolver
+        .resolve("GSC_REPORT_OAUTH_CLIENT_SECRETS")
+        .map(|(v, _)| v);
 
     let token_ok = gsc_state
         .token
@@ -63,8 +69,14 @@ pub async fn gsc_authenticate(
         resolver
             .resolve("GSC_SERVICE_ACCOUNT_PATH")
             .map(|(v, _)| v)
-            .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS").map(|(v, _)| v))
-            .ok_or("GSC_SERVICE_ACCOUNT_PATH / GOOGLE_APPLICATION_CREDENTIALS not set".to_string())?
+            .or_else(|| {
+                resolver
+                    .resolve("GOOGLE_APPLICATION_CREDENTIALS")
+                    .map(|(v, _)| v)
+            })
+            .ok_or(
+                "GSC_SERVICE_ACCOUNT_PATH / GOOGLE_APPLICATION_CREDENTIALS not set".to_string(),
+            )?
     };
 
     let token = crate::gsc::auth::get_service_account_token(&sa_path)
@@ -110,9 +122,15 @@ pub async fn gsc_fetch_analytics(
     limit: Option<u32>,
 ) -> Result<Vec<PageMetrics>, String> {
     let token = gsc_token(&gsc_state)?;
-    crate::gsc::analytics::fetch_page_rows(&token, &site_url, &start_date, &end_date, limit.unwrap_or(25))
-        .await
-        .map_err(|e| e.to_string())
+    crate::gsc::analytics::fetch_page_rows(
+        &token,
+        &site_url,
+        &start_date,
+        &end_date,
+        limit.unwrap_or(25),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -183,8 +201,8 @@ pub fn gsc_generate_indexing_report(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
 
-    let artifacts_dir = std::path::PathBuf::from(&project.path)
-        .join(".github/automation/artifacts");
+    let artifacts_dir =
+        std::path::PathBuf::from(&project.path).join(".github/automation/artifacts");
 
     crate::gsc::reports::generate_and_save_indexing_report(&records, &site_url, &artifacts_dir)
         .map_err(|e| e.to_string())
@@ -210,7 +228,10 @@ pub async fn resolve_gsc_token(
     // 1. Check cache (scoped so guard never crosses an await)
     let cached = {
         let guard = gsc_state.token.lock().map_err(|e| e.to_string())?;
-        guard.as_ref().filter(|t| !t.is_expired()).map(|t| t.access_token.clone())
+        guard
+            .as_ref()
+            .filter(|t| !t.is_expired())
+            .map(|t| t.access_token.clone())
     };
     if let Some(token) = cached {
         return Ok(Some(token));
@@ -240,6 +261,8 @@ pub(super) fn gsc_token(gsc_state: &State<'_, GscState>) -> Result<String, Strin
     match guard.as_ref() {
         Some(t) if !t.is_expired() => Ok(t.access_token.clone()),
         Some(_) => Err("GSC token has expired. Please re-authenticate.".to_string()),
-        None => Err("Not authenticated. Call gsc_authenticate or gsc_oauth_start first.".to_string()),
+        None => {
+            Err("Not authenticated. Call gsc_authenticate or gsc_oauth_start first.".to_string())
+        }
     }
 }

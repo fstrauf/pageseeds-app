@@ -95,7 +95,12 @@ pub async fn sync_live_site_gsc(
         match guard.as_ref() {
             Some(token) if !token.is_expired() => token.access_token.clone(),
             Some(_) => return Err("GSC token has expired. Please re-authenticate.".to_string()),
-            None => return Err("Not authenticated. Call gsc_authenticate or gsc_oauth_start first.".to_string()),
+            None => {
+                return Err(
+                    "Not authenticated. Call gsc_authenticate or gsc_oauth_start first."
+                        .to_string(),
+                )
+            }
         }
     };
 

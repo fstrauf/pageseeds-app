@@ -73,23 +73,21 @@ pub fn analyse_dates(articles: &[Article]) -> DateAnalysis {
                     current_date: String::new(),
                 });
             }
-            Some(ds) => {
-                match NaiveDate::parse_from_str(ds, "%Y-%m-%d") {
-                    Err(_) => {
-                        issues.push(DateIssue {
-                            article_id: article.id,
-                            issue_type: "invalid_format".into(),
-                            description: format!("Cannot parse date '{ds}'"),
-                            current_date: ds.clone(),
-                        });
-                    }
-                    Ok(d) => {
-                        if d <= Utc::now().date_naive() {
-                            published_count += 1;
-                        }
+            Some(ds) => match NaiveDate::parse_from_str(ds, "%Y-%m-%d") {
+                Err(_) => {
+                    issues.push(DateIssue {
+                        article_id: article.id,
+                        issue_type: "invalid_format".into(),
+                        description: format!("Cannot parse date '{ds}'"),
+                        current_date: ds.clone(),
+                    });
+                }
+                Ok(d) => {
+                    if d <= Utc::now().date_naive() {
+                        published_count += 1;
                     }
                 }
-            }
+            },
         }
     }
 
@@ -124,10 +122,7 @@ pub fn calculate_fixes(articles: &[Article]) -> DateFixResult {
     let mut bad_ids: Vec<i64> = analysis
         .issues
         .iter()
-        .filter(|i| {
-            i.issue_type == "future_date"
-                || i.issue_type == "duplicate_date"
-        })
+        .filter(|i| i.issue_type == "future_date" || i.issue_type == "duplicate_date")
         .map(|i| i.article_id)
         .collect();
     bad_ids.sort();

@@ -2,7 +2,7 @@
 
 /**
  * Output from Step 1: research_seed_extraction
- * 
+ *
  * The LLM reads the project brief and extracts research themes and competitor domains.
  * Contract: MUST return valid JSON with {"themes": [...], "competitors": [...]}
  */

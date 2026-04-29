@@ -1,7 +1,7 @@
-use tauri::State;
+use super::AppState;
 use crate::engine::task_store;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
-use super::AppState;
+use tauri::State;
 
 #[tauri::command]
 pub fn list_tasks(
@@ -13,7 +13,12 @@ pub fn list_tasks(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     // Use the light variant to avoid loading large artifact blobs into memory
     // for list views that only need task metadata.
-    Ok(task_store::list_tasks_filtered_light(&db, &project_id, status.as_deref(), phase.as_deref())?)
+    Ok(task_store::list_tasks_filtered_light(
+        &db,
+        &project_id,
+        status.as_deref(),
+        phase.as_deref(),
+    )?)
 }
 
 #[tauri::command]
@@ -34,10 +39,7 @@ pub fn create_task(
     use crate::config::{default_execution_mode, default_phase};
 
     let now = chrono::Utc::now().to_rfc3339();
-    let id = format!(
-        "task-{}",
-        chrono::Utc::now().timestamp_millis().to_string()
-    );
+    let id = format!("task-{}", chrono::Utc::now().timestamp_millis().to_string());
     let priority_enum = match priority.as_str() {
         "high" => Priority::High,
         "low" => Priority::Low,
@@ -97,7 +99,13 @@ pub fn update_task(
         "low" => Priority::Low,
         _ => Priority::Medium,
     };
-    Ok(task_store::update_task(&db, &id, title.as_deref(), description.as_deref(), priority_enum)?)
+    Ok(task_store::update_task(
+        &db,
+        &id,
+        title.as_deref(),
+        description.as_deref(),
+        priority_enum,
+    )?)
 }
 
 #[tauri::command]
@@ -109,7 +117,11 @@ pub fn delete_task(state: State<'_, AppState>, id: String) -> Result<(), String>
 #[tauri::command]
 pub fn cancel_task(state: State<'_, AppState>, id: String) -> Result<Task, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    Ok(task_store::update_task_status(&db, &id, TaskStatus::Cancelled)?)
+    Ok(task_store::update_task_status(
+        &db,
+        &id,
+        TaskStatus::Cancelled,
+    )?)
 }
 
 /// Create content tasks from selected keywords and mark the research task as done.

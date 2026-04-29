@@ -389,11 +389,15 @@ pub fn default_phase(task_type: &str) -> &'static str {
 }
 
 pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
-    find(task_type).map(|d| d.execution_mode).unwrap_or(ExecutionMode::Manual)
+    find(task_type)
+        .map(|d| d.execution_mode)
+        .unwrap_or(ExecutionMode::Manual)
 }
 
 pub fn review_on_success(task_type: &str) -> bool {
-    find(task_type).map(|d| d.review_on_success).unwrap_or(false)
+    find(task_type)
+        .map(|d| d.review_on_success)
+        .unwrap_or(false)
 }
 
 #[allow(dead_code)]
@@ -438,10 +442,22 @@ mod tests {
 
     #[test]
     fn default_execution_mode_matches_task_type() {
-        assert_eq!(default_execution_mode("collect_gsc"), ExecutionMode::Automatic);
-        assert_eq!(default_execution_mode("reddit_search"), ExecutionMode::Manual); // reddit_search not in registry, falls back
-        assert_eq!(default_execution_mode("reddit_opportunity_search"), ExecutionMode::Batchable);
-        assert_eq!(default_execution_mode("research_keywords"), ExecutionMode::Manual);
+        assert_eq!(
+            default_execution_mode("collect_gsc"),
+            ExecutionMode::Automatic
+        );
+        assert_eq!(
+            default_execution_mode("reddit_search"),
+            ExecutionMode::Manual
+        ); // reddit_search not in registry, falls back
+        assert_eq!(
+            default_execution_mode("reddit_opportunity_search"),
+            ExecutionMode::Batchable
+        );
+        assert_eq!(
+            default_execution_mode("research_keywords"),
+            ExecutionMode::Manual
+        );
         assert_eq!(default_execution_mode("write_article"), ExecutionMode::Spec);
     }
 
@@ -449,7 +465,12 @@ mod tests {
     fn manual_tasks_have_manual_handler_or_implementation() {
         for def in all() {
             if def.handler_family == HandlerFamily::Manual {
-                assert_eq!(def.execution_mode, ExecutionMode::Manual, "Manual handler family task {} should have Manual execution mode", def.task_type);
+                assert_eq!(
+                    def.execution_mode,
+                    ExecutionMode::Manual,
+                    "Manual handler family task {} should have Manual execution mode",
+                    def.task_type
+                );
             }
         }
     }

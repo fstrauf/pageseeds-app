@@ -7,15 +7,14 @@
 ///   4. hub_apply_draft          — write MDX file, register in SQLite + articles.json
 ///   5. hub_apply_links          — add hub↔spoke Related Articles links
 ///   6. hub_validate             — validate frontmatter, H1, word count, spoke links
-
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::engine::{agent, skills};
 use crate::models::cannibalization::HubRecommendation;
 use crate::models::task::Task;
+use rusqlite::Connection;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 1: Load Recommendation
@@ -102,10 +101,7 @@ pub(crate) fn exec_hub_load_recommendation(task: &Task, project_path: &str) -> S
                 None => {
                     return StepResult {
                         success: false,
-                        message: format!(
-                            "No hub recommendation found matching '{}'",
-                            hub_topic
-                        ),
+                        message: format!("No hub recommendation found matching '{}'", hub_topic),
                         output: None,
                     };
                 }
@@ -113,9 +109,18 @@ pub(crate) fn exec_hub_load_recommendation(task: &Task, project_path: &str) -> S
         }
     };
 
-    let out_path = paths.automation_dir.join(format!("hub_recommendation_{}.json", task.id));
-    if let Err(e) = std::fs::write(&out_path, serde_json::to_string_pretty(&rec).unwrap_or_default()) {
-        log::warn!("[hub_load_recommendation] failed to write {}: {}", out_path.display(), e);
+    let out_path = paths
+        .automation_dir
+        .join(format!("hub_recommendation_{}.json", task.id));
+    if let Err(e) = std::fs::write(
+        &out_path,
+        serde_json::to_string_pretty(&rec).unwrap_or_default(),
+    ) {
+        log::warn!(
+            "[hub_load_recommendation] failed to write {}: {}",
+            out_path.display(),
+            e
+        );
     }
 
     let json = serde_json::to_string_pretty(&rec).unwrap_or_default();
@@ -133,7 +138,9 @@ pub(crate) fn exec_hub_load_recommendation(task: &Task, project_path: &str) -> S
 pub(crate) fn exec_hub_build_brief(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    let rec_path = paths.automation_dir.join(format!("hub_recommendation_{}.json", task.id));
+    let rec_path = paths
+        .automation_dir
+        .join(format!("hub_recommendation_{}.json", task.id));
     let rec_json = match std::fs::read_to_string(&rec_path) {
         Ok(s) => s,
         Err(e) => {
@@ -179,7 +186,9 @@ pub(crate) fn exec_hub_build_brief(task: &Task, project_path: &str) -> StepResul
         spokes,
     };
 
-    let out_path = paths.automation_dir.join(format!("hub_brief_{}.json", task.id));
+    let out_path = paths
+        .automation_dir
+        .join(format!("hub_brief_{}.json", task.id));
     let brief_json = match serde_json::to_string_pretty(&brief) {
         Ok(j) => j,
         Err(e) => {
@@ -191,7 +200,11 @@ pub(crate) fn exec_hub_build_brief(task: &Task, project_path: &str) -> StepResul
         }
     };
     if let Err(e) = std::fs::write(&out_path, &brief_json) {
-        log::warn!("[hub_build_brief] failed to write {}: {}", out_path.display(), e);
+        log::warn!(
+            "[hub_build_brief] failed to write {}: {}",
+            out_path.display(),
+            e
+        );
     }
 
     StepResult {
@@ -276,7 +289,9 @@ pub(crate) fn exec_hub_write(
     };
 
     // Load brief from disk for spoke details (context_json is the outline)
-    let brief_path = paths.automation_dir.join(format!("hub_brief_{}.json", task.id));
+    let brief_path = paths
+        .automation_dir
+        .join(format!("hub_brief_{}.json", task.id));
     let brief_json = std::fs::read_to_string(&brief_path).unwrap_or_default();
 
     let prompt = skill.content
@@ -322,7 +337,9 @@ pub(crate) fn exec_hub_apply_draft(
 ) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    let brief_path = paths.automation_dir.join(format!("hub_brief_{}.json", task.id));
+    let brief_path = paths
+        .automation_dir
+        .join(format!("hub_brief_{}.json", task.id));
     let brief: HubBrief = match std::fs::read_to_string(&brief_path) {
         Ok(s) => match serde_json::from_str(&s) {
             Ok(b) => b,
@@ -383,7 +400,10 @@ pub(crate) fn exec_hub_apply_draft(
         .unwrap_or(0);
     let article_id = std::cmp::max(max_existing_id + 1, meta_next_id.max(1));
 
-    let slug = brief.suggested_url.trim_start_matches('/').replace("blog/", "");
+    let slug = brief
+        .suggested_url
+        .trim_start_matches('/')
+        .replace("blog/", "");
     let filename = format!("{:03}_{}_hub.mdx", article_id, slug.replace('-', "_"));
     let file_path = content_dir.join(&filename);
 
@@ -398,11 +418,16 @@ pub(crate) fn exec_hub_apply_draft(
     // Snapshot existing file if refreshing
     let is_refresh = task.task_type == "refresh_hub_page";
     if is_refresh && file_path.exists() {
-        let snapshot_path = paths.automation_dir.join(format!("hub_snapshot_{}.mdx", task.id));
+        let snapshot_path = paths
+            .automation_dir
+            .join(format!("hub_snapshot_{}.mdx", task.id));
         if let Err(e) = std::fs::copy(&file_path, &snapshot_path) {
             log::warn!("[hub_apply_draft] failed to snapshot existing hub: {}", e);
         } else {
-            log::info!("[hub_apply_draft] snapshotted existing hub to {}", snapshot_path.display());
+            log::info!(
+                "[hub_apply_draft] snapshotted existing hub to {}",
+                snapshot_path.display()
+            );
         }
     }
 
@@ -461,7 +486,9 @@ pub(crate) fn exec_hub_apply_draft(
         rusqlite::params![&task.project_id, article_id + 1],
     );
 
-    if let Err(e) = crate::db::export::write_articles_to_repo(&conn, &task.project_id, &paths.repo_root) {
+    if let Err(e) =
+        crate::db::export::write_articles_to_repo(&conn, &task.project_id, &paths.repo_root)
+    {
         log::warn!("[hub_apply_draft] failed to export articles.json: {}", e);
     }
 
@@ -471,12 +498,15 @@ pub(crate) fn exec_hub_apply_draft(
             "Hub draft applied: {} (id={}, {} words)",
             filename, article_id, word_count
         ),
-        output: Some(serde_json::json!({
-            "article_id": article_id,
-            "file": file_ref,
-            "slug": slug,
-            "word_count": word_count,
-        }).to_string()),
+        output: Some(
+            serde_json::json!({
+                "article_id": article_id,
+                "file": file_ref,
+                "slug": slug,
+                "word_count": word_count,
+            })
+            .to_string(),
+        ),
     }
 }
 
@@ -487,7 +517,9 @@ pub(crate) fn exec_hub_apply_draft(
 pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    let brief_path = paths.automation_dir.join(format!("hub_brief_{}.json", task.id));
+    let brief_path = paths
+        .automation_dir
+        .join(format!("hub_brief_{}.json", task.id));
     let brief: HubBrief = match std::fs::read_to_string(&brief_path) {
         Ok(s) => match serde_json::from_str(&s) {
             Ok(b) => b,
@@ -562,7 +594,10 @@ pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResul
     }
 
     let hub_title = brief.suggested_title.clone();
-    let hub_slug = brief.suggested_url.trim_start_matches('/').replace("blog/", "");
+    let hub_slug = brief
+        .suggested_url
+        .trim_start_matches('/')
+        .replace("blog/", "");
     let mut spoke_links_added = 0;
 
     for spoke in &brief.spokes {
@@ -626,7 +661,9 @@ pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResul
             entries
         },
     };
-    let plan_path = paths.automation_dir.join(format!("hub_link_plan_{}.json", task.id));
+    let plan_path = paths
+        .automation_dir
+        .join(format!("hub_link_plan_{}.json", task.id));
     if let Ok(plan_json) = serde_json::to_string_pretty(&link_plan) {
         if let Err(e) = std::fs::write(&plan_path, plan_json) {
             log::warn!("[hub_apply_links] failed to write link plan: {}", e);
@@ -651,7 +688,9 @@ pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResul
 pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    let brief_path = paths.automation_dir.join(format!("hub_brief_{}.json", task.id));
+    let brief_path = paths
+        .automation_dir
+        .join(format!("hub_brief_{}.json", task.id));
     let brief: HubBrief = match std::fs::read_to_string(&brief_path) {
         Ok(s) => match serde_json::from_str(&s) {
             Ok(b) => b,
@@ -799,11 +838,17 @@ pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
     }
 
     // Quality gate: hub URL/title must be broader than spokes (not an exact match)
-    let hub_slug_lower = brief.suggested_url.trim_start_matches('/').replace("blog/", "").to_lowercase();
+    let hub_slug_lower = brief
+        .suggested_url
+        .trim_start_matches('/')
+        .replace("blog/", "")
+        .to_lowercase();
     let hub_title_lower = brief.suggested_title.to_lowercase();
     let mut colliding_spoke = None;
     for spoke in &brief.spokes {
-        if spoke.url_slug.to_lowercase() == hub_slug_lower || spoke.title.to_lowercase() == hub_title_lower {
+        if spoke.url_slug.to_lowercase() == hub_slug_lower
+            || spoke.title.to_lowercase() == hub_title_lower
+        {
             colliding_spoke = Some(spoke.title.clone());
             break;
         }
@@ -815,7 +860,10 @@ pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
         message: if hub_is_broader {
             "Hub URL/title is broader than spokes".to_string()
         } else {
-            format!("Hub URL/title collides with spoke: {}", colliding_spoke.unwrap_or_default())
+            format!(
+                "Hub URL/title collides with spoke: {}",
+                colliding_spoke.unwrap_or_default()
+            )
         },
     });
     if !hub_is_broader {
@@ -823,7 +871,8 @@ pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
     }
 
     // Quality gate: route collision (simple heuristic — flag if slug looks like a spoke route)
-    let route_collision = brief.suggested_url.contains("/hub/") || brief.suggested_url.contains("/guide/");
+    let route_collision =
+        brief.suggested_url.contains("/hub/") || brief.suggested_url.contains("/guide/");
     checks.push(HubValidationCheck {
         name: "route_collision".to_string(),
         pass: !route_collision,
@@ -838,7 +887,9 @@ pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
     }
 
     // Quality gate: sub-intent preservation (if outline exists, check excluded intents)
-    let outline_path = paths.automation_dir.join(format!("hub_outline_{}.json", task.id));
+    let outline_path = paths
+        .automation_dir
+        .join(format!("hub_outline_{}.json", task.id));
     let mut sub_intents_preserved = true;
     let mut merged_sub_intents = Vec::new();
     if let Ok(outline_json) = std::fs::read_to_string(&outline_path) {
@@ -858,7 +909,10 @@ pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
         message: if sub_intents_preserved {
             "Excluded sub-intents are not merged into hub".to_string()
         } else {
-            format!("Hub content may merge excluded sub-intents: {}", merged_sub_intents.join(", "))
+            format!(
+                "Hub content may merge excluded sub-intents: {}",
+                merged_sub_intents.join(", ")
+            )
         },
     });
     if !sub_intents_preserved {
@@ -1003,7 +1057,8 @@ fn gather_spoke_briefs(
             let path_to_read = if repo_path.exists() {
                 repo_path
             } else if let Some(ref dir) = content_dir {
-                let basename = std::path::Path::new(&file).file_name()
+                let basename = std::path::Path::new(&file)
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or(&file);
                 dir.join(basename)
@@ -1093,12 +1148,18 @@ fn find_hub_file(content_dir: &Path, suggested_url: &str) -> Option<PathBuf> {
     let slug = suggested_url.trim_start_matches('/').replace("blog/", "");
     let slug_underscore = slug.replace('-', "_");
     // Also check just the basename (e.g. "my-hub" from "guide/my-hub")
-    let slug_basename = slug.split('/').next_back().unwrap_or(&slug).replace('-', "_");
+    let slug_basename = slug
+        .split('/')
+        .next_back()
+        .unwrap_or(&slug)
+        .replace('-', "_");
 
     if let Ok(entries) = std::fs::read_dir(content_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if (name.contains(&slug_underscore) || name.contains(&slug_basename)) && name.ends_with("_hub.mdx") {
+            if (name.contains(&slug_underscore) || name.contains(&slug_basename))
+                && name.ends_with("_hub.mdx")
+            {
                 return Some(entry.path());
             }
         }
@@ -1381,8 +1442,20 @@ mod tests {
             )
             .unwrap();
 
-            insert_test_article(&conn, "proj1", 1, "spoke-one", "./content/001_spoke_one.mdx");
-            insert_test_article(&conn, "proj1", 2, "spoke-two", "./content/002_spoke_two.mdx");
+            insert_test_article(
+                &conn,
+                "proj1",
+                1,
+                "spoke-one",
+                "./content/001_spoke_one.mdx",
+            );
+            insert_test_article(
+                &conn,
+                "proj1",
+                2,
+                "spoke-two",
+                "./content/002_spoke_two.mdx",
+            );
 
             conn.execute(
                 "INSERT INTO ctr_query_metrics (project_id, article_id, page_url, query, impressions, clicks, ctr, avg_position, fetched_at)
@@ -1401,7 +1474,11 @@ mod tests {
             "outline": ["Intro"]
         });
 
-        let rec_path = dir.path().join(".github").join("automation").join("hub_recommendation_task-hub-2.json");
+        let rec_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_recommendation_task-hub-2.json");
         fs::write(&rec_path, rec.to_string()).unwrap();
 
         let task = Task {
@@ -1456,7 +1533,11 @@ mod tests {
             target_keyword: "test topic".to_string(),
             spokes: vec![],
         };
-        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-hub-3.json");
+        let brief_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_brief_task-hub-3.json");
         fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
 
         let mdx = "---\ntitle: \"Test Topic Hub\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Test Topic\"\n---\n\n# Test Topic Hub\n\nThis is a comprehensive guide.\n".to_string();
@@ -1482,7 +1563,10 @@ mod tests {
         let result = exec_hub_apply_draft(&task, &project_path, &mdx);
         assert!(result.success, "Expected success: {}", result.message);
 
-        let hub_file = dir.path().join("content").join("010_test_topic_hub_hub.mdx");
+        let hub_file = dir
+            .path()
+            .join("content")
+            .join("010_test_topic_hub_hub.mdx");
         assert!(hub_file.exists(), "Hub file should exist");
     }
 
@@ -1501,7 +1585,9 @@ mod tests {
         );
 
         fs::write(
-            dir.path().join("content").join("010_cash_secured_puts_hub.mdx"),
+            dir.path()
+                .join("content")
+                .join("010_cash_secured_puts_hub.mdx"),
             &mdx,
         )
         .unwrap();
@@ -1532,7 +1618,11 @@ mod tests {
             ],
         };
 
-        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-hub-4.json");
+        let brief_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_brief_task-hub-4.json");
         fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
 
         let task = Task {
@@ -1554,7 +1644,11 @@ mod tests {
         };
 
         let result = exec_hub_validate(&task, &project_path);
-        assert!(result.success, "Expected validation to pass: {}", result.message);
+        assert!(
+            result.success,
+            "Expected validation to pass: {}",
+            result.message
+        );
 
         let report: HubValidationReport = serde_json::from_str(&result.output.unwrap()).unwrap();
         assert!(report.all_pass);
@@ -1567,11 +1661,7 @@ mod tests {
         let project_path = dir.path().to_string_lossy().to_string();
 
         let mdx = "---\ntitle: \"Short Hub\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Short\"\n---\n\n# Short Hub\n\nToo short.\n";
-        fs::write(
-            dir.path().join("content").join("010_short_hub.mdx"),
-            mdx,
-        )
-        .unwrap();
+        fs::write(dir.path().join("content").join("010_short_hub.mdx"), mdx).unwrap();
 
         let brief = HubBrief {
             topic: "Short".to_string(),
@@ -1582,7 +1672,11 @@ mod tests {
             spokes: vec![],
         };
 
-        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-hub-5.json");
+        let brief_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_brief_task-hub-5.json");
         fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
 
         let task = Task {
@@ -1629,8 +1723,15 @@ mod tests {
         .unwrap();
 
         // Create an existing hub file
-        let existing_hub = dir.path().join("content").join("010_test_topic_hub_hub.mdx");
-        fs::write(&existing_hub, "---\ntitle: \"Old Hub\"\n---\n\nOld content.\n").unwrap();
+        let existing_hub = dir
+            .path()
+            .join("content")
+            .join("010_test_topic_hub_hub.mdx");
+        fs::write(
+            &existing_hub,
+            "---\ntitle: \"Old Hub\"\n---\n\nOld content.\n",
+        )
+        .unwrap();
 
         let brief = HubBrief {
             topic: "Test Topic".to_string(),
@@ -1640,7 +1741,11 @@ mod tests {
             target_keyword: "test topic".to_string(),
             spokes: vec![],
         };
-        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-refresh-1.json");
+        let brief_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_brief_task-refresh-1.json");
         fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
 
         let mdx = "---\ntitle: \"Test Topic Hub\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Test Topic\"\n---\n\n# Test Topic Hub\n\nRefreshed content.\n".to_string();
@@ -1667,7 +1772,11 @@ mod tests {
         assert!(result.success, "Expected success: {}", result.message);
 
         // Verify snapshot exists
-        let snapshot = dir.path().join(".github").join("automation").join("hub_snapshot_task-refresh-1.mdx");
+        let snapshot = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_snapshot_task-refresh-1.mdx");
         assert!(snapshot.exists(), "Snapshot should exist for refresh");
         let snapshot_content = fs::read_to_string(&snapshot).unwrap();
         assert!(snapshot_content.contains("Old content"));
@@ -1695,18 +1804,20 @@ mod tests {
             suggested_title: "Options Hub".to_string(),
             intent: "informational".to_string(),
             target_keyword: "options".to_string(),
-            spokes: vec![
-                HubSpokeBrief {
-                    article_id: 1,
-                    title: "Spoke One".to_string(),
-                    url_slug: "spoke-one".to_string(),
-                    file: "001_spoke_one.mdx".to_string(),
-                    impressions: 0.0,
-                    excerpt: "Excerpt".to_string(),
-                },
-            ],
+            spokes: vec![HubSpokeBrief {
+                article_id: 1,
+                title: "Spoke One".to_string(),
+                url_slug: "spoke-one".to_string(),
+                file: "001_spoke_one.mdx".to_string(),
+                impressions: 0.0,
+                excerpt: "Excerpt".to_string(),
+            }],
         };
-        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-link-1.json");
+        let brief_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_brief_task-link-1.json");
         fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
 
         let task = Task {
@@ -1731,10 +1842,15 @@ mod tests {
         assert!(result.success, "Expected success: {}", result.message);
 
         // Verify link plan exists
-        let plan_path = dir.path().join(".github").join("automation").join("hub_link_plan_task-link-1.json");
+        let plan_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_link_plan_task-link-1.json");
         assert!(plan_path.exists(), "Link plan should be written");
 
-        let plan: HubLinkPlan = serde_json::from_str(&fs::read_to_string(&plan_path).unwrap()).unwrap();
+        let plan: HubLinkPlan =
+            serde_json::from_str(&fs::read_to_string(&plan_path).unwrap()).unwrap();
         assert_eq!(plan.hub_slug, "options-hub");
         assert!(!plan.links.is_empty());
         assert_eq!(plan.links[0].direction, "hub_to_spoke");
@@ -1757,7 +1873,11 @@ mod tests {
             target_keyword: "guide".to_string(),
             spokes: vec![],
         };
-        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-route-1.json");
+        let brief_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_brief_task-route-1.json");
         fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
 
         let task = Task {
@@ -1780,10 +1900,17 @@ mod tests {
 
         let result = exec_hub_validate(&task, &project_path);
         // Should fail due to route collision
-        assert!(!result.success, "Expected validation to fail due to route collision");
+        assert!(
+            !result.success,
+            "Expected validation to fail due to route collision"
+        );
 
         let report: HubValidationReport = serde_json::from_str(&result.output.unwrap()).unwrap();
-        let route_check = report.checks.iter().find(|c| c.name == "route_collision").unwrap();
+        let route_check = report
+            .checks
+            .iter()
+            .find(|c| c.name == "route_collision")
+            .unwrap();
         assert!(!route_check.pass);
     }
 
@@ -1793,7 +1920,11 @@ mod tests {
         let project_path = dir.path().to_string_lossy().to_string();
 
         let mdx = "---\ntitle: \"Spoke One\"\ndate: \"2024-01-01\"\ntype: hub\nhub_topic: \"Spoke\"\n---\n\n# Spoke One\n\nContent.\n- [Spoke One](/blog/spoke-one)\n";
-        fs::write(dir.path().join("content").join("010_spoke_one_hub.mdx"), mdx).unwrap();
+        fs::write(
+            dir.path().join("content").join("010_spoke_one_hub.mdx"),
+            mdx,
+        )
+        .unwrap();
 
         // Hub title collides with spoke title
         let brief = HubBrief {
@@ -1802,18 +1933,20 @@ mod tests {
             suggested_title: "Spoke One".to_string(),
             intent: "informational".to_string(),
             target_keyword: "spoke".to_string(),
-            spokes: vec![
-                HubSpokeBrief {
-                    article_id: 1,
-                    title: "Spoke One".to_string(),
-                    url_slug: "spoke-one".to_string(),
-                    file: "001_spoke_one.mdx".to_string(),
-                    impressions: 0.0,
-                    excerpt: "Excerpt".to_string(),
-                },
-            ],
+            spokes: vec![HubSpokeBrief {
+                article_id: 1,
+                title: "Spoke One".to_string(),
+                url_slug: "spoke-one".to_string(),
+                file: "001_spoke_one.mdx".to_string(),
+                impressions: 0.0,
+                excerpt: "Excerpt".to_string(),
+            }],
         };
-        let brief_path = dir.path().join(".github").join("automation").join("hub_brief_task-broad-1.json");
+        let brief_path = dir
+            .path()
+            .join(".github")
+            .join("automation")
+            .join("hub_brief_task-broad-1.json");
         fs::write(&brief_path, serde_json::to_string(&brief).unwrap()).unwrap();
 
         let task = Task {
@@ -1835,10 +1968,17 @@ mod tests {
         };
 
         let result = exec_hub_validate(&task, &project_path);
-        assert!(!result.success, "Expected validation to fail: hub title matches spoke");
+        assert!(
+            !result.success,
+            "Expected validation to fail: hub title matches spoke"
+        );
 
         let report: HubValidationReport = serde_json::from_str(&result.output.unwrap()).unwrap();
-        let broad_check = report.checks.iter().find(|c| c.name == "hub_broader_than_spokes").unwrap();
+        let broad_check = report
+            .checks
+            .iter()
+            .find(|c| c.name == "hub_broader_than_spokes")
+            .unwrap();
         assert!(!broad_check.pass);
     }
 }

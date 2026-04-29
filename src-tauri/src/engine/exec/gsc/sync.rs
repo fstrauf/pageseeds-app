@@ -49,20 +49,25 @@ pub(crate) fn exec_gsc_sync_articles(
                     .map(|t| t.access_token)
             }
         })
-    }).join();
-    
+    })
+    .join();
+
     let token = match token_result {
         Ok(Ok(t)) => t,
-        Ok(Err(e)) => return StepResult {
-            success: false,
-            message: format!("GSC auth failed: {}", e),
-            output: None,
-        },
-        Err(_) => return StepResult {
-            success: false,
-            message: "GSC auth thread panicked".to_string(),
-            output: None,
-        },
+        Ok(Err(e)) => {
+            return StepResult {
+                success: false,
+                message: format!("GSC auth failed: {}", e),
+                output: None,
+            }
+        }
+        Err(_) => {
+            return StepResult {
+                success: false,
+                message: "GSC auth thread panicked".to_string(),
+                output: None,
+            }
+        }
     };
 
     // 3. Load articles from SQLite (canonical runtime store)
@@ -91,20 +96,25 @@ pub(crate) fn exec_gsc_sync_articles(
     // 4. site_url from manifest.json
     let site_url: String = {
         let manifest_path = paths.automation_dir.join("manifest.json");
-        let from_manifest = std::fs::read_to_string(&manifest_path).ok()
+        let from_manifest = std::fs::read_to_string(&manifest_path)
+            .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| {
-                v.get("gsc_site").or_else(|| v.get("url"))
+                v.get("gsc_site")
+                    .or_else(|| v.get("url"))
                     .and_then(|u| u.as_str())
                     .map(String::from)
             });
         match from_manifest {
             Some(u) => u,
-            None => return StepResult {
-                success: false,
-                message: "No site_url found in manifest.json — add 'url' or 'gsc_site' field".to_string(),
-                output: None,
-            },
+            None => {
+                return StepResult {
+                    success: false,
+                    message: "No site_url found in manifest.json — add 'url' or 'gsc_site' field"
+                        .to_string(),
+                    output: None,
+                }
+            }
         }
     };
 
@@ -124,49 +134,74 @@ pub(crate) fn exec_gsc_sync_articles(
     let site_url_clone = site_url.clone();
     let start_str = start.format("%Y-%m-%d").to_string();
     let end_str = end.format("%Y-%m-%d").to_string();
-    
+
     let page_rows_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
             crate::gsc::analytics::fetch_page_rows(
-                &token_clone, &site_url_clone, &start_str, &end_str, 1000,
-            ).await
+                &token_clone,
+                &site_url_clone,
+                &start_str,
+                &end_str,
+                1000,
+            )
+            .await
         })
-    }).join();
-    
+    })
+    .join();
+
     let page_rows = match page_rows_result {
         Ok(Ok(rows)) => rows,
-        Ok(Err(e)) => return StepResult {
-            success: false,
-            message: format!("GSC fetch failed: {}", e),
-            output: None,
-        },
-        Err(_) => return StepResult {
-            success: false,
-            message: "GSC fetch thread panicked".to_string(),
-            output: None,
-        },
+        Ok(Err(e)) => {
+            return StepResult {
+                success: false,
+                message: format!("GSC fetch failed: {}", e),
+                output: None,
+            }
+        }
+        Err(_) => {
+            return StepResult {
+                success: false,
+                message: "GSC fetch thread panicked".to_string(),
+                output: None,
+            }
+        }
     };
 
     // 6. Build normalised path lookup
     let num_prefix_re = Regex::new(r"^\d+[_\-]+").unwrap();
 
     let normalize_path = |url: &str| -> String {
-        let stripped = if let Some(rest) = url.strip_prefix("https://") { rest }
-            else if let Some(rest) = url.strip_prefix("http://") { rest }
-            else { url };
-        let path = if let Some(slash) = stripped.find('/') { &stripped[slash..] } else { "/" };
+        let stripped = if let Some(rest) = url.strip_prefix("https://") {
+            rest
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            rest
+        } else {
+            url
+        };
+        let path = if let Some(slash) = stripped.find('/') {
+            &stripped[slash..]
+        } else {
+            "/"
+        };
         path.trim_end_matches('/').replace('_', "-").to_lowercase()
     };
 
     let mut gsc_by_path: HashMap<String, &crate::models::gsc::PageMetrics> = HashMap::new();
     for row in &page_rows {
         let p = normalize_path(&row.page);
-        if !p.is_empty() { gsc_by_path.entry(p).or_insert(row); }
+        if !p.is_empty() {
+            gsc_by_path.entry(p).or_insert(row);
+        }
     }
     let mut gsc_by_segment: HashMap<String, &crate::models::gsc::PageMetrics> = HashMap::new();
     for (path, m) in &gsc_by_path {
-        let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+        let last = path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
         if !last.is_empty() {
             gsc_by_segment.entry(last.clone()).or_insert(m);
             let stripped = num_prefix_re.replace(&last, "").to_string();
@@ -191,7 +226,10 @@ pub(crate) fn exec_gsc_sync_articles(
             format!("/{}", s)
         } else if !file_ref.is_empty() {
             let stem = std::path::Path::new(&file_ref)
-                .file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             let s = num_prefix_re.replace(&stem, "").to_string();
             format!("/{}", s.replace('_', "-").to_lowercase())
         } else {
@@ -199,7 +237,8 @@ pub(crate) fn exec_gsc_sync_articles(
             continue;
         };
 
-        let metrics = gsc_by_path.get(&article_path)
+        let metrics = gsc_by_path
+            .get(&article_path)
             .or_else(|| gsc_by_segment.get(article_path.trim_start_matches('/')));
 
         if let Some(m) = metrics {
@@ -225,7 +264,11 @@ pub(crate) fn exec_gsc_sync_articles(
     }
 
     // 8. Re-export projection so articles.json gets the new GSC metadata
-    if let Err(e) = crate::content::article_index::export_projection(&db, &task.project_id, std::path::Path::new(project_path)) {
+    if let Err(e) = crate::content::article_index::export_projection(
+        &db,
+        &task.project_id,
+        std::path::Path::new(project_path),
+    ) {
         return StepResult {
             success: false,
             message: format!("GSC sync succeeded but projection export failed: {}", e),
@@ -246,7 +289,9 @@ pub(crate) fn exec_gsc_sync_articles(
         success: true,
         message: format!(
             "GSC sync: matched {}/{} articles ({} GSC pages fetched)",
-            matched, matched + unmatched, page_rows.len()
+            matched,
+            matched + unmatched,
+            page_rows.len()
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
     }

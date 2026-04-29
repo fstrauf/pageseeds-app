@@ -1,11 +1,10 @@
+use crate::engine::skills::Skill;
+use crate::logging::{query_logs, LogQueryFilters, LogSource};
+use crate::models::task::Task;
 /// Prompt builder — combines a Skill's SKILL.md content with project context
 /// and task metadata to construct a complete agent prompt string.
-
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use crate::engine::skills::Skill;
-use crate::logging::{LogQueryFilters, LogSource, query_logs};
-use crate::models::task::Task;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -146,9 +145,13 @@ fn build_task_section(task: &Task) -> String {
 /// Build diagnostic context from recent logs for AI analysis.
 /// This allows the AI to see what happened before it was invoked,
 /// enabling self-diagnosis of issues.
-/// 
+///
 /// This version opens the database directly using the project path.
-pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, max_entries: usize) -> String {
+pub fn build_diagnostic_context_from_task(
+    task_id: &str,
+    _project_path: &str,
+    max_entries: usize,
+) -> String {
     // Open database connection using default path
     let db_path = crate::db::default_db_path();
     let conn = match rusqlite::Connection::open(&db_path) {
@@ -158,9 +161,9 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
             return String::new(); // Silently fail if DB not available
         }
     };
-    
+
     let mut lines = vec!["## Diagnostic Context (Recent System Logs)".to_string()];
-    
+
     // Query recent logs from all sources, filtering by task if possible
     let filters = LogQueryFilters {
         level: None,
@@ -169,9 +172,12 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
         session_id: None,
         search_query: None,
     };
-    
-    log::debug!("[diagnostic_context] Querying logs for task_id: {}", task_id);
-    
+
+    log::debug!(
+        "[diagnostic_context] Querying logs for task_id: {}",
+        task_id
+    );
+
     // First try: search for logs mentioning this task ID
     let mut logs = match query_logs(&conn, &filters, max_entries, 0) {
         Ok(l) => {
@@ -183,10 +189,13 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
             Vec::new()
         }
     };
-    
+
     // If not enough task-specific logs, get general recent logs
     if logs.len() < 10 {
-        log::debug!("[diagnostic_context] Only {} task logs, fetching general logs", logs.len());
+        log::debug!(
+            "[diagnostic_context] Only {} task logs, fetching general logs",
+            logs.len()
+        );
         let general_filters = LogQueryFilters {
             level: Some(crate::logging::LogLevel::Info),
             source: None,
@@ -196,7 +205,10 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
         };
         match query_logs(&conn, &general_filters, max_entries, 0) {
             Ok(general_logs) => {
-                log::debug!("[diagnostic_context] Found {} general logs", general_logs.len());
+                log::debug!(
+                    "[diagnostic_context] Found {} general logs",
+                    general_logs.len()
+                );
                 // Merge and deduplicate
                 for log_entry in general_logs {
                     if !logs.iter().any(|l| l.id == log_entry.id) {
@@ -209,13 +221,16 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
             }
         }
     }
-    
+
     if logs.is_empty() {
         log::debug!("[diagnostic_context] No logs found");
         lines.push("No recent logs available.".to_string());
     } else {
-        lines.push(format!("Showing last {} log entries:\n", logs.len().min(max_entries)));
-        
+        lines.push(format!(
+            "Showing last {} log entries:\n",
+            logs.len().min(max_entries)
+        ));
+
         for (i, log) in logs.iter().take(max_entries).rev().enumerate() {
             let source_icon = match log.source {
                 LogSource::Frontend => "[UI]",
@@ -245,7 +260,7 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
                 }
             }
         }
-        
+
         lines.push("\n".to_string());
         lines.push("Analyze these logs to understand:".to_string());
         lines.push("- What steps have already been executed".to_string());
@@ -253,7 +268,7 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
         lines.push("- The current state of the task".to_string());
         lines.push("- What action should be taken next".to_string());
     }
-    
+
     lines.join("\n")
 }
 
@@ -262,7 +277,7 @@ pub fn build_diagnostic_context_from_task(task_id: &str, _project_path: &str, ma
 /// enabling self-diagnosis of issues.
 pub fn build_diagnostic_context(conn: &Connection, task: &Task, max_entries: usize) -> String {
     let mut lines = vec!["## Diagnostic Context (Recent System Logs)".to_string()];
-    
+
     // Query recent logs from all sources, filtering by task if possible
     let filters = LogQueryFilters {
         level: None,
@@ -271,10 +286,10 @@ pub fn build_diagnostic_context(conn: &Connection, task: &Task, max_entries: usi
         session_id: None,
         search_query: None,
     };
-    
+
     // First try: search for logs mentioning this task ID
     let mut logs = query_logs(conn, &filters, max_entries, 0).unwrap_or_default();
-    
+
     // If not enough task-specific logs, get general recent logs
     if logs.len() < 10 {
         let general_filters = LogQueryFilters {
@@ -292,12 +307,15 @@ pub fn build_diagnostic_context(conn: &Connection, task: &Task, max_entries: usi
             }
         }
     }
-    
+
     if logs.is_empty() {
         lines.push("No recent logs available.".to_string());
     } else {
-        lines.push(format!("Showing last {} log entries:\n", logs.len().min(max_entries)));
-        
+        lines.push(format!(
+            "Showing last {} log entries:\n",
+            logs.len().min(max_entries)
+        ));
+
         for (i, log) in logs.iter().take(max_entries).rev().enumerate() {
             let source_icon = match log.source {
                 LogSource::Frontend => "[UI]",
@@ -327,7 +345,7 @@ pub fn build_diagnostic_context(conn: &Connection, task: &Task, max_entries: usi
                 }
             }
         }
-        
+
         lines.push("\n".to_string());
         lines.push("Analyze these logs to understand:".to_string());
         lines.push("- What steps have already been executed".to_string());
@@ -335,6 +353,6 @@ pub fn build_diagnostic_context(conn: &Connection, task: &Task, max_entries: usi
         lines.push("- The current state of the task".to_string());
         lines.push("- What action should be taken next".to_string());
     }
-    
+
     lines.join("\n")
 }

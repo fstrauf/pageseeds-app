@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
 use crate::models::gsc::TokenState;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 pub struct AppState {
     pub db: Arc<Mutex<rusqlite::Connection>>,
@@ -16,6 +16,7 @@ pub struct SeoState {
 }
 
 pub mod articles;
+pub mod cannibalization;
 pub mod content;
 pub mod engine;
 pub mod executor;
@@ -29,9 +30,9 @@ pub mod settings;
 pub mod skills;
 pub mod social;
 pub mod tasks;
-pub mod cannibalization;
 
 pub use articles::*;
+pub use cannibalization::*;
 pub use content::*;
 pub use engine::*;
 pub use executor::*;
@@ -45,4 +46,3 @@ pub use settings::*;
 pub use skills::*;
 pub use social::*;
 pub use tasks::*;
-pub use cannibalization::*;

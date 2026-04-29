@@ -2,9 +2,11 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::exec::reddit::{extract_trigger_topics, extract_query_keywords, extract_seed_subreddits};
+    use crate::engine::exec::reddit::{
+        extract_query_keywords, extract_seed_subreddits, extract_trigger_topics,
+    };
     use crate::engine::workflows::handlers::default_handlers;
-    use crate::models::task::{Task, TaskRun, TaskStatus, Priority, ExecutionMode, AgentPolicy};
+    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
     use chrono::Utc;
 
     const PAGESEEDS_CONFIG: &str = r#"# Reddit Config: PageSeeds
@@ -95,7 +97,7 @@ mod tests {
         // Verify we can extract queries from the actual pageseeds config
         let keywords = extract_query_keywords(PAGESEEDS_CONFIG);
         let topics = extract_trigger_topics(PAGESEEDS_CONFIG, 5);
-        
+
         // Queries should not be empty
         assert!(
             !keywords.is_empty() || !topics.is_empty(),
@@ -160,7 +162,8 @@ mod tests {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
              );",
-        ).unwrap();
+        )
+        .unwrap();
         conn
     }
 
@@ -169,7 +172,8 @@ mod tests {
         conn.execute(
             "INSERT INTO projects (id, name, path, active) VALUES (?1, 'Test', ?2, 1)",
             [&id, path],
-        ).unwrap();
+        )
+        .unwrap();
         id
     }
 
@@ -187,7 +191,12 @@ mod tests {
             description: Some("Search for Reddit posting opportunities".to_string()),
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
+            run: TaskRun {
+                attempts: 0,
+                last_error: None,
+                provider: None,
+                ..Default::default()
+            },
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         }
@@ -197,7 +206,7 @@ mod tests {
         let automation = dir.join(".github").join("automation");
         let reddit_dir = automation.join("reddit");
         std::fs::create_dir_all(&reddit_dir).unwrap();
-        
+
         // Create reddit_config.md
         std::fs::write(
             automation.join("reddit_config.md"),
@@ -220,9 +229,10 @@ mod tests {
 ## Query Keywords
 - "test automation"
 - "developer tools"
-"#
-        ).unwrap();
-        
+"#,
+        )
+        .unwrap();
+
         // Create consolidated project.md (replaces project_summary.md + brandvoice.md)
         std::fs::write(
             automation.join("project.md"),
@@ -249,37 +259,43 @@ Helpful, technical, and concise.
 
 - [ ] 🎯 Test Automation Basics (PLANNED)
 - [ ] 🎯 Developer Productivity (PLANNED)
-"#
-        ).unwrap();
-        
+"#,
+        )
+        .unwrap();
+
         // Create _reply_guardrails.md
         std::fs::write(
             reddit_dir.join("_reply_guardrails.md"),
-            "# Reply Guardrails\n\nBe helpful and authentic."
-        ).unwrap();
+            "# Reply Guardrails\n\nBe helpful and authentic.",
+        )
+        .unwrap();
     }
 
     /// Test that the Reddit workflow plans all 4 steps correctly.
     #[test]
     fn reddit_workflow_plans_four_steps() {
         let conn = in_memory_db();
-        let temp_dir = std::env::temp_dir().join(format!("ps_reddit_test_{}", Utc::now().timestamp_millis()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("ps_reddit_test_{}", Utc::now().timestamp_millis()));
         setup_reddit_project(&temp_dir);
 
         let project_id = create_test_project(&conn, &temp_dir.to_string_lossy());
         let task = create_reddit_search_task(&project_id);
 
         let handlers = default_handlers();
-        let handler = handlers.iter().find(|h| h.supports(&task)).expect("Should find handler");
+        let handler = handlers
+            .iter()
+            .find(|h| h.supports(&task))
+            .expect("Should find handler");
         let steps = handler.plan(&task);
-        
+
         // Should have 4 steps: config_parse, search, enrich, results
         assert_eq!(steps.len(), 4, "Reddit workflow should have 4 steps");
         assert_eq!(steps[0].name, "reddit_config_parse_stage");
         assert_eq!(steps[1].name, "reddit_search_stage");
         assert_eq!(steps[2].name, "reddit_enrich_stage");
         assert_eq!(steps[3].name, "reddit_results_stage");
-        
+
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
@@ -287,27 +303,44 @@ Helpful, technical, and concise.
     #[test]
     fn reddit_config_parsing_extracts_search_params() {
         use crate::engine::exec::reddit::RedditSearchParams;
-        
-        let temp_dir = std::env::temp_dir().join(format!("ps_reddit_test_{}", Utc::now().timestamp_millis()));
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("ps_reddit_test_{}", Utc::now().timestamp_millis()));
         setup_reddit_project(&temp_dir);
-        
+
         // Read the config file
-        let config_path = temp_dir.join(".github").join("automation").join("reddit_config.md");
+        let config_path = temp_dir
+            .join(".github")
+            .join("automation")
+            .join("reddit_config.md");
         let config_content = std::fs::read_to_string(&config_path).unwrap();
-        
+
         // Use the fallback parser to extract params
         let params = crate::engine::exec::reddit::parse_config_fallback(&config_content);
-        
+
         // Verify extraction
-        assert!(!params.query_keywords.is_empty(), "Should extract query keywords");
-        assert!(!params.trigger_topics.is_empty(), "Should extract trigger topics");
-        assert!(!params.seed_subreddits.is_empty(), "Should extract seed subreddits");
-        
+        assert!(
+            !params.query_keywords.is_empty(),
+            "Should extract query keywords"
+        );
+        assert!(
+            !params.trigger_topics.is_empty(),
+            "Should extract trigger topics"
+        );
+        assert!(
+            !params.seed_subreddits.is_empty(),
+            "Should extract seed subreddits"
+        );
+
         // Check specific values
-        assert!(params.query_keywords.contains(&"test automation".to_string()));
-        assert!(params.trigger_topics.contains(&"Test automation".to_string()));
+        assert!(params
+            .query_keywords
+            .contains(&"test automation".to_string()));
+        assert!(params
+            .trigger_topics
+            .contains(&"Test automation".to_string()));
         assert!(params.seed_subreddits.contains(&"testing".to_string()));
-        
+
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
@@ -315,10 +348,10 @@ Helpful, technical, and concise.
     #[test]
     fn reddit_opportunities_persist_and_fetch() {
         use crate::models::reddit::RedditOpportunity;
-        
+
         let conn = in_memory_db();
         let project_id = "test-project-123";
-        
+
         // Insert test opportunities
         let now = Utc::now().to_rfc3339();
         let test_opportunities = vec![
@@ -381,35 +414,50 @@ Helpful, technical, and concise.
                 updated_at: now.clone(),
             },
         ];
-        
+
         // Persist opportunities
         for opp in &test_opportunities {
-            crate::reddit::db::upsert_opportunity(&conn, opp).expect("Failed to upsert opportunity");
+            crate::reddit::db::upsert_opportunity(&conn, opp)
+                .expect("Failed to upsert opportunity");
         }
-        
+
         // Fetch opportunities using exec_reddit_fetch_results
         let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, project_id);
-        
-        assert!(result.success, "Should successfully fetch results: {}", result.message);
-        
+
+        assert!(
+            result.success,
+            "Should successfully fetch results: {}",
+            result.message
+        );
+
         let output = result.output.expect("Should have output");
-        let fetched: Vec<RedditOpportunity> = serde_json::from_str(&output).expect("Should parse JSON");
-        
+        let fetched: Vec<RedditOpportunity> =
+            serde_json::from_str(&output).expect("Should parse JSON");
+
         assert_eq!(fetched.len(), 2, "Should fetch 2 opportunities");
-        assert!(fetched.iter().any(|o| o.post_id == "post1"), "Should include post1");
-        assert!(fetched.iter().any(|o| o.post_id == "post2"), "Should include post2");
-        
+        assert!(
+            fetched.iter().any(|o| o.post_id == "post1"),
+            "Should include post1"
+        );
+        assert!(
+            fetched.iter().any(|o| o.post_id == "post2"),
+            "Should include post2"
+        );
+
         // Verify enriched data is preserved
         let post1 = fetched.iter().find(|o| o.post_id == "post1").unwrap();
         assert!(post1.reply_text.is_some(), "Should have drafted reply");
-        assert_eq!(post1.why_relevant.as_deref(), Some("Discusses test automation tools"));
+        assert_eq!(
+            post1.why_relevant.as_deref(),
+            Some("Discusses test automation tools")
+        );
     }
 
     /// Test that reddit_fetch_results step kind is recognized by run_step.
     #[test]
     fn reddit_fetch_results_step_is_recognized() {
-        use crate::engine::workflows::{WorkflowStep, StepResult};
-        
+        use crate::engine::workflows::{StepResult, WorkflowStep};
+
         // Create a minimal task
         let task = Task {
             id: "test-task".to_string(),
@@ -424,14 +472,19 @@ Helpful, technical, and concise.
             description: None,
             depends_on: vec![],
             artifacts: vec![],
-            run: TaskRun { attempts: 0, last_error: None, provider: None, ..Default::default() },
+            run: TaskRun {
+                attempts: 0,
+                last_error: None,
+                provider: None,
+                ..Default::default()
+            },
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
         };
-        
+
         // Create the step
         let step = WorkflowStep::from_kind_str("reddit_results_stage", "reddit_fetch_results");
-        
+
         // Call run_step directly (this is what the executor does)
         let result: StepResult = match step.kind.as_str() {
             "reddit_fetch_results" => crate::engine::workflows::StepResult {
@@ -439,18 +492,24 @@ Helpful, technical, and concise.
                 message: "Reddit results fetch — starting DB query".to_string(),
                 output: None,
             },
-            other => panic!("reddit_fetch_results step kind not recognized, got: {}", other),
+            other => panic!(
+                "reddit_fetch_results step kind not recognized, got: {}",
+                other
+            ),
         };
-        
+
         assert!(result.success, "reddit_fetch_results step should succeed");
-        assert!(result.message.contains("DB query"), "Should indicate DB fetch will happen");
+        assert!(
+            result.message.contains("DB query"),
+            "Should indicate DB fetch will happen"
+        );
     }
 
     /// Test complete workflow step kinds are all valid.
     #[test]
     fn reddit_workflow_all_step_kinds_are_valid() {
         use crate::engine::workflows::WorkflowStep;
-        
+
         // These are the 4 steps the Reddit workflow should plan
         let expected_steps = vec![
             ("reddit_config_parse_stage", "reddit_config_parse"),
@@ -458,20 +517,22 @@ Helpful, technical, and concise.
             ("reddit_enrich_stage", "reddit_enrich"),
             ("reddit_results_stage", "reddit_fetch_results"),
         ];
-        
+
         // Verify each step kind is recognized (would be called by run_step)
         for (name, kind) in &expected_steps {
             let step = WorkflowStep::from_kind_str(*name, *kind);
-            
+
             // Match on the same arms as run_step
-            let recognized = matches!(step.kind.as_str(), 
-                "reddit_config_parse" | 
-                "reddit_search" | 
-                "reddit_enrich" | 
-                "reddit_fetch_results"
+            let recognized = matches!(
+                step.kind.as_str(),
+                "reddit_config_parse" | "reddit_search" | "reddit_enrich" | "reddit_fetch_results"
             );
-            
-            assert!(recognized, "Step '{}' with kind '{}' should be recognized", name, kind);
+
+            assert!(
+                recognized,
+                "Step '{}' with kind '{}' should be recognized",
+                name, kind
+            );
         }
     }
 }

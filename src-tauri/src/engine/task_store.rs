@@ -11,8 +11,7 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     let run_last_error: Option<String> = row.get(13)?;
     let run_provider: Option<String> = row.get(14)?;
 
-    let depends_on: Vec<String> =
-        serde_json::from_str(&depends_on_str).unwrap_or_default();
+    let depends_on: Vec<String> = serde_json::from_str(&depends_on_str).unwrap_or_default();
     let artifacts = serde_json::from_str(&artifacts_str).unwrap_or_default();
 
     Ok(Task {
@@ -48,8 +47,7 @@ fn row_to_task_light(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     let run_last_error: Option<String> = row.get(13)?;
     let run_provider: Option<String> = row.get(14)?;
 
-    let depends_on: Vec<String> =
-        serde_json::from_str(&depends_on_str).unwrap_or_default();
+    let depends_on: Vec<String> = serde_json::from_str(&depends_on_str).unwrap_or_default();
 
     Ok(Task {
         id: row.get(0)?,
@@ -229,7 +227,7 @@ pub fn create_task(conn: &Connection, task: &Task) -> Result<Task> {
 pub fn update_task_status(conn: &Connection, id: &str, status: TaskStatus) -> Result<Task> {
     let now = chrono::Utc::now().to_rfc3339();
     let rows = conn.execute(
-        "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3",
+        "UPDATE tasks SET status = ?1, updated_at = ?2, run_last_error = CASE WHEN ?1 = 'in_progress' THEN NULL ELSE run_last_error END WHERE id = ?3",
         rusqlite::params![status, now, id],
     )?
     ;
@@ -414,8 +412,7 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
     let articles: Vec<Article> = stmt
         .query_map([project_id], |row| {
             let gaps_str: String = row.get(14)?;
-            let gaps: Vec<String> =
-                serde_json::from_str(&gaps_str).unwrap_or_default();
+            let gaps: Vec<String> = serde_json::from_str(&gaps_str).unwrap_or_default();
             Ok(Article {
                 id: row.get(0)?,
                 title: row.get(1)?,
@@ -450,7 +447,11 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
 
 use crate::models::task::TaskArtifact;
 
-pub fn append_task_artifact(conn: &Connection, task_id: &str, artifact: &TaskArtifact) -> Result<()> {
+pub fn append_task_artifact(
+    conn: &Connection,
+    task_id: &str,
+    artifact: &TaskArtifact,
+) -> Result<()> {
     // Load current artifacts, append, save back
     let task = get_task(conn, task_id)?;
     let mut artifacts = task.artifacts;
@@ -632,10 +633,10 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
 
     // Workflow activity: last completed run per key workflow type + scheduler interval
     let key_workflows: &[(&str, &str)] = &[
-        ("research_keywords",       "Keyword Research"),
-        ("content_review",          "Content Review"),
-        ("reddit_opportunity_search","Reddit Search"),
-        ("collect_gsc",             "GSC Collection"),
+        ("research_keywords", "Keyword Research"),
+        ("content_review", "Content Review"),
+        ("reddit_opportunity_search", "Reddit Search"),
+        ("collect_gsc", "GSC Collection"),
     ];
 
     // Build a map of task_type → last successful run finished_at from task_runs.
@@ -671,11 +672,14 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         .map(|(task_type, label)| {
             let last_run_at = last_run_map.remove(*task_type);
             let interval_hours = interval_map.remove(*task_type);
-            let next_due_at = last_run_at.as_ref().zip(interval_hours).and_then(|(ts, hrs)| {
-                ts.parse::<chrono::DateTime<chrono::Utc>>().ok().map(|dt| {
-                    (dt + chrono::Duration::hours(hrs)).to_rfc3339()
-                })
-            });
+            let next_due_at = last_run_at
+                .as_ref()
+                .zip(interval_hours)
+                .and_then(|(ts, hrs)| {
+                    ts.parse::<chrono::DateTime<chrono::Utc>>()
+                        .ok()
+                        .map(|dt| (dt + chrono::Duration::hours(hrs)).to_rfc3339())
+                });
             WorkflowActivity {
                 task_type: task_type.to_string(),
                 label: label.to_string(),
@@ -708,11 +712,11 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         rows.filter_map(|r| r.ok()).collect()
     };
 
-    Ok(ProjectOverview { 
-        tasks: counts, 
-        recent_tasks, 
-        articles, 
-        ready_task_count, 
+    Ok(ProjectOverview {
+        tasks: counts,
+        recent_tasks,
+        articles,
+        ready_task_count,
         workflow_activity,
         pending_landing_page_research,
     })
@@ -721,7 +725,7 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
 /// Parse landing page research description JSON to extract context and themes.
 fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
     let desc = desc.unwrap_or("");
-    
+
     // Try JSON format first
     if desc.trim().starts_with('{') {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(desc) {
@@ -743,7 +747,7 @@ fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
             return (context, themes);
         }
     }
-    
+
     // Fall back to treating entire description as context
     (desc.to_string(), vec![])
 }

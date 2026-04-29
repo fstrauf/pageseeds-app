@@ -77,9 +77,7 @@ mod tests {
         }
 
         async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-            Ok(EchoOutput {
-                echo: args.message,
-            })
+            Ok(EchoOutput { echo: args.message })
         }
     }
 
@@ -92,9 +90,7 @@ mod tests {
 
     #[test]
     fn test_boxed_tool_set_with_tools() {
-        let tools: Vec<Box<dyn ToolDyn>> = vec![
-            Box::new(EchoTool),
-        ];
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool)];
         let tool_set = boxed_tool_set(tools);
         let _ = tool_set;
     }
@@ -114,9 +110,12 @@ mod tests {
         let tool = EchoTool;
         let output = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(rig::tool::Tool::call(&tool, EchoArgs {
-                message: "hello".to_string(),
-            }))
+            .block_on(rig::tool::Tool::call(
+                &tool,
+                EchoArgs {
+                    message: "hello".to_string(),
+                },
+            ))
             .unwrap();
         assert_eq!(output.echo, "hello");
     }

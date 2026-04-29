@@ -1,7 +1,6 @@
 /// Cannibalization strategy review and approval commands.
 ///
 /// Thin IPC wrappers — all business logic lives in the engine modules.
-
 use tauri::State;
 
 use crate::commands::AppState;
@@ -68,8 +67,8 @@ pub fn get_cannibalization_strategy(
         return Ok(None);
     }
 
-    let strategy: CannibalizationStrategy =
-        serde_json::from_str(&strategy_json).map_err(|e| format!("Invalid strategy JSON: {}", e))?;
+    let strategy: CannibalizationStrategy = serde_json::from_str(&strategy_json)
+        .map_err(|e| format!("Invalid strategy JSON: {}", e))?;
 
     let strategy_id = task_id.unwrap_or_else(|| {
         // Use a synthetic strategy ID based on project + timestamp of file
@@ -144,15 +143,15 @@ pub fn create_tasks_from_approved_recommendations(
     // Load strategy from task artifact or file
     let strategy_json = if strategy_id.starts_with("strategy-") && strategy_id.contains("-file") {
         // Synthetic ID — read from file
-        let project = crate::engine::task_store::get_project(&db, &project_id)
-            .map_err(|e| e.to_string())?;
+        let project =
+            crate::engine::task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
         let paths = ProjectPaths::from_project(&project);
         let path = paths.automation_dir.join("cannibalization_strategy.json");
         std::fs::read_to_string(&path).unwrap_or_default()
     } else {
         // Real task ID — load task and extract artifact
-        let task = crate::engine::task_store::get_task(&db, &strategy_id)
-            .map_err(|e| e.to_string())?;
+        let task =
+            crate::engine::task_store::get_task(&db, &strategy_id).map_err(|e| e.to_string())?;
         task.artifacts
             .iter()
             .find(|a| a.key == "cannibalization_strategy")
@@ -164,8 +163,8 @@ pub fn create_tasks_from_approved_recommendations(
         return Err("No strategy found".to_string());
     }
 
-    let strategy: CannibalizationStrategy =
-        serde_json::from_str(&strategy_json).map_err(|e| format!("Invalid strategy JSON: {}", e))?;
+    let strategy: CannibalizationStrategy = serde_json::from_str(&strategy_json)
+        .map_err(|e| format!("Invalid strategy JSON: {}", e))?;
 
     let reviews = crate::db::list_strategy_reviews(&db, &strategy_id).map_err(|e| e.to_string())?;
 
@@ -224,10 +223,7 @@ pub fn create_tasks_from_approved_recommendations(
         if !approved.contains(&key) {
             continue;
         }
-        let idempotency_key = format!(
-            "can_fix:hub:{}:{}:{}",
-            project_id, strategy_id, rec.topic
-        );
+        let idempotency_key = format!("can_fix:hub:{}:{}:{}", project_id, strategy_id, rec.topic);
         let spec = crate::engine::spawner::TaskSpec {
             project_id: project_id.clone(),
             task_type: "create_hub_page".to_string(),

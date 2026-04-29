@@ -62,10 +62,8 @@ pub async fn compute_movers(
     prev_end: &str,
     row_limit: u32,
 ) -> Result<Vec<MoverMetrics>> {
-    let curr_rows =
-        fetch_page_rows(token, site_url, curr_start, curr_end, row_limit).await?;
-    let prev_rows =
-        fetch_page_rows(token, site_url, prev_start, prev_end, row_limit).await?;
+    let curr_rows = fetch_page_rows(token, site_url, curr_start, curr_end, row_limit).await?;
+    let prev_rows = fetch_page_rows(token, site_url, prev_start, prev_end, row_limit).await?;
 
     // Build map of prev period by page
     use std::collections::HashMap;
@@ -85,11 +83,8 @@ pub async fn compute_movers(
                 previous_impressions: prev.map(|p| p.impressions).unwrap_or(0.0),
                 previous_position: prev.map(|p| p.position).unwrap_or(0.0),
                 clicks_delta: curr.clicks - prev.map(|p| p.clicks).unwrap_or(0.0),
-                impressions_delta: curr.impressions
-                    - prev.map(|p| p.impressions).unwrap_or(0.0),
-                position_delta: prev
-                    .map(|p| p.position - curr.position)
-                    .unwrap_or(0.0),
+                impressions_delta: curr.impressions - prev.map(|p| p.impressions).unwrap_or(0.0),
+                position_delta: prev.map(|p| p.position - curr.position).unwrap_or(0.0),
             }
         })
         .collect();

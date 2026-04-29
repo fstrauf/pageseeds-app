@@ -48,7 +48,7 @@ pub fn apply_text_overlay(
     // 2. Resize/crop to canvas dimensions
     // 3. Render text overlay at specified position
     // 4. Save to output path
-    
+
     log::info!(
         "Applying overlay to {:?}: '{}' (position: {:?}, size: {:?})",
         input_path,
@@ -56,10 +56,10 @@ pub fn apply_text_overlay(
         config.text_position,
         config.canvas_size
     );
-    
+
     // For now, just copy the image (placeholder)
     std::fs::copy(input_path, output_path)?;
-    
+
     Ok(())
 }
 
@@ -75,10 +75,10 @@ pub fn create_text_image(
         output_path,
         text
     );
-    
+
     // Placeholder - would use image crate to create a solid color image
     // with rendered text
-    
+
     Ok(())
 }
 
@@ -86,7 +86,7 @@ pub fn create_text_image(
 pub fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current_line = String::new();
-    
+
     for word in text.split_whitespace() {
         if current_line.len() + word.len() + 1 > max_chars {
             if !current_line.is_empty() {
@@ -99,18 +99,18 @@ pub fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
         }
         current_line.push_str(word);
     }
-    
+
     if !current_line.is_empty() {
         lines.push(current_line);
     }
-    
+
     lines
 }
 
 /// Calculate font size based on text length and canvas size
 pub fn calculate_font_size(text_len: usize, canvas_height: u32) -> u32 {
     let base_size = canvas_height / 20; // 5% of canvas height
-    
+
     // Reduce size for longer text
     if text_len > 100 {
         base_size * 2 / 3

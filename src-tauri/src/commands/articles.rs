@@ -1,9 +1,9 @@
-use tauri::State;
-use crate::db::export;
+use super::AppState;
 use crate::content::date_policy;
+use crate::db::export;
 use crate::engine::task_store;
 use crate::models::article::Article;
-use super::AppState;
+use tauri::State;
 
 #[tauri::command]
 pub fn list_articles(
@@ -29,11 +29,9 @@ pub fn import_from_repo(
     let project = task_store::get_project(&db, &project_id)?;
     let project_path = std::path::PathBuf::from(&project.path);
 
-    let tasks_imported =
-        export::read_task_list_from_repo(&db, &project_id, &project_path)?;
+    let tasks_imported = export::read_task_list_from_repo(&db, &project_id, &project_path)?;
 
-    let articles_imported =
-        export::read_articles_from_repo(&db, &project_id, &project_path)?;
+    let articles_imported = export::read_articles_from_repo(&db, &project_id, &project_path)?;
 
     Ok(ImportResult {
         tasks_imported,
@@ -42,10 +40,7 @@ pub fn import_from_repo(
 }
 
 #[tauri::command]
-pub fn export_to_repo(
-    state: State<'_, AppState>,
-    project_id: String,
-) -> Result<(), String> {
+pub fn export_to_repo(state: State<'_, AppState>, project_id: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let articles = task_store::list_articles(&db, &project_id)?;
     let report = date_policy::validate_no_future_dates(&articles);

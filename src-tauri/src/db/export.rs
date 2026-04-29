@@ -400,8 +400,7 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
                 gaps_str,
                 estimated_traffic,
             )| {
-                let gaps: Value =
-                    serde_json::from_str(&gaps_str).unwrap_or(Value::Array(vec![]));
+                let gaps: Value = serde_json::from_str(&gaps_str).unwrap_or(Value::Array(vec![]));
                 let mut article = serde_json::json!({
                     "id": id,
                     "title": title,
@@ -442,7 +441,10 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
 
 /// Canonical location of articles.json within a repo: .github/automation/articles.json
 fn articles_json_path(project_path: &Path) -> std::path::PathBuf {
-    project_path.join(".github").join("automation").join("articles.json")
+    project_path
+        .join(".github")
+        .join("automation")
+        .join("articles.json")
 }
 
 fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()> {
@@ -505,7 +507,8 @@ fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()
 /// Merge unknown/custom fields from an existing articles.json into a newly exported one.
 /// Preserves fields not in the SQLite schema (e.g. gsc, analytics) across export rounds.
 pub(crate) fn merge_unknown_fields(exported: &mut serde_json::Value, existing: &serde_json::Value) {
-    let Some(exported_articles) = exported.get_mut("articles").and_then(|v| v.as_array_mut()) else {
+    let Some(exported_articles) = exported.get_mut("articles").and_then(|v| v.as_array_mut())
+    else {
         return;
     };
     let Some(existing_articles) = existing.get("articles").and_then(|v| v.as_array()) else {
@@ -523,19 +526,37 @@ pub(crate) fn merge_unknown_fields(exported: &mut serde_json::Value, existing: &
             .collect();
 
     let known_fields: std::collections::HashSet<&str> = [
-        "id", "title", "url_slug", "file", "target_keyword", "keyword_difficulty",
-        "target_volume", "published_date", "word_count", "status",
-        "content_gaps_addressed", "estimated_traffic_monthly",
-        "review_status", "review_started_at", "last_reviewed_at", "review_count",
+        "id",
+        "title",
+        "url_slug",
+        "file",
+        "target_keyword",
+        "keyword_difficulty",
+        "target_volume",
+        "published_date",
+        "word_count",
+        "status",
+        "content_gaps_addressed",
+        "estimated_traffic_monthly",
+        "review_status",
+        "review_started_at",
+        "last_reviewed_at",
+        "review_count",
     ]
     .iter()
     .copied()
     .collect();
 
     for article in exported_articles.iter_mut() {
-        let Some(id) = article.get("id").and_then(|v| v.as_i64()) else { continue };
-        let Some(existing_obj) = existing_map.get(&id) else { continue };
-        let Some(article_obj) = article.as_object_mut() else { continue };
+        let Some(id) = article.get("id").and_then(|v| v.as_i64()) else {
+            continue;
+        };
+        let Some(existing_obj) = existing_map.get(&id) else {
+            continue;
+        };
+        let Some(article_obj) = article.as_object_mut() else {
+            continue;
+        };
 
         for (key, value) in existing_obj.iter() {
             if !known_fields.contains(key.as_str()) {
@@ -558,7 +579,9 @@ pub(crate) fn merge_sidecar_metadata(
     };
 
     for article in articles.iter_mut() {
-        let Some(article_id) = article.get("id").and_then(|v| v.as_i64()) else { continue };
+        let Some(article_id) = article.get("id").and_then(|v| v.as_i64()) else {
+            continue;
+        };
         for (id, namespace, payload) in &meta_rows {
             if *id != article_id {
                 continue;
@@ -571,10 +594,16 @@ pub(crate) fn merge_sidecar_metadata(
                             article[key] = value.clone();
                         } else {
                             // Flatten nested keys under the namespace key
-                            if !article.get(namespace).map(|v| v.is_object()).unwrap_or(false) {
+                            if !article
+                                .get(namespace)
+                                .map(|v| v.is_object())
+                                .unwrap_or(false)
+                            {
                                 article[namespace] = serde_json::Value::Object(Default::default());
                             }
-                            if let Some(ns_obj) = article.get_mut(namespace).and_then(|v| v.as_object_mut()) {
+                            if let Some(ns_obj) =
+                                article.get_mut(namespace).and_then(|v| v.as_object_mut())
+                            {
                                 ns_obj.insert(key.clone(), value.clone());
                             }
                         }
@@ -593,7 +622,8 @@ pub fn write_articles_to_repo(
     project_path: &Path,
 ) -> Result<()> {
     validate_export_date_policy(conn, project_id)?;
-    let mut exported: serde_json::Value = serde_json::from_str(&export_articles(conn, project_id)?)?;
+    let mut exported: serde_json::Value =
+        serde_json::from_str(&export_articles(conn, project_id)?)?;
 
     // Merge sidecar metadata (e.g. GSC metrics) from SQLite into the export.
     merge_sidecar_metadata(conn, project_id, &mut exported)?;

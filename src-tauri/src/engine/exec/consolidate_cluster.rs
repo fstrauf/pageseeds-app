@@ -8,7 +8,6 @@
 ///   - merge_apply_patch        (deterministic)
 ///   - merge_generate_redirects (deterministic)
 ///   - merge_validate_output    (deterministic)
-
 use std::path::{Path, PathBuf};
 
 use crate::engine::project_paths::ProjectPaths;
@@ -109,7 +108,11 @@ pub(crate) fn exec_merge_load_plan(task: &Task, project_path: &str) -> StepResul
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Run preflight checks before merging.
-pub(crate) fn exec_merge_preflight(task: &Task, project_path: &str, _plan_json: &str) -> StepResult {
+pub(crate) fn exec_merge_preflight(
+    task: &Task,
+    project_path: &str,
+    _plan_json: &str,
+) -> StepResult {
     let plan_json = load_plan_from_task_or_file(task, project_path);
     let plan: serde_json::Value = match serde_json::from_str(&plan_json) {
         Ok(v) => v,
@@ -131,7 +134,9 @@ pub(crate) fn exec_merge_preflight(task: &Task, project_path: &str, _plan_json: 
         .collect();
 
     // Resolve keeper file from URL slug
-    let keeper_slug = keep_url.trim_start_matches("/blog/").trim_start_matches('/');
+    let keeper_slug = keep_url
+        .trim_start_matches("/blog/")
+        .trim_start_matches('/');
     let keeper_file = find_file_by_slug(project_path, keeper_slug);
     let keeper_exists = keeper_file.as_ref().map(|p| p.exists()).unwrap_or(false);
 
@@ -215,7 +220,9 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
 
-    let keeper_slug = keep_url.trim_start_matches("/blog/").trim_start_matches('/');
+    let keeper_slug = keep_url
+        .trim_start_matches("/blog/")
+        .trim_start_matches('/');
     let keeper_file = find_file_by_slug(project_path, keeper_slug);
     let keeper_content = keeper_file
         .as_ref()
@@ -369,7 +376,10 @@ pub(crate) fn exec_merge_apply_patch(
     };
 
     // Snapshot original
-    let snapshot_dir = keeper_path.parent().map(|p| p.join(".snapshots")).unwrap_or_default();
+    let snapshot_dir = keeper_path
+        .parent()
+        .map(|p| p.join(".snapshots"))
+        .unwrap_or_default();
     let _ = std::fs::create_dir_all(&snapshot_dir);
     let snapshot_path = snapshot_dir.join(
         keeper_path
@@ -506,7 +516,10 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
     let csv_path = paths.automation_dir.join("redirects.csv");
     let mut csv = String::from("source,destination,status\n");
     for rule in &rules {
-        csv.push_str(&format!("{},{},{}\n", rule.source, rule.destination, rule.status));
+        csv.push_str(&format!(
+            "{},{},{}\n",
+            rule.source, rule.destination, rule.status
+        ));
     }
 
     if let Err(e) = std::fs::write(&csv_path, &csv) {
@@ -525,7 +538,11 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
 
     StepResult {
         success: true,
-        message: format!("Generated {} redirect rules -> {}", rules.len(), csv_path.display()),
+        message: format!(
+            "Generated {} redirect rules -> {}",
+            rules.len(),
+            csv_path.display()
+        ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
     }
 }
@@ -551,7 +568,9 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
     };
 
     let keep_url = plan["keep_url"].as_str().unwrap_or("");
-    let keeper_slug = keep_url.trim_start_matches("/blog/").trim_start_matches('/');
+    let keeper_slug = keep_url
+        .trim_start_matches("/blog/")
+        .trim_start_matches('/');
     let keeper_file = find_file_by_slug(project_path, keeper_slug);
 
     let mut issues: Vec<String> = Vec::new();
@@ -662,7 +681,10 @@ fn load_plan_from_task_or_file(task: &Task, project_path: &str) -> String {
     let strategy: serde_json::Value = serde_json::from_str(&strategy_json).unwrap_or_default();
     let rec = strategy["merge_recommendations"]
         .as_array()
-        .and_then(|arr| arr.iter().find(|r| r["cluster_id"].as_str().unwrap_or("") == cluster_id));
+        .and_then(|arr| {
+            arr.iter()
+                .find(|r| r["cluster_id"].as_str().unwrap_or("") == cluster_id)
+        });
 
     match rec {
         Some(r) => serde_json::to_string(r).unwrap_or_default(),
@@ -688,7 +710,9 @@ fn find_file_by_slug(project_path: &str, slug: &str) -> Option<PathBuf> {
         if let Ok(content) = std::fs::read_to_string(&file) {
             let scalars = crate::content::frontmatter::top_level_scalars(&content);
             for field in scalars {
-                if field.key == "url_slug" && field.raw_value.trim_matches('"').trim_matches('\'') == slug {
+                if field.key == "url_slug"
+                    && field.raw_value.trim_matches('"').trim_matches('\'') == slug
+                {
                     return Some(file);
                 }
             }
@@ -762,7 +786,10 @@ fn extract_examples(body: &str) -> Vec<ExtractedExample> {
     while i < lines.len() {
         if lines[i].trim_start().starts_with("```") {
             let fence = lines[i].trim_start();
-            let lang = fence.strip_prefix("```").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            let lang = fence
+                .strip_prefix("```")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
             let mut code_lines = Vec::new();
             i += 1;
             while i < lines.len() && !lines[i].trim_start().starts_with("```") {
@@ -789,7 +816,8 @@ fn extract_faqs(body: &str) -> Vec<ExtractedFaq> {
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i].trim();
-        let q_match = line.starts_with("Q:") || line.starts_with("**Q:**") || line.starts_with("**Q:**");
+        let q_match =
+            line.starts_with("Q:") || line.starts_with("**Q:**") || line.starts_with("**Q:**");
         if q_match {
             let question = line
                 .strip_prefix("Q:")
@@ -801,7 +829,11 @@ fn extract_faqs(body: &str) -> Vec<ExtractedFaq> {
             let mut answer_lines = Vec::new();
             while i < lines.len() {
                 let next = lines[i].trim();
-                if next.starts_with("Q:") || next.starts_with("**Q:**") || next.starts_with("A:") || next.starts_with("**A:**") {
+                if next.starts_with("Q:")
+                    || next.starts_with("**Q:**")
+                    || next.starts_with("A:")
+                    || next.starts_with("**A:**")
+                {
                     break;
                 }
                 answer_lines.push(lines[i]);

@@ -432,7 +432,7 @@ function FollowUpList({ followUps, onRunNow, onOpenTask }: FollowUpListProps) {
         Next task{followUps.length !== 1 ? 's' : ''}
       </div>
       {followUps.map(task => {
-        const canRun = task.status === 'todo' && task.execution_mode !== 'manual'
+        const canRun = (task.status === 'todo' || task.status === 'review') && task.execution_mode !== 'manual'
         const isReview = task.status === 'review'
         const reviewLabel =
           task.task_type === 'research_keywords' || task.task_type === 'custom_keyword_research'

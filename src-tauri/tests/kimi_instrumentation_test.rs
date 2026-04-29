@@ -8,7 +8,7 @@ fn test_kimi_instrumentation() {
     let _ = env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
         .try_init();
-    
+
     let project_path = PathBuf::from("/Users/fstrauf/01_code/call-analyzer");
     let prompt = r#"Parse this reddit config file and extract key information:
 
@@ -58,16 +58,19 @@ Return a JSON object with this structure:
 }"#;
 
     println!("Calling run_agent from instrumentation test...");
-    
+
     let result = pageseeds_lib::engine::agent::run_agent("kimi", prompt, &project_path);
-    
-    println!("Result: {:?}", result.as_ref().map(|s| s.len()).map_err(|e| e.clone()));
-    
+
+    println!(
+        "Result: {:?}",
+        result.as_ref().map(|s| s.len()).map_err(|e| e.clone())
+    );
+
     match result {
         Ok(output) => {
             println!("Output length: {} bytes", output.len());
             println!("First 500 chars:\n{}", &output[..output.len().min(500)]);
-            
+
             // Check if it's valid JSON
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&output) {
                 println!("✓ Valid JSON output!");
@@ -80,17 +83,21 @@ Return a JSON object with this structure:
             println!("Error: {}", e);
         }
     }
-    
+
     // Check if debug file was created
     let debug_files: Vec<_> = std::fs::read_dir("/tmp")
         .unwrap()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().starts_with("kimi_output_"))
         .collect();
-    
+
     println!("\nDebug files found: {}", debug_files.len());
     for f in &debug_files {
         let meta = std::fs::metadata(f.path()).unwrap();
-        println!("  {} ({} bytes)", f.file_name().to_string_lossy(), meta.len());
+        println!(
+            "  {} ({} bytes)",
+            f.file_name().to_string_lossy(),
+            meta.len()
+        );
     }
 }

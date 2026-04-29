@@ -1,6 +1,5 @@
 //! Social media marketing workflow step executors
 
-
 use chrono::Utc;
 
 use crate::engine::workflows::StepResult;
@@ -8,33 +7,33 @@ use crate::engine::workflows::WorkflowStep;
 use crate::models::social::*;
 use crate::models::task::Task;
 use crate::social::models::{AgentPostOutput, AgentTemplateOutput, PostGenerationJob};
-use crate::social::templates::{TemplateRegistry, TemplateDef};
+use crate::social::templates::{TemplateDef, TemplateRegistry};
 
 mod extract;
 mod generate;
-mod visuals;
 mod templates;
+mod visuals;
 
 pub(crate) use extract::*;
 pub(crate) use generate::*;
-pub(crate) use visuals::*;
 pub(crate) use templates::*;
+pub(crate) use visuals::*;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 2: Load Templates
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn exec_social_load_templates(
-    task: &Task,
-    _project_path: &str,
-) -> StepResult {
+pub fn exec_social_load_templates(task: &Task, _project_path: &str) -> StepResult {
     // Get campaign config from task description
     let template_ids = parse_template_ids_from_task(task);
 
     // For now, we'll create default templates if they don't exist
     // In a real implementation, this would load from the database
 
-    log::info!("[social_load_templates] loading {} templates", template_ids.len());
+    log::info!(
+        "[social_load_templates] loading {} templates",
+        template_ids.len()
+    );
 
     // Return success - templates will be loaded from DB in the generate step
     StepResult {
@@ -67,7 +66,11 @@ pub fn exec_social_save_campaign(
         }
     };
 
-    log::info!("[social_save_campaign] saving {} posts for campaign {}", posts.len(), task.id);
+    log::info!(
+        "[social_save_campaign] saving {} posts for campaign {}",
+        posts.len(),
+        task.id
+    );
 
     // Save each post to the database
     let mut saved_count = 0;
@@ -75,7 +78,11 @@ pub fn exec_social_save_campaign(
         match db::create_post(conn, post) {
             Ok(_) => saved_count += 1,
             Err(e) => {
-                log::warn!("[social_save_campaign] failed to save post {}: {}", post.id, e);
+                log::warn!(
+                    "[social_save_campaign] failed to save post {}: {}",
+                    post.id,
+                    e
+                );
             }
         }
     }
@@ -83,19 +90,29 @@ pub fn exec_social_save_campaign(
     // Update campaign post count
     if let Some(campaign_id) = extract_campaign_id_from_task(task) {
         if let Err(e) = db::update_campaign_post_count(conn, &campaign_id, saved_count as u32) {
-            log::warn!("[social_save_campaign] failed to update campaign count: {}", e);
+            log::warn!(
+                "[social_save_campaign] failed to update campaign count: {}",
+                e
+            );
         }
-        
+
         // Update campaign status to active
         if let Err(e) = db::update_campaign_status(conn, &campaign_id, CampaignStatus::Active) {
-            log::warn!("[social_save_campaign] failed to update campaign status: {}", e);
+            log::warn!(
+                "[social_save_campaign] failed to update campaign status: {}",
+                e
+            );
         }
     }
 
     StepResult {
         success: saved_count > 0,
         message: format!("Saved {} of {} posts", saved_count, posts.len()),
-        output: Some(format!("{{\"saved\":{},\"total\":{}}}", saved_count, posts.len())),
+        output: Some(format!(
+            "{{\"saved\":{},\"total\":{}}}",
+            saved_count,
+            posts.len()
+        )),
     }
 }
 
@@ -112,8 +129,11 @@ pub fn exec_social_regenerate_single(
     // Parse post ID and feedback from task description
     let (post_id, feedback) = parse_regenerate_params(task);
 
-    log::info!("[social_regenerate_single] regenerating post {} with feedback: {}",
-        post_id, feedback);
+    log::info!(
+        "[social_regenerate_single] regenerating post {} with feedback: {}",
+        post_id,
+        feedback
+    );
 
     // For now, return success - full implementation would load post, call agent with feedback
     let _ = (post_id, feedback, project_path, agent_provider);
@@ -125,10 +145,7 @@ pub fn exec_social_regenerate_single(
     }
 }
 
-pub fn exec_social_update_post(
-    _task: &Task,
-    _project_path: &str,
-) -> StepResult {
+pub fn exec_social_update_post(_task: &Task, _project_path: &str) -> StepResult {
     StepResult {
         success: true,
         message: "Post updated".to_string(),
@@ -151,7 +168,7 @@ fn parse_source_config_from_task(task: &Task) -> SourceConfig {
             }
         }
     }
-    
+
     // Fallback to default config if parsing fails
     SourceConfig {
         include_articles: true,
@@ -174,12 +191,9 @@ fn parse_template_ids_from_task(task: &Task) -> Vec<String> {
             }
         }
     }
-    
+
     // Fallback to default templates if parsing fails
-    vec![
-        "article_hook".to_string(),
-        "article_carousel".to_string(),
-    ]
+    vec!["article_hook".to_string(), "article_carousel".to_string()]
 }
 
 fn parse_platforms_from_task(task: &Task) -> Vec<Platform> {
@@ -204,12 +218,9 @@ fn parse_platforms_from_task(task: &Task) -> Vec<Platform> {
             }
         }
     }
-    
+
     // Fallback to default platforms if parsing fails
-    vec![
-        Platform::InstagramFeed,
-        Platform::TikTok,
-    ]
+    vec![Platform::InstagramFeed, Platform::TikTok]
 }
 
 fn load_posts_from_artifacts(task: &Task) -> Option<Vec<SocialPost>> {
@@ -242,7 +253,7 @@ fn load_templates_for_generation(
             log::warn!("Template {} not found in registry, skipping", id);
         }
     }
-    
+
     // If no templates found, use all defaults
     if templates.is_empty() {
         templates = registry.all().to_vec();
@@ -296,7 +307,10 @@ fn _create_default_template(id: &str) -> Result<ContentTemplate, String> {
             text_position: TextPosition::Center,
             max_text_length: 100,
         },
-        default_hashtags: vec!["#contentmarketing".to_string(), "#digitalmarketing".to_string()],
+        default_hashtags: vec![
+            "#contentmarketing".to_string(),
+            "#digitalmarketing".to_string(),
+        ],
         example_output: None,
         created_at: Utc::now().to_rfc3339(),
         updated_at: Utc::now().to_rfc3339(),

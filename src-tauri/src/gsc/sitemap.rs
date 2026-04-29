@@ -20,7 +20,11 @@ pub async fn fetch_sitemap_urls(sitemap_url: &str, limit: usize) -> Result<Vec<S
                     all_urls.append(&mut child_urls);
                 }
                 Err(e) => {
-                    log::warn!("[sitemap] Failed to fetch child sitemap {}: {}", child_url, e);
+                    log::warn!(
+                        "[sitemap] Failed to fetch child sitemap {}: {}",
+                        child_url,
+                        e
+                    );
                 }
             }
             if all_urls.len() >= limit {

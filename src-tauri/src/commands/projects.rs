@@ -1,7 +1,7 @@
-use tauri::State;
+use super::AppState;
 use crate::engine::task_store;
 use crate::models::project::{Project, ProjectMode};
-use super::AppState;
+use tauri::State;
 
 fn managed_project_root(project_id: &str) -> Result<std::path::PathBuf, String> {
     let db_path = crate::db::default_db_path();
@@ -89,7 +89,7 @@ pub fn create_project(
 
     let db = state.db.lock().map_err(|e| e.to_string())?;
     task_store::create_project(&db, &project)?;
-    
+
     if project_mode == ProjectMode::Workspace {
         // Auto-initialize the project workspace with required files.
         let repo_root = std::path::Path::new(&resolved_path);
@@ -98,11 +98,14 @@ pub fn create_project(
             site_url.as_deref(),
             Some(&name_for_init),
         ) {
-            log::warn!("[create_project] Failed to auto-initialize workspace: {}", e);
+            log::warn!(
+                "[create_project] Failed to auto-initialize workspace: {}",
+                e
+            );
             // Don't fail project creation if initialization fails - user can fix manually
         }
     }
-    
+
     Ok(project)
 }
 

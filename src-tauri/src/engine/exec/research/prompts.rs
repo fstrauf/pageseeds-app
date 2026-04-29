@@ -106,15 +106,16 @@ pub fn build_research_prompts(
                 .unwrap_or_else(|_| "(no brief found)".to_string());
 
             // ── Coverage summary for smarter seed generation ──────────────────────
-            let coverage_summary = match crate::engine::exec::coverage::read_keyword_coverage(project_path) {
-                Some(coverage) => build_coverage_summary(&coverage),
-                None => {
-                    return Err(
+            let coverage_summary =
+                match crate::engine::exec::coverage::read_keyword_coverage(project_path) {
+                    Some(coverage) => build_coverage_summary(&coverage),
+                    None => {
+                        return Err(
                         "keyword_coverage.json not found. Run 'Analyze Keyword Coverage' first."
                             .to_string(),
                     );
-                }
-            };
+                    }
+                };
 
             let user = format!(
                 "## Project Context\n\n{}\n\n## Existing Content Coverage\n\n{}\n\n## Task Description\n\n{}\n\n## Project Path\n\n{}",
@@ -131,14 +132,12 @@ pub fn build_research_prompts(
             // This step is now handled by the deterministic keyword_research_native step.
             // The old agentic discovery with ToolCallingAgent has been replaced.
             // This prompt builder remains for backward compatibility.
-            
+
             // Get themes from previous_output (parsed as typed SeedExtractionOutput)
             let themes = if let Some(prev) = previous_output {
                 // Try to parse as typed output
                 match crate::models::research::parse_seed_extraction(prev) {
-                    Ok(extraction) if !extraction.themes.is_empty() => {
-                        extraction.themes.join(", ")
-                    }
+                    Ok(extraction) if !extraction.themes.is_empty() => extraction.themes.join(", "),
                     _ => {
                         // Fallback: try generic JSON parsing
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(prev) {
@@ -158,11 +157,11 @@ pub fn build_research_prompts(
             } else {
                 "(no themes - this should not happen in the hybrid workflow)".to_string()
             };
-            
+
             // Return a placeholder - this step kind is now handled by keyword_research_native
             let system = "You are a placeholder. The actual keyword discovery now runs via deterministic Rust code.";
             let user = format!("Themes that would be researched: {}", themes);
-            
+
             Ok((system.to_string(), user))
         }
 

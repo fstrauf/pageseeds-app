@@ -10,9 +10,9 @@ pub mod traffic;
 
 use crate::config::env_resolver::EnvResolver;
 use crate::error::Result;
-use crate::seo::provider::SeoDataProvider;
 use crate::seo::ahrefs::AhrefsProvider;
 use crate::seo::dataforseo::DataForSeoProvider;
+use crate::seo::provider::SeoDataProvider;
 
 const CAPSOLVER_CREATE_URL: &str = "https://api.capsolver.com/createTask";
 const CAPSOLVER_RESULT_URL: &str = "https://api.capsolver.com/getTaskResult";
@@ -63,12 +63,17 @@ pub async fn solve_ahrefs_captcha(api_key: &str, site_url: &str) -> Result<Strin
         let desc = create_resp["errorDescription"]
             .as_str()
             .unwrap_or("unknown error");
-        return Err(crate::error::Error::Other(format!("CapSolver create task error: {}", desc)));
+        return Err(crate::error::Error::Other(format!(
+            "CapSolver create task error: {}",
+            desc
+        )));
     }
 
     let task_id = create_resp["taskId"]
         .as_str()
-        .ok_or_else(|| crate::error::Error::Other("Missing taskId in CapSolver response".to_string()))?
+        .ok_or_else(|| {
+            crate::error::Error::Other("Missing taskId in CapSolver response".to_string())
+        })?
         .to_string();
 
     // Poll for result — max 60 seconds (30 × 2 s)
@@ -90,7 +95,10 @@ pub async fn solve_ahrefs_captcha(api_key: &str, site_url: &str) -> Result<Strin
             let desc = result_resp["errorDescription"]
                 .as_str()
                 .unwrap_or("unknown error");
-            return Err(crate::error::Error::Other(format!("CapSolver task error: {}", desc)));
+            return Err(crate::error::Error::Other(format!(
+                "CapSolver task error: {}",
+                desc
+            )));
         }
 
         let status = result_resp["status"].as_str().unwrap_or("processing");
@@ -111,18 +119,24 @@ pub async fn solve_ahrefs_captcha(api_key: &str, site_url: &str) -> Result<Strin
 }
 
 /// Build the active SeoDataProvider based on project settings.
-pub fn resolve_provider(provider_name: &str, env: &EnvResolver) -> Result<Box<dyn SeoDataProvider>> {
+pub fn resolve_provider(
+    provider_name: &str,
+    env: &EnvResolver,
+) -> Result<Box<dyn SeoDataProvider>> {
     match provider_name.to_lowercase().as_str() {
         "dataforseo" => {
-            let (login, _) = env.resolve("DATAFORSEO_LOGIN")
-                .ok_or_else(|| crate::error::Error::Other("DATAFORSEO_LOGIN not configured".to_string()))?;
-            let (password, _) = env.resolve("DATAFORSEO_PASSWORD")
-                .ok_or_else(|| crate::error::Error::Other("DATAFORSEO_PASSWORD not configured".to_string()))?;
+            let (login, _) = env.resolve("DATAFORSEO_LOGIN").ok_or_else(|| {
+                crate::error::Error::Other("DATAFORSEO_LOGIN not configured".to_string())
+            })?;
+            let (password, _) = env.resolve("DATAFORSEO_PASSWORD").ok_or_else(|| {
+                crate::error::Error::Other("DATAFORSEO_PASSWORD not configured".to_string())
+            })?;
             Ok(Box::new(DataForSeoProvider::new(login, password)))
         }
         _ => {
-            let (capsolver_key, _) = env.resolve("CAPSOLVER_API_KEY")
-                .ok_or_else(|| crate::error::Error::Other("CAPSOLVER_API_KEY not configured".to_string()))?;
+            let (capsolver_key, _) = env.resolve("CAPSOLVER_API_KEY").ok_or_else(|| {
+                crate::error::Error::Other("CAPSOLVER_API_KEY not configured".to_string())
+            })?;
             Ok(Box::new(AhrefsProvider::new(capsolver_key)))
         }
     }

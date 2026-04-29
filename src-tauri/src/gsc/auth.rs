@@ -78,7 +78,9 @@ pub async fn start_oauth_flow(client_secrets_path: &str) -> Result<TokenState> {
     let app = json
         .get("installed")
         .or_else(|| json.get("web"))
-        .ok_or_else(|| Error::Other("Invalid OAuth secrets (need 'installed' or 'web' key)".to_string()))?;
+        .ok_or_else(|| {
+            Error::Other("Invalid OAuth secrets (need 'installed' or 'web' key)".to_string())
+        })?;
 
     let client_id = app["client_id"]
         .as_str()
@@ -92,7 +94,8 @@ pub async fn start_oauth_flow(client_secrets_path: &str) -> Result<TokenState> {
     let redirect_uri = "http://localhost:8085";
     let state_param = Utc::now().timestamp_millis().to_string();
 
-    let scope = urlencoding::encode("https://www.googleapis.com/auth/webmasters.readonly").into_owned();
+    let scope =
+        urlencoding::encode("https://www.googleapis.com/auth/webmasters.readonly").into_owned();
     let auth_url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&\
          response_type=code&scope={}&access_type=offline&state={}&prompt=consent",
@@ -112,16 +115,17 @@ pub async fn start_oauth_flow(client_secrets_path: &str) -> Result<TokenState> {
         .await
         .map_err(|e| Error::Other(format!("Cannot bind port 8085 (may be in use): {}", e)))?;
 
-    let (mut stream, _) = tokio::time::timeout(
-        std::time::Duration::from_secs(180),
-        listener.accept(),
-    )
-    .await
-    .map_err(|_| Error::Other("OAuth timed out after 3 minutes.".to_string()))?
-    .map_err(|e| Error::Other(e.to_string()))?;
+    let (mut stream, _) =
+        tokio::time::timeout(std::time::Duration::from_secs(180), listener.accept())
+            .await
+            .map_err(|_| Error::Other("OAuth timed out after 3 minutes.".to_string()))?
+            .map_err(|e| Error::Other(e.to_string()))?;
 
     let mut buf = vec![0u8; 8192];
-    let n = stream.read(&mut buf).await.map_err(|e| Error::Other(e.to_string()))?;
+    let n = stream
+        .read(&mut buf)
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
     // Extract code from GET /?code=...&state=... HTTP/1.1

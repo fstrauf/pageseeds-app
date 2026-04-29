@@ -9,7 +9,6 @@
 ///
 /// Steps 1 and 3 use rig's `Extractor<T>` for type-safe structured output,
 /// eliminating the need for a separate normalizer step.
-
 mod autocomplete;
 mod landing_page;
 mod prompts;
@@ -45,22 +44,17 @@ pub async fn exec_research_workflow_step(
     let paths = ProjectPaths::from_path(project_path);
 
     // Build prompts based on step name, passing previous step's output
-    let (system_prompt, user_prompt) = match build_research_prompts(
-        &step.name,
-        task,
-        project_path,
-        &paths,
-        previous_output,
-    ) {
-        Ok(prompts) => prompts,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to build prompts for '{}': {}", step.name, e),
-                output: None,
-            };
-        }
-    };
+    let (system_prompt, user_prompt) =
+        match build_research_prompts(&step.name, task, project_path, &paths, previous_output) {
+            Ok(prompts) => prompts,
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    message: format!("Failed to build prompts for '{}': {}", step.name, e),
+                    output: None,
+                };
+            }
+        };
 
     let prompt = format!("{}\n\n---\n\n{}", system_prompt, user_prompt);
     let provider = agent_provider.to_string();
@@ -357,10 +351,7 @@ where
             );
             StepResult {
                 success: false,
-                message: format!(
-                    "Structured extraction for '{}' failed: {}",
-                    step_name, e
-                ),
+                message: format!("Structured extraction for '{}' failed: {}", step_name, e),
                 output: None,
             }
         }

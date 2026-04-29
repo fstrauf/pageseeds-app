@@ -1,6 +1,6 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
-use crate::models::task::{ExecutionMode, Task, TaskArtifact};
+use crate::models::task::{ExecutionMode, Task, TaskArtifact, TaskStatus};
 
 /// Spawn per-article `fix_ctr_article` tasks based on the ctr_build_context artifact.
 ///
@@ -54,6 +54,7 @@ pub(crate) fn create_ctr_fix_tasks(
 
     let mut created_ids = Vec::new();
     let mut skipped_healthy = 0usize;
+    let mut skipped_existing = 0usize;
 
     for article in articles {
         let id = article["id"].as_i64().unwrap_or(0);
@@ -67,7 +68,8 @@ pub(crate) fn create_ctr_fix_tasks(
         // FAQ issue is only a source-level issue when frontmatter FAQ is missing.
         // If frontmatter FAQ exists but rendered schema is missing, that's a render-level
         // issue handled by the schema renderer task, not a per-article fix.
-        let missing_source_faq = issues["missing_faq_schema"].as_bool().unwrap_or(false) && !has_frontmatter_faq;
+        let missing_source_faq =
+            issues["missing_faq_schema"].as_bool().unwrap_or(false) && !has_frontmatter_faq;
 
         let has_issues = issues["file_not_found"].as_bool().unwrap_or(false)
             || issues["title_too_long"].as_bool().unwrap_or(false)
@@ -80,6 +82,27 @@ pub(crate) fn create_ctr_fix_tasks(
             continue;
         }
 
+        if let Some(existing) =
+            find_active_ctr_fix_task_for_article(conn, &parent_task.project_id, id)
+        {
+            skipped_existing += 1;
+            log::info!(
+                "[ctr_audit] Existing active CTR fix task {} for article {} is {:?}; not spawning duplicate",
+                existing.id,
+                id,
+                existing.status
+            );
+
+            if matches!(
+                existing.status,
+                TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress
+            ) {
+                created_ids.push(existing.id);
+            }
+
+            continue;
+        }
+
         // Build single-article context
         let single_context = serde_json::json!({
             "total_articles": 1,
@@ -89,7 +112,11 @@ pub(crate) fn create_ctr_fix_tasks(
         let context_str = match serde_json::to_string(&single_context) {
             Ok(s) => s,
             Err(e) => {
-                log::warn!("[ctr_audit] Failed to serialize context for article {}: {}", id, e);
+                log::warn!(
+                    "[ctr_audit] Failed to serialize context for article {}: {}",
+                    id,
+                    e
+                );
                 continue;
             }
         };
@@ -102,19 +129,17 @@ pub(crate) fn create_ctr_fix_tasks(
             content: Some(context_str),
         };
 
+        let issue_signature = ctr_issue_signature(article);
         let idempotency_key = format!(
             "ctr_fix:article:{}:{}:{}",
-            parent_task.project_id, id, parent_task.id
+            parent_task.project_id, id, issue_signature
         );
 
         let spec = TaskSpec {
             project_id: parent_task.project_id.clone(),
             task_type: "fix_ctr_article".to_string(),
             title: Some(format!("CTR fix: {}", url_slug)),
-            description: Some(format!(
-                "Apply CTR fixes to article {} ({})",
-                id, url_slug
-            )),
+            description: Some(format!("Apply CTR fixes to article {} ({})", id, url_slug)),
             priority: crate::models::task::Priority::Medium,
             execution_mode: Some(ExecutionMode::Automatic),
             agent_policy: crate::models::task::AgentPolicy::Optional,
@@ -126,6 +151,19 @@ pub(crate) fn create_ctr_fix_tasks(
 
         match TaskSpawner::spawn(conn, spec) {
             Ok(task) => {
+                if matches!(
+                    task.status,
+                    TaskStatus::Done | TaskStatus::Cancelled | TaskStatus::Review
+                ) {
+                    log::info!(
+                        "[ctr_audit] Existing CTR fix task {} for article {} is {:?}; not re-queueing same issue state",
+                        task.id,
+                        id,
+                        task.status
+                    );
+                    continue;
+                }
+
                 log::info!(
                     "[ctr_audit] Created fix task {} (type: fix_ctr_article, article: {}, file: {})",
                     task.id, id, file_ref
@@ -133,7 +171,11 @@ pub(crate) fn create_ctr_fix_tasks(
                 created_ids.push(task.id);
             }
             Err(e) => {
-                log::warn!("[ctr_audit] Failed to create fix task for article {}: {}", id, e);
+                log::warn!(
+                    "[ctr_audit] Failed to create fix task for article {}: {}",
+                    id,
+                    e
+                );
             }
         }
     }
@@ -147,9 +189,10 @@ pub(crate) fn create_ctr_fix_tasks(
     let total_scanned = articles.len();
     let spawned = created_ids.len();
     log::info!(
-        "[ctr_audit] Spawner result: {} scanned, {} healthy skipped, {} fix task(s) created",
+        "[ctr_audit] Spawner result: {} scanned, {} healthy skipped, {} existing skipped, {} fix task(s) returned",
         total_scanned,
         skipped_healthy,
+        skipped_existing,
         spawned
     );
 
@@ -164,18 +207,82 @@ pub(crate) fn create_ctr_fix_tasks(
     created_ids
 }
 
+fn ctr_issue_signature(article: &serde_json::Value) -> String {
+    let issues = &article["issues_detected"];
+    let mut parts = Vec::new();
+
+    for issue in [
+        "file_not_found",
+        "title_too_long",
+        "meta_too_short",
+        "snippet_suboptimal",
+        "missing_faq_schema",
+    ] {
+        if issues[issue].as_bool().unwrap_or(false) {
+            parts.push(issue);
+        }
+    }
+
+    let issue_set = if parts.is_empty() {
+        "no_issues".to_string()
+    } else {
+        parts.join("+")
+    };
+
+    match article["content_hash"]
+        .as_str()
+        .filter(|hash| !hash.is_empty())
+    {
+        Some(hash) => format!("{}:{}", hash, issue_set),
+        None => issue_set,
+    }
+}
+
+fn find_active_ctr_fix_task_for_article(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    article_id: i64,
+) -> Option<Task> {
+    let mut matches: Vec<Task> = crate::engine::task_store::list_tasks(conn, project_id)
+        .ok()?
+        .into_iter()
+        .filter(|task| task.task_type == "fix_ctr_article")
+        .filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Review
+            )
+        })
+        .filter(|task| ctr_fix_task_article_id(task) == Some(article_id))
+        .collect();
+
+    matches.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    matches.into_iter().next()
+}
+
+fn ctr_fix_task_article_id(task: &Task) -> Option<i64> {
+    task.artifacts
+        .iter()
+        .find(|artifact| artifact.key == "ctr_context")
+        .and_then(|artifact| artifact.content.as_ref())
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .and_then(|value| {
+            value
+                .get("articles")?
+                .as_array()?
+                .first()?
+                .get("id")?
+                .as_i64()
+        })
+}
+
 /// Detect articles where source FAQ exists but rendered HTML has no FAQPage JSON-LD.
 /// Instead of spawning an agentic fix task (which cannot reliably edit arbitrary
 /// target-repo framework code), store the result as a warning artifact on the
 /// parent task so the UI can surface a compatibility message.
-fn record_ctr_schema_warning(
-    conn: &rusqlite::Connection,
-    parent_task: &Task,
-    project_path: &str,
-) {
-    let result = crate::engine::exec::ctr_audit::exec_ctr_schema_detect(
-        parent_task, project_path, conn,
-    );
+fn record_ctr_schema_warning(conn: &rusqlite::Connection, parent_task: &Task, project_path: &str) {
+    let result =
+        crate::engine::exec::ctr_audit::exec_ctr_schema_detect(parent_task, project_path, conn);
 
     if !result.success {
         log::warn!("[ctr_schema] Schema detection failed: {}", result.message);
@@ -213,7 +320,9 @@ fn record_ctr_schema_warning(
         content: Some(warning.to_string()),
     };
 
-    if let Err(e) = crate::engine::task_store::append_task_artifact(conn, &parent_task.id, &artifact) {
+    if let Err(e) =
+        crate::engine::task_store::append_task_artifact(conn, &parent_task.id, &artifact)
+    {
         log::warn!("[ctr_schema] Failed to append warning artifact: {}", e);
         return;
     }

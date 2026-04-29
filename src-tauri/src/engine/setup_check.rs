@@ -23,7 +23,6 @@
 /// }
 /// ```
 ///  `content_dir` is a path relative to `repo_root` (or absolute).
-
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -251,7 +250,8 @@ pub fn collect_config_file_statuses(
         // Check for legacy files as fallback
         let legacy_summary = automation_dir.join("project_summary.md");
         let legacy_brand = automation_dir.join("brandvoice.md");
-        let has_legacy = (legacy_summary.exists() && file_has_non_whitespace_content(&legacy_summary))
+        let has_legacy = (legacy_summary.exists()
+            && file_has_non_whitespace_content(&legacy_summary))
             || (legacy_brand.exists() && file_has_non_whitespace_content(&legacy_brand));
 
         let configured = has_project_md || has_legacy;
@@ -405,15 +405,25 @@ pub fn resolve(
     let is_valid = checks.iter().all(|c| c.severity != Severity::Error);
 
     let summary = if is_valid {
-        let warns = checks.iter().filter(|c| c.severity == Severity::Warn).count();
+        let warns = checks
+            .iter()
+            .filter(|c| c.severity == Severity::Warn)
+            .count();
         if warns == 0 {
             "Project is fully configured".into()
         } else {
             format!("{} warning{}", warns, if warns == 1 { "" } else { "s" })
         }
     } else {
-        let errors = checks.iter().filter(|c| c.severity == Severity::Error).count();
-        format!("{} setup error{} must be fixed", errors, if errors == 1 { "" } else { "s" })
+        let errors = checks
+            .iter()
+            .filter(|c| c.severity == Severity::Error)
+            .count();
+        format!(
+            "{} setup error{} must be fixed",
+            errors,
+            if errors == 1 { "" } else { "s" }
+        )
     };
 
     ProjectSetup {
@@ -523,11 +533,7 @@ fn check_automation_dir(automation_dir: &Path, checks: &mut Vec<SetupCheckItem>)
     }
 }
 
-fn check_articles_json(
-    path: &Path,
-    exists: bool,
-    checks: &mut Vec<SetupCheckItem>,
-) {
+fn check_articles_json(path: &Path, exists: bool, checks: &mut Vec<SetupCheckItem>) {
     if !exists {
         checks.push(SetupCheckItem {
             id: "articles_json_missing".into(),
@@ -537,9 +543,7 @@ fn check_articles_json(
                 "Expected at {} — content workflows cannot run without it",
                 path.display()
             ),
-            fix_hint: Some(
-                "Click 'Initialize Project' to create an empty articles.json".into(),
-            ),
+            fix_hint: Some("Click 'Initialize Project' to create an empty articles.json".into()),
             auto_fixable: true, // Now fixable via initialize_project_workspace
         });
     }
@@ -569,7 +573,13 @@ fn check_workspace_config(
     }
 
     if let Some(cfg) = config {
-        if cfg.content_dir.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if cfg
+            .content_dir
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             checks.push(SetupCheckItem {
                 id: "workspace_config_no_content_dir".into(),
                 severity: Severity::Warn,
@@ -582,7 +592,11 @@ fn check_workspace_config(
     }
 }
 
-fn check_content_dir(content_dir: &ContentDirResult, workspace_config_exists: bool, checks: &mut Vec<SetupCheckItem>) {
+fn check_content_dir(
+    content_dir: &ContentDirResult,
+    workspace_config_exists: bool,
+    checks: &mut Vec<SetupCheckItem>,
+) {
     match content_dir.source {
         ContentDirSource::NotFound => {
             checks.push(SetupCheckItem {
@@ -603,9 +617,15 @@ fn check_content_dir(content_dir: &ContentDirResult, workspace_config_exists: bo
                 title: "Content directory auto-discovered (not pinned)".into(),
                 detail: format!(
                     "Using {} — this may not be correct if multiple content folders exist",
-                    content_dir.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+                    content_dir
+                        .path
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default()
                 ),
-                fix_hint: Some("Add \"content_dir\" to seo_workspace.json to pin this permanently".into()),
+                fix_hint: Some(
+                    "Add \"content_dir\" to seo_workspace.json to pin this permanently".into(),
+                ),
                 auto_fixable: true,
             });
         }
@@ -616,9 +636,15 @@ fn check_content_dir(content_dir: &ContentDirResult, workspace_config_exists: bo
                 title: "Content directory is empty".into(),
                 detail: format!(
                     "{} contains no .md/.mdx files",
-                    content_dir.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+                    content_dir
+                        .path
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default()
                 ),
-                fix_hint: Some("Check that the path in seo_workspace.json points to the correct folder".into()),
+                fix_hint: Some(
+                    "Check that the path in seo_workspace.json points to the correct folder".into(),
+                ),
                 auto_fixable: false,
             });
         }
@@ -632,12 +658,12 @@ fn check_optional_config_files(automation_dir: &Path, checks: &mut Vec<SetupChec
     if !automation_dir.exists() {
         return;
     }
-    
+
     // Check for project.md (or legacy files)
     let project_md = automation_dir.join("project.md");
     let legacy_summary = automation_dir.join("project_summary.md");
     let legacy_brand = automation_dir.join("brandvoice.md");
-    
+
     if !project_md.exists() && !legacy_summary.exists() && !legacy_brand.exists() {
         checks.push(SetupCheckItem {
             id: "project_md_missing".into(),
@@ -648,7 +674,7 @@ fn check_optional_config_files(automation_dir: &Path, checks: &mut Vec<SetupChec
             auto_fixable: true,
         });
     }
-    
+
     // Check for reddit_config.md
     let reddit_config = automation_dir.join("reddit_config.md");
     if !reddit_config.exists() {
@@ -657,11 +683,13 @@ fn check_optional_config_files(automation_dir: &Path, checks: &mut Vec<SetupChec
             severity: Severity::Warn,
             title: "Reddit not configured".into(),
             detail: "reddit_config.md is missing — Reddit features won't work".into(),
-            fix_hint: Some("Click 'Initialize Project' to create a reddit_config.md template".into()),
+            fix_hint: Some(
+                "Click 'Initialize Project' to create a reddit_config.md template".into(),
+            ),
             auto_fixable: true,
         });
     }
-    
+
     // Check for reddit/_reply_guardrails.md
     let guardrails = automation_dir.join("reddit").join("_reply_guardrails.md");
     if !guardrails.exists() {
@@ -669,7 +697,8 @@ fn check_optional_config_files(automation_dir: &Path, checks: &mut Vec<SetupChec
             id: "reply_guardrails_missing".into(),
             severity: Severity::Warn,
             title: "Reply guardrails not configured".into(),
-            detail: "reddit/_reply_guardrails.md is missing — reply safety guidelines not set".into(),
+            detail: "reddit/_reply_guardrails.md is missing — reply safety guidelines not set"
+                .into(),
             fix_hint: Some("Click 'Initialize Project' to create guardrails template".into()),
             auto_fixable: true,
         });
@@ -679,12 +708,10 @@ fn check_optional_config_files(automation_dir: &Path, checks: &mut Vec<SetupChec
 // ─── CLI availability ───────────────────────────────────────────────────────
 
 /// CLIs that the app launches as subprocesses.
-const REQUIRED_CLIS: &[(&str, &str)] = &[
-    (
-        "seo-content-cli",
-        "Content workflows (keyword research, article planning)",
-    ),
-];
+const REQUIRED_CLIS: &[(&str, &str)] = &[(
+    "seo-content-cli",
+    "Content workflows (keyword research, article planning)",
+)];
 
 fn check_clis(checks: &mut Vec<SetupCheckItem>) {
     for (bin, desc) in REQUIRED_CLIS {
@@ -695,8 +722,7 @@ fn check_clis(checks: &mut Vec<SetupCheckItem>) {
                 title: format!("{} not found on PATH", bin),
                 detail: format!("Required for: {}.", desc),
                 fix_hint: Some(
-                    "uv tool install git+https://github.com/fstrauf/pageseeds-cli"
-                        .to_string(),
+                    "uv tool install git+https://github.com/fstrauf/pageseeds-cli".to_string(),
                 ),
                 auto_fixable: false,
             });
@@ -727,7 +753,9 @@ fn check_secrets(repo_root: &Path, checks: &mut Vec<SetupCheckItem>) {
 
     // GSC: either service account OR oauth client secrets
     let gsc_ok = resolver.resolve("GSC_SERVICE_ACCOUNT_PATH").is_some()
-        || resolver.resolve("GSC_REPORT_OAUTH_CLIENT_SECRETS").is_some();
+        || resolver
+            .resolve("GSC_REPORT_OAUTH_CLIENT_SECRETS")
+            .is_some();
     if !gsc_ok {
         checks.push(SetupCheckItem {
             id: "secret_gsc_missing".into(),
@@ -775,7 +803,11 @@ fn read_workspace_config(path: &Path) -> (bool, Option<SeoWorkspaceConfig>) {
     match serde_json::from_str::<SeoWorkspaceConfig>(&text) {
         Ok(cfg) => (true, Some(cfg)),
         Err(e) => {
-            log::warn!("[setup_check] seo_workspace.json parse error at {}: {}", path.display(), e);
+            log::warn!(
+                "[setup_check] seo_workspace.json parse error at {}: {}",
+                path.display(),
+                e
+            );
             (true, None)
         }
     }
@@ -877,7 +909,7 @@ pub fn auto_discover_content_dir(repo_root: &Path) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    
+
     // Second pass: find any candidate that exists (even if empty)
     for candidate in CANDIDATES {
         let p = repo_root.join(candidate);
@@ -885,14 +917,15 @@ pub fn auto_discover_content_dir(repo_root: &Path) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    
+
     // No candidates found - return None
     None
 }
 
 /// Template for project.md
 fn project_md_template(project_name: &str) -> String {
-    format!(r#"# {}
+    format!(
+        r#"# {}
 
 ## Project Summary
 <!-- Describe your project, target audience, and main value proposition -->
@@ -912,7 +945,9 @@ fn project_md_template(project_name: &str) -> String {
 
 ## Competitive Differentiation
 <!-- What makes your content/product unique -->
-"#, project_name)
+"#,
+        project_name
+    )
 }
 
 /// Template for reddit_config.md
@@ -978,7 +1013,7 @@ fn reply_guardrails_template() -> &'static str {
 /// 6. reddit/_reply_guardrails.md template
 /// 7. artifacts/, task_results/ directories
 /// 8. Updates .gitignore
-/// 
+///
 /// Returns a summary of what was created.
 pub fn initialize_project_workspace(
     repo_root: &Path,
@@ -988,7 +1023,7 @@ pub fn initialize_project_workspace(
     let automation_dir = repo_root.join(".github").join("automation");
     let reddit_dir = automation_dir.join("reddit");
     let mut created = Vec::new();
-    
+
     // Create directory structure
     std::fs::create_dir_all(&automation_dir)
         .map_err(|e| format!("Cannot create automation directory: {}", e))?;
@@ -998,7 +1033,7 @@ pub fn initialize_project_workspace(
         .map_err(|e| format!("Cannot create artifacts directory: {}", e))?;
     std::fs::create_dir_all(automation_dir.join("task_results"))
         .map_err(|e| format!("Cannot create task_results directory: {}", e))?;
-    
+
     // Auto-discover content directory
     let content_dir = auto_discover_content_dir(repo_root);
     let content_dir_str = content_dir
@@ -1006,7 +1041,7 @@ pub fn initialize_project_workspace(
         .and_then(|p| p.strip_prefix(repo_root).ok())
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "content".to_string());
-    
+
     // Create seo_workspace.json if it doesn't exist
     let workspace_config_path = automation_dir.join("seo_workspace.json");
     if !workspace_config_path.exists() {
@@ -1017,7 +1052,7 @@ pub fn initialize_project_workspace(
             content_dir_str
         ));
     }
-    
+
     // Create articles.json if it doesn't exist
     let articles_json_path = automation_dir.join("articles.json");
     if !articles_json_path.exists() {
@@ -1029,7 +1064,7 @@ pub fn initialize_project_workspace(
             .map_err(|e| format!("Cannot write articles.json: {}", e))?;
         created.push("articles.json".to_string());
     }
-    
+
     // Create project.md if it doesn't exist (and no legacy files)
     let project_md_path = automation_dir.join("project.md");
     let legacy_summary = automation_dir.join("project_summary.md");
@@ -1040,7 +1075,7 @@ pub fn initialize_project_workspace(
             .map_err(|e| format!("Cannot write project.md: {}", e))?;
         created.push("project.md".to_string());
     }
-    
+
     // Create reddit_config.md if it doesn't exist
     let reddit_config_path = automation_dir.join("reddit_config.md");
     if !reddit_config_path.exists() {
@@ -1048,7 +1083,7 @@ pub fn initialize_project_workspace(
             .map_err(|e| format!("Cannot write reddit_config.md: {}", e))?;
         created.push("reddit_config.md".to_string());
     }
-    
+
     // Create reddit/_reply_guardrails.md if it doesn't exist
     let guardrails_path = reddit_dir.join("_reply_guardrails.md");
     if !guardrails_path.exists() {
@@ -1056,13 +1091,16 @@ pub fn initialize_project_workspace(
             .map_err(|e| format!("Cannot write _reply_guardrails.md: {}", e))?;
         created.push("reddit/_reply_guardrails.md".to_string());
     }
-    
+
     // Update .gitignore
     if let Err(e) = update_gitignore(repo_root, &automation_dir) {
-        log::warn!("[initialize_project_workspace] Failed to update .gitignore: {}", e);
+        log::warn!(
+            "[initialize_project_workspace] Failed to update .gitignore: {}",
+            e
+        );
         // Don't fail initialization if gitignore update fails
     }
-    
+
     Ok(created)
 }
 
@@ -1072,14 +1110,14 @@ pub fn initialize_project_workspace(
 /// - task_results/ (generated files)
 fn update_gitignore(repo_root: &Path, _automation_dir: &Path) -> std::result::Result<(), String> {
     let gitignore_path = repo_root.join(".gitignore");
-    
+
     // Entries to add
     let entries = vec![
         "# PageSeeds automation - generated artifacts",
         ".github/automation/artifacts/",
         ".github/automation/task_results/",
     ];
-    
+
     // Read existing content
     let existing = if gitignore_path.exists() {
         std::fs::read_to_string(&gitignore_path)
@@ -1087,17 +1125,18 @@ fn update_gitignore(repo_root: &Path, _automation_dir: &Path) -> std::result::Re
     } else {
         String::new()
     };
-    
+
     // Check which entries are missing
-    let missing: Vec<&str> = entries.iter()
+    let missing: Vec<&str> = entries
+        .iter()
         .filter(|entry| !existing.contains(**entry))
         .copied()
         .collect();
-    
+
     if missing.is_empty() {
         return Ok(());
     }
-    
+
     // Append missing entries
     let mut new_content = existing;
     if !new_content.is_empty() && !new_content.ends_with('\n') {
@@ -1108,9 +1147,9 @@ fn update_gitignore(repo_root: &Path, _automation_dir: &Path) -> std::result::Re
         new_content.push_str(entry);
         new_content.push('\n');
     }
-    
+
     std::fs::write(&gitignore_path, new_content)
         .map_err(|e| format!("Cannot write .gitignore: {}", e))?;
-    
+
     Ok(())
 }

@@ -5,7 +5,6 @@
 ///   2. Only re-checks URLs that are stale or have known issues
 ///   3. Spawns fix tasks only for new, regressed, or unresolved issues
 ///   4. Tracks whether previous fixes worked
-
 use rusqlite::Connection;
 use std::collections::HashMap;
 
@@ -38,10 +37,11 @@ pub(crate) fn exec_indexing_diagnostics(
 
     // 1. manifest.json → site_url + sitemap_url
     let manifest_path = paths.automation_dir.join("manifest.json");
-    let manifest: serde_json::Value = match crate::engine::exec::common::read_json(&manifest_path, "manifest.json") {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    let manifest: serde_json::Value =
+        match crate::engine::exec::common::read_json(&manifest_path, "manifest.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
 
     let site_url = match manifest
         .get("gsc_site")
@@ -128,10 +128,7 @@ pub(crate) fn exec_indexing_diagnostics(
     if all_urls.is_empty() {
         return StepResult {
             success: false,
-            message: format!(
-                "Sitemap at '{}' is empty or unreachable",
-                sitemap_url
-            ),
+            message: format!("Sitemap at '{}' is empty or unreachable", sitemap_url),
             output: None,
         };
     }
@@ -166,7 +163,8 @@ pub(crate) fn exec_indexing_diagnostics(
                         chrono::DateTime::parse_from_rfc3339(dt)
                             .ok()
                             .map(|parsed| {
-                                let days_since = (now - parsed.with_timezone(&chrono::Utc)).num_days();
+                                let days_since =
+                                    (now - parsed.with_timezone(&chrono::Utc)).num_days();
                                 days_since >= PASS_RECHECK_DAYS
                             })
                             .unwrap_or(true)
@@ -208,7 +206,8 @@ pub(crate) fn exec_indexing_diagnostics(
             };
 
             let records =
-                crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls_to_inspect).await?;
+                crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls_to_inspect)
+                    .await?;
             Ok::<_, crate::error::Error>(records)
         })
     })
@@ -254,12 +253,15 @@ pub(crate) fn exec_indexing_diagnostics(
         let is_pass = reason == "indexed_pass";
 
         let previous = status_map.get(&record.url);
-        let prev_reason = previous.as_ref().and_then(|s| s.last_reason_code.as_deref());
+        let prev_reason = previous
+            .as_ref()
+            .and_then(|s| s.last_reason_code.as_deref());
         let prev_pass = prev_reason == Some("indexed_pass");
 
         // Determine if this is a change worth noting
         let is_new_issue = !is_pass && (previous.is_none() || prev_pass);
-        let is_regression = !is_pass && previous.is_some() && Some(reason) != prev_reason && !prev_pass;
+        let is_regression =
+            !is_pass && previous.is_some() && Some(reason) != prev_reason && !prev_pass;
         let is_resolved = is_pass && previous.is_some() && !prev_pass;
         let is_unchanged_issue = !is_pass && previous.is_some() && Some(reason) == prev_reason;
 
@@ -297,12 +299,18 @@ pub(crate) fn exec_indexing_diagnostics(
                         );
                     }
                 }
-                
+
                 match db::has_active_fix_task(conn, &task.project_id, &record.url, reason) {
                     Ok(false) => {
-                        if let Some(task_id) =
-                            spawn_fix_task(conn, task, &record.url, reason, action, verdict, record.priority)
-                        {
+                        if let Some(task_id) = spawn_fix_task(
+                            conn,
+                            task,
+                            &record.url,
+                            reason,
+                            action,
+                            verdict,
+                            record.priority,
+                        ) {
                             spawned_tasks.push(task_id);
                         }
                     }
@@ -332,11 +340,15 @@ pub(crate) fn exec_indexing_diagnostics(
 
         let last_task_id = previous.as_ref().and_then(|s| s.last_task_id.clone());
         let last_task_type = previous.as_ref().and_then(|s| s.last_task_type.clone());
-        let last_task_created_at = previous.as_ref().and_then(|s| s.last_task_created_at.clone());
+        let last_task_created_at = previous
+            .as_ref()
+            .and_then(|s| s.last_task_created_at.clone());
 
         let last_fix_summary = previous.as_ref().and_then(|s| s.last_fix_summary.clone());
         let fix_attempt_count = previous.as_ref().map(|s| s.fix_attempt_count).unwrap_or(0);
-        let last_task_resolved_at = previous.as_ref().and_then(|s| s.last_task_resolved_at.clone());
+        let last_task_resolved_at = previous
+            .as_ref()
+            .and_then(|s| s.last_task_resolved_at.clone());
 
         let status = UrlIndexingStatus {
             url: record.url.clone(),
@@ -420,7 +432,9 @@ fn has_mdx_for_url(project_path: &str, url: &str) -> bool {
     // Strip numeric prefix from URL last segment too (e.g. "127_net_worth_tracker" → "net_worth_tracker")
     let last_segment_clean = strip_numeric_prefix(last_segment).replace('_', "-");
 
-    let full_slug_dashed = strip_numeric_prefix(slug.trim_end_matches('/')).replace('/', "-").replace('_', "-");
+    let full_slug_dashed = strip_numeric_prefix(slug.trim_end_matches('/'))
+        .replace('/', "-")
+        .replace('_', "-");
 
     for entry in walkdir::WalkDir::new(&content_dir)
         .into_iter()
@@ -447,7 +461,9 @@ fn has_mdx_for_url(project_path: &str, url: &str) -> bool {
 
         // Match relative path (e.g. "posts/net_worth_tracker.mdx")
         if let Ok(rel) = path.strip_prefix(&content_dir) {
-            let rel_str = rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+            let rel_str = rel
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
             let rel_without_ext = rel_str.trim_end_matches(".mdx").trim_end_matches(".md");
             let rel_clean = strip_numeric_prefix(rel_without_ext)
                 .replace('/', "-")
@@ -521,8 +537,13 @@ fn spawn_fix_task(
 
     match TaskSpawner::spawn(conn, spec) {
         Ok(task) => {
-            if let Err(e) = db::record_task_created(conn, url, &parent.project_id, &task.id, task_type) {
-                log::warn!("[indexing_diagnostics] failed to record task creation: {}", e);
+            if let Err(e) =
+                db::record_task_created(conn, url, &parent.project_id, &task.id, task_type)
+            {
+                log::warn!(
+                    "[indexing_diagnostics] failed to record task creation: {}",
+                    e
+                );
             }
             Some(task.id)
         }

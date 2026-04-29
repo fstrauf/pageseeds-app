@@ -1,11 +1,15 @@
 /**
  * Frontend-to-Backend Logging Bridge
  * 
- * Captures all frontend logs and sends them to the Rust backend for persistent storage.
- * This enables full observability of the application for debugging and agentic analysis.
+ * Frontend log persistence is disabled by default to avoid long-running IPC,
+ * console, and SQLite overhead. Set VITE_PAGESEEDS_PERSIST_FRONTEND_LOGS=true
+ * to temporarily persist frontend logs while debugging.
  */
 
 import { invoke } from '@tauri-apps/api/core';
+
+const PERSIST_FRONTEND_LOGS = import.meta.env.VITE_PAGESEEDS_PERSIST_FRONTEND_LOGS === 'true';
+const CONSOLE_FRONTEND_LOGS = import.meta.env.VITE_PAGESEEDS_CONSOLE_FRONTEND_LOGS === 'true';
 
 // Generate a session ID for grouping logs
 const SESSION_ID = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -69,6 +73,8 @@ export function queueLog(
   message: string,
   metadata?: Record<string, unknown>
 ): void {
+  if (!PERSIST_FRONTEND_LOGS && !CONSOLE_FRONTEND_LOGS) return;
+
   const entry: LogEntry = {
     timestamp: new Date().toISOString(),
     level,
@@ -77,17 +83,20 @@ export function queueLog(
     metadata,
     session_id: SESSION_ID,
   };
-  
-  LOG_BUFFER.push(entry);
-  
-  // Schedule flush if not already scheduled
-  if (!flushTimer) {
-    flushTimer = setTimeout(() => {
-      flushLogs();
-    }, 500); // Batch logs every 500ms
+
+  if (PERSIST_FRONTEND_LOGS) {
+    LOG_BUFFER.push(entry);
+
+    // Schedule flush if not already scheduled
+    if (!flushTimer) {
+      flushTimer = setTimeout(() => {
+        flushLogs();
+      }, 500); // Batch logs every 500ms
+    }
   }
-  
-  // Also log to console for immediate visibility
+
+  if (!CONSOLE_FRONTEND_LOGS) return;
+
   const consoleMessage = `[${component}] ${message}`;
   switch (level) {
     case 'debug':
@@ -120,6 +129,10 @@ export async function flushLogs(): Promise<void> {
   LOG_BUFFER.length = 0; // Clear buffer
   
   await submitLogsBatch(logsToSend);
+}
+
+export function isFrontendLogPersistenceEnabled(): boolean {
+  return PERSIST_FRONTEND_LOGS;
 }
 
 /**
@@ -298,10 +311,11 @@ export async function clearOldLogs(daysToKeep: number): Promise<number> {
   }
 }
 
-// Auto-flush on page unload
-window.addEventListener('beforeunload', () => {
-  flushLogs();
-});
+if (PERSIST_FRONTEND_LOGS && typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    flushLogs();
+  });
+}
 
 // Export session ID for reference
 export { SESSION_ID };

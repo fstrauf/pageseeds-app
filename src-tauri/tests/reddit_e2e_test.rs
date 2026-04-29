@@ -86,13 +86,19 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
 fn setup_test_project(dir: &Path) {
     let automation_dir = dir.join(".github").join("automation");
     std::fs::create_dir_all(&automation_dir).expect("Failed to create automation dir");
-    
-    std::fs::write(automation_dir.join("reddit_config.md"), SAMPLE_REDDIT_CONFIG)
-        .expect("Failed to write reddit_config.md");
-    
-    std::fs::write(automation_dir.join("project_summary.md"), SAMPLE_PROJECT_SUMMARY)
-        .expect("Failed to write project_summary.md");
-    
+
+    std::fs::write(
+        automation_dir.join("reddit_config.md"),
+        SAMPLE_REDDIT_CONFIG,
+    )
+    .expect("Failed to write reddit_config.md");
+
+    std::fs::write(
+        automation_dir.join("project_summary.md"),
+        SAMPLE_PROJECT_SUMMARY,
+    )
+    .expect("Failed to write project_summary.md");
+
     std::fs::write(automation_dir.join("brandvoice.md"), SAMPLE_BRANDVOICE)
         .expect("Failed to write brandvoice.md");
 }
@@ -100,10 +106,10 @@ fn setup_test_project(dir: &Path) {
 /// Create an in-memory database with full schema
 fn create_test_db() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("Failed to open in-memory DB");
-    
+
     // Initialize with full schema
     db::init_with_conn(&conn).expect("Failed to initialize DB schema");
-    
+
     conn
 }
 
@@ -122,7 +128,7 @@ fn create_test_project_in_db(conn: &rusqlite::Connection, path: &str) -> String 
         agent_provider: Some("kimi".to_string()),
         seo_provider: Some("ahrefs".to_string()),
     };
-    
+
     task_store::create_project(conn, &project).expect("Failed to create project");
     project.id
 }
@@ -155,7 +161,7 @@ fn create_reddit_task(project_id: &str) -> Task {
 }
 
 /// Test 1: Reddit config parsing with real Kimi agent
-/// 
+///
 /// This test verifies that Kimi can properly parse the reddit_config.md
 /// and return valid JSON with the expected fields.
 #[tokio::test]
@@ -164,31 +170,34 @@ async fn test_reddit_config_parsing_with_real_kimi() {
     println!("\n========================================");
     println!("TEST 1: Reddit Config Parsing with Real Kimi");
     println!("========================================\n");
-    
+
     // Set up test project
     let project_dir = unique_temp_dir("reddit_e2e_test");
     setup_test_project(&project_dir);
     println!("✅ Test project created at: {}", project_dir.display());
-    
+
     // Create database and project
     let conn = create_test_db();
     let project_id = create_test_project_in_db(&conn, &project_dir.to_string_lossy());
     println!("✅ Project created in DB: {}", project_id);
-    
+
     // Create and store the task
     let task = create_reddit_task(&project_id);
     task_store::create_task(&conn, &task).expect("Failed to create task");
     println!("✅ Task created: {}", task.id);
-    
+
     // Execute the task
     println!("\n🚀 Executing task (this will call real Kimi agent)...");
     let start = std::time::Instant::now();
-    
+
     let result = executor::execute_task(&conn, &task.id).await;
     let duration = start.elapsed();
-    
-    println!("\n⏱️  Execution completed in {:.1}s", duration.as_secs_f64());
-    
+
+    println!(
+        "\n⏱️  Execution completed in {:.1}s",
+        duration.as_secs_f64()
+    );
+
     // Analyze result
     match result {
         Ok(exec_result) => {
@@ -196,7 +205,7 @@ async fn test_reddit_config_parsing_with_real_kimi() {
             println!("   Success: {}", exec_result.success);
             println!("   Message: {}", exec_result.message);
             println!("   Steps executed: {}", exec_result.steps.len());
-            
+
             // Print step details
             for (i, step) in exec_result.steps.iter().enumerate() {
                 println!("\n   Step {}: {}", i + 1, step.step_name);
@@ -210,21 +219,24 @@ async fn test_reddit_config_parsing_with_real_kimi() {
                     println!("      Preview: {}", preview);
                 }
             }
-            
+
             // Verify config parse step succeeded
-            let config_step = exec_result.steps.iter().find(|s| s.kind == "reddit_config_parse");
+            let config_step = exec_result
+                .steps
+                .iter()
+                .find(|s| s.kind == "reddit_config_parse");
             assert!(
                 config_step.is_some(),
                 "Expected reddit_config_parse step to exist"
             );
-            
+
             let config_step = config_step.unwrap();
             assert_eq!(
                 config_step.status, "ok",
                 "Config parse step should succeed. Got: {} - {}",
                 config_step.status, config_step.message
             );
-            
+
             // Check that output contains valid JSON
             if let Some(output) = &config_step.output {
                 let json_result: Result<serde_json::Value, _> = serde_json::from_str(output);
@@ -233,19 +245,32 @@ async fn test_reddit_config_parsing_with_real_kimi() {
                     "Config parse output should be valid JSON: {:?}",
                     json_result.err()
                 );
-                
+
                 let json = json_result.unwrap();
                 println!("\n📄 Parsed Config:");
-                println!("   Product: {}", json.get("product_name").and_then(|v| v.as_str()).unwrap_or("NOT FOUND"));
-                println!("   Stance: {}", json.get("mention_stance").and_then(|v| v.as_str()).unwrap_or("NOT FOUND"));
-                
+                println!(
+                    "   Product: {}",
+                    json.get("product_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("NOT FOUND")
+                );
+                println!(
+                    "   Stance: {}",
+                    json.get("mention_stance")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("NOT FOUND")
+                );
+
                 let topics = json.get("trigger_topics").and_then(|v| v.as_array());
                 println!("   Topics count: {}", topics.map(|t| t.len()).unwrap_or(0));
-                
+
                 let subreddits = json.get("seed_subreddits").and_then(|v| v.as_array());
-                println!("   Subreddits count: {}", subreddits.map(|s| s.len()).unwrap_or(0));
+                println!(
+                    "   Subreddits count: {}",
+                    subreddits.map(|s| s.len()).unwrap_or(0)
+                );
             }
-            
+
             // The search might fail due to rate limits, but config parsing should work
             println!("\n✅ TEST PASSED: Config parsing works with real Kimi");
         }
@@ -254,7 +279,7 @@ async fn test_reddit_config_parsing_with_real_kimi() {
             panic!("Task execution failed: {}", e);
         }
     }
-    
+
     // Cleanup
     std::fs::remove_dir_all(&project_dir).ok();
     println!("\n🧹 Cleaned up temp directory");
@@ -269,35 +294,38 @@ async fn test_full_reddit_flow_with_real_apis() {
     println!("\n========================================");
     println!("TEST 2: Full Reddit Flow with Real APIs");
     println!("========================================\n");
-    
+
     // Set up test project
     let project_dir = unique_temp_dir("reddit_e2e_full");
     setup_test_project(&project_dir);
     println!("✅ Test project created at: {}", project_dir.display());
-    
+
     // Create database and project
     let conn = create_test_db();
     let project_id = create_test_project_in_db(&conn, &project_dir.to_string_lossy());
     println!("✅ Project created in DB: {}", project_id);
-    
+
     // Create and store the task
     let task = create_reddit_task(&project_id);
     task_store::create_task(&conn, &task).expect("Failed to create task");
     println!("✅ Task created: {}", task.id);
-    
+
     // Execute the task
     println!("\n🚀 Executing full Reddit flow (Kimi + Reddit API)...");
     println!("   This may take 30-60 seconds...\n");
-    
+
     let start = std::time::Instant::now();
     let result = executor::execute_task(&conn, &task.id).await;
     let duration = start.elapsed();
-    
-    println!("\n⏱️  Execution completed in {:.1}s", duration.as_secs_f64());
-    
+
+    println!(
+        "\n⏱️  Execution completed in {:.1}s",
+        duration.as_secs_f64()
+    );
+
     // Get the updated task to check artifacts
     let updated_task = task_store::get_task(&conn, &task.id).expect("Failed to get updated task");
-    
+
     println!("\n📊 Final Task Status:");
     println!("   Status: {:?}", updated_task.status);
     println!("   Attempts: {}", updated_task.run.attempts);
@@ -305,14 +333,14 @@ async fn test_full_reddit_flow_with_real_apis() {
         println!("   Last Error: {}", error);
     }
     println!("   Artifacts: {}", updated_task.artifacts.len());
-    
+
     // Analyze result
     match result {
         Ok(exec_result) => {
             println!("\n📋 Execution Summary:");
             println!("   Success: {}", exec_result.success);
             println!("   Message: {}", exec_result.message);
-            
+
             // Print all steps
             println!("\n📋 Step Details:");
             for step in &exec_result.steps {
@@ -322,16 +350,19 @@ async fn test_full_reddit_flow_with_real_apis() {
                     "running" => "🔄",
                     _ => "⏳",
                 };
-                println!("   {} {} ({}): {}", icon, step.step_name, step.kind, step.message);
+                println!(
+                    "   {} {} ({}): {}",
+                    icon, step.step_name, step.kind, step.message
+                );
             }
-            
+
             // Check for search results
             let search_step = exec_result.steps.iter().find(|s| s.kind == "reddit_search");
             if let Some(step) = search_step {
                 println!("\n🔍 Search Step:");
                 println!("   Status: {}", step.status);
                 println!("   Message: {}", step.message);
-                
+
                 if let Some(output) = &step.output {
                     println!("   Output size: {} chars", output.len());
                     // Try to parse as JSON array
@@ -339,13 +370,21 @@ async fn test_full_reddit_flow_with_real_apis() {
                         println!("   Posts found: {}", posts.len());
                         for (i, post) in posts.iter().take(3).enumerate() {
                             let title = post.get("title").and_then(|v| v.as_str()).unwrap_or("N/A");
-                            let subreddit = post.get("subreddit").and_then(|v| v.as_str()).unwrap_or("N/A");
-                            println!("   {}. [{}] {}", i + 1, subreddit, &title[..title.len().min(50)]);
+                            let subreddit = post
+                                .get("subreddit")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("N/A");
+                            println!(
+                                "   {}. [{}] {}",
+                                i + 1,
+                                subreddit,
+                                &title[..title.len().min(50)]
+                            );
                         }
                     }
                 }
             }
-            
+
             // Verify results
             if exec_result.success {
                 println!("\n✅ FULL FLOW TEST PASSED");
@@ -356,9 +395,12 @@ async fn test_full_reddit_flow_with_real_apis() {
                 println!("\n⚠️  TEST INCOMPLETE (but not necessarily failed)");
                 println!("   The task didn't complete successfully, but individual steps may have worked.");
                 println!("   Check the step details above to see what succeeded/failed.");
-                
+
                 // Config parsing should work at minimum
-                let config_step = exec_result.steps.iter().find(|s| s.kind == "reddit_config_parse");
+                let config_step = exec_result
+                    .steps
+                    .iter()
+                    .find(|s| s.kind == "reddit_config_parse");
                 if let Some(step) = config_step {
                     if step.status == "ok" {
                         println!("   ✅ Config parsing worked");
@@ -374,7 +416,7 @@ async fn test_full_reddit_flow_with_real_apis() {
             println!("   This error may be expected if Kimi or Reddit APIs are unavailable.");
         }
     }
-    
+
     // Cleanup
     std::fs::remove_dir_all(&project_dir).ok();
     println!("\n🧹 Cleaned up temp directory");
@@ -386,17 +428,17 @@ async fn test_full_reddit_flow_with_real_apis() {
 #[test]
 fn test_json_extraction_from_kimi_output() {
     use pageseeds_lib::engine::exec::reddit::extract_json_object;
-    
+
     println!("\n========================================");
     println!("TEST 3: JSON Extraction from Kimi Output");
     println!("========================================\n");
-    
+
     // Test case 1: Clean JSON
     let clean = r#"{"product_name": "Test", "mention_stance": "OPTIONAL"}"#;
     let result = extract_json_object(clean).expect("Should extract clean JSON");
     assert!(result.contains("product_name"));
     println!("✅ Clean JSON extraction works");
-    
+
     // Test case 2: JSON with markdown wrapper
     let wrapped = r#"
     ```json
@@ -406,7 +448,7 @@ fn test_json_extraction_from_kimi_output() {
     let result = extract_json_object(wrapped).expect("Should extract wrapped JSON");
     assert!(result.contains("product_name"));
     println!("✅ Wrapped JSON extraction works");
-    
+
     // Test case 3: JSON with surrounding text
     let with_text = r#"
     Here is the extracted configuration:
@@ -418,11 +460,11 @@ fn test_json_extraction_from_kimi_output() {
     let result = extract_json_object(with_text).expect("Should extract JSON from text");
     assert!(result.contains("Days to Expiry"));
     println!("✅ JSON with surrounding text extraction works");
-    
+
     // Test case 4: Realistic Kimi output (simulated)
     let kimi_like = r#"{"product_name": "Days to Expiry", "mention_stance": "OPTIONAL", "trigger_topics": ["expiration date tracking", "food waste reduction"], "query_keywords": ["expiration date tracking", "food waste reduction"], "seed_subreddits": ["personalfinance", "EatCheapAndHealthy"], "excluded_subreddits": ["politics", "news"]}"#;
     let result = extract_json_object(kimi_like).expect("Should extract Kimi-like output");
-    
+
     // Verify it parses as valid JSON
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("Should parse as JSON");
     assert_eq!(
@@ -430,6 +472,6 @@ fn test_json_extraction_from_kimi_output() {
         Some("Days to Expiry")
     );
     println!("✅ Realistic Kimi output extraction works");
-    
+
     println!("\n✅ All JSON extraction tests passed!");
 }
