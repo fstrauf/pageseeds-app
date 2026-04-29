@@ -20,6 +20,7 @@ use rusqlite::Connection;
 // Step 1: Load Recommendation
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub(crate) fn exec_hub_load_recommendation(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
@@ -135,6 +136,7 @@ pub(crate) fn exec_hub_load_recommendation(task: &Task, project_path: &str) -> S
 // Step 2: Build Brief
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub(crate) fn exec_hub_build_brief(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
@@ -218,6 +220,7 @@ pub(crate) fn exec_hub_build_brief(task: &Task, project_path: &str) -> StepResul
 // Step 3: Agentic Outline
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub(crate) fn exec_hub_outline(
     _task: &Task,
     project_path: &str,
@@ -268,6 +271,7 @@ pub(crate) fn exec_hub_outline(
 // Step 4: Agentic Write
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub(crate) fn exec_hub_write(
     task: &Task,
     project_path: &str,
@@ -330,6 +334,7 @@ pub(crate) fn exec_hub_write(
 // Step 5: Apply Draft
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub(crate) fn exec_hub_apply_draft(
     task: &Task,
     project_path: &str,
@@ -517,6 +522,7 @@ pub(crate) fn exec_hub_apply_draft(
 // Step 6: Apply Links
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
@@ -688,6 +694,7 @@ pub(crate) fn exec_hub_apply_links(task: &Task, project_path: &str) -> StepResul
 // Step 7: Validate
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
@@ -952,6 +959,346 @@ pub(crate) fn exec_hub_validate(task: &Task, project_path: &str) -> StepResult {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Simplified hub application (single-step flow)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Detect a hub file written directly by the agent (rig backend with tool use).
+fn find_agent_hub_file(content_dir: &Path) -> Option<PathBuf> {
+    let now = std::time::SystemTime::now();
+    let five_minutes_ago = now - std::time::Duration::from_secs(300);
+
+    let mut candidates = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(content_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("mdx") {
+                continue;
+            }
+
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let modified = match meta.modified() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            if modified < five_minutes_ago {
+                continue;
+            }
+
+            // Must start with YAML frontmatter (not prose summary)
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if content.starts_with("---\n")
+                    && content.contains("type: hub")
+                    && content.contains("hub_topic:")
+                {
+                    candidates.push((path, modified, content.len()));
+                }
+            }
+        }
+    }
+
+    // Prefer the largest file (real content vs. short summary)
+    candidates.sort_by(|a, b| b.2.cmp(&a.2));
+    candidates.into_iter().next().map(|(p, _, _)| p)
+}
+
+/// Write hub MDX to disk, add spoke links, register in DB.
+/// Called from post_actions::after_step when a hub task completes its agentic step.
+pub(crate) fn apply_hub_output(
+    task: &Task,
+    project_path: &str,
+    agent_output: &str,
+    conn: &Connection,
+) -> Result<String, String> {
+    let paths = ProjectPaths::from_path(project_path);
+
+    // Derive hub topic from task title
+    let hub_topic = task
+        .title
+        .as_deref()
+        .and_then(|t| t.strip_prefix("Create hub:").or_else(|| t.strip_prefix("Refresh hub:")))
+        .unwrap_or("")
+        .trim();
+
+    if hub_topic.is_empty() {
+        return Err("Cannot determine hub topic from task title".to_string());
+    }
+
+    // Load recommendation from task artifacts
+    let strategy_json = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "cannibalization_strategy")
+        .and_then(|a| a.content.clone())
+        .unwrap_or_default();
+
+    if strategy_json.is_empty() {
+        return Err("No cannibalization_strategy artifact found".to_string());
+    }
+
+    let strategy: serde_json::Value =
+        serde_json::from_str(&strategy_json).map_err(|e| format!("Invalid strategy JSON: {}", e))?;
+
+    let empty_recs: Vec<serde_json::Value> = Vec::new();
+    let recommendations = strategy
+        .get("hub_recommendations")
+        .and_then(|r| r.as_array())
+        .unwrap_or(&empty_recs);
+
+    let rec = recommendations.iter().find(|r| {
+        r.get("suggested_title")
+            .and_then(|t| t.as_str())
+            .map(|t| t.trim().eq_ignore_ascii_case(hub_topic))
+            .unwrap_or(false)
+            || r.get("topic")
+                .and_then(|t| t.as_str())
+                .map(|t| t.trim().eq_ignore_ascii_case(hub_topic))
+                .unwrap_or(false)
+    });
+
+    let rec = match rec {
+        Some(r) => r,
+        None => return Err(format!("No hub recommendation found matching '{}'", hub_topic)),
+    };
+
+    let suggested_url = rec.get("suggested_url").and_then(|u| u.as_str()).unwrap_or("");
+    let suggested_title = rec.get("suggested_title").and_then(|t| t.as_str()).unwrap_or(hub_topic);
+
+    let spoke_pages = rec
+        .get("spoke_pages")
+        .and_then(|p| p.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let spokes = if spoke_pages.is_empty() {
+        Vec::new()
+    } else {
+        gather_spoke_briefs(conn, &task.project_id, project_path, &spoke_pages)
+    };
+
+    // Resolve content directory
+    let resolution = crate::content::locator::resolve(&paths.repo_root, None);
+    let content_dir = resolution
+        .selected
+        .ok_or("Could not locate content directory")?;
+
+    std::fs::create_dir_all(&content_dir).map_err(|e| e.to_string())?;
+
+    let is_refresh = task.task_type == "refresh_hub_page";
+
+    // Try to find a file the agent already wrote (rig backend with tool use)
+    let hub_file = find_agent_hub_file(&content_dir)
+        .or_else(|| {
+            // Agent did not write a file — fall back to writing from its output
+            let mdx = extract_code_block(agent_output, "mdx")
+                .or_else(|| extract_code_block(agent_output, ""))
+                .unwrap_or_else(|| agent_output.to_string());
+
+            let max_existing_id: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(id), 0) FROM articles WHERE project_id = ?1",
+                    [&task.project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            let meta_next_id: i64 = conn
+                .query_row(
+                    "SELECT next_article_id FROM articles_meta WHERE project_id = ?1",
+                    [&task.project_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            let article_id = std::cmp::max(max_existing_id + 1, meta_next_id.max(1));
+
+            let slug = suggested_url.trim_start_matches('/').replace("blog/", "");
+            let safe_slug = slug.replace(['/', '\\'], "_").replace('-', "_");
+            let filename = format!("{:03}_{}_hub.mdx", article_id, safe_slug);
+            let file_path = content_dir.join(&filename);
+
+            if is_refresh && file_path.exists() {
+                let snapshot_path = paths.automation_dir.join(format!("hub_snapshot_{}.mdx", task.id));
+                let _ = std::fs::copy(&file_path, &snapshot_path);
+            }
+
+            let hub_links: Vec<(String, String)> = spokes
+                .iter()
+                .map(|s| (s.title.clone(), s.url_slug.clone()))
+                .collect();
+            let mdx_with_links = append_related_section(&mdx, &hub_links);
+
+            std::fs::write(&file_path, &mdx_with_links).ok()?;
+            Some(file_path)
+        })
+        .ok_or("Failed to create or find hub file")?;
+
+    let filename = hub_file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("hub.mdx")
+        .to_string();
+
+    // Ensure spoke links are present in the hub file
+    let hub_content = std::fs::read_to_string(&hub_file).unwrap_or_default();
+    let hub_links: Vec<(String, String)> = spokes
+        .iter()
+        .map(|s| (s.title.clone(), s.url_slug.clone()))
+        .collect();
+    let updated_hub = append_related_section(&hub_content, &hub_links);
+    if updated_hub != hub_content {
+        let _ = std::fs::write(&hub_file, &updated_hub);
+    }
+
+    // Add hub links back to spoke articles
+    let hub_title = suggested_title.to_string();
+    let hub_slug_clean = suggested_url.trim_start_matches('/').replace("blog/", "");
+    for spoke in &spokes {
+        let spoke_path = content_dir.join(&spoke.file);
+        if !spoke_path.exists() {
+            let pattern = spoke.url_slug.replace('-', "_");
+            let found = std::fs::read_dir(&content_dir)
+                .ok()
+                .and_then(|mut entries| {
+                    entries.find_map(|entry| {
+                        let entry = entry.ok()?;
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if name.contains(&pattern) && name.ends_with(".mdx") {
+                            Some(entry.path())
+                        } else {
+                            None
+                        }
+                    })
+                });
+            if let Some(p) = found {
+                if let Ok(spoke_content) = std::fs::read_to_string(&p) {
+                    let updated = add_hub_link_to_spoke(&spoke_content, &hub_title, &hub_slug_clean);
+                    if updated != spoke_content {
+                        let _ = std::fs::write(&p, &updated);
+                    }
+                }
+            }
+            continue;
+        }
+        if let Ok(spoke_content) = std::fs::read_to_string(&spoke_path) {
+            let updated = add_hub_link_to_spoke(&spoke_content, &hub_title, &hub_slug_clean);
+            if updated != spoke_content {
+                let _ = std::fs::write(&spoke_path, &updated);
+            }
+        }
+    }
+
+    // Register in DB
+    let content_rel = content_dir
+        .strip_prefix(&paths.repo_root)
+        .unwrap_or(Path::new("content"))
+        .to_string_lossy()
+        .replace('\\', "/");
+    let file_ref = format!("./{}/{}", content_rel, filename);
+
+    // Read actual metadata from the file so DB matches frontmatter exactly
+    let meta = crate::content::ops::read_file_metadata(&hub_file).ok();
+    let file_title = meta.as_ref().and_then(|m| m.title.clone()).unwrap_or(hub_title);
+    let published_date = meta
+        .as_ref()
+        .and_then(|m| m.published_date.clone())
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let word_count = meta.map(|m| m.word_count as i64).unwrap_or_else(|| {
+        let hub_content = std::fs::read_to_string(&hub_file).unwrap_or_default();
+        count_words(&hub_content) as i64
+    });
+    let target_keyword = hub_slug_clean.replace('-', " ");
+
+    if is_refresh {
+        let _ = conn.execute(
+            "DELETE FROM articles WHERE project_id = ?1 AND file = ?2",
+            rusqlite::params![&task.project_id, &file_ref],
+        );
+    }
+
+    let existing: bool = conn
+        .query_row(
+            "SELECT 1 FROM articles WHERE project_id = ?1 AND file = ?2 LIMIT 1",
+            rusqlite::params![&task.project_id, &file_ref],
+            |_row| Ok(true),
+        )
+        .unwrap_or(false);
+
+    if !existing {
+        let max_existing_id: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(id), 0) FROM articles WHERE project_id = ?1",
+                [&task.project_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let meta_next_id: i64 = conn
+            .query_row(
+                "SELECT next_article_id FROM articles_meta WHERE project_id = ?1",
+                [&task.project_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let article_id = std::cmp::max(max_existing_id + 1, meta_next_id.max(1));
+
+        conn.execute(
+            "INSERT INTO articles (
+                id, title, url_slug, file, target_keyword, keyword_difficulty,
+                target_volume, published_date, word_count, status,
+                content_gaps_addressed, estimated_traffic_monthly, project_id
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            rusqlite::params![
+                article_id,
+                file_title,
+                hub_slug_clean,
+                file_ref,
+                Some(target_keyword),
+                Option::<String>::None,
+                0i64,
+                Some(published_date),
+                word_count,
+                "published",
+                "[]",
+                Option::<String>::None,
+                &task.project_id,
+            ],
+        )
+        .map_err(|e| format!("Failed to insert article: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO articles_meta (project_id, next_article_id)
+             VALUES (?1, ?2)
+             ON CONFLICT(project_id) DO UPDATE SET next_article_id = excluded.next_article_id",
+            rusqlite::params![&task.project_id, article_id + 1],
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        let _ = conn.execute(
+            "UPDATE articles SET title = ?1, url_slug = ?2, word_count = ?3,
+                 published_date = ?4, status = 'published'
+             WHERE project_id = ?5 AND file = ?6",
+            rusqlite::params![
+                file_title,
+                hub_slug_clean,
+                word_count,
+                published_date,
+                &task.project_id,
+                &file_ref,
+            ],
+        );
+    }
+
+    if let Err(e) = crate::db::export::write_articles_to_repo(conn, &task.project_id, &paths.repo_root)
+    {
+        log::warn!("[apply_hub_output] failed to export articles.json: {}", e);
+    }
+
+    Ok(filename)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Data Structures
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1027,7 +1374,7 @@ pub struct HubValidationCheck {
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn gather_spoke_briefs(
+pub(crate) fn gather_spoke_briefs(
     conn: &Connection,
     project_id: &str,
     project_path: &str,
@@ -1096,7 +1443,7 @@ fn gather_spoke_briefs(
     spokes
 }
 
-fn read_excerpt(file_path: &Path, max_chars: usize) -> String {
+pub(crate) fn read_excerpt(file_path: &Path, max_chars: usize) -> String {
     let content = match std::fs::read_to_string(file_path) {
         Ok(c) => c,
         Err(_) => return String::new(),
@@ -1131,11 +1478,11 @@ fn read_excerpt(file_path: &Path, max_chars: usize) -> String {
     }
 }
 
-fn count_words(text: &str) -> usize {
+pub(crate) fn count_words(text: &str) -> usize {
     text.split_whitespace().count()
 }
 
-fn extract_code_block(text: &str, lang: &str) -> Option<String> {
+pub(crate) fn extract_code_block(text: &str, lang: &str) -> Option<String> {
     let fence = if lang.is_empty() {
         "```".to_string()
     } else {
@@ -1147,7 +1494,7 @@ fn extract_code_block(text: &str, lang: &str) -> Option<String> {
     Some(after_start[..end].trim().to_string())
 }
 
-fn find_hub_file(content_dir: &Path, suggested_url: &str) -> Option<PathBuf> {
+pub(crate) fn find_hub_file(content_dir: &Path, suggested_url: &str) -> Option<PathBuf> {
     let slug = suggested_url.trim_start_matches('/').replace("blog/", "");
     let slug_underscore = slug.replace('-', "_");
     // Also check just the basename (e.g. "my-hub" from "guide/my-hub")
@@ -1184,7 +1531,7 @@ fn find_hub_file(content_dir: &Path, suggested_url: &str) -> Option<PathBuf> {
     None
 }
 
-fn append_related_section(content: &str, new_links: &[(String, String)]) -> String {
+pub(crate) fn append_related_section(content: &str, new_links: &[(String, String)]) -> String {
     if new_links.is_empty() {
         return content.to_string();
     }
@@ -1230,7 +1577,7 @@ fn append_related_section(content: &str, new_links: &[(String, String)]) -> Stri
     }
 }
 
-fn add_hub_link_to_spoke(spoke_content: &str, hub_title: &str, hub_slug: &str) -> String {
+pub(crate) fn add_hub_link_to_spoke(spoke_content: &str, hub_title: &str, hub_slug: &str) -> String {
     let link = format!("- [{}](/blog/{})\n", hub_title, hub_slug);
     if spoke_content.contains(&link.trim()) {
         return spoke_content.to_string();

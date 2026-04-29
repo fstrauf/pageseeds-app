@@ -136,6 +136,8 @@ impl WorkflowHandler for ContentHandler {
                 | "optimize_article"
                 | "create_content"
                 | "optimize_content"
+                | "create_hub_page"
+                | "refresh_hub_page"
                 | "content_review_apply"
         )
     }
@@ -560,31 +562,6 @@ impl WorkflowHandler for ConsolidateClusterHandler {
     }
 }
 
-// ─── Hub Page ────────────────────────────────────────────────────────────────
-
-pub struct HubPageHandler;
-
-impl WorkflowHandler for HubPageHandler {
-    fn supports(&self, task: &Task) -> bool {
-        let t = task_type(task);
-        t == "create_hub_page" || t == "refresh_hub_page"
-    }
-
-    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
-        vec![
-            WorkflowStep::new("hub_load_recommendation", StepKind::HubLoadRecommendation),
-            WorkflowStep::new("hub_build_brief", StepKind::HubBuildBrief),
-            WorkflowStep::new("hub_outline", StepKind::HubOutline)
-                .with_param(step_params::SKILL, "hub-outline"),
-            WorkflowStep::new("hub_write", StepKind::HubWrite)
-                .with_param(step_params::SKILL, "hub-write"),
-            WorkflowStep::new("hub_apply_draft", StepKind::HubApplyDraft),
-            WorkflowStep::new("hub_apply_links", StepKind::HubApplyLinks),
-            WorkflowStep::new("hub_validate", StepKind::HubValidate),
-        ]
-    }
-}
-
 // ─── Manual Fallback ─────────────────────────────────────────────────────────
 
 // ─── Territory Research ───────────────────────────────────────────────────────
@@ -652,7 +629,6 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(CtrAuditHandler),
         Box::new(CannibalizationAuditHandler),
         Box::new(ConsolidateClusterHandler),
-        Box::new(HubPageHandler),
         Box::new(TerritoryResearchHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
@@ -760,6 +736,101 @@ pub async fn exec_deterministic(
 ///   2. Build a prompt via `prompts::build_prompt`
 ///   3. Call `agent::run_agent(provider, prompt, project_path)`
 ///   4. Return the raw output as the step result
+fn hub_spoke_context(task: &Task, project_path: &str) -> String {
+    let hub_topic = task
+        .title
+        .as_deref()
+        .and_then(|t| t.strip_prefix("Create hub:").or_else(|| t.strip_prefix("Refresh hub:")))
+        .unwrap_or("")
+        .trim();
+
+    if hub_topic.is_empty() {
+        return String::new();
+    }
+
+    let strategy_json = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "cannibalization_strategy")
+        .and_then(|a| a.content.clone())
+        .unwrap_or_default();
+
+    if strategy_json.is_empty() {
+        return String::new();
+    }
+
+    let strategy: serde_json::Value = match serde_json::from_str(&strategy_json) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+
+    let empty_recs: Vec<serde_json::Value> = Vec::new();
+    let recommendations = strategy
+        .get("hub_recommendations")
+        .and_then(|r| r.as_array())
+        .unwrap_or(&empty_recs);
+
+    let rec = recommendations.iter().find(|r| {
+        r.get("suggested_title")
+            .and_then(|t| t.as_str())
+            .map(|t| t.trim().eq_ignore_ascii_case(hub_topic))
+            .unwrap_or(false)
+            || r.get("topic")
+                .and_then(|t| t.as_str())
+                .map(|t| t.trim().eq_ignore_ascii_case(hub_topic))
+                .unwrap_or(false)
+    });
+
+    let rec = match rec {
+        Some(r) => r,
+        None => return String::new(),
+    };
+
+    let suggested_url = rec.get("suggested_url").and_then(|u| u.as_str()).unwrap_or("");
+    let suggested_title = rec.get("suggested_title").and_then(|t| t.as_str()).unwrap_or(hub_topic);
+
+    let spoke_pages = rec
+        .get("spoke_pages")
+        .and_then(|p| p.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let db_path = crate::db::default_db_path();
+    let spokes = match rusqlite::Connection::open(&db_path) {
+        Ok(conn) => {
+            if spoke_pages.is_empty() {
+                Vec::new()
+            } else {
+                crate::engine::exec::content::hub_page::gather_spoke_briefs(
+                    &conn, &task.project_id, project_path, &spoke_pages,
+                )
+            }
+        }
+        Err(_) => Vec::new(),
+    };
+
+    let mut ctx = format!(
+        "\n\n## Hub Page Task\n\n\
+         You are writing a pillar / hub page MDX document.\n\
+         - Topic: {}\n\
+         - Title: {}\n\
+         - URL slug: {}\n",
+        hub_topic, suggested_title, suggested_url
+    );
+
+    if !spokes.is_empty() {
+        ctx.push_str("\n### Spoke Articles to Connect\n\n");
+        for spoke in &spokes {
+            ctx.push_str(&format!(
+                "- **{}** (`/blog/{}`)\n  Summary: {}\n\n",
+                spoke.title, spoke.url_slug, spoke.excerpt
+            ));
+        }
+    }
+
+    ctx
+}
+
 pub async fn exec_agentic(
     step: &WorkflowStep,
     task: &Task,
@@ -778,6 +849,11 @@ pub async fn exec_agentic(
     let is_content_task = matches!(
         task.task_type.as_str(),
         "write_article" | "optimize_article" | "create_content" | "optimize_content"
+            | "create_hub_page" | "refresh_hub_page"
+    );
+    let is_hub_task = matches!(
+        task.task_type.as_str(),
+        "create_hub_page" | "refresh_hub_page"
     );
 
     let content_context = if is_content_task {
@@ -922,6 +998,19 @@ pub async fn exec_agentic(
         agent_provider,
         step.params.get(step_params::SKILL)
     );
+
+    if is_hub_task {
+        prompt.push_str(&hub_spoke_context(task, project_path));
+        prompt.push_str(
+            "\n\n## Hub Page Requirements\n\
+             - Write a comprehensive pillar / hub page MDX document.\n\
+             - YAML frontmatter MUST include `type: hub` and `hub_topic`.\n\
+             - Include an H1 matching the hub title.\n\
+             - Link to every spoke article using `/blog/{slug}` format.\n\
+             - Total word count MUST be 1500+ words.\n\
+             - Return ONLY the complete MDX content. No explanations outside the MDX.\n"
+        );
+    }
 
     // Check if this is a research workflow step that uses ToolCallingAgent
     // Note: research_final_selection is now deterministic, not agentic

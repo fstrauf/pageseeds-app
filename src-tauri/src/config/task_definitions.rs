@@ -15,7 +15,6 @@ pub enum HandlerFamily {
     CtrAudit,
     CannibalizationAudit,
     ConsolidateCluster,
-    HubPage,
     Implementation,
     TerritoryResearch,
     #[allow(dead_code)]
@@ -310,7 +309,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
         phase: "implementation",
         execution_mode: ExecutionMode::Spec,
         review_on_success: true,
-        handler_family: HandlerFamily::HubPage,
+        handler_family: HandlerFamily::Content,
     },
     // Hub page refresh
     TaskDefinition {
@@ -318,7 +317,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
         phase: "implementation",
         execution_mode: ExecutionMode::Spec,
         review_on_success: true,
-        handler_family: HandlerFamily::HubPage,
+        handler_family: HandlerFamily::Content,
     },
     // Territory research (stub — full handler in Phase 5)
     TaskDefinition {
