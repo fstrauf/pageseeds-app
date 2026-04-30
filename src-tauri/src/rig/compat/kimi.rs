@@ -580,7 +580,32 @@ async fn send_request(
                 body
             );
 
-            // Detect bridge-in-direct-mode so callers can surface a clear action.
+            // Try structured bridge error first.
+            if let Some(bridge_err) = crate::rig::kimi_bridge::parse_bridge_error(&body) {
+                let formatted = crate::rig::kimi_bridge::format_bridge_error(&bridge_err);
+                log::error!("[kimi::send_request] Structured bridge error: {:?}", bridge_err);
+
+                if !crate::rig::kimi_bridge::is_bridge_error_retryable(&bridge_err) {
+                    return Err(formatted);
+                }
+
+                // Retryable bridge errors: only retry on useful HTTP statuses.
+                let should_retry = status.as_u16() == 429 || status.as_u16() == 503 || status.as_u16() == 504;
+                if should_retry && attempt < 3 {
+                    let backoff = 2_u64.pow(attempt);
+                    log::info!(
+                        "[kimi::send_request] Retrying in {}s due to retryable bridge error {}",
+                        backoff,
+                        bridge_err.code
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                    continue;
+                }
+
+                return Err(formatted);
+            }
+
+            // Fallback: opaque body detection for backward compatibility.
             if body.contains("tools_not_supported")
                 || body.contains("does not support native tool calls")
             {

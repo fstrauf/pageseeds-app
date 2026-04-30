@@ -95,8 +95,11 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
 /// Run an agent with an optional backend preference for the Kimi bridge.
 ///
 /// `backend_preference` should be `Some("direct")` for fast stateless queries
-/// or `Some("acp")` for complex agentic tasks. When `None`, the global
-/// `kimi_backend_mode` setting is used.
+/// or `Some("acp")` for complex agentic tasks. It is passed as the
+/// `X-Kimi-Backend` header when the resolved backend is `KimiBridge`.
+///
+/// The global `kimi_backend_mode` setting always controls whether the bridge
+/// or direct CLI is used; `backend_preference` does **not** override it.
 pub fn run_agent_with_backend(
     provider: &str,
     prompt: &str,
@@ -164,36 +167,31 @@ fn try_rig_backend_with_preference(
 }
 
 /// Resolve backend and run prompt via rig.
+///
+/// `backend_preference` is treated as a *routing hint* (passed as the
+/// `X-Kimi-Backend` header) rather than an override of the global
+/// `kimi_backend_mode` setting. This ensures `"auto"` mode can still
+/// fall back to the direct CLI when the bridge is down.
 async fn run_rig_prompt(
     provider: &str,
     prompt: &str,
     backend_preference: Option<&str>,
 ) -> Result<String, RigError> {
-    let backend = if provider == "kimi" && backend_preference.is_some() {
-        // Caller explicitly wants bridge routing; bypass global mode setting.
-        let bridge_url = std::env::var("KIMI_BRIDGE_URL")
-            .unwrap_or_else(|_| "http://localhost:8080/v1".to_string());
-        crate::rig::provider::LlmBackend::KimiBridge {
-            base_url: bridge_url,
-            model: crate::rig::provider::default_model_for_provider(provider),
+    // Read kimi_backend_mode from global settings (fallback to "auto" if DB unreachable).
+    let kimi_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => crate::db::global_settings::get_kimi_backend_mode(&conn),
+        Err(e) => {
+            log::warn!(
+                "[agent] Failed to open DB for kimi_backend_mode: {}. Using auto.",
+                e
+            );
+            "auto".to_string()
         }
-    } else {
-        // Read kimi_backend_mode from global settings (fallback to "auto" if DB unreachable).
-        let kimi_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
-            Ok(conn) => crate::db::global_settings::get_kimi_backend_mode(&conn),
-            Err(e) => {
-                log::warn!(
-                    "[agent] Failed to open DB for kimi_backend_mode: {}. Using auto.",
-                    e
-                );
-                "auto".to_string()
-            }
-        };
+    };
 
-        match crate::rig::provider::resolve_backend(provider, None, None, Some(&kimi_mode)).await {
-            Ok(b) => b,
-            Err(e) => return Err(RigError::Other(e)),
-        }
+    let backend = match crate::rig::provider::resolve_backend(provider, None, None, Some(&kimi_mode)).await {
+        Ok(b) => b,
+        Err(e) => return Err(RigError::Other(e)),
     };
 
     match &backend {
@@ -201,9 +199,28 @@ async fn run_rig_prompt(
             // Signal to the caller that we need CLI fallback.
             Err(RigError::FallbackToCli)
         }
-        _ => {
+        crate::rig::provider::LlmBackend::KimiBridge { .. } => {
+            // Pass backend_preference as the X-Kimi-Backend header.
             let response = crate::rig::provider::run_agent_with_backend(
                 &backend, prompt, None, backend_preference,
+            )
+            .await
+            .map_err(|e| RigError::Other(e))?;
+            if let (Some(pt), Some(ct)) = (response.prompt_tokens, response.completion_tokens) {
+                log::info!(
+                    "[agent] tokens — prompt={}, completion={}, total={}",
+                    pt,
+                    ct,
+                    pt + ct
+                );
+                set_last_tokens(Some(pt), Some(ct));
+            }
+            Ok(response.content)
+        }
+        _ => {
+            // Non-Kimi providers — backend_preference is irrelevant.
+            let response = crate::rig::provider::run_agent_with_backend(
+                &backend, prompt, None, None,
             )
             .await
             .map_err(|e| RigError::Other(e))?;

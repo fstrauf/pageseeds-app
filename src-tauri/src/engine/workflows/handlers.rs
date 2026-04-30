@@ -845,6 +845,43 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
     ctx
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Kimi backend routing helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Return the `X-Kimi-Backend` header value for a given task/step.
+///
+/// Content-writing tasks need ACP (persistent session, file I/O);
+/// everything else can use direct mode (fast, stateless).
+fn kimi_backend_preference_for_step(task: &Task, _step: &WorkflowStep) -> Option<&'static str> {
+    match task.task_type.as_str() {
+        "write_article" | "optimize_article" | "create_content" | "optimize_content"
+        | "create_hub_page" | "refresh_hub_page" => Some("acp"),
+        _ => Some("direct"),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prompt budget preflight
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct PromptBudget {
+    target: usize,
+    hard: usize,
+}
+
+fn default_budget_for_backend(_backend_preference: Option<&str>) -> PromptBudget {
+    // Defaults mirror the bridge limits until health data is wired.
+    PromptBudget {
+        target: 15 * 1024,
+        hard: 20 * 1024,
+    }
+}
+
+fn estimate_prompt_bytes(prompt: &str) -> usize {
+    prompt.len()
+}
+
 pub async fn exec_agentic(
     step: &WorkflowStep,
     task: &Task,
@@ -1051,13 +1088,31 @@ pub async fn exec_agentic(
     let repo_root = repo_root.to_path_buf();
     let step_name = step.name.clone();
 
-    // Dual-mode routing: content tasks need ACP (persistent session, file I/O),
-    // everything else can use direct mode (fast, stateless).
-    let backend_preference = if is_content_task {
-        Some("acp")
-    } else {
-        Some("direct")
-    };
+    let backend_preference = kimi_backend_preference_for_step(task, step);
+
+    // Prompt budget preflight — fail before the provider call if the prompt
+    // exceeds the hard budget for the chosen backend.
+    let prompt_bytes = estimate_prompt_bytes(&prompt);
+    let budget = default_budget_for_backend(backend_preference);
+    if prompt_bytes > budget.hard {
+        return StepResult {
+            success: false,
+            message: format!(
+                "Prompt size ({} bytes) exceeds hard budget ({} bytes) for step '{}'. \
+                 Trim artifacts, reduce context, or batch the workflow before retrying.",
+                prompt_bytes, budget.hard, step_name
+            ),
+            output: None,
+        };
+    }
+    if prompt_bytes > budget.target {
+        log::warn!(
+            "[executor] Prompt size {} exceeds target budget {} for step '{}'",
+            prompt_bytes,
+            budget.target,
+            step_name
+        );
+    }
 
     match tokio::task::spawn_blocking(move || {
         agent::run_agent_with_backend(&agent_provider, &prompt, &repo_root, backend_preference)
@@ -1416,6 +1471,69 @@ fn rename_new_or_modified_md_to_mdx(
     }
 
     renamed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::task::{Task, TaskStatus, Priority, TaskRunPolicy, TaskRun, AgentPolicy, TaskReviewSurface, FollowUpPolicy};
+
+    fn make_task(task_type: &str) -> Task {
+        Task {
+            id: format!("test-{task_type}"),
+            task_type: task_type.to_string(),
+            phase: "research".to_string(),
+            status: TaskStatus::Todo,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
+            title: Some(format!("{task_type} test")),
+            description: None,
+            project_id: "proj1".to_string(),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun {
+                attempts: 0,
+                last_error: None,
+                ..Default::default()
+            },
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn test_kimi_backend_preference_for_step_content() {
+        let step = WorkflowStep::new("test", crate::engine::workflows::StepKind::Agentic);
+        for tt in ["write_article", "optimize_article", "create_content", "optimize_content", "create_hub_page", "refresh_hub_page"] {
+            let task = make_task(tt);
+            assert_eq!(kimi_backend_preference_for_step(&task, &step), Some("acp"), "{} should prefer acp", tt);
+        }
+    }
+
+    #[test]
+    fn test_kimi_backend_preference_for_step_other() {
+        let step = WorkflowStep::new("test", crate::engine::workflows::StepKind::Agentic);
+        for tt in ["content_audit", "collect_gsc", "cluster_and_link", "reddit_reply"] {
+            let task = make_task(tt);
+            assert_eq!(kimi_backend_preference_for_step(&task, &step), Some("direct"), "{} should prefer direct", tt);
+        }
+    }
+
+    #[test]
+    fn test_prompt_budget_defaults() {
+        let b = default_budget_for_backend(Some("acp"));
+        assert_eq!(b.target, 15 * 1024);
+        assert_eq!(b.hard, 20 * 1024);
+    }
+
+    #[test]
+    fn test_estimate_prompt_bytes() {
+        assert_eq!(estimate_prompt_bytes("hello"), 5);
+        assert_eq!(estimate_prompt_bytes(""), 0);
+    }
 }
 
 #[cfg(test)]

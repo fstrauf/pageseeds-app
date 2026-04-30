@@ -10,8 +10,6 @@
 //! the kimi-acp-openai-bridge exposes an OpenAI-compatible `/v1/chat/completions`
 //! endpoint. The direct CLI path keeps the existing `agent-wrapper` subprocess.
 
-use std::time::Duration;
-
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
 
@@ -87,34 +85,23 @@ pub async fn run_agent_with_backend(
 }
 
 /// Detect whether the Kimi bridge is healthy on the given URL.
+///
+/// Kept as a public compatibility wrapper even if no current caller uses it
+/// directly — external consumers or future UI health checks may call it.
+#[allow(dead_code)]
+///
+/// This is a thin compatibility wrapper around the typed health check.
 pub async fn check_bridge_health(base_url: &str) -> bool {
-    let health_url = base_url.trim_end_matches("/v1").to_string() + "/health";
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    match client.get(&health_url).send().await {
-        Ok(resp) => {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                json.get("kimi_available")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-            } else {
-                false
-            }
-        }
-        Err(_) => false,
-    }
+    crate::rig::kimi_bridge::get_kimi_bridge_health(base_url)
+        .await
+        .map(|h| h.kimi_available)
+        .unwrap_or(false)
 }
 
 /// Resolve a provider string + settings into a concrete backend.
 ///
 /// For `"kimi"` the behaviour depends on `kimi_backend_mode`:
-/// - `"auto"`  → health check bridge, fall back to direct CLI if down
+/// - `"auto"`  → health check bridge; if healthy → `KimiBridge`, otherwise fall back to `KimiDirect`
 /// - `"bridge"`→ always use bridge (no health check)
 /// - `"direct"`→ always use direct CLI
 pub async fn resolve_backend(
@@ -140,17 +127,32 @@ pub async fn resolve_backend(
                 }),
                 "direct" => Ok(LlmBackend::KimiDirect),
                 _ => {
-                    // "auto" or any other value → health check
-                    if check_bridge_health(bridge_url).await {
-                        Ok(LlmBackend::KimiBridge {
-                            base_url: bridge_url.to_string(),
-                            model,
-                        })
-                    } else {
-                        Err(format!(
-                            "Kimi bridge not available on {}. Start the bridge or set kimi_backend_mode to 'direct'.",
-                            bridge_url
-                        ))
+                    // "auto" or any other value → typed health check with fallback
+                    match crate::rig::kimi_bridge::get_kimi_bridge_health(bridge_url).await {
+                        Ok(health) => {
+                            if health.kimi_available {
+                                log::info!(
+                                    "[provider] Kimi bridge healthy (version={}) — using KimiBridge",
+                                    health.bridge_version
+                                );
+                                Ok(LlmBackend::KimiBridge {
+                                    base_url: bridge_url.to_string(),
+                                    model,
+                                })
+                            } else {
+                                log::info!(
+                                    "[provider] Kimi bridge reports kimi_available=false — falling back to KimiDirect"
+                                );
+                                Ok(LlmBackend::KimiDirect)
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[provider] Kimi bridge health check failed ({}). Falling back to KimiDirect.",
+                                e
+                            );
+                            Ok(LlmBackend::KimiDirect)
+                        }
                     }
                 }
             }
@@ -430,5 +432,71 @@ mod tests {
         assert_eq!(result.content, "Hello from mock bridge!");
         assert_eq!(result.prompt_tokens, Some(12));
         assert_eq!(result.completion_tokens, Some(7));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_backend_auto_healthy() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "healthy",
+                "kimi_available": true,
+                "bridge_version": "1.2.3",
+                "models": ["kimi-k2.5"],
+                "backends": {
+                    "direct": {"available": true, "tool_calls": false, "json_mode": true, "file_io": false},
+                    "acp": {"available": true, "tool_calls": true, "json_mode": true, "file_io": true}
+                },
+                "limits": {
+                    "max_prompt_bytes_direct": 20000,
+                    "max_prompt_bytes_acp": 20000,
+                    "max_concurrent_requests": 4
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let backend = resolve_backend("kimi", Some(&format!("{}/v1", mock_server.uri())), None, Some("auto"))
+            .await
+            .unwrap();
+        assert!(matches!(backend, LlmBackend::KimiBridge { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_backend_auto_unhealthy() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "degraded",
+                "kimi_available": false,
+                "bridge_version": "1.0.0",
+                "models": [],
+                "backends": {},
+                "limits": {
+                    "max_prompt_bytes_direct": 20000,
+                    "max_prompt_bytes_acp": 20000,
+                    "max_concurrent_requests": 2
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let backend = resolve_backend("kimi", Some(&format!("{}/v1", mock_server.uri())), None, Some("auto"))
+            .await
+            .unwrap();
+        assert!(matches!(backend, LlmBackend::KimiDirect));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_backend_auto_unreachable() {
+        // Use a port that is extremely unlikely to be open.
+        let backend = resolve_backend("kimi", Some("http://127.0.0.1:1/v1"), None, Some("auto"))
+            .await
+            .unwrap();
+        assert!(matches!(backend, LlmBackend::KimiDirect));
     }
 }
