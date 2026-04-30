@@ -67,6 +67,27 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
       .catch(() => setSpawnedTasks([]))
   }, [task.id, task.type, task.status, task.project_id])
 
+  // Hydrate light tasks (from list view) with full artifacts from the database.
+  // listTasks uses the light variant which skips artifact deserialization.
+  // Review pickers (Reddit, Keyword) need those artifacts to render.
+  useEffect(() => {
+    if (task.artifacts.length > 0) return
+    let cancelled = false
+    getTask(task.id)
+      .then(fullTask => {
+        if (cancelled) return
+        if (fullTask.artifacts.length > task.artifacts.length) {
+          onUpdated(fullTask)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+    // Intentionally depend only on task.id — we only want to hydrate once when
+    // the panel opens for a new task. onUpdated and task.artifacts are stable
+    // for the lifetime of a single panel session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id])
+
   const isDirty =
     editTitle !== (task.title ?? '') ||
     editDesc !== (task.description ?? '') ||

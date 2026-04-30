@@ -6,7 +6,7 @@
  */
 
 import { useQueueStore } from '../stores/queueStore';
-import type { QueueItem, RunnerItem } from '../lib/types';
+import type { QueueItem, RunnerItem, ExecutionResult } from '../lib/types';
 import { useEffect, useMemo, useRef } from 'react';
 import { createLogger, LogTarget } from '../lib/logging';
 
@@ -32,7 +32,9 @@ function mapQueueItemToRunnerItem(item: QueueItem): RunnerItem {
     status: statusMap[item.status] ?? 'queued',
     error: item.error,
     liveSteps: [],
-    result: item.result_json ? undefined : undefined, // TODO: parse result_json if needed
+    result: item.result_json
+      ? (JSON.parse(item.result_json) as ExecutionResult)
+      : undefined,
   };
 }
 
