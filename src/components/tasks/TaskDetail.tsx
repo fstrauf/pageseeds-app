@@ -445,7 +445,7 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
         )}
 
         {/* Queue button for todo/batchable tasks, and re-run for stuck in_progress tasks */}
-        {(task.status === 'todo' || task.status === 'in_progress' || task.status === 'review') && task.execution_mode !== 'manual' && (
+        {(task.status === 'todo' || task.status === 'in_progress') && task.execution_mode !== 'manual' && (
           <Button
             size="sm"
             className="w-full"
