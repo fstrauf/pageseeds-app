@@ -85,8 +85,12 @@ where
 
     match backend {
         LlmBackend::KimiBridge { base_url, model } => {
-            crate::rig::compat::kimi::extract_structured::<T>(base_url, model, prompt, preamble, None)
-                .await
+            // Structured extraction uses native tool calls, which require ACP.
+            // Explicitly request acp so the bridge does not default to direct.
+            crate::rig::compat::kimi::extract_structured::<T>(
+                base_url, model, prompt, preamble, Some("acp"),
+            )
+            .await
         }
         LlmBackend::Claude { api_key, model } => {
             let client = rig::providers::anthropic::Client::new(api_key)
