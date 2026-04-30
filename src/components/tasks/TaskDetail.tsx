@@ -4,6 +4,7 @@ import { useErrorHandler } from '../../lib/toast-context'
 import { updateTask, deleteTask, cancelTask, listTasks, getTask } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
 import type { Task } from '../../lib/types'
+import { canEnqueue } from '../../lib/taskCapabilities'
 import { cn, formatDate } from '../../lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -59,13 +60,17 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
   const { showError } = useErrorHandler()
   const [spawnedTasks, setSpawnedTasks] = useState<import('../../lib/types').Task[]>([])
 
-  // When a content_review task is done, load the content_review_apply task it spawned
+  // When a task with FollowUpTasks review surface lands in review, load its spawned follow-ups
   useEffect(() => {
-    if (task.type !== 'content_review' || task.status !== 'done') return
+    if (task.review_surface !== 'follow_up_tasks' || task.status !== 'review') return
     listTasks(task.project_id, 'todo')
-      .then(all => setSpawnedTasks(all.filter(t => t.type === 'content_review_apply')))
+      .then(all => {
+        // content_review spawns fix_content_article tasks
+        const followUpType = task.type === 'content_review' ? 'fix_content_article' : undefined
+        setSpawnedTasks(followUpType ? all.filter(t => t.type === followUpType) : all)
+      })
       .catch(() => setSpawnedTasks([]))
-  }, [task.id, task.type, task.status, task.project_id])
+  }, [task.id, task.type, task.status, task.review_surface, task.project_id])
 
   // Hydrate light tasks (from list view) with full artifacts from the database.
   // listTasks uses the light variant which skips artifact deserialization.
@@ -206,8 +211,8 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
               <div className="text-foreground">{task.phase ?? '—'}</div>
             </div>
             <div className="space-y-1">
-              <div className="text-xs text-muted-foreground">Execution</div>
-              <div className="text-foreground">{task.execution_mode}</div>
+              <div className="text-xs text-muted-foreground">Run Policy</div>
+              <div className="text-foreground">{task.run_policy}</div>
             </div>
           </div>
 
@@ -368,8 +373,8 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
             </>
           )}
 
-          {/* Next steps for completed content review */}
-          {task.type === 'content_review' && task.status === 'done' && (
+          {/* Follow-up tasks for review_surface = FollowUpTasks */}
+          {task.review_surface === 'follow_up_tasks' && task.status === 'review' && (
             <>
               <Separator className="bg-border" />
               <div className="space-y-2">
@@ -377,7 +382,7 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
                 {spawnedTasks.length > 0 ? (
                   <div className="space-y-1.5">
                     <div className="text-xs text-muted-foreground">
-                      Apply recommendations task ready:
+                      {spawnedTasks.length} follow-up task{spawnedTasks.length !== 1 ? 's' : ''} ready to run:
                     </div>
                     {spawnedTasks.map(t => (
                       <div
@@ -393,12 +398,12 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
                     ))}
                     <div className="flex items-center gap-1 text-xs text-muted-foreground pt-0.5">
                       <ArrowRight size={11} />
-                      Close this panel, then run the apply task to edit your files
+                      Close this panel, then run the follow-up tasks to apply changes
                     </div>
                   </div>
                 ) : (
                   <div className="text-xs text-muted-foreground">
-                    All articles are in good health — no optimization tasks needed.
+                    No follow-up tasks needed.
                   </div>
                 )}
               </div>
@@ -445,7 +450,7 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
         )}
 
         {/* Queue button for todo/batchable tasks, and re-run for stuck in_progress tasks */}
-        {(task.status === 'todo' || task.status === 'in_progress') && task.execution_mode !== 'manual' && (
+        {(task.status === 'todo' || task.status === 'in_progress') && canEnqueue(task) && (
           <Button
             size="sm"
             className="w-full"

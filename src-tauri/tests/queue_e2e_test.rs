@@ -21,7 +21,7 @@ use pageseeds_lib::engine::executor;
 use pageseeds_lib::engine::task_store;
 use pageseeds_lib::logging::{query_logs, LogQueryFilters, LogSource};
 use pageseeds_lib::models::project::Project;
-use pageseeds_lib::models::task::{ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+use pageseeds_lib::models::task::{FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus};
 
 /// Sample reddit_config.md for testing
 const TEST_REDDIT_CONFIG: &str = r#"# Reddit Configuration
@@ -110,7 +110,9 @@ fn create_reddit_task(project_id: &str) -> Task {
         phase: "research".to_string(),
         status: TaskStatus::Todo,
         priority: Priority::High,
-        execution_mode: ExecutionMode::Manual,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         agent_policy: pageseeds_lib::models::task::AgentPolicy::Optional,
         title: Some("E2E Reddit Search Test".to_string()),
         description: Some("End-to-end test of queue system".to_string()),

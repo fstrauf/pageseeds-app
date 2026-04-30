@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::engine::workflows::StepResult;
 use crate::models::ctr::{CtrFixPatch, CtrRecommendation};
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
 use crate::rig::provider::LlmBackend;
 
 pub(crate) async fn exec_ctr_fix_generate(
@@ -408,8 +408,10 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             phase: "implementation".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
@@ -461,8 +463,10 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             phase: "implementation".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
@@ -594,8 +598,10 @@ More content here.
             phase: "implementation".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
@@ -769,8 +775,10 @@ More content here.
             phase: "implementation".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
@@ -947,8 +955,10 @@ More content here.
             phase: "implementation".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],

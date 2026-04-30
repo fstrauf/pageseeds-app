@@ -634,9 +634,9 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                     .ok();
                     emit_completed(&app_handle, &item, &exec_result);
 
-                    // Auto-enqueue automatic/batchable follow-ups
+                    // Auto-enqueue follow-ups with auto_enqueue policy
                     for follow_up in &exec_result.follow_up_tasks {
-                        if follow_up.execution_mode == "automatic" || follow_up.execution_mode == "batchable" {
+                        if follow_up.run_policy == "auto_enqueue" {
                             let enqueue_item = EnqueueItem {
                                 task_id: follow_up.id.clone(),
                                 project_id: item.project_id.clone(),
@@ -763,7 +763,7 @@ fn emit_follow_up(app_handle: &AppHandle, project_id: &str, follow_up: &executor
         project_id: project_id.to_string(),
         title: follow_up.title.clone(),
         task_type: follow_up.task_type.clone(),
-        execution_mode: follow_up.execution_mode.clone(),
+        run_policy: follow_up.run_policy.clone(),
     };
     let _ = app_handle.emit("queue:follow-up-created", &event);
 }

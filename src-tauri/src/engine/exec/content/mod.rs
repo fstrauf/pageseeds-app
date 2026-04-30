@@ -28,13 +28,13 @@ pub(crate) use task_spawner::*;
 #[cfg(test)]
 use crate::engine::project_paths::ProjectPaths;
 #[cfg(test)]
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::task_store;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskRun, TaskStatus};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -78,7 +78,9 @@ mod tests {
                 phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',
                 priority TEXT NOT NULL DEFAULT 'medium',
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
                 agent_policy TEXT NOT NULL DEFAULT 'none',
                 title TEXT,
                 description TEXT,
@@ -194,8 +196,10 @@ mod tests {
             phase: "investigation".to_string(),
             status: TaskStatus::Done,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Batchable,
-            agent_policy: AgentPolicy::Required,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Required,
             title: Some("Content Review".to_string()),
             description: None,
             depends_on: vec![],
@@ -508,8 +512,10 @@ mod tests {
             phase: "implementation".to_string(),
             status: TaskStatus::Done,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Batchable,
-            agent_policy: AgentPolicy::Required,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Required,
             title: Some("Fix: Alpha".to_string()),
             description: None,
             depends_on: vec![],

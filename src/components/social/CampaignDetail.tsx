@@ -6,7 +6,7 @@ import { PostCard } from './PostCard'
 import { PostEditor } from './PostEditor'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { useQueueStore } from '@/stores/queueStore'
+import { useTaskQueueActions } from '../../lib/taskQueueActions'
 import { useQuery } from '../../hooks/useQuery'
 import { useErrorHandler } from '../../lib/toast-context'
 
@@ -26,6 +26,7 @@ const TABS: { key: PostStatus | 'all'; label: string }[] = [
 
 export function CampaignDetail({ campaign, onBack }: Props) {
   const { showError } = useErrorHandler()
+  const { enqueueTasks } = useTaskQueueActions()
   const [posts, setPosts] = useState<SocialPost[]>([])
   const [activeTab, setActiveTab] = useState<PostStatus | 'all'>('all')
   const [selectedPost, setSelectedPost] = useState<SocialPost | null>(null)
@@ -96,15 +97,7 @@ export function CampaignDetail({ campaign, onBack }: Props) {
       const task = await runSocialCampaign(campaign.id)
       
       // Auto-queue the task for immediate execution
-      const queueItem = {
-        task_id: task.id,
-        project_id: task.project_id,
-        title: task.title || 'Generate posts',
-        task_type: task.type,
-        project_name: campaign.name,
-      }
-      
-      useQueueStore.getState().enqueue([queueItem])
+      enqueueTasks([task], campaign.name)
       setGenerateMsg(`Generating posts for "${campaign.name}"... The task is now running. Check the Task Runner panel for progress.`)
     } catch (e) {
       setGenerateMsg(`Error: ${String(e)}`)

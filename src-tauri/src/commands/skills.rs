@@ -102,7 +102,7 @@ pub async fn quick_run_workflow(
                     title: Some(title),
                     description,
                     priority: Priority::High,
-                    agent_policy: AgentPolicy::Optional,
+        agent_policy: AgentPolicy::Optional,
                     idempotency_key: Some(format!("quick_run:{}:{}", task_type, chrono::Utc::now().timestamp())),
                     ..Default::default()
                 };

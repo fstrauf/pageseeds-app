@@ -65,8 +65,8 @@ export function BatchPanel({ projectId }: BatchPanelProps) {
           <div className="grid grid-cols-3 gap-3">
             {[
               { label: 'Ready', value: summary.total_ready, accent: true },
-              { label: 'Automatic', value: summary.automatic, accent: false },
-              { label: 'Batchable', value: summary.batchable, accent: false },
+              { label: 'Auto Enqueue', value: summary.auto_enqueue, accent: false },
+              { label: 'User Enqueue', value: summary.user_enqueue, accent: false },
             ].map(({ label, value, accent }) => (
               <div
                 key={label}

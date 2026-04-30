@@ -453,6 +453,27 @@ CREATE INDEX IF NOT EXISTS idx_article_ctr_issues_project ON article_ctr_issues(
 CREATE INDEX IF NOT EXISTS idx_article_ctr_issues_status ON article_ctr_issues(status);
 "#;
 
+static MIGRATION_V32: &str = r#"
+-- Add task execution policy columns (replaces overloaded execution_mode)
+ALTER TABLE tasks ADD COLUMN run_policy TEXT NOT NULL DEFAULT 'user_enqueue';
+ALTER TABLE tasks ADD COLUMN review_surface TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE tasks ADD COLUMN follow_up_policy TEXT NOT NULL DEFAULT 'none';
+
+-- Map legacy execution_mode values to new run_policy
+UPDATE tasks SET run_policy = 'auto_enqueue' WHERE execution_mode IN ('automatic', 'batchable');
+UPDATE tasks SET run_policy = 'user_enqueue' WHERE execution_mode IN ('manual', 'spec');
+
+-- Backfill review_surface for task types that previously had review_on_success=true
+UPDATE tasks SET review_surface = 'keyword_picker' WHERE type IN ('research_keywords', 'custom_keyword_research', 'research_landing_pages');
+UPDATE tasks SET review_surface = 'reddit_picker' WHERE type = 'reddit_opportunity_search';
+UPDATE tasks SET review_surface = 'artifact_review' WHERE type IN ('fix_ctr_site_template', 'consolidate_cluster', 'create_hub_page', 'refresh_hub_page', 'territory_research', 'calculator_rollout');
+UPDATE tasks SET review_surface = 'follow_up_tasks' WHERE type = 'content_review';
+
+-- Backfill follow_up_policy for task types that spawn follow-ups
+UPDATE tasks SET follow_up_policy = 'backend_auto' WHERE type IN ('collect_gsc', 'ctr_audit', 'cannibalization_audit', 'content_review', 'indexing_diagnostics', 'link_audit', 'keyword_gap_analysis', 'analyze_gsc_performance', 'analyze_keyword_coverage', 'fix_ctr_site_template', 'consolidate_cluster', 'create_hub_page', 'refresh_hub_page', 'territory_research', 'calculator_rollout');
+UPDATE tasks SET follow_up_policy = 'user_selection' WHERE type IN ('research_keywords', 'custom_keyword_research', 'research_landing_pages', 'reddit_opportunity_search');
+"#;
+
 static MIGRATION_V31: &str = r#"
 -- Backend-owned task queue: durable queue runs and items
 CREATE TABLE IF NOT EXISTS queue_runs (
@@ -963,6 +984,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V31)?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (31, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 32 {
+        conn.execute_batch(MIGRATION_V32)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (32, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

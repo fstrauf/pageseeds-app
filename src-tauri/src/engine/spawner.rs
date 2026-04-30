@@ -8,7 +8,8 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::task::{
-    AgentPolicy, ExecutionMode, Priority, Task, TaskArtifact, TaskRun, TaskStatus,
+    AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskRun, TaskReviewSurface,
+    TaskRunPolicy, TaskStatus,
 };
 
 /// Specification for creating a task.
@@ -20,8 +21,12 @@ pub struct TaskSpec {
     pub description: Option<String>,
     /// If None, uses default_phase() for the task_type
     pub phase: Option<String>,
-    /// If None, uses default_execution_mode() for the task_type
-    pub execution_mode: Option<ExecutionMode>,
+    /// If None, uses default_run_policy() for the task_type
+    pub run_policy: Option<TaskRunPolicy>,
+    /// If None, uses default_review_surface() for the task_type
+    pub review_surface: Option<TaskReviewSurface>,
+    /// If None, uses default_follow_up_policy() for the task_type
+    pub follow_up_policy: Option<FollowUpPolicy>,
     pub priority: Priority,
     pub agent_policy: AgentPolicy,
     pub depends_on: Vec<String>,
@@ -38,9 +43,11 @@ impl Default for TaskSpec {
             title: None,
             description: None,
             phase: None,
-            execution_mode: None,
+            run_policy: None,
+            review_surface: None,
+            follow_up_policy: None,
             priority: Priority::Medium,
-            agent_policy: AgentPolicy::None,
+        agent_policy: AgentPolicy::None,
             depends_on: vec![],
             artifacts: vec![],
             idempotency_key: None,
@@ -85,9 +92,15 @@ impl TaskSpawner {
         let phase = spec
             .phase
             .unwrap_or_else(|| crate::config::default_phase(&spec.task_type).to_string());
-        let execution_mode = spec
-            .execution_mode
-            .unwrap_or_else(|| crate::config::default_execution_mode(&spec.task_type));
+        let run_policy = spec
+            .run_policy
+            .unwrap_or_else(|| crate::config::default_run_policy(&spec.task_type));
+        let review_surface = spec
+            .review_surface
+            .unwrap_or_else(|| crate::config::default_review_surface(&spec.task_type));
+        let follow_up_policy = spec
+            .follow_up_policy
+            .unwrap_or_else(|| crate::config::default_follow_up_policy(&spec.task_type));
 
         // 5. Build task
         let task = Task {
@@ -97,8 +110,10 @@ impl TaskSpawner {
             phase,
             status: TaskStatus::Todo,
             priority: spec.priority,
-            execution_mode,
-            agent_policy: spec.agent_policy,
+            run_policy,
+            review_surface,
+            follow_up_policy,
+        agent_policy: spec.agent_policy,
             title: spec.title,
             description: spec.description,
             depends_on: spec.depends_on,
@@ -179,7 +194,7 @@ impl TaskSpawner {
                 depends_on: vec![parent.id.clone()],
                 idempotency_key: Some(key),
                 priority: Priority::Medium,
-                agent_policy: AgentPolicy::Optional,
+        agent_policy: AgentPolicy::Optional,
                 ..Default::default()
             },
         )?;
@@ -237,7 +252,7 @@ impl TaskSpawner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskStatus};
+    use crate::models::task::{AgentPolicy, Priority, TaskStatus, TaskReviewSurface, FollowUpPolicy};
 
     fn in_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -255,7 +270,9 @@ mod tests {
                 phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',
                 priority TEXT NOT NULL DEFAULT 'medium',
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
                 agent_policy TEXT NOT NULL DEFAULT 'none',
                 title TEXT,
                 description TEXT,
@@ -351,8 +368,10 @@ mod tests {
             phase: "test".to_string(),
             status: TaskStatus::Done,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Automatic,
-            agent_policy: AgentPolicy::None,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::None,
             title: Some("Parent".to_string()),
             description: None,
             depends_on: vec![],
@@ -386,8 +405,10 @@ mod tests {
             phase: "test".to_string(),
             status: TaskStatus::Done,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Automatic,
-            agent_policy: AgentPolicy::None,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::None,
             title: None,
             description: None,
             depends_on: vec![],

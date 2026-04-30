@@ -21,6 +21,7 @@ import { Overview } from './components/overview/Overview'
 import { TaskRunner } from './components/tasks/TaskRunner'
 import { listProjects } from './lib/tauri'
 import type { Project, Task, View } from './lib/types'
+import { canEnqueue } from './lib/taskCapabilities'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './components/ui/tabs'
 import { QueueContext } from './lib/queue-context'
 import { useQueueRunner } from './hooks/useQueueRunner'
@@ -159,10 +160,10 @@ export default function App() {
   }, [activeProject])
 
   const handleRunTasks = useCallback((tasks: Task[]) => {
-    const runnableTasks = tasks.filter(task => task.execution_mode !== 'manual')
-    if (runnableTasks.length === 0) return
+    const runnable = tasks.filter(t => canEnqueue(t))
+    if (runnable.length === 0) return
     queue.enqueue(
-      runnableTasks.map(t => ({
+      runnable.map(t => ({
         taskId: t.id,
         projectId: t.project_id,
         title: t.title ?? t.type ?? 'Untitled',

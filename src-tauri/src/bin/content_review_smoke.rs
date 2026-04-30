@@ -17,7 +17,7 @@ use pageseeds_lib::{
     engine::{executor, task_store},
     models::{
         project::{Project, ProjectMode},
-        task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus},
+        task::{AgentPolicy, FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus},
     },
 };
 
@@ -82,7 +82,9 @@ async fn main() {
         phase: "investigation".to_string(),
         status: TaskStatus::Todo,
         priority: Priority::High,
-        execution_mode: ExecutionMode::Manual,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::FollowUpTasks,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         agent_policy: AgentPolicy::Required,
         title: Some("Smoke: Content Review".to_string()),
         description: None,

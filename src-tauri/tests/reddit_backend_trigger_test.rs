@@ -194,7 +194,7 @@ fn test_reddit_config_parse_step_only() {
     // Call the parse function directly
     use pageseeds_lib::engine::exec::reddit::exec_reddit_config_parse;
     use pageseeds_lib::models::task::{
-        AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus,
+        AgentPolicy, FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus,
     };
 
     // Create a minimal task for context
@@ -205,7 +205,9 @@ fn test_reddit_config_parse_step_only() {
         phase: "research".to_string(),
         status: TaskStatus::InProgress,
         priority: Priority::Medium,
-        execution_mode: ExecutionMode::Manual,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         agent_policy: AgentPolicy::Optional,
         title: Some("Test".to_string()),
         description: None,

@@ -13,7 +13,7 @@ use crate::engine::workflows::{
     handlers::default_handlers, step_params, StepResult, WorkflowStep,
 };
 use crate::engine::{agent, task_store};
-use crate::models::task::{Task, TaskArtifact, TaskStatus};
+use crate::models::task::{Task, TaskArtifact, TaskStatus, TaskReviewSurface, FollowUpPolicy};
 use ts_rs::TS;
 
 // ─── Event Types ──────────────────────────────────────────────────────────────
@@ -59,7 +59,9 @@ pub struct FollowUpTask {
     pub task_type: String,
     pub title: String,
     pub status: String,
-    pub execution_mode: String,
+    pub run_policy: String,
+    pub review_surface: String,
+    pub follow_up_policy: String,
     pub priority: String,
 }
 
@@ -324,7 +326,9 @@ pub async fn execute_task_with_token(
             task_type: t.task_type,
             title: t.title.unwrap_or_else(|| "Untitled task".to_string()),
             status: t.status.to_string(),
-            execution_mode: t.execution_mode.to_string(),
+            run_policy: t.run_policy.to_string(),
+            review_surface: t.review_surface.to_string(),
+            follow_up_policy: t.follow_up_policy.to_string(),
             priority: t.priority.to_string(),
         })
         .collect();
@@ -342,7 +346,9 @@ pub async fn execute_task_with_token(
                 .clone()
                 .unwrap_or_else(|| "Review results".to_string()),
             status: "review".to_string(),
-            execution_mode: "manual".to_string(),
+            run_policy: "user_enqueue".to_string(),
+            review_surface: task.review_surface.to_string(),
+            follow_up_policy: task.follow_up_policy.to_string(),
             priority: task.priority.to_string(),
         });
         fups
@@ -464,7 +470,7 @@ fn upsert_artifact_in_memory(artifacts: &mut Vec<TaskArtifact>, artifact: TaskAr
 /// Extracted as a named function so it can be unit-tested.
 pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus {
     if all_ok {
-        if crate::config::review_on_success(task_type) {
+        if crate::config::default_review_surface(task_type) != crate::models::task::TaskReviewSurface::None {
             TaskStatus::Review
         } else {
             TaskStatus::Done
@@ -488,7 +494,7 @@ mod tests {
     use crate::engine::task_store;
     use crate::engine::workflows::handlers::default_handlers;
     use crate::engine::workflows::StepKind;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
     use rusqlite::Connection;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -517,7 +523,9 @@ mod tests {
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',
                 priority TEXT NOT NULL DEFAULT 'medium',
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
                 agent_policy TEXT NOT NULL DEFAULT 'none',
                 title TEXT, description TEXT,
                 project_id TEXT NOT NULL,
@@ -608,8 +616,10 @@ mod tests {
             phase: "research".to_string(),
             status: TaskStatus::Todo,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Manual,
-            agent_policy: AgentPolicy::Optional,
+            run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Optional,
             title: Some(format!("{task_type} test")),
             description: None,
             project_id: project_id.to_string(),
@@ -647,17 +657,29 @@ mod tests {
         );
     }
 
-    // 2. All other successful tasks go to "done", not "review".
+    // 2. Tasks without a review surface go to "done", not "review".
     #[test]
     fn non_research_task_goes_to_done() {
         assert_eq!(
-            completed_task_status("content_review", true),
+            completed_task_status("collect_gsc", true),
             TaskStatus::Done
         );
-        assert_eq!(completed_task_status("collect_gsc", true), TaskStatus::Done);
         assert_eq!(
             completed_task_status("fix_indexing", true),
             TaskStatus::Done
+        );
+    }
+
+    // 3. Tasks with a review surface (including content review) go to "review".
+    #[test]
+    fn review_surface_task_goes_to_review() {
+        assert_eq!(
+            completed_task_status("content_review", true),
+            TaskStatus::Review
+        );
+        assert_eq!(
+            completed_task_status("content_audit", true),
+            TaskStatus::Review
         );
     }
 
@@ -1010,7 +1032,9 @@ mod tests {
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',
                 priority TEXT NOT NULL DEFAULT 'medium',
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
                 agent_policy TEXT NOT NULL DEFAULT 'none',
                 title TEXT, description TEXT,
                 project_id TEXT NOT NULL,

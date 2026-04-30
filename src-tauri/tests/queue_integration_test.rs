@@ -9,7 +9,7 @@ use pageseeds_lib::db;
 use pageseeds_lib::engine::task_store;
 use pageseeds_lib::logging::{query_logs, LogQueryFilters};
 use pageseeds_lib::models::project::Project;
-use pageseeds_lib::models::task::{ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+use pageseeds_lib::models::task::{FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus};
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
     let nanos = SystemTime::now()
@@ -66,7 +66,9 @@ fn test_queue_enqueue_and_state_management() {
         phase: "research".to_string(),
         status: TaskStatus::Todo,
         priority: Priority::High,
-        execution_mode: ExecutionMode::Manual,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         agent_policy: pageseeds_lib::models::task::AgentPolicy::Optional,
         title: Some("Test Task 1".to_string()),
         description: Some("Description 1".to_string()),
@@ -84,7 +86,9 @@ fn test_queue_enqueue_and_state_management() {
         phase: "research".to_string(),
         status: TaskStatus::Todo,
         priority: Priority::Medium,
-        execution_mode: ExecutionMode::Manual,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         agent_policy: pageseeds_lib::models::task::AgentPolicy::Optional,
         title: Some("Test Task 2".to_string()),
         description: Some("Description 2".to_string()),

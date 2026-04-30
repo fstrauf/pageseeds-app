@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X, AlertTriangle } from 'lucide-react'
 import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
+import { canEnqueue, getReviewLabel } from '../../lib/taskCapabilities'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -447,12 +448,9 @@ function FollowUpList({ followUps, onRunNow, onOpenTask }: FollowUpListProps) {
         Next task{followUps.length !== 1 ? 's' : ''}
       </div>
       {followUps.map(task => {
-        const canRun = (task.status === 'todo' || task.status === 'review') && task.execution_mode !== 'manual'
+        const canRun = (task.status === 'todo' || task.status === 'review') && canEnqueue(task)
         const isReview = task.status === 'review'
-        const reviewLabel =
-          task.task_type === 'research_keywords' || task.task_type === 'custom_keyword_research'
-            ? 'Select keywords'
-            : 'Review results'
+        const reviewLabel = getReviewLabel(task.review_surface)
         return (
           <div
             key={task.id}

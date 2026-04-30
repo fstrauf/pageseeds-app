@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
-use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task};
+use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task};
 
 /// Post-completion hook: reads gsc_collection.json and spawns fix tasks.
 ///
@@ -197,12 +197,13 @@ pub(crate) fn create_tasks_from_collection(
             title: Some(title),
             description: Some(description),
             phase: Some("implementation".to_string()),
-            execution_mode: Some(ExecutionMode::Automatic),
+            run_policy: Some(TaskRunPolicy::AutoEnqueue),
             priority: priority_enum,
-            agent_policy: AgentPolicy::Optional,
+        agent_policy: AgentPolicy::Optional,
             idempotency_key: Some(idempotency_key),
             artifacts: vec![],
             depends_on: vec![],
+            ..Default::default()
         };
 
         match TaskSpawner::spawn(conn, spec) {
@@ -230,12 +231,13 @@ pub(crate) fn create_tasks_from_collection(
             title: Some(title),
             description: Some(description),
             phase: Some("implementation".to_string()),
-            execution_mode: Some(ExecutionMode::Manual),
+            run_policy: Some(TaskRunPolicy::UserEnqueue),
             priority: Priority::High,
-            agent_policy: AgentPolicy::Optional,
+        agent_policy: AgentPolicy::Optional,
             idempotency_key: Some(idempotency_key),
             artifacts: vec![],
             depends_on: vec![parent_task.id.clone()],
+            ..Default::default()
         };
 
         match TaskSpawner::spawn(conn, spec) {
@@ -262,12 +264,13 @@ pub(crate) fn create_tasks_from_collection(
                 title: Some(title),
                 description: Some(description),
                 phase: Some("investigation".to_string()),
-                execution_mode: Some(ExecutionMode::Automatic),
+                run_policy: Some(TaskRunPolicy::AutoEnqueue),
                 priority: Priority::Medium,
-                agent_policy: AgentPolicy::Required,
+        agent_policy: AgentPolicy::Required,
                 idempotency_key: Some(idempotency_key),
                 artifacts: vec![],
                 depends_on: vec![parent_task.id.clone()],
+                ..Default::default()
             };
 
             match TaskSpawner::spawn(conn, spec) {

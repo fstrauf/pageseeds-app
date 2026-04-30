@@ -18,8 +18,10 @@
 export type {
   // Enums
   AgentPolicy,
-  ExecutionMode,
+  FollowUpPolicy,
   Platform,
+  TaskRunPolicy,
+  TaskReviewSurface,
   PostFormat,
   PostStatus,
   Priority,
@@ -504,8 +506,8 @@ export interface BatchResult {
 
 export interface BatchSummary {
   total_ready: number
-  automatic: number
-  batchable: number
+  auto_enqueue: number
+  user_enqueue: number
 }
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ vi.mock('@/lib/tauri', async () => {
 
 function makeSnapshot(overrides: Partial<QueueSnapshot> = {}): QueueSnapshot {
   return {
+    run: null,
     items: [],
     ...overrides,
   }
@@ -57,16 +58,19 @@ describe('useQueueRunner', () => {
 
     useQueueStore.setState({
       snapshot: makeSnapshot({
-        run: { id: 'run-1', status: 'finished', pause_on_error: true, created_at: '', updated_at: '' },
+        run: { id: 'run-1', status: 'finished', pause_on_error: true, created_at: '', updated_at: '', started_at: null, finished_at: null },
         items: [
           {
             run_id: 'run-1',
-            position: 0,
+            position: 0n,
             task_id: '1',
             project_id: 'p1',
             status: 'completed',
             title: 'Task 1',
             task_type: 'test',
+            error: null,
+            result_json: null,
+            project_name: null,
             created_at: '',
             updated_at: '',
           },
@@ -84,16 +88,19 @@ describe('useQueueRunner', () => {
 
     useQueueStore.setState({
       snapshot: makeSnapshot({
-        run: { id: 'run-1', status: 'running', pause_on_error: true, created_at: '', updated_at: '' },
+        run: { id: 'run-1', status: 'running', pause_on_error: true, created_at: '', updated_at: '', started_at: null, finished_at: null },
         items: [
           {
             run_id: 'run-1',
-            position: 0,
+            position: 0n,
             task_id: '1',
             project_id: 'p1',
             status: 'completed',
             title: 'Task 1',
             task_type: 'test',
+            error: null,
+            result_json: null,
+            project_name: null,
             created_at: '',
             updated_at: '',
           },
@@ -112,15 +119,18 @@ it('does not cascade when parent re-renders with completed items in store', () =
 
   useQueueStore.setState({
     snapshot: makeSnapshot({
-      run: { id: 'run-1', status: 'finished', pause_on_error: true, created_at: '', updated_at: '' },
+      run: { id: 'run-1', status: 'finished', pause_on_error: true, created_at: '', updated_at: '', started_at: null, finished_at: null },
       items: [{
         run_id: 'run-1',
-        position: 0,
+        position: 0n,
         task_id: '1',
         project_id: 'p1',
         status: 'completed',
         title: 'T1',
         task_type: 'test',
+        error: null,
+        result_json: null,
+        project_name: null,
         created_at: '',
         updated_at: '',
       }],

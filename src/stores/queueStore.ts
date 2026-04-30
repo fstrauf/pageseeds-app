@@ -37,7 +37,7 @@ export interface QueueProgressEvent {
     error?: string;
     retryable?: boolean;
     reason?: string;
-    follow_up_tasks?: { id: string; task_type: string; title: string; status: string; execution_mode: string; priority: string }[];
+    follow_up_tasks?: { id: string; task_type: string; title: string; status: string; run_policy: string; priority: string }[];
     started_at?: string;
     finished_at?: string;
   };
@@ -65,6 +65,7 @@ interface QueueState {
   // Actions
   sync: () => Promise<void>;
   enqueue: (items: EnqueueItem[], mode?: EnqueueMode) => Promise<void>;
+  enqueueNext: (items: EnqueueItem[]) => Promise<void>;
   removeItem: (taskId: string) => Promise<void>;
   clearCompleted: () => Promise<void>;
   close: () => Promise<void>;
@@ -134,6 +135,20 @@ export const useQueueStore = create<QueueState>((set, get) => ({
       set({ isStarting: false });
     }
     logger.exit('enqueue');
+  },
+
+  enqueueNext: async (items: EnqueueItem[]) => {
+    logger.entry('enqueueNext', { count: items.length });
+    set({ isStarting: true });
+    try {
+      const snapshot = await enqueueTasks(items, 'next');
+      get().applySnapshot(snapshot);
+      logger.info('enqueueNext - success');
+    } catch (error) {
+      logger.error('enqueueNext - failed', { error: String(error) });
+      set({ isStarting: false });
+    }
+    logger.exit('enqueueNext');
   },
 
   removeItem: async (taskId: string) => {

@@ -2,7 +2,7 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::skills;
 use crate::engine::workflows::StepResult;
 use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
 /// Territory research execution module.
 ///
 /// Covers the 4-step territory_research pipeline:
@@ -623,8 +623,10 @@ mod tests {
             phase: "research".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Spec,
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: Dividend Investing".to_string()),
             description: None,
             depends_on: vec![],
@@ -696,8 +698,10 @@ mod tests {
             phase: "research".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Spec,
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: Dividend Investing".to_string()),
             description: None,
             depends_on: vec![],
@@ -744,8 +748,10 @@ mod tests {
             phase: "research".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Spec,
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: Dividend Investing".to_string()),
             description: None,
             depends_on: vec![],
@@ -797,8 +803,10 @@ mod tests {
             phase: "research".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Spec,
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: coffee-health".to_string()),
             description: None,
             depends_on: vec![],

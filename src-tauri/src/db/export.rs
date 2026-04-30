@@ -46,7 +46,16 @@ pub fn import_task_list(conn: &Connection, project_id: &str, json: &str) -> Resu
         let phase = t["phase"].as_str().unwrap_or("implementation").to_string();
         let status = t["status"].as_str().unwrap_or("todo").to_string();
         let priority = t["priority"].as_str().unwrap_or("medium").to_string();
-        let execution_mode = t["execution_mode"].as_str().unwrap_or("manual").to_string();
+        // New policy fields (v5+ format). Fall back to execution_mode mapping for legacy exports.
+        let run_policy = t["run_policy"].as_str()
+            .or_else(|| t["execution_mode"].as_str().map(|em| match em {
+                "automatic" | "batchable" => "auto_enqueue",
+                _ => "user_enqueue",
+            }))
+            .unwrap_or("user_enqueue")
+            .to_string();
+        let review_surface = t["review_surface"].as_str().unwrap_or("none").to_string();
+        let follow_up_policy = t["follow_up_policy"].as_str().unwrap_or("none").to_string();
         let agent_policy = t["agent_policy"].as_str().unwrap_or("none").to_string();
         let title = t["title"].as_str().map(String::from);
         let description = t["description"].as_str().map(String::from);
@@ -62,28 +71,35 @@ pub fn import_task_list(conn: &Connection, project_id: &str, json: &str) -> Resu
         conn.execute(
             "INSERT INTO tasks (
                 id, type, phase, status, priority, execution_mode, agent_policy,
+                run_policy, review_surface, follow_up_policy,
                 title, description, project_id, depends_on, artifacts,
                 run_attempts, run_last_error, run_provider, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
              ON CONFLICT(id) DO UPDATE SET
-                status          = excluded.status,
-                priority        = excluded.priority,
-                title           = excluded.title,
-                description     = excluded.description,
-                depends_on      = excluded.depends_on,
-                artifacts       = excluded.artifacts,
-                run_attempts    = excluded.run_attempts,
-                run_last_error  = excluded.run_last_error,
-                run_provider    = excluded.run_provider,
-                updated_at      = excluded.updated_at",
+                status           = excluded.status,
+                priority         = excluded.priority,
+                title            = excluded.title,
+                description      = excluded.description,
+                run_policy       = excluded.run_policy,
+                review_surface   = excluded.review_surface,
+                follow_up_policy = excluded.follow_up_policy,
+                depends_on       = excluded.depends_on,
+                artifacts        = excluded.artifacts,
+                run_attempts     = excluded.run_attempts,
+                run_last_error   = excluded.run_last_error,
+                run_provider     = excluded.run_provider,
+                updated_at       = excluded.updated_at",
             rusqlite::params![
                 id,
                 task_type,
                 phase,
                 status,
                 priority,
-                execution_mode,
+                "manual", // execution_mode legacy column
                 agent_policy,
+                run_policy,
+                review_surface,
+                follow_up_policy,
                 title,
                 description,
                 project_id,
@@ -104,7 +120,7 @@ pub fn import_task_list(conn: &Connection, project_id: &str, json: &str) -> Resu
 /// Export all tasks for a project to task_list.json format (v4).
 pub fn export_task_list(conn: &Connection, project_id: &str) -> Result<String> {
     let mut stmt = conn.prepare(
-        "SELECT id, type, phase, status, priority, execution_mode, agent_policy,
+        "SELECT id, type, phase, status, priority, run_policy, review_surface, follow_up_policy, agent_policy,
                 title, description, depends_on, artifacts,
                 run_attempts, run_last_error, run_provider, created_at, updated_at
          FROM tasks WHERE project_id = ?1 ORDER BY created_at ASC",
@@ -117,22 +133,26 @@ pub fn export_task_list(conn: &Connection, project_id: &str) -> Result<String> {
             let phase: String = row.get(2)?;
             let status: String = row.get(3)?;
             let priority: String = row.get(4)?;
-            let execution_mode: String = row.get(5)?;
-            let agent_policy: String = row.get(6)?;
-            let title: Option<String> = row.get(7)?;
-            let description: Option<String> = row.get(8)?;
-            let depends_on_str: String = row.get(9)?;
-            let artifacts_str: String = row.get(10)?;
-            let run_attempts: i64 = row.get(11)?;
-            let run_last_error: Option<String> = row.get(12)?;
-            let run_provider: Option<String> = row.get(13)?;
+            let run_policy: String = row.get(5)?;
+            let review_surface: String = row.get(6)?;
+            let follow_up_policy: String = row.get(7)?;
+            let agent_policy: String = row.get(8)?;
+            let title: Option<String> = row.get(9)?;
+            let description: Option<String> = row.get(10)?;
+            let depends_on_str: String = row.get(11)?;
+            let artifacts_str: String = row.get(12)?;
+            let run_attempts: i64 = row.get(13)?;
+            let run_last_error: Option<String> = row.get(14)?;
+            let run_provider: Option<String> = row.get(15)?;
             Ok((
                 id,
                 task_type,
                 phase,
                 status,
                 priority,
-                execution_mode,
+                run_policy,
+                review_surface,
+                follow_up_policy,
                 agent_policy,
                 title,
                 description,
@@ -151,7 +171,9 @@ pub fn export_task_list(conn: &Connection, project_id: &str) -> Result<String> {
                 phase,
                 status,
                 priority,
-                execution_mode,
+                run_policy,
+                review_surface,
+                follow_up_policy,
                 agent_policy,
                 title,
                 description,
@@ -171,7 +193,9 @@ pub fn export_task_list(conn: &Connection, project_id: &str) -> Result<String> {
                     "phase": phase,
                     "status": status,
                     "priority": priority,
-                    "execution_mode": execution_mode,
+                    "run_policy": run_policy,
+                    "review_surface": review_surface,
+                    "follow_up_policy": follow_up_policy,
                     "agent_policy": agent_policy,
                     "depends_on": depends_on,
                     "artifacts": artifacts,

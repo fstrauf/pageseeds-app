@@ -1,4 +1,4 @@
-use crate::models::task::ExecutionMode;
+use crate::models::task::{FollowUpPolicy, TaskReviewSurface, TaskRunPolicy};
 
 /// Family of workflow handler that owns a task type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,15 +25,17 @@ pub enum HandlerFamily {
 ///
 /// This is the single source of truth for:
 /// - default phase
-/// - default execution mode
-/// - whether the task lands in Review status on success
+/// - run policy (can the system auto-enqueue this?)
+/// - review surface (what UI appears after completion?)
+/// - follow-up policy (how are child tasks created?)
 /// - which handler family plans its workflow steps
 #[derive(Debug, Clone, Copy)]
 pub struct TaskDefinition {
     pub task_type: &'static str,
     pub phase: &'static str,
-    pub execution_mode: ExecutionMode,
-    pub review_on_success: bool,
+    pub run_policy: TaskRunPolicy,
+    pub review_surface: TaskReviewSurface,
+    pub follow_up_policy: FollowUpPolicy,
     #[allow(dead_code)]
     pub handler_family: HandlerFamily,
 }
@@ -43,264 +45,300 @@ const DEFINITIONS: &[TaskDefinition] = &[
     TaskDefinition {
         task_type: "write_article",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
     TaskDefinition {
         task_type: "optimize_article",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
     TaskDefinition {
         task_type: "create_landing_page",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "create_content",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
     TaskDefinition {
         task_type: "optimize_content",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
     TaskDefinition {
         task_type: "content_review_apply",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Content,
     },
     // Content Review
     TaskDefinition {
         task_type: "content_review",
         phase: "investigation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::FollowUpTasks,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::ContentReview,
     },
     TaskDefinition {
         task_type: "content_audit",
         phase: "investigation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::FollowUpTasks,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::ContentReview,
     },
     // Research
     TaskDefinition {
         task_type: "research_keywords",
         phase: "research",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::KeywordPicker,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::Research,
     },
     TaskDefinition {
         task_type: "custom_keyword_research",
         phase: "research",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::KeywordPicker,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::Research,
     },
     TaskDefinition {
         task_type: "research_landing_pages",
         phase: "research",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::KeywordPicker,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::Research,
     },
     // Collection
     TaskDefinition {
         task_type: "collect_gsc",
         phase: "collection",
-        execution_mode: ExecutionMode::Automatic,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Collection,
     },
     TaskDefinition {
         task_type: "collect_posthog",
         phase: "collection",
-        execution_mode: ExecutionMode::Automatic,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Collection,
     },
     // Investigation
     TaskDefinition {
         task_type: "investigate_gsc",
         phase: "investigation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Investigation,
     },
     TaskDefinition {
         task_type: "investigate_posthog",
         phase: "investigation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Investigation,
     },
     // Reddit
     TaskDefinition {
         task_type: "reddit_opportunity_search",
         phase: "implementation",
-        execution_mode: ExecutionMode::Batchable,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::RedditPicker,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::Reddit,
     },
     TaskDefinition {
         task_type: "reddit_reply",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Reddit,
     },
     TaskDefinition {
         task_type: "reddit_post_reply",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Reddit,
     },
     // Implementation / fixes
     TaskDefinition {
         task_type: "fix_404s",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "fix_redirects",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "fix_indexing",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "fix_technical",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "fix_content",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "fix_gsc_access",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "fix_ctr_article",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "fix_ctr_site_template",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "ctr_outcome_review",
         phase: "investigation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::CtrAudit,
     },
     TaskDefinition {
         task_type: "fix_content_article",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "technical_seo",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "content_cleanup",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
         task_type: "sanitize_content",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
     // Performance
     TaskDefinition {
         task_type: "analyze_gsc_performance",
         phase: "investigation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Performance,
     },
     // Coverage
     TaskDefinition {
         task_type: "analyze_keyword_coverage",
         phase: "investigation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Coverage,
     },
     // CTR Audit
     TaskDefinition {
         task_type: "ctr_audit",
         phase: "investigation",
-        execution_mode: ExecutionMode::Automatic,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::CtrAudit,
     },
     // Cannibalization Audit
     TaskDefinition {
         task_type: "cannibalization_audit",
         phase: "investigation",
-        execution_mode: ExecutionMode::Automatic,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::CannibalizationAudit,
     },
     // Consolidation
     TaskDefinition {
         task_type: "consolidate_cluster",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::ConsolidateCluster,
     },
     // LEGACY: Hub page creation.
@@ -309,69 +347,78 @@ const DEFINITIONS: &[TaskDefinition] = &[
     TaskDefinition {
         task_type: "create_hub_page",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
     // LEGACY: Hub page refresh.
     TaskDefinition {
         task_type: "refresh_hub_page",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
     // Territory research (stub — full handler in Phase 5)
     TaskDefinition {
         task_type: "territory_research",
         phase: "research",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::TerritoryResearch,
     },
     // Calculator rollout (stub — full handler in Phase 6)
     TaskDefinition {
         task_type: "calculator_rollout",
         phase: "implementation",
-        execution_mode: ExecutionMode::Spec,
-        review_on_success: true,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Implementation,
     },
     // Indexing diagnostics
     TaskDefinition {
         task_type: "indexing_diagnostics",
         phase: "investigation",
-        execution_mode: ExecutionMode::Automatic,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Implementation,
     },
     // Social
     TaskDefinition {
         task_type: "social_generate_campaign",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Social,
     },
     TaskDefinition {
         task_type: "social_regenerate_campaign",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Social,
     },
     TaskDefinition {
         task_type: "social_design_template",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Social,
     },
     TaskDefinition {
         task_type: "social_save_template",
         phase: "implementation",
-        execution_mode: ExecutionMode::Manual,
-        review_on_success: false,
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Social,
     },
 ];
@@ -389,16 +436,22 @@ pub fn default_phase(task_type: &str) -> &'static str {
     find(task_type).map(|d| d.phase).unwrap_or("implementation")
 }
 
-pub fn default_execution_mode(task_type: &str) -> ExecutionMode {
+pub fn default_run_policy(task_type: &str) -> TaskRunPolicy {
     find(task_type)
-        .map(|d| d.execution_mode)
-        .unwrap_or(ExecutionMode::Manual)
+        .map(|d| d.run_policy)
+        .unwrap_or(TaskRunPolicy::UserEnqueue)
 }
 
-pub fn review_on_success(task_type: &str) -> bool {
+pub fn default_review_surface(task_type: &str) -> TaskReviewSurface {
     find(task_type)
-        .map(|d| d.review_on_success)
-        .unwrap_or(false)
+        .map(|d| d.review_surface)
+        .unwrap_or(TaskReviewSurface::None)
+}
+
+pub fn default_follow_up_policy(task_type: &str) -> FollowUpPolicy {
+    find(task_type)
+        .map(|d| d.follow_up_policy)
+        .unwrap_or(FollowUpPolicy::None)
 }
 
 #[allow(dead_code)]
@@ -423,14 +476,73 @@ mod tests {
     }
 
     #[test]
-    fn review_tasks_are_as_expected() {
-        assert!(review_on_success("research_keywords"));
-        assert!(review_on_success("custom_keyword_research"));
-        assert!(review_on_success("research_landing_pages"));
-        assert!(review_on_success("reddit_opportunity_search"));
-        assert!(!review_on_success("write_article"));
-        assert!(!review_on_success("collect_gsc"));
-        assert!(!review_on_success("ctr_audit"));
+    fn research_tasks_have_keyword_picker_surface() {
+        assert_eq!(
+            default_review_surface("research_keywords"),
+            TaskReviewSurface::KeywordPicker
+        );
+        assert_eq!(
+            default_review_surface("custom_keyword_research"),
+            TaskReviewSurface::KeywordPicker
+        );
+        assert_eq!(
+            default_review_surface("research_landing_pages"),
+            TaskReviewSurface::KeywordPicker
+        );
+    }
+
+    #[test]
+    fn reddit_search_has_reddit_picker_surface() {
+        assert_eq!(
+            default_review_surface("reddit_opportunity_search"),
+            TaskReviewSurface::RedditPicker
+        );
+    }
+
+    #[test]
+    fn content_review_has_follow_up_tasks_surface() {
+        assert_eq!(
+            default_review_surface("content_review"),
+            TaskReviewSurface::FollowUpTasks
+        );
+        assert_eq!(
+            default_review_surface("content_audit"),
+            TaskReviewSurface::FollowUpTasks
+        );
+    }
+
+    #[test]
+    fn auto_enqueue_tasks_are_collection_and_audit() {
+        assert_eq!(default_run_policy("collect_gsc"), TaskRunPolicy::AutoEnqueue);
+        assert_eq!(
+            default_run_policy("collect_posthog"),
+            TaskRunPolicy::AutoEnqueue
+        );
+        assert_eq!(default_run_policy("ctr_audit"), TaskRunPolicy::AutoEnqueue);
+        assert_eq!(
+            default_run_policy("cannibalization_audit"),
+            TaskRunPolicy::AutoEnqueue
+        );
+        assert_eq!(
+            default_run_policy("indexing_diagnostics"),
+            TaskRunPolicy::AutoEnqueue
+        );
+        assert_eq!(
+            default_run_policy("reddit_opportunity_search"),
+            TaskRunPolicy::AutoEnqueue
+        );
+    }
+
+    #[test]
+    fn write_tasks_have_backend_auto_follow_up() {
+        assert_eq!(
+            default_follow_up_policy("write_article"),
+            FollowUpPolicy::BackendAuto
+        );
+        assert_eq!(
+            default_follow_up_policy("create_hub_page"),
+            FollowUpPolicy::BackendAuto
+        );
     }
 
     #[test]
@@ -442,37 +554,23 @@ mod tests {
     }
 
     #[test]
-    fn default_execution_mode_matches_task_type() {
+    fn default_run_policy_matches_task_type() {
+        assert_eq!(default_run_policy("collect_gsc"), TaskRunPolicy::AutoEnqueue);
         assert_eq!(
-            default_execution_mode("collect_gsc"),
-            ExecutionMode::Automatic
-        );
-        assert_eq!(
-            default_execution_mode("reddit_search"),
-            ExecutionMode::Manual
+            default_run_policy("reddit_search"),
+            TaskRunPolicy::UserEnqueue
         ); // reddit_search not in registry, falls back
         assert_eq!(
-            default_execution_mode("reddit_opportunity_search"),
-            ExecutionMode::Batchable
+            default_run_policy("reddit_opportunity_search"),
+            TaskRunPolicy::AutoEnqueue
         );
         assert_eq!(
-            default_execution_mode("research_keywords"),
-            ExecutionMode::Manual
+            default_run_policy("research_keywords"),
+            TaskRunPolicy::UserEnqueue
         );
-        assert_eq!(default_execution_mode("write_article"), ExecutionMode::Spec);
-    }
-
-    #[test]
-    fn manual_tasks_have_manual_handler_or_implementation() {
-        for def in all() {
-            if def.handler_family == HandlerFamily::Manual {
-                assert_eq!(
-                    def.execution_mode,
-                    ExecutionMode::Manual,
-                    "Manual handler family task {} should have Manual execution mode",
-                    def.task_type
-                );
-            }
-        }
+        assert_eq!(
+            default_run_policy("write_article"),
+            TaskRunPolicy::UserEnqueue
+        );
     }
 }

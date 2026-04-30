@@ -62,17 +62,20 @@ impl AgentResponse {
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Run a single prompt through the configured backend.
+/// Run a single prompt with an optional backend preference for the Kimi bridge.
 ///
-/// This is the primary replacement for `engine/agent.rs::run_agent`.
-pub async fn run_agent(
+/// `backend_preference` is passed as the `X-Kimi-Backend` HTTP header when using
+/// the bridge, allowing per-request routing between `direct` (fast, stateless)
+/// and `acp` (complex, persistent session) modes.
+pub async fn run_agent_with_backend(
     backend: &LlmBackend,
     prompt: &str,
     preamble: Option<&str>,
+    backend_preference: Option<&str>,
 ) -> Result<AgentResponse, String> {
     match backend {
         LlmBackend::KimiBridge { base_url, model } => {
-            run_kimi_bridge(base_url, model, prompt, preamble).await
+            run_kimi_bridge(base_url, model, prompt, preamble, backend_preference).await
         }
         LlmBackend::KimiDirect => run_kimi_direct(prompt, preamble),
         LlmBackend::Claude { api_key, model } => run_claude(api_key, model, prompt, preamble).await,
@@ -171,7 +174,7 @@ pub async fn resolve_backend(
     }
 }
 
-fn default_model_for_provider(provider: &str) -> String {
+pub fn default_model_for_provider(provider: &str) -> String {
     match provider {
         "kimi" => "kimi-k2.5".to_string(),
         "claude" => "claude-sonnet-4-6".to_string(),
@@ -190,10 +193,13 @@ async fn run_kimi_bridge(
     model: &str,
     prompt: &str,
     preamble: Option<&str>,
+    backend_preference: Option<&str>,
 ) -> Result<AgentResponse, String> {
-    let result = crate::rig::compat::kimi::run_prompt(base_url, model, prompt, preamble)
-        .await
-        .map_err(|e| format!("Kimi bridge prompt failed: {}", e))?;
+    let result = crate::rig::compat::kimi::run_prompt(
+        base_url, model, prompt, preamble, backend_preference,
+    )
+    .await
+    .map_err(|e| format!("Kimi bridge prompt failed: {}", e))?;
 
     Ok(AgentResponse::with_usage(
         result.content,
@@ -420,7 +426,7 @@ mod tests {
             model: "test-model".to_string(),
         };
 
-        let result = run_agent(&backend, "Say hello", None).await.unwrap();
+        let result = run_agent_with_backend(&backend, "Say hello", None, None).await.unwrap();
         assert_eq!(result.content, "Hello from mock bridge!");
         assert_eq!(result.prompt_tokens, Some(12));
         assert_eq!(result.completion_tokens, Some(7));

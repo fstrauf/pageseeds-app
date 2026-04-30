@@ -6,7 +6,7 @@ mod tests {
         extract_query_keywords, extract_seed_subreddits, extract_trigger_topics,
     };
     use crate::engine::workflows::handlers::default_handlers;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
     use chrono::Utc;
 
     const PAGESEEDS_CONFIG: &str = r#"# Reddit Config: PageSeeds
@@ -123,7 +123,9 @@ mod tests {
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',
                 priority TEXT NOT NULL DEFAULT 'medium',
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
                 agent_policy TEXT NOT NULL DEFAULT 'none',
                 title TEXT, description TEXT,
                 project_id TEXT NOT NULL,
@@ -185,8 +187,10 @@ mod tests {
             phase: "research".to_string(),
             status: TaskStatus::Todo,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Automatic,
-            agent_policy: AgentPolicy::Optional,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Optional,
             title: Some("Reddit Opportunity Search".to_string()),
             description: Some("Search for Reddit posting opportunities".to_string()),
             depends_on: vec![],
@@ -466,8 +470,10 @@ Helpful, technical, and concise.
             phase: "research".to_string(),
             status: TaskStatus::Todo,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Automatic,
-            agent_policy: AgentPolicy::Optional,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Optional,
             title: None,
             description: None,
             depends_on: vec![],

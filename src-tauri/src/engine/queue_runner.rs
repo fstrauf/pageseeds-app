@@ -53,8 +53,8 @@ pub struct FollowUpCreatedEvent {
     pub title: String,
     #[serde(rename = "taskType")]
     pub task_type: String,
-    #[serde(rename = "executionMode")]
-    pub execution_mode: String,
+    #[serde(rename = "runPolicy")]
+    pub run_policy: String,
 }
 
 /// Execute a queue of tasks in the background, emitting progress events.
@@ -232,21 +232,19 @@ pub async fn execute_queue_internal(
                 // Emit follow-up created events for automatic/batchable follow-ups
                 if exec_result.success {
                     for follow_up in &exec_result.follow_up_tasks {
-                        if follow_up.execution_mode == "automatic"
-                            || follow_up.execution_mode == "batchable"
-                        {
+                        if follow_up.run_policy == "auto_enqueue" {
                             let follow_up_event = FollowUpCreatedEvent {
                                 task_id: follow_up.id.clone(),
                                 project_id: item.project_id.clone(),
                                 title: follow_up.title.clone(),
                                 task_type: follow_up.task_type.clone(),
-                                execution_mode: follow_up.execution_mode.clone(),
+                                run_policy: follow_up.run_policy.clone(),
                             };
 
                             log::info!(
-                                "[queue_runner] Emitting follow-up created: {} (mode: {})",
+                                "[queue_runner] Emitting follow-up created: {} (policy: {})",
                                 follow_up.id,
-                                follow_up.execution_mode
+                                follow_up.run_policy
                             );
 
                             if let Err(e) =

@@ -736,7 +736,7 @@ pub(crate) fn create_ctr_site_template_task(
             first_result.desired_pattern
         )),
         priority: crate::models::task::Priority::High,
-        execution_mode: Some(crate::models::task::ExecutionMode::Manual),
+        run_policy: Some(crate::models::task::TaskRunPolicy::UserEnqueue),
         agent_policy: crate::models::task::AgentPolicy::Optional,
         depends_on: vec![parent_task.id.clone()],
         artifacts: vec![artifact],

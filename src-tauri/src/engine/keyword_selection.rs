@@ -1,4 +1,4 @@
-use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
 use std::collections::{HashMap, HashSet};
 
 /// Build content tasks from selected keywords and mark the research task as done.
@@ -9,7 +9,7 @@ pub fn build_content_tasks_from_keywords(
     research_task_id: &str,
     project_id: &str,
 ) -> Result<Vec<Task>, String> {
-    use crate::config::{default_execution_mode, default_phase};
+    use crate::config::{default_run_policy, default_phase, default_review_surface, default_follow_up_policy};
 
     // Determine content task type based on research task type
     let content_task_type = if research_task.task_type == "research_landing_pages" {
@@ -82,11 +82,13 @@ pub fn build_content_tasks_from_keywords(
         let task = Task {
             id,
             phase: default_phase(content_task_type).to_string(),
-            execution_mode: default_execution_mode(content_task_type),
+            run_policy: default_run_policy(content_task_type),
+            review_surface: default_review_surface(content_task_type),
+            follow_up_policy: default_follow_up_policy(content_task_type),
             task_type: content_task_type.to_string(),
             status: TaskStatus::Todo,
             priority: priority_enum,
-            agent_policy: AgentPolicy::None,
+        agent_policy: AgentPolicy::None,
             title: Some(title),
             description: Some(description),
             project_id: project_id.to_string(),
@@ -585,7 +587,7 @@ pub fn build_keyword_provenance_artifact(keyword: &str, research_task_id: &str) 
 mod tests {
     use super::*;
     use crate::models::task::{
-        AgentPolicy, ExecutionMode, Priority, Task, TaskArtifact, TaskRun, TaskStatus,
+        AgentPolicy, FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun, TaskStatus,
     };
 
     fn make_task(artifacts: Vec<TaskArtifact>) -> Task {
@@ -595,8 +597,10 @@ mod tests {
             phase: "research".to_string(),
             status: TaskStatus::Review,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Manual,
-            agent_policy: AgentPolicy::Optional,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Optional,
             title: Some("Keyword test".to_string()),
             description: None,
             project_id: "proj1".to_string(),

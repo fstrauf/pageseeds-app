@@ -207,7 +207,7 @@ pub fn run_social_campaign(
     campaign_id: String,
 ) -> std::result::Result<crate::models::task::Task, String> {
     use crate::engine::spawner::{TaskSpec, TaskSpawner};
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority};
 
     // Get campaign details first
     let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -229,7 +229,7 @@ pub fn run_social_campaign(
         task_type: "social_generate_campaign".to_string(),
         title: Some(format!("Generate posts for campaign: {}", campaign.name)),
         description: Some(description),
-        execution_mode: Some(ExecutionMode::Automatic),
+        run_policy: Some(TaskRunPolicy::AutoEnqueue),
         priority: Priority::Medium,
         agent_policy: AgentPolicy::Required,
         idempotency_key: Some(format!("social_campaign:{}", campaign_id)),

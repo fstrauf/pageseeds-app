@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{executor, task_store};
-use crate::models::task::{ExecutionMode, Priority, Task, TaskStatus};
+use crate::models::task::{Priority, Task, TaskRunPolicy, TaskStatus};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,17 +50,14 @@ pub struct BatchResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchSummary {
     pub total_ready: usize,
-    pub automatic: usize,
-    pub batchable: usize,
+    pub auto_enqueue: usize,
+    pub user_enqueue: usize,
 }
 
 // ─── Autonomy mode helpers ────────────────────────────────────────────────────
 
 fn is_autonomous(task: &Task) -> bool {
-    matches!(
-        task.execution_mode,
-        ExecutionMode::Automatic | ExecutionMode::Batchable
-    )
+    matches!(task.run_policy, TaskRunPolicy::AutoEnqueue)
 }
 
 // ─── Ready task selection ─────────────────────────────────────────────────────
@@ -97,13 +94,13 @@ pub fn get_batch_summary(conn: &Connection, project_id: &str) -> Result<BatchSum
     let ready = get_ready_tasks(conn, project_id)?;
     Ok(BatchSummary {
         total_ready: ready.len(),
-        automatic: ready
+        auto_enqueue: ready
             .iter()
-            .filter(|t| t.execution_mode == ExecutionMode::Automatic)
+            .filter(|t| t.run_policy == TaskRunPolicy::AutoEnqueue)
             .count(),
-        batchable: ready
+        user_enqueue: ready
             .iter()
-            .filter(|t| t.execution_mode == ExecutionMode::Batchable)
+            .filter(|t| t.run_policy == TaskRunPolicy::UserEnqueue)
             .count(),
     })
 }

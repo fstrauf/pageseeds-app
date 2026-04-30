@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::engine::exec::keywords::*;
+    use crate::models::task::{FollowUpPolicy, TaskReviewSurface};
     use std::fs;
     use std::path::PathBuf;
 
@@ -426,8 +427,10 @@ mod tests {
             phase: "research".to_string(),
             status: crate::models::task::TaskStatus::Todo,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Manual,
-            agent_policy: crate::models::task::AgentPolicy::Optional,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::Optional,
             title: None,
             description: None,
             project_id: "p1".to_string(),
@@ -462,8 +465,10 @@ mod tests {
             phase: "research".to_string(),
             status: crate::models::task::TaskStatus::Todo,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Manual,
-            agent_policy: crate::models::task::AgentPolicy::Optional,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::Optional,
             title: None,
             description: None,
             project_id: "p1".to_string(),
@@ -515,6 +520,7 @@ mod tests {
 mod integration_tests {
     use crate::engine::exec::keywords::*;
     use crate::engine::workflows::StepResult;
+    use crate::models::task::{FollowUpPolicy, TaskReviewSurface};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -552,8 +558,10 @@ mod integration_tests {
             phase: "research".to_string(),
             status: crate::models::task::TaskStatus::Todo,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Manual,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Integration test".to_string()),
             description: None,
             project_id: "test".to_string(),
@@ -714,7 +722,7 @@ mod keyword_workflow_tests {
     use crate::engine::exec::keywords::*;
     use crate::engine::workflows::handlers::default_handlers;
     use crate::engine::workflows::StepKind;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
     use chrono::Utc;
 
     fn in_memory_db() -> rusqlite::Connection {
@@ -733,7 +741,9 @@ mod keyword_workflow_tests {
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',
                 priority TEXT NOT NULL DEFAULT 'medium',
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
                 agent_policy TEXT NOT NULL DEFAULT 'none',
                 title TEXT, description TEXT,
                 project_id TEXT NOT NULL,
@@ -766,8 +776,10 @@ mod keyword_workflow_tests {
             phase: "research".to_string(),
             status: TaskStatus::Todo,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Automatic,
-            agent_policy: AgentPolicy::Optional,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Optional,
             title: Some("Keyword Research".to_string()),
             description: if themes.is_empty() {
                 None // No themes provided - should trigger agentic mode

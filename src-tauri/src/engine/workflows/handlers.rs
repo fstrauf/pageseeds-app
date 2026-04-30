@@ -7,7 +7,7 @@
 /// Step execution happens in `executor.rs`; handlers only describe the plan.
 use super::{step_params, StepKind, StepResult, WorkflowStep};
 use crate::engine::project_paths::ProjectPaths;
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
 
 // ─── Trait ────────────────────────────────────────────────────────────────────
 
@@ -1054,8 +1054,16 @@ pub async fn exec_agentic(
     let repo_root = repo_root.to_path_buf();
     let step_name = step.name.clone();
 
+    // Dual-mode routing: content tasks need ACP (persistent session, file I/O),
+    // everything else can use direct mode (fast, stateless).
+    let backend_preference = if is_content_task {
+        Some("acp")
+    } else {
+        Some("direct")
+    };
+
     match tokio::task::spawn_blocking(move || {
-        agent::run_agent(&agent_provider, &prompt, &repo_root)
+        agent::run_agent_with_backend(&agent_provider, &prompt, &repo_root, backend_preference)
     })
     .await
     {
@@ -1417,7 +1425,7 @@ fn rename_new_or_modified_md_to_mdx(
 mod registry_tests {
     use super::*;
     use crate::config::task_definitions;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
 
     fn make_task(task_type: &str) -> Task {
         Task {
@@ -1426,8 +1434,10 @@ mod registry_tests {
             phase: "research".to_string(),
             status: TaskStatus::Todo,
             priority: Priority::Medium,
-            execution_mode: ExecutionMode::Manual,
-            agent_policy: AgentPolicy::Optional,
+            run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: AgentPolicy::Optional,
             title: Some(format!("{task_type} test")),
             description: None,
             project_id: "proj1".to_string(),

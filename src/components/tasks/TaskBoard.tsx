@@ -4,6 +4,7 @@ import { useRef } from 'react'
 import { cn, formatDate } from '../../lib/utils'
 import { listTasks, getTask, importFromRepo, exportToRepo, analyzeArticleDatePolicy, deleteTask } from '../../lib/tauri'
 import type { Task } from '../../lib/types'
+import { canEnqueue } from '../../lib/taskCapabilities'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -209,7 +210,7 @@ export function TaskBoard({
   }
 
   function handleRunSelected() {
-    const toRun = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && t.execution_mode !== 'manual')
+    const toRun = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && canEnqueue(t))
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)
@@ -217,7 +218,7 @@ export function TaskBoard({
   }
 
   function handleAddToQueue() {
-    const toQueue = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && t.execution_mode !== 'manual')
+    const toQueue = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && canEnqueue(t))
     if (toQueue.length === 0) return
     
     queue.enqueue(
@@ -341,7 +342,7 @@ export function TaskBoard({
   }
 
   function handleRunBatch() {
-    const toRun = tasks.filter(t => (t.status === 'todo' || t.status === 'review') && t.execution_mode !== 'manual')
+    const toRun = tasks.filter(t => (t.status === 'todo' || t.status === 'review'))
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)

@@ -65,32 +65,30 @@ impl rusqlite::types::FromSql for TaskStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
-pub enum ExecutionMode {
+pub enum TaskRunPolicy {
+    /// System may auto-enqueue this task; user may also enqueue it manually.
+    AutoEnqueue,
+    /// User must explicitly enqueue; system will not auto-enqueue.
     #[default]
-    Automatic,
-    Batchable,
-    Manual,
-    Spec,
+    UserEnqueue,
 }
 
-impl ExecutionMode {
+impl TaskRunPolicy {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ExecutionMode::Automatic => "automatic",
-            ExecutionMode::Batchable => "batchable",
-            ExecutionMode::Manual => "manual",
-            ExecutionMode::Spec => "spec",
+            TaskRunPolicy::AutoEnqueue => "auto_enqueue",
+            TaskRunPolicy::UserEnqueue => "user_enqueue",
         }
     }
 }
 
-impl std::fmt::Display for ExecutionMode {
+impl std::fmt::Display for TaskRunPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl rusqlite::types::ToSql for ExecutionMode {
+impl rusqlite::types::ToSql for TaskRunPolicy {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         Ok(rusqlite::types::ToSqlOutput::Owned(
             rusqlite::types::Value::Text(self.as_str().to_string()),
@@ -98,16 +96,117 @@ impl rusqlite::types::ToSql for ExecutionMode {
     }
 }
 
-impl rusqlite::types::FromSql for ExecutionMode {
+impl rusqlite::types::FromSql for TaskRunPolicy {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = String::column_result(value)?;
         match s.as_str() {
-            "automatic" => Ok(ExecutionMode::Automatic),
-            "batchable" => Ok(ExecutionMode::Batchable),
-            "manual" => Ok(ExecutionMode::Manual),
-            "spec" => Ok(ExecutionMode::Spec),
-            // Legacy / unknown values fall back to Manual so old DB rows still load
-            _ => Ok(ExecutionMode::Manual),
+            "auto_enqueue" => Ok(TaskRunPolicy::AutoEnqueue),
+            "user_enqueue" => Ok(TaskRunPolicy::UserEnqueue),
+            // Legacy execution_mode values
+            "automatic" | "batchable" => Ok(TaskRunPolicy::AutoEnqueue),
+            "manual" | "spec" | _ => Ok(TaskRunPolicy::UserEnqueue),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TaskReviewSurface {
+    #[default]
+    None,
+    KeywordPicker,
+    RedditPicker,
+    FollowUpTasks,
+    ArtifactReview,
+}
+
+impl TaskReviewSurface {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TaskReviewSurface::None => "none",
+            TaskReviewSurface::KeywordPicker => "keyword_picker",
+            TaskReviewSurface::RedditPicker => "reddit_picker",
+            TaskReviewSurface::FollowUpTasks => "follow_up_tasks",
+            TaskReviewSurface::ArtifactReview => "artifact_review",
+        }
+    }
+}
+
+impl std::fmt::Display for TaskReviewSurface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl rusqlite::types::ToSql for TaskReviewSurface {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::Owned(
+            rusqlite::types::Value::Text(self.as_str().to_string()),
+        ))
+    }
+}
+
+impl rusqlite::types::FromSql for TaskReviewSurface {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        match s.as_str() {
+            "none" => Ok(TaskReviewSurface::None),
+            "keyword_picker" => Ok(TaskReviewSurface::KeywordPicker),
+            "reddit_picker" => Ok(TaskReviewSurface::RedditPicker),
+            "follow_up_tasks" => Ok(TaskReviewSurface::FollowUpTasks),
+            "artifact_review" => Ok(TaskReviewSurface::ArtifactReview),
+            _ => Ok(TaskReviewSurface::None),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum FollowUpPolicy {
+    #[default]
+    None,
+    BackendAuto,
+    UserSelection,
+}
+
+impl FollowUpPolicy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FollowUpPolicy::None => "none",
+            FollowUpPolicy::BackendAuto => "backend_auto",
+            FollowUpPolicy::UserSelection => "user_selection",
+        }
+    }
+}
+
+impl std::fmt::Display for FollowUpPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl rusqlite::types::ToSql for FollowUpPolicy {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::Owned(
+            rusqlite::types::Value::Text(self.as_str().to_string()),
+        ))
+    }
+}
+
+impl rusqlite::types::FromSql for FollowUpPolicy {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        match s.as_str() {
+            "none" => Ok(FollowUpPolicy::None),
+            "backend_auto" => Ok(FollowUpPolicy::BackendAuto),
+            "user_selection" => Ok(FollowUpPolicy::UserSelection),
+            _ => Ok(FollowUpPolicy::None),
         }
     }
 }
@@ -245,7 +344,9 @@ pub struct Task {
     pub phase: String,
     pub status: TaskStatus,
     pub priority: Priority,
-    pub execution_mode: ExecutionMode,
+    pub run_policy: TaskRunPolicy,
+    pub review_surface: TaskReviewSurface,
+    pub follow_up_policy: FollowUpPolicy,
     pub agent_policy: AgentPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,

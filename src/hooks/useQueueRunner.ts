@@ -6,7 +6,7 @@
  */
 
 import { useQueueStore } from '../stores/queueStore';
-import type { QueueItem, RunnerItem, ExecutionResult } from '../lib/types';
+import type { QueueItem, RunnerItem, ExecutionResult, EnqueueItem } from '../lib/types';
 import { useEffect, useMemo, useRef } from 'react';
 import { createLogger, LogTarget } from '../lib/logging';
 
@@ -24,13 +24,13 @@ function mapQueueItemToRunnerItem(item: QueueItem): RunnerItem {
   return {
     task: {
       id: item.task_id,
-      title: item.title,
-      type: item.task_type,
-      projectId: item.project_id,
-      projectName: item.project_name,
+      title: item.title ?? undefined,
+      type: item.task_type ?? undefined,
+      projectId: item.project_id ?? undefined,
+      projectName: item.project_name ?? undefined,
     },
     status: statusMap[item.status] ?? 'queued',
-    error: item.error,
+    error: item.error ?? undefined,
     liveSteps: [],
     result: item.result_json
       ? (JSON.parse(item.result_json) as ExecutionResult)
@@ -112,11 +112,11 @@ export function useQueueRunner(onCompleted?: () => void) {
         const enqueueItems = newItems.map((i) => ({
           task_id: i.taskId,
           project_id: i.projectId,
-          title: i.title,
-          task_type: i.taskType,
-          project_name: i.projectName,
+          title: i.title ?? null,
+          task_type: i.taskType ?? null,
+          project_name: i.projectName ?? null,
         }));
-        enqueueStore(enqueueItems, 'append');
+        enqueueStore(enqueueItems as EnqueueItem[], 'append');
         logger.exit('enqueue');
       },
 
@@ -125,11 +125,11 @@ export function useQueueRunner(onCompleted?: () => void) {
         const enqueueItems = newItems.map((i) => ({
           task_id: i.taskId,
           project_id: i.projectId,
-          title: i.title,
-          task_type: i.taskType,
-          project_name: i.projectName,
+          title: i.title ?? null,
+          task_type: i.taskType ?? null,
+          project_name: i.projectName ?? null,
         }));
-        enqueueStore(enqueueItems, 'next');
+        enqueueStore(enqueueItems as EnqueueItem[], 'next');
         logger.exit('enqueueNext');
       },
 

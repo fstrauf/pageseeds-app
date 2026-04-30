@@ -8,7 +8,7 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::models::cannibalization::{
     ApprovalStatus, CannibalizationStrategy, StrategyReview, StrategyWithReviews,
 };
-use crate::models::task::{ExecutionMode, Priority, TaskArtifact};
+use crate::models::task::{TaskRunPolicy, Priority, TaskArtifact};
 
 /// Read the cannibalization strategy for a project.
 ///
@@ -204,8 +204,8 @@ pub fn create_tasks_from_approved_recommendations(
                 rec.keep_url, rec.redirect_urls
             )),
             priority: Priority::Medium,
-            execution_mode: Some(ExecutionMode::Spec),
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: Some(TaskRunPolicy::UserEnqueue),
+        agent_policy: crate::models::task::AgentPolicy::Required,
             depends_on: vec![strategy_id.clone()],
             artifacts: vec![artifact.clone()],
             idempotency_key: Some(idempotency_key),
@@ -236,8 +236,8 @@ pub fn create_tasks_from_approved_recommendations(
                 rec.suggested_url, rec.suggested_title
             )),
             priority: Priority::Medium,
-            execution_mode: Some(ExecutionMode::Spec),
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: Some(TaskRunPolicy::UserEnqueue),
+        agent_policy: crate::models::task::AgentPolicy::Required,
             depends_on: vec![strategy_id.clone()],
             artifacts: vec![artifact.clone()],
             idempotency_key: Some(idempotency_key),
@@ -268,8 +268,8 @@ pub fn create_tasks_from_approved_recommendations(
                 rec.theme, rec.priority
             )),
             priority: Priority::Medium,
-            execution_mode: Some(ExecutionMode::Spec),
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: Some(TaskRunPolicy::UserEnqueue),
+        agent_policy: crate::models::task::AgentPolicy::Required,
             depends_on: vec![strategy_id.clone()],
             artifacts: vec![artifact.clone()],
             idempotency_key: Some(idempotency_key),
@@ -300,8 +300,8 @@ pub fn create_tasks_from_approved_recommendations(
                 rec.strategy, rec.ticker_universe
             )),
             priority: Priority::Medium,
-            execution_mode: Some(ExecutionMode::Spec),
-            agent_policy: crate::models::task::AgentPolicy::Required,
+            run_policy: Some(TaskRunPolicy::UserEnqueue),
+        agent_policy: crate::models::task::AgentPolicy::Required,
             depends_on: vec![strategy_id.clone()],
             artifacts: vec![artifact.clone()],
             idempotency_key: Some(idempotency_key),

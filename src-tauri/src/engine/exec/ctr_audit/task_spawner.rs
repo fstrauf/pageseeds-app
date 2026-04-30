@@ -1,6 +1,6 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
-use crate::models::task::{ExecutionMode, Task, TaskArtifact, TaskStatus};
+use crate::models::task::{TaskRunPolicy, Task, TaskArtifact, TaskStatus};
 
 /// Spawn per-article `fix_ctr_article` tasks based on the ctr_build_context artifact.
 ///
@@ -141,8 +141,8 @@ pub(crate) fn create_ctr_fix_tasks(
             title: Some(format!("CTR fix: {}", url_slug)),
             description: Some(format!("Apply CTR fixes to article {} ({})", id, url_slug)),
             priority: crate::models::task::Priority::Medium,
-            execution_mode: Some(ExecutionMode::Automatic),
-            agent_policy: crate::models::task::AgentPolicy::Optional,
+            run_policy: Some(TaskRunPolicy::AutoEnqueue),
+        agent_policy: crate::models::task::AgentPolicy::Optional,
             depends_on: vec![parent_task.id.clone()],
             artifacts: vec![artifact],
             idempotency_key: Some(idempotency_key),

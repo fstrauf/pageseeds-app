@@ -109,7 +109,7 @@ pub(crate) fn create_cluster_and_link_task(
     _project_path: &str,
 ) -> Option<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority};
 
     let parent_title = parent_task
         .title
@@ -134,12 +134,13 @@ pub(crate) fn create_cluster_and_link_task(
         title: Some(title),
         description: Some(description),
         phase: Some("implementation".to_string()),
-        execution_mode: Some(ExecutionMode::Automatic),
+        run_policy: Some(TaskRunPolicy::AutoEnqueue),
         priority: Priority::Medium,
         agent_policy: AgentPolicy::Required,
         idempotency_key: Some(idempotency_key),
         artifacts: vec![],
         depends_on: vec![parent_task.id.clone()],
+        ..Default::default()
     };
 
     match TaskSpawner::spawn(conn, spec) {

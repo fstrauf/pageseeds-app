@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::engine::spawner::{TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::models::reddit::RedditOpportunity;
-use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskStatus};
+use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskStatus};
 
 /// Create `reddit_reply` tasks from selected opportunities in a completed search task.
 ///
@@ -84,13 +84,14 @@ pub fn create_reply_tasks_from_opportunities(
             task_type: "reddit_reply".to_string(),
             title: Some(title),
             description: Some(description),
-            phase: Some("engagement".to_string()),
-            execution_mode: Some(ExecutionMode::Manual),
+            phase: Some("implementation".to_string()),
+            run_policy: Some(TaskRunPolicy::UserEnqueue),
             priority,
-            agent_policy: AgentPolicy::Optional,
+        agent_policy: AgentPolicy::Optional,
             depends_on: vec![],
             artifacts: vec![],
             idempotency_key: Some(idempotency_key),
+            ..Default::default()
         };
 
         let task = TaskSpawner::spawn(conn, spec)

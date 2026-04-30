@@ -135,6 +135,7 @@ pub async fn run_prompt(
     model: &str,
     prompt: &str,
     preamble: Option<&str>,
+    backend: Option<&str>,
 ) -> Result<KimiChatResult, String> {
     let mut messages = Vec::new();
     if let Some(preamble) = preamble {
@@ -158,7 +159,7 @@ pub async fn run_prompt(
         response_format: None,
     };
 
-    let response = send_request(base_url, request).await?;
+    let response = send_request(base_url, request, backend).await?;
     let choice = response
         .choices
         .into_iter()
@@ -190,6 +191,7 @@ pub async fn extract_structured<T>(
     model: &str,
     prompt: &str,
     preamble: Option<&str>,
+    backend: Option<&str>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Send + Sync,
@@ -232,7 +234,7 @@ where
 
     // Attempt tool-calling first.
     let mut last_error = String::new();
-    match send_request(base_url, tool_request.clone()).await {
+    match send_request(base_url, tool_request.clone(), backend).await {
         Ok(response) => {
             let choice = response
                 .choices
@@ -288,6 +290,7 @@ where
                 prompt,
                 preamble,
                 &schema_value,
+                backend,
             )
             .await;
         }
@@ -297,7 +300,7 @@ where
     // If we reach here, the tool request returned OK but parsing failed.
     // Retry up to 2 more times with the same tool request.
     for attempt in 1..3 {
-        let response = send_request(base_url, tool_request.clone()).await?;
+        let response = send_request(base_url, tool_request.clone(), backend).await?;
         let choice = response
             .choices
             .into_iter()
@@ -368,6 +371,7 @@ async fn extract_structured_json_mode<T>(
     prompt: &str,
     preamble: Option<&str>,
     schema: &serde_json::Value,
+    backend: Option<&str>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Send + Sync,
@@ -409,7 +413,7 @@ where
 
     let mut last_error = String::new();
     for attempt in 0..3 {
-        let response = send_request(base_url, request.clone()).await?;
+        let response = send_request(base_url, request.clone(), backend).await?;
         let choice = response
             .choices
             .into_iter()
@@ -492,7 +496,11 @@ fn schema_to_parameters<T: JsonSchema>() -> Result<serde_json::Value, String> {
     serde_json::to_value(&schema).map_err(|e| format!("Failed to serialize JSON schema: {}", e))
 }
 
-async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatResponse, String> {
+async fn send_request(
+    base_url: &str,
+    request: ChatRequest,
+    backend: Option<&str>,
+) -> Result<ChatResponse, String> {
     // Use a 180-second timeout so we fail faster than the bridge's own 300s timeout.
     // This lets us retry promptly instead of waiting 5 minutes for a 500.
     let client = reqwest::Client::builder()
@@ -516,12 +524,16 @@ async fn send_request(base_url: &str, request: ChatRequest) -> Result<ChatRespon
             attempt
         );
 
-        let resp = match client
+        let mut req = client
             .post(&url)
             .header("Authorization", "Bearer dummy")
-            .json(&request)
-            .send()
-            .await
+            .json(&request);
+
+        if let Some(b) = backend {
+            req = req.header("X-Kimi-Backend", b);
+        }
+
+        let resp = match req.send().await
         {
             Ok(r) => r,
             Err(e) if e.is_timeout() => {
@@ -676,6 +688,7 @@ mod tests {
             "test-model",
             "Say hello",
             Some("You are a helpful assistant."),
+            None,
         )
         .await
         .unwrap();
@@ -710,6 +723,7 @@ mod tests {
             &format!("{}/v1", mock_server.uri()),
             "test-model",
             "Test prompt",
+            None,
             None,
         )
         .await
@@ -764,6 +778,7 @@ mod tests {
             "test-model",
             "Extract name and count.",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -798,6 +813,7 @@ mod tests {
             "test-model",
             "Extract name and count.",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -822,6 +838,7 @@ mod tests {
             &format!("{}/v1", mock_server.uri()),
             "test-model",
             "Extract name and count.",
+            None,
             None,
         )
         .await;
@@ -997,6 +1014,7 @@ mod tests {
             "test-model",
             "Extract items and total.",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1047,6 +1065,7 @@ mod tests {
             "test-model",
             "Extract name and count.",
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1091,6 +1110,7 @@ mod tests {
             &format!("{}/v1", mock_server.uri()),
             "test-model",
             "Extract name and count.",
+            None,
             None,
         )
         .await

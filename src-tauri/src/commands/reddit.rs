@@ -248,7 +248,7 @@ pub async fn enrich_reddit_opportunities(
     project_id: String,
 ) -> Result<String, String> {
     use crate::db::global_settings;
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task, TaskRun, TaskStatus};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
     use chrono::Utc;
 
     let (project_path, agent_provider) = {
@@ -267,7 +267,9 @@ pub async fn enrich_reddit_opportunities(
         phase: "research".to_string(),
         status: TaskStatus::InProgress,
         priority: Priority::Medium,
-        execution_mode: ExecutionMode::Automatic,
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: crate::models::task::TaskReviewSurface::None,
+        follow_up_policy: crate::models::task::FollowUpPolicy::None,
         agent_policy: AgentPolicy::Optional,
         title: Some("Reddit Enrichment".to_string()),
         description: None,

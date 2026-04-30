@@ -89,8 +89,22 @@ fn set_last_tokens(prompt: Option<u64>, completion: Option<u64>) {
 /// with all existing step executors. Internally it uses `block_on` when an
 /// async rig backend is selected.
 pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<String, String> {
+    run_agent_with_backend(provider, prompt, project_path, None)
+}
+
+/// Run an agent with an optional backend preference for the Kimi bridge.
+///
+/// `backend_preference` should be `Some("direct")` for fast stateless queries
+/// or `Some("acp")` for complex agentic tasks. When `None`, the global
+/// `kimi_backend_mode` setting is used.
+pub fn run_agent_with_backend(
+    provider: &str,
+    prompt: &str,
+    project_path: &Path,
+    backend_preference: Option<&str>,
+) -> Result<String, String> {
     // Attempt to use a rig backend first.
-    match try_rig_backend(provider, prompt) {
+    match try_rig_backend_with_preference(provider, prompt, backend_preference) {
         Ok(content) => return Ok(content),
         Err(RigError::FallbackToCli) => {
             // Fall through to direct CLI below.
@@ -118,14 +132,18 @@ enum RigError {
     Other(String),
 }
 
-/// Try to run the prompt through a rig async backend.
-fn try_rig_backend(provider: &str, prompt: &str) -> Result<String, RigError> {
+fn try_rig_backend_with_preference(
+    provider: &str,
+    prompt: &str,
+    backend_preference: Option<&str>,
+) -> Result<String, RigError> {
     // Spawn a dedicated thread with its own runtime to avoid all block_on issues:
     // - called from an async task on a worker thread
     // - called from a spawn_blocking thread (block_in_place panics there)
     // - called from a current_thread runtime
     let provider = provider.to_string();
     let prompt = prompt.to_string();
+    let backend_preference = backend_preference.map(|s| s.to_string());
 
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -135,7 +153,8 @@ fn try_rig_backend(provider: &str, prompt: &str) -> Result<String, RigError> {
                 return Err(RigError::FallbackToCli);
             }
         };
-        rt.block_on(run_rig_prompt(&provider, &prompt))
+        let pref = backend_preference.as_deref();
+        rt.block_on(run_rig_prompt(&provider, &prompt, pref))
     })
     .join()
     .unwrap_or_else(|e| {
@@ -145,24 +164,37 @@ fn try_rig_backend(provider: &str, prompt: &str) -> Result<String, RigError> {
 }
 
 /// Resolve backend and run prompt via rig.
-async fn run_rig_prompt(provider: &str, prompt: &str) -> Result<String, RigError> {
-    // Read kimi_backend_mode from global settings (fallback to "auto" if DB unreachable).
-    let kimi_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
-        Ok(conn) => crate::db::global_settings::get_kimi_backend_mode(&conn),
-        Err(e) => {
-            log::warn!(
-                "[agent] Failed to open DB for kimi_backend_mode: {}. Using auto.",
-                e
-            );
-            "auto".to_string()
+async fn run_rig_prompt(
+    provider: &str,
+    prompt: &str,
+    backend_preference: Option<&str>,
+) -> Result<String, RigError> {
+    let backend = if provider == "kimi" && backend_preference.is_some() {
+        // Caller explicitly wants bridge routing; bypass global mode setting.
+        let bridge_url = std::env::var("KIMI_BRIDGE_URL")
+            .unwrap_or_else(|_| "http://localhost:8080/v1".to_string());
+        crate::rig::provider::LlmBackend::KimiBridge {
+            base_url: bridge_url,
+            model: crate::rig::provider::default_model_for_provider(provider),
         }
-    };
+    } else {
+        // Read kimi_backend_mode from global settings (fallback to "auto" if DB unreachable).
+        let kimi_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
+            Ok(conn) => crate::db::global_settings::get_kimi_backend_mode(&conn),
+            Err(e) => {
+                log::warn!(
+                    "[agent] Failed to open DB for kimi_backend_mode: {}. Using auto.",
+                    e
+                );
+                "auto".to_string()
+            }
+        };
 
-    let backend =
         match crate::rig::provider::resolve_backend(provider, None, None, Some(&kimi_mode)).await {
             Ok(b) => b,
             Err(e) => return Err(RigError::Other(e)),
-        };
+        }
+    };
 
     match &backend {
         crate::rig::provider::LlmBackend::KimiDirect => {
@@ -170,9 +202,11 @@ async fn run_rig_prompt(provider: &str, prompt: &str) -> Result<String, RigError
             Err(RigError::FallbackToCli)
         }
         _ => {
-            let response = crate::rig::provider::run_agent(&backend, prompt, None)
-                .await
-                .map_err(|e| RigError::Other(e))?;
+            let response = crate::rig::provider::run_agent_with_backend(
+                &backend, prompt, None, backend_preference,
+            )
+            .await
+            .map_err(|e| RigError::Other(e))?;
             if let (Some(pt), Some(ct)) = (response.prompt_tokens, response.completion_tokens) {
                 log::info!(
                     "[agent] tokens — prompt={}, completion={}, total={}",

@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::engine::task_store;
-use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
+use crate::models::task::{Priority, Task, TaskStatus};
 use tauri::State;
 
 #[tauri::command]
@@ -36,36 +36,26 @@ pub fn create_task(
     description: Option<String>,
     priority: String,
 ) -> Result<Task, String> {
-    use crate::config::{default_execution_mode, default_phase};
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let id = format!("task-{}", chrono::Utc::now().timestamp_millis().to_string());
     let priority_enum = match priority.as_str() {
         "high" => Priority::High,
         "low" => Priority::Low,
         _ => Priority::Medium,
     };
 
-    let task = Task {
-        id,
-        phase: default_phase(&task_type).to_string(),
-        execution_mode: default_execution_mode(&task_type),
-        task_type,
-        status: TaskStatus::Todo,
-        priority: priority_enum,
-        agent_policy: AgentPolicy::None,
-        title,
-        description,
-        project_id,
-        depends_on: vec![],
-        artifacts: vec![],
-        run: crate::models::task::TaskRun::default(),
-        created_at: now.clone(),
-        updated_at: now,
-    };
-
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    Ok(task_store::create_task(&db, &task)?)
+    Ok(TaskSpawner::spawn(
+        &db,
+        TaskSpec {
+            project_id,
+            task_type,
+            title,
+            description,
+            priority: priority_enum,
+            ..Default::default()
+        },
+    )?)
 }
 
 #[tauri::command]

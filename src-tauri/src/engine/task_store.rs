@@ -5,11 +5,11 @@ use crate::error::{Error, Result};
 use crate::models::task::{Priority, Task, TaskStatus};
 
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
-    let depends_on_str: String = row.get(10)?;
-    let artifacts_str: String = row.get(11)?;
-    let run_attempts: i64 = row.get(12)?;
-    let run_last_error: Option<String> = row.get(13)?;
-    let run_provider: Option<String> = row.get(14)?;
+    let depends_on_str: String = row.get(12)?;
+    let artifacts_str: String = row.get(13)?;
+    let run_attempts: i64 = row.get(14)?;
+    let run_last_error: Option<String> = row.get(15)?;
+    let run_provider: Option<String> = row.get(16)?;
 
     let depends_on: Vec<String> = serde_json::from_str(&depends_on_str).unwrap_or_default();
     let artifacts = serde_json::from_str(&artifacts_str).unwrap_or_default();
@@ -20,11 +20,13 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         phase: row.get(2)?,
         status: row.get(3)?,
         priority: row.get(4)?,
-        execution_mode: row.get(5)?,
-        agent_policy: row.get(6)?,
-        title: row.get(7)?,
-        description: row.get(8)?,
-        project_id: row.get(9)?,
+        run_policy: row.get(5)?,
+        review_surface: row.get(6)?,
+        follow_up_policy: row.get(7)?,
+        agent_policy: row.get(8)?,
+        title: row.get(9)?,
+        description: row.get(10)?,
+        project_id: row.get(11)?,
         depends_on,
         artifacts,
         run: crate::models::task::TaskRun {
@@ -33,8 +35,8 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
             provider: run_provider,
             ..Default::default()
         },
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
     })
 }
 
@@ -42,10 +44,10 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
 /// Use this when you only need task metadata (status, type, title, etc.)
 /// and don't want to pay the memory cost of large artifact payloads.
 fn row_to_task_light(row: &rusqlite::Row) -> rusqlite::Result<Task> {
-    let depends_on_str: String = row.get(10)?;
-    let run_attempts: i64 = row.get(12)?;
-    let run_last_error: Option<String> = row.get(13)?;
-    let run_provider: Option<String> = row.get(14)?;
+    let depends_on_str: String = row.get(12)?;
+    let run_attempts: i64 = row.get(14)?;
+    let run_last_error: Option<String> = row.get(15)?;
+    let run_provider: Option<String> = row.get(16)?;
 
     let depends_on: Vec<String> = serde_json::from_str(&depends_on_str).unwrap_or_default();
 
@@ -55,11 +57,13 @@ fn row_to_task_light(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         phase: row.get(2)?,
         status: row.get(3)?,
         priority: row.get(4)?,
-        execution_mode: row.get(5)?,
-        agent_policy: row.get(6)?,
-        title: row.get(7)?,
-        description: row.get(8)?,
-        project_id: row.get(9)?,
+        run_policy: row.get(5)?,
+        review_surface: row.get(6)?,
+        follow_up_policy: row.get(7)?,
+        agent_policy: row.get(8)?,
+        title: row.get(9)?,
+        description: row.get(10)?,
+        project_id: row.get(11)?,
         depends_on,
         artifacts: vec![], // Skip — saves memory on large artifact columns
         run: crate::models::task::TaskRun {
@@ -68,13 +72,13 @@ fn row_to_task_light(row: &rusqlite::Row) -> rusqlite::Result<Task> {
             provider: run_provider,
             ..Default::default()
         },
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
     })
 }
 
 const SELECT_COLS: &str = "
-    id, type, phase, status, priority, execution_mode, agent_policy,
+    id, type, phase, status, priority, run_policy, review_surface, follow_up_policy, agent_policy,
     title, description, project_id, depends_on, artifacts,
     run_attempts, run_last_error, run_provider, created_at, updated_at";
 
@@ -226,17 +230,19 @@ pub fn create_task(conn: &Connection, task: &Task) -> Result<Task> {
     let artifacts = serde_json::to_string(&task.artifacts)?;
     conn.execute(
         "INSERT INTO tasks (
-            id, type, phase, status, priority, execution_mode, agent_policy,
+            id, type, phase, status, priority, run_policy, review_surface, follow_up_policy, agent_policy,
             title, description, project_id, depends_on, artifacts,
             run_attempts, run_last_error, run_provider, created_at, updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
         rusqlite::params![
             task.id,
             task.task_type,
             task.phase,
             task.status,
             task.priority,
-            task.execution_mode,
+            task.run_policy,
+            task.review_surface,
+            task.follow_up_policy,
             task.agent_policy,
             task.title,
             task.description,

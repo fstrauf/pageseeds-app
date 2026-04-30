@@ -13,7 +13,7 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
 use crate::engine::workflows::StepResult;
 use crate::gsc::db::{self, UrlIndexingStatus};
-use crate::models::task::{AgentPolicy, ExecutionMode, Priority, Task};
+use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task};
 
 /// Number of days before a previously-passing URL is re-checked.
 const PASS_RECHECK_DAYS: i64 = 14;
@@ -527,12 +527,13 @@ fn spawn_fix_task(
         title: Some(title),
         description: Some(description),
         phase: Some("implementation".to_string()),
-        execution_mode: Some(ExecutionMode::Automatic),
+        run_policy: Some(TaskRunPolicy::AutoEnqueue),
         priority: priority_enum,
         agent_policy: AgentPolicy::Optional,
         idempotency_key: None, // allow re-creation when previous task is done
         artifacts: vec![],
         depends_on: vec![],
+        ..Default::default()
     };
 
     match TaskSpawner::spawn(conn, spec) {

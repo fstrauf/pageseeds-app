@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::engine::{agent, skills};
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Data structures
@@ -1276,8 +1276,10 @@ Cash secured puts are a great way to generate income.
             phase: "investigation".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Test Cannibalization Audit".to_string()),
             description: None,
             depends_on: vec![],
@@ -1404,8 +1406,10 @@ Some content here.
             phase: "investigation".to_string(),
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
-            execution_mode: crate::models::task::ExecutionMode::Automatic,
-            agent_policy: crate::models::task::AgentPolicy::None,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Test".to_string()),
             description: None,
             depends_on: vec![],

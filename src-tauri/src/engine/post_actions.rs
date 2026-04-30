@@ -276,8 +276,8 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
                         reloaded.id
                     )),
                     priority: crate::models::task::Priority::Medium,
-                    execution_mode: Some(crate::models::task::ExecutionMode::Manual),
-                    agent_policy: crate::models::task::AgentPolicy::None,
+                    run_policy: Some(crate::models::task::TaskRunPolicy::UserEnqueue),
+        agent_policy: crate::models::task::AgentPolicy::None,
                     depends_on: vec![reloaded.id.clone()],
                     artifacts: vec![],
                     idempotency_key: Some(idempotency_key),

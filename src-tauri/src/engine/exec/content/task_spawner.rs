@@ -115,7 +115,7 @@ pub(crate) fn create_content_review_apply_task(
     project_path: &str,
 ) -> Vec<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{AgentPolicy, ExecutionMode, Priority, TaskArtifact, TaskStatus};
+    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, TaskArtifact, TaskStatus};
     use std::collections::HashSet;
 
     let paths = ProjectPaths::from_path(project_path);
@@ -229,12 +229,13 @@ pub(crate) fn create_content_review_apply_task(
                 article_file
             )),
             phase: Some("implementation".to_string()),
-            execution_mode: Some(ExecutionMode::Batchable),
+            run_policy: Some(TaskRunPolicy::AutoEnqueue),
             priority,
-            agent_policy: AgentPolicy::Required,
+        agent_policy: AgentPolicy::Required,
             idempotency_key: Some(idempotency_key),
             artifacts: vec![artifact],
             depends_on: vec![],
+            ..Default::default()
         };
 
         match TaskSpawner::spawn(conn, spec) {
