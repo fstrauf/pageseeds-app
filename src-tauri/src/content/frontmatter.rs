@@ -217,8 +217,8 @@ pub fn replace_faq_block(raw_fm: &str, questions: &[(String, String)]) -> String
 
     let mut new_block = vec!["faq:".to_string()];
     for (q, a) in questions {
-        let q_escaped = q.replace('"', "\\\"");
-        let a_escaped = a.replace('"', "\\\"");
+        let q_escaped = q.replace('\\', "\\\\").replace('"', "\\\"");
+        let a_escaped = a.replace('\\', "\\\\").replace('"', "\\\"");
         new_block.push(format!("  - question: \"{}\"", q_escaped));
         new_block.push(format!("    answer: \"{}\"", a_escaped));
     }
@@ -314,14 +314,15 @@ pub fn replace_scalar(raw_fm: &str, key: &str, new_value: &str) -> String {
             }
         }
 
-        if let Some((k, old_val)) = split_field_line(trimmed) {
+        if let Some((k, _old_val)) = split_field_line(trimmed) {
             if k == key {
-                let needs_quotes = old_val.starts_with('"') || old_val.starts_with('\'');
-                let new_val = if needs_quotes {
-                    format!("\"{}\"", new_value.replace('"', "\\\""))
-                } else {
-                    new_value.to_string()
-                };
+                // Always quote the replacement value. Preserving unquoted style is unsafe
+                // because the new value may contain YAML special characters (:, #, etc.)
+                // that break frontmatter parsing.
+                let new_val = format!(
+                    "\"{}\"",
+                    new_value.replace('\\', "\\\\").replace('"', "\\\"")
+                );
                 let leading_ws: String = line.chars().take_while(|c| c.is_whitespace()).collect();
                 *line = format!("{}{}: {}", leading_ws, key, new_val);
                 found = true;
@@ -334,7 +335,11 @@ pub fn replace_scalar(raw_fm: &str, key: &str, new_value: &str) -> String {
 
     if !found {
         let insert_idx = title_idx.map(|i| i + 1).unwrap_or(0);
-        let line = format!("{}: \"{}\"", key, new_value.replace('"', "\\\""));
+        let line = format!(
+            "{}: \"{}\"",
+            key,
+            new_value.replace('\\', "\\\\").replace('"', "\\\"")
+        );
         lines.insert(insert_idx, line);
     }
 
@@ -452,10 +457,10 @@ description: Old desc"#;
 
     #[test]
     fn replace_scalar_updates_existing_field() {
-        let raw = "title: \"Old\"\ndescription: Old desc\n";
+        let raw = "title: \"Old\"\ndescription: \"Old desc\"\n";
         let updated = replace_scalar(raw, "title", "New Title");
         assert!(updated.contains("title: \"New Title\""));
-        assert!(updated.contains("description: Old desc"));
+        assert!(updated.contains("description: \"Old desc\""));
     }
 
     #[test]
@@ -583,5 +588,67 @@ description: "Desc"
         assert!(q2_pos > q1_pos);
         assert!(updated.contains("  - question: \"Q1?\""));
         assert!(updated.contains("  - question: \"Q2?\""));
+    }
+
+    #[test]
+    fn replace_faq_block_produces_valid_yaml_for_multiline_answers() {
+        let raw = "title: \"Hello\"\n";
+        let updated = replace_faq_block(
+            raw,
+            &[(
+                "Q1?".to_string(),
+                "Line 1\nLine 2".to_string(),
+            )],
+        );
+        // The updated frontmatter must be valid YAML so has_frontmatter_faq can parse it.
+        let mdx = crate::content::cleaner::rebuild_mdx(&updated, "Body");
+        assert!(
+            crate::engine::exec::audit_health::has_frontmatter_faq(&mdx),
+            "has_frontmatter_faq should detect FAQ in:\n{}",
+            mdx
+        );
+    }
+
+    #[test]
+    fn replace_scalar_unquoted_value_with_colon_produces_valid_yaml() {
+        // If the original value is unquoted and the new value contains a colon,
+        // replace_scalar must quote the new value or the frontmatter becomes invalid YAML.
+        let raw = "title: Hello\ndescription: Old desc\n";
+        let updated = replace_scalar(
+            raw,
+            "description",
+            "Discover NZ's best coffee beans: single origin, blends, and specialty roasts.",
+        );
+        let mdx = crate::content::cleaner::rebuild_mdx(&updated, "Body");
+        // parse should succeed — if it fails, the frontmatter is broken
+        let parsed = crate::content::frontmatter::parse(
+            crate::content::frontmatter::split_mdx(&mdx).unwrap().0,
+        );
+        assert!(
+            parsed.is_ok(),
+            "Frontmatter should be valid YAML after replace_scalar with colon. Got:\n{}",
+            updated
+        );
+    }
+
+    #[test]
+    fn replace_scalar_breaking_yaml_breaks_faq_detection() {
+        // Simulate the full CTR apply pipeline: replace_scalar for title/description,
+        // then replace_faq_block for FAQ. If replace_scalar breaks YAML, has_frontmatter_faq
+        // returns false even though the FAQ block is valid.
+        let mut fm = "title: Hello\ndescription: Old desc\n".to_string();
+        fm = replace_scalar(
+            &fm,
+            "description",
+            "Discover NZ's best coffee beans: single origin, blends, and specialty roasts.",
+        );
+        fm = replace_faq_block(&fm, &[("Q1?".to_string(), "A1".to_string())]);
+        let mdx = crate::content::cleaner::rebuild_mdx(&fm, "Body");
+        assert!(
+            crate::engine::exec::audit_health::has_frontmatter_faq(&mdx),
+            "has_frontmatter_faq should detect FAQ after replace_scalar + replace_faq_block.\nFrontmatter:\n{}\nFull MDX:\n{}",
+            fm,
+            mdx
+        );
     }
 }
