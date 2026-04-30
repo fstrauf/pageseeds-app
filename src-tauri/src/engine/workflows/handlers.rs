@@ -232,10 +232,7 @@ impl WorkflowHandler for ImplementationHandler {
             ],
             "publish_content" => {
                 vec![
-                    WorkflowStep::new("publish_content_run", StepKind::Deterministic).with_param(
-                        step_params::CMD,
-                        "pageseeds content validate --workspace-dir {automation_dir}",
-                    ),
+                    WorkflowStep::new("publish_content_validate", StepKind::FormatValidation),
                 ]
             }
             "fix_content_article" => vec![

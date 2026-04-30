@@ -17,9 +17,68 @@ use commands::{AppState, GscState, SeoState};
 use std::sync::Mutex;
 use tauri::Manager;
 
+/// CLI entry point for commands that should run without starting the Tauri GUI.
+///
+/// Currently supports:
+///   - `pageseeds content validate [--workspace-dir <dir>]`
+pub fn run_cli(args: Vec<String>) -> Result<(), String> {
+    if args.len() < 2 {
+        return Err("No command provided".to_string());
+    }
+
+    match args[1].as_str() {
+        "content" => match args.get(2).map(|s| s.as_str()) {
+            Some("validate") => {
+                let repo_root = std::env::current_dir()
+                    .map_err(|e| format!("Failed to get current directory: {}", e))?;
+
+                let automation_dir =
+                    if let Some(pos) = args.iter().position(|a| a == "--workspace-dir") {
+                        args.get(pos + 1)
+                            .map(std::path::PathBuf::from)
+                            .ok_or_else(|| "--workspace-dir requires a value".to_string())?
+                    } else {
+                        repo_root.join(".github").join("automation")
+                    };
+
+                let schema = crate::engine::setup_check::load_workspace_config(&automation_dir)
+                    .and_then(|cfg| cfg.frontmatter_schema);
+
+                let content_dir =
+                    crate::content::ops::resolve_content_dir(&automation_dir, &repo_root)
+                        .map_err(|e| format!("Failed to resolve content directory: {}", e))?;
+
+                let result = crate::content::validator::validate_project(
+                    &repo_root,
+                    &content_dir,
+                    schema.as_ref(),
+                )
+                .map_err(|e| format!("Validation failed: {}", e))?;
+
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+                Ok(())
+            }
+            Some(other) => Err(format!(
+                "Unknown content subcommand: {}. Use 'content validate'.",
+                other
+            )),
+            None => Err("No content subcommand provided. Use 'content validate'.".to_string()),
+        },
+        other => Err(format!(
+            "Unknown command: {}. PageSeeds is a GUI application. Run without arguments to start the desktop app.",
+            other
+        )),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())

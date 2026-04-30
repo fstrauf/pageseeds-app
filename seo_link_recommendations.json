@@ -1,0 +1,165 @@
+{
+  "generated_at": "2026-04-29T23:35:12Z",
+  "links_to_add": [
+    {
+      "source_article_id": 261,
+      "source_file": "261_hub_coffee.mdx",
+      "target_article_id": 243,
+      "target_title": "[Primary Keyword] - [Benefit/Outcome] | BrewedLate\"  # 50-60 chars",
+      "target_slug": "TEMPLATE_AI_SEO",
+      "reason": "The hub page should reference the SEO content template as a resource for writers creating new articles."
+    },
+    {
+      "source_article_id": 265,
+      "source_file": "265_hub_coffee_beans.mdx",
+      "target_article_id": 253,
+      "target_title": "What Is Coffee Made Of? Bean Composition Guide",
+      "target_slug": "what_is_coffee_beans_made_of",
+      "reason": "Hub page on coffee beans should link to the foundational article explaining bean composition."
+    },
+    {
+      "source_article_id": 265,
+      "source_file": "265_hub_coffee_beans.mdx",
+      "target_article_id": 246,
+      "target_title": "Coffee Roast Analyzer: How to Evaluate and Perfect Your Roasts",
+      "target_slug": "coffee_roast_analyzer_guide",
+      "reason": "Coffee bean selection hub should connect to the roast analyzer for readers evaluating bean quality."
+    },
+    {
+      "source_article_id": 261,
+      "source_file": "261_hub_coffee.mdx",
+      "target_article_id": 252,
+      "target_title": "Coffee Deals This Week: How to Find the Best Savings on Beans & Gear",
+      "target_slug": "coffee_deals_this_week",
+      "reason": "Main coffee hub should feature the weekly deals article to help readers find current savings."
+    },
+    {
+      "source_article_id": 268,
+      "source_file": "268_hub_coffee_subscriptions.mdx",
+      "target_article_id": 263,
+      "target_title": "Coffee Subscriptions Australia & NZ: Complete Guide",
+      "target_slug": "hub_coffee_subscriptions",
+      "reason": "Subscription hub should link to the dedicated hub page for readers wanting a deeper dive into subscriptions."
+    },
+    {
+      "source_article_id": 266,
+      "source_file": "266_hub_coffee_brewing.mdx",
+      "target_article_id": 264,
+      "target_title": "Coffee Brewing: The Complete Guide to Every Method",
+      "target_slug": "hub_coffee_brewing",
+      "reason": "Brewing hub should link to the alternate brewing guide hub for comprehensive method coverage."
+    },
+    {
+      "source_article_id": 269,
+      "source_file": "269_hub_coffee_brewing.mdx",
+      "target_article_id": 264,
+      "target_title": "Coffee Brewing: The Complete Guide to Every Method",
+      "target_slug": "hub_coffee_brewing",
+      "reason": "Secondary brewing hub should reference the primary brewing hub to consolidate authority."
+    },
+    {
+      "source_article_id": 96,
+      "source_file": "96_coffee_subscription_australia_best_services_price_comparison_2026.mdx",
+      "target_article_id": 263,
+      "target_title": "Coffee Subscriptions Australia & NZ: Complete Guide",
+      "target_slug": "hub_coffee_subscriptions",
+      "reason": "Subscription comparison article should link up to the parent subscription hub for broader context."
+    },
+    {
+      "source_article_id": 49,
+      "source_file": "49_trending_specialty_coffee_2025.mdx",
+      "target_article_id": 261,
+      "target_title": "Coffee: The Complete Guide",
+      "target_slug": "hub_coffee",
+      "reason": "Trending specialty coffee article should link up to the main coffee hub for readers wanting general coffee knowledge."
+    },
+    {
+      "source_article_id": 51,
+      "source_file": "51_coffee_roast_date_guide.mdx",
+      "target_article_id": 261,
+      "target_title": "Coffee: The Complete Guide",
+      "target_slug": "hub_coffee",
+      "reason": "Roast date guide should link up to the main coffee hub as a foundational reference."
+    },
+    {
+      "source_article_id": 61,
+      "source_file": "61_how_decaf_coffee_is_made.mdx",
+      "target_article_id": 261,
+      "target_title": "Coffee: The Complete Guide",
+      "target_slug": "hub_coffee",
+      "reason": "Decaf process article should link up to the main coffee hub for broader coffee context."
+    },
+    {
+      "source_article_id": 70,
+      "source_file": "70_best_espresso_machine_australia.mdx",
+      "target_article_id": 267,
+      "target_title": "Coffee Equipment: Grinders, Makers & Brewing Gear",
+      "target_slug": "hub_coffee_equipment",
+      "reason": "Espresso machine review should link up to the equipment hub for readers exploring other gear."
+    },
+    {
+      "source_article_id": 109,
+      "source_file": "109_best_reusable_coffee_pods_australia_2026_complete_buying_guide.mdx",
+      "target_article_id": 267,
+      "target_title": "Coffee Equipment: Grinders, Makers & Brewing Gear",
+      "target_slug": "hub_coffee_equipment",
+      "reason": "Reusable pods guide should link up to the equipment hub for readers interested in other brewing accessories."
+    },
+    {
+      "source_article_id": 149,
+      "source_file": "149_camping_coffee_maker.mdx",
+      "target_article_id": 267,
+      "target_title": "Coffee Equipment: Grinders, Makers & Brewing Gear",
+      "target_slug": "hub_coffee_equipment",
+      "reason": "Camping coffee maker review should link up to the equipment hub for portable gear enthusiasts."
+    },
+    {
+      "source_article_id": 150,
+      "source_file": "150_portable_coffee_maker.mdx",
+      "target_article_id": 267,
+      "target_title": "Coffee Equipment: Grinders, Makers & Brewing Gear",
+      "target_slug": "hub_coffee_equipment",
+      "reason": "Portable coffee maker guide should link up to the equipment hub for readers exploring travel brewing options."
+    },
+    {
+      "source_article_id": 151,
+      "source_file": "151_how_to_use_moka_pot.mdx",
+      "target_article_id": 266,
+      "target_title": "Coffee Brewing: The Complete Guide to Every Method",
+      "target_slug": "hub_coffee_brewing",
+      "reason": "Moka pot tutorial should link up to the brewing methods hub for readers wanting to explore other techniques."
+    },
+    {
+      "source_article_id": 153,
+      "source_file": "153_coffee_gift_sets_australia.mdx",
+      "target_article_id": 261,
+      "target_title": "Coffee: The Complete Guide",
+      "target_slug": "hub_coffee",
+      "reason": "Coffee gift sets article should link up to the main coffee hub for readers new to coffee gifting."
+    },
+    {
+      "source_article_id": 203,
+      "source_file": "2025-10-06-learnedlate-coffee-brand-and-platform-overview.mdx",
+      "target_article_id": 261,
+      "target_title": "Coffee: The Complete Guide",
+      "target_slug": "hub_coffee",
+      "reason": "Brand overview should link up to the main coffee hub for readers seeking broader coffee education."
+    },
+    {
+      "source_article_id": 209,
+      "source_file": "best_coffee_deals_september_2025.mdx",
+      "target_article_id": 252,
+      "target_title": "Coffee Deals This Week: How to Find the Best Savings on Beans & Gear",
+      "target_slug": "coffee_deals_this_week",
+      "reason": "Seasonal deals article should link to the weekly deals guide for readers wanting ongoing savings updates."
+    },
+    {
+      "source_article_id": 241,
+      "source_file": "242_pour_over_coffee_cafes_auckland.mdx",
+      "target_article_id": 266,
+      "target_title": "Coffee Brewing: The Complete Guide to Every Method",
+      "target_slug": "hub_coffee_brewing",
+      "reason": "Pour-over cafes article should link up to the brewing hub for readers wanting to brew pour-over at home."
+    }
+  ]
+}

@@ -121,7 +121,7 @@ pub async fn gsc_fetch_analytics(
     end_date: String,
     limit: Option<u32>,
 ) -> Result<Vec<PageMetrics>, String> {
-    let token = gsc_token(&gsc_state)?;
+    let token = gsc_token(&gsc_state).await?;
     crate::gsc::analytics::fetch_page_rows(
         &token,
         &site_url,
@@ -142,7 +142,7 @@ pub async fn gsc_fetch_queries_for_page(
     end_date: String,
     limit: Option<u32>,
 ) -> Result<Vec<QueryMetrics>, String> {
-    let token = gsc_token(&gsc_state)?;
+    let token = gsc_token(&gsc_state).await?;
     crate::gsc::analytics::fetch_queries_for_page(
         &token,
         &site_url,
@@ -165,7 +165,7 @@ pub async fn gsc_compute_movers(
     prev_end: String,
     limit: Option<u32>,
 ) -> Result<Vec<MoverMetrics>, String> {
-    let token = gsc_token(&gsc_state)?;
+    let token = gsc_token(&gsc_state).await?;
     crate::gsc::analytics::compute_movers(
         &token,
         &site_url,
@@ -185,7 +185,7 @@ pub async fn gsc_inspect_urls(
     site_url: String,
     urls: Vec<String>,
 ) -> Result<Vec<InspectionRecord>, String> {
-    let token = gsc_token(&gsc_state)?;
+    let token = gsc_token(&gsc_state).await?;
     crate::gsc::indexing::inspect_batch(&token, &site_url, urls)
         .await
         .map_err(|e| e.to_string())
@@ -256,13 +256,35 @@ pub async fn resolve_gsc_token(
     Ok(None)
 }
 
-pub(super) fn gsc_token(gsc_state: &State<'_, GscState>) -> Result<String, String> {
-    let guard = gsc_state.token.lock().map_err(|e| e.to_string())?;
-    match guard.as_ref() {
-        Some(t) if !t.is_expired() => Ok(t.access_token.clone()),
-        Some(_) => Err("GSC token has expired. Please re-authenticate.".to_string()),
-        None => {
-            Err("Not authenticated. Call gsc_authenticate or gsc_oauth_start first.".to_string())
+pub(super) async fn gsc_token(gsc_state: &State<'_, GscState>) -> Result<String, String> {
+    // 1. Check cache
+    let cached = {
+        let guard = gsc_state.token.lock().map_err(|e| e.to_string())?;
+        guard
+            .as_ref()
+            .filter(|t| !t.is_expired())
+            .map(|t| t.access_token.clone())
+    };
+    if let Some(token) = cached {
+        return Ok(token);
+    }
+
+    // 2. Try service-account fallback
+    let resolver = EnvResolver::new("");
+    if let Some(sa_path) = resolver
+        .resolve("GSC_SERVICE_ACCOUNT_PATH")
+        .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS"))
+        .map(|(v, _)| v)
+    {
+        if let Ok(token_state) = crate::gsc::auth::get_service_account_token(&sa_path).await {
+            let token = token_state.access_token.clone();
+            if let Ok(mut guard) = gsc_state.token.lock() {
+                *guard = Some(token_state);
+            }
+            return Ok(token);
         }
     }
+
+    // 3. Fail
+    Err("GSC token has expired and no service account is configured. Please re-authenticate.".to_string())
 }

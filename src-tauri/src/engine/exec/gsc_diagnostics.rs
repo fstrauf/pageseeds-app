@@ -29,7 +29,7 @@ const PASS_RECHECK_DAYS: i64 = 14;
 pub(crate) fn exec_indexing_diagnostics(
     task: &Task,
     project_path: &str,
-    gsc_token: Option<&str>,
+    _gsc_token: Option<&str>,
     conn: &Connection,
 ) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
@@ -92,7 +92,6 @@ pub(crate) fn exec_indexing_diagnostics(
     };
 
     // 3. Fetch sitemap + inspect URLs (async I/O in a blocking thread)
-    let gsc_token_owned = gsc_token.map(|t| t.to_string());
     let sa_path_owned = sa_path.clone();
     let sitemap_url_owned = sitemap_url.clone();
     let site_url_owned = site_url.clone();
@@ -197,13 +196,10 @@ pub(crate) fn exec_indexing_diagnostics(
     let inspect_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
-            let token = if let Some(token) = gsc_token_owned {
-                token
-            } else {
-                crate::gsc::auth::get_service_account_token(&sa_path_owned)
-                    .await
-                    .map(|t| t.access_token)?
-            };
+            // Always mint fresh from service account when available
+            let token = crate::gsc::auth::get_service_account_token(&sa_path_owned)
+                .await
+                .map(|t| t.access_token)?;
 
             let records =
                 crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls_to_inspect)

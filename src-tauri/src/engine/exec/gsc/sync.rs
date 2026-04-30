@@ -15,7 +15,7 @@ use crate::models::task::Task;
 pub(crate) fn exec_gsc_sync_articles(
     task: &Task,
     project_path: &str,
-    gsc_token: Option<&str>,
+    _gsc_token: Option<&str>,
 ) -> StepResult {
     let _ = task;
 
@@ -35,19 +35,14 @@ pub(crate) fn exec_gsc_sync_articles(
         },
     };
 
-    // 2. Token - Spawn thread with own runtime to avoid block_on issues
-    let gsc_token_owned = gsc_token.map(|t| t.to_string());
+    // 2. Token - Always mint fresh from service account when available
     let sa_path_owned = sa_path.clone();
     let token_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
-            if let Some(token) = gsc_token_owned {
-                Ok::<_, crate::error::Error>(token)
-            } else {
-                crate::gsc::auth::get_service_account_token(&sa_path_owned)
-                    .await
-                    .map(|t| t.access_token)
-            }
+            crate::gsc::auth::get_service_account_token(&sa_path_owned)
+                .await
+                .map(|t| t.access_token)
         })
     })
     .join();

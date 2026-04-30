@@ -508,12 +508,8 @@ fn enrich_with_query_metrics(
 }
 
 /// Resolve a GSC token for query fetching.
-/// Uses the provided token if available, otherwise falls back to service account auth.
-fn resolve_gsc_token_for_queries(project_path: &str, gsc_token: Option<&str>) -> Option<String> {
-    if let Some(t) = gsc_token {
-        return Some(t.to_string());
-    }
-
+/// Always mints fresh from service account when available, ignoring any stale passed token.
+fn resolve_gsc_token_for_queries(project_path: &str, _gsc_token: Option<&str>) -> Option<String> {
     let resolver = crate::config::env_resolver::EnvResolver::new(project_path);
     let sa_path = resolver
         .resolve("GSC_SERVICE_ACCOUNT_PATH")

@@ -155,7 +155,6 @@ pub(crate) fn exec_collect_gsc(
     };
 
     // 2-4. Credentials + fetch sitemap + URL Inspection API - All in one thread with own runtime
-    let gsc_token_owned = gsc_token.map(|t| t.to_string());
     let sa_path_owned = sa_path.clone();
     let sitemap_url_owned = sitemap_url.clone();
     let site_url_owned = site_url.clone();
@@ -163,14 +162,10 @@ pub(crate) fn exec_collect_gsc(
     let gsc_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
-            // Get token
-            let token = if let Some(token) = gsc_token_owned {
-                token
-            } else {
-                crate::gsc::auth::get_service_account_token(&sa_path_owned)
-                    .await
-                    .map(|t| t.access_token)?
-            };
+            // Get token — always mint fresh from service account
+            let token = crate::gsc::auth::get_service_account_token(&sa_path_owned)
+                .await
+                .map(|t| t.access_token)?;
 
             // Fetch sitemap URLs
             let urls = crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url_owned, 200).await?;
