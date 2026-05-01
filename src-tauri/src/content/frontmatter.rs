@@ -289,14 +289,37 @@ pub fn replace_scalar(raw_fm: &str, key: &str, new_value: &str) -> String {
     let mut lines: Vec<String> = raw_fm.lines().map(|s| s.to_string()).collect();
     let mut found = false;
     let mut title_idx = None;
+    let mut skip_block_scalar = false;
 
     for (i, line) in lines.iter_mut().enumerate() {
         let trimmed = line.trim_start();
-        if trimmed.starts_with('#') || trimmed.starts_with('-') {
-            continue;
-        }
-        if line.starts_with(' ') || line.starts_with('\t') {
-            continue;
+
+        // Skip indented / list / comment lines — but only when NOT consuming
+        // a multi-line block scalar. Block-scalar continuation lines ARE
+        // indented and must be swallowed.
+        if !skip_block_scalar {
+            if trimmed.starts_with('#') || trimmed.starts_with('-') {
+                continue;
+            }
+            if line.starts_with(' ') || line.starts_with('\t') {
+                continue;
+            }
+        } else {
+            // We are inside a block scalar. Swallow this line if it is
+            // indented, blank, or a comment. Stop when we hit a top-level key.
+            let is_top_level_key = !line.is_empty()
+                && !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && !trimmed.starts_with('#')
+                && split_field_line(trimmed).is_some();
+
+            if is_top_level_key {
+                skip_block_scalar = false;
+                // Fall through to normal processing for THIS line
+            } else {
+                *line = String::new(); // mark for removal
+                continue;
+            }
         }
 
         // Track title position for insertion fallback
@@ -314,8 +337,14 @@ pub fn replace_scalar(raw_fm: &str, key: &str, new_value: &str) -> String {
             }
         }
 
-        if let Some((k, _old_val)) = split_field_line(trimmed) {
+        if let Some((k, old_val)) = split_field_line(trimmed) {
             if k == key {
+                // Detect YAML block-scalar indicators: >, >-, >+, |, |-, |+
+                let is_block_scalar = old_val.trim().starts_with('>') || old_val.trim().starts_with('|');
+                if is_block_scalar {
+                    skip_block_scalar = true;
+                }
+
                 // Always quote the replacement value. Preserving unquoted style is unsafe
                 // because the new value may contain YAML special characters (:, #, etc.)
                 // that break frontmatter parsing.
@@ -330,7 +359,7 @@ pub fn replace_scalar(raw_fm: &str, key: &str, new_value: &str) -> String {
         }
     }
 
-    // Remove blanked-out alias lines
+    // Remove blanked-out alias lines and swallowed block-scalar lines
     lines.retain(|l| !l.is_empty());
 
     if !found {
@@ -650,5 +679,33 @@ description: "Desc"
             fm,
             mdx
         );
+    }
+
+    #[test]
+    fn replace_scalar_replaces_block_scalar_and_removes_continuation_lines() {
+        let raw = r#"title: "Test"
+description: >-
+  First line of description.
+  Second line of description.
+summary: "Keep me"
+"#;
+        let updated = replace_scalar(raw, "description", "New short desc");
+        assert!(updated.contains("description: \"New short desc\""));
+        assert!(!updated.contains("First line of description"));
+        assert!(!updated.contains("Second line of description"));
+        assert!(updated.contains("summary: \"Keep me\""));
+    }
+
+    #[test]
+    fn replace_scalar_replaces_literal_block_scalar() {
+        let raw = r#"title: "Test"
+description: |
+  Line one
+  Line two
+"#;
+        let updated = replace_scalar(raw, "description", "Single line");
+        assert!(updated.contains("description: \"Single line\""));
+        assert!(!updated.contains("Line one"));
+        assert!(!updated.contains("Line two"));
     }
 }
