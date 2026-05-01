@@ -624,6 +624,7 @@ export interface TaskStatusCounts {
   in_progress: number
   review: number
   done: number
+  failed: number
   total: number
 }
 

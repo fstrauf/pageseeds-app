@@ -60,6 +60,12 @@ pub enum StepKind {
     CanBuildContext,
     /// Agentic cannibalization strategy — merges, hubs, territories (agentic).
     CanAnalyze,
+    /// Deterministic selection of merge/hub/territory candidates from audit artifacts.
+    CanSelectCandidates,
+    /// Agentic analysis of individual candidate batches (byte-budgeted).
+    CanAnalyzeCandidates,
+    /// Deterministic merge of batch outputs into final strategy JSON.
+    CanReduceStrategy,
     /// Typed structured extraction of a CtrFixPatch from an LLM.
     CtrFixGenerate,
     /// Deterministic application of agent-generated CTR fix patch.
@@ -175,6 +181,9 @@ impl StepKind {
             Self::CtrAnalyze => "ctr_analyze",
             Self::CanBuildContext => "can_build_context",
             Self::CanAnalyze => "can_analyze",
+            Self::CanSelectCandidates => "can_select_candidates",
+            Self::CanAnalyzeCandidates => "can_analyze_candidates",
+            Self::CanReduceStrategy => "can_reduce_strategy",
             Self::CtrFixGenerate => "ctr_fix_generate",
             Self::CtrFixApply => "ctr_fix_apply",
             Self::CtrVerifyFix => "ctr_verify_fix",
@@ -274,6 +283,9 @@ impl FromStr for StepKind {
             "ctr_analyze" => Ok(Self::CtrAnalyze),
             "can_build_context" => Ok(Self::CanBuildContext),
             "can_analyze" => Ok(Self::CanAnalyze),
+            "can_select_candidates" => Ok(Self::CanSelectCandidates),
+            "can_analyze_candidates" => Ok(Self::CanAnalyzeCandidates),
+            "can_reduce_strategy" => Ok(Self::CanReduceStrategy),
             "ctr_fix_generate" => Ok(Self::CtrFixGenerate),
             "ctr_fix_apply" => Ok(Self::CtrFixApply),
             "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
@@ -384,6 +396,9 @@ mod tests {
             StepKind::CtrFixGenerate,
             StepKind::CanBuildContext,
             StepKind::CanAnalyze,
+            StepKind::CanSelectCandidates,
+            StepKind::CanAnalyzeCandidates,
+            StepKind::CanReduceStrategy,
             StepKind::CtrFixGenerate,
             StepKind::CtrFixApply,
             StepKind::CtrVerifyFix,

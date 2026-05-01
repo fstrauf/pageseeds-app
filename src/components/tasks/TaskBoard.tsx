@@ -32,7 +32,7 @@ import { ListPlus } from 'lucide-react'
 import { useErrorHandler } from '../../lib/toast-context'
 import { useQuery, useMutation } from '../../hooks/useQuery'
 
-const STATUS_TABS = ['all', 'todo', 'in_progress', 'review', 'done'] as const
+const STATUS_TABS = ['all', 'todo', 'in_progress', 'review', 'done', 'failed'] as const
 type StatusFilter = typeof STATUS_TABS[number]
 
 const STATUS_LABELS: Record<StatusFilter, string> = {
@@ -41,6 +41,7 @@ const STATUS_LABELS: Record<StatusFilter, string> = {
   in_progress: 'In Progress',
   review: 'Review',
   done: 'Done',
+  failed: 'Failed',
 }
 
 // Helper to check if a task status matches the filter
@@ -57,6 +58,7 @@ const STATUS_BADGE: Record<string, string> = {
   review: 'bg-amber-100 text-amber-700 border-transparent',
   done: 'bg-emerald-100 text-emerald-700 border-transparent',
   cancelled: 'bg-secondary text-muted-foreground border-transparent',
+  failed: 'bg-red-100 text-red-700 border-transparent',
 }
 
 const PRIORITY_DOT: Record<string, string> = {
@@ -210,7 +212,7 @@ export function TaskBoard({
   }
 
   function handleRunSelected() {
-    const toRun = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && canEnqueue(t))
+    const toRun = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review' || t.status === 'failed') && canEnqueue(t))
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)
@@ -218,7 +220,7 @@ export function TaskBoard({
   }
 
   function handleAddToQueue() {
-    const toQueue = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review') && canEnqueue(t))
+    const toQueue = tasks.filter(t => checkedIds.has(t.id) && (t.status === 'todo' || t.status === 'review' || t.status === 'failed') && canEnqueue(t))
     if (toQueue.length === 0) return
     
     queue.enqueue(
@@ -342,7 +344,7 @@ export function TaskBoard({
   }
 
   function handleRunBatch() {
-    const toRun = tasks.filter(t => (t.status === 'todo' || t.status === 'review'))
+    const toRun = tasks.filter(t => (t.status === 'todo' || t.status === 'review' || t.status === 'failed'))
     if (toRun.length === 0) return
     setCheckedIds(new Set())
     setSelectedTask(null)

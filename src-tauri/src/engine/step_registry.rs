@@ -752,6 +752,25 @@ impl StepRegistry {
             context_json
         );
 
+        register_blocking!(
+            handlers,
+            StepKind::CanSelectCandidates,
+            crate::engine::exec::cannibalization_audit::exec_can_select_candidates
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::CanAnalyzeCandidates,
+            crate::engine::exec::cannibalization_audit::exec_can_analyze_candidates,
+            agent_provider
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::CanReduceStrategy,
+            crate::engine::exec::cannibalization_audit::exec_can_reduce_strategy
+        );
+
         handlers.insert(
             StepKind::CtrFixApply,
             Box::new(|_step, ctx| {

@@ -265,13 +265,14 @@ where
             // Fallback within same response: parse content as JSON.
             if let Some(content) = choice.message.content {
                 let trimmed = content.trim();
-                if !trimmed.is_empty() {
-                    match serde_json::from_str::<T>(trimmed) {
+                let cleaned = strip_json_fences(trimmed);
+                if !cleaned.is_empty() {
+                    match serde_json::from_str::<T>(cleaned) {
                         Ok(value) => return Ok(value),
                         Err(e) => {
                             last_error = format!(
                                 "Content parse error: {} | raw: {}",
-                                e, trimmed
+                                e, cleaned
                             );
                             log::warn!("[kimi::extract_structured] {}", last_error);
                         }
@@ -330,15 +331,16 @@ where
 
         if let Some(content) = choice.message.content {
             let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                match serde_json::from_str::<T>(trimmed) {
+            let cleaned = strip_json_fences(trimmed);
+            if !cleaned.is_empty() {
+                match serde_json::from_str::<T>(cleaned) {
                     Ok(value) => return Ok(value),
                     Err(e) => {
                         last_error = format!(
                             "Content parse error (attempt {}): {} | raw: {}",
                             attempt + 1,
                             e,
-                            trimmed
+                            cleaned
                         );
                         log::warn!("[kimi::extract_structured] {}", last_error);
                         continue;
@@ -1097,6 +1099,42 @@ mod tests {
 
         assert_eq!(result.name, "json-mode-name");
         assert_eq!(result.count, 77);
+    }
+
+    #[tokio::test]
+    async fn test_extract_structured_fallback_to_content_strips_markdown_fences() {
+        let mock_server = MockServer::start().await;
+
+        // Tool request returns OK but no tool_calls — just fenced JSON content.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-fenced-content",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "```json\n{\"name\":\"fenced-content-name\",\"count\":55}\n```"
+                        },
+                        "finish_reason": "stop"
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result: TestOutput = extract_structured(
+            &format!("{}/v1", mock_server.uri()),
+            "test-model",
+            "Extract name and count.",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.name, "fenced-content-name");
+        assert_eq!(result.count, 55);
     }
 
     #[tokio::test]

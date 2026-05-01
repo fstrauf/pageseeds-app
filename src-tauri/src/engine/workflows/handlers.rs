@@ -473,27 +473,24 @@ impl WorkflowHandler for CannibalizationAuditHandler {
     fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
         vec![
             // Step 1 (deterministic): Sync latest GSC data.
-            // Non-optional: cannibalization analysis is meaningless without
-            // impression/click/position data. If this fails, the task fails loud.
             WorkflowStep::new("can_gsc_sync", StepKind::GscSyncArticles),
             // Step 2 (deterministic): Load articles from articles.json or live-site inventory.
             WorkflowStep::new("can_coverage_load", StepKind::CoverageLoadArticles),
-            // Step 3 (deterministic): Compute TF-IDF similarity matrix + format structured context.
-            // Pure math: TF-IDF vectorization on [title, h1, target_keyword, first_200_words],
-            // cosine similarity between pairs, group by shared keyword. NO judgment about what
-            // to do with the clusters.
+            // Step 3 (deterministic): Compute TF-IDF similarity matrix + write reference artifacts.
+            // Returns a compact summary; full context is written to disk for downstream steps.
             WorkflowStep::new("can_build_context", StepKind::CanBuildContext)
-                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
-            // Step 4 (agentic): Generate merge strategy + expansion plan.
-            // Cannot be deterministic: deciding which article to keep in a merge requires
-            // judgment about authority (impressions, internal links), content quality, and
-            // brand alignment. Cannot be reduced to a single metric.
-            // Input contract: structured JSON with similarity clusters + article metadata.
-            // Output contract: JSON with merge_recommendations, hub_recommendations, territory_recommendations.
-            WorkflowStep::new("can_analyze", StepKind::CanAnalyze)
-                .with_param(step_params::SKILL, "cannibalization-strategy")
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::Clear),
+            // Step 4 (deterministic): Select merge candidates from clusters.
+            // Splits giant components by target keyword, caps pages at 8 per candidate.
+            WorkflowStep::new("can_select_candidates", StepKind::CanSelectCandidates),
+            // Step 5 (agentic): Analyze individual merge candidates with byte-budgeted prompts.
+            // One agent call per candidate to stay under the Kimi bridge limit.
+            WorkflowStep::new("can_analyze_candidates", StepKind::CanAnalyzeCandidates)
+                .with_param(step_params::SKILL, "cannibalization-strategy"),
+            // Step 6 (deterministic): Merge batch outputs into final strategy JSON.
+            // Validates recommendations and includes deterministic hub/territory data.
+            WorkflowStep::new("can_reduce_strategy", StepKind::CanReduceStrategy)
                 .with_param(step_params::ARTIFACT_NAME, "cannibalization_strategy"),
-            // No normalizer needed — can_analyze extracts JSON internally.
         ]
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X, AlertTriangle } from 'lucide-react'
+import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X, AlertTriangle, RefreshCw } from 'lucide-react'
 import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
 import { canEnqueue, getReviewLabel } from '../../lib/taskCapabilities'
 import { Button } from '@/components/ui/button'
@@ -227,6 +227,15 @@ export function TaskRunner({
                     projectName: item.task.projectName,
                   }])
                 }}
+                onRetry={(taskId) => {
+                  queue.enqueue([{
+                    taskId,
+                    projectId: item.task.projectId ?? '',
+                    title: item.task.title ?? 'Untitled',
+                    taskType: item.task.type ?? '',
+                    projectName: item.task.projectName,
+                  }])
+                }}
                 onRemove={onRemove}
                 onOpenTask={onOpenTask}
               />
@@ -275,11 +284,12 @@ interface ItemRowProps {
   expanded: boolean
   onToggle: () => void
   onRunNow: (taskId: string) => void
+  onRetry?: (taskId: string) => void
   onRemove: (taskId: string) => void
   onOpenTask?: (taskId: string) => void
 }
 
-function ItemRow({ item, expanded, onToggle, onRunNow, onRemove, onOpenTask }: ItemRowProps) {
+function ItemRow({ item, expanded, onToggle, onRunNow, onRetry, onRemove, onOpenTask }: ItemRowProps) {
   const { task, status, result, error, liveSteps } = item
   const hasDetails = !!(result?.steps?.length || result?.follow_up_tasks?.length || error || (liveSteps && liveSteps.length > 0))
 
@@ -366,7 +376,21 @@ function ItemRow({ item, expanded, onToggle, onRunNow, onRemove, onOpenTask }: I
           )}
           {status === 'running' && <span className="text-blue-600 font-medium">running…</span>}
           {status === 'done'    && durationMs != null && <span>{(durationMs / 1000).toFixed(1)}s</span>}
-          {status === 'failed'  && <span className="text-red-500 font-medium">failed</span>}
+          {status === 'failed'  && (
+            <>
+              {onRetry && (
+                <Button
+                  size="xs"
+                  onClick={(e) => { e.stopPropagation(); onRetry(task.id) }}
+                  className="text-xs h-5 mr-1"
+                >
+                  <RefreshCw size={12} className="mr-1" />
+                  Retry
+                </Button>
+              )}
+              <span className="text-red-500 font-medium">failed</span>
+            </>
+          )}
           {hasDetails && (
             expanded
               ? <ChevronDown size={14} />

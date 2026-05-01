@@ -402,19 +402,26 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         );
     }
 
-    // ── 12. Build full structured cluster context for the agent ───────────────
-    let agent_context = serde_json::json!({
-        "site_summary": {
-            "total_pages": articles_json.len(),
-            "total_impressions": total_impressions,
-            "period_days": period_days,
+    // ── 12. Return compact artifact summary (full context stays on disk) ─────
+    let territory_count = territory_analysis["saturated_themes"].as_array().map(|a| a.len()).unwrap_or(0)
+        + territory_analysis["open_territories"].as_array().map(|a| a.len()).unwrap_or(0);
+
+    let summary = serde_json::json!({
+        "artifact_paths": {
+            "context": ".github/automation/cannibalization_audit_context.json",
+            "clusters": ".github/automation/cannibalization_clusters.json",
+            "hub_gaps": ".github/automation/hub_gaps.json",
+            "territory_analysis": ".github/automation/territory_analysis.json"
         },
-        "clusters": clusters_json,
-        "hub_gaps": hub_gaps,
-        "territory_analysis": territory_analysis,
-        "calculator_opportunities": {},
+        "summary": {
+            "total_articles": articles_json.len(),
+            "total_impressions": total_impressions,
+            "similarity_pairs": similarity_pairs.len(),
+            "candidate_clusters": clusters.len(),
+            "hub_gaps": hub_gaps.len(),
+            "territories": territory_count
+        }
     });
-    let agent_context_str = serde_json::to_string_pretty(&agent_context).unwrap_or_default() + "\n";
 
     StepResult {
         success: true,
@@ -425,10 +432,9 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
             keyword_groups_json.len(),
             clusters.len(),
             hub_gaps.len(),
-            territory_analysis["saturated_themes"].as_array().map(|a| a.len()).unwrap_or(0) +
-                territory_analysis["open_territories"].as_array().map(|a| a.len()).unwrap_or(0),
+            territory_count,
         ),
-        output: Some(agent_context_str),
+        output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
     }
 }
 
@@ -1036,6 +1042,19 @@ pub(crate) fn exec_can_analyze(
         + " Do not include markdown prose, summaries, tables, or explanations outside the JSON."
         + " Do not write files. Output the JSON directly in your response.";
 
+    const HARD_PROMPT_LIMIT_BYTES: usize = 20_000;
+    let prompt_bytes = prompt.len();
+    if prompt_bytes > HARD_PROMPT_LIMIT_BYTES {
+        return StepResult {
+            success: false,
+            message: format!(
+                "Prompt too large ({} bytes). Limit: {} bytes. The cannibalization context exceeded the Kimi bridge hard limit. Use the refactored candidate-batching workflow (can_select_candidates → can_analyze_candidates) instead of sending the full site context in one prompt.",
+                prompt_bytes, HARD_PROMPT_LIMIT_BYTES
+            ),
+            output: None,
+        };
+    }
+
     match agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(output) => {
             // Extract JSON if present so downstream steps receive clean structured data
@@ -1089,7 +1108,586 @@ pub(crate) fn exec_can_analyze(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 3: Create Fix Tasks
+// Step 3: Select Candidates
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Deterministic candidate selection from cannibalization cluster artifacts.
+///
+/// Reads `cannibalization_clusters.json`, scores clusters, splits giant components
+/// by target keyword, caps pages per candidate at 8, and writes
+/// `cannibalization_candidates.json`.
+pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+    let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
+
+    let clusters_doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&clusters_path, "cannibalization_clusters.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+
+    let clusters = clusters_doc["clusters"].as_array().cloned().unwrap_or_default();
+    let clusters_len = clusters.len();
+    if clusters.is_empty() {
+        return StepResult {
+            success: true,
+            message: "No clusters found — nothing to select.".to_string(),
+            output: None,
+        };
+    }
+
+    let mut candidates: Vec<serde_json::Value> = Vec::new();
+
+    for cluster in &clusters {
+        let pages = cluster["pages"].as_array().cloned().unwrap_or_default();
+        if pages.len() < 2 {
+            continue;
+        }
+
+        // Split giant clusters by target keyword
+        let mut keyword_groups: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+        for page in &pages {
+            let kw = page["target_keyword"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            keyword_groups.entry(kw).or_default().push(page.clone());
+        }
+
+        // If the whole cluster shares one keyword and is ≤8 pages, keep as one candidate.
+        // Otherwise create per-keyword candidates.
+        let groups_to_process: Vec<Vec<serde_json::Value>> =
+            if keyword_groups.len() == 1 && pages.len() <= 8 {
+                vec![pages.clone()]
+            } else {
+                let mut groups: Vec<Vec<serde_json::Value>> =
+                    keyword_groups.into_values().collect();
+                groups.sort_by(|a, b| {
+                    let ia: f64 = a
+                        .iter()
+                        .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
+                        .sum();
+                    let ib: f64 = b
+                        .iter()
+                        .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
+                        .sum();
+                    ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                groups
+            };
+
+        for group in groups_to_process {
+            if group.len() < 2 {
+                continue;
+            }
+
+            // Cap at 8 pages by impressions
+            let mut group_pages = group;
+            group_pages.sort_by(|a, b| {
+                let ia = b["impressions"].as_f64().unwrap_or(0.0);
+                let ib = a["impressions"].as_f64().unwrap_or(0.0);
+                ia.partial_cmp(&ib).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let selected_pages: Vec<serde_json::Value> = group_pages.into_iter().take(8).collect();
+
+            let total_impressions: f64 = selected_pages
+                .iter()
+                .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
+                .sum();
+
+            let theme = cluster["theme"].as_str().unwrap_or("").to_string();
+            let candidate_id = format!("{}_{}", slugify(&theme), candidates.len());
+
+            let compact_pages: Vec<serde_json::Value> = selected_pages
+                .iter()
+                .map(|p| {
+                    let excerpt = p["first_200_words"].as_str().unwrap_or("");
+                    let excerpt_words: Vec<&str> = excerpt.split_whitespace().take(60).collect();
+                    serde_json::json!({
+                        "id": p["id"],
+                        "url": p["url"],
+                        "title": p["title"],
+                        "h1": p["h1"],
+                        "target_keyword": p["target_keyword"],
+                        "impressions": p["impressions"],
+                        "clicks": p["clicks"],
+                        "avg_position": p["avg_position"],
+                        "word_count": p["word_count"],
+                        "incoming_internal_links": p["incoming_internal_links"],
+                        "outgoing_internal_links": p["outgoing_internal_links"],
+                        "published_date": p["published_date"],
+                        "excerpt": excerpt_words.join(" "),
+                    })
+                })
+                .collect();
+
+            let top_shared_queries: Vec<String> = cluster["top_shared_queries"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            candidates.push(serde_json::json!({
+                "candidate_id": candidate_id,
+                "candidate_type": "merge_candidate",
+                "theme": theme,
+                "pages": compact_pages,
+                "top_shared_queries": top_shared_queries,
+                "shared_query_count": cluster["shared_query_count"].as_i64().unwrap_or(0),
+                "total_impressions": total_impressions,
+                "page_count": compact_pages.len(),
+            }));
+        }
+    }
+
+    // Sort candidates by total impressions descending
+    candidates.sort_by(|a, b| {
+        let ia = a["total_impressions"].as_f64().unwrap_or(0.0);
+        let ib = b["total_impressions"].as_f64().unwrap_or(0.0);
+        ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let candidates_doc = serde_json::json!({
+        "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "candidate_count": candidates.len(),
+        "candidates": candidates,
+    });
+
+    let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
+    if let Err(e) = std::fs::write(
+        &candidates_path,
+        serde_json::to_string_pretty(&candidates_doc).unwrap_or_default() + "\n",
+    ) {
+        log::warn!(
+            "[cannibalization_audit] Failed to write candidates file: {}",
+            e
+        );
+    }
+
+    StepResult {
+        success: true,
+        message: format!(
+            "Selected {} merge candidates from {} clusters",
+            candidates.len(),
+            clusters_len
+        ),
+        output: Some(serde_json::to_string_pretty(&candidates_doc).unwrap_or_default()),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 4: Analyze Candidates
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Agentic analysis of individual merge candidates with byte-budgeted prompts.
+///
+/// Reads `cannibalization_candidates.json`, calls the agent once per candidate,
+/// and writes `cannibalization_batch_outputs.json`.
+pub(crate) fn exec_can_analyze_candidates(
+    _task: &Task,
+    project_path: &str,
+    agent_provider: &str,
+) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+    let repo_root = Path::new(project_path);
+
+    let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
+    let candidates_doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&candidates_path, "cannibalization_candidates.json")
+        {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+
+    let candidates = candidates_doc["candidates"].as_array().cloned().unwrap_or_default();
+    let candidates_len = candidates.len();
+    if candidates.is_empty() {
+        return StepResult {
+            success: true,
+            message: "No candidates to analyze.".to_string(),
+            output: None,
+        };
+    }
+
+    const TARGET_PROMPT_BYTES: usize = 15_000;
+    const HARD_PROMPT_BYTES: usize = 20_000;
+
+    let skill = match skills::load_skill(repo_root, "cannibalization-strategy") {
+        Some(s) => s,
+        None => {
+            return StepResult {
+                success: false,
+                message: "Skill 'cannibalization-strategy' not found".to_string(),
+                output: None,
+            };
+        }
+    };
+
+    let mut batch_outputs: Vec<serde_json::Value> = Vec::new();
+    let mut failed_candidates: Vec<String> = Vec::new();
+
+    for candidate in &candidates {
+        let candidate_id = candidate["candidate_id"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+
+        let (prompt, prompt_bytes) = build_merge_prompt(&skill.content, &candidate);
+
+        let chosen_prompt = if prompt_bytes > HARD_PROMPT_BYTES {
+            let (trimmed, trimmed_bytes) = build_merge_prompt_trimmed(&skill.content, &candidate);
+            if trimmed_bytes > HARD_PROMPT_BYTES {
+                log::warn!(
+                    "[cannibalization_audit] Candidate {} still exceeds hard limit after trimming ({} bytes). Skipping.",
+                    candidate_id,
+                    trimmed_bytes
+                );
+                failed_candidates.push(candidate_id.clone());
+                batch_outputs.push(serde_json::json!({
+                    "candidate_id": candidate_id,
+                    "success": false,
+                    "message": format!("Prompt exceeded hard limit ({} bytes)", trimmed_bytes),
+                    "merge_recommendation": null,
+                }));
+                continue;
+            }
+            log::info!(
+                "[cannibalization_audit] Candidate {} trimmed from {} to {} bytes",
+                candidate_id,
+                prompt_bytes,
+                trimmed_bytes
+            );
+            trimmed
+        } else {
+            prompt
+        };
+
+        // Additional safety: warn if we're over target but under hard
+        if chosen_prompt.len() > TARGET_PROMPT_BYTES && chosen_prompt.len() <= HARD_PROMPT_BYTES {
+            log::info!(
+                "[cannibalization_audit] Candidate {} prompt is {} bytes (over target {})",
+                candidate_id,
+                chosen_prompt.len(),
+                TARGET_PROMPT_BYTES
+            );
+        }
+
+        match agent::run_agent(agent_provider, &chosen_prompt, repo_root) {
+            Ok(output) => {
+                let rec = parse_merge_output(&output, &candidate);
+                batch_outputs.push(serde_json::json!({
+                    "candidate_id": candidate_id,
+                    "success": true,
+                    "message": "Analyzed successfully",
+                    "merge_recommendation": rec,
+                }));
+            }
+            Err(e) => {
+                log::warn!(
+                    "[cannibalization_audit] Agent error for candidate {}: {}",
+                    candidate_id,
+                    e
+                );
+                failed_candidates.push(candidate_id.clone());
+                batch_outputs.push(serde_json::json!({
+                    "candidate_id": candidate_id,
+                    "success": false,
+                    "message": format!("Agent error: {}", e),
+                    "merge_recommendation": null,
+                }));
+            }
+        }
+    }
+
+    let batch_doc = serde_json::json!({
+        "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "batch_outputs": batch_outputs,
+        "failed_candidates": failed_candidates,
+    });
+
+    let batch_path = paths.automation_dir.join("cannibalization_batch_outputs.json");
+    if let Err(e) = std::fs::write(
+        &batch_path,
+        serde_json::to_string_pretty(&batch_doc).unwrap_or_default() + "\n",
+    ) {
+        log::warn!(
+            "[cannibalization_audit] Failed to write batch outputs: {}",
+            e
+        );
+    }
+
+    let success_count = batch_outputs
+        .iter()
+        .filter(|o| o["success"].as_bool().unwrap_or(false))
+        .count();
+
+    StepResult {
+        success: failed_candidates.is_empty() || success_count > 0,
+        message: format!(
+            "Analyzed {}/{} candidates successfully. Failed: {}",
+            success_count,
+            candidates_len,
+            failed_candidates.len()
+        ),
+        output: Some(serde_json::to_string_pretty(&batch_doc).unwrap_or_default()),
+    }
+}
+
+/// Build the full merge-analysis prompt for a single candidate.
+fn build_merge_prompt(skill_content: &str, candidate: &serde_json::Value) -> (String, usize) {
+    let candidate_json = serde_json::to_string_pretty(candidate).unwrap_or_default();
+    let prompt = skill_content.to_string()
+        + "\n\n---\n\n## Merge Candidate\n\n"
+        + &candidate_json
+        + "\n\nAnalyze ONLY this candidate cluster. Decide if the pages represent true cannibalization (same search intent competing in SERPs) or just topical similarity.\n\n"
+        + "If true cannibalization: recommend a keeper URL, redirect URLs, and merge instructions.\n"
+        + "If not: return no_action with a reason.\n\n"
+        + "CRITICAL: Return ONLY a single JSON object matching the Output Contract. Do not include markdown prose outside the JSON.";
+    let bytes = prompt.len();
+    (prompt, bytes)
+}
+
+/// Build a trimmed prompt without page excerpts (second-level budget fallback).
+fn build_merge_prompt_trimmed(skill_content: &str, candidate: &serde_json::Value) -> (String, usize) {
+    let mut trimmed = candidate.clone();
+    if let Some(pages) = trimmed["pages"].as_array_mut() {
+        for page in pages {
+            if let serde_json::Value::Object(ref mut map) = page {
+                map.remove("excerpt");
+            }
+        }
+    }
+    let candidate_json = serde_json::to_string_pretty(&trimmed).unwrap_or_default();
+    let prompt = skill_content.to_string()
+        + "\n\n---\n\n## Merge Candidate (Trimmed)\n\n"
+        + &candidate_json
+        + "\n\nAnalyze ONLY this candidate cluster. Decide if the pages represent true cannibalization (same search intent competing in SERPs) or just topical similarity.\n\n"
+        + "If true cannibalization: recommend a keeper URL, redirect URLs, and merge instructions.\n"
+        + "If not: return no_action with a reason.\n\n"
+        + "CRITICAL: Return ONLY a single JSON object matching the Output Contract. Do not include markdown prose outside the JSON.";
+    let bytes = prompt.len();
+    (prompt, bytes)
+}
+
+/// Parse agent output into a validated merge recommendation JSON value.
+fn parse_merge_output(output: &str, candidate: &serde_json::Value) -> serde_json::Value {
+    let mut value = crate::engine::text::extract_json(output)
+        .unwrap_or_else(|| serde_json::Value::String(output.to_string()));
+
+    if let serde_json::Value::Object(ref mut map) = value {
+        if !map.contains_key("keep_url") && !map.contains_key("no_action") {
+            map.insert(
+                "no_action".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            map.insert(
+                "reason".to_string(),
+                serde_json::Value::String(
+                    "Model did not provide a keep_url or explicit no_action".to_string(),
+                ),
+            );
+        }
+        if !map.contains_key("confidence") {
+            map.insert(
+                "confidence".to_string(),
+                serde_json::Value::String("medium".to_string()),
+            );
+        }
+        if !map.contains_key("cluster_theme") {
+            map.insert("cluster_theme".to_string(), candidate["theme"].clone());
+        }
+    }
+
+    value
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 5: Reduce Strategy
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Deterministic reducer that merges batch outputs into the final
+/// `cannibalization_strategy.json`.
+///
+/// Validates merge recommendations and includes deterministic hub/territory data.
+pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+
+    let batch_path = paths.automation_dir.join("cannibalization_batch_outputs.json");
+    let batch_doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&batch_path, "cannibalization_batch_outputs.json")
+        {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+
+    let hub_gaps_path = paths.automation_dir.join("hub_gaps.json");
+    let hub_gaps_doc: serde_json::Value = std::fs::read_to_string(&hub_gaps_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({ "hub_gaps": [] }));
+
+    let territory_path = paths.automation_dir.join("territory_analysis.json");
+    let territory_doc: serde_json::Value = std::fs::read_to_string(&territory_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "territory_analysis": {
+                    "saturated_themes": [],
+                    "open_territories": []
+                }
+            })
+        });
+
+    let mut merge_recommendations: Vec<serde_json::Value> = Vec::new();
+    let mut risks: Vec<String> = Vec::new();
+
+    if let Some(outputs) = batch_doc["batch_outputs"].as_array() {
+        for output in outputs {
+            if !output["success"].as_bool().unwrap_or(false) {
+                if let Some(cid) = output["candidate_id"].as_str() {
+                    risks.push(format!(
+                        "Candidate {} failed: {}",
+                        cid,
+                        output["message"].as_str().unwrap_or("unknown error")
+                    ));
+                }
+                continue;
+            }
+
+            if let Some(rec) = output["merge_recommendation"].as_object() {
+                if rec.get("no_action").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    continue;
+                }
+
+                let keep_url = rec.get("keep_url").and_then(|v| v.as_str()).unwrap_or("");
+                if keep_url.is_empty() {
+                    risks.push(format!(
+                        "Missing keep_url for candidate {}",
+                        output["candidate_id"].as_str().unwrap_or("?")
+                    ));
+                    continue;
+                }
+
+                let redirect_urls: Vec<String> = rec
+                    .get("redirect_urls")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if redirect_urls.is_empty() {
+                    risks.push(format!(
+                        "No redirect_urls for candidate {} (keeper: {})",
+                        output["candidate_id"].as_str().unwrap_or("?"),
+                        keep_url
+                    ));
+                }
+
+                let mut rec = rec.clone();
+                if !rec.contains_key("confidence") {
+                    rec.insert(
+                        "confidence".to_string(),
+                        serde_json::Value::String("medium".to_string()),
+                    );
+                }
+
+                merge_recommendations.push(serde_json::Value::Object(rec));
+            }
+        }
+    }
+
+    let hub_recommendations: Vec<serde_json::Value> = hub_gaps_doc["hub_gaps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|gap| {
+            serde_json::json!({
+                "topic": gap["theme"],
+                "suggested_url": gap["suggested_url"],
+                "suggested_title": gap["suggested_title"],
+                "articles_to_link": gap["spoke_pages"].as_array().map(|arr| {
+                    arr.iter().filter_map(|p| p["id"].as_i64()).collect::<Vec<i64>>()
+                }).unwrap_or_default(),
+                "outline_suggestion": "",
+                "reason": gap["reason"],
+                "deterministic": true,
+            })
+        })
+        .collect();
+
+    let mut territory_recommendations: Vec<serde_json::Value> = Vec::new();
+    if let Some(saturated) = territory_doc["territory_analysis"]["saturated_themes"].as_array() {
+        for theme in saturated {
+            territory_recommendations.push(serde_json::json!({
+                "theme": theme["theme"],
+                "opportunity": format!(
+                    "Saturated territory: {} articles. Consider consolidation or hub creation.",
+                    theme["article_count"].as_i64().unwrap_or(0)
+                ),
+                "suggested_articles": Vec::<String>::new(),
+                "priority": "medium",
+                "deterministic": true,
+            }));
+        }
+    }
+    if let Some(open) = territory_doc["territory_analysis"]["open_territories"].as_array() {
+        for theme in open {
+            territory_recommendations.push(serde_json::json!({
+                "theme": theme["theme"],
+                "opportunity": format!(
+                    "Open territory with {} impressions. Consider new content.",
+                    theme["total_impressions"].as_f64().unwrap_or(0.0) as i64
+                ),
+                "suggested_articles": Vec::<String>::new(),
+                "priority": "high",
+                "deterministic": true,
+            }));
+        }
+    }
+
+    let strategy = serde_json::json!({
+        "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "merge_recommendations": merge_recommendations,
+        "hub_recommendations": hub_recommendations,
+        "territory_recommendations": territory_recommendations,
+        "risks": risks,
+    });
+
+    let strategy_path = paths.automation_dir.join("cannibalization_strategy.json");
+    if let Err(e) = std::fs::write(
+        &strategy_path,
+        serde_json::to_string_pretty(&strategy).unwrap_or_default() + "\n",
+    ) {
+        log::warn!(
+            "[cannibalization_audit] Failed to write strategy file: {}",
+            e
+        );
+    }
+
+    StepResult {
+        success: true,
+        message: format!(
+            "Strategy reduced: {} merge recommendations, {} hub recommendations, {} territory recommendations, {} risks",
+            merge_recommendations.len(),
+            hub_recommendations.len(),
+            territory_recommendations.len(),
+            risks.len()
+        ),
+        output: Some(serde_json::to_string_pretty(&strategy).unwrap_or_default()),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 6: Create Fix Tasks
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// No longer auto-spawns destructive fix tasks.
@@ -1295,61 +1893,38 @@ Cash secured puts are a great way to generate income.
         let output: serde_json::Value =
             serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
 
-        // Site summary
-        assert_eq!(output["site_summary"]["total_pages"].as_i64().unwrap(), 4);
+        // Compact summary shape
+        assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 4);
         assert!(
-            output["site_summary"]["total_impressions"]
+            output["summary"]["total_impressions"]
                 .as_f64()
                 .unwrap()
                 > 0.0
         );
+        assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 1);
+        assert!(output["summary"]["hub_gaps"].as_i64().unwrap() >= 1);
 
-        // Clusters
-        let clusters = output["clusters"].as_array().unwrap();
-        assert!(!clusters.is_empty(), "Should find at least one cluster");
+        // Artifact paths
+        assert!(output["artifact_paths"]["context"].as_str().unwrap().contains("cannibalization_audit_context.json"));
+        assert!(output["artifact_paths"]["clusters"].as_str().unwrap().contains("cannibalization_clusters.json"));
 
-        // The cash-secured-puts cluster should have 3 articles
-        let csp_cluster = clusters.iter().find(|c| {
-            c["theme"]
-                .as_str()
-                .unwrap_or("")
-                .contains("cash secured puts")
-        });
-        assert!(
-            csp_cluster.is_some(),
-            "Should find cash secured puts cluster"
-        );
-        let csp_cluster = csp_cluster.unwrap();
-        assert_eq!(csp_cluster["pages"].as_array().unwrap().len(), 3);
-        assert!(csp_cluster["total_impressions"].as_f64().unwrap() > 46000.0);
-
-        // Shared query overlap (falls back to target_keyword proxy in tests without DB query data)
-        assert_eq!(csp_cluster["shared_query_count"].as_i64().unwrap(), 1);
-        let top_queries = csp_cluster["top_shared_queries"].as_array().unwrap();
-        assert!(!top_queries.is_empty());
-        assert!(top_queries[0]
-            .as_str()
-            .unwrap()
-            .contains("cash secured puts"));
-
-        // Hub gaps
-        let hub_gaps = output["hub_gaps"].as_array().unwrap();
-        assert!(
-            !hub_gaps.is_empty(),
-            "Should detect hub gaps for 3+ article clusters"
-        );
-
-        // Territory analysis
-        let territory = &output["territory_analysis"];
-        assert!(territory["saturated_themes"].is_array());
-        assert!(territory["open_territories"].is_array());
-
-        // Artifacts should be written
+        // Full artifacts should still be written to disk
         let auto_dir = Path::new(&path).join(".github").join("automation");
         assert!(auto_dir.join("cannibalization_audit_context.json").exists());
         assert!(auto_dir.join("cannibalization_clusters.json").exists());
         assert!(auto_dir.join("hub_gaps.json").exists());
         assert!(auto_dir.join("territory_analysis.json").exists());
+
+        // Verify clusters artifact has the expected content
+        let clusters_content = std::fs::read_to_string(auto_dir.join("cannibalization_clusters.json")).unwrap();
+        let clusters_doc: serde_json::Value = serde_json::from_str(&clusters_content).unwrap();
+        let clusters = clusters_doc["clusters"].as_array().unwrap();
+        assert!(!clusters.is_empty());
+        let csp_cluster = clusters.iter().find(|c| {
+            c["theme"].as_str().unwrap_or("").contains("cash secured puts")
+        });
+        assert!(csp_cluster.is_some());
+        assert_eq!(csp_cluster.unwrap()["pages"].as_array().unwrap().len(), 3);
 
         cleanup(&path);
     }
@@ -1428,17 +2003,14 @@ Some content here.
 
         let output: serde_json::Value =
             serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
-        assert_eq!(output["site_summary"]["total_pages"].as_i64().unwrap(), 2);
+        assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 2);
         assert_eq!(
-            output["site_summary"]["total_impressions"]
+            output["summary"]["total_impressions"]
                 .as_f64()
                 .unwrap(),
             0.0
         );
-
-        let clusters = output["clusters"].as_array().unwrap();
-        assert!(!clusters.is_empty());
-        assert_eq!(clusters[0]["total_impressions"].as_f64().unwrap(), 0.0);
+        assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 1);
 
         cleanup(&path);
     }
@@ -1815,5 +2387,220 @@ Some content here.
 
         assert_eq!(count, 1, "Proxy should find 1 distinct target_keyword");
         assert_eq!(top[0], "cash secured puts");
+    }
+
+    #[test]
+    fn test_can_select_candidates_produces_merge_candidates() {
+        let path = test_dir();
+        setup_project(&path);
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "cannibalization_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let build_result = exec_can_build_context(&task, &path);
+        assert!(build_result.success);
+
+        let select_result = exec_can_select_candidates(&task, &path);
+        assert!(select_result.success, "select_candidates failed: {}", select_result.message);
+
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        assert!(auto_dir.join("cannibalization_candidates.json").exists());
+
+        let candidates_doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(auto_dir.join("cannibalization_candidates.json")).unwrap()).unwrap();
+        let candidates = candidates_doc["candidates"].as_array().unwrap();
+        assert!(!candidates.is_empty(), "Should produce at least one candidate");
+
+        // All candidates should be merge candidates with ≤8 pages
+        for c in candidates {
+            assert_eq!(c["candidate_type"].as_str().unwrap(), "merge_candidate");
+            assert!(c["pages"].as_array().unwrap().len() <= 8);
+            assert!(c["total_impressions"].as_f64().unwrap() >= 0.0);
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_can_reduce_strategy_merges_batch_outputs() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        // Write fake batch outputs
+        let batch_doc = serde_json::json!({
+            "batch_outputs": [
+                {
+                    "candidate_id": "test_0",
+                    "success": true,
+                    "message": "ok",
+                    "merge_recommendation": {
+                        "cluster_theme": "cash secured puts",
+                        "keep_url": "/blog/best-stocks-csp",
+                        "redirect_urls": ["/blog/csp-strategy-explained"],
+                        "merge_instructions": "Merge content",
+                        "reason": "Higher impressions",
+                        "confidence": "high"
+                    }
+                },
+                {
+                    "candidate_id": "test_1",
+                    "success": true,
+                    "message": "ok",
+                    "merge_recommendation": {
+                        "no_action": true,
+                        "reason": "Topical overlap only"
+                    }
+                },
+                {
+                    "candidate_id": "test_2",
+                    "success": false,
+                    "message": "Agent error"
+                }
+            ]
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_batch_outputs.json"),
+            serde_json::to_string_pretty(&batch_doc).unwrap(),
+        ).unwrap();
+
+        // Write minimal hub gaps and territory analysis
+        let hub_doc = serde_json::json!({
+            "hub_gaps": [
+                {
+                    "theme": "cash secured puts",
+                    "suggested_url": "/hub/cash-secured-puts",
+                    "suggested_title": "Cash Secured Puts: Complete Guide",
+                    "spoke_pages": [{"id": 1, "url": "/blog/a", "title": "A"}],
+                    "reason": "No hub exists"
+                }
+            ]
+        });
+        std::fs::write(auto_dir.join("hub_gaps.json"), serde_json::to_string_pretty(&hub_doc).unwrap()).unwrap();
+
+        let territory_doc = serde_json::json!({
+            "territory_analysis": {
+                "saturated_themes": [{"theme": "saturated", "article_count": 6, "total_impressions": 1000.0}],
+                "open_territories": [{"theme": "open", "article_count": 1, "total_impressions": 2000.0}]
+            }
+        });
+        std::fs::write(auto_dir.join("territory_analysis.json"), serde_json::to_string_pretty(&territory_doc).unwrap()).unwrap();
+
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "cannibalization_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_can_reduce_strategy(&task, &path);
+        assert!(result.success, "reduce_strategy failed: {}", result.message);
+
+        let strategy_path = auto_dir.join("cannibalization_strategy.json");
+        assert!(strategy_path.exists());
+
+        let strategy: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&strategy_path).unwrap()).unwrap();
+
+        // Should include the one valid merge recommendation (test_0)
+        let merges = strategy["merge_recommendations"].as_array().unwrap();
+        assert_eq!(merges.len(), 1);
+        assert_eq!(merges[0]["keep_url"].as_str().unwrap(), "/blog/best-stocks-csp");
+        assert_eq!(merges[0]["confidence"].as_str().unwrap(), "high");
+
+        // Should include hub from deterministic data
+        let hubs = strategy["hub_recommendations"].as_array().unwrap();
+        assert_eq!(hubs.len(), 1);
+
+        // Should include territories from deterministic data
+        let territories = strategy["territory_recommendations"].as_array().unwrap();
+        assert_eq!(territories.len(), 2);
+
+        // Should record the failed candidate as a risk
+        let risks = strategy["risks"].as_array().unwrap();
+        assert!(risks.iter().any(|r| r.as_str().unwrap().contains("test_2")));
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_merge_prompt_budget_and_trim() {
+        let skill = "# Skill\n\nSome instructions here.".to_string();
+        let candidate = serde_json::json!({
+            "candidate_id": "test",
+            "pages": [
+                {
+                    "id": 1,
+                    "title": "Page 1",
+                    "excerpt": "word ".repeat(100)
+                },
+                {
+                    "id": 2,
+                    "title": "Page 2",
+                    "excerpt": "word ".repeat(100)
+                }
+            ]
+        });
+
+        let (full_prompt, full_bytes) = build_merge_prompt(&skill, &candidate);
+        let (trimmed_prompt, trimmed_bytes) = build_merge_prompt_trimmed(&skill, &candidate);
+
+        // Trimmed prompt should be smaller because excerpts are removed
+        assert!(trimmed_bytes < full_bytes, "Trimmed prompt should be smaller: {} < {}", trimmed_bytes, full_bytes);
+        assert!(!trimmed_prompt.contains("excerpt"));
+        assert!(full_prompt.contains("excerpt"));
+    }
+
+    #[test]
+    fn test_parse_merge_output_injects_defaults() {
+        let candidate = serde_json::json!({"theme": "test-theme"});
+
+        // Case 1: Valid JSON with keep_url
+        let out1 = r#"{"keep_url": "/blog/a", "redirect_urls": ["/blog/b"], "confidence": "high"}"#;
+        let parsed1 = parse_merge_output(out1, &candidate);
+        assert_eq!(parsed1["keep_url"].as_str().unwrap(), "/blog/a");
+        assert_eq!(parsed1["confidence"].as_str().unwrap(), "high");
+        assert_eq!(parsed1["cluster_theme"].as_str().unwrap(), "test-theme");
+
+        // Case 2: Missing keep_url → no_action
+        let out2 = r#"{"some_other_field": "value"}"#;
+        let parsed2 = parse_merge_output(out2, &candidate);
+        assert!(parsed2["no_action"].as_bool().unwrap());
+        assert!(parsed2["reason"].as_str().unwrap().contains("did not provide"));
+
+        // Case 3: Missing confidence → medium
+        let out3 = r#"{"keep_url": "/blog/a", "redirect_urls": []}"#;
+        let parsed3 = parse_merge_output(out3, &candidate);
+        assert_eq!(parsed3["confidence"].as_str().unwrap(), "medium");
     }
 }

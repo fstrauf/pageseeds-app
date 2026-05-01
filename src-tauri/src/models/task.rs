@@ -14,6 +14,7 @@ pub enum TaskStatus {
     Review,
     Done,
     Cancelled,
+    Failed,
 }
 
 impl TaskStatus {
@@ -25,6 +26,7 @@ impl TaskStatus {
             TaskStatus::Review => "review",
             TaskStatus::Done => "done",
             TaskStatus::Cancelled => "cancelled",
+            TaskStatus::Failed => "failed",
         }
     }
 }
@@ -53,6 +55,7 @@ impl rusqlite::types::FromSql for TaskStatus {
             "review" => Ok(TaskStatus::Review),
             "done" => Ok(TaskStatus::Done),
             "cancelled" => Ok(TaskStatus::Cancelled),
+            "failed" => Ok(TaskStatus::Failed),
             other => Err(rusqlite::types::FromSqlError::Other(
                 format!("unknown task status: {other}").into(),
             )),

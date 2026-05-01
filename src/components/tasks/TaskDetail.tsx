@@ -36,6 +36,7 @@ const STATUS_BADGE: Record<string, string> = {
   review: 'bg-amber-100 text-amber-700 border-transparent',
   done: 'bg-emerald-100 text-emerald-700 border-transparent',
   cancelled: 'bg-secondary text-muted-foreground border-transparent',
+  failed: 'bg-red-100 text-red-700 border-transparent',
 }
 
 interface TaskDetailProps {
@@ -302,9 +303,9 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
                       <ErrorExplainer
                         error={task.run.last_error}
                         taskType={task.type}
-                        onRetry={task.status === 'todo' || task.status === 'in_progress' ? handleEnqueue : undefined}
+                        onRetry={task.status === 'todo' || task.status === 'in_progress' || task.status === 'failed' ? handleEnqueue : undefined}
                       />
-                      {task.status === 'todo' && (
+                      {(task.status === 'todo' || task.status === 'failed') && (
                         <Button
                           variant="ghost"
                           size="xs"
@@ -450,7 +451,7 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
         )}
 
         {/* Queue button for todo/batchable tasks, and re-run for stuck in_progress tasks */}
-        {(task.status === 'todo' || task.status === 'in_progress') && canEnqueue(task) && (
+        {(task.status === 'todo' || task.status === 'in_progress' || task.status === 'failed') && canEnqueue(task) && (
           <Button
             size="sm"
             className="w-full"
@@ -458,6 +459,8 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
           >
             {task.status === 'in_progress' ? (
               <><Play size={13} className="mr-1.5" />Re-run</>
+            ) : task.status === 'failed' ? (
+              <><Play size={13} className="mr-1.5" />Retry</>
             ) : (
               <><Play size={13} className="mr-1.5" />Run</>
             )}

@@ -1,6 +1,6 @@
 # Cannibalization Audit Prompt Budgeting Spec
 
-**Status:** Proposed  
+**Status:** Implemented  
 **Date:** 2026-05-01  
 **Scope:** Make `cannibalization_audit` reliable under Kimi bridge prompt limits by replacing one site-wide agent prompt with deterministic candidate preparation and byte-budgeted agent analysis.
 

@@ -173,6 +173,16 @@ fn insert_queue_items(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
 
+    // Remove stale items (failed/skipped/completed) for tasks being re-enqueued
+    // so retries get fresh pending entries instead of being silently ignored
+    // by ON CONFLICT DO NOTHING.
+    for item in &items {
+        conn.execute(
+            "DELETE FROM queue_items WHERE run_id = ?1 AND task_id = ?2 AND status IN ('failed', 'skipped', 'completed')",
+            rusqlite::params![run_id, &item.task_id],
+        )?;
+    }
+
     match mode {
         EnqueueMode::Append => {
             let mut position = max_position(conn, run_id)?;
@@ -674,8 +684,8 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
             Ok(Err(e)) => {
                 update_item_status(&conn, &run.id, &item.task_id, QueueItemStatus::Failed, Some(&e), None)
                     .ok();
-                // Ensure the underlying task is reset to todo so it can be retried.
-                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Todo).ok();
+                // Ensure the underlying task is marked as failed so it can be retried.
+                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Failed).ok();
                 emit_failed(&app_handle, &item, &e);
 
                 if run.pause_on_error {
@@ -690,7 +700,7 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                 update_item_status(&conn, &run.id, &item.task_id, QueueItemStatus::Failed, Some(&err), None)
                     .ok();
                 // Panic means the executor never got to reset task status — do it here.
-                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Todo).ok();
+                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Failed).ok();
                 emit_failed(&app_handle, &item, &err);
 
                 if run.pause_on_error {

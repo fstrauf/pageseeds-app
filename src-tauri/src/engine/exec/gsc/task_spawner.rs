@@ -85,8 +85,8 @@ fn should_skip_issue(conn: &Connection, idempotency_key: &str) -> bool {
             );
             true
         }
-        // Completed — apply 14-day cooldown so GSC has time to re-crawl
-        TaskStatus::Done | TaskStatus::Cancelled => {
+        // Completed or failed — apply 14-day cooldown so GSC has time to re-crawl
+        TaskStatus::Done | TaskStatus::Cancelled | TaskStatus::Failed => {
             let cooldown_days = 14;
             let cutoff = chrono::Utc::now() - chrono::Duration::days(cooldown_days);
             let updated = chrono::DateTime::parse_from_rfc3339(&task.updated_at)

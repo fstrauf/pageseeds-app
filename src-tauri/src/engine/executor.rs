@@ -91,7 +91,7 @@ pub async fn execute_task_with_token(
     let started_at = Utc::now().to_rfc3339();
 
     // Transition to in_progress
-    if task.status == TaskStatus::Todo || task.status == TaskStatus::Review {
+    if task.status == TaskStatus::Todo || task.status == TaskStatus::Review || task.status == TaskStatus::Failed {
         task.status = TaskStatus::InProgress;
         task.updated_at = started_at.clone();
         task.run.last_error = None;
@@ -432,7 +432,7 @@ async fn run_step(
 }
 
 fn _fail_task(conn: &Connection, task: &mut Task, msg: &str) {
-    let _ = task_store::update_task_status(conn, &task.id, TaskStatus::Todo);
+    let _ = task_store::update_task_status(conn, &task.id, TaskStatus::Failed);
     let _ = task_store::record_task_run(conn, &task.id, false, Some(msg), None, None, None);
 }
 
@@ -481,7 +481,7 @@ pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus
         if task_type == "fix_ctr_article" {
             TaskStatus::Review
         } else {
-            TaskStatus::Todo
+            TaskStatus::Failed
         }
     }
 }
@@ -683,20 +683,20 @@ mod tests {
         );
     }
 
-    // 3. Most failed tasks reset to "todo" so they can be retried.
+    // 3. Most failed tasks go to "failed" so they can be found and retried.
     #[test]
-    fn failed_task_resets_to_todo() {
+    fn failed_task_goes_to_failed() {
         assert_eq!(
             completed_task_status("research_keywords", false),
-            TaskStatus::Todo
+            TaskStatus::Failed
         );
         assert_eq!(
             completed_task_status("content_review", false),
-            TaskStatus::Todo
+            TaskStatus::Failed
         );
         assert_eq!(
             completed_task_status("fix_indexing", false),
-            TaskStatus::Todo
+            TaskStatus::Failed
         );
     }
 

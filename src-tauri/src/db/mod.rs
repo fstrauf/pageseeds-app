@@ -996,6 +996,19 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 33 {
+        // Migrate tasks that failed but were left in 'todo' status to the new 'failed' status.
+        // A task is considered failed if it has a last_error and at least one attempt.
+        conn.execute(
+            "UPDATE tasks SET status = 'failed', updated_at = ?1 WHERE status = 'todo' AND run_attempts > 0 AND run_last_error IS NOT NULL",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (33, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn

@@ -564,6 +564,7 @@ pub struct TaskStatusCounts {
     pub in_progress: i64,
     pub review: i64,
     pub done: i64,
+    pub failed: i64,
     pub total: i64,
 }
 
@@ -625,6 +626,7 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
                SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END),
                SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END),
                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
                COUNT(*)
              FROM tasks WHERE project_id = ?1",
         )?;
@@ -634,7 +636,8 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
                 in_progress: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
                 review: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
                 done: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                total: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                failed: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                total: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
             })
         })?
     };

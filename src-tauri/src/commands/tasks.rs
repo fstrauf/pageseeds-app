@@ -70,6 +70,7 @@ pub fn update_task_status(
         "review" => TaskStatus::Review,
         "done" => TaskStatus::Done,
         "cancelled" => TaskStatus::Cancelled,
+        "failed" => TaskStatus::Failed,
         _ => TaskStatus::Todo,
     };
     Ok(task_store::update_task_status(&db, &id, status_enum)?)
