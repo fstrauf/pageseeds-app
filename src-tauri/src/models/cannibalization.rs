@@ -118,6 +118,31 @@ pub struct MergeRecommendation {
     pub approval_status: ApprovalStatus,
 }
 
+/// Raw agent output for a single merge candidate analysis.
+/// Used by `extract_structured` in the cannibalization audit pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct CandidateAnalysisOutput {
+    #[serde(default)]
+    pub cluster_id: String,
+    #[serde(default)]
+    pub keep_url: String,
+    #[serde(default)]
+    pub redirect_urls: Vec<String>,
+    #[serde(default)]
+    pub merge_before_redirect: bool,
+    #[serde(default)]
+    pub merge_instructions: Vec<String>,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub no_action: bool,
+    #[serde(default)]
+    pub confidence: String,
+    #[serde(default)]
+    pub cluster_theme: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -128,7 +153,7 @@ pub struct HubRecommendation {
     pub intent: String,
     #[serde(default)]
     pub source_pages: Vec<i64>,
-    #[serde(default)]
+    #[serde(default, alias = "articles_to_link")]
     pub spoke_pages: Vec<i64>,
     #[serde(default)]
     pub outline: Vec<String>,
@@ -251,6 +276,17 @@ pub struct StrategyReview {
 
 // ─── Frontend view model ──────────────────────────────────────────────────────
 
+/// Status of an existing fix task for a recommendation.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct RecommendationTaskStatus {
+    pub recommendation_type: String,
+    pub recommendation_id: String,
+    pub task_id: Option<String>,
+    pub task_status: Option<String>,
+}
+
 /// A strategy with per-recommendation approval state merged in.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -258,6 +294,8 @@ pub struct StrategyReview {
 pub struct StrategyWithReviews {
     pub strategy: CannibalizationStrategy,
     pub reviews: Vec<StrategyReview>,
+    #[serde(default)]
+    pub task_statuses: Vec<RecommendationTaskStatus>,
     pub strategy_id: String,
     pub project_id: String,
 }

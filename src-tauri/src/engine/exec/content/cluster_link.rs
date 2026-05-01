@@ -240,8 +240,38 @@ pub(crate) fn exec_cluster_link_strategy(
         .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
         .unwrap_or_default();
 
-    // Compact article index (id, title, slug, file) — cap at 100 to keep prompt bounded
+    // Compact article index (id, title, slug) — cap at 100 to keep prompt bounded.
+    // We intentionally omit `file` here; it adds ~35 bytes/article and is only
+    // needed by the apply step, not the agent's reasoning. A separate
+    // article_id_to_file.json mapping is written for the apply step.
     let mut index_entries: Vec<serde_json::Value> = articles
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "id": a.id,
+                "title": a.title,
+                "slug": a.url_slug,
+            })
+        })
+        .collect();
+    // Prioritize orphans and under-connected articles so they appear first
+    // in the index. The agent can only link articles it can see.
+    index_entries.sort_by(|a, b| {
+        let a_id = a["id"].as_i64().unwrap_or(0);
+        let b_id = b["id"].as_i64().unwrap_or(0);
+        let a_is_orphan = orphan_ids.contains(&a_id);
+        let b_is_orphan = orphan_ids.contains(&b_id);
+        match (a_is_orphan, b_is_orphan) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+    index_entries.truncate(100);
+    let index_json = serde_json::to_string(&index_entries).unwrap_or_default();
+
+    // Build id → file mapping for the apply step (resolves source_article_id → file).
+    let id_to_file: serde_json::Value = articles
         .iter()
         .map(|a| {
             let file_basename = std::path::Path::new(&a.file)
@@ -251,27 +281,37 @@ pub(crate) fn exec_cluster_link_strategy(
                 .to_string();
             serde_json::json!({
                 "id": a.id,
-                "title": a.title,
-                "slug": a.url_slug,
                 "file": file_basename,
             })
         })
-        .collect();
-    index_entries.truncate(100);
-    let index_json = serde_json::to_string(&index_entries).unwrap_or_default();
+        .collect::<Vec<_>>()
+        .into();
 
-    // Profiles for under-connected articles (incoming < 2) — cap at 40
+    // Profiles for under-connected articles (incoming < 2) — cap at 20.
+    // We send ONLY id, title, file, and link counts. The full incoming_ids/
+    // outgoing_ids arrays from scan_links can be huge (dozens of IDs per profile)
+    // and blow the 20KB prompt budget. The agent only needs counts to identify
+    // which articles need more links; the actual link targets come from the index.
     let empty_profiles: Vec<serde_json::Value> = Vec::new();
     let profiles_arr = scan["profiles"].as_array().unwrap_or(&empty_profiles);
-    let under_connected: Vec<&serde_json::Value> = profiles_arr
+    let compact_profiles: Vec<serde_json::Value> = profiles_arr
         .iter()
         .filter(|p| {
             let incoming = p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0);
             incoming < 2
         })
-        .take(40)
+        .take(20)
+        .map(|p| {
+            serde_json::json!({
+                "id": p["id"],
+                "title": p["title"],
+                "file": p["file"],
+                "incoming_count": p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0),
+                "outgoing_count": p["outgoing_ids"].as_array().map(|a| a.len()).unwrap_or(0),
+            })
+        })
         .collect();
-    let under_json = serde_json::to_string(&under_connected).unwrap_or_default();
+    let under_json = serde_json::to_string(&compact_profiles).unwrap_or_default();
     let orphan_list_json = serde_json::to_string(&orphan_ids).unwrap_or_default();
 
     let prompt = format!(
@@ -283,7 +323,7 @@ pub(crate) fn exec_cluster_link_strategy(
 - Articles with at least one incoming link: {with_inc}
 - Orphan article IDs (no links in or out): {orphan_list_json}
 
-## Article index (id, title, url slug, file)
+## Article index (id, title, url slug)
 
 {index_json}
 
@@ -306,7 +346,6 @@ Output schema:
   "links_to_add": [
     {{
       "source_article_id": <number — the article whose MDX file will receive the new link>,
-      "source_file": "<exact basename.mdx from the article index>",
       "target_article_id": <number>,
       "target_title": "<exact title from the article index>",
       "target_slug": "<exact slug from the article index>",
@@ -320,8 +359,39 @@ Requirements:
 - Only suggest links that make genuine topical sense.
 - Each entry adds a link IN the source article TO the target article at URL /blog/<target_slug>.
 - Use exact slugs and titles from the article index above.
+- You do NOT need to include `source_file`; the apply step resolves the article ID to the file automatically.
 "#,
     );
+
+    const PROMPT_HARD_BUDGET: usize = 20_000;
+    if prompt.len() > PROMPT_HARD_BUDGET {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "Prompt size ({} bytes) exceeds hard budget ({} bytes) for cluster_link_strategy. \
+                 The link graph is too large. Try reducing the number of articles or running \
+                 cluster_and_link in smaller batches.",
+                prompt.len(), PROMPT_HARD_BUDGET
+            ),
+            output: None,
+        };
+    }
+
+    // Detailed component-size logging so we can debug prompt bloat precisely.
+    log::info!(
+        "[cluster_link_strategy] prompt components: index={} bytes, profiles={} bytes, orphans={} bytes, template={} bytes, total={} bytes",
+        index_json.len(),
+        under_json.len(),
+        orphan_list_json.len(),
+        prompt.len() - index_json.len() - under_json.len() - orphan_list_json.len(),
+        prompt.len()
+    );
+
+    // Write article_id_to_file.json so the apply step can resolve IDs → files
+    let id_to_file_path = paths.automation_dir.join("article_id_to_file.json");
+    if let Err(e) = std::fs::write(&id_to_file_path, serde_json::to_string(&id_to_file).unwrap_or_default()) {
+        log::warn!("[cluster_link_strategy] failed to write article_id_to_file.json: {}", e);
+    }
 
     log::info!(
         "[cluster_link_strategy] running agent ({} chars prompt, {} articles, {} orphans, provider={})",
@@ -405,6 +475,24 @@ pub(crate) fn exec_cluster_link_apply(
         };
     }
 
+    // Load article_id_to_file.json (written by strategy step) to resolve IDs → files.
+    // Falls back to the legacy source_file field if the mapping is missing.
+    let id_to_file_path = paths.automation_dir.join("article_id_to_file.json");
+    let id_to_file: HashMap<i64, String> =
+        match crate::engine::exec::common::read_json::<serde_json::Value>(&id_to_file_path, "article_id_to_file.json") {
+            Ok(doc) => doc
+                .as_array()
+                .unwrap_or(&Vec::new())
+                .iter()
+                .filter_map(|entry| {
+                    let id = entry["id"].as_i64()?;
+                    let file = entry["file"].as_str()?.to_string();
+                    Some((id, file))
+                })
+                .collect(),
+            Err(_) => HashMap::new(),
+        };
+
     // Locate content directory
     let resolution = crate::content::locator::resolve(repo_root, None);
     let content_dir = match resolution.selected {
@@ -421,7 +509,12 @@ pub(crate) fn exec_cluster_link_apply(
     // Group links by source_file basename: source_file → vec[(title, slug)]
     let mut by_source: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for link in links_to_add {
-        let source_file = link["source_file"].as_str().unwrap_or("").to_string();
+        let source_file = if let Some(id) = link["source_article_id"].as_i64() {
+            id_to_file.get(&id).cloned().unwrap_or_default()
+        } else {
+            // Legacy fallback: strategy step wrote source_file directly
+            link["source_file"].as_str().unwrap_or("").to_string()
+        };
         let target_title = link["target_title"].as_str().unwrap_or("").to_string();
         let target_slug = link["target_slug"].as_str().unwrap_or("").to_string();
         if source_file.is_empty() || target_slug.is_empty() {

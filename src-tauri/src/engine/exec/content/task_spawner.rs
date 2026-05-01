@@ -231,8 +231,9 @@ pub(crate) fn create_content_review_apply_task(
             phase: Some("implementation".to_string()),
             run_policy: Some(TaskRunPolicy::AutoEnqueue),
             priority,
-        agent_policy: AgentPolicy::Required,
+            agent_policy: AgentPolicy::Required,
             idempotency_key: Some(idempotency_key),
+            dedup_policy: Some(crate::engine::spawner::DeduplicationPolicy::SkipIfActive),
             artifacts: vec![artifact],
             depends_on: vec![],
             ..Default::default()
@@ -240,26 +241,14 @@ pub(crate) fn create_content_review_apply_task(
 
         match TaskSpawner::spawn(conn, spec) {
             Ok(task) => {
-                if matches!(
-                    task.status,
-                    TaskStatus::Todo | TaskStatus::InProgress | TaskStatus::Review
-                ) {
-                    log::info!(
-                        "[create_apply_task] created {} for article '{}' ({} issues)",
-                        task.id,
-                        article_title,
-                        issue_count
-                    );
-                    created_task_ids.push(task.id);
-                    in_review_article_ids.push(article_id);
-                } else {
-                    log::info!(
-                        "[create_apply_task] existing task {} for article '{}' is {:?}; not reopening review",
-                        task.id,
-                        article_title,
-                        task.status
-                    );
-                }
+                log::info!(
+                    "[create_apply_task] created {} for article '{}' ({} issues)",
+                    task.id,
+                    article_title,
+                    issue_count
+                );
+                created_task_ids.push(task.id);
+                in_review_article_ids.push(article_id);
             }
             Err(e) => {
                 log::warn!(

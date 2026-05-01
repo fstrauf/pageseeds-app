@@ -73,7 +73,7 @@ pub(crate) fn gather_spoke_briefs(
                 PathBuf::new()
             };
             if path_to_read.exists() {
-                read_excerpt(&path_to_read, 300)
+                read_excerpt(&path_to_read, 150)
             } else {
                 String::new()
             }

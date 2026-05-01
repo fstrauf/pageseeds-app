@@ -1202,28 +1202,24 @@ mod tests {
 
     // ── Fix 1: date injection ──────────────────────────────────────────────────
 
-    // compute_next_publish_date returns yesterday when articles.json has no entries.
+    // compute_next_publish_date returns yesterday when no articles exist.
     #[test]
     fn compute_next_publish_date_no_existing_articles() {
         use crate::engine::workflows::handlers::compute_next_publish_date;
         use chrono::{Duration, Utc};
 
-        let dir = unique_temp_dir("ps_date_empty");
-        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
-        let articles_path = dir.join(".github").join("automation").join("articles.json");
-        std::fs::write(&articles_path, r#"{"nextArticleId":1,"articles":[]}"#).unwrap();
+        let conn = in_memory_db();
+        test_project_in(&conn);
 
-        let result = compute_next_publish_date(&dir.to_string_lossy()).unwrap();
+        let result = compute_next_publish_date(&conn, "proj1").unwrap();
 
         let yesterday = (Utc::now().date_naive() - Duration::days(1))
             .format("%Y-%m-%d")
             .to_string();
         assert_eq!(
             result, yesterday,
-            "empty articles.json should return yesterday"
+            "empty project should return yesterday"
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     // compute_next_publish_date skips occupied dates and returns first free past date.
@@ -1232,45 +1228,40 @@ mod tests {
         use crate::engine::workflows::handlers::compute_next_publish_date;
         use chrono::{Duration, Utc};
 
-        let dir = unique_temp_dir("ps_date_occupied");
-        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
-        let articles_path = dir.join(".github").join("automation").join("articles.json");
+        let conn = in_memory_db();
+        test_project_in(&conn);
 
         // Occupy yesterday and two days ago.
         let today = Utc::now().date_naive();
         let d1 = (today - Duration::days(1)).format("%Y-%m-%d").to_string();
         let d2 = (today - Duration::days(2)).format("%Y-%m-%d").to_string();
-        let json = format!(
-            r#"{{"nextArticleId":3,"articles":[
-                {{"id":1,"published_date":"{d1}","status":"published"}},
-                {{"id":2,"published_date":"{d2}","status":"published"}}
-            ]}}"#
-        );
-        std::fs::write(&articles_path, json).unwrap();
 
-        let result = compute_next_publish_date(&dir.to_string_lossy()).unwrap();
+        conn.execute(
+            "INSERT INTO articles (id, title, url_slug, file, published_date, status, project_id)
+             VALUES (1, 'A', 'a', 'a.mdx', ?1, 'published', 'proj1'),
+                    (2, 'B', 'b', 'b.mdx', ?2, 'published', 'proj1')",
+            rusqlite::params![d1, d2],
+        )
+        .unwrap();
+
+        let result = compute_next_publish_date(&conn, "proj1").unwrap();
 
         let expected = (today - Duration::days(3)).format("%Y-%m-%d").to_string();
         assert_eq!(
             result, expected,
             "should skip occupied yesterday/two-days-ago and return three days ago"
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
-    // compute_next_publish_date returns None when articles.json is missing.
+    // compute_next_publish_date returns None when project has no articles table entries.
     #[test]
-    fn compute_next_publish_date_missing_file_returns_none() {
+    fn compute_next_publish_date_missing_project_returns_none() {
         use crate::engine::workflows::handlers::compute_next_publish_date;
 
-        let dir = unique_temp_dir("ps_date_missing");
-        std::fs::create_dir_all(&dir).unwrap();
-        // No articles.json — function must gracefully return None, not panic.
-        let result = compute_next_publish_date(&dir.to_string_lossy());
+        let conn = in_memory_db();
+        // No project inserted — function must gracefully return None, not panic.
+        let result = compute_next_publish_date(&conn, "nonexistent");
         assert!(result.is_none());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ── Fix 2: keyword metadata parsing ───────────────────────────────────────

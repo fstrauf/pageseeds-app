@@ -2,7 +2,6 @@
 ///
 /// Covers:
 ///   - exec_can_build_context   (deterministic TF-IDF clustering + link graph + hub gaps + territory analysis)
-///   - exec_can_analyze         (agentic analysis with cannibalization-strategy skill)
 ///   - create_can_fix_tasks     (spawn follow-up fix tasks)
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -11,7 +10,7 @@ use rusqlite::Connection;
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
-use crate::engine::{agent, skills};
+use crate::engine::skills;
 use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1005,110 +1004,7 @@ fn read_article_head_and_words(project_path: &str, file_ref: &str) -> (String, S
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 2: Analyze
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Run the cannibalization strategy analysis using an LLM agent.
-///
-/// Loads the "cannibalization-strategy" skill, builds a prompt with the skill
-/// content and the provided structured cluster context, and delegates to the agent.
-pub(crate) fn exec_can_analyze(
-    _task: &Task,
-    project_path: &str,
-    agent_provider: &str,
-    context_json: &str,
-) -> StepResult {
-    let repo_root = Path::new(project_path);
-
-    let skill = match skills::load_skill(repo_root, "cannibalization-strategy") {
-        Some(s) => s,
-        None => {
-            return StepResult {
-                success: false,
-                message:
-                    "Skill 'cannibalization-strategy' not found in .github/skills/ or app defaults"
-                        .to_string(),
-                output: None,
-            };
-        }
-    };
-
-    // Use string concatenation to avoid format! panics if skill content contains { or }
-    let prompt = skill.content
-        + "\n\n---\n\n## Cannibalization Audit Context\n\n"
-        + context_json
-        + "\n\nPlease analyze the above context and provide a cannibalization resolution strategy."
-        + "\n\nCRITICAL: Return ONLY a single JSON object matching the Output Contract above."
-        + " Do not include markdown prose, summaries, tables, or explanations outside the JSON."
-        + " Do not write files. Output the JSON directly in your response.";
-
-    const HARD_PROMPT_LIMIT_BYTES: usize = 20_000;
-    let prompt_bytes = prompt.len();
-    if prompt_bytes > HARD_PROMPT_LIMIT_BYTES {
-        return StepResult {
-            success: false,
-            message: format!(
-                "Prompt too large ({} bytes). Limit: {} bytes. The cannibalization context exceeded the Kimi bridge hard limit. Use the refactored candidate-batching workflow (can_select_candidates → can_analyze_candidates) instead of sending the full site context in one prompt.",
-                prompt_bytes, HARD_PROMPT_LIMIT_BYTES
-            ),
-            output: None,
-        };
-    }
-
-    match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => {
-            // Extract JSON if present so downstream steps receive clean structured data
-            let mut value = crate::engine::text::extract_json(&output)
-                .unwrap_or_else(|| serde_json::Value::String(output));
-
-            // Inject generated_at if missing so deserialization always succeeds
-            if let serde_json::Value::Object(ref mut map) = value {
-                if !map.contains_key("generated_at") {
-                    map.insert(
-                        "generated_at".to_string(),
-                        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
-                    );
-                }
-            }
-
-            let final_output = serde_json::to_string_pretty(&value).unwrap_or_default();
-
-            // Also write to automation dir so the file fallback works
-            let paths = ProjectPaths::from_path(project_path);
-            let strategy_path = paths.automation_dir.join("cannibalization_strategy.json");
-            if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
-                log::warn!(
-                    "[cannibalization_audit] Failed to create automation dir: {}",
-                    e
-                );
-            } else if let Err(e) = std::fs::write(&strategy_path, &final_output) {
-                log::warn!(
-                    "[cannibalization_audit] Failed to write strategy file: {}",
-                    e
-                );
-            } else {
-                log::info!(
-                    "[cannibalization_audit] Wrote strategy to {:?}",
-                    strategy_path
-                );
-            }
-
-            StepResult {
-                success: true,
-                message: "Cannibalization analysis completed".to_string(),
-                output: Some(final_output),
-            }
-        }
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Agent error during cannibalization analysis: {}", e),
-            output: None,
-        },
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Step 3: Select Candidates
+// Step 2: Select Candidates
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Deterministic candidate selection from cannibalization cluster artifacts.
@@ -1136,17 +1032,65 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
         };
     }
 
-    let mut candidates: Vec<serde_json::Value> = Vec::new();
-
+    // Build candidates from clusters, but merge clusters that share the same theme.
+    // Multiple connected components can have the same theme (e.g., 11 separate
+    // 2-page clusters all about "iron condor"). Without merging, the agent analyzes
+    // each one separately and may return duplicate-looking recommendations.
+    let mut theme_groups: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     for cluster in &clusters {
         let pages = cluster["pages"].as_array().cloned().unwrap_or_default();
         if pages.len() < 2 {
             continue;
         }
+        let theme = cluster["theme"].as_str().unwrap_or("").trim().to_lowercase();
+        if theme.is_empty() {
+            continue;
+        }
+        theme_groups.entry(theme).or_default().push(cluster.clone());
+    }
 
-        // Split giant clusters by target keyword
+    let mut candidates: Vec<serde_json::Value> = Vec::new();
+
+    for (theme, group_clusters) in theme_groups {
+        // Collect all pages from all clusters with this theme
+        let mut all_pages: Vec<serde_json::Value> = Vec::new();
+        let mut top_shared_queries: Vec<String> = Vec::new();
+        let mut shared_query_count: i64 = 0;
+        for cluster in &group_clusters {
+            if let Some(pages) = cluster["pages"].as_array() {
+                all_pages.extend(pages.clone());
+            }
+            if let Some(arr) = cluster["top_shared_queries"].as_array() {
+                for q in arr {
+                    if let Some(s) = q.as_str() {
+                        if !top_shared_queries.contains(&s.to_string()) {
+                            top_shared_queries.push(s.to_string());
+                        }
+                    }
+                }
+            }
+            shared_query_count = shared_query_count.max(
+                cluster["shared_query_count"].as_i64().unwrap_or(0)
+            );
+        }
+
+        if all_pages.len() < 2 {
+            continue;
+        }
+
+        // Deduplicate pages by URL
+        {
+            let mut seen_urls = std::collections::HashSet::new();
+            all_pages.retain(|p| {
+                let url = p["url"].as_str().unwrap_or("").to_string();
+                if url.is_empty() { return false; }
+                seen_urls.insert(url)
+            });
+        }
+
+        // Split by target keyword if the merged group is large
         let mut keyword_groups: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-        for page in &pages {
+        for page in &all_pages {
             let kw = page["target_keyword"]
                 .as_str()
                 .unwrap_or("")
@@ -1155,11 +1099,9 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
             keyword_groups.entry(kw).or_default().push(page.clone());
         }
 
-        // If the whole cluster shares one keyword and is ≤8 pages, keep as one candidate.
-        // Otherwise create per-keyword candidates.
         let groups_to_process: Vec<Vec<serde_json::Value>> =
-            if keyword_groups.len() == 1 && pages.len() <= 8 {
-                vec![pages.clone()]
+            if keyword_groups.len() == 1 && all_pages.len() <= 8 {
+                vec![all_pages.clone()]
             } else {
                 let mut groups: Vec<Vec<serde_json::Value>> =
                     keyword_groups.into_values().collect();
@@ -1196,7 +1138,6 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
                 .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
                 .sum();
 
-            let theme = cluster["theme"].as_str().unwrap_or("").to_string();
             let candidate_id = format!("{}_{}", slugify(&theme), candidates.len());
 
             let compact_pages: Vec<serde_json::Value> = selected_pages
@@ -1222,22 +1163,13 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
                 })
                 .collect();
 
-            let top_shared_queries: Vec<String> = cluster["top_shared_queries"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-
             candidates.push(serde_json::json!({
                 "candidate_id": candidate_id,
                 "candidate_type": "merge_candidate",
                 "theme": theme,
                 "pages": compact_pages,
                 "top_shared_queries": top_shared_queries,
-                "shared_query_count": cluster["shared_query_count"].as_i64().unwrap_or(0),
+                "shared_query_count": shared_query_count,
                 "total_impressions": total_impressions,
                 "page_count": compact_pages.len(),
             }));
@@ -1280,10 +1212,18 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 4: Analyze Candidates
+// Step 3: Analyze Candidates
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Agentic analysis of individual merge candidates with byte-budgeted prompts.
+///
+/// Why not deterministic: each candidate is a cluster of 2–8 pages competing for the
+/// same keyword(s). Deciding which page to keep, which to redirect, and how to merge
+/// unique valuable content requires judgment about content quality, user intent,
+/// URL authority, and GSC performance. No finite rule set can correctly resolve all
+/// valid inputs because the "best" keeper depends on nuanced semantic comparison.
+/// The output is a structured `CandidateAnalysisOutput` per candidate, extracted
+/// via Rig's `extract_structured`.
 ///
 /// Reads `cannibalization_candidates.json`, calls the agent once per candidate,
 /// and writes `cannibalization_batch_outputs.json`.
@@ -1376,19 +1316,86 @@ pub(crate) fn exec_can_analyze_candidates(
             );
         }
 
-        match agent::run_agent(agent_provider, &chosen_prompt, repo_root) {
-            Ok(output) => {
-                let rec = parse_merge_output(&output, &candidate);
+        // Run the structured extractor inside a fresh runtime because this
+        // function is called from within tokio::task::spawn_blocking.
+        let extract_result = {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    log::warn!(
+                        "[cannibalization_audit] Failed to create runtime for candidate {}: {}",
+                        candidate_id,
+                        e
+                    );
+                    failed_candidates.push(candidate_id.clone());
+                    batch_outputs.push(serde_json::json!({
+                        "candidate_id": candidate_id,
+                        "success": false,
+                        "message": format!("Runtime error: {}", e),
+                        "merge_recommendation": null,
+                    }));
+                    continue;
+                }
+            };
+            rt.block_on(async {
+                crate::rig::extraction::extract_structured::<
+                    crate::models::cannibalization::CandidateAnalysisOutput,
+                >(
+                    agent_provider,
+                    &chosen_prompt,
+                    Some("You are an expert SEO strategist. Analyze the candidate and return structured JSON."),
+                )
+                .await
+            })
+        };
+
+        match extract_result {
+            Ok(mut rec) => {
+                // Defensive normalization: ensure required fields are present.
+                if rec.cluster_id.is_empty() {
+                    rec.cluster_id = candidate_id.clone();
+                }
+                if rec.cluster_theme.is_empty() {
+                    rec.cluster_theme = candidate["theme"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                }
+                if rec.confidence.is_empty() {
+                    rec.confidence = "medium".to_string();
+                }
+                if rec.keep_url.is_empty() && !rec.no_action {
+                    rec.no_action = true;
+                    rec.reason = "Model did not provide a keep_url or explicit no_action".to_string();
+                }
+                let rec_json = match serde_json::to_value(&rec) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!(
+                            "[cannibalization_audit] Failed to serialize analysis for candidate {}: {}",
+                            candidate_id,
+                            e
+                        );
+                        failed_candidates.push(candidate_id.clone());
+                        batch_outputs.push(serde_json::json!({
+                            "candidate_id": candidate_id,
+                            "success": false,
+                            "message": format!("Serialize error: {}", e),
+                            "merge_recommendation": null,
+                        }));
+                        continue;
+                    }
+                };
                 batch_outputs.push(serde_json::json!({
                     "candidate_id": candidate_id,
                     "success": true,
                     "message": "Analyzed successfully",
-                    "merge_recommendation": rec,
+                    "merge_recommendation": rec_json,
                 }));
             }
             Err(e) => {
                 log::warn!(
-                    "[cannibalization_audit] Agent error for candidate {}: {}",
+                    "[cannibalization_audit] Structured extraction failed for candidate {}: {}",
                     candidate_id,
                     e
                 );
@@ -1396,7 +1403,7 @@ pub(crate) fn exec_can_analyze_candidates(
                 batch_outputs.push(serde_json::json!({
                     "candidate_id": candidate_id,
                     "success": false,
-                    "message": format!("Agent error: {}", e),
+                    "message": format!("Extraction error: {}", e),
                     "merge_recommendation": null,
                 }));
             }
@@ -1473,40 +1480,8 @@ fn build_merge_prompt_trimmed(skill_content: &str, candidate: &serde_json::Value
     (prompt, bytes)
 }
 
-/// Parse agent output into a validated merge recommendation JSON value.
-fn parse_merge_output(output: &str, candidate: &serde_json::Value) -> serde_json::Value {
-    let mut value = crate::engine::text::extract_json(output)
-        .unwrap_or_else(|| serde_json::Value::String(output.to_string()));
-
-    if let serde_json::Value::Object(ref mut map) = value {
-        if !map.contains_key("keep_url") && !map.contains_key("no_action") {
-            map.insert(
-                "no_action".to_string(),
-                serde_json::Value::Bool(true),
-            );
-            map.insert(
-                "reason".to_string(),
-                serde_json::Value::String(
-                    "Model did not provide a keep_url or explicit no_action".to_string(),
-                ),
-            );
-        }
-        if !map.contains_key("confidence") {
-            map.insert(
-                "confidence".to_string(),
-                serde_json::Value::String("medium".to_string()),
-            );
-        }
-        if !map.contains_key("cluster_theme") {
-            map.insert("cluster_theme".to_string(), candidate["theme"].clone());
-        }
-    }
-
-    value
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 5: Reduce Strategy
+// Step 4: Reduce Strategy
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Deterministic reducer that merges batch outputs into the final
@@ -1598,10 +1573,40 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
                         serde_json::Value::String("medium".to_string()),
                     );
                 }
+                // Defensive fallback: ensure unique cluster_id from candidate_id.
+                let has_valid_cluster_id = rec
+                    .get("cluster_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if !has_valid_cluster_id {
+                    rec.insert(
+                        "cluster_id".to_string(),
+                        output["candidate_id"].clone(),
+                    );
+                }
 
                 merge_recommendations.push(serde_json::Value::Object(rec));
             }
         }
+    }
+
+    // Deduplicate merge recommendations by cluster_id. The agentic step can
+    // return the same cluster_id for multiple candidates; without dedup the
+    // frontend renders duplicate React keys and the approval/task-creation
+    // flow treats them as a single recommendation, causing UI bugs.
+    {
+        let mut seen = std::collections::HashSet::new();
+        merge_recommendations.retain(|rec| {
+            let id = rec
+                .get("cluster_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if id.is_empty() {
+                return false;
+            }
+            seen.insert(id.to_string())
+        });
     }
 
     let hub_recommendations: Vec<serde_json::Value> = hub_gaps_doc["hub_gaps"]
@@ -1614,7 +1619,7 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
                 "topic": gap["theme"],
                 "suggested_url": gap["suggested_url"],
                 "suggested_title": gap["suggested_title"],
-                "articles_to_link": gap["spoke_pages"].as_array().map(|arr| {
+                "spoke_pages": gap["spoke_pages"].as_array().map(|arr| {
                     arr.iter().filter_map(|p| p["id"].as_i64()).collect::<Vec<i64>>()
                 }).unwrap_or_default(),
                 "outline_suggestion": "",
@@ -1663,6 +1668,10 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
     });
 
     let strategy_path = paths.automation_dir.join("cannibalization_strategy.json");
+    // Delete any stale strategy file before writing the new one. This prevents
+    // old duplicate recommendations from persisting if a previous audit run
+    // produced a larger strategy and the current run produces fewer.
+    let _ = std::fs::remove_file(&strategy_path);
     if let Err(e) = std::fs::write(
         &strategy_path,
         serde_json::to_string_pretty(&strategy).unwrap_or_default() + "\n",
@@ -1687,7 +1696,7 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 6: Create Fix Tasks
+// Step 5: Create Fix Tasks
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// No longer auto-spawns destructive fix tasks.
@@ -2581,26 +2590,4 @@ Some content here.
         assert!(full_prompt.contains("excerpt"));
     }
 
-    #[test]
-    fn test_parse_merge_output_injects_defaults() {
-        let candidate = serde_json::json!({"theme": "test-theme"});
-
-        // Case 1: Valid JSON with keep_url
-        let out1 = r#"{"keep_url": "/blog/a", "redirect_urls": ["/blog/b"], "confidence": "high"}"#;
-        let parsed1 = parse_merge_output(out1, &candidate);
-        assert_eq!(parsed1["keep_url"].as_str().unwrap(), "/blog/a");
-        assert_eq!(parsed1["confidence"].as_str().unwrap(), "high");
-        assert_eq!(parsed1["cluster_theme"].as_str().unwrap(), "test-theme");
-
-        // Case 2: Missing keep_url → no_action
-        let out2 = r#"{"some_other_field": "value"}"#;
-        let parsed2 = parse_merge_output(out2, &candidate);
-        assert!(parsed2["no_action"].as_bool().unwrap());
-        assert!(parsed2["reason"].as_str().unwrap().contains("did not provide"));
-
-        // Case 3: Missing confidence → medium
-        let out3 = r#"{"keep_url": "/blog/a", "redirect_urls": []}"#;
-        let parsed3 = parse_merge_output(out3, &candidate);
-        assert_eq!(parsed3["confidence"].as_str().unwrap(), "medium");
-    }
 }

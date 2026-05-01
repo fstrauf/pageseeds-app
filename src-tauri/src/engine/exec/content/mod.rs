@@ -96,7 +96,8 @@ mod tests {
             CREATE TABLE task_idempotency_keys (
                 key TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                expires_at TEXT
             );
             CREATE TABLE task_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

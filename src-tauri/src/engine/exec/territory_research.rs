@@ -2,7 +2,7 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::skills;
 use crate::engine::workflows::StepResult;
 use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
-use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, FollowUpPolicy};
 /// Territory research execution module.
 ///
 /// Covers the 4-step territory_research pipeline:
@@ -202,6 +202,14 @@ pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> S
 // Step 3: Agentic Strategy
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Agentic: generate a TerritoryStrategy JSON from clustered article context.
+///
+/// Why not deterministic: territory strategy requires weighing trade-offs between
+/// competitor gaps, existing coverage, content opportunity, and business priority.
+/// A deterministic ruleset cannot judge which gaps are worth filling or how to
+/// prioritize recommendations — this requires semantic understanding of the domain,
+/// search intent, and content quality. The output is a structured TerritoryStrategy
+/// with typed recommendations, extracted via Rig's `extract_structured`.
 pub(crate) async fn exec_territory_strategy(
     _task: &Task,
     project_path: &str,
@@ -505,6 +513,121 @@ fn read_excerpt_from_file(file: &str) -> String {
     } else {
         cleaned
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Post-task: Spawn write_article tasks from territory strategy
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Spawn `write_article` tasks for each content recommendation in a completed
+/// territory research task.
+///
+/// Reads the territory strategy from the task artifact or from disk, then
+/// creates focused `write_article` tasks with `territory_brief` artifacts.
+/// Uses `SkipIfAnyExists` dedup to avoid duplicates.
+pub(crate) fn create_territory_write_tasks(
+    conn: &Connection,
+    parent_task: &Task,
+    project_path: &str,
+) -> Vec<String> {
+    let mut spawned_ids = Vec::new();
+
+    // 1. Try task artifact first, then fall back to disk
+    let strategy_json = parent_task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "territory_strategy")
+        .and_then(|a| a.content.clone())
+        .or_else(|| {
+            let paths = ProjectPaths::from_path(project_path);
+            let path = paths
+                .automation_dir
+                .join(format!("territory_strategy_{}.json", parent_task.id));
+            std::fs::read_to_string(&path).ok()
+        });
+
+    let strategy_json = match strategy_json {
+        Some(j) => j,
+        None => {
+            log::warn!(
+                "[territory_post_task] No territory strategy found for task {}",
+                parent_task.id
+            );
+            return spawned_ids;
+        }
+    };
+
+    let strategy: TerritoryStrategy = match serde_json::from_str(&strategy_json) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!(
+                "[territory_post_task] Failed to parse territory strategy for task {}: {}",
+                parent_task.id,
+                e
+            );
+            return spawned_ids;
+        }
+    };
+
+    for rec in &strategy.content_recommendations {
+        let idempotency_key = format!(
+            "territory_write:{}:{}:{}",
+            parent_task.project_id, parent_task.id, rec.url_slug
+        );
+
+        let brief = serde_json::json!({
+            "title": rec.title,
+            "url_slug": rec.url_slug,
+            "intent": rec.intent,
+            "rationale": rec.rationale,
+            "territory_theme": strategy.theme,
+            "priority": strategy.priority,
+        });
+
+        let artifact = TaskArtifact {
+            key: "territory_brief".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("territory_research".to_string()),
+            content: Some(brief.to_string()),
+        };
+
+        let spec = crate::engine::spawner::TaskSpec {
+            project_id: parent_task.project_id.clone(),
+            task_type: "write_article".to_string(),
+            title: Some(format!("Write territory article: {}", rec.title)),
+            description: Some(format!(
+                "Territory article for '{}'. Intent: {}. Rationale: {}",
+                strategy.theme, rec.intent, rec.rationale
+            )),
+            priority: Priority::Medium,
+            agent_policy: AgentPolicy::Required,
+            depends_on: vec![parent_task.id.clone()],
+            artifacts: vec![artifact],
+            idempotency_key: Some(idempotency_key),
+            dedup_policy: Some(crate::engine::spawner::DeduplicationPolicy::SkipIfAnyExists),
+            ..Default::default()
+        };
+
+        match crate::engine::spawner::TaskSpawner::spawn(conn, spec) {
+            Ok(task) => {
+                log::info!(
+                    "[territory_post_task] Spawned write_article {} for '{}' (territory: {})",
+                    task.id, rec.title, strategy.theme
+                );
+                spawned_ids.push(task.id);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[territory_post_task] Failed to spawn write_article for '{}': {}",
+                    rec.title,
+                    e
+                );
+            }
+        }
+    }
+
+    spawned_ids
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

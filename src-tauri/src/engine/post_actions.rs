@@ -135,6 +135,40 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
         }
     }
 
+    // ─── Date enforcement after any content-modifying step ───────────────────
+
+    const CONTENT_WRITE_STEPS: &[&str] = &[
+        "content_write_stage",
+        "content_review_apply_execute",
+        "fix_content_article_apply",
+        "fix_ctr_article_apply",
+        "sanitize_content_run",
+        "content_cleanup_fix",
+    ];
+
+    if CONTENT_WRITE_STEPS.contains(&ctx.step.name.as_str()) && ctx.result.success {
+        let project_path = std::path::Path::new(ctx.project_path);
+        match crate::content::dates::enforce_safe_dates(
+            ctx.conn,
+            &ctx.task.project_id,
+            project_path,
+        ) {
+            Ok(result) if result.articles_fixed > 0 => {
+                log::info!(
+                    "[date_enforce] Fixed {} article date(s) after {}",
+                    result.articles_fixed,
+                    ctx.step.name
+                );
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!(
+                "[date_enforce] Failed after {}: {}",
+                ctx.step.name,
+                e
+            ),
+        }
+    }
+
     override_out
 }
 
@@ -223,6 +257,19 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
             follow_up_ids.extend(
                 crate::engine::exec::cannibalization_audit::create_can_fix_tasks(
+                    ctx.conn,
+                    &reloaded,
+                    ctx.project_path,
+                ),
+            );
+        }
+    }
+
+    // Territory research → spawn write_article tasks from content recommendations
+    if ctx.task.task_type == "territory_research" {
+        if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
+            follow_up_ids.extend(
+                crate::engine::exec::territory_research::create_territory_write_tasks(
                     ctx.conn,
                     &reloaded,
                     ctx.project_path,

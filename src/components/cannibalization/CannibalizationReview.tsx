@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import {
   Check,
   X,
@@ -9,13 +9,18 @@ import {
   Calculator,
   Play,
   Loader2,
+  RotateCcw,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useQuery, useMutation } from '@/hooks/useQuery'
+import { useErrorHandler } from '@/lib/toast-context'
 import {
   getCannibalizationStrategy,
   setRecommendationApproval,
   createTasksFromApprovedRecommendations,
+  enqueueTasks,
 } from '@/lib/tauri'
 import type {
   MergeRecommendation,
@@ -23,6 +28,7 @@ import type {
   TerritoryRecommendation,
   CalculatorRecommendation,
   StrategyReview,
+  RecommendationTaskStatus,
 } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -36,6 +42,7 @@ interface Props {
 }
 
 type RecType = 'merge' | 'hub' | 'territory' | 'calculator'
+type ApprovalStatus = 'approved' | 'rejected' | 'needs_review' | 'pending'
 
 function statusBadgeClass(status: string) {
   switch (status) {
@@ -84,10 +91,21 @@ function useReviewLookup(reviews: StrategyReview[]) {
   }, [reviews])
 }
 
+function useTaskStatusLookup(taskStatuses: RecommendationTaskStatus[]) {
+  return useMemo(() => {
+    const map = new Map<string, RecommendationTaskStatus>()
+    for (const t of taskStatuses) {
+      map.set(`${t.recommendation_type}:${t.recommendation_id}`, t)
+    }
+    return map
+  }, [taskStatuses])
+}
+
 export function CannibalizationReview({ projectId }: Props) {
   const {
     data: strategyWithReviews,
     isLoading,
+    error: queryError,
     refetch,
   } = useQuery(
     `cannibalization-strategy-${projectId}`,
@@ -95,13 +113,22 @@ export function CannibalizationReview({ projectId }: Props) {
     { enabled: !!projectId },
   )
 
+  const { showError, showSuccess } = useErrorHandler()
+
+  useEffect(() => {
+    if (queryError) {
+      console.error('[cannibalization] strategy fetch failed:', queryError)
+      showError(queryError.message || 'Failed to load strategy')
+    }
+  }, [queryError, showError])
+
   const approveMutation = useMutation(
     (args: {
       strategyId: string
       projectId: string
       recommendationType: RecType
       recommendationId: string
-      status: 'approved' | 'rejected' | 'needs_review'
+      status: ApprovalStatus
     }) =>
       setRecommendationApproval({
         strategyId: args.strategyId,
@@ -112,6 +139,10 @@ export function CannibalizationReview({ projectId }: Props) {
       }),
     {
       onSuccess: () => refetch(),
+      onError: (err: Error) => {
+        console.error('[cannibalization] approve failed:', err)
+        showError(err.message)
+      },
     },
   )
 
@@ -119,12 +150,38 @@ export function CannibalizationReview({ projectId }: Props) {
     (args: { strategyId: string; projectId: string }) =>
       createTasksFromApprovedRecommendations(args.strategyId, args.projectId),
     {
-      onSuccess: () => refetch(),
+      onSuccess: async (ids: string[], variables) => {
+        creatingRef.current = false
+        refetch()
+        if (ids.length > 0) {
+          const items = ids.map(id => ({
+            task_id: id,
+            project_id: variables.projectId,
+            title: null as string | null,
+            task_type: null as string | null,
+            project_name: null as string | null,
+          }))
+          try {
+            await enqueueTasks(items, 'append')
+            showSuccess(`Created and enqueued ${ids.length} task${ids.length === 1 ? '' : 's'}`)
+          } catch (enqueueErr) {
+            console.error('[cannibalization] enqueue failed:', enqueueErr)
+            showError(`Created ${ids.length} tasks but failed to enqueue them`)
+          }
+        } else {
+          showError('No approved recommendations found to create tasks from')
+        }
+      },
+      onError: (err: Error) => {
+        creatingRef.current = false
+        console.error('[cannibalization] create tasks failed:', err)
+        showError(err.message)
+      },
     },
   )
 
   const handleApprove = useCallback(
-    (type: RecType, id: string, status: 'approved' | 'rejected' | 'needs_review') => {
+    (type: RecType, id: string, status: ApprovalStatus) => {
       if (!strategyWithReviews) return
       approveMutation.mutate({
         strategyId: strategyWithReviews.strategy_id,
@@ -137,8 +194,11 @@ export function CannibalizationReview({ projectId }: Props) {
     [approveMutation, strategyWithReviews],
   )
 
+  const creatingRef = useRef(false)
+
   const handleCreateTasks = useCallback(() => {
-    if (!strategyWithReviews) return
+    if (!strategyWithReviews || createTasksMutation.isPending || creatingRef.current) return
+    creatingRef.current = true
     createTasksMutation.mutate({
       strategyId: strategyWithReviews.strategy_id,
       projectId: strategyWithReviews.project_id,
@@ -146,16 +206,60 @@ export function CannibalizationReview({ projectId }: Props) {
   }, [createTasksMutation, strategyWithReviews])
 
   const reviewLookup = useReviewLookup(strategyWithReviews?.reviews ?? [])
+  const taskStatusLookup = useTaskStatusLookup(strategyWithReviews?.task_statuses ?? [])
 
   const approvedCount = useMemo(() => {
     return strategyWithReviews?.reviews.filter(r => r.approval_status === 'approved').length ?? 0
   }, [strategyWithReviews])
 
+  const approvedWithoutTaskCount = useMemo(() => {
+    if (!strategyWithReviews) return 0
+    return strategyWithReviews.reviews.filter(r => {
+      if (r.approval_status !== 'approved') return false
+      const status = taskStatusLookup.get(`${r.recommendation_type}:${r.recommendation_id}`)
+      // Count as "needs task" only if no task exists at all (regardless of status).
+      // Once a task has been created for a recommendation, it should not be
+      // recreated from this UI — the user manages retries from the task board.
+      return !status?.task_status
+    }).length
+  }, [strategyWithReviews, taskStatusLookup])
+
+  // Filter to hide approved recommendations that already have tasks.
+  const [hideCompleted, setHideCompleted] = useState(true)
+
+  const isCompleted = useCallback(
+    (type: RecType, id: string) => {
+      const review = reviewLookup.get(`${type}:${id}`)
+      if (review?.approval_status !== 'approved') return false
+      const status = taskStatusLookup.get(`${type}:${id}`)
+      return !!status?.task_status
+    },
+    [reviewLookup, taskStatusLookup]
+  )
+
+  // Defensive dedup: the backend reducer deduplicates by cluster_id, but stale
+  // strategy files or old audit runs may still contain duplicates. Deduplicating
+  // here prevents "click one, all ticked" UI bugs where multiple cards share
+  // the same review lookup key.
+  const strategy = useMemo(() => {
+    const rawStrategy = strategyWithReviews?.strategy
+    if (!rawStrategy) return null
+    const seen = new Set<string>()
+    return {
+      ...rawStrategy,
+      merge_recommendations: rawStrategy.merge_recommendations.filter(rec => {
+        if (seen.has(rec.cluster_id)) return false
+        seen.add(rec.cluster_id)
+        return true
+      }),
+    }
+  }, [strategyWithReviews])
+
   const totalRecs =
-    (strategyWithReviews?.strategy.merge_recommendations.length ?? 0) +
-    (strategyWithReviews?.strategy.hub_recommendations.length ?? 0) +
-    (strategyWithReviews?.strategy.territory_recommendations.length ?? 0) +
-    (strategyWithReviews?.strategy.calculator_recommendations.length ?? 0)
+    (strategy?.merge_recommendations.length ?? 0) +
+    (strategy?.hub_recommendations.length ?? 0) +
+    (strategy?.territory_recommendations.length ?? 0) +
+    (strategy?.calculator_recommendations.length ?? 0)
 
   if (isLoading) {
     return (
@@ -165,7 +269,7 @@ export function CannibalizationReview({ projectId }: Props) {
     )
   }
 
-  if (!strategyWithReviews) {
+  if (!strategyWithReviews || !strategy) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
         <AlertCircle size={32} />
@@ -175,7 +279,7 @@ export function CannibalizationReview({ projectId }: Props) {
     )
   }
 
-  const { strategy, strategy_id } = strategyWithReviews
+  const { strategy_id } = strategyWithReviews
 
   return (
     <div className="flex flex-col h-full">
@@ -187,18 +291,40 @@ export function CannibalizationReview({ projectId }: Props) {
             Strategy {strategy_id} · {approvedCount} / {totalRecs} approved
           </p>
         </div>
-        <Button
-          size="sm"
-          onClick={handleCreateTasks}
-          disabled={createTasksMutation.isPending || approvedCount === 0}
-        >
-          {createTasksMutation.isPending ? (
-            <Loader2 className="animate-spin mr-1.5" size={14} />
-          ) : (
-            <Play className="mr-1.5" size={14} />
-          )}
-          Create Tasks from Approved
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setHideCompleted(v => !v)}
+            title={hideCompleted ? 'Show completed recommendations' : 'Hide completed recommendations'}
+          >
+            {hideCompleted ? (
+              <Eye size={14} className="mr-1.5" />
+            ) : (
+              <EyeOff size={14} className="mr-1.5" />
+            )}
+            {hideCompleted ? 'Show Completed' : 'Hide Completed'}
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleCreateTasks}
+            disabled={createTasksMutation.isPending || approvedWithoutTaskCount === 0}
+            title={
+              approvedWithoutTaskCount === 0 && approvedCount > 0
+                ? 'All approved recommendations already have tasks'
+                : undefined
+            }
+          >
+            {createTasksMutation.isPending ? (
+              <Loader2 className="animate-spin mr-1.5" size={14} />
+            ) : (
+              <Play className="mr-1.5" size={14} />
+            )}
+            {approvedWithoutTaskCount === 0 && approvedCount > 0
+              ? 'All Tasks Created'
+              : `Create Tasks from Approved (${approvedWithoutTaskCount})`}
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 min-h-0">
@@ -208,7 +334,7 @@ export function CannibalizationReview({ projectId }: Props) {
             <TabsList className="mb-4">
               <TabsTrigger value="merge">
                 <GitMerge size={14} className="mr-1.5" />
-                Merges ({strategy.merge_recommendations.length})
+                Merges ({strategy?.merge_recommendations.length ?? 0})
               </TabsTrigger>
               <TabsTrigger value="hub">
                 <BookOpen size={14} className="mr-1.5" />
@@ -226,68 +352,96 @@ export function CannibalizationReview({ projectId }: Props) {
 
             <TabsContent value="merge">
               <div className="space-y-3">
-                {strategy.merge_recommendations.map(rec => (
-                  <MergeCard
-                    key={rec.cluster_id}
-                    rec={rec}
-                    review={reviewLookup.get(`merge:${rec.cluster_id}`)}
-                    onApprove={status => handleApprove('merge', rec.cluster_id, status)}
-                    isPending={approveMutation.isPending}
-                  />
-                ))}
-                {strategy.merge_recommendations.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No merge recommendations.</p>
+                {strategy.merge_recommendations
+                  .filter(rec => !hideCompleted || !isCompleted('merge', rec.cluster_id))
+                  .map((rec, i) => (
+                    <MergeCard
+                      key={`${rec.cluster_id}-${i}`}
+                      rec={rec}
+                      review={reviewLookup.get(`merge:${rec.cluster_id}`)}
+                      taskStatus={taskStatusLookup.get(`merge:${rec.cluster_id}`)}
+                      onApprove={status => handleApprove('merge', rec.cluster_id, status)}
+                      isPending={approveMutation.isPending}
+                    />
+                  ))}
+                {strategy.merge_recommendations.filter(rec => !hideCompleted || !isCompleted('merge', rec.cluster_id)).length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    {hideCompleted
+                      ? 'No pending merge recommendations. Toggle "Show Completed" to see finished ones.'
+                      : 'No merge recommendations.'}
+                  </p>
                 )}
               </div>
             </TabsContent>
 
             <TabsContent value="hub">
               <div className="space-y-3">
-                {strategy.hub_recommendations.map(rec => (
-                  <HubCard
-                    key={rec.topic}
-                    rec={rec}
-                    review={reviewLookup.get(`hub:${rec.topic}`)}
-                    onApprove={status => handleApprove('hub', rec.topic, status)}
-                    isPending={approveMutation.isPending}
-                  />
-                ))}
-                {strategy.hub_recommendations.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No hub recommendations.</p>
+                {strategy.hub_recommendations
+                  .filter(rec => !hideCompleted || !isCompleted('hub', rec.topic))
+                  .map(rec => (
+                    <HubCard
+                      key={rec.topic}
+                      rec={rec}
+                      review={reviewLookup.get(`hub:${rec.topic}`)}
+                      taskStatus={taskStatusLookup.get(`hub:${rec.topic}`)}
+                      onApprove={status => handleApprove('hub', rec.topic, status)}
+                      isPending={approveMutation.isPending}
+                    />
+                  ))}
+                {strategy.hub_recommendations.filter(rec => !hideCompleted || !isCompleted('hub', rec.topic)).length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    {hideCompleted
+                      ? 'No pending hub recommendations. Toggle "Show Completed" to see finished ones.'
+                      : 'No hub recommendations.'}
+                  </p>
                 )}
               </div>
             </TabsContent>
 
             <TabsContent value="territory">
               <div className="space-y-3">
-                {strategy.territory_recommendations.map(rec => (
-                  <TerritoryCard
-                    key={rec.theme}
-                    rec={rec}
-                    review={reviewLookup.get(`territory:${rec.theme}`)}
-                    onApprove={status => handleApprove('territory', rec.theme, status)}
-                    isPending={approveMutation.isPending}
-                  />
-                ))}
-                {strategy.territory_recommendations.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No territory recommendations.</p>
+                {strategy.territory_recommendations
+                  .filter(rec => !hideCompleted || !isCompleted('territory', rec.theme))
+                  .map(rec => (
+                    <TerritoryCard
+                      key={rec.theme}
+                      rec={rec}
+                      review={reviewLookup.get(`territory:${rec.theme}`)}
+                      taskStatus={taskStatusLookup.get(`territory:${rec.theme}`)}
+                      onApprove={status => handleApprove('territory', rec.theme, status)}
+                      isPending={approveMutation.isPending}
+                    />
+                  ))}
+                {strategy.territory_recommendations.filter(rec => !hideCompleted || !isCompleted('territory', rec.theme)).length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    {hideCompleted
+                      ? 'No pending territory recommendations. Toggle "Show Completed" to see finished ones.'
+                      : 'No territory recommendations.'}
+                  </p>
                 )}
               </div>
             </TabsContent>
 
             <TabsContent value="calculator">
               <div className="space-y-3">
-                {strategy.calculator_recommendations.map(rec => (
-                  <CalculatorCard
-                    key={rec.strategy}
-                    rec={rec}
-                    review={reviewLookup.get(`calculator:${rec.strategy}`)}
-                    onApprove={status => handleApprove('calculator', rec.strategy, status)}
-                    isPending={approveMutation.isPending}
-                  />
-                ))}
-                {strategy.calculator_recommendations.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No calculator recommendations.</p>
+                {strategy.calculator_recommendations
+                  .filter(rec => !hideCompleted || !isCompleted('calculator', rec.strategy))
+                  .map(rec => (
+                    <CalculatorCard
+                      key={rec.strategy}
+                      rec={rec}
+                      review={reviewLookup.get(`calculator:${rec.strategy}`)}
+                      taskStatus={taskStatusLookup.get(`calculator:${rec.strategy}`)}
+                      onApprove={status => handleApprove('calculator', rec.strategy, status)}
+                      isPending={approveMutation.isPending}
+                    />
+                  ))}
+                {strategy.calculator_recommendations.filter(rec => !hideCompleted || !isCompleted('calculator', rec.strategy)).length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    {hideCompleted
+                      ? 'No pending calculator recommendations. Toggle "Show Completed" to see finished ones.'
+                      : 'No calculator recommendations.'}
+                  </p>
                 )}
               </div>
             </TabsContent>
@@ -301,15 +455,59 @@ export function CannibalizationReview({ projectId }: Props) {
 
 // ─── Merge Card ───────────────────────────────────────────────────────────────
 
+function taskStatusBadgeClass(status: string | null | undefined) {
+  if (!status) return ''
+  switch (status) {
+    case 'todo':
+    case 'queued':
+      return 'bg-blue-100 text-blue-700 border-transparent'
+    case 'in_progress':
+      return 'bg-purple-100 text-purple-700 border-transparent'
+    case 'review':
+      return 'bg-amber-100 text-amber-700 border-transparent'
+    case 'done':
+      return 'bg-emerald-100 text-emerald-700 border-transparent'
+    case 'failed':
+      return 'bg-red-100 text-red-700 border-transparent'
+    case 'cancelled':
+      return 'bg-gray-100 text-gray-700 border-transparent'
+    default:
+      return 'bg-secondary text-muted-foreground border-transparent'
+  }
+}
+
+function taskStatusLabel(status: string | null | undefined) {
+  if (!status) return ''
+  switch (status) {
+    case 'todo':
+    case 'queued':
+      return 'Task queued'
+    case 'in_progress':
+      return 'In progress'
+    case 'review':
+      return 'Under review'
+    case 'done':
+      return 'Completed'
+    case 'failed':
+      return 'Failed'
+    case 'cancelled':
+      return 'Cancelled'
+    default:
+      return status
+  }
+}
+
 function MergeCard({
   rec,
   review,
+  taskStatus,
   onApprove,
   isPending,
 }: {
   rec: MergeRecommendation
   review?: StrategyReview
-  onApprove: (status: 'approved' | 'rejected' | 'needs_review') => void
+  taskStatus?: RecommendationTaskStatus
+  onApprove: (status: ApprovalStatus) => void
   isPending: boolean
 }) {
   const status = review?.approval_status ?? 'pending'
@@ -324,13 +522,18 @@ function MergeCard({
               Keeper: <span className="font-medium text-foreground">{rec.keep_url}</span>
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Badge variant="outline" className={cn('text-xs', confidenceBadgeClass(rec.confidence))}>
               {rec.confidence} confidence
             </Badge>
             <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
               {statusLabel(status)}
             </Badge>
+            {taskStatus?.task_status && (
+              <Badge variant="outline" className={cn('text-xs', taskStatusBadgeClass(taskStatus.task_status))}>
+                {taskStatusLabel(taskStatus.task_status)}
+              </Badge>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -383,6 +586,18 @@ function MergeCard({
             <AlertCircle size={14} className="mr-1" />
             Needs Review
           </Button>
+          {status !== 'pending' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onApprove('pending')}
+              disabled={isPending}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw size={14} className="mr-1" />
+              Clear
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -394,12 +609,14 @@ function MergeCard({
 function HubCard({
   rec,
   review,
+  taskStatus,
   onApprove,
   isPending,
 }: {
   rec: HubRecommendation
   review?: StrategyReview
-  onApprove: (status: 'approved' | 'rejected' | 'needs_review') => void
+  taskStatus?: RecommendationTaskStatus
+  onApprove: (status: ApprovalStatus) => void
   isPending: boolean
 }) {
   const status = review?.approval_status ?? 'pending'
@@ -414,9 +631,16 @@ function HubCard({
               {rec.suggested_url} · {rec.spoke_pages.length} spokes
             </CardDescription>
           </div>
-          <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
-            {statusLabel(status)}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
+              {statusLabel(status)}
+            </Badge>
+            {taskStatus?.task_status && (
+              <Badge variant="outline" className={cn('text-xs', taskStatusBadgeClass(taskStatus.task_status))}>
+                {taskStatusLabel(taskStatus.task_status)}
+              </Badge>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -456,6 +680,18 @@ function HubCard({
             <AlertCircle size={14} className="mr-1" />
             Needs Review
           </Button>
+          {status !== 'pending' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onApprove('pending')}
+              disabled={isPending}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw size={14} className="mr-1" />
+              Clear
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -467,12 +703,14 @@ function HubCard({
 function CalculatorCard({
   rec,
   review,
+  taskStatus,
   onApprove,
   isPending,
 }: {
   rec: CalculatorRecommendation
   review?: StrategyReview
-  onApprove: (status: 'approved' | 'rejected' | 'needs_review') => void
+  taskStatus?: RecommendationTaskStatus
+  onApprove: (status: ApprovalStatus) => void
   isPending: boolean
 }) {
   const status = review?.approval_status ?? 'pending'
@@ -485,9 +723,16 @@ function CalculatorCard({
             <CardTitle className="text-sm">{rec.strategy}</CardTitle>
             <CardDescription className="text-xs">Universe: {rec.ticker_universe}</CardDescription>
           </div>
-          <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
-            {statusLabel(status)}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
+              {statusLabel(status)}
+            </Badge>
+            {taskStatus?.task_status && (
+              <Badge variant="outline" className={cn('text-xs', taskStatusBadgeClass(taskStatus.task_status))}>
+                {taskStatusLabel(taskStatus.task_status)}
+              </Badge>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -524,6 +769,18 @@ function CalculatorCard({
             <AlertCircle size={14} className="mr-1" />
             Needs Review
           </Button>
+          {status !== 'pending' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onApprove('pending')}
+              disabled={isPending}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw size={14} className="mr-1" />
+              Clear
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -535,12 +792,14 @@ function CalculatorCard({
 function TerritoryCard({
   rec,
   review,
+  taskStatus,
   onApprove,
   isPending,
 }: {
   rec: TerritoryRecommendation
   review?: StrategyReview
-  onApprove: (status: 'approved' | 'rejected' | 'needs_review') => void
+  taskStatus?: RecommendationTaskStatus
+  onApprove: (status: ApprovalStatus) => void
   isPending: boolean
 }) {
   const status = review?.approval_status ?? 'pending'
@@ -553,9 +812,16 @@ function TerritoryCard({
             <CardTitle className="text-sm">{rec.theme}</CardTitle>
             <CardDescription className="text-xs">Priority: {rec.priority}</CardDescription>
           </div>
-          <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
-            {statusLabel(status)}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className={cn('text-xs', statusBadgeClass(status))}>
+              {statusLabel(status)}
+            </Badge>
+            {taskStatus?.task_status && (
+              <Badge variant="outline" className={cn('text-xs', taskStatusBadgeClass(taskStatus.task_status))}>
+                {taskStatusLabel(taskStatus.task_status)}
+              </Badge>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -596,6 +862,18 @@ function TerritoryCard({
             <AlertCircle size={14} className="mr-1" />
             Needs Review
           </Button>
+          {status !== 'pending' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onApprove('pending')}
+              disabled={isPending}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw size={14} className="mr-1" />
+              Clear
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>

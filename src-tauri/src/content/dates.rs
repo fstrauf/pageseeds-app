@@ -200,3 +200,75 @@ pub fn apply_fixes_to_db_and_export(
     crate::content::article_index::export_projection(conn, project_id, project_path)
         .map(|_| ())
 }
+
+/// Deterministic post-write date enforcement.
+///
+/// Loads all articles from SQLite, detects duplicate/future dates,
+/// patches MDX frontmatter, updates SQLite, and exports articles.json.
+///
+/// This is a safety net that runs after any content-modifying task to ensure
+/// no agent mistake or race condition leaves the project with overlapping dates.
+pub fn enforce_safe_dates(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    project_path: &std::path::Path,
+) -> Result<DateFixResult, crate::error::Error> {
+    let articles = crate::engine::task_store::list_articles(conn, project_id)
+        .map_err(|e| crate::error::Error::Other(e.to_string()))?;
+
+    let mut result = calculate_fixes(&articles);
+    if result.articles_fixed == 0 {
+        return Ok(result);
+    }
+
+    // Patch MDX frontmatter for each fix before updating DB.
+    for fix in &result.fixes {
+        if let Some(article) = articles.iter().find(|a| a.id == fix.article_id) {
+            let file_path = project_path.join(&article.file);
+            if let Ok(text) = std::fs::read_to_string(&file_path) {
+                if let Some(patched) = patch_mdx_date(&text, &fix.new_date) {
+                    if std::fs::write(&file_path, patched).is_ok() {
+                        log::info!(
+                            "[enforce_safe_dates] Patched date for article {} ({}): {} -> {}",
+                            fix.article_id,
+                            article.file,
+                            fix.old_date,
+                            fix.new_date
+                        );
+                    } else {
+                        log::warn!(
+                            "[enforce_safe_dates] Failed to write patched file for article {}: {}",
+                            fix.article_id,
+                            article.file
+                        );
+                    }
+                } else {
+                    log::warn!(
+                        "[enforce_safe_dates] Could not patch frontmatter for article {}: {}",
+                        fix.article_id,
+                        article.file
+                    );
+                }
+            } else {
+                log::warn!(
+                    "[enforce_safe_dates] Could not read file for article {}: {}",
+                    fix.article_id,
+                    article.file
+                );
+            }
+        }
+    }
+
+    // Update SQLite and export articles.json
+    apply_fixes_to_db_and_export(conn, project_id, project_path, &result.fixes)?;
+    result.dry_run = false;
+    Ok(result)
+}
+
+/// Patch the `date` field in MDX frontmatter text.
+/// Returns the rebuilt MDX with the updated date, or None if no frontmatter found.
+fn patch_mdx_date(text: &str, new_date: &str) -> Option<String> {
+    let (fm, body) = crate::content::frontmatter::split_mdx(text)?;
+    let patched_fm = crate::content::frontmatter::replace_scalar(fm, "date", new_date);
+    Some(crate::content::cleaner::rebuild_mdx(&patched_fm, body))
+}

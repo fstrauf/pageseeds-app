@@ -245,6 +245,8 @@ impl StepRegistry {
                 let site_url = ctx.site_url;
                 let agent_provider = ctx.agent_provider;
                 let latest_raw = ctx.latest_raw;
+                let next_publish_date =
+                    handlers::compute_next_publish_date(ctx.conn, &task.project_id);
                 Box::pin(async move {
                     handlers::exec_agentic(
                         step,
@@ -253,6 +255,7 @@ impl StepRegistry {
                         site_url,
                         agent_provider,
                         latest_raw,
+                        next_publish_date,
                     )
                     .await
                 })
@@ -746,14 +749,6 @@ impl StepRegistry {
 
         register_blocking!(
             handlers,
-            StepKind::CanAnalyze,
-            crate::engine::exec::cannibalization_audit::exec_can_analyze,
-            agent_provider,
-            context_json
-        );
-
-        register_blocking!(
-            handlers,
             StepKind::CanSelectCandidates,
             crate::engine::exec::cannibalization_audit::exec_can_select_candidates
         );
@@ -927,6 +922,12 @@ impl StepRegistry {
             handlers,
             StepKind::MergeValidateOutput,
             crate::engine::exec::consolidate_cluster::exec_merge_validate_output
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::MergeSyncArticles,
+            crate::engine::exec::consolidate_cluster::exec_merge_sync_articles
         );
 
         // ─── Territory Research ─────────────────────────────────────────────────

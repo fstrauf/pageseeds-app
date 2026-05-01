@@ -50,8 +50,7 @@ impl WorkflowStep {
         let latest_raw_policy = match kind {
             StepKind::Agentic
             | StepKind::CtrAnalyze
-            | StepKind::CtrFixGenerate
-            | StepKind::CanAnalyze => LatestRawPolicy::ReplaceWithOutput,
+            | StepKind::CtrFixGenerate => LatestRawPolicy::ReplaceWithOutput,
             _ => LatestRawPolicy::Preserve,
         };
         Self {

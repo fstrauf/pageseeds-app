@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Trash2, Ban, ArrowRight, Play, ChevronDown, X } from 'lucide-react'
+import { Trash2, Ban, ArrowRight, Play, ChevronDown, X, Check } from 'lucide-react'
 import { useErrorHandler } from '../../lib/toast-context'
-import { updateTask, deleteTask, cancelTask, listTasks, getTask } from '../../lib/tauri'
+import { updateTask, deleteTask, cancelTask, listTasks, getTask, updateTaskStatus } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
 import type { Task } from '../../lib/types'
 import { canEnqueue } from '../../lib/taskCapabilities'
@@ -138,6 +138,15 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
       showError(String(e))
     } finally {
       setDismissing(false)
+    }
+  }
+
+  async function handleMarkDone() {
+    try {
+      const updated = await updateTaskStatus(task.id, 'done')
+      onUpdated(updated)
+    } catch (e: unknown) {
+      showError(String(e))
     }
   }
 
@@ -464,6 +473,19 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
             ) : (
               <><Play size={13} className="mr-1.5" />Run</>
             )}
+          </Button>
+        )}
+
+        {/* Mark as done for tasks in review that need human approval */}
+        {task.status === 'review' && (
+          <Button
+            size="sm"
+            variant="default"
+            className="w-full"
+            onClick={handleMarkDone}
+          >
+            <Check size={13} className="mr-1.5" />
+            Mark as done
           </Button>
         )}
 

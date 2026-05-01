@@ -101,6 +101,7 @@ export type {
   Confidence,
   HubRecommendation,
   MergeRecommendation,
+  RecommendationTaskStatus,
   StrategyReview,
   StrategyRisk,
   StrategyWithReviews,

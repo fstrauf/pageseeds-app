@@ -61,7 +61,7 @@ Return JSON exactly matching this structure:
       "topic": "cash-secured-puts",
       "suggested_url": "/hub/cash-secured-puts",
       "suggested_title": "Cash-Secured Puts: The Complete Guide",
-      "articles_to_link": [42, 43, 44, 45],
+      "spoke_pages": [42, 43, 44, 45],
       "outline_suggestion": "Introduction to CSPs -> How they work -> Best practices -> Risk management -> Comparison to other strategies -> FAQ"
     }
   ],

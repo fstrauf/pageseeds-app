@@ -12,6 +12,33 @@ use crate::models::task::{
     TaskRunPolicy, TaskStatus,
 };
 
+/// How the spawner should behave when an idempotency key matches an existing task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeduplicationPolicy {
+    /// Always create a new task. Use only for genuinely one-off tasks.
+    AlwaysCreate,
+
+    /// Skip creation if ANY task exists with this key, regardless of status.
+    SkipIfAnyExists,
+
+    /// Skip only if an active (todo / queued / in_progress / review) task exists.
+    /// If the existing task is done / failed / cancelled, create a new one.
+    SkipIfActive,
+
+    /// Skip if active. If done/failed/cancelled, allow re-creation only after
+    /// the cooldown has expired. When expired, the old idempotency key is deleted.
+    Cooldown {
+        /// Cooldown duration in days.
+        days: u32,
+    },
+}
+
+impl Default for DeduplicationPolicy {
+    fn default() -> Self {
+        DeduplicationPolicy::SkipIfActive
+    }
+}
+
 /// Specification for creating a task.
 #[derive(Debug, Clone)]
 pub struct TaskSpec {
@@ -33,6 +60,8 @@ pub struct TaskSpec {
     pub artifacts: Vec<TaskArtifact>,
     /// For idempotency - prevents duplicate creation
     pub idempotency_key: Option<String>,
+    /// How to handle duplicate keys. Defaults to SkipIfActive if a key is provided.
+    pub dedup_policy: Option<DeduplicationPolicy>,
 }
 
 impl Default for TaskSpec {
@@ -47,16 +76,27 @@ impl Default for TaskSpec {
             review_surface: None,
             follow_up_policy: None,
             priority: Priority::Medium,
-        agent_policy: AgentPolicy::None,
+            agent_policy: AgentPolicy::None,
             depends_on: vec![],
             artifacts: vec![],
             idempotency_key: None,
+            dedup_policy: None,
         }
     }
 }
 
 /// Centralized task creation.
 pub struct TaskSpawner;
+
+/// Result of evaluating an idempotency key against the database and policy.
+enum IdempotencyResolution {
+    /// No existing task, or policy allows creation. Proceed.
+    Create,
+    /// Existing task matches and policy says return it.
+    ReturnExisting(Task),
+    /// Existing task exists but is expired/stale. Delete old key then create.
+    DeleteAndCreate,
+}
 
 impl TaskSpawner {
     /// Primary creation method. All task creation should go through here.
@@ -71,13 +111,27 @@ impl TaskSpawner {
     pub fn spawn(conn: &Connection, spec: TaskSpec) -> Result<Task> {
         // 1. Check idempotency if key provided
         if let Some(ref key) = spec.idempotency_key {
-            if let Some(existing) = Self::find_by_idempotency_key(conn, key)? {
-                log::info!(
-                    "[spawner] Idempotency key '{}' exists, returning existing task {}",
-                    key,
-                    existing.id
-                );
-                return Ok(existing);
+            let policy = spec.dedup_policy.unwrap_or_default();
+            match Self::resolve_idempotency(conn, key, policy)? {
+                IdempotencyResolution::Create => {
+                    // Proceed to creation
+                }
+                IdempotencyResolution::ReturnExisting(task) => {
+                    log::info!(
+                        "[spawner] Idempotency key '{}' exists (policy: {:?}), returning existing task {}",
+                        key,
+                        policy,
+                        task.id
+                    );
+                    return Ok(task);
+                }
+                IdempotencyResolution::DeleteAndCreate => {
+                    // Old key expired or policy allows re-creation; delete stale key
+                    let _ = conn.execute(
+                        "DELETE FROM task_idempotency_keys WHERE key = ?1",
+                        [key],
+                    );
+                }
             }
         }
 
@@ -113,7 +167,7 @@ impl TaskSpawner {
             run_policy,
             review_surface,
             follow_up_policy,
-        agent_policy: spec.agent_policy,
+            agent_policy: spec.agent_policy,
             title: spec.title,
             description: spec.description,
             depends_on: spec.depends_on,
@@ -128,7 +182,13 @@ impl TaskSpawner {
 
         // 7. Record idempotency key if provided
         if let Some(key) = spec.idempotency_key {
-            Self::record_idempotency_key(conn, &key, &id)?;
+            let expires_at = spec.dedup_policy.and_then(|p| match p {
+                DeduplicationPolicy::Cooldown { days } => {
+                    Some((chrono::Utc::now() + chrono::Duration::days(days as i64)).to_rfc3339())
+                }
+                _ => None,
+            });
+            Self::record_idempotency_key(conn, &key, &id, expires_at.as_deref())?;
         }
 
         log::info!("[spawner] Created task {} (type: {})", id, task.task_type);
@@ -137,9 +197,8 @@ impl TaskSpawner {
 
     /// Convenience method for follow-up tasks with built-in idempotency.
     ///
-    /// This method checks if a follow-up task already exists for this parent
-    /// and type before creating. If one exists in 'todo', 'in_progress', or 'review'
-    /// status, it returns None.
+    /// Uses SkipIfActive policy: blocks if an active task exists, but allows
+    /// re-creation if the previous task is done / failed / cancelled.
     ///
     /// # Arguments
     /// * `conn` - SQLite connection
@@ -160,13 +219,11 @@ impl TaskSpawner {
         // Generate deterministic idempotency key
         let key = format!("followup:{}:{}:{}", parent.id, task_type, title);
 
-        // Check for existing active task via idempotency key
-        if let Some(existing) = Self::find_by_idempotency_key(conn, &key)? {
-            // Check if existing task is still active
-            if matches!(
-                existing.status,
-                TaskStatus::Todo | TaskStatus::InProgress | TaskStatus::Review
-            ) {
+        match Self::resolve_idempotency(conn, &key, DeduplicationPolicy::SkipIfActive)? {
+            IdempotencyResolution::Create => {
+                // Proceed
+            }
+            IdempotencyResolution::ReturnExisting(existing) => {
                 log::info!(
                     "[spawner] Follow-up '{}' already exists as active task {}, skipping",
                     key,
@@ -174,14 +231,12 @@ impl TaskSpawner {
                 );
                 return Ok(None);
             }
-            // Task exists but is done/cancelled - we could create a new one,
-            // but for now treat as duplicate to avoid spam
-            log::info!(
-                "[spawner] Follow-up '{}' exists but is {:?}, skipping to avoid spam",
-                key,
-                existing.status
-            );
-            return Ok(None);
+            IdempotencyResolution::DeleteAndCreate => {
+                let _ = conn.execute(
+                    "DELETE FROM task_idempotency_keys WHERE key = ?1",
+                    [&key],
+                );
+            }
         }
 
         let task = Self::spawn(
@@ -193,8 +248,9 @@ impl TaskSpawner {
                 description: Some(format!("Follow-up from task {}", parent.id)),
                 depends_on: vec![parent.id.clone()],
                 idempotency_key: Some(key),
+                dedup_policy: Some(DeduplicationPolicy::SkipIfActive),
                 priority: Priority::Medium,
-        agent_policy: AgentPolicy::Optional,
+                agent_policy: AgentPolicy::Optional,
                 ..Default::default()
             },
         )?;
@@ -202,34 +258,99 @@ impl TaskSpawner {
         Ok(Some(task))
     }
 
-    /// Find a task by its idempotency key.
-    fn find_by_idempotency_key(conn: &Connection, key: &str) -> Result<Option<Task>> {
-        let task_id: Option<String> = conn
+    /// Evaluate whether a task should be created, returned, or have its stale key deleted.
+    fn resolve_idempotency(
+        conn: &Connection,
+        key: &str,
+        policy: DeduplicationPolicy,
+    ) -> Result<IdempotencyResolution> {
+        // Look up key + expiration
+        let row: Option<(String, Option<String>)> = conn
             .query_row(
-                "SELECT task_id FROM task_idempotency_keys WHERE key = ?1",
+                "SELECT task_id, expires_at FROM task_idempotency_keys WHERE key = ?1",
                 [key],
-                |r| r.get(0),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
             )
             .optional()?;
 
-        match task_id {
-            Some(id) => match task_store::get_task(conn, &id) {
-                Ok(task) => Ok(Some(task)),
-                Err(_) => {
-                    // Task was deleted but key remains - clean it up
-                    let _ = conn.execute("DELETE FROM task_idempotency_keys WHERE key = ?1", [key]);
-                    Ok(None)
+        let (task_id, expires_at) = match row {
+            Some((id, exp)) => (id, exp),
+            None => return Ok(IdempotencyResolution::Create),
+        };
+
+        // Check if key is expired
+        if let Some(exp) = expires_at {
+            if let Ok(exp_dt) = chrono::DateTime::parse_from_rfc3339(&exp) {
+                if chrono::Utc::now() > exp_dt.with_timezone(&chrono::Utc) {
+                    log::info!(
+                        "[spawner] Idempotency key '{}' expired ({}), allowing re-creation",
+                        key,
+                        exp
+                    );
+                    return Ok(IdempotencyResolution::DeleteAndCreate);
                 }
-            },
-            None => Ok(None),
+            }
+        }
+
+        // Load the task
+        let task = match task_store::get_task(conn, &task_id) {
+            Ok(t) => t,
+            Err(_) => {
+                // Task was deleted but key remains - clean it up and allow creation
+                let _ = conn.execute(
+                    "DELETE FROM task_idempotency_keys WHERE key = ?1",
+                    [key],
+                );
+                return Ok(IdempotencyResolution::Create);
+            }
+        };
+
+        match policy {
+            DeduplicationPolicy::AlwaysCreate => Ok(IdempotencyResolution::Create),
+            DeduplicationPolicy::SkipIfAnyExists => {
+                Ok(IdempotencyResolution::ReturnExisting(task))
+            }
+            DeduplicationPolicy::SkipIfActive => {
+                if matches!(
+                    task.status,
+                    TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Review
+                ) {
+                    Ok(IdempotencyResolution::ReturnExisting(task))
+                } else {
+                    // Task is done/failed/cancelled - allow re-creation
+                    Ok(IdempotencyResolution::DeleteAndCreate)
+                }
+            }
+            DeduplicationPolicy::Cooldown { .. } => {
+                if matches!(
+                    task.status,
+                    TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Review
+                ) {
+                    Ok(IdempotencyResolution::ReturnExisting(task))
+                } else {
+                    // For Cooldown, expiration is checked above. If not expired,
+                    // return existing; if expired, DeleteAndCreate was already returned.
+                    Ok(IdempotencyResolution::ReturnExisting(task))
+                }
+            }
         }
     }
 
     /// Record an idempotency key for a task.
-    fn record_idempotency_key(conn: &Connection, key: &str, task_id: &str) -> Result<()> {
+    fn record_idempotency_key(
+        conn: &Connection,
+        key: &str,
+        task_id: &str,
+        expires_at: Option<&str>,
+    ) -> Result<()> {
         conn.execute(
-            "INSERT INTO task_idempotency_keys (key, task_id, created_at) VALUES (?1, ?2, ?3)",
-            [key, task_id, &chrono::Utc::now().to_rfc3339()],
+            "INSERT INTO task_idempotency_keys (key, task_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                key,
+                task_id,
+                chrono::Utc::now().to_rfc3339(),
+                expires_at,
+            ],
         )?;
         Ok(())
     }
@@ -288,7 +409,8 @@ mod tests {
             CREATE TABLE task_idempotency_keys (
                 key TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                expires_at TEXT
             );
             CREATE TABLE task_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -371,7 +493,7 @@ mod tests {
             run_policy: TaskRunPolicy::AutoEnqueue,
             review_surface: TaskReviewSurface::None,
             follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::None,
+            agent_policy: AgentPolicy::None,
             title: Some("Parent".to_string()),
             description: None,
             depends_on: vec![],
@@ -408,7 +530,7 @@ mod tests {
             run_policy: TaskRunPolicy::AutoEnqueue,
             review_surface: TaskReviewSurface::None,
             follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::None,
+            agent_policy: AgentPolicy::None,
             title: None,
             description: None,
             depends_on: vec![],
@@ -431,5 +553,174 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn spawn_with_skip_if_active_allows_recreate_after_done() {
+        let conn = in_memory_db();
+        create_test_project(&conn, "proj1");
+
+        let spec = TaskSpec {
+            project_id: "proj1".to_string(),
+            task_type: "test_task".to_string(),
+            title: Some("Test".to_string()),
+            idempotency_key: Some("skip-active-key".to_string()),
+            dedup_policy: Some(DeduplicationPolicy::SkipIfActive),
+            ..Default::default()
+        };
+
+        let task1 = TaskSpawner::spawn(&conn, spec.clone()).unwrap();
+        assert_eq!(task1.status, TaskStatus::Todo);
+
+        // Same key, active status → returns existing
+        let task2 = TaskSpawner::spawn(&conn, spec.clone()).unwrap();
+        assert_eq!(task1.id, task2.id);
+
+        // Mark as done
+        task_store::update_task_status(&conn, &task1.id, TaskStatus::Done).unwrap();
+
+        // Same key, done status → creates new task
+        let task3 = TaskSpawner::spawn(&conn, spec).unwrap();
+        assert_ne!(task1.id, task3.id);
+    }
+
+    #[test]
+    fn spawn_with_skip_if_any_exists_blocks_forever() {
+        let conn = in_memory_db();
+        create_test_project(&conn, "proj1");
+
+        let spec = TaskSpec {
+            project_id: "proj1".to_string(),
+            task_type: "test_task".to_string(),
+            title: Some("Test".to_string()),
+            idempotency_key: Some("skip-any-key".to_string()),
+            dedup_policy: Some(DeduplicationPolicy::SkipIfAnyExists),
+            ..Default::default()
+        };
+
+        let task1 = TaskSpawner::spawn(&conn, spec.clone()).unwrap();
+        task_store::update_task_status(&conn, &task1.id, TaskStatus::Done).unwrap();
+
+        // Even though task is done, SkipIfAnyExists blocks re-creation
+        let task2 = TaskSpawner::spawn(&conn, spec).unwrap();
+        assert_eq!(task1.id, task2.id);
+    }
+
+    #[test]
+    fn spawn_with_cooldown_blocks_within_period() {
+        let conn = in_memory_db();
+        create_test_project(&conn, "proj1");
+
+        let spec = TaskSpec {
+            project_id: "proj1".to_string(),
+            task_type: "test_task".to_string(),
+            title: Some("Test".to_string()),
+            idempotency_key: Some("cooldown-key".to_string()),
+            dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 7 }),
+            ..Default::default()
+        };
+
+        let task1 = TaskSpawner::spawn(&conn, spec.clone()).unwrap();
+        task_store::update_task_status(&conn, &task1.id, TaskStatus::Done).unwrap();
+
+        // Within cooldown → returns existing
+        let task2 = TaskSpawner::spawn(&conn, spec.clone()).unwrap();
+        assert_eq!(task1.id, task2.id);
+    }
+
+    #[test]
+    fn spawn_with_cooldown_allows_recreate_after_expiry() {
+        let conn = in_memory_db();
+        create_test_project(&conn, "proj1");
+
+        let key = "cooldown-expired-key";
+        let spec = TaskSpec {
+            project_id: "proj1".to_string(),
+            task_type: "test_task".to_string(),
+            title: Some("Test".to_string()),
+            idempotency_key: Some(key.to_string()),
+            dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 7 }),
+            ..Default::default()
+        };
+
+        let task1 = TaskSpawner::spawn(&conn, spec.clone()).unwrap();
+        task_store::update_task_status(&conn, &task1.id, TaskStatus::Done).unwrap();
+
+        // Manually expire the idempotency key
+        let expired = (chrono::Utc::now() - chrono::Duration::days(8)).to_rfc3339();
+        conn.execute(
+            "UPDATE task_idempotency_keys SET expires_at = ?1 WHERE key = ?2",
+            [&expired, key],
+        )
+        .unwrap();
+
+        // After expiry → creates new task
+        let task2 = TaskSpawner::spawn(&conn, spec).unwrap();
+        assert_ne!(task1.id, task2.id);
+    }
+
+    #[test]
+    fn spawn_follow_up_allows_recreate_after_failure() {
+        let conn = in_memory_db();
+        create_test_project(&conn, "proj1");
+
+        let parent = Task {
+            id: "parent-456".to_string(),
+            project_id: "proj1".to_string(),
+            task_type: "parent_task".to_string(),
+            phase: "test".to_string(),
+            status: TaskStatus::Done,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::None,
+            title: Some("Parent".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+        task_store::create_task(&conn, &parent).unwrap();
+
+        // First follow-up creates
+        let follow1 = TaskSpawner::spawn_follow_up(&conn, &parent, "child_task", "Child").unwrap();
+        assert!(follow1.is_some());
+        let child_id = follow1.unwrap().id;
+
+        // Mark child as failed
+        task_store::update_task_status(&conn, &child_id, TaskStatus::Failed).unwrap();
+
+        // Second follow-up should create a new one (SkipIfActive allows re-creation)
+        let follow2 = TaskSpawner::spawn_follow_up(&conn, &parent, "child_task", "Child").unwrap();
+        assert!(follow2.is_some());
+        assert_ne!(child_id, follow2.unwrap().id);
+    }
+
+    #[test]
+    fn orphan_idempotency_key_is_cleaned_up() {
+        let conn = in_memory_db();
+        create_test_project(&conn, "proj1");
+
+        // Insert an orphan key manually (no matching task)
+        conn.execute(
+            "INSERT INTO task_idempotency_keys (key, task_id, created_at) VALUES (?1, ?2, ?3)",
+            ["orphan-key", "nonexistent-task", &chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let spec = TaskSpec {
+            project_id: "proj1".to_string(),
+            task_type: "test_task".to_string(),
+            title: Some("Test".to_string()),
+            idempotency_key: Some("orphan-key".to_string()),
+            ..Default::default()
+        };
+
+        // Should create a new task, not fail
+        let task = TaskSpawner::spawn(&conn, spec).unwrap();
+        assert_eq!(task.task_type, "test_task");
     }
 }

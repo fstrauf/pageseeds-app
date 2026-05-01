@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 /// A structured patch describing how to merge unique content from redirect
 /// targets into a keeper article.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct ContentMergePatch {
@@ -23,7 +23,7 @@ pub struct ContentMergePatch {
 }
 
 /// A section to add to the keeper.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct SectionAddition {
@@ -38,7 +38,7 @@ pub struct SectionAddition {
 }
 
 /// A transition edit to an existing paragraph.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub struct TransitionEdit {

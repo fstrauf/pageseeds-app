@@ -153,7 +153,8 @@ impl WorkflowHandler for ContentHandler {
             )];
         }
         // Agentic: the agent reads the article spec and writes the MDX file.
-        let is_hub = matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
+        let has_hub_brief = task.artifacts.iter().any(|a| a.key == "hub_brief");
+        let is_hub = has_hub_brief || matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
         let step = WorkflowStep::new("content_write_stage", StepKind::Agentic);
         if is_hub {
             vec![step.with_param(step_params::SKILL, "hub-write")]
@@ -567,6 +568,8 @@ impl WorkflowHandler for ConsolidateClusterHandler {
             WorkflowStep::new("merge_generate_redirects", StepKind::MergeGenerateRedirects),
             // Step 7 (deterministic): Validate merged keeper and redirect map.
             WorkflowStep::new("merge_validate_output", StepKind::MergeValidateOutput),
+            // Step 8 (deterministic): Sync merged articles back to SQLite and articles.json.
+            WorkflowStep::new("merge_sync_articles", StepKind::MergeSyncArticles),
         ]
     }
 }
@@ -759,55 +762,95 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
         return String::new();
     }
 
-    let strategy_json = task
+    // Try focused hub_brief artifact first (new write_article path)
+    let hub_brief_json = task
         .artifacts
         .iter()
-        .find(|a| a.key == "cannibalization_strategy")
-        .and_then(|a| a.content.clone())
-        .unwrap_or_default();
+        .find(|a| a.key == "hub_brief")
+        .and_then(|a| a.content.clone());
 
-    if strategy_json.is_empty() {
-        return String::new();
-    }
+    let (suggested_url, suggested_title, spoke_pages) = if let Some(brief_json) = hub_brief_json {
+        match serde_json::from_str::<serde_json::Value>(&brief_json) {
+            Ok(brief) => {
+                let url = brief
+                    .get("suggested_url")
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let title = brief
+                    .get("suggested_title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or(hub_topic)
+                    .to_string();
+                let pages = brief
+                    .get("spoke_pages")
+                    .and_then(|p| p.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                (url, title, pages)
+            }
+            Err(_) => return String::new(),
+        }
+    } else {
+        // Legacy path: parse from full cannibalization_strategy artifact
+        let strategy_json = task
+            .artifacts
+            .iter()
+            .find(|a| a.key == "cannibalization_strategy")
+            .and_then(|a| a.content.clone())
+            .unwrap_or_default();
 
-    let strategy: serde_json::Value = match serde_json::from_str(&strategy_json) {
-        Ok(v) => v,
-        Err(_) => return String::new(),
-    };
+        if strategy_json.is_empty() {
+            return String::new();
+        }
 
-    let empty_recs: Vec<serde_json::Value> = Vec::new();
-    let recommendations = strategy
-        .get("hub_recommendations")
-        .and_then(|r| r.as_array())
-        .unwrap_or(&empty_recs);
+        let strategy: serde_json::Value = match serde_json::from_str(&strategy_json) {
+            Ok(v) => v,
+            Err(_) => return String::new(),
+        };
 
-    let rec = recommendations.iter().find(|r| {
-        r.get("suggested_title")
-            .and_then(|t| t.as_str())
-            .map(|t| t.trim().eq_ignore_ascii_case(hub_topic))
-            .unwrap_or(false)
-            || r.get("topic")
+        let recommendations = strategy
+            .get("hub_recommendations")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let rec = recommendations.iter().find(|r| {
+            r.get("suggested_title")
                 .and_then(|t| t.as_str())
                 .map(|t| t.trim().eq_ignore_ascii_case(hub_topic))
                 .unwrap_or(false)
-    });
+                || r.get("topic")
+                    .and_then(|t| t.as_str())
+                    .map(|t| t.trim().eq_ignore_ascii_case(hub_topic))
+                    .unwrap_or(false)
+        });
 
-    let rec = match rec {
-        Some(r) => r,
-        None => return String::new(),
+        let rec = match rec {
+            Some(r) => r,
+            None => return String::new(),
+        };
+
+        let url = rec
+            .get("suggested_url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("")
+            .to_string();
+        let title = rec
+            .get("suggested_title")
+            .and_then(|t| t.as_str())
+            .unwrap_or(hub_topic)
+            .to_string();
+        let pages = rec
+            .get("spoke_pages")
+            .and_then(|p| p.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        (url, title, pages)
     };
 
-    let suggested_url = rec.get("suggested_url").and_then(|u| u.as_str()).unwrap_or("");
-    let suggested_title = rec.get("suggested_title").and_then(|t| t.as_str()).unwrap_or(hub_topic);
-
-    let spoke_pages = rec
-        .get("spoke_pages")
-        .and_then(|p| p.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>())
-        .unwrap_or_default();
-
     let db_path = crate::db::default_db_path();
-    let spokes = match rusqlite::Connection::open(&db_path) {
+    let mut spokes = match rusqlite::Connection::open(&db_path) {
         Ok(conn) => {
             if spoke_pages.is_empty() {
                 Vec::new()
@@ -819,6 +862,11 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
         }
         Err(_) => Vec::new(),
     };
+
+    // Sort by impressions (highest first) and cap at 8 to stay within prompt budget.
+    spokes.sort_by(|a, b| b.impressions.partial_cmp(&a.impressions).unwrap_or(std::cmp::Ordering::Equal));
+    const MAX_SPOKES: usize = 8;
+    spokes.truncate(MAX_SPOKES);
 
     let mut ctx = format!(
         "\n\n## Hub Page Task\n\n\
@@ -837,6 +885,18 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
                 spoke.title, spoke.url_slug, spoke.excerpt
             ));
         }
+    }
+
+    const MAX_HUB_CONTEXT_BYTES: usize = 6_000;
+    if ctx.len() > MAX_HUB_CONTEXT_BYTES {
+        log::warn!(
+            "[hub_spoke_context] context too large ({} bytes) for hub '{}'; truncating",
+            ctx.len(),
+            hub_topic
+        );
+        let mut truncated = ctx.chars().take(MAX_HUB_CONTEXT_BYTES).collect::<String>();
+        truncated.push_str("\n\n[…hub context truncated…]\n");
+        return truncated;
     }
 
     ctx
@@ -886,6 +946,7 @@ pub async fn exec_agentic(
     site_url: &str,
     agent_provider: &str,
     latest_raw_output: Option<&str>,
+    next_publish_date: Option<String>,
 ) -> StepResult {
     use crate::engine::project_paths::ProjectPaths;
     use crate::engine::{agent, prompts, skills};
@@ -897,12 +958,13 @@ pub async fn exec_agentic(
     let is_content_task = matches!(
         task.task_type.as_str(),
         "write_article" | "optimize_article" | "create_content" | "optimize_content"
-            | "create_hub_page" | "refresh_hub_page"
+            | "create_hub_page" | "refresh_hub_page" | "fix_content_article"
     );
-    let is_hub_task = matches!(
+    let is_new_article_task = matches!(
         task.task_type.as_str(),
-        "create_hub_page" | "refresh_hub_page"
+        "write_article" | "create_content" | "create_hub_page" | "refresh_hub_page"
     );
+    let is_hub_task = step.params.get(step_params::SKILL).map(|s| s.as_str()) == Some("hub-write");
 
     let content_context = if is_content_task {
         let resolved = crate::content::locator::resolve(repo_root, None);
@@ -990,10 +1052,22 @@ pub async fn exec_agentic(
     let task_artifacts: Vec<String> = task
         .artifacts
         .iter()
+        .filter(|a| {
+            // Hub tasks get focused hub context via hub_spoke_context(); inlining the
+            // full cannibalization_strategy here duplicates data and blows the prompt
+            // budget (it can be 20-90KB). Skip it for hub tasks.
+            !(is_hub_task && a.key == "cannibalization_strategy")
+        })
         .filter_map(|a| {
-            a.content
-                .as_ref()
-                .map(|c| format!("\n\n## Artifact: {}\n\n```\n{}\n```", a.key, c))
+            a.content.as_ref().map(|c| {
+                const MAX_ARTIFACT_CHARS: usize = 2_000;
+                let preview = if c.len() > MAX_ARTIFACT_CHARS {
+                    format!("{}… [truncated]", crate::engine::text::char_prefix(c, MAX_ARTIFACT_CHARS))
+                } else {
+                    c.clone()
+                };
+                format!("\n\n## Artifact: {}\n\n```\n{}\n```", a.key, preview)
+            })
         })
         .collect();
     if !task_artifacts.is_empty() {
@@ -1004,15 +1078,25 @@ pub async fn exec_agentic(
     if is_content_task {
         // Pre-compute the next safe publish date and inject it into the prompt.
         // Without this, the agent defaults to today's date which conflicts with
-        // articles already in articles.json and breaks the date distribution.
-        // Cannot be deterministic-only: the date depends on the current state of
-        // articles.json and must be computed from the existing occupied slots.
-        if let Some(date) = compute_next_publish_date(project_path) {
-            prompt.push_str(&format!(
-                "\n\n## Publish Date (Required)\n\
-                         - The frontmatter `date:` field MUST be exactly: `{date}`\n\
-                         - Do not use today's date or any other value — use the date above."
-            ));
+        // articles already in the database and breaks the date distribution.
+        // We read from SQLite (canonical source of truth) rather than articles.json
+        // so queued tasks see the most current state after orphan ingestion.
+        if let Some(ref date) = next_publish_date {
+            if is_new_article_task {
+                prompt.push_str(&format!(
+                    "\n\n## Publish Date (Required)\n\
+                             - The frontmatter `date:` field MUST be exactly: `{date}`\n\
+                             - Do not use today's date or any other value — use the date above."
+                ));
+            } else {
+                // Modification tasks: preserve existing date, avoid collisions
+                prompt.push_str(&format!(
+                    "\n\n## Publish Date (Preserve)\n\
+                             - Preserve the existing `date:` field in the frontmatter.\n\
+                             - Do NOT change it to today's date, a future date, or a date already used by another article.\n\
+                             - If the article has no date, use exactly: `{date}`"
+                ));
+            }
         }
 
         prompt.push_str(
@@ -1392,24 +1476,35 @@ fn load_coverage_context(automation_dir: &std::path::Path) -> String {
 /// the next unoccupied past date for a new article.
 ///
 /// Implements the same logic as `content::date_policy::suggest_next_safe_date` but reads
-/// dates directly from the on-disk JSON file instead of requiring a DB connection, so it
-/// can be called from inside `exec_agentic` which has no access to SQLite.
-pub(crate) fn compute_next_publish_date(project_path: &str) -> Option<String> {
+/// Compute the next available past publish date from the SQLite database.
+///
+/// Reads all articles for the project and finds the most recent past date
+/// that is not already occupied. This is more current than reading articles.json
+/// because SQLite is updated by ingest_orphans before articles.json is exported.
+pub(crate) fn compute_next_publish_date(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> Option<String> {
     use chrono::{Duration, NaiveDate, Utc};
     use std::collections::HashSet;
 
-    let articles_path = std::path::Path::new(project_path)
-        .join(".github")
-        .join("automation")
-        .join("articles.json");
+    // Verify the project exists before computing a date.
+    let project_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM projects WHERE id = ?1 LIMIT 1",
+            [project_id],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !project_exists {
+        return None;
+    }
 
-    let json = std::fs::read_to_string(&articles_path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&json).ok()?;
-    let articles = value.get("articles")?.as_array()?;
+    let articles = crate::engine::task_store::list_articles(conn, project_id).ok()?;
 
     let occupied: HashSet<NaiveDate> = articles
         .iter()
-        .filter_map(|a| a["published_date"].as_str())
+        .filter_map(|a| a.published_date.as_deref())
         .filter(|d| !d.is_empty())
         .filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
         .collect();

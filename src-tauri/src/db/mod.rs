@@ -1009,6 +1009,19 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 34 {
+        // Add expiration support to idempotency keys for cooldown-based deduplication
+        conn.execute_batch(
+            "ALTER TABLE task_idempotency_keys ADD COLUMN expires_at TEXT;
+             CREATE INDEX IF NOT EXISTS idx_idempotency_expires ON task_idempotency_keys(expires_at);
+             CREATE INDEX IF NOT EXISTS idx_tasks_project_type_status ON tasks(project_id, type, status);",
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (34, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn

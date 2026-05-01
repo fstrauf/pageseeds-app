@@ -58,8 +58,6 @@ pub enum StepKind {
     CtrAnalyze,
     /// Build structured context for cannibalization audit (TF-IDF + data formatting).
     CanBuildContext,
-    /// Agentic cannibalization strategy — merges, hubs, territories (agentic).
-    CanAnalyze,
     /// Deterministic selection of merge/hub/territory candidates from audit artifacts.
     CanSelectCandidates,
     /// Agentic analysis of individual candidate batches (byte-budgeted).
@@ -102,20 +100,8 @@ pub enum StepKind {
     MergeGenerateRedirects,
     /// Validate merged keeper and redirect map.
     MergeValidateOutput,
-    /// Load approved hub recommendation from strategy artifact.
-    HubLoadRecommendation,
-    /// Gather spoke metadata, excerpts, and GSC metrics into HubBrief.
-    HubBuildBrief,
-    /// Agentic: generate structured hub outline and linking strategy from HubBrief.
-    HubOutline,
-    /// Agentic: generate full MDX hub page from HubBrief using hub-write skill.
-    HubWrite,
-    /// Write MDX file to content dir, register in SQLite and articles.json.
-    HubApplyDraft,
-    /// Add hub↔spoke Related Articles links.
-    HubApplyLinks,
-    /// Validate hub page: frontmatter, H1, word count ≥1500, spoke links.
-    HubValidate,
+    /// Sync merged articles back to SQLite and articles.json.
+    MergeSyncArticles,
     /// Load approved territory recommendation from strategy artifact.
     TerritoryLoadRecommendation,
     /// Gather existing articles, excerpts, and GSC metrics for territory context.
@@ -180,7 +166,6 @@ impl StepKind {
             Self::CtrBuildContext => "ctr_build_context",
             Self::CtrAnalyze => "ctr_analyze",
             Self::CanBuildContext => "can_build_context",
-            Self::CanAnalyze => "can_analyze",
             Self::CanSelectCandidates => "can_select_candidates",
             Self::CanAnalyzeCandidates => "can_analyze_candidates",
             Self::CanReduceStrategy => "can_reduce_strategy",
@@ -202,13 +187,7 @@ impl StepKind {
             Self::MergeApplyPatch => "merge_apply_patch",
             Self::MergeGenerateRedirects => "merge_generate_redirects",
             Self::MergeValidateOutput => "merge_validate_output",
-            Self::HubLoadRecommendation => "hub_load_recommendation",
-            Self::HubBuildBrief => "hub_build_brief",
-            Self::HubOutline => "hub_outline",
-            Self::HubWrite => "hub_write",
-            Self::HubApplyDraft => "hub_apply_draft",
-            Self::HubApplyLinks => "hub_apply_links",
-            Self::HubValidate => "hub_validate",
+            Self::MergeSyncArticles => "merge_sync_articles",
             Self::TerritoryLoadRecommendation => "territory_load_recommendation",
             Self::TerritoryBuildContext => "territory_build_context",
             Self::TerritoryStrategy => "territory_strategy",
@@ -282,7 +261,6 @@ impl FromStr for StepKind {
             "ctr_build_context" => Ok(Self::CtrBuildContext),
             "ctr_analyze" => Ok(Self::CtrAnalyze),
             "can_build_context" => Ok(Self::CanBuildContext),
-            "can_analyze" => Ok(Self::CanAnalyze),
             "can_select_candidates" => Ok(Self::CanSelectCandidates),
             "can_analyze_candidates" => Ok(Self::CanAnalyzeCandidates),
             "can_reduce_strategy" => Ok(Self::CanReduceStrategy),
@@ -304,13 +282,7 @@ impl FromStr for StepKind {
             "merge_apply_patch" => Ok(Self::MergeApplyPatch),
             "merge_generate_redirects" => Ok(Self::MergeGenerateRedirects),
             "merge_validate_output" => Ok(Self::MergeValidateOutput),
-            "hub_load_recommendation" => Ok(Self::HubLoadRecommendation),
-            "hub_build_brief" => Ok(Self::HubBuildBrief),
-            "hub_outline" => Ok(Self::HubOutline),
-            "hub_write" => Ok(Self::HubWrite),
-            "hub_apply_draft" => Ok(Self::HubApplyDraft),
-            "hub_apply_links" => Ok(Self::HubApplyLinks),
-            "hub_validate" => Ok(Self::HubValidate),
+            "merge_sync_articles" => Ok(Self::MergeSyncArticles),
             "territory_load_recommendation" => Ok(Self::TerritoryLoadRecommendation),
             "territory_build_context" => Ok(Self::TerritoryBuildContext),
             "territory_strategy" => Ok(Self::TerritoryStrategy),
@@ -395,7 +367,6 @@ mod tests {
             StepKind::CtrAnalyze,
             StepKind::CtrFixGenerate,
             StepKind::CanBuildContext,
-            StepKind::CanAnalyze,
             StepKind::CanSelectCandidates,
             StepKind::CanAnalyzeCandidates,
             StepKind::CanReduceStrategy,
@@ -417,13 +388,6 @@ mod tests {
             StepKind::MergeApplyPatch,
             StepKind::MergeGenerateRedirects,
             StepKind::MergeValidateOutput,
-            StepKind::HubLoadRecommendation,
-            StepKind::HubBuildBrief,
-            StepKind::HubOutline,
-            StepKind::HubWrite,
-            StepKind::HubApplyDraft,
-            StepKind::HubApplyLinks,
-            StepKind::HubValidate,
             StepKind::TerritoryLoadRecommendation,
             StepKind::TerritoryBuildContext,
             StepKind::TerritoryStrategy,

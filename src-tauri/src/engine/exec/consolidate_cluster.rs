@@ -229,7 +229,61 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
 
-    let mut inventories: Vec<SectionInventory> = Vec::new();
+    // Build a capped keeper representation to stay within the 20KB prompt limit.
+    // The agent needs the heading structure for insertion points and a prose excerpt
+    // for tone matching and duplicate detection, but not the full article.
+    let (_keeper_fm, keeper_body) =
+        crate::content::frontmatter::split_mdx(&keeper_content)
+            .map(|(fm, b)| (fm, b))
+            .unwrap_or(("", keeper_content.as_str()));
+    // Lightweight keeper outline: just heading levels and titles (no body).
+    // The agent only needs these for insertion-point selection.
+    let keeper_outline: Vec<serde_json::Value> = keeper_body
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("## ") || t.starts_with("### ") || t.starts_with("#### ")
+        })
+        .map(|l| {
+            let level = l.trim_start().chars().take_while(|&c| c == '#').count() as u8;
+            let text = l.trim_start_matches('#').trim().to_string();
+            serde_json::json!({"level": level, "text": text})
+        })
+        .collect();
+    const KEEPER_EXCERPT_CHARS: usize = 1_500;
+    let keeper_excerpt = if keeper_body.chars().count() > KEEPER_EXCERPT_CHARS {
+        let mut excerpt = String::new();
+        let mut count = 0;
+        for ch in keeper_body.chars() {
+            if count >= KEEPER_EXCERPT_CHARS {
+                excerpt.push_str("\n\n[…excerpt truncated…]");
+                break;
+            }
+            excerpt.push(ch);
+            count += 1;
+        }
+        excerpt
+    } else {
+        keeper_body.to_string()
+    };
+
+    // Build compact summaries for each redirect page.
+    // The agent only needs enough context to identify unique topics and decide
+    // what to merge — full tables, code blocks, and FAQ answers are too large
+    // for the 20KB prompt budget when there are many redirect pages.
+    #[derive(Debug)]
+    struct RedirectSummary {
+        file: String,
+        url: String,
+        title: String,
+        word_count: usize,
+        excerpt: String,
+        headings: Vec<String>,
+        has_tables: bool,
+        has_examples: bool,
+        has_faqs: bool,
+    }
+    let mut summaries: Vec<RedirectSummary> = Vec::new();
 
     for url in &redirect_urls {
         let slug = url.trim_start_matches("/blog/").trim_start_matches('/');
@@ -246,35 +300,118 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
             Some((fm, b)) => (fm, b),
             None => ("", content.as_str()),
         };
-        let _ = frontmatter;
 
-        let headings = extract_headings(body);
-        let tables = extract_tables(body);
-        let examples = extract_examples(body);
-        let faqs = extract_faqs(body);
+        let title = crate::content::frontmatter::parse(frontmatter)
+            .ok()
+            .and_then(|fm| fm.parsed.get("title").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| slug.replace('-', " "));
 
-        inventories.push(SectionInventory {
+        let word_count = body.split_whitespace().count();
+
+        // Excerpt: first 200 chars of body
+        const EXCERPT_CHARS: usize = 200;
+        let excerpt = if body.chars().count() > EXCERPT_CHARS {
+            let mut e = String::new();
+            let mut count = 0;
+            for ch in body.chars() {
+                if count >= EXCERPT_CHARS {
+                    e.push_str("…");
+                    break;
+                }
+                e.push(ch);
+                count += 1;
+            }
+            e
+        } else {
+            body.to_string()
+        };
+
+        // Heading titles only (no body), capped at 15
+        let heading_titles: Vec<String> = body
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                t.starts_with("## ") || t.starts_with("### ") || t.starts_with("#### ")
+            })
+            .map(|l| l.trim_start_matches('#').trim().to_string())
+            .take(15)
+            .collect();
+
+        let has_tables = body.lines().any(|l| l.trim_start().starts_with('|'));
+        let has_examples = body.lines().any(|l| l.trim_start().starts_with("```"));
+        let has_faqs = body.lines().any(|l| {
+            let t = l.trim();
+            t.starts_with("Q:") || t.starts_with("**Q:**")
+        });
+
+        summaries.push(RedirectSummary {
             file: file.to_string_lossy().to_string(),
-            headings,
-            tables,
-            examples,
-            faqs,
+            url: url.clone(),
+            title,
+            word_count,
+            excerpt,
+            headings: heading_titles,
+            has_tables,
+            has_examples,
+            has_faqs,
         });
     }
 
+    // Sort by word count (most content-rich first) and cap at 5 to stay within budget.
+    summaries.sort_by(|a, b| b.word_count.cmp(&a.word_count));
+    const MAX_REDIRECTS: usize = 5;
+    let truncated = summaries.len() > MAX_REDIRECTS;
+    summaries.truncate(MAX_REDIRECTS);
+
+    let summary_values: Vec<serde_json::Value> = summaries
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "file": s.file,
+                "url": s.url,
+                "title": s.title,
+                "word_count": s.word_count,
+                "excerpt": s.excerpt,
+                "headings": s.headings,
+                "has_tables": s.has_tables,
+                "has_examples": s.has_examples,
+                "has_faqs": s.has_faqs,
+            })
+        })
+        .collect();
+
     let output_doc = serde_json::json!({
         "keeper_file": keeper_file.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        "keeper_content": keeper_content,
-        "redirect_inventories": inventories,
+        "keeper_outline": keeper_outline,
+        "keeper_excerpt": keeper_excerpt,
+        "redirect_summaries": summary_values,
+        "truncated": truncated,
     });
+
+    let output_json = serde_json::to_string_pretty(&output_doc).unwrap_or_default();
+    const MAX_EXTRACT_OUTPUT_BYTES: usize = 12_000;
+    if output_json.len() > MAX_EXTRACT_OUTPUT_BYTES {
+        return StepResult {
+            success: false,
+            message: format!(
+                "Merge context too large ({} bytes) after extraction. \
+                 The cluster has too many redirect pages to fit the prompt budget. \
+                 Try splitting the cluster into smaller groups.",
+                output_json.len()
+            ),
+            output: None,
+        };
+    }
 
     StepResult {
         success: true,
         message: format!(
-            "Extracted sections from {} redirect pages",
-            inventories.len()
+            "Summarized {} redirect pages ({} bytes){}",
+            summary_values.len(),
+            output_json.len(),
+            if truncated { " — truncated to top 5 by word count" } else { "" }
         ),
-        output: Some(serde_json::to_string_pretty(&output_doc).unwrap_or_default()),
+        output: Some(output_json),
     }
 }
 
@@ -282,7 +419,15 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
 // Step 4: Draft Patch (agentic)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Agentic step: draft a ContentMergePatch JSON.
+/// Agentic: draft a ContentMergePatch JSON that merges unique valuable content
+/// from redirect pages into the keeper page.
+///
+/// Why not deterministic: merging overlapping articles requires editorial judgment
+/// about which sections are redundant, which contain unique value worth preserving,
+/// and where in the keeper's structure they best fit. A deterministic algorithm
+/// cannot evaluate content quality, relevance, or narrative flow. The output is a
+/// structured `ContentMergePatch` with precise insertion points, extracted via
+/// Rig's `extract_structured`.
 pub(crate) fn exec_merge_draft_patch(
     _task: &Task,
     project_path: &str,
@@ -309,20 +454,68 @@ pub(crate) fn exec_merge_draft_patch(
         + "\n\nCRITICAL: Return ONLY a single JSON object matching the ContentMergePatch structure."
         + " Do not include markdown prose, summaries, or explanations outside the JSON.";
 
-    match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => {
-            let final_output = crate::engine::text::extract_json(&output)
-                .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                .unwrap_or(output);
+    const HARD_PROMPT_LIMIT_BYTES: usize = 20_000;
+    let prompt_bytes = prompt.len();
+    if prompt_bytes > HARD_PROMPT_LIMIT_BYTES {
+        return StepResult {
+            success: false,
+            message: format!(
+                "Merge prompt too large ({} bytes). Limit: {} bytes. \
+                 The cluster has too much redirect content to fit the Kimi bridge limit. \
+                 Consider splitting the cluster into smaller groups or running merge manually.",
+                prompt_bytes, HARD_PROMPT_LIMIT_BYTES
+            ),
+            output: None,
+        };
+    }
+
+    // Run the structured extractor inside a fresh runtime because this function
+    // is called from within tokio::task::spawn_blocking.
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to create runtime for merge extraction: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    let extract_result = rt.block_on(async {
+        crate::rig::extraction::extract_structured::<crate::models::merge_patch::ContentMergePatch>(
+            agent_provider,
+            &prompt,
+            Some("You are an expert content editor. Draft a precise ContentMergePatch JSON."),
+        )
+        .await
+    });
+
+    match extract_result {
+        Ok(patch) => {
+            let patch_json = match serde_json::to_string_pretty(&patch) {
+                Ok(j) => j,
+                Err(e) => {
+                    return StepResult {
+                        success: false,
+                        message: format!("Failed to serialize merge patch: {}", e),
+                        output: None,
+                    };
+                }
+            };
             StepResult {
                 success: true,
-                message: "Merge patch drafted".to_string(),
-                output: Some(final_output),
+                message: format!(
+                    "Merge patch drafted: {} additions, {} transitions",
+                    patch.additions.len(),
+                    patch.transitions.len()
+                ),
+                output: Some(patch_json),
             }
         }
         Err(e) => StepResult {
             success: false,
-            message: format!("Agent error during merge patch draft: {}", e),
+            message: format!("Structured extraction failed for merge patch: {}", e),
             output: None,
         },
     }
@@ -645,6 +838,62 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Step 8: Sync Articles
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Sync merged content back to SQLite and articles.json.
+pub(crate) fn exec_merge_sync_articles(
+    task: &Task,
+    project_path: &str,
+) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+    let repo_root = std::path::Path::new(project_path);
+
+    let db_path = crate::db::default_db_path();
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to open DB for sync: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    match crate::content::ops::sync_and_validate(
+        &paths.automation_dir,
+        repo_root,
+        true, // apply_sync
+        &conn,
+        &task.project_id,
+    ) {
+        Ok(report) => StepResult {
+            success: true,
+            message: format!(
+                "Synced {} checked entries, {} dates patched",
+                report.checked_entries,
+                report.dates_synced
+            ),
+            output: Some(
+                serde_json::json!({
+                    "checked_entries": report.checked_entries,
+                    "content_files": report.content_files,
+                    "orphan_files": report.orphan_files,
+                    "dates_synced": report.dates_synced,
+                })
+                .to_string(),
+            ),
+        },
+        Err(e) => StepResult {
+            success: false,
+            message: format!("Failed to sync merged articles: {}", e),
+            output: None,
+        },
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -723,7 +972,9 @@ fn find_file_by_slug(project_path: &str, slug: &str) -> Option<PathBuf> {
 }
 
 /// Extract headings from markdown body.
+#[allow(dead_code)]
 fn extract_headings(body: &str) -> Vec<ExtractedHeading> {
+    const MAX_BODY_LINES: usize = 30;
     let mut headings = Vec::new();
     let lines: Vec<&str> = body.lines().collect();
     let mut i = 0;
@@ -734,12 +985,20 @@ fn extract_headings(body: &str) -> Vec<ExtractedHeading> {
             let text = line.trim_start_matches('#').trim().to_string();
             let mut body_lines = Vec::new();
             i += 1;
-            while i < lines.len() {
+            while i < lines.len() && body_lines.len() < MAX_BODY_LINES {
                 let next = lines[i].trim_start();
                 if next.starts_with("## ") || next.starts_with("# ") {
                     break;
                 }
                 body_lines.push(lines[i]);
+                i += 1;
+            }
+            // Skip remaining lines of this section if truncated
+            while i < lines.len() {
+                let next = lines[i].trim_start();
+                if next.starts_with("## ") || next.starts_with("# ") {
+                    break;
+                }
                 i += 1;
             }
             headings.push(ExtractedHeading {
@@ -755,6 +1014,7 @@ fn extract_headings(body: &str) -> Vec<ExtractedHeading> {
 }
 
 /// Extract markdown tables from body.
+#[allow(dead_code)]
 fn extract_tables(body: &str) -> Vec<ExtractedTable> {
     let mut tables = Vec::new();
     let lines: Vec<&str> = body.lines().collect();
@@ -779,7 +1039,9 @@ fn extract_tables(body: &str) -> Vec<ExtractedTable> {
 }
 
 /// Extract code block examples from body.
+#[allow(dead_code)]
 fn extract_examples(body: &str) -> Vec<ExtractedExample> {
+    const MAX_CODE_LINES: usize = 40;
     let mut examples = Vec::new();
     let lines: Vec<&str> = body.lines().collect();
     let mut i = 0;
@@ -793,7 +1055,9 @@ fn extract_examples(body: &str) -> Vec<ExtractedExample> {
             let mut code_lines = Vec::new();
             i += 1;
             while i < lines.len() && !lines[i].trim_start().starts_with("```") {
-                code_lines.push(lines[i]);
+                if code_lines.len() < MAX_CODE_LINES {
+                    code_lines.push(lines[i]);
+                }
                 i += 1;
             }
             i += 1; // skip closing fence
@@ -810,7 +1074,9 @@ fn extract_examples(body: &str) -> Vec<ExtractedExample> {
 }
 
 /// Extract FAQ-style Q&A from body (lines matching "Q:" / "A:" or "**Q:**" patterns).
+#[allow(dead_code)]
 fn extract_faqs(body: &str) -> Vec<ExtractedFaq> {
+    const MAX_ANSWER_LINES: usize = 20;
     let mut faqs = Vec::new();
     let lines: Vec<&str> = body.lines().collect();
     let mut i = 0;
@@ -836,20 +1102,24 @@ fn extract_faqs(body: &str) -> Vec<ExtractedFaq> {
                 {
                     break;
                 }
-                answer_lines.push(lines[i]);
+                if answer_lines.len() < MAX_ANSWER_LINES {
+                    answer_lines.push(lines[i]);
+                }
                 i += 1;
             }
             // Check if next line is "A:"
             if i < lines.len() {
                 let a_line = lines[i].trim();
                 if a_line.starts_with("A:") || a_line.starts_with("**A:**") {
-                    answer_lines.push(
-                        a_line
-                            .strip_prefix("A:")
-                            .or_else(|| a_line.strip_prefix("**A:**"))
-                            .unwrap_or(a_line)
-                            .trim(),
-                    );
+                    if answer_lines.len() < MAX_ANSWER_LINES {
+                        answer_lines.push(
+                            a_line
+                                .strip_prefix("A:")
+                                .or_else(|| a_line.strip_prefix("**A:**"))
+                                .unwrap_or(a_line)
+                                .trim(),
+                        );
+                    }
                     i += 1;
                 }
             }

@@ -231,11 +231,38 @@ pub fn ingest_orphans(
     let mut next_id = std::cmp::max(max_existing_id + 1, meta_next_id.max(1));
 
     let mut ingested_files = Vec::new();
+
+    // Collect existing dates for duplicate detection.
+    let existing_dates: std::collections::HashSet<String> = articles
+        .iter()
+        .filter_map(|a| a.published_date.clone())
+        .filter(|d| !d.is_empty())
+        .collect();
+    let today = chrono::Utc::now().date_naive();
+
     for (basename, file_path) in orphans {
         let meta = match crate::content::ops::read_file_metadata(&file_path) {
             Ok(m) => m,
             Err(_) => continue,
         };
+
+        // Warn if the ingested date is duplicate or future.
+        if let Some(ref date_str) = meta.published_date {
+            if !date_str.is_empty() {
+                let is_duplicate = existing_dates.contains(date_str);
+                let is_future = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                    .map(|d| d > today)
+                    .unwrap_or(false);
+                if is_duplicate || is_future {
+                    log::warn!(
+                        "[ingest_orphans] {} has {} date: {} (will be fixed by post-step enforcement)",
+                        basename,
+                        if is_duplicate { "duplicate" } else { "future" },
+                        date_str
+                    );
+                }
+            }
+        }
 
         let url_slug = derive_url_slug(&basename);
         let title = meta.title.unwrap_or_else(|| url_slug.replace('-', " "));

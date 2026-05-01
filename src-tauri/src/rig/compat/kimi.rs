@@ -167,6 +167,13 @@ pub async fn run_prompt(
         .ok_or("No choices in Kimi response")?;
 
     let content = choice.message.content.unwrap_or_default();
+
+    // The bridge sometimes returns upstream API errors as HTTP 200 with the
+    // error text in the content field (e.g. "Error code: 429 - ...").
+    if let Some(err) = detect_proxy_error(&content) {
+        return Err(format!("Kimi bridge returned a proxied API error: {}", err));
+    }
+
     let (pt, ct) = response
         .usage
         .map(|u| (Some(u.prompt_tokens), Some(u.completion_tokens)))
@@ -265,6 +272,12 @@ where
             // Fallback within same response: parse content as JSON.
             if let Some(content) = choice.message.content {
                 let trimmed = content.trim();
+                if let Some(err) = detect_proxy_error(trimmed) {
+                    return Err(format!(
+                        "Kimi bridge returned a proxied API error during structured extraction: {}",
+                        err
+                    ));
+                }
                 let cleaned = strip_json_fences(trimmed);
                 if !cleaned.is_empty() {
                     match serde_json::from_str::<T>(cleaned) {
@@ -331,6 +344,13 @@ where
 
         if let Some(content) = choice.message.content {
             let trimmed = content.trim();
+            if let Some(err) = detect_proxy_error(trimmed) {
+                return Err(format!(
+                    "Kimi bridge returned a proxied API error during structured extraction (attempt {}): {}",
+                    attempt + 1,
+                    err
+                ));
+            }
             let cleaned = strip_json_fences(trimmed);
             if !cleaned.is_empty() {
                 match serde_json::from_str::<T>(cleaned) {
@@ -465,6 +485,24 @@ fn is_tools_not_supported(error: &str) -> bool {
         || error.contains("Tool calling")
 }
 
+/// Detect when the bridge returned an upstream API error as normal content.
+///
+/// Some bridge configurations proxy Kimi/OpenAI errors as HTTP 200 with the
+/// error message placed in the `content` field. This function catches that
+/// pattern so callers can treat it as an error instead of valid output.
+fn detect_proxy_error(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.starts_with("Error code:") {
+        return Some(trimmed.to_string());
+    }
+    if trimmed.contains("rate_limit_reached_error")
+        || trimmed.contains("usage limit")
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
 /// Strip markdown JSON code fences from a string.
 fn strip_json_fences(text: &str) -> &str {
     let trimmed = text.trim();
@@ -503,10 +541,11 @@ async fn send_request(
     request: ChatRequest,
     backend: Option<&str>,
 ) -> Result<ChatResponse, String> {
-    // Use a 180-second timeout so we fail faster than the bridge's own 300s timeout.
-    // This lets us retry promptly instead of waiting 5 minutes for a 500.
+    // Use a 300-second timeout to match the bridge's own timeout.
+    // The bridge queues requests when max_concurrent_requests is reached;
+    // timing out earlier than the bridge causes spurious retries on queued work.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
+        .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
@@ -620,8 +659,15 @@ async fn send_request(
 
             last_error = format!("Kimi API error {}: {}", status, body);
 
-            // Retry on 5xx (server / bridge errors) and 429 (rate limit).
-            let should_retry = status.is_server_error() || status.as_u16() == 429;
+            // Retry on 5xx (server / bridge errors).
+            let is_server_error = status.is_server_error();
+            // For 429, only retry if it's a transient rate limit.
+            // Hard quota limits ("usage limit", "rate_limit_reached_error") won't resolve quickly.
+            let is_retryable_429 = status.as_u16() == 429
+                && !body.contains("usage limit")
+                && !body.contains("quota")
+                && !body.contains("rate_limit_reached_error");
+            let should_retry = is_server_error || is_retryable_429;
             if should_retry && attempt < 3 {
                 let backoff = 2_u64.pow(attempt);
                 log::info!(
@@ -631,6 +677,14 @@ async fn send_request(
                 );
                 tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
                 continue;
+            }
+            // If we got a 429 but it's not retryable, fail fast with a clear message.
+            if status.as_u16() == 429 && !is_retryable_429 {
+                return Err(format!(
+                    "Kimi API quota exceeded (429). The response indicates a hard usage limit. \
+                     Retry after your quota resets. Body: {}",
+                    body
+                ));
             }
 
             return Err(last_error);
@@ -1206,6 +1260,15 @@ mod tests {
             strip_json_fences("{\"a\":1}"),
             "{\"a\":1}"
         );
+    }
+
+    #[test]
+    fn test_detect_proxy_error() {
+        assert!(detect_proxy_error("Error code: 429 - {\"error\": ...}").is_some());
+        assert!(detect_proxy_error("Something else\nrate_limit_reached_error").is_some());
+        assert!(detect_proxy_error("You've reached your usage limit").is_some());
+        assert!(detect_proxy_error("Normal assistant response").is_none());
+        assert!(detect_proxy_error("{\"key\": \"value\"}").is_none());
     }
 
     /// Recursively collect all `$ref` values from a JSON value.

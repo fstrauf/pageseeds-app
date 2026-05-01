@@ -1,3 +1,4 @@
+mod cannibalization;
 mod commands;
 mod config;
 mod content;

@@ -1,5 +1,5 @@
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::spawner::{TaskSpawner, TaskSpec};
+use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
 use crate::models::task::{TaskRunPolicy, Task, TaskArtifact, TaskStatus};
 
 /// Spawn per-article `fix_ctr_article` tasks based on the ctr_build_context artifact.
@@ -142,28 +142,16 @@ pub(crate) fn create_ctr_fix_tasks(
             description: Some(format!("Apply CTR fixes to article {} ({})", id, url_slug)),
             priority: crate::models::task::Priority::Medium,
             run_policy: Some(TaskRunPolicy::AutoEnqueue),
-        agent_policy: crate::models::task::AgentPolicy::Optional,
+            agent_policy: crate::models::task::AgentPolicy::Optional,
             depends_on: vec![parent_task.id.clone()],
             artifacts: vec![artifact],
             idempotency_key: Some(idempotency_key),
+            dedup_policy: Some(DeduplicationPolicy::SkipIfActive),
             ..Default::default()
         };
 
         match TaskSpawner::spawn(conn, spec) {
             Ok(task) => {
-                if matches!(
-                    task.status,
-                    TaskStatus::Done | TaskStatus::Cancelled | TaskStatus::Review
-                ) {
-                    log::info!(
-                        "[ctr_audit] Existing CTR fix task {} for article {} is {:?}; not re-queueing same issue state",
-                        task.id,
-                        id,
-                        task.status
-                    );
-                    continue;
-                }
-
                 log::info!(
                     "[ctr_audit] Created fix task {} (type: fix_ctr_article, article: {}, file: {})",
                     task.id, id, file_ref

@@ -26,6 +26,10 @@ pub enum Error {
     ConfigMissing(String),
     #[error("Validation error: {0}")]
     Validation(String),
+    #[error("Strategy not found")]
+    StrategyNotFound,
+    #[error("Invalid JSON: {0}")]
+    InvalidJson(String),
 
     #[error("{0}")]
     Other(String),

@@ -121,7 +121,23 @@ pub(crate) fn exec_ctr_analyze(
                         serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
                     }
                 }
-                None => output,
+                None => {
+                    let preview = crate::engine::text::char_prefix(&output, 300);
+                    log::warn!(
+                        "[ctr_audit] Agent response contained no parseable JSON. Preview: {:?}",
+                        preview
+                    );
+                    return StepResult {
+                        success: false,
+                        message: format!(
+                            "CTR analysis agent did not return valid JSON. \
+                             The prompt asked for a JSON object but the agent responded with non-JSON text. \
+                             Preview: {:?}",
+                            preview
+                        ),
+                        output: Some(output),
+                    };
+                }
             };
             StepResult {
                 success: true,

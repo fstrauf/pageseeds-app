@@ -97,13 +97,13 @@ pub async fn quick_run_workflow(
                     .map(|t| serde_json::json!({ "themes": t }).to_string());
 
                 let spec = TaskSpec {
-                    project_id,
+                    project_id: project_id.clone(),
                     task_type: task_type.clone(),
                     title: Some(title),
                     description,
                     priority: Priority::High,
-        agent_policy: AgentPolicy::Optional,
-                    idempotency_key: Some(format!("quick_run:{}:{}", task_type, chrono::Utc::now().timestamp())),
+                    agent_policy: AgentPolicy::Optional,
+                    idempotency_key: Some(format!("quick_run:{}:{}", project_id, task_type)),
                     ..Default::default()
                 };
 
