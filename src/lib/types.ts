@@ -97,6 +97,7 @@ export type {
   // Cannibalization Models
   ApprovalStatus,
   CalculatorRecommendation,
+  CannibalizationSelection,
   CannibalizationStrategy,
   Confidence,
   HubRecommendation,

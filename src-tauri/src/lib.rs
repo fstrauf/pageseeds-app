@@ -227,6 +227,7 @@ pub fn run() {
             commands::set_recommendation_approval,
             commands::get_strategy_reviews,
             commands::create_tasks_from_approved_recommendations,
+            commands::create_cannibalization_tasks_from_selection,
             commands::validate_content_format,
             commands::fix_content_format,
             commands::ingest_orphan_articles,

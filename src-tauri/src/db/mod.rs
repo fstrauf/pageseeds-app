@@ -1022,6 +1022,18 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 35 {
+        // Update existing cannibalization_audit tasks to use the new task-drawer picker flow.
+        conn.execute(
+            "UPDATE tasks SET review_surface = 'cannibalization_picker', follow_up_policy = 'user_selection', updated_at = ?1 WHERE type = 'cannibalization_audit'",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (35, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure sitemap_url exists even if the migration was skipped.
     {
         let has_col: bool = conn

@@ -122,6 +122,7 @@ pub enum TaskReviewSurface {
     None,
     KeywordPicker,
     RedditPicker,
+    CannibalizationPicker,
     FollowUpTasks,
     ArtifactReview,
 }
@@ -132,6 +133,7 @@ impl TaskReviewSurface {
             TaskReviewSurface::None => "none",
             TaskReviewSurface::KeywordPicker => "keyword_picker",
             TaskReviewSurface::RedditPicker => "reddit_picker",
+            TaskReviewSurface::CannibalizationPicker => "cannibalization_picker",
             TaskReviewSurface::FollowUpTasks => "follow_up_tasks",
             TaskReviewSurface::ArtifactReview => "artifact_review",
         }
@@ -159,6 +161,7 @@ impl rusqlite::types::FromSql for TaskReviewSurface {
             "none" => Ok(TaskReviewSurface::None),
             "keyword_picker" => Ok(TaskReviewSurface::KeywordPicker),
             "reddit_picker" => Ok(TaskReviewSurface::RedditPicker),
+            "cannibalization_picker" => Ok(TaskReviewSurface::CannibalizationPicker),
             "follow_up_tasks" => Ok(TaskReviewSurface::FollowUpTasks),
             "artifact_review" => Ok(TaskReviewSurface::ArtifactReview),
             _ => Ok(TaskReviewSurface::None),

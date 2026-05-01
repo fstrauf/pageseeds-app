@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/sheet'
 import { KeywordPicker } from './KeywordPicker'
 import { RedditOpportunityPicker } from './RedditOpportunityPicker'
+import { CannibalizationPicker } from './CannibalizationPicker'
 import { ErrorExplainer } from './error-explainer'
 
 const STATUS_BADGE: Record<string, string> = {
@@ -374,6 +375,27 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
                   task={task}
                   onTasksCreated={newTasks => {
                     // Signal parent to switch to the todo tab (where new tasks will appear).
+                    onArticleTasksCreated?.(newTasks)
+                    onClose()
+                    getTask(task.id).then(refreshed => onUpdated(refreshed)).catch(() => {})
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Cannibalization picker — shown when cannibalization audit is in review status */}
+          {task.type === 'cannibalization_audit' && task.status === 'review' && (
+            <>
+              <Separator className="bg-border" />
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground font-medium">Cannibalization Recommendations</div>
+                <p className="text-xs text-muted-foreground">
+                  Select the recommendations you want to act on, then click "Create Tasks".
+                </p>
+                <CannibalizationPicker
+                  task={task}
+                  onTasksCreated={newTasks => {
                     onArticleTasksCreated?.(newTasks)
                     onClose()
                     getTask(task.id).then(refreshed => onUpdated(refreshed)).catch(() => {})

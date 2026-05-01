@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Eye,
   EyeOff,
+  Info,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useQuery, useMutation } from '@/hooks/useQuery'
@@ -307,12 +308,13 @@ export function CannibalizationReview({ projectId }: Props) {
           </Button>
           <Button
             size="sm"
+            variant="outline"
             onClick={handleCreateTasks}
             disabled={createTasksMutation.isPending || approvedWithoutTaskCount === 0}
             title={
               approvedWithoutTaskCount === 0 && approvedCount > 0
                 ? 'All approved recommendations already have tasks'
-                : undefined
+                : 'Legacy flow — prefer the task-drawer picker'
             }
           >
             {createTasksMutation.isPending ? (
@@ -322,8 +324,21 @@ export function CannibalizationReview({ projectId }: Props) {
             )}
             {approvedWithoutTaskCount === 0 && approvedCount > 0
               ? 'All Tasks Created'
-              : `Create Tasks from Approved (${approvedWithoutTaskCount})`}
+              : `Create from Approved (${approvedWithoutTaskCount})`}
           </Button>
+        </div>
+      </div>
+
+      {/* New-primary-flow banner */}
+      <div className="mx-6 mt-4 shrink-0">
+        <div className="flex items-start gap-2.5 rounded-md border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
+          <Info size={14} className="mt-0.5 shrink-0 text-foreground" />
+          <div>
+            <span className="font-medium text-foreground">New workflow:</span>{' '}
+            Open the latest <span className="font-medium">cannibalization_audit</span> task in the task board,
+            review recommendations in the drawer, and create follow-up tasks directly from there.
+            This page is now a read-only strategy browser.
+          </div>
         </div>
       </div>
 

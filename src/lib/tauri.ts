@@ -919,3 +919,9 @@ export const createTasksFromApprovedRecommendations = (
   projectId: string,
 ): Promise<string[]> =>
   invoke('create_tasks_from_approved_recommendations', { strategyId, projectId })
+
+export const createCannibalizationTasksFromSelection = (
+  parentTaskId: string,
+  selections: { recommendation_type: string; recommendation_id: string }[],
+): Promise<Task[]> =>
+  invoke('create_cannibalization_tasks_from_selection', { parentTaskId, selections })

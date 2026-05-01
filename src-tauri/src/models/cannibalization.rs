@@ -255,6 +255,16 @@ pub struct TerritoryCoverageItem {
     pub overlap: String,
 }
 
+// ─── Selection input for task-drawer picker ───────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct CannibalizationSelection {
+    pub recommendation_type: String,
+    pub recommendation_id: String,
+}
+
 // ─── Review state (DB row) ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

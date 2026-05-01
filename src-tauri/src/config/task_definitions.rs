@@ -328,8 +328,8 @@ const DEFINITIONS: &[TaskDefinition] = &[
         task_type: "cannibalization_audit",
         phase: "investigation",
         run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::BackendAuto,
+        review_surface: TaskReviewSurface::CannibalizationPicker,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::CannibalizationAudit,
     },
     // Consolidation
@@ -496,6 +496,18 @@ mod tests {
         assert_eq!(
             default_review_surface("reddit_opportunity_search"),
             TaskReviewSurface::RedditPicker
+        );
+    }
+
+    #[test]
+    fn cannibalization_audit_has_cannibalization_picker_surface() {
+        assert_eq!(
+            default_review_surface("cannibalization_audit"),
+            TaskReviewSurface::CannibalizationPicker
+        );
+        assert_eq!(
+            default_follow_up_policy("cannibalization_audit"),
+            FollowUpPolicy::UserSelection
         );
     }
 

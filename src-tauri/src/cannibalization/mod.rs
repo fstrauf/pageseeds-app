@@ -8,11 +8,11 @@ use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
 use crate::engine::task_store;
 use crate::error::Result;
 use crate::models::cannibalization::{
-    ApprovalStatus, CannibalizationStrategy, CalculatorRecommendation, HubRecommendation,
-    MergeRecommendation, RecommendationTaskStatus, StrategyReview, StrategyWithReviews,
-    TerritoryRecommendation,
+    ApprovalStatus, CannibalizationSelection, CannibalizationStrategy, CalculatorRecommendation,
+    HubRecommendation, MergeRecommendation, RecommendationTaskStatus, StrategyReview,
+    StrategyWithReviews, TerritoryRecommendation,
 };
-use crate::models::task::{AgentPolicy, Priority, TaskArtifact, TaskRunPolicy};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRunPolicy, TaskStatus};
 use rusqlite::{Connection, OptionalExtension};
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -364,4 +364,528 @@ pub fn spawn_tasks_from_approved(
     created_ids.retain(|id| seen.insert(id.clone()));
 
     Ok(created_ids)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Task Spawning from Selection (task-drawer picker flow)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Create follow-up tasks from user selections in the task drawer.
+///
+/// Validates selections against the parent task's strategy artifact,
+/// creates child tasks via TaskSpawner, marks the parent done,
+/// and returns the full created tasks.
+///
+/// Uses `serde_json::Value` instead of the strict `CannibalizationStrategy`
+/// model because the reducer emits loose shapes (e.g. hub gaps without
+/// `intent`, risks as strings) that do not deserialize into the typed struct.
+pub fn spawn_tasks_from_selection(
+    db: &Connection,
+    parent_task_id: &str,
+    selections: &[CannibalizationSelection],
+) -> Result<Vec<Task>> {
+    if selections.is_empty() {
+        return Err(crate::error::Error::Validation(
+            "No selections provided".to_string(),
+        ));
+    }
+
+    let parent_task = task_store::get_task(db, parent_task_id)?;
+
+    if parent_task.task_type != "cannibalization_audit" {
+        return Err(crate::error::Error::Validation(
+            "Parent task is not a cannibalization audit".to_string(),
+        ));
+    }
+
+    let strategy_json = parent_task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "cannibalization_strategy")
+        .and_then(|a| a.content.clone())
+        .ok_or_else(|| crate::error::Error::StrategyNotFound)?;
+
+    let strategy: serde_json::Value = serde_json::from_str(&strategy_json)
+        .map_err(|e| crate::error::Error::InvalidJson(format!("strategy: {}", e)))?;
+
+    // Helper to extract string from a JSON value safely.
+    fn get_str<'v>(v: &'v serde_json::Value, key: &str) -> Option<&'v str> {
+        v.get(key).and_then(|x| x.as_str())
+    }
+
+    // Build a set of valid recommendation keys and lookup maps.
+    let mut valid_keys = std::collections::HashSet::new();
+
+    let merge_recs = strategy
+        .get("merge_recommendations")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut merge_map = std::collections::HashMap::new();
+    for rec in &merge_recs {
+        if let Some(id) = get_str(rec, "cluster_id") {
+            if !id.is_empty() {
+                valid_keys.insert(format!("merge:{}", id));
+                merge_map.insert(id.to_string(), rec);
+            }
+        }
+    }
+
+    let hub_recs = strategy
+        .get("hub_recommendations")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut hub_map = std::collections::HashMap::new();
+    for rec in &hub_recs {
+        if let Some(id) = get_str(rec, "topic") {
+            if !id.is_empty() {
+                valid_keys.insert(format!("hub:{}", id));
+                hub_map.insert(id.to_string(), rec);
+            }
+        }
+    }
+
+    let territory_recs = strategy
+        .get("territory_recommendations")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut territory_map = std::collections::HashMap::new();
+    for rec in &territory_recs {
+        if let Some(id) = get_str(rec, "theme") {
+            if !id.is_empty() {
+                valid_keys.insert(format!("territory:{}", id));
+                territory_map.insert(id.to_string(), rec);
+            }
+        }
+    }
+
+    let calculator_recs = strategy
+        .get("calculator_recommendations")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut calculator_map = std::collections::HashMap::new();
+    for rec in &calculator_recs {
+        if let Some(id) = get_str(rec, "strategy") {
+            if !id.is_empty() {
+                valid_keys.insert(format!("calculator:{}", id));
+                calculator_map.insert(id.to_string(), rec);
+            }
+        }
+    }
+
+    // Validate all selections
+    for sel in selections {
+        let key = format!("{}:{}", sel.recommendation_type, sel.recommendation_id);
+        if !valid_keys.contains(&key) {
+            return Err(crate::error::Error::Validation(format!(
+                "Selection {} not found in strategy artifact",
+                key
+            )));
+        }
+    }
+
+    let artifact = TaskArtifact {
+        key: "cannibalization_strategy".to_string(),
+        path: None,
+        artifact_type: Some("json".to_string()),
+        source: Some("cannibalization_audit".to_string()),
+        content: Some(strategy_json),
+    };
+
+    let depends_on = vec![parent_task_id.to_string()];
+    let project_id = parent_task.project_id.clone();
+    let mut created_tasks = Vec::new();
+
+    for sel in selections {
+        let task = match sel.recommendation_type.as_str() {
+            "merge" => {
+                let rec = merge_map
+                    .get(&sel.recommendation_id)
+                    .ok_or_else(|| crate::error::Error::Validation("Merge rec not found".to_string()))?;
+                let cluster_id = sel.recommendation_id.clone();
+                let keep_url = get_str(rec, "keep_url").unwrap_or("");
+                let redirect_urls: Vec<String> = rec
+                    .get("redirect_urls")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let idempotency_key = format!("can_fix:merge:{}:{}", project_id, cluster_id);
+                let spec = TaskSpec {
+                    project_id: project_id.clone(),
+                    task_type: "consolidate_cluster".to_string(),
+                    title: Some(format!("Merge cluster: {}", cluster_id)),
+                    description: Some(format!(
+                        "Merge: keep {} → redirect {:?}",
+                        keep_url, redirect_urls
+                    )),
+                    priority: Priority::Medium,
+                    run_policy: Some(TaskRunPolicy::UserEnqueue),
+                    agent_policy: AgentPolicy::Required,
+                    depends_on: depends_on.clone(),
+                    artifacts: vec![artifact.clone()],
+                    idempotency_key: Some(idempotency_key),
+                    dedup_policy: Some(DeduplicationPolicy::SkipIfAnyExists),
+                    ..Default::default()
+                };
+                TaskSpawner::spawn(db, spec)?
+            }
+            "hub" => {
+                let rec = hub_map
+                    .get(&sel.recommendation_id)
+                    .ok_or_else(|| crate::error::Error::Validation("Hub rec not found".to_string()))?;
+                let topic = sel.recommendation_id.clone();
+                let suggested_title = get_str(rec, "suggested_title").unwrap_or(&topic).to_string();
+                let suggested_url = get_str(rec, "suggested_url").unwrap_or("").to_string();
+                let intent = get_str(rec, "intent").unwrap_or("").to_string();
+                let source_pages: Vec<i64> = rec
+                    .get("source_pages")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+                    .unwrap_or_default();
+                let spoke_pages: Vec<i64> = rec
+                    .get("spoke_pages")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+                    .unwrap_or_default();
+                let outline: Vec<String> = rec
+                    .get("outline")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+                let idempotency_key = format!("can_fix:hub:{}:{}", project_id, topic);
+                let hub_brief = serde_json::json!({
+                    "topic": topic,
+                    "suggested_title": suggested_title,
+                    "suggested_url": suggested_url,
+                    "intent": intent,
+                    "source_pages": source_pages,
+                    "spoke_pages": spoke_pages,
+                    "outline": outline,
+                });
+                let hub_artifact = TaskArtifact {
+                    key: "hub_brief".to_string(),
+                    path: None,
+                    artifact_type: Some("json".to_string()),
+                    source: Some("cannibalization_audit".to_string()),
+                    content: Some(hub_brief.to_string()),
+                };
+                let spec = TaskSpec {
+                    project_id: project_id.clone(),
+                    task_type: "write_article".to_string(),
+                    title: Some(format!("Create hub: {}", suggested_title)),
+                    description: Some(format!(
+                        "Hub page: {} → {}",
+                        suggested_url, suggested_title
+                    )),
+                    priority: Priority::Medium,
+                    run_policy: Some(TaskRunPolicy::UserEnqueue),
+                    review_surface: None,
+                    agent_policy: AgentPolicy::Required,
+                    depends_on: depends_on.clone(),
+                    artifacts: vec![hub_artifact],
+                    idempotency_key: Some(idempotency_key),
+                    dedup_policy: Some(DeduplicationPolicy::SkipIfAnyExists),
+                    ..Default::default()
+                };
+                TaskSpawner::spawn(db, spec)?
+            }
+            "territory" => {
+                let rec = territory_map
+                    .get(&sel.recommendation_id)
+                    .ok_or_else(|| crate::error::Error::Validation("Territory rec not found".to_string()))?;
+                let theme = sel.recommendation_id.clone();
+                let priority = get_str(rec, "priority").unwrap_or("medium").to_string();
+                let idempotency_key = format!("can_fix:territory:{}:{}", project_id, theme);
+                let spec = TaskSpec {
+                    project_id: project_id.clone(),
+                    task_type: "territory_research".to_string(),
+                    title: Some(format!("Research territory: {}", theme)),
+                    description: Some(format!(
+                        "Territory research: {} (priority: {})",
+                        theme, priority
+                    )),
+                    priority: Priority::Medium,
+                    run_policy: Some(TaskRunPolicy::UserEnqueue),
+                    agent_policy: AgentPolicy::Required,
+                    depends_on: depends_on.clone(),
+                    artifacts: vec![artifact.clone()],
+                    idempotency_key: Some(idempotency_key),
+                    dedup_policy: Some(DeduplicationPolicy::SkipIfAnyExists),
+                    ..Default::default()
+                };
+                TaskSpawner::spawn(db, spec)?
+            }
+            "calculator" => {
+                let rec = calculator_map
+                    .get(&sel.recommendation_id)
+                    .ok_or_else(|| crate::error::Error::Validation("Calculator rec not found".to_string()))?;
+                let strategy_name = sel.recommendation_id.clone();
+                let ticker_universe = get_str(rec, "ticker_universe").unwrap_or("").to_string();
+                let idempotency_key = format!("can_fix:calculator:{}:{}", project_id, strategy_name);
+                let spec = TaskSpec {
+                    project_id: project_id.clone(),
+                    task_type: "calculator_rollout".to_string(),
+                    title: Some(format!("Calculator rollout: {}", strategy_name)),
+                    description: Some(format!(
+                        "Calculator: {} (universe: {})",
+                        strategy_name, ticker_universe
+                    )),
+                    priority: Priority::Medium,
+                    run_policy: Some(TaskRunPolicy::UserEnqueue),
+                    agent_policy: AgentPolicy::Required,
+                    depends_on: depends_on.clone(),
+                    artifacts: vec![artifact.clone()],
+                    idempotency_key: Some(idempotency_key),
+                    dedup_policy: Some(DeduplicationPolicy::SkipIfAnyExists),
+                    ..Default::default()
+                };
+                TaskSpawner::spawn(db, spec)?
+            }
+            other => {
+                return Err(crate::error::Error::Validation(format!(
+                    "Unknown recommendation type: {}",
+                    other
+                )));
+            }
+        };
+        created_tasks.push(task);
+    }
+
+    // Mark parent as done
+    task_store::update_task_status(db, parent_task_id, TaskStatus::Done)?;
+
+    Ok(created_tasks)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::task::{FollowUpPolicy, TaskReviewSurface, TaskRunPolicy};
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
+    fn test_project_in(conn: &Connection) -> String {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active) VALUES ('proj1', 'Test', '/tmp', 1)",
+            [],
+        )
+        .unwrap();
+        "proj1".to_string()
+    }
+
+    fn make_task(task_type: &str, project_id: &str) -> crate::models::task::Task {
+        crate::models::task::Task {
+            id: format!("test-{}", uuid::Uuid::new_v4()),
+            task_type: task_type.to_string(),
+            phase: "investigation".to_string(),
+            status: TaskStatus::Review,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::CannibalizationPicker,
+            follow_up_policy: FollowUpPolicy::UserSelection,
+            agent_policy: AgentPolicy::Optional,
+            title: Some(format!("{} test", task_type)),
+            description: None,
+            project_id: project_id.to_string(),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun {
+                attempts: 0,
+                last_error: None,
+                provider: None,
+                ..Default::default()
+            },
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn strategy_artifact() -> TaskArtifact {
+        let json = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "merge_recommendations": [
+                {
+                    "cluster_id": "risk-management",
+                    "confidence": "high",
+                    "keep_url": "/blog/risk",
+                    "redirect_urls": ["/blog/risk-old"],
+                    "reason": "Duplicate coverage"
+                }
+            ],
+            "hub_recommendations": [
+                {
+                    "topic": "risk-management",
+                    "suggested_url": "/hub/risk-management",
+                    "suggested_title": "Risk Management Hub",
+                    "spoke_pages": [1, 2],
+                    "reason": "Gap detected"
+                }
+            ],
+            "territory_recommendations": [
+                {
+                    "theme": "portfolio-hedging",
+                    "priority": "high",
+                    "suggested_tasks": ["Research hedging strategies"]
+                }
+            ],
+            "calculator_recommendations": [
+                {
+                    "strategy": "black-scholes",
+                    "ticker_universe": "US equities",
+                    "indexing_policy": "weekly",
+                    "reason": "High demand"
+                }
+            ],
+            "risks": ["Candidate X failed: missing data"]
+        });
+        TaskArtifact {
+            key: "cannibalization_strategy".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("cannibalization_audit".to_string()),
+            content: Some(json.to_string()),
+        }
+    }
+
+    #[test]
+    fn selection_rejects_empty_selections() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        let mut parent = make_task("cannibalization_audit", &project_id);
+        parent.artifacts.push(strategy_artifact());
+        task_store::create_task(&conn, &parent).unwrap();
+
+        let result = spawn_tasks_from_selection(&conn, &parent.id, &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("No selections provided"), "expected empty-selection error, got: {}", err);
+    }
+
+    #[test]
+    fn selection_rejects_invalid_parent_task_type() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        let mut parent = make_task("content_audit", &project_id);
+        parent.artifacts.push(strategy_artifact());
+        task_store::create_task(&conn, &parent).unwrap();
+
+        let selections = vec![CannibalizationSelection {
+            recommendation_type: "merge".to_string(),
+            recommendation_id: "risk-management".to_string(),
+        }];
+        let result = spawn_tasks_from_selection(&conn, &parent.id, &selections);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not a cannibalization audit"), "expected type-mismatch error, got: {}", err);
+    }
+
+    #[test]
+    fn selection_rejects_id_not_in_artifact() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        let mut parent = make_task("cannibalization_audit", &project_id);
+        parent.artifacts.push(strategy_artifact());
+        task_store::create_task(&conn, &parent).unwrap();
+
+        let selections = vec![CannibalizationSelection {
+            recommendation_type: "merge".to_string(),
+            recommendation_id: "does-not-exist".to_string(),
+        }];
+        let result = spawn_tasks_from_selection(&conn, &parent.id, &selections);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found in strategy artifact"), "expected not-found error, got: {}", err);
+    }
+
+    #[test]
+    fn selection_creates_expected_child_task_types() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        let mut parent = make_task("cannibalization_audit", &project_id);
+        parent.artifacts.push(strategy_artifact());
+        task_store::create_task(&conn, &parent).unwrap();
+
+        let selections = vec![
+            CannibalizationSelection {
+                recommendation_type: "merge".to_string(),
+                recommendation_id: "risk-management".to_string(),
+            },
+            CannibalizationSelection {
+                recommendation_type: "hub".to_string(),
+                recommendation_id: "risk-management".to_string(),
+            },
+            CannibalizationSelection {
+                recommendation_type: "territory".to_string(),
+                recommendation_id: "portfolio-hedging".to_string(),
+            },
+            CannibalizationSelection {
+                recommendation_type: "calculator".to_string(),
+                recommendation_id: "black-scholes".to_string(),
+            },
+        ];
+
+        let tasks = spawn_tasks_from_selection(&conn, &parent.id, &selections).unwrap();
+        assert_eq!(tasks.len(), 4);
+
+        let types: Vec<String> = tasks.iter().map(|t| t.task_type.clone()).collect();
+        assert!(types.contains(&"consolidate_cluster".to_string()));
+        assert!(types.contains(&"write_article".to_string()));
+        assert!(types.contains(&"territory_research".to_string()));
+        assert!(types.contains(&"calculator_rollout".to_string()));
+    }
+
+    #[test]
+    fn selection_marks_parent_done() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        let mut parent = make_task("cannibalization_audit", &project_id);
+        parent.artifacts.push(strategy_artifact());
+        task_store::create_task(&conn, &parent).unwrap();
+
+        let selections = vec![CannibalizationSelection {
+            recommendation_type: "merge".to_string(),
+            recommendation_id: "risk-management".to_string(),
+        }];
+
+        spawn_tasks_from_selection(&conn, &parent.id, &selections).unwrap();
+        let updated = task_store::get_task(&conn, &parent.id).unwrap();
+        assert_eq!(updated.status, TaskStatus::Done);
+    }
+
+    #[test]
+    fn selection_is_idempotent() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        let mut parent = make_task("cannibalization_audit", &project_id);
+        parent.artifacts.push(strategy_artifact());
+        task_store::create_task(&conn, &parent).unwrap();
+
+        let selections = vec![CannibalizationSelection {
+            recommendation_type: "merge".to_string(),
+            recommendation_id: "risk-management".to_string(),
+        }];
+
+        let first = spawn_tasks_from_selection(&conn, &parent.id, &selections).unwrap();
+        assert_eq!(first.len(), 1);
+
+        // Second call should return the existing task (idempotency via TaskSpawner)
+        let second = spawn_tasks_from_selection(&conn, &parent.id, &selections).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].id, second[0].id);
+    }
 }

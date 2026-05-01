@@ -5,8 +5,9 @@ use tauri::State;
 
 use crate::commands::AppState;
 use crate::models::cannibalization::{
-    ApprovalStatus, StrategyReview, StrategyWithReviews,
+    ApprovalStatus, CannibalizationSelection, StrategyReview, StrategyWithReviews,
 };
+use crate::models::task::Task;
 
 /// Read the cannibalization strategy for a project.
 #[tauri::command]
@@ -70,5 +71,17 @@ pub fn create_tasks_from_approved_recommendations(
 ) -> Result<Vec<String>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     crate::cannibalization::spawn_tasks_from_approved(&db, &strategy_id, &project_id)
+        .map_err(|e| e.into())
+}
+
+/// Create follow-up tasks from user selections in the task drawer.
+#[tauri::command]
+pub fn create_cannibalization_tasks_from_selection(
+    state: State<'_, AppState>,
+    parent_task_id: String,
+    selections: Vec<CannibalizationSelection>,
+) -> Result<Vec<Task>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    crate::cannibalization::spawn_tasks_from_selection(&db, &parent_task_id, &selections)
         .map_err(|e| e.into())
 }
