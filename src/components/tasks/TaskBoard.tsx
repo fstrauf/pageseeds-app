@@ -245,7 +245,7 @@ export function TaskBoard({
     {
       invalidateQueries: 'tasks-',
       onSuccess: (_, ids) => {
-        setImportExportMsg(`Deleted ${ids.length} to-do/review task${ids.length !== 1 ? 's' : ''}.`)
+        setImportExportMsg(`Deleted ${ids.length} task${ids.length !== 1 ? 's' : ''}.`)
       },
       onError: (error) => {
         showError(`Bulk delete failed: ${error.message}`)
@@ -258,18 +258,18 @@ export function TaskBoard({
     if (deletingSelected) return
 
     const selected = tasks.filter(t => checkedIds.has(t.id))
-    const deletableSelected = selected.filter(t => t.status === 'todo' || t.status === 'review')
+    const deletableSelected = selected.filter(t => t.status === 'todo' || t.status === 'review' || t.status === 'failed')
     const nonDeletableCount = selected.length - deletableSelected.length
 
     if (deletableSelected.length === 0) {
-      showError('Only to-do or review tasks can be bulk deleted.')
+      showError('Only to-do, review, or failed tasks can be bulk deleted.')
       return
     }
 
     const confirmMsg =
       nonDeletableCount > 0
-        ? `Delete ${deletableSelected.length} selected to-do/review task${deletableSelected.length !== 1 ? 's' : ''}? (${nonDeletableCount} selected item${nonDeletableCount !== 1 ? 's are' : ' is'} not to-do/review and will be kept.)`
-        : `Delete ${deletableSelected.length} selected to-do/review task${deletableSelected.length !== 1 ? 's' : ''}?`
+        ? `Delete ${deletableSelected.length} selected task${deletableSelected.length !== 1 ? 's' : ''}? (${nonDeletableCount} selected item${nonDeletableCount !== 1 ? 's are' : ' is'} not to-do/review/failed and will be kept.)`
+        : `Delete ${deletableSelected.length} selected task${deletableSelected.length !== 1 ? 's' : ''}?`
 
     if (!window.confirm(confirmMsg)) return
 
