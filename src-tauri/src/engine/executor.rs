@@ -106,8 +106,14 @@ pub async fn execute_task_with_token(
 
         // Agent provider is now global (user preference), but check for legacy project-specific setting
         let agent_provider = if let Some(legacy) = &project.agent_provider {
-            log::debug!("[executor] Using legacy project agent_provider: {}", legacy);
-            legacy.clone()
+            let valid = matches!(legacy.as_str(), "kimi" | "claude" | "openai" | "ollama");
+            if valid {
+                log::debug!("[executor] Using legacy project agent_provider: {}", legacy);
+                legacy.clone()
+            } else {
+                log::warn!("[executor] Invalid legacy project agent_provider '{}', falling back to global", legacy);
+                global_settings::get_agent_provider(conn)
+            }
         } else {
             global_settings::get_agent_provider(conn)
         };

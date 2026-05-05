@@ -650,9 +650,9 @@ export function Settings({ projectId }: SettingsProps) {
                         }}
                         className="flex-1 text-sm bg-secondary border border-border rounded-md px-3 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                       >
-                        <option value="copilot">copilot</option>
-                        <option value="claude">claude</option>
                         <option value="kimi">kimi</option>
+                        <option value="claude">claude</option>
+                        <option value="openai">openai</option>
                       </select>
                       <Button
                         variant="outline"

@@ -44,14 +44,28 @@ pub fn get_agent_provider(conn: &Connection) -> String {
         .unwrap_or_else(|| DEFAULT_AGENT_PROVIDER.to_string())
 }
 
+/// Valid agent providers supported by the backend.
+pub const VALID_PROVIDERS: &[&str] = &["kimi", "claude", "openai", "ollama"];
+
 /// Resolve the agent provider for a project.
-/// Uses the project's legacy `agent_provider` if set and non-empty,
+/// Uses the project's legacy `agent_provider` if set, non-empty, and valid,
 /// otherwise falls back to the global setting.
 pub fn resolve_agent_provider(conn: &Connection, legacy: Option<&str>) -> String {
-    legacy
+    let legacy_valid = legacy
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| get_agent_provider(conn))
+        .filter(|s| VALID_PROVIDERS.contains(&s.to_lowercase().as_str()));
+
+    if let Some(provider) = legacy_valid {
+        provider.to_string()
+    } else {
+        if legacy.is_some_and(|s| !s.is_empty()) {
+            log::warn!(
+                "[global_settings] Invalid legacy agent_provider '{}', falling back to global",
+                legacy.unwrap()
+            );
+        }
+        get_agent_provider(conn)
+    }
 }
 
 /// Set the global agent provider setting.

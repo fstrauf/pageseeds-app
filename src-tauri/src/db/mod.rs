@@ -619,6 +619,29 @@ pub fn init(path: &Path) -> Result<Connection> {
 pub fn init_with_conn(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     run_migrations(conn)?;
+    // Repair: ensure global_settings exists even if V14 was skipped or the table was dropped.
+    {
+        let table_exists: bool = conn
+            .prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='global_settings'")?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !table_exists {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute_batch(
+                "CREATE TABLE global_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );",
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO global_settings (key, value, updated_at) VALUES ('agent_provider', 'kimi', ?1)",
+                [&now],
+            )?;
+        }
+    }
+
     Ok(())
 }
 
