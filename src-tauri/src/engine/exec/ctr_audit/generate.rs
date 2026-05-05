@@ -238,11 +238,12 @@ pub(crate) fn build_ctr_fix_prompt(
     let (current_title, current_meta, current_first) = super::patch::parse_content_excerpt(original_content);
     let has_faq = crate::engine::exec::audit_health::has_frontmatter_faq(original_content);
 
-    // Build body excerpt (first ~800 chars of body, skipping frontmatter)
+    // Build body excerpt (first ~3_000 chars of body, skipping frontmatter)
+    const BODY_EXCERPT_CHARS: usize = 3_000;
     let body_excerpt = crate::content::frontmatter::split_mdx(original_content)
         .map(|(_, b)| {
-            let truncated: String = b.chars().take(800).collect();
-            if b.len() > 800 {
+            let truncated: String = b.chars().take(BODY_EXCERPT_CHARS).collect();
+            if b.len() > BODY_EXCERPT_CHARS {
                 format!("{}...", truncated)
             } else {
                 truncated

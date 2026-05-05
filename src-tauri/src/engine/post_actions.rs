@@ -40,6 +40,7 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
     }
 
     if ctx.step.kind == StepKind::RedditEnrich {
+        let mut last_pending = -1i64;
         loop {
             let pending: i64 = ctx
                 .conn
@@ -54,6 +55,14 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
             if pending == 0 {
                 break;
             }
+            if pending == last_pending {
+                log::warn!(
+                    "[reddit_enrich] no progress in last batch ({} posts still pending) — breaking to avoid infinite loop",
+                    pending
+                );
+                break;
+            }
+            last_pending = pending;
             log::info!(
                 "[reddit_enrich] {} posts still pending enrichment — running batch",
                 pending

@@ -47,12 +47,15 @@ export type {
   
   // GSC Models
   Coverage404Record,
+  DriftUrl,
   GscAuthStatus,
+  GscDriftReport,
   InspectionRecord,
   MoverMetrics,
   PageMetrics,
   QueryMetrics,
   RedirectRecord,
+  ResubmitCandidate,
   
   // Reddit Models
   MigrationResult,

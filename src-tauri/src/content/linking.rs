@@ -38,7 +38,10 @@ pub struct LinkScanResult {
     pub total_internal_links: usize,
     pub articles_with_outgoing: usize,
     pub articles_with_incoming: usize,
+    /// Articles with zero incoming AND zero outgoing links (completely disconnected)
     pub orphan_ids: Vec<i64>,
+    /// Articles with zero incoming links (may have outgoing links — Google cannot discover them)
+    pub zero_incoming_ids: Vec<i64>,
     pub profiles: Vec<ArticleLinkProfile>,
 }
 
@@ -230,6 +233,11 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
         .filter(|p| p.incoming_ids.is_empty() && p.outgoing_ids.is_empty())
         .map(|p| p.id)
         .collect();
+    let zero_incoming_ids: Vec<i64> = profiles
+        .iter()
+        .filter(|p| p.incoming_ids.is_empty())
+        .map(|p| p.id)
+        .collect();
 
     Ok(LinkScanResult {
         total_articles: articles.len(),
@@ -237,6 +245,7 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
         articles_with_outgoing,
         articles_with_incoming,
         orphan_ids,
+        zero_incoming_ids,
         profiles,
     })
 }

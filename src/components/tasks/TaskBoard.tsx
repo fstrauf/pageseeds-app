@@ -139,11 +139,13 @@ export function TaskBoard({
 
   // Auto-open a specific task when navigated here from Overview or the task runner.
   useEffect(() => {
+    console.log('[TaskBoard] auto-open effect running, initialTaskId:', initialTaskId, 'tasks count:', tasks.length, 'statusFilter:', statusFilter)
     if (!initialTaskId) return
 
     // Already in the current list? Open immediately.
     const target = tasks.find(t => t.id === initialTaskId)
     if (target) {
+      console.log('[TaskBoard] found target in tasks list, opening:', target.id)
       setSelectedTask(target)
       onTaskOpened?.()
       fetchedTaskIdRef.current = null
@@ -153,17 +155,22 @@ export function TaskBoard({
     // Not in current filtered list. Widen to 'all' so the background list reloads,
     // and also fetch the task directly so the panel opens right away.
     if (statusFilter !== 'all') {
+      console.log('[TaskBoard] widening statusFilter to all')
       setStatusFilter('all')
     }
 
     if (fetchedTaskIdRef.current !== initialTaskId) {
+      console.log('[TaskBoard] fetching task directly:', initialTaskId)
       fetchedTaskIdRef.current = initialTaskId
       getTask(initialTaskId)
         .then(task => {
+          console.log('[TaskBoard] getTask succeeded, opening:', task.id)
           setSelectedTask(task)
           onTaskOpened?.()
         })
-        .catch(() => {
+        .catch((err) => {
+          console.log('[TaskBoard] getTask failed:', err)
+          fetchedTaskIdRef.current = null
           // Direct fetch failed; the background list reload may still pick it up.
         })
     }
@@ -613,6 +620,8 @@ export function TaskBoard({
               refetch()
             }
             setSelectedTask(null)
+            // Clear the pending task ID so subsequent "Open task" clicks work.
+            onTaskOpened?.()
           }
         }}
       >
@@ -621,7 +630,10 @@ export function TaskBoard({
             <TaskDetail
               task={selectedTask}
               projectName={projectName}
-              onClose={() => setSelectedTask(null)}
+              onClose={() => {
+                setSelectedTask(null)
+                onTaskOpened?.()
+              }}
               onUpdated={handleTaskUpdated}
               onDeleted={handleTaskDeleted}
               onArticleTasksCreated={(newTasks) => {

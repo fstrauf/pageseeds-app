@@ -1,127 +1,81 @@
 # Cannibalization Strategy Skill
 
-Used by the `can_analyze` agentic step.
+Used by the `can_analyze_candidates` agentic step.
 
 ## Input
 
-Structured JSON containing:
-- **site_summary**: `total_pages`, `total_impressions`, `period_days`
-- **clusters**: Array of cluster objects, each with:
-  - `cluster_id`: Machine-readable cluster identifier
-  - `theme`: Common theme / target keyword
-  - `candidate_intent`: Inferred search intent for the cluster
-  - `total_impressions`, `total_clicks`, `avg_position`: Aggregated GSC metrics
-  - `shared_query_count`: Number of distinct target keywords in cluster (proxy for query overlap)
-  - `hub_exists`: Whether a hub/guide page already exists in this cluster
-  - `pages`: Full per-page metadata including `url`, `title`, `h1`, `target_keyword`, `impressions`, `clicks`, `ctr`, `avg_position`, `word_count`, `incoming_internal_links`, `outgoing_internal_links`, `published_date`, `first_200_words`
-  - `top_shared_queries`: Most common queries shared across pages
-- **hub_gaps**: Clusters with 3+ articles that lack a broad parent hub page
-- **territory_analysis**: `saturated_themes` (>5 articles) and `open_territories` (0-1 articles with demand evidence)
+A single merge candidate JSON containing:
+- `candidate_id`: Machine-readable identifier
+- `candidate_type`: `"merge_candidate"` or `"exact_keyword_dupe"`
+- `theme`: Common theme / target keyword
+- `pages`: Array of pages, each with `id`, `url`, `title`, `h1`, `target_keyword`, `impressions`, `clicks`, `avg_position`, `word_count`, `incoming_internal_links`, `outgoing_internal_links`, `published_date`, `excerpt`
+- `top_shared_queries`: Most common queries shared across pages
+- `shared_query_count`: Number of distinct overlapping queries
+- `total_impressions`: Sum of impressions across all pages
 
 ## Analysis Rules
 
 ### 1. Identify True Cannibalization
-- Analyze similarity clusters and distinguish **true cannibalization** from mere topical similarity.
+- Analyze the candidate cluster and distinguish **true cannibalization** from mere topical similarity.
 - True cannibalization occurs when two or more articles target the **same search intent** for the **same keyword** and compete against each other in SERPs.
+- **Exact keyword duplicates**: Candidates with `candidate_type: "exact_keyword_dupe"` have the **identical target_keyword**. They are guaranteed cannibalization cases — you MUST recommend a merge. Do NOT return `no_action: true` for these.
+- **Do NOT return `no_action: true` for clusters where 3+ articles share the exact same target_keyword.** These are almost certainly cannibalizing each other.
 - Topical overlap alone (e.g., two articles mentioning the same broad topic) is not sufficient.
-- Use `shared_query_count`, similarity evidence, and per-page metrics to decide.
 
 ### 2. Merge Recommendations
-For each cannibalized cluster, recommend which article to **KEEP** and which to **redirect**:
+For true cannibalization, recommend which article to **KEEP** and which to **redirect**:
 
+- **Mandatory merges**: If 3+ articles share the identical target_keyword, you MUST recommend a merge unless one article has 10x more impressions than all others combined.
+- **Exact duplicate candidates**: GSC performance data is already provided. Use it as the primary authority signal:
+  - The article with the **highest impressions + lowest avg_position** is usually the best keeper.
+  - If the top performer also has the cleanest URL and deepest content, the choice is obvious.
+  - Only override GSC rank if the top performer has a terrible URL or clearly outdated content.
 - **Keeper selection criteria** (evaluate all, then decide):
-  - **Impressions**: Higher impressions = stronger authority signal (primary proxy when backlink data is unavailable).
-  - **Internal links**: Higher `incoming_internal_links` indicates stronger site integration.
+  - **Impressions**: Higher impressions = stronger authority signal.
+  - **avg_position**: Lower position (closer to 1.0) = better SERP ranking.
   - **URL quality**: Shorter, cleaner, more keyword-aligned URLs are preferred.
-  - **Content depth**: Higher `word_count` and better-structured content wins.
+  - **Content depth**: Longer, more thorough, better-structured content wins.
   - **Publish date**: More recent content is preferred if depth and authority are comparable.
-  - **Position**: Lower `avg_position` (closer to 1) is better.
 - The keeper should be the **strongest overall article** in the cluster.
 - Redirect targets should be merged into the keeper **before** applying 301s: preserve unique examples, data points, or angles.
 - Set `confidence` to `high`, `medium`, or `low` based on evidence strength.
-- Low-confidence recommendations should never auto-apply.
-
-### 3. Hub / Pillar Page Identification
-- For any cluster with **3+ articles**, evaluate whether a dedicated hub/pillar page is missing.
-- Check `hub_exists` and `hub_gaps` to avoid recommending duplicate hubs.
-- Hub pages should target a **broader keyword** than the individual cluster articles.
-- The hub should logically link to all cluster articles.
-
-### 4. Territory Analysis
-- Identify **saturated themes**: > 5 articles on the same narrow topic with diminishing returns.
-- Identify **open territories**: themes with 0–1 existing articles but **related demand** (implied by adjacent keywords, search trends, or gaps in the content map).
-- Recommend new topical territories based on real search demand.
-
-### 5. Prioritization
-- Prioritize clusters with the **highest total impressions** first.
-- Use impressions as the primary authority proxy when backlink data is unavailable.
+- **no_action is only for clusters where the pages clearly serve different search intents** (e.g., one is a beginner tutorial, another is an advanced strategy, and the keywords differ).
 
 ## Output Contract
 
-Return JSON exactly matching this structure:
+You are analyzing **ONE candidate cluster**. Return **ONE JSON object** with exactly these fields:
 
 ```json
 {
-  "generated_at": "2026-04-28T10:00:00Z",
-  "merge_recommendations": [
-    {
-      "cluster_id": "cash_secured_puts_best_stocks",
-      "confidence": "high",
-      "keep_url": "/blog/best-stocks-csp",
-      "redirect_urls": ["/blog/cash-secured-puts-strategy-explained", "/blog/cash-secured-puts-playbook"],
-      "merge_before_redirect": true,
-      "merge_instructions": [
-        "Move the risk-management table from /blog/cash-secured-puts-playbook into the keeper.",
-        "Preserve the brokerage-specific example as a subsection."
-      ],
-      "reason": "Keeper has highest impressions, cleanest URL, strongest internal link count, and best position."
-    }
+  "cluster_id": "cash_secured_puts_best_stocks",
+  "cluster_theme": "cash-secured-puts",
+  "keep_url": "/blog/best-stocks-csp",
+  "redirect_urls": ["/blog/cash-secured-puts-strategy-explained", "/blog/cash-secured-puts-playbook"],
+  "merge_before_redirect": true,
+  "merge_instructions": [
+    "Move the risk-management table from /blog/cash-secured-puts-playbook into the keeper.",
+    "Preserve the brokerage-specific example as a subsection."
   ],
-  "hub_recommendations": [
-    {
-      "topic": "cash-secured-puts",
-      "suggested_url": "/hub/cash-secured-puts",
-      "suggested_title": "Cash-Secured Puts: Complete Guide",
-      "intent": "broad pillar",
-      "source_pages": [1, 2, 4],
-      "spoke_pages": [1, 2, 4, 5],
-      "outline": ["What CSPs are", "Best stocks", "Strike selection", "Risks", "Calculators"]
-    }
-  ],
-  "calculator_recommendations": [
-    {
-      "strategy": "cash-secured-put",
-      "ticker_universe": "sp500",
-      "priority_tickers": ["AAPL", "MSFT", "NVDA"],
-      "indexing_policy": "index when option data and unique computed tables are available",
-      "reason": "Ticker + strategy combinations open new long-tail query inventory."
-    }
-  ],
-  "territory_recommendations": [
-    {
-      "theme": "broker-reviews",
-      "priority": "high",
-      "demand_evidence": ["existing IBKR guide has impressions", "keyword ideas show broker modifiers"],
-      "suggested_tasks": ["How to sell covered calls on Schwab", "Fidelity vs Schwab for options sellers"]
-    }
-  ],
-  "risks": [
-    {
-      "risk": "Merging a page with distinct intent may reduce long-tail coverage.",
-      "mitigation": "Require shared-query overlap or agent high-confidence label before redirect."
-    }
-  ]
+  "reason": "Keeper has highest impressions, cleanest URL, strongest internal link count, and best position.",
+  "no_action": false,
+  "confidence": "high"
 }
 ```
 
-## Constraints
+**Field descriptions:**
+- `cluster_id`: Copy the `candidate_id` from the input.
+- `cluster_theme`: Copy the `theme` from the input.
+- `keep_url`: The URL of the single best article to keep.
+- `redirect_urls`: Array of URLs to 301-redirect to the keeper.
+- `merge_before_redirect`: `true` if unique content from redirect targets should be merged into the keeper first.
+- `merge_instructions`: Array of specific instructions for what content to preserve during the merge.
+- `reason`: One-sentence justification for the keeper choice.
+- `no_action`: `true` ONLY if the pages clearly serve different search intents and do not cannibalize each other. `false` for all true cannibalization cases.
+- `confidence`: `"high"`, `"medium"`, or `"low"`.
 
-- Be specific: name **exact URLs** and **article titles**.
-- Use **impressions as primary authority proxy** when backlink data is unavailable.
-- The keeper must have the **cleanest URL**, **highest impressions**, and **best content depth**.
-- Hub pages must target **broader keywords** than the cluster articles they link to.
-- New territories must have **0–1 existing articles** and evidence of **real search demand**.
-- Prioritize clusters with the **highest total impressions** first.
+**CRITICAL:**
+- Return ONLY a single JSON object. Do NOT wrap it in arrays or return multiple recommendations.
+- Do NOT return `no_action: true` for exact keyword duplicates (`candidate_type: "exact_keyword_dupe"`).
 - Every merge recommendation must name a keeper URL and at least one redirect URL.
-- Every keeper and redirect URL must exist in the provided cluster pages.
+- Every keeper and redirect URL must exist in the provided candidate pages.
 - Every redirect URL must be different from the keeper.

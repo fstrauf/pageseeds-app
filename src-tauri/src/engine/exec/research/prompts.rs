@@ -191,10 +191,23 @@ pub fn build_research_prompts(
             let brief_content = std::fs::read_to_string(paths.automation_dir.join("project.md"))
                 .unwrap_or_else(|_| "(no brief found)".to_string());
 
+            // Truncate very long briefs to keep prompts manageable
+            const MAX_BRIEF_LEN: usize = 15_000;
+            let brief_trimmed = if brief_content.len() > MAX_BRIEF_LEN {
+                format!("{}… [truncated]", &brief_content[..MAX_BRIEF_LEN])
+            } else {
+                brief_content
+            };
+
+            // Compact the autocomplete JSON to shave whitespace bytes
+            let autocomplete_compact = serde_json::from_str::<serde_json::Value>(autocomplete_json)
+                .map(|v| serde_json::to_string(&v).unwrap_or_else(|_| autocomplete_json.to_string()))
+                .unwrap_or_else(|_| autocomplete_json.to_string());
+
             let user = format!(
                 "## Project Context\n\n{}\n\n## Autocomplete Results\n\n{}\n\n## Task\n\nFilter each theme's suggestions to only those clearly relevant to this site. Output JSON only.",
-                brief_content,
-                autocomplete_json,
+                brief_trimmed,
+                autocomplete_compact,
             );
 
             Ok((system.to_string(), user))

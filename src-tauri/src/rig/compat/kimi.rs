@@ -137,6 +137,15 @@ pub async fn run_prompt(
     preamble: Option<&str>,
     backend: Option<&str>,
 ) -> Result<KimiChatResult, String> {
+    let prompt_bytes = prompt.len();
+    let preamble_bytes = preamble.map(|p| p.len()).unwrap_or(0);
+    log::info!(
+        "[kimi::run_prompt] prompt_size={} bytes, preamble_size={} bytes, backend={:?}",
+        prompt_bytes,
+        preamble_bytes,
+        backend
+    );
+
     let mut messages = Vec::new();
     if let Some(preamble) = preamble {
         messages.push(RequestMessage {
@@ -541,18 +550,24 @@ async fn send_request(
     request: ChatRequest,
     backend: Option<&str>,
 ) -> Result<ChatResponse, String> {
-    // Use a 300-second timeout to match the bridge's own timeout.
-    // The bridge queues requests when max_concurrent_requests is reached;
-    // timing out earlier than the bridge causes spurious retries on queued work.
+    // Per-backend timeouts per the Kimi bridge provider spec:
+    // - direct: 120s (fast, stateless)
+    // - acp / none: 300s (project-aware, may queue behind concurrency limit)
+    let timeout_secs: u64 = match backend {
+        Some("direct") => 120,
+        _ => 300,
+    };
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
+    let request_body = serde_json::to_string(&request).unwrap_or_default();
     log::debug!(
-        "[kimi::send_request] POST {} with body: {}",
+        "[kimi::send_request] POST {} with body ({} bytes): {}",
         url,
+        request_body.len(),
         serde_json::to_string_pretty(&request).unwrap_or_default()
     );
 
@@ -560,9 +575,12 @@ async fn send_request(
     for attempt in 1..=3 {
         let start = std::time::Instant::now();
         log::info!(
-            "[kimi::send_request] >>> START POST {} (attempt {}/3)",
+            "[kimi::send_request] >>> START POST {} (attempt {}/3, body={} bytes, backend={:?}, timeout={}s)",
             url,
-            attempt
+            attempt,
+            request_body.len(),
+            backend,
+            timeout_secs
         );
 
         let mut req = client

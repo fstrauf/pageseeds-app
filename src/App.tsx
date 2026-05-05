@@ -188,6 +188,7 @@ export default function App() {
   }, [])
 
   const handleTaskOpened = useCallback(() => {
+    console.log('[App] handleTaskOpened called, clearing pendingTaskId')
     setPendingTaskId(undefined)
   }, [])
 
@@ -200,6 +201,7 @@ export default function App() {
   }, [])
 
   const handleOpenTask = useCallback((taskId: string) => {
+    console.log('[App] handleOpenTask called with taskId:', taskId)
     setActiveView('tasks')
     setPendingTaskId(taskId)
   }, [])

@@ -22,7 +22,7 @@ vi.mock('../../lib/tauri', () => ({
 function makeTask(artifactContent: object): Task {
   return {
     id: 'task-1',
-    task_type: 'cannibalization_audit',
+    type: 'cannibalization_audit',
     project_id: 'proj-1',
     status: 'review',
     priority: 'medium',
@@ -38,12 +38,12 @@ function makeTask(artifactContent: object): Task {
       {
         key: 'cannibalization_strategy',
         path: null,
-        artifact_type: 'json',
+        type: 'json',
         source: 'cannibalization_audit',
         content: JSON.stringify(artifactContent),
       },
     ],
-    run: { attempts: 0, last_error: null, provider: null },
+    run: { attempts: 0, last_error: null, provider: null, prompt_tokens: null, completion_tokens: null },
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }

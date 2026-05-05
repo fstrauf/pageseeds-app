@@ -78,11 +78,13 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
   // listTasks uses the light variant which skips artifact deserialization.
   // Review pickers (Reddit, Keyword) need those artifacts to render.
   useEffect(() => {
+    console.log('[TaskDetail] hydration effect, task.id:', task.id, 'artifacts.length:', task.artifacts.length)
     if (task.artifacts.length > 0) return
     let cancelled = false
     getTask(task.id)
       .then(fullTask => {
         if (cancelled) return
+        console.log('[TaskDetail] hydrated task, new artifacts.length:', fullTask.artifacts.length)
         if (fullTask.artifacts.length > task.artifacts.length) {
           onUpdated(fullTask)
         }

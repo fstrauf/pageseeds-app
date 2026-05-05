@@ -58,6 +58,8 @@ pub enum StepKind {
     CtrAnalyze,
     /// Build structured context for cannibalization audit (TF-IDF + data formatting).
     CanBuildContext,
+    /// Deterministic detection of exact duplicate target keywords + GSC ranking.
+    CanExactKeywordDupes,
     /// Deterministic selection of merge/hub/territory candidates from audit artifacts.
     CanSelectCandidates,
     /// Agentic analysis of individual candidate batches (byte-budgeted).
@@ -166,6 +168,7 @@ impl StepKind {
             Self::CtrBuildContext => "ctr_build_context",
             Self::CtrAnalyze => "ctr_analyze",
             Self::CanBuildContext => "can_build_context",
+            Self::CanExactKeywordDupes => "can_exact_keyword_dupes",
             Self::CanSelectCandidates => "can_select_candidates",
             Self::CanAnalyzeCandidates => "can_analyze_candidates",
             Self::CanReduceStrategy => "can_reduce_strategy",
@@ -261,6 +264,7 @@ impl FromStr for StepKind {
             "ctr_build_context" => Ok(Self::CtrBuildContext),
             "ctr_analyze" => Ok(Self::CtrAnalyze),
             "can_build_context" => Ok(Self::CanBuildContext),
+            "can_exact_keyword_dupes" => Ok(Self::CanExactKeywordDupes),
             "can_select_candidates" => Ok(Self::CanSelectCandidates),
             "can_analyze_candidates" => Ok(Self::CanAnalyzeCandidates),
             "can_reduce_strategy" => Ok(Self::CanReduceStrategy),
@@ -367,6 +371,7 @@ mod tests {
             StepKind::CtrAnalyze,
             StepKind::CtrFixGenerate,
             StepKind::CanBuildContext,
+            StepKind::CanExactKeywordDupes,
             StepKind::CanSelectCandidates,
             StepKind::CanAnalyzeCandidates,
             StepKind::CanReduceStrategy,

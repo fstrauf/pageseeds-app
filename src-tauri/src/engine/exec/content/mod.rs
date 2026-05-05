@@ -128,6 +128,7 @@ mod tests {
                 review_count INTEGER NOT NULL DEFAULT 0,
                 content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
                 estimated_traffic_monthly TEXT,
+                page_type TEXT,
                 project_id TEXT NOT NULL,
                 PRIMARY KEY (id, project_id)
             );

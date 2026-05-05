@@ -21,4 +21,8 @@ publishing_ready: boolean | null,
 /**
  * Category scores breakdown
  */
-quality_breakdown: QualityBreakdown | null, };
+quality_breakdown: QualityBreakdown | null, 
+/**
+ * Page type: "hub", "pillar", "spoke", "landing", etc.
+ */
+page_type: string | null, };

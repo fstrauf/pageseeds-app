@@ -229,7 +229,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
 
-    // Build a capped keeper representation to stay within the 20KB prompt limit.
+    // Build a capped keeper representation.
     // The agent needs the heading structure for insertion points and a prose excerpt
     // for tone matching and duplicate detection, but not the full article.
     let (_keeper_fm, keeper_body) =
@@ -270,7 +270,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
     // Build compact summaries for each redirect page.
     // The agent only needs enough context to identify unique topics and decide
     // what to merge — full tables, code blocks, and FAQ answers are too large
-    // for the 20KB prompt budget when there are many redirect pages.
+    // when there are many redirect pages.
     #[derive(Debug)]
     struct RedirectSummary {
         file: String,
@@ -389,7 +389,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
     });
 
     let output_json = serde_json::to_string_pretty(&output_doc).unwrap_or_default();
-    const MAX_EXTRACT_OUTPUT_BYTES: usize = 12_000;
+    const MAX_EXTRACT_OUTPUT_BYTES: usize = 50_000;
     if output_json.len() > MAX_EXTRACT_OUTPUT_BYTES {
         return StepResult {
             success: false,
@@ -568,24 +568,6 @@ pub(crate) fn exec_merge_apply_patch(
         }
     };
 
-    // Snapshot original
-    let snapshot_dir = keeper_path
-        .parent()
-        .map(|p| p.join(".snapshots"))
-        .unwrap_or_default();
-    let _ = std::fs::create_dir_all(&snapshot_dir);
-    let snapshot_path = snapshot_dir.join(
-        keeper_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string()
-            + ".backup",
-    );
-    if let Err(e) = std::fs::write(&snapshot_path, &original) {
-        log::warn!("[consolidate_cluster] Failed to write snapshot: {}", e);
-    }
-
     // Apply patch
     let mut modified = original.clone();
 
@@ -649,16 +631,14 @@ pub(crate) fn exec_merge_apply_patch(
     StepResult {
         success: validation.is_ok(),
         message: format!(
-            "Patch applied: {} additions, {} transitions, {} words, snapshot at {}",
+            "Patch applied: {} additions, {} transitions, {} words",
             patch.additions.len(),
             patch.transitions.len(),
             word_count,
-            snapshot_path.display(),
         ),
         output: Some(
             serde_json::json!({
                 "keeper_file": keeper_path.to_string_lossy().to_string(),
-                "snapshot_path": snapshot_path.to_string_lossy().to_string(),
                 "word_count": word_count,
                 "validation_valid": validation.is_ok(),
                 "validation_issues": validation.err().map(|e| vec![e]).unwrap_or_default(),
@@ -705,14 +685,35 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
         })
         .collect();
 
-    // Write generic CSV
+    // Merge with existing redirects.csv (append, no duplicates)
     let csv_path = paths.automation_dir.join("redirects.csv");
-    let mut csv = String::from("source,destination,status\n");
+    let mut existing_rules: std::collections::HashMap<String, (String, i32)> =
+        std::collections::HashMap::new();
+
+    if let Ok(existing) = std::fs::read_to_string(&csv_path) {
+        for line in existing.lines().skip(1) {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 3 {
+                if let Ok(status) = parts[2].trim().parse::<i32>() {
+                    existing_rules.insert(
+                        parts[0].trim().to_string(),
+                        (parts[1].trim().to_string(), status),
+                    );
+                }
+            }
+        }
+    }
+
     for rule in &rules {
-        csv.push_str(&format!(
-            "{},{},{}\n",
-            rule.source, rule.destination, rule.status
-        ));
+        existing_rules.insert(
+            rule.source.clone(),
+            (rule.destination.clone(), rule.status as i32),
+        );
+    }
+
+    let mut csv = String::from("source,destination,status\n");
+    for (source, (destination, status)) in &existing_rules {
+        csv.push_str(&format!("{},{},{}\n", source, destination, status));
     }
 
     if let Err(e) = std::fs::write(&csv_path, &csv) {
@@ -789,27 +790,6 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
         .map(|c| c.split_whitespace().count())
         .unwrap_or(0);
 
-    let snapshot_dir = keeper_file
-        .as_ref()
-        .and_then(|p| p.parent())
-        .map(|p| p.join(".snapshots"));
-    let snapshot_path = snapshot_dir.as_ref().map(|d| {
-        d.join(
-            keeper_file
-                .as_ref()
-                .unwrap()
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-                + ".backup",
-        )
-    });
-    let has_snapshot = snapshot_path.as_ref().map(|p| p.exists()).unwrap_or(false);
-    if !has_snapshot {
-        issues.push("No snapshot found for keeper file".to_string());
-    }
-
     let csv_path = paths.automation_dir.join("redirects.csv");
     let has_redirect_map = csv_path.exists();
     if !has_redirect_map {
@@ -819,12 +799,12 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
     let report = MergeValidationReport {
         keeper_valid,
         keeper_word_count: word_count,
-        snapshot_path: snapshot_path.map(|p| p.to_string_lossy().to_string()),
+        snapshot_path: None,
         redirect_map_path: Some(csv_path.to_string_lossy().to_string()),
         issues: issues.clone(),
     };
 
-    let all_ok = keeper_valid && has_snapshot && has_redirect_map && issues.is_empty();
+    let all_ok = keeper_valid && has_redirect_map && issues.is_empty();
 
     StepResult {
         success: all_ok,
@@ -949,18 +929,31 @@ fn find_file_by_slug(project_path: &str, slug: &str) -> Option<PathBuf> {
 
     let files = crate::content::locator::collect_markdown_files(&content_dir);
 
+    // Normalize slug for matching: kebab-case and snake_case should match
+    let slug_normalized = slug.replace('-', "_");
+
     for file in files {
         let name = file.file_stem()?.to_string_lossy().to_string();
+        let name_normalized = name.replace('-', "_");
+
         // Slug might be in filename like "001_best_stocks_csp" → we look for the slug part
-        if name == slug || name.ends_with(&format!("_{}", slug)) || name.contains(slug) {
+        if name == slug
+            || name.ends_with(&format!("_{}", slug))
+            || name.contains(slug)
+            || name_normalized == slug_normalized
+            || name_normalized.ends_with(&format!("_{}", slug_normalized))
+            || name_normalized.contains(&slug_normalized)
+        {
             return Some(file);
         }
         // Also check frontmatter for url_slug match
         if let Ok(content) = std::fs::read_to_string(&file) {
             let scalars = crate::content::frontmatter::top_level_scalars(&content);
             for field in scalars {
+                let fm_slug = field.raw_value.trim_matches('"').trim_matches('\'');
+                let fm_slug_normalized = fm_slug.replace('-', "_");
                 if field.key == "url_slug"
-                    && field.raw_value.trim_matches('"').trim_matches('\'') == slug
+                    && (fm_slug == slug || fm_slug_normalized == slug_normalized)
                 {
                     return Some(file);
                 }

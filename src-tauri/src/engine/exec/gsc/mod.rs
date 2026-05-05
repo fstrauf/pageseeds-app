@@ -9,11 +9,13 @@
 ///   - normalize_site_for_url_match        (sc-domain: normalisation)
 ///   - normalize_url_for_comparison        (URL normalization for domain matching)
 mod collect;
+mod drift;
 mod investigate;
 mod sync;
 mod task_spawner;
 
 pub(crate) use collect::*;
+pub(crate) use drift::*;
 pub(crate) use investigate::*;
 pub(crate) use sync::*;
 pub(crate) use task_spawner::*;

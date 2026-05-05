@@ -85,3 +85,13 @@ pub fn create_cannibalization_tasks_from_selection(
     crate::cannibalization::spawn_tasks_from_selection(&db, &parent_task_id, &selections)
         .map_err(|e| e.into())
 }
+
+/// Backfill hub page_type for existing articles based on heuristics.
+#[tauri::command]
+pub fn backfill_hub_pages(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<usize, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    crate::cannibalization::backfill_hub_page_types(&db, &project_id).map_err(|e| e.into())
+}

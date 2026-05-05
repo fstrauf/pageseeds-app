@@ -2,8 +2,8 @@ use super::{AppState, GscState};
 use crate::config::env_resolver::EnvResolver;
 use crate::engine::task_store;
 use crate::models::gsc::{
-    Coverage404Record, GscAuthStatus, InspectionRecord, MoverMetrics, PageMetrics, QueryMetrics,
-    RedirectRecord,
+    Coverage404Record, GscAuthStatus, GscDriftReport, InspectionRecord, MoverMetrics, PageMetrics,
+    QueryMetrics, RedirectRecord,
 };
 use tauri::State;
 
@@ -216,6 +216,22 @@ pub fn gsc_parse_coverage_csv(csv_content: String) -> Result<Vec<Coverage404Reco
 #[tauri::command]
 pub fn gsc_parse_redirect_csv(csv_content: String) -> Result<Vec<RedirectRecord>, String> {
     crate::gsc::redirects::parse_redirect_csv(&csv_content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn gsc_compute_drift(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<GscDriftReport, String> {
+    let project_path = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
+        project.path
+    };
+
+    crate::engine::exec::gsc::exec_gsc_drift(&project_id, &project_path)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Resolve a GSC token using the shared state cache, falling back to

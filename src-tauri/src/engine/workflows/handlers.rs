@@ -204,6 +204,7 @@ impl WorkflowHandler for ImplementationHandler {
         matches!(
             t,
             "cluster_and_link"
+                | "interlinking"
                 | "content_cleanup"
                 | "sanitize_content"
                 | "publish_content"
@@ -298,7 +299,7 @@ impl WorkflowHandler for ImplementationHandler {
                 // depends on intent, content quality, and site-specific conventions.
                 WorkflowStep::new("indexing_fix_apply", StepKind::IndexingFixApply),
             ],
-            "cluster_and_link" => vec![
+            "cluster_and_link" | "interlinking" => vec![
                 // Step 1 (deterministic, native Rust): scan all MDX files, build the full link
                 // map, identify orphans and coverage gaps.  Pure file I/O + regex — no judgment.
                 // Writes link_scan.json to the automation dir for the next step to consume.
@@ -481,14 +482,18 @@ impl WorkflowHandler for CannibalizationAuditHandler {
             // Returns a compact summary; full context is written to disk for downstream steps.
             WorkflowStep::new("can_build_context", StepKind::CanBuildContext)
                 .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::Clear),
-            // Step 4 (deterministic): Select merge candidates from clusters.
+            // Step 4 (deterministic): Detect exact duplicate target keywords + rank by GSC.
+            // Writes exact_keyword_duplicates.json. These are guaranteed overlap cases.
+            WorkflowStep::new("can_exact_keyword_dupes", StepKind::CanExactKeywordDupes),
+            // Step 5 (deterministic): Select merge candidates from clusters.
+            // Also injects exact-keyword-duplicate groups as high-priority candidates.
             // Splits giant components by target keyword, caps pages at 8 per candidate.
             WorkflowStep::new("can_select_candidates", StepKind::CanSelectCandidates),
-            // Step 5 (agentic): Analyze individual merge candidates with byte-budgeted prompts.
+            // Step 6 (agentic): Analyze individual merge candidates with byte-budgeted prompts.
             // One agent call per candidate to stay under the Kimi bridge limit.
             WorkflowStep::new("can_analyze_candidates", StepKind::CanAnalyzeCandidates)
                 .with_param(step_params::SKILL, "cannibalization-strategy"),
-            // Step 6 (deterministic): Merge batch outputs into final strategy JSON.
+            // Step 7 (deterministic): Merge batch outputs into final strategy JSON.
             // Validates recommendations and includes deterministic hub/territory data.
             WorkflowStep::new("can_reduce_strategy", StepKind::CanReduceStrategy)
                 .with_param(step_params::ARTIFACT_NAME, "cannibalization_strategy"),
@@ -887,7 +892,7 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
         }
     }
 
-    const MAX_HUB_CONTEXT_BYTES: usize = 6_000;
+    const MAX_HUB_CONTEXT_BYTES: usize = 40_000;
     if ctx.len() > MAX_HUB_CONTEXT_BYTES {
         log::warn!(
             "[hub_spoke_context] context too large ({} bytes) for hub '{}'; truncating",
@@ -928,10 +933,12 @@ struct PromptBudget {
 }
 
 fn default_budget_for_backend(_backend_preference: Option<&str>) -> PromptBudget {
-    // Defaults mirror the bridge limits until health data is wired.
+    // Defaults mirror the Kimi bridge limits until health data is wired.
+    // Bridge hard limit is 100 KB based on live evidence (reddit_enrich ~25 KB,
+    // CTR audit ~46 KB). Target leaves headroom for JSON/preamble overhead.
     PromptBudget {
-        target: 15 * 1024,
-        hard: 20 * 1024,
+        target: 80 * 1024,
+        hard: 90 * 1024,
     }
 }
 
@@ -1060,7 +1067,7 @@ pub async fn exec_agentic(
         })
         .filter_map(|a| {
             a.content.as_ref().map(|c| {
-                const MAX_ARTIFACT_CHARS: usize = 2_000;
+                const MAX_ARTIFACT_CHARS: usize = 10_000;
                 let preview = if c.len() > MAX_ARTIFACT_CHARS {
                     format!("{}… [truncated]", crate::engine::text::char_prefix(c, MAX_ARTIFACT_CHARS))
                 } else {
@@ -1617,8 +1624,8 @@ mod tests {
     #[test]
     fn test_prompt_budget_defaults() {
         let b = default_budget_for_backend(Some("acp"));
-        assert_eq!(b.target, 15 * 1024);
-        assert_eq!(b.hard, 20 * 1024);
+        assert_eq!(b.target, 80 * 1024);
+        assert_eq!(b.hard, 90 * 1024);
     }
 
     #[test]

@@ -326,6 +326,7 @@ export const createRedditReplyTasks = (
 import type {
   Coverage404Record,
   GscAuthStatus,
+  GscDriftReport,
   InspectionRecord,
   MoverMetrics,
   PageMetrics,
@@ -387,6 +388,9 @@ export const gscParseCoverageCsv = (csvContent: string): Promise<Coverage404Reco
 
 export const gscParseRedirectCsv = (csvContent: string): Promise<RedirectRecord[]> =>
   invoke('gsc_parse_redirect_csv', { csvContent })
+
+export const gscComputeDrift = (projectId: string): Promise<GscDriftReport> =>
+  invoke('gsc_compute_drift', { projectId })
 
 // ─── SEO / Ahrefs ─────────────────────────────────────────────────────────────
 
@@ -925,3 +929,6 @@ export const createCannibalizationTasksFromSelection = (
   selections: { recommendation_type: string; recommendation_id: string }[],
 ): Promise<Task[]> =>
   invoke('create_cannibalization_tasks_from_selection', { parentTaskId, selections })
+
+export const backfillHubPages = (projectId: string): Promise<number> =>
+  invoke('backfill_hub_pages', { projectId })

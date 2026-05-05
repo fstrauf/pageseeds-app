@@ -321,6 +321,12 @@ pub fn create_reddit_reply_tasks(
     task_id: String,
     post_ids: Vec<String>,
 ) -> Result<Vec<crate::models::task::Task>, String> {
+    log::info!("[create_reddit_reply_tasks] command called task_id={} post_ids={:?}", task_id, post_ids);
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    crate::reddit::spawner::create_reply_tasks_from_opportunities(&db, &task_id, &post_ids)
+    let result = crate::reddit::spawner::create_reply_tasks_from_opportunities(&db, &task_id, &post_ids);
+    match &result {
+        Ok(tasks) => log::info!("[create_reddit_reply_tasks] success, created {} tasks", tasks.len()),
+        Err(e) => log::warn!("[create_reddit_reply_tasks] failed: {}", e),
+    }
+    result
 }

@@ -88,8 +88,13 @@ fn set_last_tokens(prompt: Option<u64>, completion: Option<u64>) {
 /// The function is still **synchronous** to maintain backward compatibility
 /// with all existing step executors. Internally it uses `block_on` when an
 /// async rig backend is selected.
+///
+/// **Backend routing:** This function defaults to `direct` mode for the Kimi
+/// bridge, which is appropriate for stateless analysis and short generation
+/// tasks. Content-writing tasks that need ACP (file I/O, persistent session)
+/// should call `run_agent_with_backend(..., Some("acp"))` explicitly.
 pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<String, String> {
-    run_agent_with_backend(provider, prompt, project_path, None)
+    run_agent_with_backend(provider, prompt, project_path, Some("direct"))
 }
 
 /// Run an agent with an optional backend preference for the Kimi bridge.

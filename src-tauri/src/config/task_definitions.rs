@@ -240,6 +240,18 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
+    // Interlinking: spawned for not_indexed_other URLs (unknown to Google).
+    // Runs the same steps as cluster_and_link — scan link graph, strategize,
+    // apply Related Articles sections — to add inbound internal links from
+    // indexed pages so Google can discover the target URL.
+    TaskDefinition {
+        task_type: "interlinking",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
     TaskDefinition {
         task_type: "fix_ctr_article",
         phase: "implementation",

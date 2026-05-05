@@ -95,6 +95,18 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
     }
 
     let output = serde_json::to_string_pretty(&ctx).unwrap_or_default();
+
+    if !ctx.exists {
+        return StepResult {
+            success: false,
+            message: format!(
+                "No MDX file found for {} (slug={}). Cannot fix indexing for a page that has no content file.",
+                url, slug
+            ),
+            output: Some(output),
+        };
+    }
+
     StepResult {
         success: true,
         message: format!(

@@ -51,6 +51,9 @@ pub struct Article {
     /// Category scores breakdown
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_breakdown: Option<QualityBreakdown>,
+    /// Page type: "hub", "pillar", "spoke", "landing", etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_type: Option<String>,
 }
 
 /// Category scores for quality breakdown

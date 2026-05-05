@@ -141,3 +141,55 @@ impl TokenState {
         chrono::Utc::now().timestamp() >= self.expires_at - 60
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GSC Drift Detection
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct GscDriftReport {
+    pub site_url: String,
+    pub sitemap_url: String,
+    pub checked_at: String,
+    pub sitemap_total: usize,
+    pub gsc_total: usize,
+    pub indexed_count: usize,
+    pub not_indexed_count: usize,
+    pub in_sitemap_not_in_gsc: Vec<DriftUrl>,
+    pub in_gsc_not_in_sitemap: Vec<DriftUrl>,
+    pub not_indexed: Vec<DriftUrl>,
+    pub resubmit_priority: Vec<ResubmitCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct DriftUrl {
+    pub url: String,
+    pub slug: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct ResubmitCandidate {
+    pub url: String,
+    pub slug: String,
+    pub reason_code: String,
+    pub priority_score: i32,
+    pub priority_reason: String,
+    pub has_internal_links: bool,
+    pub incoming_link_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gsc_impressions: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_keyword: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_date: Option<String>,
+}

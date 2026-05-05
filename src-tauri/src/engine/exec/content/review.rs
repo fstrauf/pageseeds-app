@@ -368,7 +368,7 @@ pub(crate) async fn exec_content_review_recommend(
         };
 
     let empty_vec: Vec<serde_json::Value> = Vec::new();
-    let raw_articles = if articles_doc.is_array() {
+    let raw_articles_ref = if articles_doc.is_array() {
         articles_doc.as_array().unwrap_or(&empty_vec)
     } else {
         articles_doc
@@ -381,7 +381,56 @@ pub(crate) async fn exec_content_review_recommend(
         .and_then(|v| v.as_array())
         .unwrap_or(&empty_vec);
 
-    let selected = select_priority_articles(raw_articles, audit_articles, 5);
+    // ── Filter out articles that Google cannot see (not indexed) ──────────────
+    // Load gsc_collection.json to cross-reference indexing status.
+    let gsc_collection_path = paths.automation_dir.join("gsc_collection.json");
+    let mut non_indexed_slugs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(gsc_raw) = std::fs::read_to_string(&gsc_collection_path) {
+        if let Ok(gsc_doc) = serde_json::from_str::<serde_json::Value>(&gsc_raw) {
+            if let Some(items) = gsc_doc["items"].as_array() {
+                for item in items {
+                    if item["reason_code"].as_str().unwrap_or("") != "indexed_pass" {
+                        if let Some(url) = item["url"].as_str() {
+                            let slug = url
+                                .trim_start_matches("https://")
+                                .trim_start_matches("http://");
+                            let slug = if let Some(pos) = slug.find('/') {
+                                &slug[pos + 1..]
+                            } else {
+                                slug
+                            };
+                            if !slug.is_empty() {
+                                non_indexed_slugs.insert(slug.to_string());
+                            }
+                            // Also index last path segment for flat slug matching
+                            let last = slug.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+                            if !last.is_empty() {
+                                non_indexed_slugs.insert(last.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let raw_articles: Vec<serde_json::Value> = raw_articles_ref
+        .iter()
+        .filter(|article| {
+            let slug = article["url_slug"].as_str().unwrap_or("");
+            if non_indexed_slugs.contains(slug) {
+                log::info!(
+                    "[content_review_recommend] skipping non-indexed article: {}",
+                    slug
+                );
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+
+    let selected = select_priority_articles(&raw_articles, audit_articles, 5);
     log::info!(
         "[content_review_recommend] {} priority articles selected (project={})",
         selected.len(),

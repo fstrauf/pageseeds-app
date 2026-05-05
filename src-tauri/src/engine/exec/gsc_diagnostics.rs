@@ -489,6 +489,7 @@ fn spawn_fix_task(
 ) -> Option<String> {
     let task_type = match reason {
         "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch" => "fix_technical",
+        "not_indexed_other" => "interlinking",
         "api_error" => "fix_gsc_access",
         _ => "fix_indexing",
     };

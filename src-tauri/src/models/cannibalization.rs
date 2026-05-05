@@ -135,12 +135,27 @@ pub struct CandidateAnalysisOutput {
     pub merge_instructions: Vec<String>,
     #[serde(default)]
     pub reason: String,
-    #[serde(default)]
+    /// Accepts both boolean and object (e.g. {"reason": "..."}) for backward
+    /// compatibility with prompts that instruct the agent to return an object.
+    #[serde(default, deserialize_with = "deserialize_no_action")]
     pub no_action: bool,
     #[serde(default)]
     pub confidence: String,
     #[serde(default)]
     pub cluster_theme: String,
+}
+
+fn deserialize_no_action<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Bool(b) => Ok(b),
+        serde_json::Value::Object(_) => Ok(true),
+        serde_json::Value::Null => Ok(false),
+        _ => Ok(false),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]

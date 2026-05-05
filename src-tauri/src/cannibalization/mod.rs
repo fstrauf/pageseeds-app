@@ -16,6 +16,67 @@ use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRunPoli
 use rusqlite::{Connection, OptionalExtension};
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Hub Page Backfill
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Detect existing hub-like pages and persist `page_type = "hub"` in the DB + articles.json.
+///
+/// Heuristics used:
+/// - URL slug starts with `hub/`, `guide/`, `hub_`, or `guide_`
+/// - Title contains "complete guide" or "ultimate guide"
+/// - Word count > 2000 AND target_keyword is broad (3+ words or generic single word)
+///
+/// Returns the number of articles updated.
+pub fn backfill_hub_page_types(db: &Connection, project_id: &str) -> Result<usize> {
+    let articles = task_store::list_articles(db, project_id)?;
+    let mut updated = 0;
+
+    for article in &articles {
+        let slug = article.url_slug.to_lowercase();
+        let title = article.title.to_lowercase();
+        let kw = article.target_keyword.as_deref().unwrap_or("").to_lowercase();
+
+        let is_hub_url = slug.starts_with("hub/")
+            || slug.starts_with("guide/")
+            || slug.starts_with("hub_")
+            || slug.starts_with("guide_");
+
+        let is_hub_title = title.contains("complete guide")
+            || title.contains("ultimate guide")
+            || title.contains("complete overview");
+
+        let is_hub_by_content = article.word_count > 2000
+            && (kw.split_whitespace().count() >= 3
+                || kw.is_empty() && article.word_count > 3000);
+
+        if is_hub_url || is_hub_title || is_hub_by_content {
+            db.execute(
+                "UPDATE articles SET page_type = 'hub' WHERE id = ?1 AND project_id = ?2",
+                rusqlite::params![article.id, project_id],
+            )?;
+            updated += 1;
+        }
+    }
+
+    if updated > 0 {
+        if let Ok(project) = task_store::get_project(db, project_id) {
+            let _ = crate::db::export::write_articles_to_repo(
+                db,
+                project_id,
+                std::path::Path::new(&project.path),
+            );
+        }
+    }
+
+    log::info!(
+        "[backfill_hub_page_types] Updated {} articles to page_type='hub' for project {}",
+        updated,
+        project_id
+    );
+    Ok(updated)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Strategy Loading
 // ═══════════════════════════════════════════════════════════════════════════════
 

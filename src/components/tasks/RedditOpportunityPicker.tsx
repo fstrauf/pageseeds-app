@@ -119,12 +119,15 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
 
   async function handleCreateTasks() {
     const selectedIds = rows.filter(r => r.selected).map(r => r.opportunity.post_id)
+    console.log('[RedditOpportunityPicker] handleCreateTasks called, selectedIds:', selectedIds)
     if (selectedIds.length === 0) return
 
     setCreating(true)
 
     try {
+      console.log('[RedditOpportunityPicker] calling createRedditReplyTasks with task.id:', task.id)
       const newTasks = await createRedditReplyTasks(task.id, selectedIds)
+      console.log('[RedditOpportunityPicker] createRedditReplyTasks returned', newTasks.length, 'tasks')
       
       // Auto-add created tasks to the queue (shopping cart pattern)
       if (newTasks.length > 0) {
@@ -141,6 +144,7 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
       
       onTasksCreated(newTasks)
     } catch (e: unknown) {
+      console.error('[RedditOpportunityPicker] createRedditReplyTasks failed:', e)
       showError(String(e))
     } finally {
       setCreating(false)

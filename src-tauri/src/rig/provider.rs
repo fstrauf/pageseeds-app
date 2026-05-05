@@ -450,8 +450,8 @@ mod tests {
                     "acp": {"available": true, "tool_calls": true, "json_mode": true, "file_io": true}
                 },
                 "limits": {
-                    "max_prompt_bytes_direct": 20000,
-                    "max_prompt_bytes_acp": 20000,
+                    "max_prompt_bytes_direct": 100000,
+                    "max_prompt_bytes_acp": 100000,
                     "max_concurrent_requests": 4
                 }
             })))
@@ -477,8 +477,8 @@ mod tests {
                 "models": [],
                 "backends": {},
                 "limits": {
-                    "max_prompt_bytes_direct": 20000,
-                    "max_prompt_bytes_acp": 20000,
+                    "max_prompt_bytes_direct": 100000,
+                    "max_prompt_bytes_acp": 100000,
                     "max_concurrent_requests": 2
                 }
             })))

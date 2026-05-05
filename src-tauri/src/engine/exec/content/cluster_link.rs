@@ -13,6 +13,38 @@ pub(crate) fn exec_cluster_link_scan(
 ) -> crate::engine::workflows::StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
+    // --- Cache check: if link_scan.json exists and is < 1 hour old, reuse it ---
+    let scan_path = paths.automation_dir.join("link_scan.json");
+    if let Ok(metadata) = std::fs::metadata(&scan_path) {
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(elapsed) = modified.elapsed() {
+                if elapsed.as_secs() < 3600 {
+                    if let Ok(cached) = std::fs::read_to_string(&scan_path) {
+                        log::info!(
+                            "[cluster_link_scan] using cached link_scan.json ({} min old)",
+                            elapsed.as_secs() / 60
+                        );
+                        // Try to extract summary stats from cached JSON for the message
+                        let summary = serde_json::from_str::<serde_json::Value>(&cached)
+                            .map(|v| format!(
+                                "{} articles, {} internal links, {} orphans, {} zero-incoming",
+                                v["total_articles"].as_u64().unwrap_or(0),
+                                v["total_internal_links"].as_u64().unwrap_or(0),
+                                v["orphan_ids"].as_array().map(|a| a.len()).unwrap_or(0),
+                                v["zero_incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0),
+                            ))
+                            .unwrap_or_else(|_| "cached".to_string());
+                        return crate::engine::workflows::StepResult {
+                            success: true,
+                            message: format!("Link scan complete (cached): {}", summary),
+                            output: Some(cached),
+                        };
+                    }
+                }
+            }
+        }
+    }
+
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
@@ -83,10 +115,11 @@ pub(crate) fn exec_cluster_link_scan(
             crate::engine::workflows::StepResult {
                 success: true,
                 message: format!(
-                    "Link scan complete: {} articles, {} internal links, {} orphans",
+                    "Link scan complete: {} articles, {} internal links, {} orphans, {} zero-incoming",
                     result.total_articles,
                     result.total_internal_links,
-                    result.orphan_ids.len()
+                    result.orphan_ids.len(),
+                    result.zero_incoming_ids.len()
                 ),
                 output: Some(json),
             }
@@ -239,8 +272,12 @@ pub(crate) fn exec_cluster_link_strategy(
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
         .unwrap_or_default();
+    let zero_incoming_ids: Vec<i64> = scan["zero_incoming_ids"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
 
-    // Compact article index (id, title, slug) — cap at 100 to keep prompt bounded.
+    // Compact article index (id, title, slug) — cap at 50 to keep prompt bounded.
     // We intentionally omit `file` here; it adds ~35 bytes/article and is only
     // needed by the apply step, not the agent's reasoning. A separate
     // article_id_to_file.json mapping is written for the apply step.
@@ -267,7 +304,7 @@ pub(crate) fn exec_cluster_link_strategy(
             _ => std::cmp::Ordering::Equal,
         }
     });
-    index_entries.truncate(100);
+    index_entries.truncate(50);
     let index_json = serde_json::to_string(&index_entries).unwrap_or_default();
 
     // Build id → file mapping for the apply step (resolves source_article_id → file).
@@ -287,11 +324,11 @@ pub(crate) fn exec_cluster_link_strategy(
         .collect::<Vec<_>>()
         .into();
 
-    // Profiles for under-connected articles (incoming < 2) — cap at 20.
+    // Profiles for under-connected articles (incoming < 2) — cap at 10.
     // We send ONLY id, title, file, and link counts. The full incoming_ids/
-    // outgoing_ids arrays from scan_links can be huge (dozens of IDs per profile)
-    // and blow the 20KB prompt budget. The agent only needs counts to identify
-    // which articles need more links; the actual link targets come from the index.
+    // outgoing_ids arrays from scan_links can be huge (dozens of IDs per profile).
+    // The agent only needs counts to identify which articles need more links;
+    // the actual link targets come from the index.
     let empty_profiles: Vec<serde_json::Value> = Vec::new();
     let profiles_arr = scan["profiles"].as_array().unwrap_or(&empty_profiles);
     let compact_profiles: Vec<serde_json::Value> = profiles_arr
@@ -300,7 +337,7 @@ pub(crate) fn exec_cluster_link_strategy(
             let incoming = p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0);
             incoming < 2
         })
-        .take(20)
+        .take(10)
         .map(|p| {
             serde_json::json!({
                 "id": p["id"],
@@ -312,7 +349,16 @@ pub(crate) fn exec_cluster_link_strategy(
         })
         .collect();
     let under_json = serde_json::to_string(&compact_profiles).unwrap_or_default();
+
+    if compact_profiles.is_empty() {
+        return crate::engine::workflows::StepResult {
+            success: true,
+            message: "No under-connected articles found — link graph is healthy".to_string(),
+            output: Some(r#"{"generated_at":"","links_to_add":[]}"#.to_string()),
+        };
+    }
     let orphan_list_json = serde_json::to_string(&orphan_ids).unwrap_or_default();
+    let zero_incoming_list_json = serde_json::to_string(&zero_incoming_ids).unwrap_or_default();
 
     let prompt = format!(
         r#"You are an SEO specialist analysing the internal link structure of a blog.
@@ -322,6 +368,7 @@ pub(crate) fn exec_cluster_link_strategy(
 - Articles with at least one outgoing link: {with_out}
 - Articles with at least one incoming link: {with_inc}
 - Orphan article IDs (no links in or out): {orphan_list_json}
+- Zero-incoming article IDs (Google cannot discover — no pages link TO them): {zero_incoming_list_json}
 
 ## Article index (id, title, url slug)
 
@@ -379,11 +426,12 @@ Requirements:
 
     // Detailed component-size logging so we can debug prompt bloat precisely.
     log::info!(
-        "[cluster_link_strategy] prompt components: index={} bytes, profiles={} bytes, orphans={} bytes, template={} bytes, total={} bytes",
+        "[cluster_link_strategy] prompt components: index={} bytes, profiles={} bytes, orphans={} bytes, zero_incoming={} bytes, template={} bytes, total={} bytes",
         index_json.len(),
         under_json.len(),
         orphan_list_json.len(),
-        prompt.len() - index_json.len() - under_json.len() - orphan_list_json.len(),
+        zero_incoming_list_json.len(),
+        prompt.len() - index_json.len() - under_json.len() - orphan_list_json.len() - zero_incoming_list_json.len(),
         prompt.len()
     );
 
@@ -391,6 +439,12 @@ Requirements:
     let id_to_file_path = paths.automation_dir.join("article_id_to_file.json");
     if let Err(e) = std::fs::write(&id_to_file_path, serde_json::to_string(&id_to_file).unwrap_or_default()) {
         log::warn!("[cluster_link_strategy] failed to write article_id_to_file.json: {}", e);
+    }
+
+    // Write full prompt to disk for debugging / inspection
+    let prompt_debug_path = paths.automation_dir.join("cluster_link_strategy_prompt.txt");
+    if let Err(e) = std::fs::write(&prompt_debug_path, &prompt) {
+        log::warn!("[cluster_link_strategy] failed to write prompt debug file: {}", e);
     }
 
     log::info!(
@@ -562,22 +616,14 @@ pub(crate) fn exec_cluster_link_apply(
             }
         };
 
-        // Skip if a "Related Articles" section already exists
-        let has_related = content.lines().any(|l| {
+        // Check if a "Related Articles" section already exists
+        let related_section_start = content.lines().position(|l| {
             let t = l.trim();
             t.starts_with("##") && t.to_lowercase().contains("related")
         });
-        if has_related {
-            log::info!(
-                "[cluster_link_apply] {} already has Related Articles section — skipping",
-                source_basename
-            );
-            continue;
-        }
 
-        // Build section, skipping slugs already present in the file
-        let mut section = String::from("\n\n## Related Articles\n\n");
-        let mut added_in_file = 0usize;
+        // Build list of new link lines, skipping slugs already present in the file
+        let mut new_link_lines: Vec<String> = Vec::new();
         for (title, slug) in new_links {
             if content.contains(slug.as_str()) {
                 log::info!(
@@ -587,15 +633,82 @@ pub(crate) fn exec_cluster_link_apply(
                 );
                 continue;
             }
-            section.push_str(&format!("- [{}](/blog/{})\n", title, slug));
-            added_in_file += 1;
+            new_link_lines.push(format!("- [{}](/blog/{})\n", title, slug));
         }
 
-        if added_in_file == 0 {
+        if new_link_lines.is_empty() {
             continue;
         }
 
-        let new_content = format!("{}{}", content.trim_end(), section);
+        let (new_content, added_in_file) = if let Some(start_idx) = related_section_start {
+            // --- Merge into existing Related Articles section ---
+            let lines: Vec<&str> = content.lines().collect();
+            // Find where the next heading begins (end of Related Articles section)
+            let end_idx = lines.iter().enumerate().skip(start_idx + 1).find(|(_, l)| {
+                let t = l.trim();
+                t.starts_with("##") && !t.to_lowercase().contains("related")
+            }).map(|(i, _)| i).unwrap_or(lines.len());
+
+            // Extract existing slugs from the current section to deduplicate
+            // Simple string scan: find "/blog/" and take everything up to ')'
+            let existing_slugs: std::collections::HashSet<String> = lines[start_idx..end_idx]
+                .iter()
+                .filter_map(|l| {
+                    let idx = l.find("/blog/")?;
+                    let start = idx + "/blog/".len();
+                    let end = l[start..].find(')').unwrap_or(l[start..].len());
+                    Some(l[start..start + end].to_string())
+                })
+                .collect();
+
+            let mut merged_lines: Vec<String> = lines[start_idx..end_idx]
+                .iter()
+                .map(|l| l.to_string())
+                .collect();
+
+            for line in &new_link_lines {
+                // Extract slug from the new link line to check for duplicates
+                let new_slug = line.find("/blog/").and_then(|idx| {
+                    let start = idx + "/blog/".len();
+                    let end = line[start..].find(')').unwrap_or(line[start..].len());
+                    Some(line[start..start + end].to_string())
+                });
+                if let Some(ref slug) = new_slug {
+                    if existing_slugs.contains(slug) {
+                        log::info!(
+                            "[cluster_link_apply] {} already links to /blog/{} in Related Articles — skipping",
+                            source_basename, slug
+                        );
+                        continue;
+                    }
+                }
+                merged_lines.push(line.trim_end().to_string());
+            }
+
+            let original_section_len = end_idx - start_idx;
+            if merged_lines.len() <= original_section_len {
+                // Nothing new was added
+                continue;
+            }
+
+            let before = lines[..start_idx].join("\n");
+            let after = lines[end_idx..].join("\n");
+            let section = merged_lines.join("\n");
+            let new_content = if after.is_empty() {
+                format!("{}\n{}", before.trim_end(), section)
+            } else {
+                format!("{}\n{}\n{}", before.trim_end(), section, after)
+            };
+            (new_content, merged_lines.len() - original_section_len)
+        } else {
+            // --- Append new Related Articles section ---
+            let mut section = String::from("\n\n## Related Articles\n\n");
+            for line in &new_link_lines {
+                section.push_str(line);
+            }
+            let new_content = format!("{}{}", content.trim_end(), section);
+            (new_content, new_link_lines.len())
+        };
         match std::fs::write(file_path, new_content) {
             Ok(_) => {
                 files_modified += 1;

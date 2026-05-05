@@ -39,7 +39,8 @@ pub(crate) fn create_tasks_from_collection_after_exec(
 ///
 /// Maps reason codes to task types:
 ///   robots_blocked / noindex / fetch_error / canonical_mismatch → fix_technical
-///   not_indexed_*                                               → fix_indexing
+///   not_indexed_other                                           → interlinking (add inbound links)
+///   crawled_not_indexed / other not_indexed_*                   → fix_indexing
 ///   api_error                                                   → fix_gsc_access (batched)
 ///   (all indexed)                                               → investigate_gsc
 
@@ -58,7 +59,7 @@ pub(crate) fn create_tasks_from_collection(
     let mut seen_issues = std::collections::HashSet::<String>::new();
     let mut api_error_count = 0u32;
 
-    for item in items.iter().take(20) {
+    for item in items.iter() {
         let url = item["url"].as_str().unwrap_or("");
         let reason = item["reason_code"].as_str().unwrap_or("unknown");
         let action = item["action"].as_str().unwrap_or("");
@@ -82,6 +83,8 @@ pub(crate) fn create_tasks_from_collection(
 
         let task_type = match reason {
             "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch" => "fix_technical",
+            "not_indexed_other" => "interlinking",
+            "crawled_not_indexed" => "fix_indexing",
             _ => "fix_indexing",
         };
 

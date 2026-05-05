@@ -15,18 +15,26 @@ pub fn create_reply_tasks_from_opportunities(
     task_id: &str,
     post_ids: &[String],
 ) -> Result<Vec<Task>, String> {
+    log::info!("[create_reply_tasks_from_opportunities] called with task_id={} post_ids={:?}", task_id, post_ids);
+    
     if post_ids.is_empty() {
         return Err("No opportunities selected".to_string());
     }
 
     let parent_task = task_store::get_task(conn, task_id)
         .map_err(|e| format!("Failed to get parent task: {}", e))?;
+    
+    log::info!("[create_reply_tasks_from_opportunities] parent_task has {} artifacts", parent_task.artifacts.len());
+    for a in &parent_task.artifacts {
+        log::info!("[create_reply_tasks_from_opportunities] artifact key={}", a.key);
+    }
 
     let results_artifact = parent_task
         .artifacts
         .iter()
         .find(|a| a.key == "reddit_results_stage")
         .ok_or_else(|| {
+            log::warn!("[create_reply_tasks_from_opportunities] reddit_results_stage artifact not found");
             "No reddit_results_stage artifact found. Run the search first.".to_string()
         })?;
 
@@ -103,7 +111,7 @@ pub fn create_reply_tasks_from_opportunities(
         .map_err(|e| format!("Failed to update parent task status: {}", e))?;
 
     log::info!(
-        "[create_reply_tasks] created {} reply tasks from parent {} and marked parent as Done",
+        "[create_reply_tasks_from_opportunities] created {} reply tasks from parent {} and marked parent as Done",
         created_tasks.len(),
         parent_task.id
     );

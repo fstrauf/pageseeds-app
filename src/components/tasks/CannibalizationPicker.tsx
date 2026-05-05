@@ -72,7 +72,9 @@ export function CannibalizationPicker({ task, onTasksCreated }: CannibalizationP
   useEffect(() => {
     const artifact = task.artifacts.find(a => a.key === 'cannibalization_strategy')
     if (!artifact?.content) {
-      showError('No strategy artifact found. Run the audit first.')
+      // list_tasks returns light tasks without artifacts; TaskDetail hydrates
+      // via getTask(). Don't error here — just show empty until hydrated.
+      setRows([])
       return
     }
 

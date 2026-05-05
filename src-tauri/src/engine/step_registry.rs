@@ -749,6 +749,12 @@ impl StepRegistry {
 
         register_blocking!(
             handlers,
+            StepKind::CanExactKeywordDupes,
+            crate::engine::exec::cannibalization_audit::exec_can_exact_keyword_dupes
+        );
+
+        register_blocking!(
+            handlers,
             StepKind::CanSelectCandidates,
             crate::engine::exec::cannibalization_audit::exec_can_select_candidates
         );

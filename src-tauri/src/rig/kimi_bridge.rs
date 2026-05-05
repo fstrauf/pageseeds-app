@@ -214,8 +214,8 @@ mod tests {
                 "acp": {"available": true, "tool_calls": true, "json_mode": true, "file_io": true}
             },
             "limits": {
-                "max_prompt_bytes_direct": 20000,
-                "max_prompt_bytes_acp": 20000,
+                "max_prompt_bytes_direct": 100000,
+                "max_prompt_bytes_acp": 100000,
                 "max_concurrent_requests": 4
             }
         }"#;
@@ -227,8 +227,8 @@ mod tests {
         assert_eq!(health.kimi_cli_version, Some("0.9.1".to_string()));
         assert_eq!(health.models, vec!["kimi-k2.5"]);
         assert_eq!(health.backends.len(), 2);
-        assert_eq!(health.limits.max_prompt_bytes_direct, 20000);
-        assert_eq!(health.limits.max_prompt_bytes_acp, 20000);
+        assert_eq!(health.limits.max_prompt_bytes_direct, 100000);
+        assert_eq!(health.limits.max_prompt_bytes_acp, 100000);
         assert_eq!(health.limits.max_concurrent_requests, 4);
     }
 
@@ -241,8 +241,8 @@ mod tests {
             "models": [],
             "backends": {},
             "limits": {
-                "max_prompt_bytes_direct": 20000,
-                "max_prompt_bytes_acp": 20000,
+                "max_prompt_bytes_direct": 100000,
+                "max_prompt_bytes_acp": 100000,
                 "max_concurrent_requests": 2
             }
         }"#;

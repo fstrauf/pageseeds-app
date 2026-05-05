@@ -58,7 +58,7 @@ pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult
 
                 let suggestion_list: Vec<String> = suggestions
                     .iter()
-                    .take(6)
+                    .take(4)
                     .map(|s| s.keyword.clone())
                     .collect();
 

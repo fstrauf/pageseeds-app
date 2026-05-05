@@ -32,6 +32,7 @@ struct ArticleRecord {
     outgoing_links: usize,
     published_date: String,
     word_count: usize,
+    page_type: Option<String>,
 }
 
 #[derive(Debug)]
@@ -149,6 +150,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         };
         let word_count = first_200_words.split_whitespace().count();
 
+        let page_type = article["page_type"].as_str().map(String::from);
         let combined_text = format!("{} {} {} {}", title, h1, target_keyword, first_200_words);
         let tokens = tokenize(&combined_text);
 
@@ -166,8 +168,16 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
             outgoing_links: 0,
             published_date,
             word_count,
+            page_type,
         });
     }
+
+    // ── 1b. Skip articles without GSC data from clustering — if Google can't
+    //     see them, they can't cannibalize in search results.
+    let mut records: Vec<ArticleRecord> = records
+        .into_iter()
+        .filter(|r| r.gsc.as_object().map(|o| !o.is_empty()).unwrap_or(false))
+        .collect();
 
     // ── 2. Compute TF-IDF vectors ─────────────────────────────────────────────
     let all_tokens: Vec<Vec<String>> = records.iter().map(|r| r.tokens.clone()).collect();
@@ -254,7 +264,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     let clusters = build_clusters(&records, &all_edges, db_conn.as_ref(), &task.project_id);
 
     // ── 7. Detect hub gaps ────────────────────────────────────────────────────
-    let hub_gaps = detect_hub_gaps(&records, &clusters);
+    let hub_gaps = detect_hub_gaps(&records, &clusters, db_conn.as_ref(), &task.project_id);
 
     // ── 8. Analyse territories ────────────────────────────────────────────────
     let territory_analysis = analyze_territories(&records);
@@ -721,6 +731,7 @@ fn enrich_link_metrics(records: &mut [ArticleRecord], project_path: &str) {
             review_count: 0,
             content_gaps_addressed: vec![],
             estimated_traffic_monthly: None,
+            page_type: None,
             project_id: String::new(),
             quality_score: None,
             quality_grade: None,
@@ -750,58 +761,122 @@ fn enrich_link_metrics(records: &mut [ArticleRecord], project_path: &str) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Detect clusters that lack a hub/pillar page.
-fn detect_hub_gaps(records: &[ArticleRecord], clusters: &[Cluster]) -> Vec<serde_json::Value> {
-    // Find existing hub-like pages across the whole site.
-    // Recognise both URL-path prefixes (hub/) and slug prefixes (hub_).
-    let existing_hubs: HashSet<String> = records
-        .iter()
-        .filter(|r| {
-            let slug = &r.url_slug;
-            slug.starts_with("hub/")
-                || slug.starts_with("guide/")
-                || slug.starts_with("hub_")
-                || slug.starts_with("guide_")
-        })
-        .flat_map(|r| {
-            let mut topics = Vec::new();
-            // 1. target_keyword if populated
-            let kw = r.target_keyword.trim().to_lowercase();
-            if !kw.is_empty() {
-                topics.push(kw);
+/// Uses DB-tracked page_type='hub' first, then falls back to URL prefix heuristics.
+fn detect_hub_gaps(
+    records: &[ArticleRecord],
+    clusters: &[Cluster],
+    conn: Option<&rusqlite::Connection>,
+    project_id: &str,
+) -> Vec<serde_json::Value> {
+    let mut existing_hubs: HashSet<String> = HashSet::new();
+
+    // 1. Primary: DB-tracked hub pages (page_type = 'hub')
+    if let Some(conn) = conn {
+        match conn.prepare(
+            "SELECT url_slug, target_keyword, title FROM articles WHERE project_id = ?1 AND page_type = 'hub'",
+        ) {
+            Ok(mut stmt) => {
+                let rows = stmt.query_map([project_id], |row| {
+                    let slug: String = row.get(0)?;
+                    let kw: Option<String> = row.get(1)?;
+                    let title: String = row.get(2)?;
+                    Ok((slug, kw, title))
+                });
+                if let Ok(rows) = rows {
+                    for row in rows.filter_map(|r| r.ok()) {
+                        let (slug, kw, title) = row;
+                        if let Some(kw) = kw.filter(|s| !s.is_empty()) {
+                            existing_hubs.insert(kw.trim().to_lowercase());
+                        }
+                        // Derive topic from slug
+                        let stripped = if slug.starts_with("hub/") {
+                            &slug[4..]
+                        } else if slug.starts_with("guide/") {
+                            &slug[6..]
+                        } else if slug.starts_with("hub_") {
+                            &slug[4..]
+                        } else if slug.starts_with("guide_") {
+                            &slug[6..]
+                        } else {
+                            &slug
+                        };
+                        let stripped = stripped.trim().replace('_', " ").replace('-', " ").to_lowercase();
+                        if !stripped.is_empty() {
+                            existing_hubs.insert(stripped);
+                        }
+                        // Title topic
+                        let title_topic = title
+                            .trim()
+                            .to_lowercase()
+                            .trim_end_matches(": complete guide")
+                            .trim_end_matches(": the complete guide")
+                            .trim_end_matches(" complete guide")
+                            .trim_end_matches(": ultimate guide")
+                            .trim_end_matches(" ultimate guide")
+                            .trim()
+                            .to_string();
+                        if !title_topic.is_empty() {
+                            existing_hubs.insert(title_topic);
+                        }
+                    }
+                }
             }
-            // 2. Derive topic from slug by stripping prefix
-            let slug = &r.url_slug;
-            let stripped = if slug.starts_with("hub/") {
-                &slug[4..]
-            } else if slug.starts_with("guide/") {
-                &slug[6..]
-            } else if slug.starts_with("hub_") {
-                &slug[4..]
-            } else if slug.starts_with("guide_") {
-                &slug[6..]
-            } else {
-                ""
-            };
-            let stripped = stripped.trim().replace('_', " ").to_lowercase();
-            if !stripped.is_empty() {
-                topics.push(stripped);
+            Err(e) => {
+                log::warn!("[detect_hub_gaps] Failed to query DB hubs: {}", e);
             }
-            // 3. Fall back to title words (without common suffixes)
-            let title = r.title.trim().to_lowercase();
-            let title_topic = title
-                .trim_end_matches(": complete guide")
-                .trim_end_matches(": the complete guide")
-                .trim_end_matches(" complete guide")
-                .trim()
-                .to_string();
-            if !title_topic.is_empty() && title_topic != title {
-                topics.push(title_topic);
-            } else if !title.is_empty() {
-                topics.push(title);
-            }
-            topics
-        })
-        .collect();
+        }
+    }
+
+    // 2. From article records: explicit page_type='hub' or heuristic detection
+    for r in records {
+        let is_hub_explicit = r.page_type.as_deref() == Some("hub");
+        let is_hub_heuristic = !is_hub_explicit
+            && (r.url_slug.starts_with("hub/")
+                || r.url_slug.starts_with("guide/")
+                || r.url_slug.starts_with("hub_")
+                || r.url_slug.starts_with("guide_")
+                || r.title.to_lowercase().contains("complete guide")
+                || r.title.to_lowercase().contains("ultimate guide"));
+
+        if !is_hub_explicit && !is_hub_heuristic {
+            continue;
+        }
+
+        let kw = r.target_keyword.trim().to_lowercase();
+        if !kw.is_empty() {
+            existing_hubs.insert(kw);
+        }
+        let slug = &r.url_slug;
+        let stripped = if slug.starts_with("hub/") {
+            &slug[4..]
+        } else if slug.starts_with("guide/") {
+            &slug[6..]
+        } else if slug.starts_with("hub_") {
+            &slug[4..]
+        } else if slug.starts_with("guide_") {
+            &slug[6..]
+        } else {
+            ""
+        };
+        let stripped = stripped.trim().replace('_', " ").replace('-', " ").to_lowercase();
+        if !stripped.is_empty() {
+            existing_hubs.insert(stripped);
+        }
+        let title_topic = r
+            .title
+            .trim()
+            .to_lowercase()
+            .trim_end_matches(": complete guide")
+            .trim_end_matches(": the complete guide")
+            .trim_end_matches(" complete guide")
+            .trim_end_matches(": ultimate guide")
+            .trim_end_matches(" ultimate guide")
+            .trim()
+            .to_string();
+        if !title_topic.is_empty() {
+            existing_hubs.insert(title_topic);
+        }
+    }
 
     let mut gaps: Vec<serde_json::Value> = Vec::new();
     for cluster in clusters {
@@ -875,21 +950,94 @@ fn capitalize_words(text: &str) -> String {
 // Territory analysis
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Build a canonical keyword form for semantic grouping.
+/// Splits into words, sorts them, and re-joins so that
+/// "covered calls strategy" and "strategy covered calls" group together.
+fn canonical_keyword(kw: &str) -> String {
+    let mut words: Vec<String> = kw
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect();
+    words.sort_unstable();
+    words.join(" ")
+}
+
+/// Compute Jaccard similarity between two keyword strings (0.0–1.0).
+fn keyword_jaccard(a: &str, b: &str) -> f64 {
+    let set_a: HashSet<String> = a
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect();
+    let set_b: HashSet<String> = b
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect();
+    if set_a.is_empty() || set_b.is_empty() {
+        return 0.0;
+    }
+    let intersection: HashSet<&String> = set_a.intersection(&set_b).collect();
+    let union_count = set_a.len() + set_b.len() - intersection.len();
+    if union_count == 0 {
+        return 0.0;
+    }
+    intersection.len() as f64 / union_count as f64
+}
+
 /// Analyse content coverage to find saturated themes and open territories.
+///
+/// Improvements:
+/// - Semantic grouping collapses keyword variations (e.g. "covered calls" / "covered call strategy")
+/// - Open territory threshold raised to 5,000 impressions
+/// - Open territories capped at top 10 by impressions
 fn analyze_territories(records: &[ArticleRecord]) -> serde_json::Value {
-    let mut theme_counts: HashMap<String, Vec<i64>> = HashMap::new();
+    // Raw grouping by exact target_keyword
+    let mut raw_groups: HashMap<String, Vec<i64>> = HashMap::new();
     for r in records {
         let kw = r.target_keyword.trim().to_lowercase();
         if kw.is_empty() {
             continue;
         }
-        theme_counts.entry(kw).or_default().push(r.id);
+        raw_groups.entry(kw).or_default().push(r.id);
+    }
+
+    // Semantic grouping: merge keywords that are canonical duplicates or high Jaccard overlap
+    let mut merged_groups: HashMap<String, (Vec<i64>, Vec<String>)> = HashMap::new();
+    let mut canonical_to_representative: HashMap<String, String> = HashMap::new();
+
+    for (kw, ids) in raw_groups {
+        let canonical = canonical_keyword(&kw);
+        let mut merged = false;
+
+        // Try to merge with an existing group if Jaccard > 0.5
+        for (rep, (existing_ids, existing_kws)) in merged_groups.iter_mut() {
+            if keyword_jaccard(&kw, rep) > 0.5 {
+                existing_ids.extend(ids.clone());
+                existing_kws.push(kw.clone());
+                merged = true;
+                break;
+            }
+        }
+
+        if !merged {
+            canonical_to_representative.insert(canonical.clone(), kw.clone());
+            let kw_clone = kw.clone();
+            merged_groups.insert(kw, (ids, vec![kw_clone]));
+        }
+    }
+
+    // Deduplicate article IDs within each merged group
+    for (ids, _) in merged_groups.values_mut() {
+        ids.sort_unstable();
+        ids.dedup();
     }
 
     let mut saturated_themes: Vec<serde_json::Value> = Vec::new();
     let mut open_territories: Vec<serde_json::Value> = Vec::new();
 
-    for (theme, ids) in &theme_counts {
+    for (representative, (ids, source_kws)) in &merged_groups {
         let total_impressions: f64 = ids
             .iter()
             .filter_map(|&id| records.iter().find(|r| r.id == id))
@@ -898,18 +1046,21 @@ fn analyze_territories(records: &[ArticleRecord]) -> serde_json::Value {
 
         if ids.len() > 5 {
             saturated_themes.push(serde_json::json!({
-                "theme": theme,
+                "theme": representative,
                 "article_count": ids.len(),
                 "total_impressions": total_impressions,
-                "reason": "More than 5 articles target the same narrow theme.",
+                "source_keywords": source_kws,
+                "reason": format!("{} articles ({} merged keywords) target the same narrow theme.", ids.len(), source_kws.len()),
             }));
         } else if ids.len() <= 1 {
-            // Only flag as open if it has some impressions (evidence of demand)
-            if total_impressions > 1000.0 {
+            // Only flag as open if it has meaningful impressions (evidence of demand)
+            const OPEN_TERRITORY_IMPRESSION_THRESHOLD: f64 = 5000.0;
+            if total_impressions >= OPEN_TERRITORY_IMPRESSION_THRESHOLD {
                 open_territories.push(serde_json::json!({
-                    "theme": theme,
+                    "theme": representative,
                     "article_count": ids.len(),
                     "total_impressions": total_impressions,
+                    "source_keywords": source_kws,
                     "reason": "Low coverage but existing impressions suggest demand.",
                 }));
             }
@@ -928,10 +1079,18 @@ fn analyze_territories(records: &[ArticleRecord]) -> serde_json::Value {
         tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Cap open territories to top 10 so the strategy doesn't drown in low-value suggestions
+    const MAX_OPEN_TERRITORIES: usize = 10;
+    let open_territories_count = open_territories.len();
+    if open_territories.len() > MAX_OPEN_TERRITORIES {
+        open_territories.truncate(MAX_OPEN_TERRITORIES);
+    }
+
     serde_json::json!({
         "saturated_themes": saturated_themes,
         "open_territories": open_territories,
-        "total_themes": theme_counts.len(),
+        "open_territories_dropped": open_territories_count.saturating_sub(MAX_OPEN_TERRITORIES),
+        "total_themes": merged_groups.len(),
     })
 }
 
@@ -1004,7 +1163,120 @@ fn read_article_head_and_words(project_path: &str, file_ref: &str) -> (String, S
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 2: Select Candidates
+// Step 2: Exact Keyword Duplicates
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Deterministic detection of exact duplicate target keywords.
+///
+/// Reads `cannibalization_audit_context.json`, groups articles by identical
+/// target_keyword, enriches each group with GSC performance ranking, and writes
+/// `exact_keyword_duplicates.json`. These are guaranteed merge candidates — the
+/// agent only decides which page to keep and how to redirect.
+pub(crate) fn exec_can_exact_keyword_dupes(_task: &Task, project_path: &str) -> StepResult {
+    let paths = ProjectPaths::from_path(project_path);
+    let context_path = paths.automation_dir.join("cannibalization_audit_context.json");
+
+    let context_doc: serde_json::Value =
+        match crate::engine::exec::common::read_json(&context_path, "cannibalization_audit_context.json") {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+
+    let articles = context_doc["articles"].as_array().cloned().unwrap_or_default();
+    if articles.is_empty() {
+        return StepResult {
+            success: true,
+            message: "No articles found — nothing to check for exact duplicates.".to_string(),
+            output: None,
+        };
+    }
+
+    // Group by exact target_keyword (trimmed, lowercase)
+    let mut groups: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for article in &articles {
+        let kw = article["target_keyword"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if kw.is_empty() {
+            continue;
+        }
+        groups.entry(kw).or_default().push(article.clone());
+    }
+
+    let mut dupes: Vec<serde_json::Value> = Vec::new();
+    for (kw, mut pages) in groups {
+        if pages.len() < 2 {
+            continue;
+        }
+
+        // Sort by GSC performance: impressions desc, clicks desc, position asc
+        pages.sort_by(|a, b| {
+            let ia = a["gsc"]["impressions"].as_f64().unwrap_or(0.0);
+            let ib = b["gsc"]["impressions"].as_f64().unwrap_or(0.0);
+            let ca = a["gsc"]["clicks"].as_f64().unwrap_or(0.0);
+            let cb = b["gsc"]["clicks"].as_f64().unwrap_or(0.0);
+            let pa = a["gsc"]["avg_position"].as_f64().unwrap_or(999.0);
+            let pb = b["gsc"]["avg_position"].as_f64().unwrap_or(999.0);
+
+            ib.partial_cmp(&ia)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        let total_impressions: f64 = pages
+            .iter()
+            .map(|p| p["gsc"]["impressions"].as_f64().unwrap_or(0.0))
+            .sum();
+
+        dupes.push(serde_json::json!({
+            "keyword": kw,
+            "article_count": pages.len(),
+            "total_impressions": total_impressions,
+            "pages": pages,
+            "best_performer": {
+                "id": pages[0]["id"],
+                "title": pages[0]["title"],
+                "url": pages[0]["url_slug"],
+                "impressions": pages[0]["gsc"]["impressions"].as_f64().unwrap_or(0.0),
+                "clicks": pages[0]["gsc"]["clicks"].as_f64().unwrap_or(0.0),
+                "avg_position": pages[0]["gsc"]["avg_position"].as_f64().unwrap_or(0.0),
+            },
+        }));
+    }
+
+    // Sort by total impressions descending
+    dupes.sort_by(|a, b| {
+        let ta = a["total_impressions"].as_f64().unwrap_or(0.0);
+        let tb = b["total_impressions"].as_f64().unwrap_or(0.0);
+        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let dupes_doc = serde_json::json!({
+        "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "dupe_count": dupes.len(),
+        "duplicates": dupes,
+    });
+
+    let dupes_path = paths.automation_dir.join("exact_keyword_duplicates.json");
+    if let Err(e) = std::fs::write(
+        &dupes_path,
+        serde_json::to_string_pretty(&dupes_doc).unwrap_or_default() + "\n",
+    ) {
+        log::warn!("[cannibalization_audit] Failed to write exact_keyword_duplicates.json: {}", e);
+    }
+
+    StepResult {
+        success: true,
+        message: format!("Found {} exact keyword duplicates", dupes.len()),
+        output: Some(serde_json::to_string_pretty(&dupes_doc).unwrap_or_default()),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Step 3: Select Candidates
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Deterministic candidate selection from cannibalization cluster artifacts.
@@ -1173,6 +1445,70 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
                 "total_impressions": total_impressions,
                 "page_count": compact_pages.len(),
             }));
+        }
+    }
+
+    // ── Inject exact-keyword-duplicate candidates ─────────────────────────────
+    // These are guaranteed overlap cases (identical target_keyword). They take
+    // priority over cluster-based candidates because the overlap is unambiguous.
+    let dupes_path = paths.automation_dir.join("exact_keyword_duplicates.json");
+    if let Ok(dupes_json) = std::fs::read_to_string(&dupes_path) {
+        if let Ok(dupes_doc) = serde_json::from_str::<serde_json::Value>(&dupes_json) {
+            if let Some(dupes_arr) = dupes_doc["duplicates"].as_array() {
+                for dupe in dupes_arr {
+                    let keyword = dupe["keyword"].as_str().unwrap_or("").to_string();
+                    if keyword.is_empty() {
+                        continue;
+                    }
+                    let pages = dupe["pages"].as_array().cloned().unwrap_or_default();
+                    if pages.len() < 2 {
+                        continue;
+                    }
+
+                    // Build compact pages in the same shape as cluster candidates
+                    let compact_pages: Vec<serde_json::Value> = pages
+                        .iter()
+                        .map(|p| {
+                            let excerpt = p["first_200_words"].as_str().unwrap_or("");
+                            let excerpt_words: Vec<&str> = excerpt.split_whitespace().take(60).collect();
+                            serde_json::json!({
+                                "id": p["id"],
+                                "url": format!("/blog/{}", p["url_slug"].as_str().unwrap_or("")),
+                                "title": p["title"],
+                                "h1": p["h1"],
+                                "target_keyword": p["target_keyword"],
+                                "impressions": p["gsc"]["impressions"].as_f64().unwrap_or(0.0),
+                                "clicks": p["gsc"]["clicks"].as_f64().unwrap_or(0.0),
+                                "avg_position": p["gsc"]["avg_position"].as_f64().unwrap_or(0.0),
+                                "word_count": p["word_count"],
+                                "incoming_internal_links": p["incoming_internal_links"],
+                                "outgoing_internal_links": p["outgoing_internal_links"],
+                                "published_date": p["published_date"],
+                                "excerpt": excerpt_words.join(" "),
+                            })
+                        })
+                        .collect();
+
+                    let total_impressions: f64 = compact_pages
+                        .iter()
+                        .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
+                        .sum();
+
+                    let candidate_id = format!("exact_{}_{}", slugify(&keyword), candidates.len());
+
+                    candidates.push(serde_json::json!({
+                        "candidate_id": candidate_id,
+                        "candidate_type": "exact_keyword_dupe",
+                        "theme": keyword,
+                        "pages": compact_pages,
+                        "top_shared_queries": vec![keyword.clone()],
+                        "shared_query_count": 1,
+                        "total_impressions": total_impressions,
+                        "page_count": compact_pages.len(),
+                        "best_performer": dupe["best_performer"],
+                    }));
+                }
+            }
         }
     }
 
@@ -2041,6 +2377,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "2024-01-01".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 2,
@@ -2056,6 +2393,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "2024-01-02".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 3,
@@ -2071,6 +2409,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "2024-01-03".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 4,
@@ -2086,6 +2425,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "2024-01-04".to_string(),
                 word_count: 100,
+                page_type: None,
             },
         ];
 
@@ -2102,7 +2442,7 @@ Some content here.
             None,
             "",
         );
-        let gaps = detect_hub_gaps(&records, &clusters);
+        let gaps = detect_hub_gaps(&records, &clusters, None, "");
 
         // Cluster includes hub page (id 4), so no gap should be reported
         assert!(
@@ -2128,6 +2468,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 2,
@@ -2143,6 +2484,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 3,
@@ -2158,6 +2500,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 4,
@@ -2173,6 +2516,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 5,
@@ -2188,6 +2532,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 6,
@@ -2203,6 +2548,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 100,
+                page_type: None,
             },
             ArticleRecord {
                 id: 7,
@@ -2218,6 +2564,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 100,
+                page_type: None,
             },
         ];
 
@@ -2313,6 +2660,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 0,
+                page_type: None,
             },
             ArticleRecord {
                 id: 2,
@@ -2328,6 +2676,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 0,
+                page_type: None,
             },
             ArticleRecord {
                 id: 3,
@@ -2343,6 +2692,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 0,
+                page_type: None,
             },
         ];
 
@@ -2372,6 +2722,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 0,
+                page_type: None,
             },
             ArticleRecord {
                 id: 2,
@@ -2387,6 +2738,7 @@ Some content here.
                 outgoing_links: 0,
                 published_date: "".to_string(),
                 word_count: 0,
+                page_type: None,
             },
         ];
 

@@ -6,6 +6,7 @@ import { GscMovers } from './GscMovers'
 import { GscIndexing } from './GscIndexing'
 import { GscCoverage } from './GscCoverage'
 import { GscRedirects } from './GscRedirects'
+import { GscDrift } from './GscDrift'
 import type { Project } from '../../lib/types'
 
 interface Props {
@@ -26,7 +27,7 @@ export function GSC({ projectId, project }: Props) {
           style={{ borderColor: 'var(--color-border)' }}
         >
           <TabsList className="bg-card border border-border">
-            {['auth', 'dashboard', 'movers', 'indexing', 'coverage', 'redirects'].map(tab => (
+            {['auth', 'dashboard', 'movers', 'indexing', 'coverage', 'redirects', 'drift'].map(tab => (
               <TabsTrigger
                 key={tab}
                 value={tab}
@@ -64,6 +65,10 @@ export function GSC({ projectId, project }: Props) {
 
         <TabsContent value="redirects" className="flex-1 overflow-y-auto mt-0 p-4">
           <GscRedirects />
+        </TabsContent>
+
+        <TabsContent value="drift" className="flex-1 overflow-hidden mt-0 p-0">
+          <GscDrift projectId={projectId} />
         </TabsContent>
       </Tabs>
     </div>

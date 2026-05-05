@@ -489,7 +489,10 @@ function FollowUpList({ followUps, onRunNow, onOpenTask }: FollowUpListProps) {
             {isReview ? (
               <Button
                 size="xs"
-                onClick={() => onOpenTask?.(task.id)}
+                onClick={() => {
+                  console.log('[TaskRunner] review button clicked, taskId:', task.id, 'review_surface:', task.review_surface)
+                  onOpenTask?.(task.id)
+                }}
                 className="text-[11px]"
               >
                 {reviewLabel}
