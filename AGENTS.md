@@ -25,6 +25,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 |---|---|---|
 | **Adjust how an AI writes/reviews content** | Edit or add a skill in `.github/skills/{skill}/SKILL.md` (or embedded defaults in `src-tauri/src/skills/`). Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
+| **Add or change task lifecycle behavior** | Follow the Task Lifecycle Contract below, then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
 | **Attach tasks to execution** | Use backend queue commands through `tauri.ts` (`enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`). | Call `executeTask` directly from components |
 | **Programmatically create tasks** | Use `TaskSpawner::spawn` or `TaskSpawner::spawn_follow_up`. | Call `task_store::create_task` directly |
 | **Pass downstream context/data** | Use task artifacts + deterministic prep steps. | Make the agent rediscover file paths or metrics from prose |
@@ -145,6 +146,27 @@ src/
 5. **Task creation goes through `engine::spawner::TaskSpawner`**. Never call `task_store::create_task` directly for programmatic task creation. The spawner enforces idempotency (preventing duplicate follow-up tasks) and dependency validation. Use `TaskSpawner::spawn()` for general creation or `TaskSpawner::spawn_follow_up()` for follow-up tasks.
 6. **No subprocess calls**. All I/O uses Rust crates directly (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.).
 6. **Independent but isolated codebase**. Do not share code with `pageseeds-cli`. If a Python module needs porting, re-implement it cleanly in Rust.
+
+### Task Lifecycle Contract
+
+Before adding or changing anything that creates, queues, reviews, or spawns tasks, identify which lifecycle lane it belongs to. Put the answer in the spec, PR summary, or implementation note.
+
+| Lane | Source of truth | How it works | Reuse |
+|---|---|---|---|
+| **User starts an existing task** | `src/lib/taskQueueActions.ts`, `src/stores/queueStore.ts`, `src-tauri/src/engine/queue.rs` | Frontend sends `EnqueueItem`s with `enqueueTasks`; backend persists queue rows, starts the runner, emits queue events. | `enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`, `removeQueueItem` |
+| **System creates a task** | `src-tauri/src/engine/spawner.rs` | Build a `TaskSpec`; defaults come from `config/task_definitions.rs`; idempotency prevents duplicate active work. | `TaskSpawner::spawn` |
+| **Task creates backend follow-ups after success** | `src-tauri/src/engine/post_actions.rs` | `after_task_success` runs after executor completion and returns created task IDs; queue auto-enqueues only follow-ups whose `run_policy` is `auto_enqueue`. | `TaskSpawner::spawn_follow_up` or `TaskSpawner::spawn` with an idempotency key |
+| **Task requires user input before follow-ups** | `config/task_definitions.rs` + a review UI + a selection command | The parent task gets `review_surface != none` and usually `follow_up_policy = UserSelection`; executor leaves it in `review`; the selection command validates user choices, creates downstream tasks, then marks the parent done. | Existing patterns: keyword picker, Reddit picker, cannibalization picker |
+| **Task should only show results, not spawn work** | `config/task_definitions.rs` | Use a review surface such as `artifact_review` and `follow_up_policy = None`; do not create queue items from the UI unless the user explicitly enqueues a task. | Existing artifact review surfaces |
+
+Hard rules:
+- `config/task_definitions.rs` owns `run_policy`, `review_surface`, `follow_up_policy`, and `handler_family`. Do not duplicate those decisions in React state or executor branches.
+- Components enqueue; they do not execute. Use `src/lib/taskQueueActions.ts` or the queue context/store wrappers, which call backend queue commands.
+- Backend follow-ups live in `engine/post_actions.rs` or a domain module called from it. The generic executor should stay an orchestrator.
+- User-selection follow-ups must not be spawned before the user chooses. Store selectable options as artifacts, route the completed parent to `review`, and create downstream tasks from the selection command.
+- Every generated task needs an idempotency key unless it is intentionally one-off. Active `todo`, `queued`, `in_progress`, and `review` tasks count as duplicates.
+- Run `pnpm run check:task-store` after task-creation changes.
+
 7. **Choose execution mode deliberately.** Every new workflow step requires an explicit decision. Use the tests below — if you cannot answer them, go back to the design.
 
    **The Deterministic-First Test:** Could a developer write a finite set of rules that produces the correct output for *all* valid inputs? If yes → deterministic. If the rules would need to understand intent, weigh tradeoffs between equally valid options, or generate prose → agentic.
@@ -750,6 +772,7 @@ See `docs/async-architecture.md` for detailed comparison.
 
 ### Rust backend
 - [ ] **Checked for reuse**: Reviewed the "DRY: Core Reusable Functions" catalog above. If the feature writes MDX, reuses `write_article`; if it links articles, reuses `cluster_and_link`; if it exports articles.json, reuses `db::export::write_articles_to_repo`; etc.
+- [ ] **Task lifecycle contract checked**: If the change creates, queues, reviews, or spawns tasks, identified the lifecycle lane and reused `TaskSpawner`, backend queue commands, `task_definitions`, and `post_actions` as appropriate.
 - [ ] `cargo check` passes before touching the frontend
 - [ ] `cargo test` passes — especially workflow routing and task definition tests
 - [ ] New SQLite columns added via a new migration, not by altering existing ones

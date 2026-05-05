@@ -170,11 +170,7 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
                 );
             }
             Ok(_) => {}
-            Err(e) => log::warn!(
-                "[date_enforce] Failed after {}: {}",
-                ctx.step.name,
-                e
-            ),
+            Err(e) => log::warn!("[date_enforce] Failed after {}: {}", ctx.step.name, e),
         }
     }
 
@@ -287,6 +283,63 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
+    // cluster_and_link / interlinking → spawn follow-up if orphans remain
+    if matches!(
+        ctx.task.task_type.as_str(),
+        "cluster_and_link" | "interlinking"
+    ) {
+        let apply_artifact = ctx
+            .task
+            .artifacts
+            .iter()
+            .find(|a| a.key == "cluster_link_apply");
+        if let Some(artifact) = apply_artifact {
+            if let Some(content) = artifact.content.as_deref() {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+                    let orphans = val["orphans_remaining"].as_i64().unwrap_or(0);
+                    let links_added = val["links_added"].as_i64().unwrap_or(0);
+                    // Cap follow-ups at 3 rounds total to avoid infinite loops
+                    let current_round = ctx
+                        .task
+                        .title
+                        .as_deref()
+                        .and_then(|t| {
+                            let re = regex::Regex::new(r"round\s+(\d+)").ok()?;
+                            re.captures(t)?.get(1)?.as_str().parse::<u32>().ok()
+                        })
+                        .unwrap_or(1);
+                    if current_round >= 3 {
+                        log::info!("[post_actions] cluster_and_link reached round {} — stopping follow-up chain", current_round);
+                    } else if orphans > 0 && links_added > 0 {
+                        let next_round = current_round + 1;
+                        log::info!(
+                            "[post_actions] cluster_and_link round {} finished with {} orphans remaining and {} links added — spawning round {}",
+                            current_round, orphans, links_added, next_round
+                        );
+                        if let Ok(task) = task_store::get_task(ctx.conn, &ctx.task.id) {
+                            let title = format!(
+                                "Cluster and link: round {} ({} orphans remain)",
+                                next_round, orphans
+                            );
+                            if let Ok(Some(follow_up)) =
+                                crate::engine::spawner::TaskSpawner::spawn_follow_up(
+                                    ctx.conn,
+                                    &task,
+                                    &ctx.task.task_type,
+                                    &title,
+                                )
+                            {
+                                follow_up_ids.push(follow_up.id);
+                            }
+                        }
+                    } else {
+                        log::info!("[post_actions] cluster_and_link round {} finished with {} orphans remaining, {} links added — no follow-up needed", current_round, orphans, links_added);
+                    }
+                }
+            }
+        }
+    }
+
     // Indexing diagnostics → collect spawned fix task IDs from step output
     if ctx.task.task_type == "indexing_diagnostics" {
         if let Some(step_result) = ctx
@@ -346,6 +399,16 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
+    // GSC indexing recovery → spawn focused child tasks
+    if ctx.task.task_type == "gsc_indexing_recovery" {
+        let child_ids = crate::engine::exec::gsc::spawn_recovery_child_tasks(
+            ctx.conn,
+            ctx.task,
+            ctx.project_path,
+        );
+        follow_up_ids.extend(child_ids);
+    }
+
     // GSC fix tasks → record resolution
     if matches!(
         ctx.task.task_type.as_str(),
@@ -370,6 +433,89 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
                     );
                 }
             }
+        }
+    }
+
+    // fix_indexing_internal_links → update history + spawn delayed outcome review
+    if ctx.task.task_type == "fix_indexing_internal_links" {
+        // Parse verify step output for incoming count and links added
+        let verify_data = ctx
+            .progress
+            .iter()
+            .find(|p| p.kind == "indexing_link_verify")
+            .and_then(|p| p.output.as_ref())
+            .and_then(|o| serde_json::from_str::<serde_json::Value>(o).ok());
+
+        let incoming_after = verify_data
+            .as_ref()
+            .and_then(|v| v["incoming_link_count_after"].as_i64())
+            .unwrap_or(-1);
+        let links_added = verify_data
+            .as_ref()
+            .and_then(|v| v["links_added"].as_i64())
+            .unwrap_or(0);
+
+        // Update recovery history
+        let _ = crate::gsc::db::update_recovery_history_on_complete(
+            ctx.conn,
+            &ctx.task.id,
+            incoming_after,
+            links_added,
+        );
+
+        // Spawn delayed outcome review with not_before = 14 days
+        let not_before = (chrono::Utc::now() + chrono::Duration::days(14)).to_rfc3339();
+        let idempotency_key = format!(
+            "gsc-indexing-outcome-review:{}:{}",
+            ctx.task.project_id, ctx.task.id
+        );
+
+        let spec = crate::engine::spawner::TaskSpec {
+            project_id: ctx.task.project_id.clone(),
+            task_type: "gsc_indexing_outcome_review".to_string(),
+            title: Some(format!("GSC outcome review for {}", ctx.task.id)),
+            description: Some(format!(
+                "Re-inspect target URL in GSC 14 days after link fix. Parent: {}",
+                ctx.task.id
+            )),
+            priority: crate::models::task::Priority::Medium,
+            run_policy: Some(crate::models::task::TaskRunPolicy::UserEnqueue),
+            agent_policy: crate::models::task::AgentPolicy::None,
+            depends_on: vec![ctx.task.id.clone()],
+            artifacts: ctx.task.artifacts.clone(),
+            idempotency_key: Some(idempotency_key),
+            ..Default::default()
+        };
+
+        if let Ok(task) = crate::engine::spawner::TaskSpawner::spawn(ctx.conn, spec) {
+            // Set not_before on the spawned task
+            let _ = ctx.conn.execute(
+                "UPDATE tasks SET not_before = ?1 WHERE id = ?2",
+                rusqlite::params![not_before, &task.id],
+            );
+            follow_up_ids.push(task.id);
+        }
+    }
+
+    // gsc_indexing_outcome_review → update history with final outcome
+    if ctx.task.task_type == "gsc_indexing_outcome_review" {
+        let outcome = ctx
+            .progress
+            .iter()
+            .find(|p| p.kind == "gsc_indexing_outcome_report")
+            .and_then(|p| p.output.as_ref())
+            .and_then(|o| serde_json::from_str::<serde_json::Value>(o).ok())
+            .and_then(|v| v["outcome_status"].as_str().map(String::from))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Find the parent fix task ID from depends_on
+        let parent_task_id = ctx.task.depends_on.first().cloned().unwrap_or_default();
+        if !parent_task_id.is_empty() {
+            let _ = crate::gsc::db::update_recovery_history_outcome(
+                ctx.conn,
+                &parent_task_id,
+                &outcome,
+            );
         }
     }
 

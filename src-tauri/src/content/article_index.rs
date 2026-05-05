@@ -354,9 +354,9 @@ fn derive_url_slug(filename: &str) -> String {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(filename);
-    let re = regex::Regex::new(r"^\d+[_\-]+").unwrap();
-    let stripped = re.replace(base, "");
-    stripped.to_lowercase().replace('_', "-")
+    crate::content::slug::strip_numeric_prefix(base)
+        .to_lowercase()
+        .replace('_', "-")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

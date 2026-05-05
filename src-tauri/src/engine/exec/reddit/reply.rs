@@ -33,7 +33,7 @@ pub fn exec_reddit_fetch_results(
             match stmt.query_map(rusqlite::params![project_id], |row| {
                 let pain_points_json: String = row.get::<_, String>(14).unwrap_or_else(|_| "[]".to_string());
                 let pain_points: Vec<String> = serde_json::from_str(&pain_points_json).unwrap_or_default();
-                
+
                 Ok(RedditOpportunity {
                     post_id: row.get(0)?,
                     title: row.get(1).ok(),

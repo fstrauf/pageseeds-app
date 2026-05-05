@@ -197,8 +197,7 @@ pub fn apply_fixes_to_db_and_export(
             rusqlite::params![fix.new_date, fix.article_id, project_id],
         )?;
     }
-    crate::content::article_index::export_projection(conn, project_id, project_path)
-        .map(|_| ())
+    crate::content::article_index::export_projection(conn, project_id, project_path).map(|_| ())
 }
 
 /// Deterministic post-write date enforcement.

@@ -2,4 +2,12 @@
 import type { DriftUrl } from "./DriftUrl";
 import type { ResubmitCandidate } from "./ResubmitCandidate";
 
-export type GscDriftReport = { site_url: string, sitemap_url: string, checked_at: string, sitemap_total: number, gsc_total: number, indexed_count: number, not_indexed_count: number, in_sitemap_not_in_gsc: Array<DriftUrl>, in_gsc_not_in_sitemap: Array<DriftUrl>, not_indexed: Array<DriftUrl>, resubmit_priority: Array<ResubmitCandidate>, };
+export type GscDriftReport = { site_url: string, sitemap_url: string, checked_at: string, sitemap_total: number, gsc_total: number, indexed_count: number, not_indexed_count: number, in_sitemap_not_in_gsc: Array<DriftUrl>, in_gsc_not_in_sitemap: Array<DriftUrl>, not_indexed: Array<DriftUrl>, resubmit_priority: Array<ResubmitCandidate>, 
+/**
+ * Hours since gsc_collection.json was last written. None if the file does not exist.
+ */
+gsc_data_age_hours: number | null, 
+/**
+ * Hours since link_scan.json was last written. None if the file does not exist.
+ */
+link_scan_age_hours: number | null, };

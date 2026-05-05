@@ -161,6 +161,12 @@ pub struct GscDriftReport {
     pub in_gsc_not_in_sitemap: Vec<DriftUrl>,
     pub not_indexed: Vec<DriftUrl>,
     pub resubmit_priority: Vec<ResubmitCandidate>,
+    /// Hours since gsc_collection.json was last written. None if the file does not exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gsc_data_age_hours: Option<i32>,
+    /// Hours since link_scan.json was last written. None if the file does not exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_scan_age_hours: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -173,6 +179,14 @@ pub struct DriftUrl {
     pub reason_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
+    /// Sitemap `<lastmod>` value when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lastmod: Option<String>,
+    /// Whether a matching MDX content file exists for this URL.
+    pub has_content_file: bool,
+    /// Frontmatter or structural issues that may prevent indexing (e.g. "noindex", "missing meta description").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -192,4 +206,15 @@ pub struct ResubmitCandidate {
     pub target_keyword: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub struct RecoveryStats {
+    pub total_attempts: usize,
+    pub linked: usize,
+    pub resolved: usize,
+    pub failed: usize,
+    pub total_links_added: usize,
 }

@@ -197,11 +197,10 @@ async fn run_kimi_bridge(
     preamble: Option<&str>,
     backend_preference: Option<&str>,
 ) -> Result<AgentResponse, String> {
-    let result = crate::rig::compat::kimi::run_prompt(
-        base_url, model, prompt, preamble, backend_preference,
-    )
-    .await
-    .map_err(|e| format!("Kimi bridge prompt failed: {}", e))?;
+    let result =
+        crate::rig::compat::kimi::run_prompt(base_url, model, prompt, preamble, backend_preference)
+            .await
+            .map_err(|e| format!("Kimi bridge prompt failed: {}", e))?;
 
     Ok(AgentResponse::with_usage(
         result.content,
@@ -428,7 +427,9 @@ mod tests {
             model: "test-model".to_string(),
         };
 
-        let result = run_agent_with_backend(&backend, "Say hello", None, None).await.unwrap();
+        let result = run_agent_with_backend(&backend, "Say hello", None, None)
+            .await
+            .unwrap();
         assert_eq!(result.content, "Hello from mock bridge!");
         assert_eq!(result.prompt_tokens, Some(12));
         assert_eq!(result.completion_tokens, Some(7));
@@ -458,9 +459,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let backend = resolve_backend("kimi", Some(&format!("{}/v1", mock_server.uri())), None, Some("auto"))
-            .await
-            .unwrap();
+        let backend = resolve_backend(
+            "kimi",
+            Some(&format!("{}/v1", mock_server.uri())),
+            None,
+            Some("auto"),
+        )
+        .await
+        .unwrap();
         assert!(matches!(backend, LlmBackend::KimiBridge { .. }));
     }
 
@@ -485,9 +491,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let backend = resolve_backend("kimi", Some(&format!("{}/v1", mock_server.uri())), None, Some("auto"))
-            .await
-            .unwrap();
+        let backend = resolve_backend(
+            "kimi",
+            Some(&format!("{}/v1", mock_server.uri())),
+            None,
+            Some("auto"),
+        )
+        .await
+        .unwrap();
         assert!(matches!(backend, LlmBackend::KimiDirect));
     }
 

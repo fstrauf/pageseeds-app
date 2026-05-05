@@ -8,7 +8,10 @@ use crate::models::task::Task;
 /// Normalize a patch in-place before validation.
 ///
 /// Returns a list of human-readable repair notes.
-pub(crate) fn normalize_patch_before_validation(patch: &mut CtrFixPatch, task: &Task) -> Vec<String> {
+pub(crate) fn normalize_patch_before_validation(
+    patch: &mut CtrFixPatch,
+    task: &Task,
+) -> Vec<String> {
     let mut repairs = Vec::new();
     let recommendation = extract_recommendation(task).ok().flatten();
     let target_keyword = recommendation
@@ -249,7 +252,11 @@ pub(crate) fn parse_content_excerpt(content: &str) -> (String, String, String) {
         .find(|s| s.key == "title")
         .and_then(|s| {
             let v = s.raw_value.trim_matches('"').trim_matches('\'');
-            if !v.is_empty() { Some(v.to_string()) } else { None }
+            if !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or_default();
 
@@ -258,7 +265,11 @@ pub(crate) fn parse_content_excerpt(content: &str) -> (String, String, String) {
         .find(|s| s.key == "description")
         .and_then(|s| {
             let v = s.raw_value.trim_matches('"').trim_matches('\'');
-            if !v.is_empty() { Some(v.to_string()) } else { None }
+            if !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or_default();
 
@@ -367,9 +378,7 @@ pub(crate) fn validate_patch_against_recommendation(
 }
 
 /// Extract the single CtrRecommendation from the task's ctr_recommendations artifact.
-pub(crate) fn extract_recommendation(
-    task: &Task,
-) -> Result<Option<CtrRecommendation>, String> {
+pub(crate) fn extract_recommendation(task: &Task) -> Result<Option<CtrRecommendation>, String> {
     let artifact = task
         .artifacts
         .iter()

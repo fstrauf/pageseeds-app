@@ -1,5 +1,6 @@
 mod cluster_link;
 pub mod hub_page;
+mod indexing_link;
 /// Content review and sync execution module.
 ///
 /// Covers:
@@ -19,6 +20,7 @@ mod sync;
 mod task_spawner;
 
 pub(crate) use cluster_link::*;
+pub(crate) use indexing_link::*;
 pub(crate) use review::*;
 #[cfg(test)]
 use rusqlite::Connection;
@@ -28,13 +30,16 @@ pub(crate) use task_spawner::*;
 #[cfg(test)]
 use crate::engine::project_paths::ProjectPaths;
 #[cfg(test)]
-use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
+use crate::models::task::{FollowUpPolicy, Task, TaskReviewSurface};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::engine::task_store;
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -90,6 +95,7 @@ mod tests {
                 run_attempts INTEGER DEFAULT 0,
                 run_last_error TEXT,
                 run_provider TEXT,
+                not_before TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -199,9 +205,9 @@ mod tests {
             status: TaskStatus::Done,
             priority: Priority::Medium,
             run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Required,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Required,
             title: Some("Content Review".to_string()),
             description: None,
             depends_on: vec![],
@@ -209,6 +215,7 @@ mod tests {
             run: TaskRun::default(),
             created_at: now.clone(),
             updated_at: now,
+            not_before: None,
         }
     }
 
@@ -515,9 +522,9 @@ mod tests {
             status: TaskStatus::Done,
             priority: Priority::Medium,
             run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Required,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Required,
             title: Some("Fix: Alpha".to_string()),
             description: None,
             depends_on: vec![],
@@ -538,6 +545,7 @@ mod tests {
             }],
             run: TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 

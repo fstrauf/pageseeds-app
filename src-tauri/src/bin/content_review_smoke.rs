@@ -17,7 +17,10 @@ use pageseeds_lib::{
     engine::{executor, task_store},
     models::{
         project::{Project, ProjectMode},
-        task::{AgentPolicy, FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus},
+        task::{
+            AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+            TaskStatus,
+        },
     },
 };
 
@@ -94,6 +97,7 @@ async fn main() {
         run: TaskRun::default(),
         created_at: now.clone(),
         updated_at: now,
+        not_before: None,
     };
     task_store::create_task(&conn, &task).expect("create_task failed");
     println!("✓ Task created: {}\n", task_id);

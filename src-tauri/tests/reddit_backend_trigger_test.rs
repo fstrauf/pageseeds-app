@@ -194,7 +194,8 @@ fn test_reddit_config_parse_step_only() {
     // Call the parse function directly
     use pageseeds_lib::engine::exec::reddit::exec_reddit_config_parse;
     use pageseeds_lib::models::task::{
-        AgentPolicy, FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus,
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
     };
 
     // Create a minimal task for context
@@ -215,6 +216,7 @@ fn test_reddit_config_parse_step_only() {
         artifacts: vec![],
         run: TaskRun::default(),
         created_at: chrono::Utc::now().to_rfc3339(),
+        not_before: None,
         updated_at: chrono::Utc::now().to_rfc3339(),
     };
 
@@ -360,7 +362,8 @@ fn test_reddit_config_parse_simulate_app_call() {
 
             // Now extract JSON
             println!("\nExtracting JSON...");
-            match pageseeds_lib::engine::text::extract_json_string(&content).ok_or("No JSON found") {
+            match pageseeds_lib::engine::text::extract_json_string(&content).ok_or("No JSON found")
+            {
                 Ok(json_str) => {
                     println!("✅ Extracted JSON ({} chars)", json_str.len());
                     println!(

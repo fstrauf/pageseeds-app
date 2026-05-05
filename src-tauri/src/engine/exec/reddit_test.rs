@@ -6,7 +6,10 @@ mod tests {
         extract_query_keywords, extract_seed_subreddits, extract_trigger_topics,
     };
     use crate::engine::workflows::handlers::default_handlers;
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
     use chrono::Utc;
 
     const PAGESEEDS_CONFIG: &str = r#"# Reddit Config: PageSeeds
@@ -188,9 +191,9 @@ mod tests {
             status: TaskStatus::Todo,
             priority: Priority::Medium,
             run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Optional,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
             title: Some("Reddit Opportunity Search".to_string()),
             description: Some("Search for Reddit posting opportunities".to_string()),
             depends_on: vec![],
@@ -203,6 +206,7 @@ mod tests {
             },
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
+            not_before: None,
         }
     }
 
@@ -471,9 +475,9 @@ Helpful, technical, and concise.
             status: TaskStatus::Todo,
             priority: Priority::Medium,
             run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Optional,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
             title: None,
             description: None,
             depends_on: vec![],
@@ -485,6 +489,7 @@ Helpful, technical, and concise.
                 ..Default::default()
             },
             created_at: Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: Utc::now().to_rfc3339(),
         };
 

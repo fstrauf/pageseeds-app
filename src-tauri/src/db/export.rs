@@ -47,11 +47,14 @@ pub fn import_task_list(conn: &Connection, project_id: &str, json: &str) -> Resu
         let status = t["status"].as_str().unwrap_or("todo").to_string();
         let priority = t["priority"].as_str().unwrap_or("medium").to_string();
         // New policy fields (v5+ format). Fall back to execution_mode mapping for legacy exports.
-        let run_policy = t["run_policy"].as_str()
-            .or_else(|| t["execution_mode"].as_str().map(|em| match em {
-                "automatic" | "batchable" => "auto_enqueue",
-                _ => "user_enqueue",
-            }))
+        let run_policy = t["run_policy"]
+            .as_str()
+            .or_else(|| {
+                t["execution_mode"].as_str().map(|em| match em {
+                    "automatic" | "batchable" => "auto_enqueue",
+                    _ => "user_enqueue",
+                })
+            })
             .unwrap_or("user_enqueue")
             .to_string();
         let review_surface = t["review_surface"].as_str().unwrap_or("none").to_string();

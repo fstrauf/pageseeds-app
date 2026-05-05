@@ -1,6 +1,6 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
-use crate::models::task::{TaskRunPolicy, Task, TaskArtifact, TaskStatus};
+use crate::models::task::{Task, TaskArtifact, TaskRunPolicy, TaskStatus};
 
 /// Spawn per-article `fix_ctr_article` tasks based on the ctr_build_context artifact.
 ///

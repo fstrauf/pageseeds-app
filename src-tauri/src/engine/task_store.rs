@@ -35,8 +35,9 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
             provider: run_provider,
             ..Default::default()
         },
-        created_at: row.get(17)?,
-        updated_at: row.get(18)?,
+        not_before: row.get(17).ok(),
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
     })
 }
 
@@ -72,15 +73,16 @@ fn row_to_task_light(row: &rusqlite::Row) -> rusqlite::Result<Task> {
             provider: run_provider,
             ..Default::default()
         },
-        created_at: row.get(17)?,
-        updated_at: row.get(18)?,
+        not_before: row.get(17).ok(),
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
     })
 }
 
 const SELECT_COLS: &str = "
     id, type, phase, status, priority, run_policy, review_surface, follow_up_policy, agent_policy,
     title, description, project_id, depends_on, artifacts,
-    run_attempts, run_last_error, run_provider, created_at, updated_at";
+    run_attempts, run_last_error, run_provider, not_before, created_at, updated_at";
 
 pub fn list_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>> {
     let sql = format!(
@@ -197,7 +199,11 @@ pub fn list_all_tasks_by_statuses(conn: &Connection, statuses: &[&str]) -> Resul
     if statuses.is_empty() {
         return Ok(vec![]);
     }
-    let placeholders: Vec<String> = statuses.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+    let placeholders: Vec<String> = statuses
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect();
     let sql = format!(
         "SELECT {SELECT_COLS} FROM tasks WHERE status IN ({}) ORDER BY
          CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
@@ -206,7 +212,10 @@ pub fn list_all_tasks_by_statuses(conn: &Connection, statuses: &[&str]) -> Resul
     );
     let mut stmt = conn.prepare(&sql)?;
     let tasks: Vec<Task> = stmt
-        .query_map(rusqlite::params_from_iter(statuses.iter()), row_to_task_light)?
+        .query_map(
+            rusqlite::params_from_iter(statuses.iter()),
+            row_to_task_light,
+        )?
         .filter_map(|r| r.ok())
         .collect();
     Ok(tasks)
@@ -232,8 +241,8 @@ pub fn create_task(conn: &Connection, task: &Task) -> Result<Task> {
         "INSERT INTO tasks (
             id, type, phase, status, priority, run_policy, review_surface, follow_up_policy, agent_policy,
             title, description, project_id, depends_on, artifacts,
-            run_attempts, run_last_error, run_provider, created_at, updated_at
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            run_attempts, run_last_error, run_provider, not_before, created_at, updated_at
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
         rusqlite::params![
             task.id,
             task.task_type,
@@ -252,6 +261,7 @@ pub fn create_task(conn: &Connection, task: &Task) -> Result<Task> {
             task.run.attempts as i64,
             task.run.last_error,
             task.run.provider,
+            task.not_before,
             task.created_at,
             task.updated_at,
         ],

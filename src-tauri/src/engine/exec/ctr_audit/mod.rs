@@ -145,9 +145,9 @@ This is another article with different content.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Parent Audit".to_string()),
             description: None,
             depends_on: vec![],
@@ -161,6 +161,7 @@ This is another article with different content.
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
         }
     }
 
@@ -216,15 +217,16 @@ This is another article with different content.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Test CTR Audit".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -260,15 +262,16 @@ This is another article with different content.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -491,15 +494,16 @@ Q: What?\nA: This.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Missing File Test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -577,15 +581,16 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Healthy Test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -637,15 +642,16 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -701,9 +707,9 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix near miss test".to_string()),
             description: None,
             depends_on: vec![],
@@ -716,6 +722,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -793,15 +800,16 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix overlong snippet test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -857,15 +865,16 @@ This is the only paragraph.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix corrupt test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -911,15 +920,16 @@ This is the only paragraph.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix missing test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -983,9 +993,9 @@ Q: What?\nA: This.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Verify test".to_string()),
             description: None,
             depends_on: vec![],
@@ -998,6 +1008,7 @@ Q: What?\nA: This.
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -1058,9 +1069,9 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Verify partial test".to_string()),
             description: None,
             depends_on: vec![],
@@ -1073,6 +1084,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -1110,9 +1122,9 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Parent Audit".to_string()),
             description: None,
             depends_on: vec![],
@@ -1158,6 +1170,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -1326,9 +1339,9 @@ A: This is a test.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix complex frontmatter test".to_string()),
             description: None,
             depends_on: vec![],
@@ -1353,6 +1366,7 @@ A: This is a test.
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -1429,9 +1443,9 @@ A: This is a test.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Skip Test".to_string()),
             description: None,
             depends_on: vec![],
@@ -1490,6 +1504,7 @@ A: This is a test.
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -1543,23 +1558,22 @@ A: This is a test.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Artifact test".to_string()),
             description: None,
             depends_on: vec![],
-            artifacts: vec![
-                crate::models::task::TaskArtifact {
-                    key: "ctr_fix_patch".to_string(),
-                    path: None,
-                    artifact_type: Some("json".to_string()),
-                    source: Some("ctr_fix_generate".to_string()),
-                    content: Some(artifact_patch.to_string()),
-                },
-            ],
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "ctr_fix_patch".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("ctr_fix_generate".to_string()),
+                content: Some(artifact_patch.to_string()),
+            }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -1572,7 +1586,10 @@ A: This is a test.
                 .join("001_test_article.mdx"),
         )
         .unwrap();
-        assert!(content.contains("Artifact Title"), "Should use artifact patch, not legacy raw");
+        assert!(
+            content.contains("Artifact Title"),
+            "Should use artifact patch, not legacy raw"
+        );
 
         cleanup(&path);
     }
@@ -1598,15 +1615,16 @@ A: This is a test.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Legacy test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -1619,7 +1637,10 @@ A: This is a test.
                 .join("001_test_article.mdx"),
         )
         .unwrap();
-        assert!(content.contains("Legacy Title"), "Should fall back to legacy raw output");
+        assert!(
+            content.contains("Legacy Title"),
+            "Should fall back to legacy raw output"
+        );
 
         cleanup(&path);
     }
@@ -1633,14 +1654,12 @@ A: This is a test.
             priority: None,
             expected_ctr_improvement: None,
             target_keyword: "test keyword".to_string(),
-            fixes: vec![
-                crate::models::ctr::CtrFix {
-                    fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
-                    current: Some("Old Title".to_string()),
-                    recommended: serde_json::json!("New Title"),
-                    reason: None,
-                },
-            ],
+            fixes: vec![crate::models::ctr::CtrFix {
+                fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
+                current: Some("Old Title".to_string()),
+                recommended: serde_json::json!("New Title"),
+                reason: None,
+            }],
         };
 
         let mdx = r#"---
@@ -1678,7 +1697,8 @@ This is the first paragraph of the test article. It contains some content.
             error: None,
             changes: crate::models::ctr::CtrFixPatchChanges::default(),
         };
-        let errors = super::patch::validate_patch_against_recommendation(&patch_missing_title, &rec, mdx);
+        let errors =
+            super::patch::validate_patch_against_recommendation(&patch_missing_title, &rec, mdx);
         assert!(
             errors.iter().any(|e| e.contains("title_rewrite")),
             "Should error when requested title fix is missing: {:?}",
@@ -1696,9 +1716,12 @@ This is the first paragraph of the test article. It contains some content.
                 ..Default::default()
             },
         };
-        let errors = super::patch::validate_patch_against_recommendation(&patch_unrequested, &rec, mdx);
+        let errors =
+            super::patch::validate_patch_against_recommendation(&patch_unrequested, &rec, mdx);
         assert!(
-            errors.iter().any(|e| e.contains("meta_description was not requested")),
+            errors
+                .iter()
+                .any(|e| e.contains("meta_description was not requested")),
             "Should error on unrequested description change: {:?}",
             errors
         );

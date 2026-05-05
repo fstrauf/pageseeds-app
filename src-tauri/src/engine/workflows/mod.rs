@@ -48,9 +48,9 @@ impl WorkflowStep {
     pub fn new(name: &str, kind: StepKind) -> Self {
         // Agentic steps typically produce output that downstream steps consume.
         let latest_raw_policy = match kind {
-            StepKind::Agentic
-            | StepKind::CtrAnalyze
-            | StepKind::CtrFixGenerate => LatestRawPolicy::ReplaceWithOutput,
+            StepKind::Agentic | StepKind::CtrAnalyze | StepKind::CtrFixGenerate => {
+                LatestRawPolicy::ReplaceWithOutput
+            }
             _ => LatestRawPolicy::Preserve,
         };
         Self {

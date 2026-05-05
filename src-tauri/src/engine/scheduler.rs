@@ -230,7 +230,7 @@ pub fn run_cycle(conn: &Connection, project_id: &str) -> Result<SchedulerCycleRe
 }
 
 fn create_task_for_rule(conn: &Connection, rule: &SchedulerRule) -> Result<String, String> {
-    use crate::engine::spawner::{TaskSpec, TaskSpawner};
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
     use crate::models::task::{AgentPolicy, Priority};
 
     let priority_enum = match rule.priority.as_str() {

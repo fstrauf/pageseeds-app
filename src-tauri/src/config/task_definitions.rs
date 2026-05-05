@@ -240,6 +240,36 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
+    // GSC Indexing Recovery Campaign
+    // Parent campaign task: refreshes GSC/link data, computes drift, plans targets,
+    // and spawns focused fix_indexing_internal_links children via post-actions.
+    TaskDefinition {
+        task_type: "gsc_indexing_recovery",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
+        handler_family: HandlerFamily::Implementation,
+    },
+    // Per-target internal link fix task. Auto-enqueued by the backend queue.
+    // Each task carries a structured target artifact and verifies the target gained inbound links.
+    TaskDefinition {
+        task_type: "fix_indexing_internal_links",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
+        handler_family: HandlerFamily::Implementation,
+    },
+    // Delayed GSC outcome review: re-inspects target URL after wait period to see if linking helped indexing.
+    TaskDefinition {
+        task_type: "gsc_indexing_outcome_review",
+        phase: "verification",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
     // Interlinking: spawned for not_indexed_other URLs (unknown to Google).
     // Runs the same steps as cluster_and_link — scan link graph, strategize,
     // apply Related Articles sections — to add inbound internal links from
@@ -537,7 +567,10 @@ mod tests {
 
     #[test]
     fn auto_enqueue_tasks_are_collection_and_audit() {
-        assert_eq!(default_run_policy("collect_gsc"), TaskRunPolicy::AutoEnqueue);
+        assert_eq!(
+            default_run_policy("collect_gsc"),
+            TaskRunPolicy::AutoEnqueue
+        );
         assert_eq!(
             default_run_policy("collect_posthog"),
             TaskRunPolicy::AutoEnqueue
@@ -579,7 +612,10 @@ mod tests {
 
     #[test]
     fn default_run_policy_matches_task_type() {
-        assert_eq!(default_run_policy("collect_gsc"), TaskRunPolicy::AutoEnqueue);
+        assert_eq!(
+            default_run_policy("collect_gsc"),
+            TaskRunPolicy::AutoEnqueue
+        );
         assert_eq!(
             default_run_policy("reddit_search"),
             TaskRunPolicy::UserEnqueue

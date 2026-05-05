@@ -62,7 +62,7 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
 
     let slug_to_id: HashMap<String, i64> = articles
         .iter()
-        .map(|a| (a.url_slug.clone(), a.id))
+        .map(|a| (crate::content::slug::normalize_url_slug(&a.url_slug), a.id))
         .collect();
 
     let id_to_article: HashMap<i64, &Article> = articles.iter().map(|a| (a.id, a)).collect();
@@ -114,7 +114,7 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
             // Match canonical /blog/slug links
             for cap in re_canonical.captures_iter(line) {
                 let anchor = cap[1].to_string();
-                let slug = cap[2].to_string();
+                let slug = crate::content::slug::normalize_url_slug(&cap[2]);
                 let (target_id, target_file) = if let Some(&tid) = slug_to_id.get(&slug) {
                     let tfile = id_to_article
                         .get(&tid)

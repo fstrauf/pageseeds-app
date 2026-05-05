@@ -339,7 +339,8 @@ pub(crate) fn exec_collect_gsc(
     // (cannibalization_audit, content_review, etc.) have impression data.
     // This reuses the existing gsc_sync_articles logic rather than
     // duplicating it in a separate manual step.
-    let sync_result = crate::engine::exec::gsc::exec_gsc_sync_articles(task, project_path, gsc_token);
+    let sync_result =
+        crate::engine::exec::gsc::exec_gsc_sync_articles(task, project_path, gsc_token);
     let (sync_ok, sync_msg) = (sync_result.success, sync_result.message);
     if sync_ok {
         log::info!("[collect_gsc] analytics sync succeeded: {}", sync_msg);

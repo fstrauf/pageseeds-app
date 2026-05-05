@@ -7,7 +7,7 @@
 /// Step execution happens in `executor.rs`; handlers only describe the plan.
 use super::{step_params, StepKind, StepResult, WorkflowStep};
 use crate::engine::project_paths::ProjectPaths;
-use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
+use crate::models::task::{FollowUpPolicy, Task, TaskReviewSurface};
 
 // ─── Trait ────────────────────────────────────────────────────────────────────
 
@@ -108,7 +108,9 @@ impl WorkflowHandler for ResearchHandler {
                     // Step 4 (deterministic): DataForSEO related_keywords per validated seed.
                     // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
-                        .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
+                        .with_latest_raw_policy(
+                            crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                        ),
                     // Step 5 (deterministic): Select best candidates from structured data.
                     // Outputs clean JSON directly — no normalizer needed because upstream
                     // agentic steps now use Extractor<T>.
@@ -154,7 +156,8 @@ impl WorkflowHandler for ContentHandler {
         }
         // Agentic: the agent reads the article spec and writes the MDX file.
         let has_hub_brief = task.artifacts.iter().any(|a| a.key == "hub_brief");
-        let is_hub = has_hub_brief || matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
+        let is_hub =
+            has_hub_brief || matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
         let step = WorkflowStep::new("content_write_stage", StepKind::Agentic);
         if is_hub {
             vec![step.with_param(step_params::SKILL, "hub-write")]
@@ -215,6 +218,9 @@ impl WorkflowHandler for ImplementationHandler {
                 | "landing_page_spec"
                 | "create_landing_page"
                 | "calculator_rollout"
+                | "gsc_indexing_recovery"
+                | "fix_indexing_internal_links"
+                | "gsc_indexing_outcome_review"
         ) || t.starts_with("fix_")
     }
 
@@ -233,9 +239,10 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("sanitize_content_run", StepKind::SanitizeContent),
             ],
             "publish_content" => {
-                vec![
-                    WorkflowStep::new("publish_content_validate", StepKind::FormatValidation),
-                ]
+                vec![WorkflowStep::new(
+                    "publish_content_validate",
+                    StepKind::FormatValidation,
+                )]
             }
             "fix_content_article" => vec![
                 // Per-article content fix: reads the recommendations artifact embedded in the task
@@ -293,7 +300,9 @@ impl WorkflowHandler for ImplementationHandler {
                 // (word count, H1, title, internal links, canonical). This is obvious file I/O —
                 // no judgment required — and saves the agent from hunting around the repo.
                 WorkflowStep::new("indexing_fix_context", StepKind::IndexingFixContext)
-                    .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
+                    .with_latest_raw_policy(
+                        crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                    ),
                 // Step 2 (agentic): apply the fix. The agent gets the GSC issue + structured
                 // context and edits the MDX file directly. Judgment is required because the fix
                 // depends on intent, content quality, and site-specific conventions.
@@ -317,6 +326,43 @@ impl WorkflowHandler for ImplementationHandler {
                 // Skips files that already have a Related Articles section or already link
                 // to the target slug.
                 WorkflowStep::new("cluster_and_link_apply", StepKind::ClusterLinkApply),
+            ],
+            "gsc_indexing_recovery" => vec![
+                // Step 1 (deterministic): refresh stale GSC and link data before planning.
+                // Uses shared collection helpers. Writes refreshed gsc_collection.json and link_scan.json.
+                WorkflowStep::new("gsc_recovery_prepare", StepKind::GscRecoveryPrepare),
+                // Step 2 (deterministic): compute drift from current sitemap/GSC/link data.
+                // Reuses existing drift computation. No hidden repair work.
+                WorkflowStep::new("gsc_recovery_drift", StepKind::GscRecoveryDrift),
+                // Step 3 (deterministic): filter, score eligible targets, build source candidates,
+                // write gsc_recovery_plan artifact consumed by post-actions.
+                WorkflowStep::new("gsc_recovery_plan", StepKind::GscRecoveryPlan),
+            ],
+            "fix_indexing_internal_links" => vec![
+                // Step 1 (deterministic): build compact per-target context from the target artifact,
+                // current link scan, article metadata, and source files.
+                WorkflowStep::new("indexing_link_context", StepKind::IndexingLinkContext),
+                // Step 2 (agentic): choose relevant source and anchor from the shortlist.
+                // Requires topical judgment. Uses existing prompt-based pattern in V1.
+                WorkflowStep::new("indexing_link_plan", StepKind::IndexingLinkPlan),
+                // Step 3 (deterministic): apply Related Articles links to source MDX files.
+                // Reuses existing append_related_section logic.
+                WorkflowStep::new("indexing_link_apply", StepKind::IndexingLinkApply),
+                // Step 4 (deterministic): rescan link graph, verify target gained inbound links.
+                // Fails or moves to review if no inbound link was added.
+                WorkflowStep::new("indexing_link_verify", StepKind::IndexingLinkVerify),
+            ],
+            "gsc_indexing_outcome_review" => vec![
+                // Step 1 (deterministic): re-inspect target URL in GSC after wait period.
+                WorkflowStep::new(
+                    "gsc_indexing_outcome_inspect",
+                    StepKind::GscIndexingOutcomeInspect,
+                ),
+                // Step 2 (deterministic): compare before/after status, write outcome report.
+                WorkflowStep::new(
+                    "gsc_indexing_outcome_report",
+                    StepKind::GscIndexingOutcomeReport,
+                ),
             ],
             "create_landing_page" | "landing_page_spec" => vec![
                 // Deterministic: build a structured spec file from keyword metadata
@@ -388,7 +434,9 @@ impl WorkflowHandler for CoverageHandler {
         vec![
             // Step 1 (deterministic): Load articles from articles.json
             WorkflowStep::new("coverage_load_articles", StepKind::CoverageLoadArticles)
-                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
+                .with_latest_raw_policy(
+                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                ),
             // Step 2 (agentic): Cluster articles by semantic similarity
             // Cannot be deterministic: understanding topic relationships and naming
             // clusters requires semantic judgment about content themes.
@@ -455,7 +503,9 @@ impl WorkflowHandler for CtrAuditHandler {
                 // NO quality judgments — just raw titles, meta descs, first paragraphs, GSC metrics,
                 // and deterministic math: clicks_lost = impressions * max(0, target_ctr - actual_ctr).
                 WorkflowStep::new("ctr_build_context", StepKind::CtrBuildContext)
-                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
+                    .with_latest_raw_policy(
+                        crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                    ),
                 // Per-article fix tasks are spawned in post_actions::after_task_success
                 // after this task completes, reading the ctr_build_context artifact.
             ],
@@ -559,13 +609,17 @@ impl WorkflowHandler for ConsolidateClusterHandler {
             WorkflowStep::new("merge_preflight", StepKind::MergePreflight),
             // Step 3 (deterministic): Extract unique sections (headings, tables, examples, FAQs) from redirect pages.
             WorkflowStep::new("merge_extract_sections", StepKind::MergeExtractSections)
-                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
+                .with_latest_raw_policy(
+                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                ),
             // Step 4 (agentic): Draft ContentMergePatch JSON deciding which unique content belongs in keeper.
             // Cannot be deterministic: understanding whether a section adds unique value requires judgment.
             // Input contract: structured JSON with keeper content + extracted unique sections.
             // Output contract: ContentMergePatch JSON.
             WorkflowStep::new("merge_draft_patch", StepKind::MergeDraftPatch)
-                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput)
+                .with_latest_raw_policy(
+                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                )
                 .with_param(step_params::SKILL, "merge-content"),
             // Step 5 (deterministic): Apply structured patch, snapshot original, validate MDX/frontmatter.
             WorkflowStep::new("merge_apply_patch", StepKind::MergeApplyPatch),
@@ -601,14 +655,18 @@ impl WorkflowHandler for TerritoryResearchHandler {
             // Step 2 (deterministic): Query SQLite for existing articles matching theme, read excerpts.
             // Pure data collection — no judgment. Outputs structured TerritoryContext JSON.
             WorkflowStep::new("territory_build_context", StepKind::TerritoryBuildContext)
-                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput),
+                .with_latest_raw_policy(
+                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                ),
             // Step 3 (agentic): Generate TerritoryStrategy JSON from context.
             // Cannot be deterministic: deciding which gaps to fill, what competitors cover,
             // and how to avoid cannibalization requires semantic judgment.
             // Input contract: structured TerritoryContext JSON.
             // Output contract: TerritoryStrategy JSON.
             WorkflowStep::new("territory_strategy", StepKind::TerritoryStrategy)
-                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput)
+                .with_latest_raw_policy(
+                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                )
                 .with_param(step_params::SKILL, "territory-strategy"),
             // Step 4 (deterministic): Write strategy JSON to automation dir.
             WorkflowStep::new("territory_apply", StepKind::TerritoryApply),
@@ -759,7 +817,10 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
     let hub_topic = task
         .title
         .as_deref()
-        .and_then(|t| t.strip_prefix("Create hub:").or_else(|| t.strip_prefix("Refresh hub:")))
+        .and_then(|t| {
+            t.strip_prefix("Create hub:")
+                .or_else(|| t.strip_prefix("Refresh hub:"))
+        })
         .unwrap_or("")
         .trim();
 
@@ -861,7 +922,10 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
                 Vec::new()
             } else {
                 crate::engine::exec::content::hub_page::gather_spoke_briefs(
-                    &conn, &task.project_id, project_path, &spoke_pages,
+                    &conn,
+                    &task.project_id,
+                    project_path,
+                    &spoke_pages,
                 )
             }
         }
@@ -869,7 +933,11 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
     };
 
     // Sort by impressions (highest first) and cap at 8 to stay within prompt budget.
-    spokes.sort_by(|a, b| b.impressions.partial_cmp(&a.impressions).unwrap_or(std::cmp::Ordering::Equal));
+    spokes.sort_by(|a, b| {
+        b.impressions
+            .partial_cmp(&a.impressions)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     const MAX_SPOKES: usize = 8;
     spokes.truncate(MAX_SPOKES);
 
@@ -964,8 +1032,13 @@ pub async fn exec_agentic(
 
     let is_content_task = matches!(
         task.task_type.as_str(),
-        "write_article" | "optimize_article" | "create_content" | "optimize_content"
-            | "create_hub_page" | "refresh_hub_page" | "fix_content_article"
+        "write_article"
+            | "optimize_article"
+            | "create_content"
+            | "optimize_content"
+            | "create_hub_page"
+            | "refresh_hub_page"
+            | "fix_content_article"
     );
     let is_new_article_task = matches!(
         task.task_type.as_str(),
@@ -1069,7 +1142,10 @@ pub async fn exec_agentic(
             a.content.as_ref().map(|c| {
                 const MAX_ARTIFACT_CHARS: usize = 10_000;
                 let preview = if c.len() > MAX_ARTIFACT_CHARS {
-                    format!("{}… [truncated]", crate::engine::text::char_prefix(c, MAX_ARTIFACT_CHARS))
+                    format!(
+                        "{}… [truncated]",
+                        crate::engine::text::char_prefix(c, MAX_ARTIFACT_CHARS)
+                    )
                 } else {
                     c.clone()
                 };
@@ -1147,7 +1223,7 @@ pub async fn exec_agentic(
              - Include an H1 matching the hub title.\n\
              - Link to every spoke article using `/blog/{slug}` format.\n\
              - Total word count MUST be 1500+ words.\n\
-             - Return ONLY the complete MDX content. No explanations outside the MDX.\n"
+             - Return ONLY the complete MDX content. No explanations outside the MDX.\n",
         );
     }
 
@@ -1575,7 +1651,10 @@ fn rename_new_or_modified_md_to_mdx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::task::{Task, TaskStatus, Priority, TaskRunPolicy, TaskRun, AgentPolicy, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
 
     fn make_task(task_type: &str) -> Task {
         Task {
@@ -1600,24 +1679,47 @@ mod tests {
             },
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
         }
     }
 
     #[test]
     fn test_kimi_backend_preference_for_step_content() {
         let step = WorkflowStep::new("test", crate::engine::workflows::StepKind::Agentic);
-        for tt in ["write_article", "optimize_article", "create_content", "optimize_content", "create_hub_page", "refresh_hub_page"] {
+        for tt in [
+            "write_article",
+            "optimize_article",
+            "create_content",
+            "optimize_content",
+            "create_hub_page",
+            "refresh_hub_page",
+        ] {
             let task = make_task(tt);
-            assert_eq!(kimi_backend_preference_for_step(&task, &step), Some("acp"), "{} should prefer acp", tt);
+            assert_eq!(
+                kimi_backend_preference_for_step(&task, &step),
+                Some("acp"),
+                "{} should prefer acp",
+                tt
+            );
         }
     }
 
     #[test]
     fn test_kimi_backend_preference_for_step_other() {
         let step = WorkflowStep::new("test", crate::engine::workflows::StepKind::Agentic);
-        for tt in ["content_audit", "collect_gsc", "cluster_and_link", "reddit_reply"] {
+        for tt in [
+            "content_audit",
+            "collect_gsc",
+            "cluster_and_link",
+            "reddit_reply",
+        ] {
             let task = make_task(tt);
-            assert_eq!(kimi_backend_preference_for_step(&task, &step), Some("direct"), "{} should prefer direct", tt);
+            assert_eq!(
+                kimi_backend_preference_for_step(&task, &step),
+                Some("direct"),
+                "{} should prefer direct",
+                tt
+            );
         }
     }
 
@@ -1639,7 +1741,10 @@ mod tests {
 mod registry_tests {
     use super::*;
     use crate::config::task_definitions;
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
 
     fn make_task(task_type: &str) -> Task {
         Task {
@@ -1649,9 +1754,9 @@ mod registry_tests {
             status: TaskStatus::Todo,
             priority: Priority::Medium,
             run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Optional,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
             title: Some(format!("{task_type} test")),
             description: None,
             project_id: "proj1".to_string(),
@@ -1665,6 +1770,7 @@ mod registry_tests {
             },
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
         }
     }
 

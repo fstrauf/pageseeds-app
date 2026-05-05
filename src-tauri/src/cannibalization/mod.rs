@@ -8,7 +8,7 @@ use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
 use crate::engine::task_store;
 use crate::error::Result;
 use crate::models::cannibalization::{
-    ApprovalStatus, CannibalizationSelection, CannibalizationStrategy, CalculatorRecommendation,
+    ApprovalStatus, CalculatorRecommendation, CannibalizationSelection, CannibalizationStrategy,
     HubRecommendation, MergeRecommendation, RecommendationTaskStatus, StrategyReview,
     StrategyWithReviews, TerritoryRecommendation,
 };
@@ -34,7 +34,11 @@ pub fn backfill_hub_page_types(db: &Connection, project_id: &str) -> Result<usiz
     for article in &articles {
         let slug = article.url_slug.to_lowercase();
         let title = article.title.to_lowercase();
-        let kw = article.target_keyword.as_deref().unwrap_or("").to_lowercase();
+        let kw = article
+            .target_keyword
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase();
 
         let is_hub_url = slug.starts_with("hub/")
             || slug.starts_with("guide/")
@@ -46,8 +50,7 @@ pub fn backfill_hub_page_types(db: &Connection, project_id: &str) -> Result<usiz
             || title.contains("complete overview");
 
         let is_hub_by_content = article.word_count > 2000
-            && (kw.split_whitespace().count() >= 3
-                || kw.is_empty() && article.word_count > 3000);
+            && (kw.split_whitespace().count() >= 3 || kw.is_empty() && article.word_count > 3000);
 
         if is_hub_url || is_hub_title || is_hub_by_content {
             db.execute(
@@ -83,11 +86,7 @@ pub fn backfill_hub_page_types(db: &Connection, project_id: &str) -> Result<usiz
 /// Load strategy JSON using dual-source logic:
 /// 1. Try the task artifact if `strategy_id` is a real task
 /// 2. Fall back to `cannibalization_strategy.json` in the automation dir
-pub fn load_strategy_json(
-    db: &Connection,
-    strategy_id: &str,
-    project_id: &str,
-) -> Result<String> {
+pub fn load_strategy_json(db: &Connection, strategy_id: &str, project_id: &str) -> Result<String> {
     // 1. Try task artifact (only if this is a real task ID)
     let from_task = if !strategy_id.starts_with("strategy-") || !strategy_id.contains("-file") {
         task_store::get_task(db, strategy_id)
@@ -129,9 +128,7 @@ pub fn resolve_strategy_id(db: &Connection, project_id: &str) -> Result<String> 
          ORDER BY created_at DESC LIMIT 1",
     )?;
 
-    let task_id: Option<String> = stmt
-        .query_row([project_id], |row| row.get(0))
-        .optional()?;
+    let task_id: Option<String> = stmt.query_row([project_id], |row| row.get(0)).optional()?;
 
     Ok(task_id.unwrap_or_else(|| format!("strategy-{}-file", project_id)))
 }
@@ -563,9 +560,9 @@ pub fn spawn_tasks_from_selection(
     for sel in selections {
         let task = match sel.recommendation_type.as_str() {
             "merge" => {
-                let rec = merge_map
-                    .get(&sel.recommendation_id)
-                    .ok_or_else(|| crate::error::Error::Validation("Merge rec not found".to_string()))?;
+                let rec = merge_map.get(&sel.recommendation_id).ok_or_else(|| {
+                    crate::error::Error::Validation("Merge rec not found".to_string())
+                })?;
                 let cluster_id = sel.recommendation_id.clone();
                 let keep_url = get_str(rec, "keep_url").unwrap_or("");
                 let redirect_urls: Vec<String> = rec
@@ -598,11 +595,13 @@ pub fn spawn_tasks_from_selection(
                 TaskSpawner::spawn(db, spec)?
             }
             "hub" => {
-                let rec = hub_map
-                    .get(&sel.recommendation_id)
-                    .ok_or_else(|| crate::error::Error::Validation("Hub rec not found".to_string()))?;
+                let rec = hub_map.get(&sel.recommendation_id).ok_or_else(|| {
+                    crate::error::Error::Validation("Hub rec not found".to_string())
+                })?;
                 let topic = sel.recommendation_id.clone();
-                let suggested_title = get_str(rec, "suggested_title").unwrap_or(&topic).to_string();
+                let suggested_title = get_str(rec, "suggested_title")
+                    .unwrap_or(&topic)
+                    .to_string();
                 let suggested_url = get_str(rec, "suggested_url").unwrap_or("").to_string();
                 let intent = get_str(rec, "intent").unwrap_or("").to_string();
                 let source_pages: Vec<i64> = rec
@@ -618,7 +617,11 @@ pub fn spawn_tasks_from_selection(
                 let outline: Vec<String> = rec
                     .get("outline")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let idempotency_key = format!("can_fix:hub:{}:{}", project_id, topic);
                 let hub_brief = serde_json::json!({
@@ -641,10 +644,7 @@ pub fn spawn_tasks_from_selection(
                     project_id: project_id.clone(),
                     task_type: "write_article".to_string(),
                     title: Some(format!("Create hub: {}", suggested_title)),
-                    description: Some(format!(
-                        "Hub page: {} → {}",
-                        suggested_url, suggested_title
-                    )),
+                    description: Some(format!("Hub page: {} → {}", suggested_url, suggested_title)),
                     priority: Priority::Medium,
                     run_policy: Some(TaskRunPolicy::UserEnqueue),
                     review_surface: None,
@@ -658,9 +658,9 @@ pub fn spawn_tasks_from_selection(
                 TaskSpawner::spawn(db, spec)?
             }
             "territory" => {
-                let rec = territory_map
-                    .get(&sel.recommendation_id)
-                    .ok_or_else(|| crate::error::Error::Validation("Territory rec not found".to_string()))?;
+                let rec = territory_map.get(&sel.recommendation_id).ok_or_else(|| {
+                    crate::error::Error::Validation("Territory rec not found".to_string())
+                })?;
                 let theme = sel.recommendation_id.clone();
                 let priority = get_str(rec, "priority").unwrap_or("medium").to_string();
                 let idempotency_key = format!("can_fix:territory:{}:{}", project_id, theme);
@@ -684,12 +684,13 @@ pub fn spawn_tasks_from_selection(
                 TaskSpawner::spawn(db, spec)?
             }
             "calculator" => {
-                let rec = calculator_map
-                    .get(&sel.recommendation_id)
-                    .ok_or_else(|| crate::error::Error::Validation("Calculator rec not found".to_string()))?;
+                let rec = calculator_map.get(&sel.recommendation_id).ok_or_else(|| {
+                    crate::error::Error::Validation("Calculator rec not found".to_string())
+                })?;
                 let strategy_name = sel.recommendation_id.clone();
                 let ticker_universe = get_str(rec, "ticker_universe").unwrap_or("").to_string();
-                let idempotency_key = format!("can_fix:calculator:{}:{}", project_id, strategy_name);
+                let idempotency_key =
+                    format!("can_fix:calculator:{}:{}", project_id, strategy_name);
                 let spec = TaskSpec {
                     project_id: project_id.clone(),
                     task_type: "calculator_rollout".to_string(),
@@ -773,6 +774,7 @@ mod tests {
             },
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
         }
     }
 
@@ -834,7 +836,11 @@ mod tests {
         let result = spawn_tasks_from_selection(&conn, &parent.id, &[]);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No selections provided"), "expected empty-selection error, got: {}", err);
+        assert!(
+            err.contains("No selections provided"),
+            "expected empty-selection error, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -852,7 +858,11 @@ mod tests {
         let result = spawn_tasks_from_selection(&conn, &parent.id, &selections);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("not a cannibalization audit"), "expected type-mismatch error, got: {}", err);
+        assert!(
+            err.contains("not a cannibalization audit"),
+            "expected type-mismatch error, got: {}",
+            err
+        );
     }
 
     #[test]
@@ -870,7 +880,11 @@ mod tests {
         let result = spawn_tasks_from_selection(&conn, &parent.id, &selections);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found in strategy artifact"), "expected not-found error, got: {}", err);
+        assert!(
+            err.contains("not found in strategy artifact"),
+            "expected not-found error, got: {}",
+            err
+        );
     }
 
     #[test]

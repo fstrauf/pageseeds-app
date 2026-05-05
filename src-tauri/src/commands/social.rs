@@ -206,8 +206,8 @@ pub fn run_social_campaign(
     state: State<'_, AppState>,
     campaign_id: String,
 ) -> std::result::Result<crate::models::task::Task, String> {
-    use crate::engine::spawner::{TaskSpec, TaskSpawner};
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority};
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::{AgentPolicy, Priority, TaskRunPolicy};
 
     // Get campaign details first
     let conn = state.db.lock().map_err(|e| e.to_string())?;

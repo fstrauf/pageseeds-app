@@ -15,8 +15,7 @@ use crate::engine::queue_runner;
 use crate::engine::task_store;
 use crate::error::Result;
 use crate::models::queue::{
-    EnqueueItem, EnqueueMode, QueueItem, QueueItemStatus, QueueRun, QueueRunStatus,
-    QueueSnapshot,
+    EnqueueItem, EnqueueMode, QueueItem, QueueItemStatus, QueueRun, QueueRunStatus, QueueSnapshot,
 };
 use crate::models::task::TaskStatus;
 
@@ -194,8 +193,14 @@ fn insert_queue_items(
                      ON CONFLICT (run_id, task_id) DO NOTHING",
                     rusqlite::params![run_id, position, &item.task_id, &item.project_id, &now],
                 )?;
-                if let Err(e) = task_store::update_task_status(conn, &item.task_id, TaskStatus::Queued) {
-                    log::warn!("[queue] Failed to mark task {} as queued: {}", item.task_id, e);
+                if let Err(e) =
+                    task_store::update_task_status(conn, &item.task_id, TaskStatus::Queued)
+                {
+                    log::warn!(
+                        "[queue] Failed to mark task {} as queued: {}",
+                        item.task_id,
+                        e
+                    );
                 }
             }
         }
@@ -206,7 +211,11 @@ fn insert_queue_items(
             )?;
             let existing: Vec<(String, i64, String)> = stmt
                 .query_map([run_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
                 })?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -214,14 +223,17 @@ fn insert_queue_items(
             // Use current_running_position to find the split point
             let running_pos = current_running_position(conn, run_id).unwrap_or(-1);
             let split_idx = if running_pos >= 0 {
-                existing.iter().position(|(_, pos, _)| *pos > running_pos)
+                existing
+                    .iter()
+                    .position(|(_, pos, _)| *pos > running_pos)
                     .unwrap_or(existing.len())
             } else {
                 0
             };
 
             // Insert new items right after the running item
-            let mut new_order: Vec<(String, i64, String)> = Vec::with_capacity(existing.len() + items.len());
+            let mut new_order: Vec<(String, i64, String)> =
+                Vec::with_capacity(existing.len() + items.len());
             new_order.extend_from_slice(&existing[..split_idx]);
             for item in &items {
                 new_order.push((item.task_id.clone(), 0, now.clone()));
@@ -236,8 +248,14 @@ fn insert_queue_items(
                      ON CONFLICT (run_id, task_id) DO NOTHING",
                     rusqlite::params![run_id, 0, &item.task_id, &item.project_id, &now],
                 )?;
-                if let Err(e) = task_store::update_task_status(conn, &item.task_id, TaskStatus::Queued) {
-                    log::warn!("[queue] Failed to mark task {} as queued: {}", item.task_id, e);
+                if let Err(e) =
+                    task_store::update_task_status(conn, &item.task_id, TaskStatus::Queued)
+                {
+                    log::warn!(
+                        "[queue] Failed to mark task {} as queued: {}",
+                        item.task_id,
+                        e
+                    );
                 }
             }
 
@@ -275,6 +293,7 @@ fn renumber_positions(conn: &Connection, run_id: &str) -> Result<()> {
 }
 
 fn get_next_pending_item(conn: &Connection, run_id: &str) -> Result<Option<QueueItem>> {
+    let now = chrono::Utc::now().to_rfc3339();
     let mut stmt = conn.prepare(
         "SELECT qi.run_id, qi.position, qi.task_id, qi.project_id, qi.status, qi.error,
                 qi.result_json, qi.created_at, qi.updated_at,
@@ -283,11 +302,12 @@ fn get_next_pending_item(conn: &Connection, run_id: &str) -> Result<Option<Queue
          JOIN tasks t ON t.id = qi.task_id
          LEFT JOIN projects p ON p.id = qi.project_id
          WHERE qi.run_id = ?1 AND qi.status = 'pending'
+           AND (t.not_before IS NULL OR t.not_before <= ?2)
          ORDER BY qi.position ASC
          LIMIT 1",
     )?;
     let row = stmt
-        .query_row([run_id], |row| {
+        .query_row(rusqlite::params![run_id, &now], |row| {
             Ok(QueueItem {
                 run_id: row.get(0)?,
                 position: row.get(1)?,
@@ -307,6 +327,24 @@ fn get_next_pending_item(conn: &Connection, run_id: &str) -> Result<Option<Queue
     Ok(row)
 }
 
+/// Get the earliest `not_before` timestamp among pending items in a run.
+/// Returns None if there are no pending items with a future `not_before`.
+fn get_earliest_not_before(conn: &Connection, run_id: &str) -> Result<Option<String>> {
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT MIN(t.not_before)
+             FROM queue_items qi
+             JOIN tasks t ON t.id = qi.task_id
+             WHERE qi.run_id = ?1 AND qi.status = 'pending'
+               AND t.not_before IS NOT NULL
+               AND t.not_before > ?2",
+            rusqlite::params![run_id, chrono::Utc::now().to_rfc3339()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(row)
+}
+
 fn update_item_status(
     conn: &Connection,
     run_id: &str,
@@ -319,7 +357,14 @@ fn update_item_status(
     conn.execute(
         "UPDATE queue_items SET status = ?1, error = ?2, result_json = ?3, updated_at = ?4
          WHERE run_id = ?5 AND task_id = ?6",
-        [status.as_str(), error.unwrap_or(""), result_json.unwrap_or(""), &now, run_id, task_id],
+        [
+            status.as_str(),
+            error.unwrap_or(""),
+            result_json.unwrap_or(""),
+            &now,
+            run_id,
+            task_id,
+        ],
     )?;
     Ok(())
 }
@@ -557,10 +602,34 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
         let item = match get_next_pending_item(&conn, &run.id) {
             Ok(Some(item)) => item,
             Ok(None) => {
-                log::info!("[queue_runner] No pending items, marking run as finished");
-                let _ = set_run_finished(&conn, &run.id, QueueRunStatus::Finished);
-                emit_finished(&app_handle);
-                break;
+                // Check if there are future delayed items (not_before in the future)
+                match get_earliest_not_before(&conn, &run.id) {
+                    Ok(Some(not_before)) => {
+                        log::info!(
+                            "[queue_runner] No pending items ready now; earliest delayed item at {}. Sleeping until then.",
+                            not_before
+                        );
+                        // Sleep until the earliest delayed item is due
+                        if let Ok(due) = chrono::DateTime::parse_from_rfc3339(&not_before) {
+                            let now = chrono::Utc::now();
+                            let due_utc = due.with_timezone(&chrono::Utc);
+                            if due_utc > now {
+                                let sleep_secs = (due_utc - now).num_seconds() as u64;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs))
+                                    .await;
+                                continue;
+                            }
+                        }
+                        // If parsing failed or due time is now, continue the loop
+                        continue;
+                    }
+                    _ => {
+                        log::info!("[queue_runner] No pending items, marking run as finished");
+                        let _ = set_run_finished(&conn, &run.id, QueueRunStatus::Finished);
+                        emit_finished(&app_handle);
+                        break;
+                    }
+                }
             }
             Err(e) => {
                 log::error!("[queue_runner] Failed to get next item: {}", e);
@@ -577,12 +646,20 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
         );
 
         // Mark as running in queue_items
-        if let Err(e) = update_item_status(&conn, &run.id, &item.task_id, QueueItemStatus::Running, None, None) {
+        if let Err(e) = update_item_status(
+            &conn,
+            &run.id,
+            &item.task_id,
+            QueueItemStatus::Running,
+            None,
+            None,
+        ) {
             log::error!("[queue_runner] Failed to mark item as running: {}", e);
         }
 
         // Mark underlying task as in_progress
-        if let Err(e) = task_store::update_task_status(&conn, &item.task_id, TaskStatus::InProgress) {
+        if let Err(e) = task_store::update_task_status(&conn, &item.task_id, TaskStatus::InProgress)
+        {
             log::error!("[queue_runner] Failed to mark task as in_progress: {}", e);
         }
 
@@ -654,8 +731,13 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                                 task_type: Some(follow_up.task_type.clone()),
                                 project_name: item.project_name.clone(),
                             };
-                            if let Err(e) = enqueue_tasks(&conn, vec![enqueue_item], EnqueueMode::Append) {
-                                log::error!("[queue_runner] Failed to auto-enqueue follow-up: {}", e);
+                            if let Err(e) =
+                                enqueue_tasks(&conn, vec![enqueue_item], EnqueueMode::Append)
+                            {
+                                log::error!(
+                                    "[queue_runner] Failed to auto-enqueue follow-up: {}",
+                                    e
+                                );
                             } else {
                                 emit_follow_up(&app_handle, &item.project_id, follow_up);
                             }
@@ -682,8 +764,15 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                 }
             }
             Ok(Err(e)) => {
-                update_item_status(&conn, &run.id, &item.task_id, QueueItemStatus::Failed, Some(&e), None)
-                    .ok();
+                update_item_status(
+                    &conn,
+                    &run.id,
+                    &item.task_id,
+                    QueueItemStatus::Failed,
+                    Some(&e),
+                    None,
+                )
+                .ok();
                 // Ensure the underlying task is marked as failed so it can be retried.
                 task_store::update_task_status(&conn, &item.task_id, TaskStatus::Failed).ok();
                 emit_failed(&app_handle, &item, &e);
@@ -697,8 +786,15 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
             }
             Err(e) => {
                 let err = format!("Task panicked: {:?}", e);
-                update_item_status(&conn, &run.id, &item.task_id, QueueItemStatus::Failed, Some(&err), None)
-                    .ok();
+                update_item_status(
+                    &conn,
+                    &run.id,
+                    &item.task_id,
+                    QueueItemStatus::Failed,
+                    Some(&err),
+                    None,
+                )
+                .ok();
                 // Panic means the executor never got to reset task status — do it here.
                 task_store::update_task_status(&conn, &item.task_id, TaskStatus::Failed).ok();
                 emit_failed(&app_handle, &item, &err);

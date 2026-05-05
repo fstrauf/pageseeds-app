@@ -613,7 +613,7 @@ pub(crate) fn exec_keyword_research_native(
             }
 
             let pre_filter_count = candidates.len();
-            
+
             // Step 2 — Coverage-aware filtering
             if !coverage_clusters_thread.is_empty() {
                 let pre_gap_count = candidates.len();

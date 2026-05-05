@@ -2,7 +2,9 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::skills;
 use crate::engine::workflows::StepResult;
 use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
-use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, FollowUpPolicy};
+use crate::models::task::{
+    AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskReviewSurface,
+};
 /// Territory research execution module.
 ///
 /// Covers the 4-step territory_research pipeline:
@@ -613,7 +615,9 @@ pub(crate) fn create_territory_write_tasks(
             Ok(task) => {
                 log::info!(
                     "[territory_post_task] Spawned write_article {} for '{}' (territory: {})",
-                    task.id, rec.title, strategy.theme
+                    task.id,
+                    rec.title,
+                    strategy.theme
                 );
                 spawned_ids.push(task.id);
             }
@@ -747,9 +751,9 @@ mod tests {
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::Required,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: Dividend Investing".to_string()),
             description: None,
             depends_on: vec![],
@@ -762,6 +766,7 @@ mod tests {
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -822,15 +827,16 @@ mod tests {
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::Required,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: Dividend Investing".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -872,15 +878,16 @@ mod tests {
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::Required,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: Dividend Investing".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -927,15 +934,16 @@ mod tests {
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::Required,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::Required,
             title: Some("Research territory: coffee-health".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 

@@ -320,7 +320,8 @@ pub fn apply_publish(
     }
 
     // Export the updated SQLite state to articles.json so the projection stays in sync.
-    if let Err(e) = crate::content::article_index::export_projection(conn, project_id, project_path) {
+    if let Err(e) = crate::content::article_index::export_projection(conn, project_id, project_path)
+    {
         errors.push(format!("Failed to write articles.json: {e}"));
     }
 
@@ -470,8 +471,6 @@ fn assign_free_date(
     }
     cursor.format("%Y-%m-%d").to_string()
 }
-
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Regression tests for publish date consistency (Phase 5)

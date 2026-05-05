@@ -299,7 +299,12 @@ pub(crate) fn exec_gsc_sync_articles(
 
         // Insert full path and segment variants for query matching
         path_to_article_id.insert(article_path.clone(), article.id);
-        let last = article_path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+        let last = article_path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
         if !last.is_empty() {
             path_to_article_id.insert(last.clone(), article.id);
             let stripped = num_prefix_re.replace(&last, "").to_string();

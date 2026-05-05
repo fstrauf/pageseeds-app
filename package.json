@@ -18,6 +18,7 @@
     "build:windows": "./build-windows.sh",
     "release": "./publish-release.sh",
     "check:ipc": "node scripts/check-ipc-surface.mjs",
+    "check:task-store": "./scripts/check-task-store-usage.sh",
     "check:pre-release": "./scripts/pre-release-checks.sh"
   },
   "dependencies": {

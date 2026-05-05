@@ -391,21 +391,14 @@ pub(crate) async fn exec_content_review_recommend(
                 for item in items {
                     if item["reason_code"].as_str().unwrap_or("") != "indexed_pass" {
                         if let Some(url) = item["url"].as_str() {
-                            let slug = url
-                                .trim_start_matches("https://")
-                                .trim_start_matches("http://");
-                            let slug = if let Some(pos) = slug.find('/') {
-                                &slug[pos + 1..]
-                            } else {
-                                slug
-                            };
-                            if !slug.is_empty() {
-                                non_indexed_slugs.insert(slug.to_string());
-                            }
+                            let slug = crate::content::slug::extract_slug_from_url(url);
                             // Also index last path segment for flat slug matching
-                            let last = slug.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+                            let last = slug.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+                            if !slug.is_empty() {
+                                non_indexed_slugs.insert(slug);
+                            }
                             if !last.is_empty() {
-                                non_indexed_slugs.insert(last.to_string());
+                                non_indexed_slugs.insert(last);
                             }
                         }
                     }

@@ -25,15 +25,18 @@ pub(crate) fn exec_cluster_link_scan(
                             elapsed.as_secs() / 60
                         );
                         // Try to extract summary stats from cached JSON for the message
-                        let summary = serde_json::from_str::<serde_json::Value>(&cached)
-                            .map(|v| format!(
+                        let summary =
+                            serde_json::from_str::<serde_json::Value>(&cached)
+                                .map(|v| {
+                                    format!(
                                 "{} articles, {} internal links, {} orphans, {} zero-incoming",
                                 v["total_articles"].as_u64().unwrap_or(0),
                                 v["total_internal_links"].as_u64().unwrap_or(0),
                                 v["orphan_ids"].as_array().map(|a| a.len()).unwrap_or(0),
                                 v["zero_incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0),
-                            ))
-                            .unwrap_or_else(|_| "cached".to_string());
+                            )
+                                })
+                                .unwrap_or_else(|_| "cached".to_string());
                         return crate::engine::workflows::StepResult {
                             success: true,
                             message: format!("Link scan complete (cached): {}", summary),
@@ -142,7 +145,7 @@ pub(crate) fn create_cluster_and_link_task(
     _project_path: &str,
 ) -> Option<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority};
+    use crate::models::task::{AgentPolicy, Priority, TaskRunPolicy};
 
     let parent_title = parent_task
         .title
@@ -277,7 +280,7 @@ pub(crate) fn exec_cluster_link_strategy(
         .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
         .unwrap_or_default();
 
-    // Compact article index (id, title, slug) — cap at 50 to keep prompt bounded.
+    // Compact article index (id, title, slug).
     // We intentionally omit `file` here; it adds ~35 bytes/article and is only
     // needed by the apply step, not the agent's reasoning. A separate
     // article_id_to_file.json mapping is written for the apply step.
@@ -304,7 +307,13 @@ pub(crate) fn exec_cluster_link_strategy(
             _ => std::cmp::Ordering::Equal,
         }
     });
-    index_entries.truncate(50);
+    // Budget-aware cap: always keep all orphans in the index (they're the
+    // primary link targets), then allow non-orphans up to a total of 120.
+    // A 120-entry index is ~6-8 KB, leaving plenty of room for profiles
+    // and template inside the 20 KB hard budget.
+    let orphan_count = orphan_ids.len();
+    let max_index = std::cmp::max(orphan_count, 50).min(120);
+    index_entries.truncate(max_index);
     let index_json = serde_json::to_string(&index_entries).unwrap_or_default();
 
     // Build id → file mapping for the apply step (resolves source_article_id → file).
@@ -324,7 +333,7 @@ pub(crate) fn exec_cluster_link_strategy(
         .collect::<Vec<_>>()
         .into();
 
-    // Profiles for under-connected articles (incoming < 2) — cap at 10.
+    // Profiles for under-connected articles (incoming < 2) — cap at 20.
     // We send ONLY id, title, file, and link counts. The full incoming_ids/
     // outgoing_ids arrays from scan_links can be huge (dozens of IDs per profile).
     // The agent only needs counts to identify which articles need more links;
@@ -337,7 +346,7 @@ pub(crate) fn exec_cluster_link_strategy(
             let incoming = p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0);
             incoming < 2
         })
-        .take(10)
+        .take(20)
         .map(|p| {
             serde_json::json!({
                 "id": p["id"],
@@ -418,7 +427,8 @@ Requirements:
                 "Prompt size ({} bytes) exceeds hard budget ({} bytes) for cluster_link_strategy. \
                  The link graph is too large. Try reducing the number of articles or running \
                  cluster_and_link in smaller batches.",
-                prompt.len(), PROMPT_HARD_BUDGET
+                prompt.len(),
+                PROMPT_HARD_BUDGET
             ),
             output: None,
         };
@@ -437,14 +447,25 @@ Requirements:
 
     // Write article_id_to_file.json so the apply step can resolve IDs → files
     let id_to_file_path = paths.automation_dir.join("article_id_to_file.json");
-    if let Err(e) = std::fs::write(&id_to_file_path, serde_json::to_string(&id_to_file).unwrap_or_default()) {
-        log::warn!("[cluster_link_strategy] failed to write article_id_to_file.json: {}", e);
+    if let Err(e) = std::fs::write(
+        &id_to_file_path,
+        serde_json::to_string(&id_to_file).unwrap_or_default(),
+    ) {
+        log::warn!(
+            "[cluster_link_strategy] failed to write article_id_to_file.json: {}",
+            e
+        );
     }
 
     // Write full prompt to disk for debugging / inspection
-    let prompt_debug_path = paths.automation_dir.join("cluster_link_strategy_prompt.txt");
+    let prompt_debug_path = paths
+        .automation_dir
+        .join("cluster_link_strategy_prompt.txt");
     if let Err(e) = std::fs::write(&prompt_debug_path, &prompt) {
-        log::warn!("[cluster_link_strategy] failed to write prompt debug file: {}", e);
+        log::warn!(
+            "[cluster_link_strategy] failed to write prompt debug file: {}",
+            e
+        );
     }
 
     log::info!(
@@ -532,20 +553,22 @@ pub(crate) fn exec_cluster_link_apply(
     // Load article_id_to_file.json (written by strategy step) to resolve IDs → files.
     // Falls back to the legacy source_file field if the mapping is missing.
     let id_to_file_path = paths.automation_dir.join("article_id_to_file.json");
-    let id_to_file: HashMap<i64, String> =
-        match crate::engine::exec::common::read_json::<serde_json::Value>(&id_to_file_path, "article_id_to_file.json") {
-            Ok(doc) => doc
-                .as_array()
-                .unwrap_or(&Vec::new())
-                .iter()
-                .filter_map(|entry| {
-                    let id = entry["id"].as_i64()?;
-                    let file = entry["file"].as_str()?.to_string();
-                    Some((id, file))
-                })
-                .collect(),
-            Err(_) => HashMap::new(),
-        };
+    let id_to_file: HashMap<i64, String> = match crate::engine::exec::common::read_json::<
+        serde_json::Value,
+    >(&id_to_file_path, "article_id_to_file.json")
+    {
+        Ok(doc) => doc
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .filter_map(|entry| {
+                let id = entry["id"].as_i64()?;
+                let file = entry["file"].as_str()?.to_string();
+                Some((id, file))
+            })
+            .collect(),
+        Err(_) => HashMap::new(),
+    };
 
     // Locate content directory
     let resolution = crate::content::locator::resolve(repo_root, None);
@@ -644,10 +667,16 @@ pub(crate) fn exec_cluster_link_apply(
             // --- Merge into existing Related Articles section ---
             let lines: Vec<&str> = content.lines().collect();
             // Find where the next heading begins (end of Related Articles section)
-            let end_idx = lines.iter().enumerate().skip(start_idx + 1).find(|(_, l)| {
-                let t = l.trim();
-                t.starts_with("##") && !t.to_lowercase().contains("related")
-            }).map(|(i, _)| i).unwrap_or(lines.len());
+            let end_idx = lines
+                .iter()
+                .enumerate()
+                .skip(start_idx + 1)
+                .find(|(_, l)| {
+                    let t = l.trim();
+                    t.starts_with("##") && !t.to_lowercase().contains("related")
+                })
+                .map(|(i, _)| i)
+                .unwrap_or(lines.len());
 
             // Extract existing slugs from the current section to deduplicate
             // Simple string scan: find "/blog/" and take everything up to ')'
@@ -736,10 +765,63 @@ pub(crate) fn exec_cluster_link_apply(
         }
     }
 
+    // Re-scan the link graph after applying changes so the next drift
+    // detection or cluster_and_link run sees the updated state.
+    let (orphans_remaining, zero_incoming_remaining) = if files_modified > 0 {
+        let mut orphans = 0i32;
+        let mut zero_incoming = 0i32;
+        if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+            if let Ok(articles) =
+                crate::content::article_index::list_articles(&db, &_task.project_id)
+            {
+                let articles: Vec<_> = articles
+                    .into_iter()
+                    .filter(|a| !a.file.is_empty())
+                    .collect();
+                let resolution = crate::content::locator::resolve(Path::new(project_path), None);
+                if let Some(content_dir) = resolution.selected {
+                    match crate::content::linking::scan_links(&content_dir, &articles) {
+                        Ok(result) => {
+                            let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+                            let paths = ProjectPaths::from_path(project_path);
+                            let scan_path = paths.automation_dir.join("link_scan.json");
+                            if let Err(e) = std::fs::write(&scan_path, &json) {
+                                log::warn!("[cluster_link_apply] failed to write updated link_scan.json: {}", e);
+                            } else {
+                                log::info!(
+                                    "[cluster_link_apply] re-scanned and saved link_scan.json: {} articles, {} orphans, {} zero-incoming",
+                                    result.total_articles,
+                                    result.orphan_ids.len(),
+                                    result.zero_incoming_ids.len()
+                                );
+                            }
+                            orphans = result.orphan_ids.len() as i32;
+                            zero_incoming = result.zero_incoming_ids.len() as i32;
+                        }
+                        Err(e) => {
+                            log::warn!("[cluster_link_apply] re-scan failed: {}", e);
+                        }
+                    }
+                } else {
+                    log::warn!("[cluster_link_apply] could not locate content dir for re-scan");
+                }
+            } else {
+                log::warn!("[cluster_link_apply] failed to load articles for re-scan");
+            }
+        } else {
+            log::warn!("[cluster_link_apply] failed to open DB for re-scan");
+        }
+        (orphans, zero_incoming)
+    } else {
+        (0, 0)
+    };
+
     let summary = serde_json::json!({
         "files_modified": files_modified,
         "links_added": links_added,
         "changes": change_log,
+        "orphans_remaining": orphans_remaining,
+        "zero_incoming_remaining": zero_incoming_remaining,
     });
     crate::engine::workflows::StepResult {
         success: true,

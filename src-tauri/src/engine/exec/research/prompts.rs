@@ -201,7 +201,9 @@ pub fn build_research_prompts(
 
             // Compact the autocomplete JSON to shave whitespace bytes
             let autocomplete_compact = serde_json::from_str::<serde_json::Value>(autocomplete_json)
-                .map(|v| serde_json::to_string(&v).unwrap_or_else(|_| autocomplete_json.to_string()))
+                .map(|v| {
+                    serde_json::to_string(&v).unwrap_or_else(|_| autocomplete_json.to_string())
+                })
                 .unwrap_or_else(|_| autocomplete_json.to_string());
 
             let user = format!(

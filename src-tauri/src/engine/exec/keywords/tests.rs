@@ -428,9 +428,9 @@ mod tests {
             status: crate::models::task::TaskStatus::Todo,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::Optional,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::Optional,
             title: None,
             description: None,
             project_id: "p1".to_string(),
@@ -444,6 +444,7 @@ mod tests {
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
+            not_before: None,
             updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
@@ -466,9 +467,9 @@ mod tests {
             status: crate::models::task::TaskStatus::Todo,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::Optional,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::Optional,
             title: None,
             description: None,
             project_id: "p1".to_string(),
@@ -482,6 +483,7 @@ mod tests {
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
+            not_before: None,
             updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
@@ -559,9 +561,9 @@ mod integration_tests {
             status: crate::models::task::TaskStatus::Todo,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Integration test".to_string()),
             description: None,
             project_id: "test".to_string(),
@@ -569,6 +571,7 @@ mod integration_tests {
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
+            not_before: None,
             updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
@@ -722,7 +725,10 @@ mod keyword_workflow_tests {
     use crate::engine::exec::keywords::*;
     use crate::engine::workflows::handlers::default_handlers;
     use crate::engine::workflows::StepKind;
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
     use chrono::Utc;
 
     fn in_memory_db() -> rusqlite::Connection {
@@ -777,9 +783,9 @@ mod keyword_workflow_tests {
             status: TaskStatus::Todo,
             priority: Priority::Medium,
             run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Optional,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
             title: Some("Keyword Research".to_string()),
             description: if themes.is_empty() {
                 None // No themes provided - should trigger agentic mode
@@ -796,6 +802,7 @@ mod keyword_workflow_tests {
             },
             created_at: Utc::now().to_rfc3339(),
             updated_at: Utc::now().to_rfc3339(),
+            not_before: None,
         }
     }
 

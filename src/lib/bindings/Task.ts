@@ -8,4 +8,4 @@ import type { TaskRun } from "./TaskRun";
 import type { TaskRunPolicy } from "./TaskRunPolicy";
 import type { TaskStatus } from "./TaskStatus";
 
-export type Task = { id: string, type: string, phase: string, status: TaskStatus, priority: Priority, run_policy: TaskRunPolicy, review_surface: TaskReviewSurface, follow_up_policy: FollowUpPolicy, agent_policy: AgentPolicy, title: string | null, description: string | null, project_id: string, depends_on: Array<string>, artifacts: Array<TaskArtifact>, run: TaskRun, created_at: string, updated_at: string, };
+export type Task = { id: string, type: string, phase: string, status: TaskStatus, priority: Priority, run_policy: TaskRunPolicy, review_surface: TaskReviewSurface, follow_up_policy: FollowUpPolicy, agent_policy: AgentPolicy, title: string | null, description: string | null, project_id: string, depends_on: Array<string>, artifacts: Array<TaskArtifact>, run: TaskRun, not_before: string | null, created_at: string, updated_at: string, };

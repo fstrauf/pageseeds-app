@@ -330,8 +330,6 @@ fn parse_agent_template_output(output: &str) -> Result<AgentTemplateOutput, Stri
     serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
-
-
 fn create_social_post_from_agent_output(
     campaign_id: &str,
     project_id: &str,

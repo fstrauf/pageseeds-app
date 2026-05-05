@@ -9,11 +9,9 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter as _;
 
 use crate::engine::step_registry::{StepContext, StepRegistry};
-use crate::engine::workflows::{
-    handlers::default_handlers, step_params, StepResult, WorkflowStep,
-};
+use crate::engine::workflows::{handlers::default_handlers, step_params, StepResult, WorkflowStep};
 use crate::engine::{agent, task_store};
-use crate::models::task::{Task, TaskArtifact, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+use crate::models::task::{FollowUpPolicy, Task, TaskArtifact, TaskReviewSurface, TaskStatus};
 use ts_rs::TS;
 
 // ─── Event Types ──────────────────────────────────────────────────────────────
@@ -91,7 +89,10 @@ pub async fn execute_task_with_token(
     let started_at = Utc::now().to_rfc3339();
 
     // Transition to in_progress
-    if task.status == TaskStatus::Todo || task.status == TaskStatus::Review || task.status == TaskStatus::Failed {
+    if task.status == TaskStatus::Todo
+        || task.status == TaskStatus::Review
+        || task.status == TaskStatus::Failed
+    {
         task.status = TaskStatus::InProgress;
         task.updated_at = started_at.clone();
         task.run.last_error = None;
@@ -207,7 +208,10 @@ pub async fn execute_task_with_token(
                     );
                     latest_raw_output = Some(out.clone());
                 } else {
-                    log::warn!("[executor] step '{}' expected output for latest_raw but produced none", step.name);
+                    log::warn!(
+                        "[executor] step '{}' expected output for latest_raw but produced none",
+                        step.name
+                    );
                     latest_raw_output = None;
                 }
             }
@@ -470,7 +474,9 @@ fn upsert_artifact_in_memory(artifacts: &mut Vec<TaskArtifact>, artifact: TaskAr
 /// Extracted as a named function so it can be unit-tested.
 pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus {
     if all_ok {
-        if crate::config::default_review_surface(task_type) != crate::models::task::TaskReviewSurface::None {
+        if crate::config::default_review_surface(task_type)
+            != crate::models::task::TaskReviewSurface::None
+        {
             TaskStatus::Review
         } else {
             TaskStatus::Done
@@ -494,7 +500,10 @@ mod tests {
     use crate::engine::task_store;
     use crate::engine::workflows::handlers::default_handlers;
     use crate::engine::workflows::StepKind;
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
     use rusqlite::Connection;
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -533,6 +542,7 @@ mod tests {
                 artifacts TEXT NOT NULL DEFAULT '[]',
                 run_attempts INTEGER NOT NULL DEFAULT 0,
                 run_last_error TEXT, run_provider TEXT,
+                not_before TEXT,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS task_runs (
@@ -618,9 +628,9 @@ mod tests {
             status: TaskStatus::Todo,
             priority: Priority::Medium,
             run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Optional,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
             title: Some(format!("{task_type} test")),
             description: None,
             project_id: project_id.to_string(),
@@ -634,6 +644,7 @@ mod tests {
             },
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
         }
     }
 
@@ -661,10 +672,7 @@ mod tests {
     // 2. Tasks without a review surface go to "done", not "review".
     #[test]
     fn non_research_task_goes_to_done() {
-        assert_eq!(
-            completed_task_status("collect_gsc", true),
-            TaskStatus::Done
-        );
+        assert_eq!(completed_task_status("collect_gsc", true), TaskStatus::Done);
         assert_eq!(
             completed_task_status("fix_indexing", true),
             TaskStatus::Done
@@ -1043,6 +1051,7 @@ mod tests {
                 artifacts TEXT NOT NULL DEFAULT '[]',
                 run_attempts INTEGER NOT NULL DEFAULT 0,
                 run_last_error TEXT, run_provider TEXT,
+                not_before TEXT,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS task_runs (
@@ -1218,10 +1227,7 @@ mod tests {
         let yesterday = (Utc::now().date_naive() - Duration::days(1))
             .format("%Y-%m-%d")
             .to_string();
-        assert_eq!(
-            result, yesterday,
-            "empty project should return yesterday"
-        );
+        assert_eq!(result, yesterday, "empty project should return yesterday");
     }
 
     // compute_next_publish_date skips occupied dates and returns first free past date.

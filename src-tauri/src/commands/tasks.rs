@@ -35,13 +35,21 @@ pub fn create_task(
     title: Option<String>,
     description: Option<String>,
     priority: String,
+    auto_enqueue: Option<bool>,
 ) -> Result<Task, String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::TaskRunPolicy;
 
     let priority_enum = match priority.as_str() {
         "high" => Priority::High,
         "low" => Priority::Low,
         _ => Priority::Medium,
+    };
+
+    let run_policy = if auto_enqueue.unwrap_or(false) {
+        Some(TaskRunPolicy::AutoEnqueue)
+    } else {
+        None
     };
 
     let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -53,6 +61,7 @@ pub fn create_task(
             title,
             description,
             priority: priority_enum,
+            run_policy,
             ..Default::default()
         },
     )?)

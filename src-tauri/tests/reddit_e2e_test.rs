@@ -20,7 +20,9 @@ use pageseeds_lib::db;
 use pageseeds_lib::engine::executor;
 use pageseeds_lib::engine::task_store;
 use pageseeds_lib::models::project::Project;
-use pageseeds_lib::models::task::{FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus};
+use pageseeds_lib::models::task::{
+    FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy, TaskStatus,
+};
 
 /// Sample reddit_config.md content for testing
 const SAMPLE_REDDIT_CONFIG: &str = r#"# Reddit Configuration
@@ -159,6 +161,7 @@ fn create_reddit_task(project_id: &str) -> Task {
         },
         created_at: now.clone(),
         updated_at: now,
+        not_before: None,
     }
 }
 

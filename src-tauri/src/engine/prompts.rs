@@ -130,7 +130,10 @@ fn build_task_section(task: &Task) -> String {
                 // Inline content — truncate very long artifacts to keep prompts readable
                 const MAX_ARTIFACT_PREVIEW: usize = 5_000;
                 let preview = if c.len() > MAX_ARTIFACT_PREVIEW {
-                    format!("{}… [truncated]", crate::engine::text::char_prefix(c, MAX_ARTIFACT_PREVIEW))
+                    format!(
+                        "{}… [truncated]",
+                        crate::engine::text::char_prefix(c, MAX_ARTIFACT_PREVIEW)
+                    )
                 } else {
                     c.clone()
                 };

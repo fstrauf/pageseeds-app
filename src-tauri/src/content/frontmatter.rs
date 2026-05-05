@@ -340,7 +340,8 @@ pub fn replace_scalar(raw_fm: &str, key: &str, new_value: &str) -> String {
         if let Some((k, old_val)) = split_field_line(trimmed) {
             if k == key {
                 // Detect YAML block-scalar indicators: >, >-, >+, |, |-, |+
-                let is_block_scalar = old_val.trim().starts_with('>') || old_val.trim().starts_with('|');
+                let is_block_scalar =
+                    old_val.trim().starts_with('>') || old_val.trim().starts_with('|');
                 if is_block_scalar {
                     skip_block_scalar = true;
                 }
@@ -622,13 +623,7 @@ description: "Desc"
     #[test]
     fn replace_faq_block_produces_valid_yaml_for_multiline_answers() {
         let raw = "title: \"Hello\"\n";
-        let updated = replace_faq_block(
-            raw,
-            &[(
-                "Q1?".to_string(),
-                "Line 1\nLine 2".to_string(),
-            )],
-        );
+        let updated = replace_faq_block(raw, &[("Q1?".to_string(), "Line 1\nLine 2".to_string())]);
         // The updated frontmatter must be valid YAML so has_frontmatter_faq can parse it.
         let mdx = crate::content::cleaner::rebuild_mdx(&updated, "Body");
         assert!(

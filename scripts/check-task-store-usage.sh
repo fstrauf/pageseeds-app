@@ -12,17 +12,26 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Find all Rust files that contain "task_store::create_task"
-# Exclude allowed locations, test modules, binary smoke tests, and test helper files
-violations=$(grep -rn "task_store::create_task" src-tauri/src --include="*.rs" | \
-    grep -v "engine/spawner.rs" | \
-    grep -v "engine/task_store.rs" | \
-    grep -v "commands/tasks.rs" | \
-    grep -v "executor.rs" | \
-    grep -v "bin/" | \
-    grep -v "#\[cfg(test)\]" | \
-    grep -v "mod tests" | \
-    grep -v "engine/exec/ctr_audit/" || true)
+# Find all Rust files that contain "task_store::create_task".
+# Exclude allowed locations, binary smoke tests, and calls inside #[cfg(test)] modules.
+violations=$(grep -rn "task_store::create_task" src-tauri/src --include="*.rs" | while IFS=: read -r file line text; do
+    if [[ "$file" == *engine/spawner.rs \
+        || "$file" == *engine/task_store.rs \
+        || "$file" == *commands/tasks.rs \
+        || "$file" == *executor.rs \
+        || "$file" == *bin/* \
+        || "$file" == *engine/exec/ctr_audit/* ]]; then
+        continue
+    fi
+
+    # If a #[cfg(test)] marker appears before this line in the same file, treat it
+    # as test fixture setup. This keeps the guard focused on production paths.
+    if awk -v target_line="$line" 'NR > target_line { exit } /^[[:space:]]*#\[cfg\(test\)\]/ { found = 1 } END { exit found ? 0 : 1 }' "$file"; then
+        continue
+    fi
+
+    printf '%s:%s:%s\n' "$file" "$line" "$text"
+done || true)
 
 if [ -n "$violations" ]; then
     echo "ERROR: Direct task_store::create_task calls found outside allowlist."

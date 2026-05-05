@@ -24,6 +24,7 @@ import type {
   EnqueueMode,
   RedditOpportunity,
   RedditStats,
+  RecoveryStats,
   ScoredSkill,
   SecretsStatus,
   SubmissionSummary,
@@ -84,8 +85,9 @@ export const createTask = (
   title: string | undefined,
   description: string | undefined,
   priority: string,
+  autoEnqueue?: boolean,
 ): Promise<Task> =>
-  invoke('create_task', { projectId, taskType, title, description, priority })
+  invoke('create_task', { projectId, taskType, title, description, priority, autoEnqueue })
 
 export const updateTaskStatus = (id: string, status: string): Promise<Task> =>
   invoke('update_task_status', { id, status })
@@ -110,6 +112,14 @@ export const createArticleTasksFromKeywords = (
   keywords: string[],
 ): Promise<Task[]> =>
   invoke('create_article_tasks_from_keywords', { projectId, researchTaskId, keywords })
+
+export const createGscIndexingRecoveryTask = (projectId: string): Promise<Task> =>
+  invoke('create_gsc_indexing_recovery_task', { projectId })
+
+export const getGscRecoveryStats = (
+  projectId: string,
+): Promise<RecoveryStats> =>
+  invoke('get_gsc_recovery_stats', { projectId })
 
 // ─── Articles ─────────────────────────────────────────────────────────────────
 

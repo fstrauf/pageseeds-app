@@ -9,7 +9,9 @@ use pageseeds_lib::db;
 use pageseeds_lib::engine::task_store;
 use pageseeds_lib::logging::{query_logs, LogQueryFilters};
 use pageseeds_lib::models::project::Project;
-use pageseeds_lib::models::task::{FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus};
+use pageseeds_lib::models::task::{
+    FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy, TaskStatus,
+};
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
     let nanos = SystemTime::now()
@@ -77,6 +79,7 @@ fn test_queue_enqueue_and_state_management() {
         artifacts: vec![],
         run: TaskRun::default(),
         created_at: now.clone(),
+        not_before: None,
         updated_at: now.clone(),
     };
 
@@ -97,6 +100,7 @@ fn test_queue_enqueue_and_state_management() {
         artifacts: vec![],
         run: TaskRun::default(),
         created_at: now.clone(),
+        not_before: None,
         updated_at: now,
     };
 

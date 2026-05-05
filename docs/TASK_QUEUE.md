@@ -11,26 +11,24 @@ The task queue is the **single execution path** for all task processing. All tas
 │                         TASK QUEUE SYSTEM                               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│   FRONTEND (Zustand + Tauri Events)                                     │
+│   FRONTEND (Projection Cache + Tauri Events)                            │
 │   ┌──────────────────────────────────────────────────────────────┐     │
 │   │  QueueStore                                                  │     │
-│   │  ├─ items: QueueItem[]           // Ordered queue            │     │
-│   │  ├─ currentIndex: number         // Running item             │     │
-│   │  ├─ isRunning: boolean                                      │     │
-│   │  └─ isPaused: boolean                                       │     │
+│   │  ├─ snapshot: QueueSnapshot      // Backend state copy       │     │
+│   │  ├─ isVisible / expanded rows    // UI-only preferences      │     │
+│   │  └─ enqueue / pause / resume     // Command wrappers         │     │
 │   └──────────────────────────────────────────────────────────────┘     │
 │        │                                                                │
-│        │ invoke                                                         │
+│        │ invoke enqueue_tasks / get_queue_snapshot / pause_queue        │
 │        ▼                                                                │
-│   RUST BACKEND                                                          │
+│   RUST BACKEND (Source of Truth)                                        │
 │   ┌──────────────────────────────────────────────────────────────┐     │
-│   │  execute_queue(items: Vec<QueueItem>)                       │     │
-│   │     spawn_blocking                                             │     │
-│   │        for item in items:                                      │     │
-│   │           emit "task-started"                                  │     │
-│   │           execute_task(item.task_id)                           │     │
-│   │           emit "task-completed"                                │     │
-│   │        emit "queue:finished"                                   │     │
+│   │  engine::queue                                                │     │
+│   │  ├─ queue_runs + queue_items in SQLite                        │     │
+│   │  ├─ ensure_runner_started()                                   │     │
+│   │  ├─ lease next pending item                                   │     │
+│   │  ├─ execute_task_with_token(task_id)                          │     │
+│   │  └─ persist result + auto-enqueue eligible follow-ups         │     │
 │   └──────────────────────────────────────────────────────────────┘     │
 │        │                                                                │
 │        │ events                                                         │
@@ -55,7 +53,8 @@ The task queue is the **single execution path** for all task processing. All tas
 - **One queue per app session**, not per project
 - Tasks from any project can be added
 - Queue continues running when switching projects/views
-- Queue state is **managed by the backend** (`enqueue_tasks`, `get_queue_snapshot`, `pause_queue`, `resume_queue` in `tauri.ts:468`). The frontend subscribes to events and renders progress, but does not own execution.
+- Queue state is **managed by the backend** (`enqueue_tasks`, `get_queue_snapshot`, `pause_queue`, `resume_queue`). The frontend subscribes to events and renders progress, but does not own execution.
+- Queue membership and item status are persisted in SQLite (`queue_runs`, `queue_items`) and can be rehydrated with `get_queue_snapshot`.
 
 ### Execution Order
 
@@ -67,6 +66,8 @@ FIFO by default
 Follow-up tasks append after parent's position
 ```
 
+`EnqueueMode::Append` adds pending items to the end. `EnqueueMode::Next` inserts them immediately after the currently running item.
+
 ### Concurrency
 
 **V1:** Serial execution only (one task at a time). No parallel execution.
@@ -77,32 +78,28 @@ Follow-up tasks append after parent's position
 
 ## Data Model
 
-### QueueItem (Frontend)
-
-```typescript
-interface QueueItem {
-  taskId: string;
-  projectId: string;
-  projectName: string;  // For display
-  title: string;
-  taskType: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  result?: ExecutionResult;
-  liveSteps?: StepProgress[];
-}
-```
-
-### QueueItem (Rust)
+### QueueSnapshot (Frontend/Rust)
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueueItem {
-    pub task_id: String,
-    pub project_id: String,
-    pub title: String,
-    pub task_type: String,
+pub struct QueueSnapshot {
+    pub run: Option<QueueRun>,
+    pub items: Vec<QueueItem>,
 }
 ```
+
+### EnqueueItem
+
+```rust
+pub struct EnqueueItem {
+    pub task_id: String,
+    pub project_id: String,
+    pub title: Option<String>,
+    pub task_type: Option<String>,
+    pub project_name: Option<String>,
+}
+```
+
+`QueueItem` rows include durable queue state (`pending`, `running`, `completed`, `failed`, `skipped`), error/result JSON, and display fields joined from the task/project tables.
 
 ### ExecutionResult
 
@@ -121,11 +118,11 @@ pub struct ExecutionResult {
 
 | Event | Direction | Payload | Purpose |
 |-------|-----------|---------|---------|
-| `queue:task-started` | Rust → TS | `{ task_id, project_id, index, total, title, task_type }` | Task begins |
+| `queue:task-started` | Rust → TS | `{ task_id, project_id, title, task_type }` | Task begins |
 | `queue:task-step-progress` | Rust → TS | `{ task_id, step_name, status }` | Step update |
-| `queue:task-completed` | Rust → TS | `{ task_id, project_id, success, message, follow_up_count }` | Task done |
-| `queue:task-failed` | Rust → TS | `{ task_id, project_id, error, retryable }` | Task failed |
-| `queue:follow-up-created` | Rust → TS | `{ task_id, project_id, title, task_type, execution_mode }` | Follow-up ready |
+| `queue:task-completed` | Rust → TS | `{ task_id, project_id, success, message, follow_up_tasks }` | Task done |
+| `queue:task-failed` | Rust → TS | `{ task_id, project_id, error }` | Task failed |
+| `queue:follow-up-created` | Rust → TS | `{ taskId, projectId, title, taskType, runPolicy }` | Auto-enqueued follow-up ready |
 | `queue:finished` | Rust → TS | `()` | All done |
 
 ---
@@ -135,14 +132,13 @@ pub struct ExecutionResult {
 ### From Components
 
 ```typescript
-import { useQueue } from '@/stores/queueStore';
+import { useTaskQueueActions } from '@/lib/taskQueueActions';
 
 function MyComponent() {
-  const { addTask, startQueue, isRunning } = useQueue();
+  const { enqueueTasks } = useTaskQueueActions();
   
   const handleRun = (task: Task) => {
-    addTask(task, projectName);
-    if (!isRunning) startQueue();
+    enqueueTasks([task], projectName);
   };
 }
 ```
@@ -151,15 +147,14 @@ function MyComponent() {
 
 | Action | Purpose |
 |--------|---------|
-| `addTask(task, projectName)` | Add single task to queue |
-| `addTasks(tasks, projectName)` | Add multiple tasks |
-| `removeTask(taskId)` | Remove pending task |
-| `reorderTasks(newOrder)` | Manual reorder |
-| `clearCompleted()` | Remove done/failed items |
-| `startQueue()` | Begin execution |
+| `sync()` | Refresh projection from `get_queue_snapshot` |
+| `enqueue(items, 'append')` | Add tasks to the end of the backend queue and start runner if needed |
+| `enqueueNext(items)` | Insert tasks next in the pending section |
+| `removeTask(taskId)` | Remove a pending backend queue item |
 | `pauseQueue()` | Pause after current task |
 | `resumeQueue()` | Resume execution |
-| `stopQueue()` | Stop immediately |
+| `clearCompleted()` | Remove completed/failed/skipped queue rows |
+| `dismiss()` | Hide/archive a finished queue run |
 
 ---
 
@@ -197,13 +192,35 @@ When a task completes with follow-ups:
 
 When `ExecutionResult.follow_up_tasks` is returned:
 
-1. **Auto-queue** if `execution_mode` is `"automatic"` or `"batchable"`
-2. **Show inline** in TaskRunner with actions:
-   - **Run now** — inserts at head of queue
-   - **Skip** — removes from follow-up list
-   - **Open task** — navigates to task detail
+1. The backend queue auto-enqueues only follow-ups whose `run_policy` is `"auto_enqueue"`.
+2. The task completion payload includes all returned follow-ups so TaskRunner can show review/open/run actions.
+3. User-enqueue follow-ups are not automatically inserted into the queue.
+
+TaskRunner can show inline actions:
+- **Run now** — inserts at head of queue
+- **Skip** — removes from follow-up list
+- **Open task** — navigates to task detail
 
 **Idempotency:** Follow-up creation uses `TaskSpawner::spawn_follow_up()` which prevents duplicates via deterministic keys.
+
+---
+
+## User-Input Gates
+
+Some workflows deliberately stop before creating downstream tasks. This is not a queue concern; it is a task lifecycle contract.
+
+| Contract | Meaning |
+|----------|---------|
+| `review_surface != none` | Successful execution ends with task status `review` |
+| `follow_up_policy = user_selection` | Downstream tasks are created only after the user chooses items in the review UI |
+| Selection command | Validates selected IDs against the parent artifact, creates downstream tasks, and marks the parent done |
+
+Examples:
+- Keyword research stores selectable keywords, goes to review, then `create_article_tasks_from_keywords` creates article tasks after selection.
+- Reddit opportunity search stores selectable opportunities, goes to review, then `create_reply_tasks_from_opportunities` creates reply tasks after selection.
+- Cannibalization audit stores selectable recommendations, goes to review, then `create_cannibalization_tasks_from_selection` creates implementation tasks.
+
+Do not spawn user-selection follow-ups in `post_actions.rs`; doing so bypasses the user gate.
 
 ---
 
@@ -214,7 +231,7 @@ When `ExecutionResult.follow_up_tasks` is returned:
 | Task not found | Mark failed, continue to next |
 | Task not runnable | Show "Open task" action, continue |
 | DB/IPC failure | Mark failed, continue |
-| App crash | Queue not restored (V1 limitation); task statuses preserved in DB |
+| App crash | Queue rows persist; startup recovery resets stale running work and `get_queue_snapshot` shows recoverable state |
 
 ---
 
@@ -247,7 +264,7 @@ impl TaskSpawner {
 
 | Scenario | Key Format |
 |----------|------------|
-| Follow-up from parent | `followup:{parent_id}:{task_type}:{title_hash}` |
+| Follow-up from parent | `followup:{parent_id}:{task_type}:{title}` |
 | GSC fix task | `gsc_fix:{project_id}:{url}:{issue_type}` |
 | Scheduler created | `scheduler:{rule_id}:{date_ymd}` |
 | Keyword→Article | `keyword_article:{project_id}:{keyword_hash}` |
@@ -279,15 +296,14 @@ Shows:
 ### Expected Flow
 
 ```
-[execute_queue] Called with N items
-[execute_queue_internal] Starting execution of N tasks
-[execute_queue_internal] Task 1/N: Title (task-xxx) in project xxx
-[execute_queue_internal] Emitting queue:task-started for task task-xxx
-[execute_queue_internal] Successfully emitted started event
+[enqueue_tasks] Called with N items
+[queue] ensure_runner_started
+[queue_runner] TASK: task-xxx (Title)
+[queue:task-started] task-xxx
 ... (execution) ...
-[execute_queue_internal] Task task-xxx succeeded: Task completed
-[execute_queue_internal] Emitting queue:task-completed for task task-xxx
-[execute_queue_internal] All tasks complete
+[queue:task-completed] task-xxx
+[queue_runner] auto-enqueue follow-up with run_policy=auto_enqueue, if any
+[queue:finished]
 ```
 
 ### Common Failures

@@ -88,7 +88,11 @@ where
             // Structured extraction uses native tool calls, which require ACP.
             // Explicitly request acp so the bridge does not default to direct.
             crate::rig::compat::kimi::extract_structured::<T>(
-                base_url, model, prompt, preamble, Some("acp"),
+                base_url,
+                model,
+                prompt,
+                preamble,
+                Some("acp"),
             )
             .await
         }

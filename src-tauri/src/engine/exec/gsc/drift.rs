@@ -35,23 +35,54 @@ pub(crate) async fn exec_gsc_drift(
     // 1. Resolve site config
     let (site_url, sitemap_url) = resolve_site_config(project_id, project_path)?;
 
-    // 2. Fetch sitemap URLs (high limit — drift detection needs completeness)
-    let sitemap_urls = crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url, 5000).await?;
+    // 2. Fetch sitemap entries with lastmod (high limit — drift detection needs completeness)
+    let sitemap_entries = crate::gsc::sitemap::fetch_sitemap_entries(&sitemap_url, 5000).await?;
 
     // 3. Load GSC inspection data
     let gsc_items = load_gsc_items(&paths, project_id)?;
 
-    // 4. Load link scan data
-    let link_scan = load_link_scan(&paths);
+    // 4. Load link scan data (trigger fresh scan if missing)
+    let link_scan_path = paths.automation_dir.join("link_scan.json");
+    let link_scan = if !link_scan_path.exists() {
+        log::info!("[gsc_drift] link_scan.json missing — triggering fresh scan");
+        if let Ok(articles) = load_articles_for_scan(&paths) {
+            if let Ok(content_dir) =
+                crate::content::ops::resolve_content_dir(&paths.automation_dir, &paths.repo_root)
+            {
+                match crate::content::linking::scan_links(&content_dir, &articles) {
+                    Ok(result) => {
+                        let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+                        let _ = std::fs::write(&link_scan_path, &json);
+                        log::info!(
+                            "[gsc_drift] fresh scan written: {} articles, {} orphans",
+                            result.total_articles,
+                            result.orphan_ids.len()
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!("[gsc_drift] fresh scan failed: {}", e);
+                    }
+                }
+            }
+        }
+        load_link_scan(&paths)
+    } else {
+        load_link_scan(&paths)
+    };
 
     // 5. Load article metadata
     let articles = load_articles(&paths);
 
+    // 5b. Compute freshness of source data files
+    let gsc_collection_path = paths.automation_dir.join("gsc_collection.json");
+    let gsc_data_age_hours = file_age_hours(&gsc_collection_path);
+    let link_scan_age_hours = file_age_hours(&link_scan_path);
+
     // 6. Build normalized lookup maps
-    let mut sitemap_map: HashMap<String, String> = HashMap::new(); // normalized → original
-    for url in &sitemap_urls {
-        let norm = crate::engine::exec::gsc::normalize_url_for_comparison(url);
-        sitemap_map.insert(norm, url.clone());
+    let mut sitemap_map: HashMap<String, (String, Option<String>)> = HashMap::new(); // normalized → (original_url, lastmod)
+    for entry in &sitemap_entries {
+        let norm = crate::engine::exec::gsc::normalize_url_for_comparison(&entry.url);
+        sitemap_map.insert(norm, (entry.url.clone(), entry.lastmod.clone()));
     }
 
     let mut gsc_map: HashMap<String, GscItem> = HashMap::new();
@@ -60,30 +91,39 @@ pub(crate) async fn exec_gsc_drift(
         gsc_map.insert(norm, item.clone());
     }
 
+    // Resolve content directory for file existence checks
+    let content_dir = crate::content::locator::resolve(&paths.repo_root, None).selected;
+
     // 7. Compute drift categories
     let mut in_sitemap_not_in_gsc: Vec<DriftUrl> = Vec::new();
     let mut in_gsc_not_in_sitemap: Vec<DriftUrl> = Vec::new();
     let mut not_indexed: Vec<DriftUrl> = Vec::new();
     let mut indexed_count = 0usize;
 
-    for (norm, original_url) in &sitemap_map {
+    for (norm, (original_url, lastmod)) in &sitemap_map {
         if let Some(gsc_item) = gsc_map.get(norm) {
             if gsc_item.reason_code.as_deref() == Some("indexed_pass") {
                 indexed_count += 1;
             } else {
                 not_indexed.push(DriftUrl {
                     url: original_url.clone(),
-                    slug: extract_slug(original_url),
+                    slug: crate::content::slug::extract_slug_from_url(original_url),
                     reason_code: gsc_item.reason_code.clone(),
                     verdict: gsc_item.verdict.clone(),
+                    lastmod: lastmod.clone(),
+                    has_content_file: content_file_exists(content_dir.as_deref(), original_url),
+                    issues: diagnose_url(content_dir.as_deref(), original_url),
                 });
             }
         } else {
             in_sitemap_not_in_gsc.push(DriftUrl {
                 url: original_url.clone(),
-                slug: extract_slug(original_url),
+                slug: crate::content::slug::extract_slug_from_url(original_url),
                 reason_code: None,
                 verdict: None,
+                lastmod: lastmod.clone(),
+                has_content_file: content_file_exists(content_dir.as_deref(), original_url),
+                issues: diagnose_url(content_dir.as_deref(), original_url),
             });
         }
     }
@@ -92,9 +132,12 @@ pub(crate) async fn exec_gsc_drift(
         if !sitemap_map.contains_key(norm) {
             in_gsc_not_in_sitemap.push(DriftUrl {
                 url: gsc_item.url.clone(),
-                slug: extract_slug(&gsc_item.url),
+                slug: crate::content::slug::extract_slug_from_url(&gsc_item.url),
                 reason_code: gsc_item.reason_code.clone(),
                 verdict: gsc_item.verdict.clone(),
+                lastmod: None,
+                has_content_file: content_file_exists(content_dir.as_deref(), &gsc_item.url),
+                issues: diagnose_url(content_dir.as_deref(), &gsc_item.url),
             });
         }
     }
@@ -127,7 +170,7 @@ pub(crate) async fn exec_gsc_drift(
         site_url,
         sitemap_url,
         checked_at: chrono::Utc::now().to_rfc3339(),
-        sitemap_total: sitemap_urls.len(),
+        sitemap_total: sitemap_entries.len(),
         gsc_total: gsc_items.len(),
         indexed_count,
         not_indexed_count,
@@ -135,6 +178,8 @@ pub(crate) async fn exec_gsc_drift(
         in_gsc_not_in_sitemap,
         not_indexed,
         resubmit_priority: candidates,
+        gsc_data_age_hours,
+        link_scan_age_hours,
     })
 }
 
@@ -142,7 +187,10 @@ pub(crate) async fn exec_gsc_drift(
 // Data loaders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn resolve_site_config(project_id: &str, project_path: &str) -> Result<(String, String), crate::error::Error> {
+fn resolve_site_config(
+    project_id: &str,
+    project_path: &str,
+) -> Result<(String, String), crate::error::Error> {
     let paths = ProjectPaths::from_path(project_path);
     let manifest_path = paths.automation_dir.join("manifest.json");
 
@@ -161,7 +209,9 @@ fn resolve_site_config(project_id: &str, project_path: &str) -> Result<(String, 
                     .unwrap_or_else(|| {
                         let base = if site_url.starts_with("sc-domain:") {
                             format!("https://{}", &site_url["sc-domain:".len()..])
-                        } else if !site_url.starts_with("http://") && !site_url.starts_with("https://") {
+                        } else if !site_url.starts_with("http://")
+                            && !site_url.starts_with("https://")
+                        {
                             format!("https://{}", site_url)
                         } else {
                             site_url.clone()
@@ -262,6 +312,33 @@ fn load_link_scan(paths: &ProjectPaths) -> LinkScanData {
     LinkScanData { incoming_by_id }
 }
 
+/// Load articles.json as full Article structs so they can be passed to
+/// `content::linking::scan_links` when we need to trigger a fresh scan.
+fn load_articles_for_scan(
+    paths: &ProjectPaths,
+) -> Result<Vec<crate::models::article::Article>, String> {
+    use crate::models::article::Article;
+    let articles_path = paths.automation_dir.join("articles.json");
+    let raw = std::fs::read_to_string(&articles_path).map_err(|e| e.to_string())?;
+    let doc: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+    let arr = if doc.is_array() {
+        doc.as_array().cloned().unwrap_or_default()
+    } else {
+        doc.get("articles")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    let articles: Vec<Article> = arr
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect();
+
+    Ok(articles)
+}
+
 #[derive(Debug, Default, Clone)]
 struct ArticleMeta {
     id: i64,
@@ -286,7 +363,9 @@ fn load_articles(paths: &ProjectPaths) -> HashMap<String, ArticleMeta> {
     let arr = if doc.is_array() {
         doc.as_array().unwrap_or(&empty)
     } else {
-        doc.get("articles").and_then(|v| v.as_array()).unwrap_or(&empty)
+        doc.get("articles")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&empty)
     };
 
     let mut map: HashMap<String, ArticleMeta> = HashMap::new();
@@ -322,16 +401,107 @@ fn load_articles(paths: &ProjectPaths) -> HashMap<String, ArticleMeta> {
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn extract_slug(url: &str) -> String {
-    let without_scheme = url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    if let Some(pos) = without_scheme.find('/') {
-        without_scheme[pos + 1..].to_string()
-    } else {
-        without_scheme.to_string()
-    }
+/// Return the age of a file in whole hours, or None if the file does not exist.
+fn file_age_hours(path: &std::path::Path) -> Option<i32> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let elapsed = modified.elapsed().ok()?;
+    Some((elapsed.as_secs() / 3600) as i32)
 }
+
+/// Check whether an MDX file exists for the given URL slug.
+fn content_file_exists(content_dir: Option<&std::path::Path>, url: &str) -> bool {
+    let dir = match content_dir {
+        Some(d) => d,
+        None => return false,
+    };
+    let slug = crate::content::slug::extract_slug_from_url(url);
+    let target = slug.trim_end_matches('/');
+    let files = crate::content::locator::collect_markdown_files(dir);
+    files.iter().any(|p| {
+        let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        // Strip numeric prefix if present (e.g. "127_net_worth_tracker" → "net_worth_tracker")
+        let bare = crate::content::ops::slug_from_filename(name);
+        bare == target
+    })
+}
+
+/// Diagnose frontmatter / structural issues for a URL's content file.
+fn diagnose_url(content_dir: Option<&std::path::Path>, url: &str) -> Vec<String> {
+    let dir = match content_dir {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+    let slug = crate::content::slug::extract_slug_from_url(url);
+    let target = slug.trim_end_matches('/');
+    let files = crate::content::locator::collect_markdown_files(dir);
+    let path = files.iter().find(|p| {
+        let name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let bare = crate::content::ops::slug_from_filename(name);
+        bare == target
+    });
+    let path = match path {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut issues = Vec::new();
+
+    // Check for noindex
+    if content.contains("noindex") || content.contains("robots: noindex") {
+        issues.push("noindex".to_string());
+    }
+
+    // Check for canonical mismatch
+    let canonical = extract_frontmatter_string(&content, "canonical");
+    if let Some(canonical_url) = canonical {
+        let canonical_slug = crate::content::slug::extract_slug_from_url(&canonical_url);
+        if canonical_slug != target {
+            issues.push(format!("canonical mismatch: {}", canonical_slug));
+        }
+    }
+
+    // Check for missing description
+    if extract_frontmatter_string(&content, "description").is_none() {
+        issues.push("missing meta description".to_string());
+    }
+
+    // Check for thin content (< 300 words)
+    let word_count = crate::content::ops::count_words(&content);
+    if word_count < 300 {
+        issues.push(format!("thin content ({} words)", word_count));
+    }
+
+    issues
+}
+
+fn extract_frontmatter_string(content: &str, key: &str) -> Option<String> {
+    // Simple frontmatter parser: looks for `key: value` before the first `---` or empty line
+    let prefix = format!("{}:", key);
+    for line in content.lines() {
+        if line.trim() == "---" {
+            break;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(&prefix) {
+            let val = trimmed[prefix.len()..]
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+
 
 fn build_candidate(
     drift_url: &DriftUrl,
@@ -341,7 +511,10 @@ fn build_candidate(
     let reason = drift_url.reason_code.as_deref().unwrap_or("unknown");
 
     // Skip technical blockers — resubmission won't help
-    if matches!(reason, "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch") {
+    if matches!(
+        reason,
+        "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch"
+    ) {
         return None;
     }
 
@@ -371,12 +544,14 @@ fn build_candidate(
 
     let age_bonus = meta
         .and_then(|m| m.published_date.as_deref())
-        .and_then(|d| {
-            chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()
-        })
+        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
         .map(|published| {
             let days = (chrono::Utc::now().date_naive() - published).num_days();
-            if days > 30 { 15 } else { 0 }
+            if days > 30 {
+                15
+            } else {
+                0
+            }
         })
         .unwrap_or(0);
 
@@ -438,7 +613,11 @@ fn build_candidate_for_unknown(
         .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
         .map(|published| {
             let days = (chrono::Utc::now().date_naive() - published).num_days();
-            if days > 30 { 15 } else { 0 }
+            if days > 30 {
+                15
+            } else {
+                0
+            }
         })
         .unwrap_or(0);
 

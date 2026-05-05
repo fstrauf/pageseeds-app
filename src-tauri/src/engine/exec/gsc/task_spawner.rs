@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
-use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskRunPolicy};
 
 /// Post-completion hook: reads gsc_collection.json and spawns fix tasks.
 ///
@@ -43,7 +43,6 @@ pub(crate) fn create_tasks_from_collection_after_exec(
 ///   crawled_not_indexed / other not_indexed_*                   → fix_indexing
 ///   api_error                                                   → fix_gsc_access (batched)
 ///   (all indexed)                                               → investigate_gsc
-
 
 pub(crate) fn create_tasks_from_collection(
     conn: &Connection,
@@ -88,16 +87,7 @@ pub(crate) fn create_tasks_from_collection(
             _ => "fix_indexing",
         };
 
-        let url_slug = {
-            let without_scheme = url
-                .trim_start_matches("https://")
-                .trim_start_matches("http://");
-            if let Some(slash_pos) = without_scheme.find('/') {
-                &without_scheme[slash_pos..]
-            } else {
-                url
-            }
-        };
+        let url_slug = crate::content::slug::extract_slug_from_url(url);
         let reason_human = reason.replace('_', " ");
         let title = format!("Fix {}: {}", reason_human, url_slug);
         let description = format!(

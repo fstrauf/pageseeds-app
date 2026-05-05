@@ -1,9 +1,9 @@
 use rusqlite::Connection;
 
-use crate::engine::spawner::{TaskSpec, TaskSpawner};
+use crate::engine::spawner::{TaskSpawner, TaskSpec};
 use crate::engine::task_store;
 use crate::models::reddit::RedditOpportunity;
-use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskStatus};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskRunPolicy, TaskStatus};
 
 /// Create `reddit_reply` tasks from selected opportunities in a completed search task.
 ///
@@ -15,18 +15,28 @@ pub fn create_reply_tasks_from_opportunities(
     task_id: &str,
     post_ids: &[String],
 ) -> Result<Vec<Task>, String> {
-    log::info!("[create_reply_tasks_from_opportunities] called with task_id={} post_ids={:?}", task_id, post_ids);
-    
+    log::info!(
+        "[create_reply_tasks_from_opportunities] called with task_id={} post_ids={:?}",
+        task_id,
+        post_ids
+    );
+
     if post_ids.is_empty() {
         return Err("No opportunities selected".to_string());
     }
 
     let parent_task = task_store::get_task(conn, task_id)
         .map_err(|e| format!("Failed to get parent task: {}", e))?;
-    
-    log::info!("[create_reply_tasks_from_opportunities] parent_task has {} artifacts", parent_task.artifacts.len());
+
+    log::info!(
+        "[create_reply_tasks_from_opportunities] parent_task has {} artifacts",
+        parent_task.artifacts.len()
+    );
     for a in &parent_task.artifacts {
-        log::info!("[create_reply_tasks_from_opportunities] artifact key={}", a.key);
+        log::info!(
+            "[create_reply_tasks_from_opportunities] artifact key={}",
+            a.key
+        );
     }
 
     let results_artifact = parent_task
@@ -34,7 +44,9 @@ pub fn create_reply_tasks_from_opportunities(
         .iter()
         .find(|a| a.key == "reddit_results_stage")
         .ok_or_else(|| {
-            log::warn!("[create_reply_tasks_from_opportunities] reddit_results_stage artifact not found");
+            log::warn!(
+                "[create_reply_tasks_from_opportunities] reddit_results_stage artifact not found"
+            );
             "No reddit_results_stage artifact found. Run the search first.".to_string()
         })?;
 
@@ -82,10 +94,7 @@ pub fn create_reply_tasks_from_opportunities(
             opp.post_id
         );
 
-        let idempotency_key = format!(
-            "reddit_reply:{}:{}",
-            parent_task.project_id, opp.post_id
-        );
+        let idempotency_key = format!("reddit_reply:{}:{}", parent_task.project_id, opp.post_id);
 
         let spec = TaskSpec {
             project_id: parent_task.project_id.clone(),
@@ -95,7 +104,7 @@ pub fn create_reply_tasks_from_opportunities(
             phase: Some("implementation".to_string()),
             run_policy: Some(TaskRunPolicy::UserEnqueue),
             priority,
-        agent_policy: AgentPolicy::Optional,
+            agent_policy: AgentPolicy::Optional,
             depends_on: vec![],
             artifacts: vec![],
             idempotency_key: Some(idempotency_key),

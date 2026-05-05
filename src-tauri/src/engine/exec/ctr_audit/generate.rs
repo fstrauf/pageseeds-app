@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::engine::workflows::StepResult;
 use crate::models::ctr::{CtrFixPatch, CtrRecommendation};
-use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
+use crate::models::task::{FollowUpPolicy, Task, TaskReviewSurface};
 use crate::rig::provider::LlmBackend;
 
 pub(crate) async fn exec_ctr_fix_generate(
@@ -20,17 +20,17 @@ pub(crate) async fn exec_ctr_fix_generate(
     project_path: &str,
     agent_provider: &str,
 ) -> StepResult {
-    let backend = match crate::rig::provider::resolve_backend(agent_provider, None, None, None).await
-    {
-        Ok(b) => b,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Could not resolve LLM backend: {}", e),
-                output: None,
-            };
-        }
-    };
+    let backend =
+        match crate::rig::provider::resolve_backend(agent_provider, None, None, None).await {
+            Ok(b) => b,
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    message: format!("Could not resolve LLM backend: {}", e),
+                    output: None,
+                };
+            }
+        };
 
     match &backend {
         LlmBackend::KimiDirect => {
@@ -79,20 +79,20 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
 
     // 2. Read file
     let repo_root = Path::new(project_path);
-    let file_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &rec.file)
-    {
-        Some(p) => p,
-        None => {
-            return StepResult {
-                success: false,
-                message: format!(
-                    "File not found: {}. Run sanitize_content to repair paths.",
-                    rec.file
-                ),
-                output: None,
-            };
-        }
-    };
+    let file_path =
+        match crate::engine::exec::audit_health::resolve_content_file(repo_root, &rec.file) {
+            Some(p) => p,
+            None => {
+                return StepResult {
+                    success: false,
+                    message: format!(
+                        "File not found: {}. Run sanitize_content to repair paths.",
+                        rec.file
+                    ),
+                    output: None,
+                };
+            }
+        };
 
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
@@ -148,7 +148,8 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
     let mut errors = super::validate_patch_before_write(&patch, task, &original_content);
 
     // 6. Consistency validation (Phase 6)
-    let consistency_errors = super::validate_patch_against_recommendation(&patch, &rec, &original_content);
+    let consistency_errors =
+        super::validate_patch_against_recommendation(&patch, &rec, &original_content);
     errors.extend(consistency_errors);
 
     // 7. One repair attempt if needed
@@ -162,8 +163,13 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
         match repair_ctr_fix_patch_with_backend(backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
                 let _repair_notes = super::normalize_patch_before_validation(&mut repaired, task);
-                let mut repair_errors = super::validate_patch_before_write(&repaired, task, &original_content);
-                let consistency_errors2 = super::validate_patch_against_recommendation(&repaired, &rec, &original_content);
+                let mut repair_errors =
+                    super::validate_patch_before_write(&repaired, task, &original_content);
+                let consistency_errors2 = super::validate_patch_against_recommendation(
+                    &repaired,
+                    &rec,
+                    &original_content,
+                );
                 repair_errors.extend(consistency_errors2);
 
                 if !repair_errors.is_empty() {
@@ -211,10 +217,7 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
 
     StepResult {
         success: true,
-        message: format!(
-            "Generated typed CtrFixPatch for {}{}",
-            rec.file, repair_msg
-        ),
+        message: format!("Generated typed CtrFixPatch for {}{}", rec.file, repair_msg),
         output: Some(patch_json),
     }
 }
@@ -235,7 +238,8 @@ pub(crate) fn build_ctr_fix_prompt(
         .unwrap_or_else(|| "Apply CTR fixes to improve title, meta description, first paragraph, FAQ schema, and snippet bait.".to_string());
 
     // Parse current excerpt
-    let (current_title, current_meta, current_first) = super::patch::parse_content_excerpt(original_content);
+    let (current_title, current_meta, current_first) =
+        super::patch::parse_content_excerpt(original_content);
     let has_faq = crate::engine::exec::audit_health::has_frontmatter_faq(original_content);
 
     // Build body excerpt (first ~3_000 chars of body, skipping frontmatter)
@@ -322,7 +326,11 @@ Only include fields that need to change. Do not include title/description/first_
         first_words = current_first.split_whitespace().count(),
         snippet_min = snippet_min,
         snippet_max = snippet_max,
-        has_faq = if has_faq { "yes — do NOT generate faq_questions" } else { "no — generate faq_questions if requested" },
+        has_faq = if has_faq {
+            "yes — do NOT generate faq_questions"
+        } else {
+            "no — generate faq_questions if requested"
+        },
         body_excerpt = body_excerpt.trim(),
         rec_json = serde_json::to_string_pretty(rec).map_err(|e| e.to_string())?,
     );
@@ -360,7 +368,11 @@ async fn repair_ctr_fix_patch_with_backend(
 Fix the patch so it passes all validation rules. Return only the corrected CtrFixPatch by calling the submit tool. Address every error listed above."#,
         original_prompt = original_prompt,
         patch_json = serde_json::to_string_pretty(invalid_patch).map_err(|e| e.to_string())?,
-        errors = errors.iter().map(|e| format!("- {}", e)).collect::<Vec<_>>().join("\n"),
+        errors = errors
+            .iter()
+            .map(|e| format!("- {}", e))
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
 
     crate::rig::extraction::extract_with_backend::<CtrFixPatch>(
@@ -373,7 +385,6 @@ Fix the patch so it passes all validation rules. Return only the corrected CtrFi
     )
     .await
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -410,15 +421,16 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -448,7 +460,10 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             )),
             "prompt should include snippet word range"
         );
-        assert!(prompt.contains("test keyword"), "prompt should include target keyword");
+        assert!(
+            prompt.contains("test keyword"),
+            "prompt should include target keyword"
+        );
         assert!(
             prompt.contains("content/test.mdx"),
             "prompt should include file path"
@@ -465,15 +480,16 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -600,9 +616,9 @@ More content here.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
@@ -615,6 +631,7 @@ More content here.
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -777,9 +794,9 @@ More content here.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
@@ -792,13 +809,20 @@ More content here.
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
         let result = exec_ctr_fix_generate_with_backend(&task, &path, &backend).await;
-        assert!(result.success, "Generate with repair failed: {}", result.message);
         assert!(
-            result.message.contains("repair") || result.message.contains("normalized") || result.message.contains("Generated typed"),
+            result.success,
+            "Generate with repair failed: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("repair")
+                || result.message.contains("normalized")
+                || result.message.contains("Generated typed"),
             "Expected success after repair, got: {}",
             result.message
         );
@@ -957,9 +981,9 @@ More content here.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Fix test".to_string()),
             description: None,
             depends_on: vec![],
@@ -972,11 +996,15 @@ More content here.
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
         let result = exec_ctr_fix_generate_with_backend(&task, &path, &backend).await;
-        assert!(!result.success, "Should fail when repair also produces invalid patch");
+        assert!(
+            !result.success,
+            "Should fail when repair also produces invalid patch"
+        );
         assert!(
             result.message.contains("repair") || result.message.contains("validation after repair"),
             "Expected repair failure message, got: {}",

@@ -34,6 +34,7 @@ function makeTask(artifactContent: object): Task {
     title: 'Audit',
     description: null,
     depends_on: [],
+    not_before: null,
     artifacts: [
       {
         key: 'cannibalization_strategy',

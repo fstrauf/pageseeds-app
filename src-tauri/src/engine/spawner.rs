@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::task::{
-    AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskRun, TaskReviewSurface,
+    AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun,
     TaskRunPolicy, TaskStatus,
 };
 
@@ -127,10 +127,7 @@ impl TaskSpawner {
                 }
                 IdempotencyResolution::DeleteAndCreate => {
                     // Old key expired or policy allows re-creation; delete stale key
-                    let _ = conn.execute(
-                        "DELETE FROM task_idempotency_keys WHERE key = ?1",
-                        [key],
-                    );
+                    let _ = conn.execute("DELETE FROM task_idempotency_keys WHERE key = ?1", [key]);
                 }
             }
         }
@@ -175,6 +172,7 @@ impl TaskSpawner {
             run: TaskRun::default(),
             created_at: now.clone(),
             updated_at: now,
+            not_before: None,
         };
 
         // 6. Persist
@@ -232,10 +230,7 @@ impl TaskSpawner {
                 return Ok(None);
             }
             IdempotencyResolution::DeleteAndCreate => {
-                let _ = conn.execute(
-                    "DELETE FROM task_idempotency_keys WHERE key = ?1",
-                    [&key],
-                );
+                let _ = conn.execute("DELETE FROM task_idempotency_keys WHERE key = ?1", [&key]);
             }
         }
 
@@ -297,23 +292,21 @@ impl TaskSpawner {
             Ok(t) => t,
             Err(_) => {
                 // Task was deleted but key remains - clean it up and allow creation
-                let _ = conn.execute(
-                    "DELETE FROM task_idempotency_keys WHERE key = ?1",
-                    [key],
-                );
+                let _ = conn.execute("DELETE FROM task_idempotency_keys WHERE key = ?1", [key]);
                 return Ok(IdempotencyResolution::Create);
             }
         };
 
         match policy {
             DeduplicationPolicy::AlwaysCreate => Ok(IdempotencyResolution::Create),
-            DeduplicationPolicy::SkipIfAnyExists => {
-                Ok(IdempotencyResolution::ReturnExisting(task))
-            }
+            DeduplicationPolicy::SkipIfAnyExists => Ok(IdempotencyResolution::ReturnExisting(task)),
             DeduplicationPolicy::SkipIfActive => {
                 if matches!(
                     task.status,
-                    TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Review
+                    TaskStatus::Todo
+                        | TaskStatus::Queued
+                        | TaskStatus::InProgress
+                        | TaskStatus::Review
                 ) {
                     Ok(IdempotencyResolution::ReturnExisting(task))
                 } else {
@@ -324,7 +317,10 @@ impl TaskSpawner {
             DeduplicationPolicy::Cooldown { .. } => {
                 if matches!(
                     task.status,
-                    TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::Review
+                    TaskStatus::Todo
+                        | TaskStatus::Queued
+                        | TaskStatus::InProgress
+                        | TaskStatus::Review
                 ) {
                     Ok(IdempotencyResolution::ReturnExisting(task))
                 } else {
@@ -373,7 +369,9 @@ impl TaskSpawner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::task::{AgentPolicy, Priority, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskReviewSurface, TaskStatus,
+    };
 
     fn in_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -403,6 +401,7 @@ mod tests {
                 run_attempts INTEGER DEFAULT 0,
                 run_last_error TEXT,
                 run_provider TEXT,
+                not_before TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -500,6 +499,7 @@ mod tests {
             artifacts: vec![],
             run: TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
         task_store::create_task(&conn, &parent).unwrap();
@@ -537,6 +537,7 @@ mod tests {
             artifacts: vec![],
             run: TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
         task_store::create_task(&conn, &dep_task).unwrap();
@@ -681,6 +682,7 @@ mod tests {
             artifacts: vec![],
             run: TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
         task_store::create_task(&conn, &parent).unwrap();
@@ -707,7 +709,11 @@ mod tests {
         // Insert an orphan key manually (no matching task)
         conn.execute(
             "INSERT INTO task_idempotency_keys (key, task_id, created_at) VALUES (?1, ?2, ?3)",
-            ["orphan-key", "nonexistent-task", &chrono::Utc::now().to_rfc3339()],
+            [
+                "orphan-key",
+                "nonexistent-task",
+                &chrono::Utc::now().to_rfc3339(),
+            ],
         )
         .unwrap();
 

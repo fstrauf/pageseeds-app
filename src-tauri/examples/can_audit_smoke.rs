@@ -7,7 +7,10 @@ use pageseeds_lib::{
     engine::{executor, task_store},
     models::{
         project::Project,
-        task::{AgentPolicy, FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskStatus},
+        task::{
+            AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+            TaskStatus,
+        },
     },
 };
 
@@ -61,6 +64,7 @@ fn main() {
         artifacts: vec![],
         run: TaskRun::default(),
         created_at: now.clone(),
+        not_before: None,
         updated_at: now,
     };
     task_store::create_task(&conn, &task).expect("create_task failed");

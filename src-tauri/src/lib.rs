@@ -177,6 +177,8 @@ pub fn run() {
             commands::gsc_parse_coverage_csv,
             commands::gsc_parse_redirect_csv,
             commands::gsc_compute_drift,
+            commands::create_gsc_indexing_recovery_task,
+            commands::get_gsc_recovery_stats,
             commands::seo_get_keyword_ideas,
             commands::seo_get_keyword_difficulty,
             commands::seo_batch_keyword_difficulty,

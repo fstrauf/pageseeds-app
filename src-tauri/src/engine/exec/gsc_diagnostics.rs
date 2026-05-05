@@ -13,7 +13,7 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
 use crate::engine::workflows::StepResult;
 use crate::gsc::db::{self, UrlIndexingStatus};
-use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskRunPolicy};
 
 /// Number of days before a previously-passing URL is re-checked.
 const PASS_RECHECK_DAYS: i64 = 14;
@@ -407,14 +407,7 @@ fn has_mdx_for_url(project_path: &str, url: &str) -> bool {
         .selected
         .unwrap_or_else(|| std::path::PathBuf::from(project_path));
 
-    let slug = url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let slug = if let Some(pos) = slug.find('/') {
-        &slug[pos + 1..]
-    } else {
-        slug
-    };
+    let slug = crate::content::slug::extract_slug_from_url(url);
 
     if slug.is_empty() {
         return false;
@@ -424,11 +417,11 @@ fn has_mdx_for_url(project_path: &str, url: &str) -> bool {
         .trim_end_matches('/')
         .rsplit('/')
         .next()
-        .unwrap_or(slug);
+        .unwrap_or(&slug);
     // Strip numeric prefix from URL last segment too (e.g. "127_net_worth_tracker" → "net_worth_tracker")
-    let last_segment_clean = strip_numeric_prefix(last_segment).replace('_', "-");
+    let last_segment_clean = crate::content::slug::strip_numeric_prefix(last_segment).replace('_', "-");
 
-    let full_slug_dashed = strip_numeric_prefix(slug.trim_end_matches('/'))
+    let full_slug_dashed = crate::content::slug::strip_numeric_prefix(slug.trim_end_matches('/'))
         .replace('/', "-")
         .replace('_', "-");
 
@@ -443,7 +436,7 @@ fn has_mdx_for_url(project_path: &str, url: &str) -> bool {
         }
 
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let stem_clean = strip_numeric_prefix(stem).replace('_', "-");
+        let stem_clean = crate::content::slug::strip_numeric_prefix(stem).replace('_', "-");
 
         // Match on last segment (e.g. URL ends in "net-worth-tracker", file is "127_net_worth_tracker")
         if stem_clean == last_segment_clean {
@@ -461,7 +454,7 @@ fn has_mdx_for_url(project_path: &str, url: &str) -> bool {
                 .to_string_lossy()
                 .replace(std::path::MAIN_SEPARATOR, "/");
             let rel_without_ext = rel_str.trim_end_matches(".mdx").trim_end_matches(".md");
-            let rel_clean = strip_numeric_prefix(rel_without_ext)
+            let rel_clean = crate::content::slug::strip_numeric_prefix(rel_without_ext)
                 .replace('/', "-")
                 .replace('_', "-");
             if rel_clean == full_slug_dashed {
@@ -471,11 +464,6 @@ fn has_mdx_for_url(project_path: &str, url: &str) -> bool {
     }
 
     false
-}
-
-fn strip_numeric_prefix(s: &str) -> String {
-    let re = regex::Regex::new(r"^\d+[_\-]+").unwrap();
-    re.replace(s, "").to_string()
 }
 
 fn spawn_fix_task(
@@ -494,16 +482,7 @@ fn spawn_fix_task(
         _ => "fix_indexing",
     };
 
-    let url_slug = {
-        let without_scheme = url
-            .trim_start_matches("https://")
-            .trim_start_matches("http://");
-        if let Some(slash_pos) = without_scheme.find('/') {
-            &without_scheme[slash_pos..]
-        } else {
-            url
-        }
-    };
+    let url_slug = crate::content::slug::extract_slug_from_url(url);
 
     let reason_human = reason.replace('_', " ");
     let title = format!("Fix {}: {}", reason_human, url_slug);

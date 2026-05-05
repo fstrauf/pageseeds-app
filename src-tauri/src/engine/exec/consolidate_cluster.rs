@@ -232,10 +232,9 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
     // Build a capped keeper representation.
     // The agent needs the heading structure for insertion points and a prose excerpt
     // for tone matching and duplicate detection, but not the full article.
-    let (_keeper_fm, keeper_body) =
-        crate::content::frontmatter::split_mdx(&keeper_content)
-            .map(|(fm, b)| (fm, b))
-            .unwrap_or(("", keeper_content.as_str()));
+    let (_keeper_fm, keeper_body) = crate::content::frontmatter::split_mdx(&keeper_content)
+        .map(|(fm, b)| (fm, b))
+        .unwrap_or(("", keeper_content.as_str()));
     // Lightweight keeper outline: just heading levels and titles (no body).
     // The agent only needs these for insertion-point selection.
     let keeper_outline: Vec<serde_json::Value> = keeper_body
@@ -303,7 +302,12 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
 
         let title = crate::content::frontmatter::parse(frontmatter)
             .ok()
-            .and_then(|fm| fm.parsed.get("title").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .and_then(|fm| {
+                fm.parsed
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
             .unwrap_or_else(|| slug.replace('-', " "));
 
         let word_count = body.split_whitespace().count();
@@ -409,7 +413,11 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
             "Summarized {} redirect pages ({} bytes){}",
             summary_values.len(),
             output_json.len(),
-            if truncated { " — truncated to top 5 by word count" } else { "" }
+            if truncated {
+                " — truncated to top 5 by word count"
+            } else {
+                ""
+            }
         ),
         output: Some(output_json),
     }
@@ -822,10 +830,7 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Sync merged content back to SQLite and articles.json.
-pub(crate) fn exec_merge_sync_articles(
-    task: &Task,
-    project_path: &str,
-) -> StepResult {
+pub(crate) fn exec_merge_sync_articles(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let repo_root = std::path::Path::new(project_path);
 
@@ -852,8 +857,7 @@ pub(crate) fn exec_merge_sync_articles(
             success: true,
             message: format!(
                 "Synced {} checked entries, {} dates patched",
-                report.checked_entries,
-                report.dates_synced
+                report.checked_entries, report.dates_synced
             ),
             output: Some(
                 serde_json::json!({

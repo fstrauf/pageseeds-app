@@ -140,19 +140,11 @@ pub fn parse_bridge_error(body: &str) -> Option<KimiBridgeError> {
 /// The message includes the `request_id` when available and gives an
 /// actionable hint for known error codes.
 pub fn format_bridge_error(err: &KimiBridgeError) -> String {
-    let req_id = err
-        .request_id
-        .as_deref()
-        .unwrap_or("unknown");
-    let backend = err
-        .backend
-        .as_deref()
-        .unwrap_or("unknown");
+    let req_id = err.request_id.as_deref().unwrap_or("unknown");
+    let backend = err.backend.as_deref().unwrap_or("unknown");
 
     let hint = match err.code.as_str() {
-        "prompt_too_large" => {
-            "Split or trim the prompt before retrying."
-        }
+        "prompt_too_large" => "Split or trim the prompt before retrying.",
         "tools_not_supported" => {
             "Restart the bridge with --backend acp (or set KIMI_BACKEND=acp) and try again."
         }
@@ -313,7 +305,13 @@ mod tests {
 
     #[test]
     fn test_is_bridge_error_retryable_hard_codes() {
-        for code in ["prompt_too_large", "tools_not_supported", "kimi_not_found", "bridge_unhealthy", "backend_unavailable"] {
+        for code in [
+            "prompt_too_large",
+            "tools_not_supported",
+            "kimi_not_found",
+            "bridge_unhealthy",
+            "backend_unavailable",
+        ] {
             let err = KimiBridgeError {
                 code: code.to_string(),
                 message: "x".to_string(),
@@ -323,7 +321,11 @@ mod tests {
                 phase: None,
                 details: None,
             };
-            assert!(!is_bridge_error_retryable(&err), "{} should not be retryable", code);
+            assert!(
+                !is_bridge_error_retryable(&err),
+                "{} should not be retryable",
+                code
+            );
         }
     }
 }

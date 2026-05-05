@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { gscComputeDrift, createTask } from '../../lib/tauri'
-import type { GscDriftReport, ResubmitCandidate, DriftUrl } from '../../lib/types'
+import { gscComputeDrift, createGscIndexingRecoveryTask, getGscRecoveryStats } from '../../lib/tauri'
+import { useTaskQueueActions } from '../../lib/taskQueueActions'
+import type { GscDriftReport, ResubmitCandidate, DriftUrl, RecoveryStats } from '../../lib/types'
 import { Card, CardContent } from '../ui/card'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -14,7 +15,7 @@ import {
   TableRow,
 } from '../ui/table'
 import { ScrollArea } from '../ui/scroll-area'
-import { Copy, Check, Info, Link2 } from 'lucide-react'
+import { Copy, Check, Info, Link2, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 interface Props {
   projectId: string
@@ -25,13 +26,20 @@ export function GscDrift({ projectId }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [creatingTask, setCreatingTask] = useState(false)
+  const [taskMessage, setTaskMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [recoveryStats, setRecoveryStats] = useState<RecoveryStats | null>(null)
+  const { enqueueTasks } = useTaskQueueActions()
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await gscComputeDrift(projectId)
+      const [data, stats] = await Promise.all([
+        gscComputeDrift(projectId),
+        getGscRecoveryStats(projectId).catch(() => null),
+      ])
       setReport(data)
+      setRecoveryStats(stats)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -39,18 +47,20 @@ export function GscDrift({ projectId }: Props) {
     }
   }, [projectId])
 
-  const handleCreateLinkTask = async () => {
+  const handleCreateRecoveryTask = async () => {
     setCreatingTask(true)
+    setTaskMessage(null)
     try {
-      await createTask(
-        projectId,
-        'cluster_and_link',
-        'Cluster and link: fix internal links for orphan pages',
-        'Auto-created from GSC drift detection. Scans the internal link graph and adds missing inbound links to orphan pages.',
-        'high',
-      )
+      const task = await createGscIndexingRecoveryTask(projectId)
+      enqueueTasks([task])
+      setTaskMessage({
+        type: 'success',
+        text: `Recovery campaign created and queued: ${task.title || task.type} (${task.id.slice(0, 8)}…). Child tasks will be spawned automatically after planning.`,
+      })
     } catch (e) {
-      console.error('Failed to create cluster_and_link task:', e)
+      const msg = String(e)
+      setTaskMessage({ type: 'error', text: msg })
+      console.error('Failed to create GSC indexing recovery task:', e)
     } finally {
       setCreatingTask(false)
     }
@@ -92,14 +102,50 @@ export function GscDrift({ projectId }: Props) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-4 py-3 border-b shrink-0 flex items-center justify-between">
-        <div className="text-xs text-muted-foreground">
-          Sitemap: {report.sitemap_total} URLs · GSC: {report.gsc_total} URLs · Checked{' '}
-          {new Date(report.checked_at).toLocaleString()}
+      <div className="px-4 py-3 border-b shrink-0 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
+            Sitemap: {report.sitemap_total} URLs · GSC: {report.gsc_total} URLs · Checked{' '}
+            {new Date(report.checked_at).toLocaleString()}
+          </div>
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </Button>
+        {/* Data freshness row */}
+        <div className="flex items-center gap-3 text-[11px]">
+          {report.gsc_data_age_hours !== null && report.gsc_data_age_hours !== undefined && (
+            <FreshnessBadge
+              label="GSC data"
+              hours={report.gsc_data_age_hours}
+              warnAfter={24}
+            />
+          )}
+          {report.link_scan_age_hours !== null && report.link_scan_age_hours !== undefined && (
+            <FreshnessBadge
+              label="Link scan"
+              hours={report.link_scan_age_hours}
+              warnAfter={24}
+            />
+          )}
+        </div>
+        {/* Task creation feedback */}
+        {taskMessage && (
+          <div
+            className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded ${
+              taskMessage.type === 'success'
+                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                : 'bg-red-500/10 text-red-700 dark:text-red-300'
+            }`}
+          >
+            {taskMessage.type === 'success' ? (
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            )}
+            {taskMessage.text}
+          </div>
+        )}
       </div>
 
       <ScrollArea className="flex-1">
@@ -132,11 +178,16 @@ export function GscDrift({ projectId }: Props) {
             />
           </div>
 
+          {/* Recovery campaign stats */}
+          {recoveryStats && recoveryStats.total_attempts > 0 && (
+            <RecoveryStatsCard stats={recoveryStats} />
+          )}
+
           {/* Link-fix CTA */}
           {report && (
             <LinkFixCard
               candidates={report.resubmit_priority}
-              onCreateTask={handleCreateLinkTask}
+              onCreateTask={handleCreateRecoveryTask}
               creating={creatingTask}
             />
           )}
@@ -180,7 +231,16 @@ export function GscDrift({ projectId }: Props) {
               {report.in_sitemap_not_in_gsc.length === 0 ? (
                 <EmptyState message="All sitemap URLs are known to GSC." />
               ) : (
-                <DriftUrlTable urls={report.in_sitemap_not_in_gsc} projectId={projectId} />
+                <div className="space-y-3">
+                  <div className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
+                    <Info className="w-3.5 h-3.5 inline-block mr-1 -mt-0.5" />
+                    These URLs are in your sitemap but were not found in the cached GSC data.
+                    {report.gsc_data_age_hours !== null && report.gsc_data_age_hours !== undefined && report.gsc_data_age_hours > 24
+                      ? ` GSC data is ${report.gsc_data_age_hours}h old — run a fresh GSC collection to update.`
+                      : ' They may be recently discovered by Google but not yet indexed, or the URL format may differ from what GSC reports.'}
+                  </div>
+                  <DriftUrlTable urls={report.in_sitemap_not_in_gsc} projectId={projectId} />
+                </div>
               )}
             </TabsContent>
 
@@ -199,6 +259,30 @@ export function GscDrift({ projectId }: Props) {
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
+
+function FreshnessBadge({
+  label,
+  hours,
+  warnAfter,
+}: {
+  label: string
+  hours: number
+  warnAfter: number
+}) {
+  const isStale = hours > warnAfter
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${
+        isStale
+          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+          : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+      }`}
+    >
+      <span className="font-medium">{label}:</span>
+      {hours < 1 ? '<1h old' : `${hours}h old`}
+    </span>
+  )
+}
 
 function SummaryCard({
   title,
@@ -259,11 +343,11 @@ function LinkFixCard({
                 onClick={onCreateTask}
                 disabled={creating}
               >
-                {creating ? 'Creating…' : 'Fix links'}
+                {creating ? 'Starting…' : 'Start link recovery'}
               </Button>
             </div>
             <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
-              This creates a <strong>cluster_and_link</strong> task that scans your content and adds inbound internal links from indexed pages.
+              This starts a <strong>GSC indexing recovery</strong> campaign that refreshes data, plans targets, and spawns one focused link-fix task per eligible URL.
             </p>
           </div>
         </div>
@@ -430,8 +514,10 @@ function DriftUrlTable({ urls, projectId }: { urls: DriftUrl[]; projectId: strin
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="text-xs">URL</TableHead>
-              <TableHead className="text-xs">Reason</TableHead>
-              <TableHead className="text-xs">Verdict</TableHead>
+              <TableHead className="text-xs w-[90px]">Last mod</TableHead>
+              <TableHead className="text-xs w-[70px]">Content</TableHead>
+              <TableHead className="text-xs">Issues</TableHead>
+              <TableHead className="text-xs w-[90px]">Reason</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -440,16 +526,28 @@ function DriftUrlTable({ urls, projectId }: { urls: DriftUrl[]; projectId: strin
                 <TableCell className="text-xs">
                   <div className="flex items-center gap-1.5">
                     <CopyUrl url={u.url} projectId={projectId} />
-                    <div className="max-w-[380px] truncate" title={u.url}>
+                    <div className="max-w-[260px] truncate" title={u.url}>
                       {u.slug}
                     </div>
                   </div>
                 </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {u.lastmod
+                    ? new Date(u.lastmod).toLocaleDateString()
+                    : '—'}
+                </TableCell>
+                <TableCell className="text-xs">
+                  {u.has_content_file ? (
+                    <span className="text-emerald-600">✓</span>
+                  ) : (
+                    <span className="text-red-500" title="No MDX file matches this URL">✗</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-xs">
+                  <IssueBadges issues={u.issues ?? []} />
+                </TableCell>
                 <TableCell className="text-xs">
                   <ReasonBadge reason={u.reason_code ?? 'unknown'} />
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {u.verdict ?? '—'}
                 </TableCell>
               </TableRow>
             ))}
@@ -457,6 +555,75 @@ function DriftUrlTable({ urls, projectId }: { urls: DriftUrl[]; projectId: strin
         </Table>
       </div>
     </ScrollArea>
+  )
+}
+
+function IssueBadges({ issues }: { issues: string[] }) {
+  if (issues.length === 0) {
+    return <span className="text-muted-foreground">—</span>
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {issues.map((issue, i) => (
+        <Badge
+          key={i}
+          variant="outline"
+          className={`text-[10px] ${
+            issue === 'noindex'
+              ? 'bg-purple-500/10 text-purple-700 border-purple-500/20'
+              : issue.startsWith('canonical')
+                ? 'bg-orange-500/10 text-orange-700 border-orange-500/20'
+                : issue.startsWith('thin')
+                  ? 'bg-amber-500/10 text-amber-700 border-amber-500/20'
+                  : 'bg-muted text-muted-foreground'
+          }`}
+        >
+          {issue}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+function RecoveryStatsCard({ stats }: { stats: RecoveryStats }) {
+  return (
+    <Card className="border-emerald-500/20 bg-emerald-500/5">
+      <CardContent className="p-3">
+        <div className="flex items-start gap-3">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-emerald-900 dark:text-emerald-200">
+              Recovery campaign progress
+            </div>
+            <div className="grid grid-cols-3 gap-2 mt-2">
+              <div className="text-center">
+                <div className="text-lg font-semibold tabular-nums text-emerald-700">
+                  {stats.linked}
+                </div>
+                <div className="text-[10px] text-emerald-600">Linked</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-semibold tabular-nums text-emerald-700">
+                  {stats.total_links_added}
+                </div>
+                <div className="text-[10px] text-emerald-600">Links added</div>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-semibold tabular-nums text-emerald-700">
+                  {stats.resolved}
+                </div>
+                <div className="text-[10px] text-emerald-600">Resolved</div>
+              </div>
+            </div>
+            {stats.failed > 0 && (
+              <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                {stats.failed} attempt{stats.failed === 1 ? '' : 's'} failed or still pending
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 

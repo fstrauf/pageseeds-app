@@ -55,6 +55,7 @@ export type {
   PageMetrics,
   QueryMetrics,
   RedirectRecord,
+  RecoveryStats,
   ResubmitCandidate,
   
   // Reddit Models

@@ -72,7 +72,7 @@ pub async fn quick_run_workflow(
     title: String,
     themes: Option<Vec<String>>,
 ) -> Result<executor::ExecutionResult, String> {
-    use crate::engine::spawner::{TaskSpec, TaskSpawner};
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
     use crate::models::task::{AgentPolicy, Priority, TaskStatus};
 
     let task_id = {
@@ -107,9 +107,7 @@ pub async fn quick_run_workflow(
                     ..Default::default()
                 };
 
-                TaskSpawner::spawn(&db, spec)
-                    .map_err(|e| e.to_string())?
-                    .id
+                TaskSpawner::spawn(&db, spec).map_err(|e| e.to_string())?.id
             }
         }
     };

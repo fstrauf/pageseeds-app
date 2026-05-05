@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 
 use crate::engine::project_paths::ProjectPaths;
 

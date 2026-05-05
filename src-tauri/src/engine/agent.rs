@@ -194,10 +194,11 @@ async fn run_rig_prompt(
         }
     };
 
-    let backend = match crate::rig::provider::resolve_backend(provider, None, None, Some(&kimi_mode)).await {
-        Ok(b) => b,
-        Err(e) => return Err(RigError::Other(e)),
-    };
+    let backend =
+        match crate::rig::provider::resolve_backend(provider, None, None, Some(&kimi_mode)).await {
+            Ok(b) => b,
+            Err(e) => return Err(RigError::Other(e)),
+        };
 
     match &backend {
         crate::rig::provider::LlmBackend::KimiDirect => {
@@ -207,7 +208,10 @@ async fn run_rig_prompt(
         crate::rig::provider::LlmBackend::KimiBridge { .. } => {
             // Pass backend_preference as the X-Kimi-Backend header.
             let response = crate::rig::provider::run_agent_with_backend(
-                &backend, prompt, None, backend_preference,
+                &backend,
+                prompt,
+                None,
+                backend_preference,
             )
             .await
             .map_err(|e| RigError::Other(e))?;
@@ -224,11 +228,10 @@ async fn run_rig_prompt(
         }
         _ => {
             // Non-Kimi providers — backend_preference is irrelevant.
-            let response = crate::rig::provider::run_agent_with_backend(
-                &backend, prompt, None, None,
-            )
-            .await
-            .map_err(|e| RigError::Other(e))?;
+            let response =
+                crate::rig::provider::run_agent_with_backend(&backend, prompt, None, None)
+                    .await
+                    .map_err(|e| RigError::Other(e))?;
             if let (Some(pt), Some(ct)) = (response.prompt_tokens, response.completion_tokens) {
                 log::info!(
                     "[agent] tokens — prompt={}, completion={}, total={}",

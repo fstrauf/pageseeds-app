@@ -114,6 +114,27 @@ pub enum StepKind {
     TerritoryApply,
     /// Sanitize content: rename .md → .mdx, repair paths, validate frontmatter (read-only report).
     SanitizeContent,
+    // ─── GSC Indexing Recovery ──────────────────────────────────────────────────
+    /// Deterministic: refresh stale GSC/link data before recovery planning.
+    GscRecoveryPrepare,
+    /// Deterministic: compute drift report from current sitemap/GSC/link data.
+    GscRecoveryDrift,
+    /// Deterministic: filter, score, and build target plan with source candidates.
+    GscRecoveryPlan,
+    // ─── Fix Indexing Internal Links ────────────────────────────────────────────
+    /// Deterministic: build per-target context (target + source shortlist).
+    IndexingLinkContext,
+    /// Agentic: choose source links from shortlist for the target.
+    IndexingLinkPlan,
+    /// Deterministic: apply Related Articles links to source MDX files.
+    IndexingLinkApply,
+    /// Deterministic: verify target gained inbound links after apply.
+    IndexingLinkVerify,
+    // ─── GSC Indexing Outcome Review ────────────────────────────────────────────
+    /// Deterministic: re-inspect target URL in GSC after wait period.
+    GscIndexingOutcomeInspect,
+    /// Deterministic: compare before/after indexing status and write report.
+    GscIndexingOutcomeReport,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -196,6 +217,15 @@ impl StepKind {
             Self::TerritoryStrategy => "territory_strategy",
             Self::TerritoryApply => "territory_apply",
             Self::SanitizeContent => "sanitize_content",
+            Self::GscRecoveryPrepare => "gsc_recovery_prepare",
+            Self::GscRecoveryDrift => "gsc_recovery_drift",
+            Self::GscRecoveryPlan => "gsc_recovery_plan",
+            Self::IndexingLinkContext => "indexing_link_context",
+            Self::IndexingLinkPlan => "indexing_link_plan",
+            Self::IndexingLinkApply => "indexing_link_apply",
+            Self::IndexingLinkVerify => "indexing_link_verify",
+            Self::GscIndexingOutcomeInspect => "gsc_indexing_outcome_inspect",
+            Self::GscIndexingOutcomeReport => "gsc_indexing_outcome_report",
             Self::Unknown => "unknown",
         }
     }
@@ -292,6 +322,15 @@ impl FromStr for StepKind {
             "territory_strategy" => Ok(Self::TerritoryStrategy),
             "territory_apply" => Ok(Self::TerritoryApply),
             "sanitize_content" => Ok(Self::SanitizeContent),
+            "gsc_recovery_prepare" => Ok(Self::GscRecoveryPrepare),
+            "gsc_recovery_drift" => Ok(Self::GscRecoveryDrift),
+            "gsc_recovery_plan" => Ok(Self::GscRecoveryPlan),
+            "indexing_link_context" => Ok(Self::IndexingLinkContext),
+            "indexing_link_plan" => Ok(Self::IndexingLinkPlan),
+            "indexing_link_apply" => Ok(Self::IndexingLinkApply),
+            "indexing_link_verify" => Ok(Self::IndexingLinkVerify),
+            "gsc_indexing_outcome_inspect" => Ok(Self::GscIndexingOutcomeInspect),
+            "gsc_indexing_outcome_report" => Ok(Self::GscIndexingOutcomeReport),
             _ => Err(()),
         }
     }
@@ -398,6 +437,15 @@ mod tests {
             StepKind::TerritoryStrategy,
             StepKind::TerritoryApply,
             StepKind::SanitizeContent,
+            StepKind::GscRecoveryPrepare,
+            StepKind::GscRecoveryDrift,
+            StepKind::GscRecoveryPlan,
+            StepKind::IndexingLinkContext,
+            StepKind::IndexingLinkPlan,
+            StepKind::IndexingLinkApply,
+            StepKind::IndexingLinkVerify,
+            StepKind::GscIndexingOutcomeInspect,
+            StepKind::GscIndexingOutcomeReport,
         ];
 
         for variant in &variants {

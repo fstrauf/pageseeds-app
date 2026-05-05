@@ -11,4 +11,7 @@ pub mod locator;
 pub mod ops;
 pub mod publish;
 pub mod readability;
+pub mod slug;
+pub mod snapshot;
+pub mod tfidf;
 pub mod validator;

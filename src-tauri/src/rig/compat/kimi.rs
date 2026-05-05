@@ -270,8 +270,7 @@ where
                     Err(e) => {
                         last_error = format!(
                             "Tool call parse error: {} | raw: {}",
-                            e,
-                            tool_call.function.arguments
+                            e, tool_call.function.arguments
                         );
                         log::warn!("[kimi::extract_structured] {}", last_error);
                     }
@@ -292,10 +291,7 @@ where
                     match serde_json::from_str::<T>(cleaned) {
                         Ok(value) => return Ok(value),
                         Err(e) => {
-                            last_error = format!(
-                                "Content parse error: {} | raw: {}",
-                                e, cleaned
-                            );
+                            last_error = format!("Content parse error: {} | raw: {}", e, cleaned);
                             log::warn!("[kimi::extract_structured] {}", last_error);
                         }
                     }
@@ -504,9 +500,7 @@ fn detect_proxy_error(content: &str) -> Option<String> {
     if trimmed.starts_with("Error code:") {
         return Some(trimmed.to_string());
     }
-    if trimmed.contains("rate_limit_reached_error")
-        || trimmed.contains("usage limit")
-    {
+    if trimmed.contains("rate_limit_reached_error") || trimmed.contains("usage limit") {
         return Some(trimmed.to_string());
     }
     None
@@ -592,8 +586,7 @@ async fn send_request(
             req = req.header("X-Kimi-Backend", b);
         }
 
-        let resp = match req.send().await
-        {
+        let resp = match req.send().await {
             Ok(r) => r,
             Err(e) if e.is_timeout() => {
                 log::warn!(
@@ -642,14 +635,18 @@ async fn send_request(
             // Try structured bridge error first.
             if let Some(bridge_err) = crate::rig::kimi_bridge::parse_bridge_error(&body) {
                 let formatted = crate::rig::kimi_bridge::format_bridge_error(&bridge_err);
-                log::error!("[kimi::send_request] Structured bridge error: {:?}", bridge_err);
+                log::error!(
+                    "[kimi::send_request] Structured bridge error: {:?}",
+                    bridge_err
+                );
 
                 if !crate::rig::kimi_bridge::is_bridge_error_retryable(&bridge_err) {
                     return Err(formatted);
                 }
 
                 // Retryable bridge errors: only retry on useful HTTP statuses.
-                let should_retry = status.as_u16() == 429 || status.as_u16() == 503 || status.as_u16() == 504;
+                let should_retry =
+                    status.as_u16() == 429 || status.as_u16() == 503 || status.as_u16() == 504;
                 if should_retry && attempt < 3 {
                     let backoff = 2_u64.pow(attempt);
                     log::info!(
@@ -1216,9 +1213,10 @@ mod tests {
         // Tool request fails.
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
-            .respond_with(ResponseTemplate::new(400).set_body_string(
-                r#"{"detail":{"error":{"message":"tools_not_supported"}}}"#
-            ))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string(r#"{"detail":{"error":{"message":"tools_not_supported"}}}"#),
+            )
             .up_to_n_times(1)
             .mount(&mock_server)
             .await;
@@ -1266,18 +1264,9 @@ mod tests {
 
     #[test]
     fn test_strip_json_fences() {
-        assert_eq!(
-            strip_json_fences("```json\n{\"a\":1}\n```"),
-            "{\"a\":1}"
-        );
-        assert_eq!(
-            strip_json_fences("```\n{\"a\":1}\n```"),
-            "{\"a\":1}"
-        );
-        assert_eq!(
-            strip_json_fences("{\"a\":1}"),
-            "{\"a\":1}"
-        );
+        assert_eq!(strip_json_fences("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_json_fences("```\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_json_fences("{\"a\":1}"), "{\"a\":1}");
     }
 
     #[test]

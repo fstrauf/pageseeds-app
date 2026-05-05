@@ -1,4 +1,7 @@
-use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+use crate::models::task::{
+    AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun,
+    TaskStatus,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Build content tasks from selected keywords and mark the research task as done.
@@ -9,7 +12,9 @@ pub fn build_content_tasks_from_keywords(
     research_task_id: &str,
     project_id: &str,
 ) -> Result<Vec<Task>, String> {
-    use crate::config::{default_run_policy, default_phase, default_review_surface, default_follow_up_policy};
+    use crate::config::{
+        default_follow_up_policy, default_phase, default_review_surface, default_run_policy,
+    };
 
     // Determine content task type based on research task type
     let content_task_type = if research_task.task_type == "research_landing_pages" {
@@ -88,7 +93,7 @@ pub fn build_content_tasks_from_keywords(
             task_type: content_task_type.to_string(),
             status: TaskStatus::Todo,
             priority: priority_enum,
-        agent_policy: AgentPolicy::None,
+            agent_policy: AgentPolicy::None,
             title: Some(title),
             description: Some(description),
             project_id: project_id.to_string(),
@@ -97,6 +102,7 @@ pub fn build_content_tasks_from_keywords(
             run: TaskRun::default(),
             created_at: now.clone(),
             updated_at: now,
+            not_before: None,
         };
         created.push(task);
     }
@@ -243,7 +249,8 @@ pub fn extract_selectable_keywords(task: &Task) -> Vec<String> {
     };
 
     // Strip markdown code fences if present (e.g., ```json ... ```)
-    let raw_clean = crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
+    let raw_clean =
+        crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
 
     let v = match serde_json::from_str::<Value>(&raw_clean) {
         Ok(v) => v,
@@ -364,7 +371,8 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
     };
 
     // Strip markdown code fences if present
-    let raw_clean = crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
+    let raw_clean =
+        crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
     let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
     if let Some(v) = parsed_json {
         // Standard keyword research format
@@ -486,7 +494,8 @@ pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCand
         return out;
     };
 
-    let raw_clean = crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
+    let raw_clean =
+        crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
     let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
     if let Some(v) = parsed_json {
         if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
@@ -520,8 +529,6 @@ pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCand
 
     out
 }
-
-
 
 pub fn compute_task_priority(metric: Option<&KeywordMetric>) -> Priority {
     match metric.and_then(|m| m.difficulty) {
@@ -587,7 +594,8 @@ pub fn build_keyword_provenance_artifact(keyword: &str, research_task_id: &str) 
 mod tests {
     use super::*;
     use crate::models::task::{
-        AgentPolicy, FollowUpPolicy, TaskRunPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun, TaskStatus,
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun,
+        TaskRunPolicy, TaskStatus,
     };
 
     fn make_task(artifacts: Vec<TaskArtifact>) -> Task {
@@ -600,7 +608,7 @@ mod tests {
             run_policy: TaskRunPolicy::UserEnqueue,
             review_surface: TaskReviewSurface::None,
             follow_up_policy: FollowUpPolicy::None,
-        agent_policy: AgentPolicy::Optional,
+            agent_policy: AgentPolicy::Optional,
             title: Some("Keyword test".to_string()),
             description: None,
             project_id: "proj1".to_string(),
@@ -609,6 +617,7 @@ mod tests {
             run: TaskRun::default(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            not_before: None,
         }
     }
 

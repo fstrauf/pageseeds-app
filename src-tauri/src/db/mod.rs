@@ -1038,7 +1038,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         // Add page_type to articles for hub/pillar/spoke classification
         let _ = conn.execute_batch("ALTER TABLE articles ADD COLUMN page_type TEXT;");
         let _ = conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_articles_page_type ON articles(project_id, page_type);"
+            "CREATE INDEX IF NOT EXISTS idx_articles_page_type ON articles(project_id, page_type);",
         );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (36, ?1)",
@@ -1104,6 +1104,44 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         if !has_col {
             conn.execute_batch(column.1)?;
         }
+    }
+
+    if version < 37 {
+        // Add not_before support for delayed task execution (e.g. outcome reviews)
+        let _ = conn.execute_batch("ALTER TABLE tasks ADD COLUMN not_before TEXT;");
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (37, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 38 {
+        // GSC indexing recovery history: track attempts and outcomes per URL
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS gsc_recovery_history (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id      TEXT NOT NULL,
+                url             TEXT NOT NULL,
+                article_id      INTEGER,
+                campaign_task_id TEXT NOT NULL,
+                child_task_id   TEXT NOT NULL,
+                reason_code     TEXT NOT NULL,
+                incoming_before INTEGER NOT NULL DEFAULT 0,
+                incoming_after  INTEGER,
+                links_added     INTEGER NOT NULL DEFAULT 0,
+                outcome_status  TEXT NOT NULL DEFAULT 'pending',
+                created_at      TEXT NOT NULL,
+                resolved_at     TEXT,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_recovery_history_project ON gsc_recovery_history(project_id);
+            CREATE INDEX IF NOT EXISTS idx_recovery_history_url ON gsc_recovery_history(url);
+            CREATE INDEX IF NOT EXISTS idx_recovery_history_campaign ON gsc_recovery_history(campaign_task_id);"
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (38, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
     }
 
     Ok(())

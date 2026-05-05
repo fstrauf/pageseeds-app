@@ -234,6 +234,53 @@ pub async fn gsc_compute_drift(
         .map_err(|e| e.to_string())
 }
 
+/// Create a `gsc_indexing_recovery` campaign task for a project.
+///
+/// The frontend calls this when the user clicks "Start link recovery" in the Drift tab.
+/// The backend creates the parent task; post-actions spawn child fix tasks after success.
+#[tauri::command]
+pub fn create_gsc_indexing_recovery_task(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::models::task::Task, String> {
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    use crate::models::task::{AgentPolicy, Priority, TaskRunPolicy};
+
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    let idempotency_key = format!("gsc-indexing-recovery:campaign:{}", project_id);
+
+    let spec = TaskSpec {
+        project_id: project_id.clone(),
+        task_type: "gsc_indexing_recovery".to_string(),
+        title: Some(format!(
+            "GSC indexing recovery: {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M")
+        )),
+        description: Some(
+            "Refresh GSC/link data, compute drift, plan targets, and spawn focused internal-link fix tasks."
+                .to_string(),
+        ),
+        run_policy: Some(TaskRunPolicy::UserEnqueue),
+        agent_policy: AgentPolicy::None,
+        priority: Priority::High,
+        idempotency_key: Some(idempotency_key),
+        ..Default::default()
+    };
+
+    TaskSpawner::spawn(&db, spec).map_err(|e| e.to_string())
+}
+
+/// Get aggregate recovery stats for a project.
+#[tauri::command]
+pub fn get_gsc_recovery_stats(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<crate::models::gsc::RecoveryStats, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    crate::gsc::db::get_recovery_stats(&db, &project_id).map_err(|e| e.to_string())
+}
+
 /// Resolve a GSC token using the shared state cache, falling back to
 /// service-account authentication via the project's env resolver.
 /// On success, caches the new token in `gsc_state` and returns it.
@@ -302,5 +349,8 @@ pub(super) async fn gsc_token(gsc_state: &State<'_, GscState>) -> Result<String,
     }
 
     // 3. Fail
-    Err("GSC token has expired and no service account is configured. Please re-authenticate.".to_string())
+    Err(
+        "GSC token has expired and no service account is configured. Please re-authenticate."
+            .to_string(),
+    )
 }

@@ -9,9 +9,9 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::workflows::StepResult;
 use crate::engine::skills;
-use crate::models::task::{Task, TaskReviewSurface, FollowUpPolicy};
+use crate::engine::workflows::StepResult;
+use crate::models::task::{FollowUpPolicy, Task, TaskReviewSurface};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Data structures
@@ -335,7 +335,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
                 .map(|r| {
                     serde_json::json!({
                         "id": r.id,
-                        "url": format!("/blog/{}", r.url_slug),
+                        "url": crate::content::slug::format_blog_link(&r.url_slug),
                         "title": r.title,
                         "h1": r.h1,
                         "target_keyword": r.target_keyword,
@@ -412,8 +412,14 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     }
 
     // ── 12. Return compact artifact summary (full context stays on disk) ─────
-    let territory_count = territory_analysis["saturated_themes"].as_array().map(|a| a.len()).unwrap_or(0)
-        + territory_analysis["open_territories"].as_array().map(|a| a.len()).unwrap_or(0);
+    let territory_count = territory_analysis["saturated_themes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0)
+        + territory_analysis["open_territories"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
 
     let summary = serde_json::json!({
         "artifact_paths": {
@@ -858,7 +864,11 @@ fn detect_hub_gaps(
         } else {
             ""
         };
-        let stripped = stripped.trim().replace('_', " ").replace('-', " ").to_lowercase();
+        let stripped = stripped
+            .trim()
+            .replace('_', " ")
+            .replace('-', " ")
+            .to_lowercase();
         if !stripped.is_empty() {
             existing_hubs.insert(stripped);
         }
@@ -1174,15 +1184,22 @@ fn read_article_head_and_words(project_path: &str, file_ref: &str) -> (String, S
 /// agent only decides which page to keep and how to redirect.
 pub(crate) fn exec_can_exact_keyword_dupes(_task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
-    let context_path = paths.automation_dir.join("cannibalization_audit_context.json");
+    let context_path = paths
+        .automation_dir
+        .join("cannibalization_audit_context.json");
 
-    let context_doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&context_path, "cannibalization_audit_context.json") {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+    let context_doc: serde_json::Value = match crate::engine::exec::common::read_json(
+        &context_path,
+        "cannibalization_audit_context.json",
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
-    let articles = context_doc["articles"].as_array().cloned().unwrap_or_default();
+    let articles = context_doc["articles"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     if articles.is_empty() {
         return StepResult {
             success: true,
@@ -1265,7 +1282,10 @@ pub(crate) fn exec_can_exact_keyword_dupes(_task: &Task, project_path: &str) -> 
         &dupes_path,
         serde_json::to_string_pretty(&dupes_doc).unwrap_or_default() + "\n",
     ) {
-        log::warn!("[cannibalization_audit] Failed to write exact_keyword_duplicates.json: {}", e);
+        log::warn!(
+            "[cannibalization_audit] Failed to write exact_keyword_duplicates.json: {}",
+            e
+        );
     }
 
     StepResult {
@@ -1288,13 +1308,18 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
     let paths = ProjectPaths::from_path(project_path);
     let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
 
-    let clusters_doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&clusters_path, "cannibalization_clusters.json") {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+    let clusters_doc: serde_json::Value = match crate::engine::exec::common::read_json(
+        &clusters_path,
+        "cannibalization_clusters.json",
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
-    let clusters = clusters_doc["clusters"].as_array().cloned().unwrap_or_default();
+    let clusters = clusters_doc["clusters"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let clusters_len = clusters.len();
     if clusters.is_empty() {
         return StepResult {
@@ -1314,7 +1339,11 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
         if pages.len() < 2 {
             continue;
         }
-        let theme = cluster["theme"].as_str().unwrap_or("").trim().to_lowercase();
+        let theme = cluster["theme"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
         if theme.is_empty() {
             continue;
         }
@@ -1341,9 +1370,8 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
                     }
                 }
             }
-            shared_query_count = shared_query_count.max(
-                cluster["shared_query_count"].as_i64().unwrap_or(0)
-            );
+            shared_query_count =
+                shared_query_count.max(cluster["shared_query_count"].as_i64().unwrap_or(0));
         }
 
         if all_pages.len() < 2 {
@@ -1355,7 +1383,9 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
             let mut seen_urls = std::collections::HashSet::new();
             all_pages.retain(|p| {
                 let url = p["url"].as_str().unwrap_or("").to_string();
-                if url.is_empty() { return false; }
+                if url.is_empty() {
+                    return false;
+                }
                 seen_urls.insert(url)
             });
         }
@@ -1371,25 +1401,25 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
             keyword_groups.entry(kw).or_default().push(page.clone());
         }
 
-        let groups_to_process: Vec<Vec<serde_json::Value>> =
-            if keyword_groups.len() == 1 && all_pages.len() <= 8 {
-                vec![all_pages.clone()]
-            } else {
-                let mut groups: Vec<Vec<serde_json::Value>> =
-                    keyword_groups.into_values().collect();
-                groups.sort_by(|a, b| {
-                    let ia: f64 = a
-                        .iter()
-                        .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
-                        .sum();
-                    let ib: f64 = b
-                        .iter()
-                        .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
-                        .sum();
-                    ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
-                });
-                groups
-            };
+        let groups_to_process: Vec<Vec<serde_json::Value>> = if keyword_groups.len() == 1
+            && all_pages.len() <= 8
+        {
+            vec![all_pages.clone()]
+        } else {
+            let mut groups: Vec<Vec<serde_json::Value>> = keyword_groups.into_values().collect();
+            groups.sort_by(|a, b| {
+                let ia: f64 = a
+                    .iter()
+                    .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
+                    .sum();
+                let ib: f64 = b
+                    .iter()
+                    .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
+                    .sum();
+                ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            groups
+        };
 
         for group in groups_to_process {
             if group.len() < 2 {
@@ -1470,10 +1500,11 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
                         .iter()
                         .map(|p| {
                             let excerpt = p["first_200_words"].as_str().unwrap_or("");
-                            let excerpt_words: Vec<&str> = excerpt.split_whitespace().take(60).collect();
+                            let excerpt_words: Vec<&str> =
+                                excerpt.split_whitespace().take(60).collect();
                             serde_json::json!({
                                 "id": p["id"],
-                                "url": format!("/blog/{}", p["url_slug"].as_str().unwrap_or("")),
+                                "url": crate::content::slug::format_blog_link(p["url_slug"].as_str().unwrap_or("")),
                                 "title": p["title"],
                                 "h1": p["h1"],
                                 "target_keyword": p["target_keyword"],
@@ -1572,14 +1603,18 @@ pub(crate) fn exec_can_analyze_candidates(
     let repo_root = Path::new(project_path);
 
     let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
-    let candidates_doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&candidates_path, "cannibalization_candidates.json")
-        {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+    let candidates_doc: serde_json::Value = match crate::engine::exec::common::read_json(
+        &candidates_path,
+        "cannibalization_candidates.json",
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
-    let candidates = candidates_doc["candidates"].as_array().cloned().unwrap_or_default();
+    let candidates = candidates_doc["candidates"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let candidates_len = candidates.len();
     if candidates.is_empty() {
         return StepResult {
@@ -1692,17 +1727,15 @@ pub(crate) fn exec_can_analyze_candidates(
                     rec.cluster_id = candidate_id.clone();
                 }
                 if rec.cluster_theme.is_empty() {
-                    rec.cluster_theme = candidate["theme"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string();
+                    rec.cluster_theme = candidate["theme"].as_str().unwrap_or("").to_string();
                 }
                 if rec.confidence.is_empty() {
                     rec.confidence = "medium".to_string();
                 }
                 if rec.keep_url.is_empty() && !rec.no_action {
                     rec.no_action = true;
-                    rec.reason = "Model did not provide a keep_url or explicit no_action".to_string();
+                    rec.reason =
+                        "Model did not provide a keep_url or explicit no_action".to_string();
                 }
                 let rec_json = match serde_json::to_value(&rec) {
                     Ok(v) => v,
@@ -1752,7 +1785,9 @@ pub(crate) fn exec_can_analyze_candidates(
         "failed_candidates": failed_candidates,
     });
 
-    let batch_path = paths.automation_dir.join("cannibalization_batch_outputs.json");
+    let batch_path = paths
+        .automation_dir
+        .join("cannibalization_batch_outputs.json");
     if let Err(e) = std::fs::write(
         &batch_path,
         serde_json::to_string_pretty(&batch_doc).unwrap_or_default() + "\n",
@@ -1795,7 +1830,10 @@ fn build_merge_prompt(skill_content: &str, candidate: &serde_json::Value) -> (St
 }
 
 /// Build a trimmed prompt without page excerpts (second-level budget fallback).
-fn build_merge_prompt_trimmed(skill_content: &str, candidate: &serde_json::Value) -> (String, usize) {
+fn build_merge_prompt_trimmed(
+    skill_content: &str,
+    candidate: &serde_json::Value,
+) -> (String, usize) {
     let mut trimmed = candidate.clone();
     if let Some(pages) = trimmed["pages"].as_array_mut() {
         for page in pages {
@@ -1827,13 +1865,16 @@ fn build_merge_prompt_trimmed(skill_content: &str, candidate: &serde_json::Value
 pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    let batch_path = paths.automation_dir.join("cannibalization_batch_outputs.json");
-    let batch_doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&batch_path, "cannibalization_batch_outputs.json")
-        {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+    let batch_path = paths
+        .automation_dir
+        .join("cannibalization_batch_outputs.json");
+    let batch_doc: serde_json::Value = match crate::engine::exec::common::read_json(
+        &batch_path,
+        "cannibalization_batch_outputs.json",
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
     let hub_gaps_path = paths.automation_dir.join("hub_gaps.json");
     let hub_gaps_doc: serde_json::Value = std::fs::read_to_string(&hub_gaps_path)
@@ -1871,7 +1912,11 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
             }
 
             if let Some(rec) = output["merge_recommendation"].as_object() {
-                if rec.get("no_action").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if rec
+                    .get("no_action")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
@@ -1916,10 +1961,7 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
                     .map(|s| !s.is_empty())
                     .unwrap_or(false);
                 if !has_valid_cluster_id {
-                    rec.insert(
-                        "cluster_id".to_string(),
-                        output["candidate_id"].clone(),
-                    );
+                    rec.insert("cluster_id".to_string(), output["candidate_id"].clone());
                 }
 
                 merge_recommendations.push(serde_json::Value::Object(rec));
@@ -1934,10 +1976,7 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
     {
         let mut seen = std::collections::HashSet::new();
         merge_recommendations.retain(|rec| {
-            let id = rec
-                .get("cluster_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let id = rec.get("cluster_id").and_then(|v| v.as_str()).unwrap_or("");
             if id.is_empty() {
                 return false;
             }
@@ -2220,15 +2259,16 @@ Cash secured puts are a great way to generate income.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Test Cannibalization Audit".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -2240,18 +2280,19 @@ Cash secured puts are a great way to generate income.
 
         // Compact summary shape
         assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 4);
-        assert!(
-            output["summary"]["total_impressions"]
-                .as_f64()
-                .unwrap()
-                > 0.0
-        );
+        assert!(output["summary"]["total_impressions"].as_f64().unwrap() > 0.0);
         assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 1);
         assert!(output["summary"]["hub_gaps"].as_i64().unwrap() >= 1);
 
         // Artifact paths
-        assert!(output["artifact_paths"]["context"].as_str().unwrap().contains("cannibalization_audit_context.json"));
-        assert!(output["artifact_paths"]["clusters"].as_str().unwrap().contains("cannibalization_clusters.json"));
+        assert!(output["artifact_paths"]["context"]
+            .as_str()
+            .unwrap()
+            .contains("cannibalization_audit_context.json"));
+        assert!(output["artifact_paths"]["clusters"]
+            .as_str()
+            .unwrap()
+            .contains("cannibalization_clusters.json"));
 
         // Full artifacts should still be written to disk
         let auto_dir = Path::new(&path).join(".github").join("automation");
@@ -2261,12 +2302,16 @@ Cash secured puts are a great way to generate income.
         assert!(auto_dir.join("territory_analysis.json").exists());
 
         // Verify clusters artifact has the expected content
-        let clusters_content = std::fs::read_to_string(auto_dir.join("cannibalization_clusters.json")).unwrap();
+        let clusters_content =
+            std::fs::read_to_string(auto_dir.join("cannibalization_clusters.json")).unwrap();
         let clusters_doc: serde_json::Value = serde_json::from_str(&clusters_content).unwrap();
         let clusters = clusters_doc["clusters"].as_array().unwrap();
         assert!(!clusters.is_empty());
         let csp_cluster = clusters.iter().find(|c| {
-            c["theme"].as_str().unwrap_or("").contains("cash secured puts")
+            c["theme"]
+                .as_str()
+                .unwrap_or("")
+                .contains("cash secured puts")
         });
         assert!(csp_cluster.is_some());
         assert_eq!(csp_cluster.unwrap()["pages"].as_array().unwrap().len(), 3);
@@ -2327,15 +2372,16 @@ Some content here.
             status: crate::models::task::TaskStatus::InProgress,
             priority: crate::models::task::Priority::Medium,
             run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        agent_policy: crate::models::task::AgentPolicy::None,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
             title: Some("Test".to_string()),
             description: None,
             depends_on: vec![],
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -2350,9 +2396,7 @@ Some content here.
             serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
         assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 2);
         assert_eq!(
-            output["summary"]["total_impressions"]
-                .as_f64()
-                .unwrap(),
+            output["summary"]["total_impressions"].as_f64().unwrap(),
             0.0
         );
         assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 1);
@@ -2771,6 +2815,7 @@ Some content here.
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -2778,15 +2823,24 @@ Some content here.
         assert!(build_result.success);
 
         let select_result = exec_can_select_candidates(&task, &path);
-        assert!(select_result.success, "select_candidates failed: {}", select_result.message);
+        assert!(
+            select_result.success,
+            "select_candidates failed: {}",
+            select_result.message
+        );
 
         let auto_dir = Path::new(&path).join(".github").join("automation");
         assert!(auto_dir.join("cannibalization_candidates.json").exists());
 
-        let candidates_doc: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(auto_dir.join("cannibalization_candidates.json")).unwrap()).unwrap();
+        let candidates_doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(auto_dir.join("cannibalization_candidates.json")).unwrap(),
+        )
+        .unwrap();
         let candidates = candidates_doc["candidates"].as_array().unwrap();
-        assert!(!candidates.is_empty(), "Should produce at least one candidate");
+        assert!(
+            !candidates.is_empty(),
+            "Should produce at least one candidate"
+        );
 
         // All candidates should be merge candidates with ≤8 pages
         for c in candidates {
@@ -2840,7 +2894,8 @@ Some content here.
         std::fs::write(
             auto_dir.join("cannibalization_batch_outputs.json"),
             serde_json::to_string_pretty(&batch_doc).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Write minimal hub gaps and territory analysis
         let hub_doc = serde_json::json!({
@@ -2854,7 +2909,11 @@ Some content here.
                 }
             ]
         });
-        std::fs::write(auto_dir.join("hub_gaps.json"), serde_json::to_string_pretty(&hub_doc).unwrap()).unwrap();
+        std::fs::write(
+            auto_dir.join("hub_gaps.json"),
+            serde_json::to_string_pretty(&hub_doc).unwrap(),
+        )
+        .unwrap();
 
         let territory_doc = serde_json::json!({
             "territory_analysis": {
@@ -2862,7 +2921,11 @@ Some content here.
                 "open_territories": [{"theme": "open", "article_count": 1, "total_impressions": 2000.0}]
             }
         });
-        std::fs::write(auto_dir.join("territory_analysis.json"), serde_json::to_string_pretty(&territory_doc).unwrap()).unwrap();
+        std::fs::write(
+            auto_dir.join("territory_analysis.json"),
+            serde_json::to_string_pretty(&territory_doc).unwrap(),
+        )
+        .unwrap();
 
         let task = Task {
             id: "task-test".to_string(),
@@ -2881,6 +2944,7 @@ Some content here.
             artifacts: vec![],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
@@ -2896,7 +2960,10 @@ Some content here.
         // Should include the one valid merge recommendation (test_0)
         let merges = strategy["merge_recommendations"].as_array().unwrap();
         assert_eq!(merges.len(), 1);
-        assert_eq!(merges[0]["keep_url"].as_str().unwrap(), "/blog/best-stocks-csp");
+        assert_eq!(
+            merges[0]["keep_url"].as_str().unwrap(),
+            "/blog/best-stocks-csp"
+        );
         assert_eq!(merges[0]["confidence"].as_str().unwrap(), "high");
 
         // Should include hub from deterministic data
@@ -2937,9 +3004,13 @@ Some content here.
         let (trimmed_prompt, trimmed_bytes) = build_merge_prompt_trimmed(&skill, &candidate);
 
         // Trimmed prompt should be smaller because excerpts are removed
-        assert!(trimmed_bytes < full_bytes, "Trimmed prompt should be smaller: {} < {}", trimmed_bytes, full_bytes);
+        assert!(
+            trimmed_bytes < full_bytes,
+            "Trimmed prompt should be smaller: {} < {}",
+            trimmed_bytes,
+            full_bytes
+        );
         assert!(!trimmed_prompt.contains("excerpt"));
         assert!(full_prompt.contains("excerpt"));
     }
-
 }

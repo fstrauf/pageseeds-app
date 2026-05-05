@@ -53,8 +53,8 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
         .unwrap_or_else(|| paths.repo_root.clone());
 
     // Try to find the MDX file matching the URL slug
-    let slug = extract_slug_from_url(&url);
-    let file_match = find_mdx_by_slug(&content_dir, slug);
+    let slug = crate::content::slug::extract_slug_from_url(&url);
+    let file_match = find_mdx_by_slug(&content_dir, &slug);
 
     log::info!(
         "[indexing_fix_context] url={} content_dir={} slug={} matched={}",
@@ -221,24 +221,13 @@ pub(crate) fn exec_indexing_fix_apply(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn extract_slug_from_url(url: &str) -> &str {
-    let without_scheme = url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    if let Some(pos) = without_scheme.find('/') {
-        &without_scheme[pos + 1..]
-    } else {
-        ""
-    }
-}
-
 fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf> {
     if slug.is_empty() {
         return None;
     }
 
     // Strip numeric prefix from URL segments too (e.g. "127_net_worth_tracker" → "net_worth_tracker")
-    let last_segment = strip_numeric_prefix(
+    let last_segment = crate::content::slug::strip_numeric_prefix(
         slug.trim_end_matches('/')
             .rsplit('/')
             .next()
@@ -246,7 +235,7 @@ fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf
     )
     .replace('_', "-");
 
-    let full_slug_dashed = strip_numeric_prefix(slug.trim_end_matches('/'))
+    let full_slug_dashed = crate::content::slug::strip_numeric_prefix(slug.trim_end_matches('/'))
         .replace('/', "-")
         .replace('_', "-");
 
@@ -263,7 +252,7 @@ fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf
         }
 
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let stem_clean = strip_numeric_prefix(stem).replace('_', "-");
+        let stem_clean = crate::content::slug::strip_numeric_prefix(stem).replace('_', "-");
 
         // Exact stem match on last segment — highest confidence
         if stem_clean == last_segment {
@@ -281,7 +270,7 @@ fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf
                 .to_string_lossy()
                 .replace(std::path::MAIN_SEPARATOR, "/");
             let rel_without_ext = rel_str.trim_end_matches(".mdx").trim_end_matches(".md");
-            let rel_clean = strip_numeric_prefix(rel_without_ext)
+            let rel_clean = crate::content::slug::strip_numeric_prefix(rel_without_ext)
                 .replace('/', "-")
                 .replace('_', "-");
             if rel_clean == full_slug_dashed {
@@ -291,11 +280,6 @@ fn find_mdx_by_slug(content_dir: &Path, slug: &str) -> Option<std::path::PathBuf
     }
 
     best_match
-}
-
-fn strip_numeric_prefix(s: &str) -> String {
-    let re = regex::Regex::new(r"^\d+[_\-]+").unwrap();
-    re.replace(s, "").to_string()
 }
 
 fn extract_first_h1(content: &str) -> Option<String> {

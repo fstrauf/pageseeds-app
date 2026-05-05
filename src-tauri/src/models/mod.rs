@@ -1,13 +1,13 @@
 pub mod article;
-pub mod content_review;
 pub mod cannibalization;
+pub mod content_review;
 pub mod ctr;
 pub mod gsc;
 pub mod live_site;
 pub mod merge_patch;
 pub mod project;
+pub mod queue;
 pub mod reddit;
 pub mod research;
 pub mod social;
-pub mod queue;
 pub mod task;

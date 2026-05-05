@@ -305,14 +305,22 @@ impl StepRegistry {
             }),
         );
 
-        handlers.insert(StepKind::ContentReviewRecommend, Box::new(|_step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let agent_provider = ctx.agent_provider.to_string();
-            Box::pin(async move {
-                crate::engine::exec::content::exec_content_review_recommend(&task, &project_path, &agent_provider).await
-            })
-        }));
+        handlers.insert(
+            StepKind::ContentReviewRecommend,
+            Box::new(|_step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                let agent_provider = ctx.agent_provider.to_string();
+                Box::pin(async move {
+                    crate::engine::exec::content::exec_content_review_recommend(
+                        &task,
+                        &project_path,
+                        &agent_provider,
+                    )
+                    .await
+                })
+            }),
+        );
 
         register_blocking!(
             handlers,
@@ -959,8 +967,12 @@ impl StepRegistry {
                 let context_json = ctx.latest_raw.unwrap_or("{}").to_string();
                 Box::pin(async move {
                     crate::engine::exec::territory_research::exec_territory_strategy(
-                        &task, &project_path, &agent_provider, &context_json,
-                    ).await
+                        &task,
+                        &project_path,
+                        &agent_provider,
+                        &context_json,
+                    )
+                    .await
                 })
             }),
         );
@@ -987,6 +999,69 @@ impl StepRegistry {
                     })
                 })
             }),
+        );
+
+        // ─── GSC Indexing Recovery ──────────────────────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::GscRecoveryPrepare,
+            crate::engine::exec::gsc::exec_gsc_recovery_prepare,
+            gsc_token
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::GscRecoveryDrift,
+            crate::engine::exec::gsc::exec_gsc_recovery_drift
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::GscRecoveryPlan,
+            crate::engine::exec::gsc::exec_gsc_recovery_plan
+        );
+
+        // ─── Fix Indexing Internal Links ────────────────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::IndexingLinkContext,
+            crate::engine::exec::content::exec_indexing_link_context
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IndexingLinkPlan,
+            crate::engine::exec::content::exec_indexing_link_plan,
+            agent_provider
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IndexingLinkApply,
+            crate::engine::exec::content::exec_indexing_link_apply
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IndexingLinkVerify,
+            crate::engine::exec::content::exec_indexing_link_verify
+        );
+
+        // ─── GSC Indexing Outcome Review ────────────────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::GscIndexingOutcomeInspect,
+            crate::engine::exec::gsc::exec_gsc_indexing_outcome_inspect,
+            gsc_token
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::GscIndexingOutcomeReport,
+            crate::engine::exec::gsc::exec_gsc_indexing_outcome_report
         );
 
         Self { handlers }

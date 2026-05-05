@@ -278,7 +278,8 @@ pub fn exec_reddit_config_parse(
 
                     return crate::engine::workflows::StepResult {
                         success: false,
-                        message: "Failed to extract JSON from agent output: no valid JSON found".to_string(),
+                        message: "Failed to extract JSON from agent output: no valid JSON found"
+                            .to_string(),
                         output: Some(output),
                     };
                 }
@@ -374,5 +375,3 @@ pub(crate) fn extract_json_array(output: &str) -> String {
     }
     trimmed.to_string()
 }
-
-

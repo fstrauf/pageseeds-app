@@ -11,12 +11,14 @@
 mod collect;
 mod drift;
 mod investigate;
+mod recovery;
 mod sync;
 mod task_spawner;
 
 pub(crate) use collect::*;
 pub(crate) use drift::*;
 pub(crate) use investigate::*;
+pub(crate) use recovery::*;
 pub(crate) use sync::*;
 pub(crate) use task_spawner::*;
 

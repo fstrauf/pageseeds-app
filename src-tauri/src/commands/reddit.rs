@@ -248,7 +248,10 @@ pub async fn enrich_reddit_opportunities(
     project_id: String,
 ) -> Result<String, String> {
     use crate::db::global_settings;
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, Task, TaskRun, TaskStatus, TaskReviewSurface, FollowUpPolicy};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
     use chrono::Utc;
 
     let (project_path, agent_provider) = {
@@ -283,6 +286,7 @@ pub async fn enrich_reddit_opportunities(
         },
         created_at: Utc::now().to_rfc3339(),
         updated_at: Utc::now().to_rfc3339(),
+        not_before: None,
     };
 
     let db_arc = Arc::clone(&state.db);
@@ -321,11 +325,19 @@ pub fn create_reddit_reply_tasks(
     task_id: String,
     post_ids: Vec<String>,
 ) -> Result<Vec<crate::models::task::Task>, String> {
-    log::info!("[create_reddit_reply_tasks] command called task_id={} post_ids={:?}", task_id, post_ids);
+    log::info!(
+        "[create_reddit_reply_tasks] command called task_id={} post_ids={:?}",
+        task_id,
+        post_ids
+    );
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let result = crate::reddit::spawner::create_reply_tasks_from_opportunities(&db, &task_id, &post_ids);
+    let result =
+        crate::reddit::spawner::create_reply_tasks_from_opportunities(&db, &task_id, &post_ids);
     match &result {
-        Ok(tasks) => log::info!("[create_reddit_reply_tasks] success, created {} tasks", tasks.len()),
+        Ok(tasks) => log::info!(
+            "[create_reddit_reply_tasks] success, created {} tasks",
+            tasks.len()
+        ),
         Err(e) => log::warn!("[create_reddit_reply_tasks] failed: {}", e),
     }
     result

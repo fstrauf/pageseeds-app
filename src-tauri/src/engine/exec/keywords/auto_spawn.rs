@@ -1,4 +1,4 @@
-use crate::engine::spawner::{TaskSpec, TaskSpawner};
+use crate::engine::spawner::{TaskSpawner, TaskSpec};
 use crate::models::task::{AgentPolicy, Priority, TaskArtifact};
 use std::collections::HashSet;
 
@@ -98,7 +98,7 @@ pub fn auto_create_article_tasks_from_research(
             title: Some(title),
             description: Some(description),
             priority: priority_enum,
-        agent_policy: AgentPolicy::None,
+            agent_policy: AgentPolicy::None,
             depends_on: vec![research_task.id.clone()],
             artifacts: vec![provenance],
             idempotency_key: Some(idempotency_key),

@@ -207,3 +207,193 @@ pub fn has_active_fix_task(
     )?;
     Ok(count > 0)
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Recovery History
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryHistoryRecord {
+    pub id: i64,
+    pub project_id: String,
+    pub url: String,
+    pub article_id: Option<i64>,
+    pub campaign_task_id: String,
+    pub child_task_id: String,
+    pub reason_code: String,
+    pub incoming_before: i64,
+    pub incoming_after: Option<i64>,
+    pub links_added: i64,
+    pub outcome_status: String,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
+}
+
+/// Insert a recovery history record when a child task is spawned.
+pub fn insert_recovery_history(
+    conn: &Connection,
+    project_id: &str,
+    url: &str,
+    article_id: Option<i64>,
+    campaign_task_id: &str,
+    child_task_id: &str,
+    reason_code: &str,
+    incoming_before: i64,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO gsc_recovery_history (
+            project_id, url, article_id, campaign_task_id, child_task_id,
+            reason_code, incoming_before, links_added, outcome_status, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 'pending', ?8)",
+        rusqlite::params![
+            project_id,
+            url,
+            article_id,
+            campaign_task_id,
+            child_task_id,
+            reason_code,
+            incoming_before,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+/// Update a recovery history record when the fix task completes.
+pub fn update_recovery_history_on_complete(
+    conn: &Connection,
+    child_task_id: &str,
+    incoming_after: i64,
+    links_added: i64,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE gsc_recovery_history
+         SET incoming_after = ?1,
+             links_added = ?2,
+             outcome_status = CASE WHEN ?2 > 0 THEN 'linked' ELSE 'failed' END,
+             resolved_at = ?3
+         WHERE child_task_id = ?4",
+        rusqlite::params![incoming_after, links_added, now, child_task_id],
+    )?;
+    Ok(())
+}
+
+/// Update a recovery history record with the final GSC outcome.
+pub fn update_recovery_history_outcome(
+    conn: &Connection,
+    child_task_id: &str,
+    outcome_status: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE gsc_recovery_history
+         SET outcome_status = ?1,
+             resolved_at = ?2
+         WHERE child_task_id = ?3",
+        rusqlite::params![outcome_status, now, child_task_id],
+    )?;
+    Ok(())
+}
+
+/// List recovery history for a project.
+pub fn list_recovery_history(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<RecoveryHistoryRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, url, article_id, campaign_task_id, child_task_id,
+                reason_code, incoming_before, incoming_after, links_added,
+                outcome_status, created_at, resolved_at
+         FROM gsc_recovery_history
+         WHERE project_id = ?1
+         ORDER BY created_at DESC",
+    )?;
+
+    let rows = stmt.query_map([project_id], |r| {
+        Ok(RecoveryHistoryRecord {
+            id: r.get(0)?,
+            project_id: r.get(1)?,
+            url: r.get(2)?,
+            article_id: r.get(3)?,
+            campaign_task_id: r.get(4)?,
+            child_task_id: r.get(5)?,
+            reason_code: r.get(6)?,
+            incoming_before: r.get(7)?,
+            incoming_after: r.get(8)?,
+            links_added: r.get(9)?,
+            outcome_status: r.get(10)?,
+            created_at: r.get(11)?,
+            resolved_at: r.get(12)?,
+        })
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Get the latest recovery outcome for a specific URL in a project.
+pub fn get_latest_recovery_outcome(
+    conn: &Connection,
+    project_id: &str,
+    url: &str,
+) -> Result<Option<String>> {
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT outcome_status FROM gsc_recovery_history
+             WHERE project_id = ?1 AND url = ?2
+             ORDER BY created_at DESC LIMIT 1",
+            rusqlite::params![project_id, url],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// Get aggregate recovery stats for a project.
+pub fn get_recovery_stats(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<crate::models::gsc::RecoveryStats> {
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM gsc_recovery_history WHERE project_id = ?1",
+        [project_id],
+        |r| r.get(0),
+    )?;
+
+    let linked: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM gsc_recovery_history WHERE project_id = ?1 AND links_added > 0",
+        [project_id],
+        |r| r.get(0),
+    )?;
+
+    let resolved: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM gsc_recovery_history WHERE project_id = ?1 AND outcome_status = 'resolved'",
+        [project_id],
+        |r| r.get(0),
+    )?;
+
+    let failed: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM gsc_recovery_history WHERE project_id = ?1 AND outcome_status = 'failed'",
+        [project_id],
+        |r| r.get(0),
+    )?;
+
+    let total_links_added: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(links_added), 0) FROM gsc_recovery_history WHERE project_id = ?1",
+        [project_id],
+        |r| r.get(0),
+    )?;
+
+    Ok(crate::models::gsc::RecoveryStats {
+        total_attempts: total as usize,
+        linked: linked as usize,
+        resolved: resolved as usize,
+        failed: failed as usize,
+        total_links_added: total_links_added as usize,
+    })
+}

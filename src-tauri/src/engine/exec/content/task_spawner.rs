@@ -115,7 +115,7 @@ pub(crate) fn create_content_review_apply_task(
     project_path: &str,
 ) -> Vec<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{AgentPolicy, TaskRunPolicy, Priority, TaskArtifact, TaskStatus};
+    use crate::models::task::{AgentPolicy, Priority, TaskArtifact, TaskRunPolicy, TaskStatus};
     use std::collections::HashSet;
 
     let paths = ProjectPaths::from_path(project_path);

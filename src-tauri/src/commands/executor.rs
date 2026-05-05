@@ -17,7 +17,11 @@ pub async fn enqueue_tasks(
     app_handle: AppHandle,
     gsc_state: State<'_, GscState>,
 ) -> Result<QueueSnapshot, String> {
-    log::info!("[enqueue_tasks] Called with {} items, mode={:?}", items.len(), mode);
+    log::info!(
+        "[enqueue_tasks] Called with {} items, mode={:?}",
+        items.len(),
+        mode
+    );
 
     let snapshot = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -104,7 +108,10 @@ pub async fn execute_queue(
     gsc_state: State<'_, GscState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    log::info!("[execute_queue] Legacy called with {} items, delegating to enqueue_tasks", items.len());
+    log::info!(
+        "[execute_queue] Legacy called with {} items, delegating to enqueue_tasks",
+        items.len()
+    );
 
     let enqueue_items: Vec<EnqueueItem> = items
         .into_iter()
@@ -119,8 +126,7 @@ pub async fn execute_queue(
 
     let snapshot = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        queue::enqueue_tasks(&db, enqueue_items, EnqueueMode::Append)
-            .map_err(|e| e.to_string())?
+        queue::enqueue_tasks(&db, enqueue_items, EnqueueMode::Append).map_err(|e| e.to_string())?
     };
 
     let gsc_token = resolve_gsc_token_for_queue(&state, &gsc_state, &snapshot).await?;
@@ -142,7 +148,10 @@ pub async fn mark_tasks_todo(
     task_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    log::info!("[mark_tasks_todo] Legacy called for {} tasks", task_ids.len());
+    log::info!(
+        "[mark_tasks_todo] Legacy called for {} tasks",
+        task_ids.len()
+    );
     let db = state.db.lock().map_err(|e| e.to_string())?;
     for task_id in task_ids {
         queue::remove_queue_item(&db, &task_id).ok();

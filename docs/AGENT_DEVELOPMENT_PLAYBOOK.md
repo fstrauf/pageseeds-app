@@ -92,6 +92,50 @@ cargo test --manifest-path src-tauri/Cargo.toml task_definitions
 
 ---
 
+## Scenario: Designing Task Lifecycle Behavior
+
+**Use when:** A feature creates tasks, puts tasks in the queue, changes what happens after a task succeeds, or requires user input before downstream tasks exist.
+
+**Primitive:** `TaskDefinition` + `TaskSpawner` + backend queue + review surface
+
+**Files to inspect first:**
+- `src-tauri/src/config/task_definitions.rs` — source of truth for `run_policy`, `review_surface`, `follow_up_policy`, and `handler_family`
+- `src-tauri/src/engine/spawner.rs` — centralized task creation and idempotency
+- `src-tauri/src/engine/post_actions.rs` — backend follow-up creation after successful task runs
+- `src-tauri/src/engine/queue.rs` — backend-owned queue, persistence, auto-enqueue behavior
+- `src/lib/taskQueueActions.ts` and `src/stores/queueStore.ts` — frontend queue entry points
+
+**Choose the lifecycle lane first:**
+
+| If the feature needs... | Use this lane | Usually touched |
+|---|---|---|
+| A user clicks a button to run existing tasks | Enqueue existing tasks | Component + `taskQueueActions`/queue context |
+| Code creates tasks without user picking from results | System-created tasks | Domain module or `post_actions` + `TaskSpawner::spawn` |
+| A completed task creates automatic downstream work | Backend follow-up | `post_actions.rs` + `TaskSpawner::spawn_follow_up` |
+| The user must choose keywords/recommendations/opportunities first | User-selection follow-up | `task_definitions.rs`, review UI, selection command |
+| Results should be reviewed but not converted into tasks | Review-only artifact | `task_definitions.rs` review surface, no task creation |
+
+**Rules:**
+- `run_policy` answers: can this task be auto-enqueued, or must the user enqueue it?
+- `review_surface` answers: should completion stop in `review` and show a picker/review UI?
+- `follow_up_policy` answers: are follow-ups backend-created, user-selected, or absent?
+- The executor already sends any task with a non-`none` review surface to `review`; do not reimplement that status logic.
+- The queue auto-enqueues only created follow-ups whose `run_policy` is `auto_enqueue`; user-selected follow-ups wait for a selection command.
+- Selection commands validate the selected IDs against the parent task artifact, create downstream tasks through the task creation primitive, and mark the parent done.
+
+**Files NOT touched:**
+- Do not add ad-hoc task execution calls in components.
+- Do not add lifecycle branches to `engine/executor.rs` unless the executor contract itself changes.
+- Do not call `task_store::create_task` from new programmatic task factories.
+
+**Validation:**
+```bash
+pnpm run check:task-store
+cargo test --manifest-path src-tauri/Cargo.toml task_definitions
+```
+
+---
+
 ## Scenario: Adding Follow-Up Tasks
 
 **Use when:** A task should automatically create downstream tasks on success.
@@ -101,6 +145,7 @@ cargo test --manifest-path src-tauri/Cargo.toml task_definitions
 **Files to inspect first:**
 - `src-tauri/src/engine/spawner.rs` — `spawn_follow_up()` and idempotency key format
 - `src-tauri/src/engine/post_actions.rs` — where follow-ups are triggered after task success
+- `src-tauri/src/config/task_definitions.rs` — follow-up task `run_policy`, review surface, and default metadata
 
 **Files usually touched:**
 - `src-tauri/src/engine/post_actions.rs` — add follow-up creation logic
@@ -113,7 +158,7 @@ cargo test --manifest-path src-tauri/Cargo.toml task_definitions
 **Validation:**
 ```bash
 # Verify no direct create_task calls outside allowlist
-./scripts/check-task-store-usage.sh
+pnpm run check:task-store
 ```
 
 ---
@@ -237,7 +282,7 @@ pnpm exec tsc -b
 | Rust model with `#[ts(export)]` | `./scripts/sync-bindings.sh && ./scripts/check-bindings.sh` |
 | New command or changed signature | `pnpm run check:ipc` |
 | New task type or handler | `cargo test --manifest-path src-tauri/Cargo.toml task_definitions` |
-| Task creation logic | `./scripts/check-task-store-usage.sh` |
+| Task lifecycle or task creation logic | `pnpm run check:task-store && cargo test --manifest-path src-tauri/Cargo.toml task_definitions` |
 | Documentation links | `./scripts/check-docs-links.sh` |
 | Skill paths | `./scripts/check-skill-paths.sh` |
 | Frontend invoke usage | `./scripts/check-invoke-usage.sh` |
