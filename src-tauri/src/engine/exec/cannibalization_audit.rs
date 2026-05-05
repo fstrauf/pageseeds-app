@@ -913,7 +913,7 @@ fn detect_hub_gaps(
             .map(|r| {
                 serde_json::json!({
                     "id": r.id,
-                    "url": format!("/blog/{}", r.url_slug),
+                    "url": crate::content::slug::format_blog_link(&r.url_slug),
                     "title": r.title,
                     "impressions": r.gsc["impressions"].as_f64().unwrap_or(0.0),
                 })

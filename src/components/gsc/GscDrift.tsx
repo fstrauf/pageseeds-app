@@ -148,7 +148,7 @@ export function GscDrift({ projectId }: Props) {
         )}
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="p-4 space-y-4">
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -211,7 +211,7 @@ export function GscDrift({ projectId }: Props) {
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="priority" className="mt-3 h-[calc(100vh-380px)]">
+            <TabsContent value="priority" className="mt-3 h-[calc(100vh-380px)] min-h-0">
               {report.resubmit_priority.length === 0 ? (
                 <EmptyState message="No resubmission candidates found." />
               ) : (
@@ -219,7 +219,7 @@ export function GscDrift({ projectId }: Props) {
               )}
             </TabsContent>
 
-            <TabsContent value="not_indexed" className="mt-3 h-[calc(100vh-380px)]">
+            <TabsContent value="not_indexed" className="mt-3 h-[calc(100vh-380px)] min-h-0">
               {report.not_indexed.length === 0 ? (
                 <EmptyState message="All indexed URLs are healthy." />
               ) : (
@@ -227,7 +227,7 @@ export function GscDrift({ projectId }: Props) {
               )}
             </TabsContent>
 
-            <TabsContent value="missing_gsc" className="mt-3 h-[calc(100vh-380px)]">
+            <TabsContent value="missing_gsc" className="mt-3 h-[calc(100vh-380px)] min-h-0">
               {report.in_sitemap_not_in_gsc.length === 0 ? (
                 <EmptyState message="All sitemap URLs are known to GSC." />
               ) : (
@@ -244,7 +244,7 @@ export function GscDrift({ projectId }: Props) {
               )}
             </TabsContent>
 
-            <TabsContent value="missing_sitemap" className="mt-3 h-[calc(100vh-380px)]">
+            <TabsContent value="missing_sitemap" className="mt-3 h-[calc(100vh-380px)] min-h-0">
               {report.in_gsc_not_in_sitemap.length === 0 ? (
                 <EmptyState message="No GSC URLs are missing from the sitemap." />
               ) : (

@@ -354,7 +354,7 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
             .cloned()
             .or_else(|| {
                 let last = candidate.slug.trim_end_matches('/').rsplit('/').next()?;
-                articles.get(last).cloned()
+                articles.get(&crate::content::slug::normalize_url_slug(last)).cloned()
             })
             .unwrap_or_default();
         let article_id = article.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -445,11 +445,11 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
 
         // Find article metadata by slug (matching drift.rs lookup strategy)
         let article = articles
-            .get(&drift_url.slug)
+            .get(&crate::content::slug::normalize_url_slug(&drift_url.slug))
             .cloned()
             .or_else(|| {
                 let last = drift_url.slug.trim_end_matches('/').rsplit('/').next()?;
-                articles.get(last).cloned()
+                articles.get(&crate::content::slug::normalize_url_slug(last)).cloned()
             })
             .unwrap_or_default();
         let article_id = article.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -973,7 +973,8 @@ fn load_articles_map(paths: &ProjectPaths) -> HashMap<String, serde_json::Value>
                 .into_iter()
                 .filter_map(|a| {
                     let slug = a["url_slug"].as_str()?;
-                    Some((slug.to_string(), a))
+                    let normalized = crate::content::slug::normalize_url_slug(slug);
+                    Some((normalized, a))
                 })
                 .collect()
         })

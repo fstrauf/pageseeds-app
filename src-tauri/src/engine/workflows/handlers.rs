@@ -954,8 +954,10 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
         ctx.push_str("\n### Spoke Articles to Connect\n\n");
         for spoke in &spokes {
             ctx.push_str(&format!(
-                "- **{}** (`/blog/{}`)\n  Summary: {}\n\n",
-                spoke.title, spoke.url_slug, spoke.excerpt
+                "- **{}** (`{}`)\n  Summary: {}\n\n",
+                spoke.title,
+                crate::content::slug::format_blog_link(&spoke.url_slug),
+                spoke.excerpt
             ));
         }
     }

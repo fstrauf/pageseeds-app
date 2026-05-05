@@ -375,6 +375,7 @@ fn load_articles(paths: &ProjectPaths) -> HashMap<String, ArticleMeta> {
         if slug.is_empty() {
             continue;
         }
+        let normalized_slug = crate::content::slug::normalize_url_slug(&slug);
         let gsc = &article["gsc"];
         let impressions = if gsc.is_object() {
             gsc["impressions"].as_f64()
@@ -383,7 +384,7 @@ fn load_articles(paths: &ProjectPaths) -> HashMap<String, ArticleMeta> {
         };
 
         map.insert(
-            slug.clone(),
+            normalized_slug,
             ArticleMeta {
                 id,
                 url_slug: slug,
@@ -518,11 +519,13 @@ fn build_candidate(
         return None;
     }
 
-    let meta = articles.get(&drift_url.slug).or_else(|| {
-        // Try matching by last segment
-        let last = drift_url.slug.trim_end_matches('/').rsplit('/').next()?;
-        articles.get(last)
-    });
+    let meta = articles
+        .get(&crate::content::slug::normalize_url_slug(&drift_url.slug))
+        .or_else(|| {
+            // Try matching by last segment
+            let last = drift_url.slug.trim_end_matches('/').rsplit('/').next()?;
+            articles.get(&crate::content::slug::normalize_url_slug(last))
+        });
 
     let incoming_link_count = meta
         .and_then(|m| link_scan.incoming_by_id.get(&m.id).copied())
@@ -593,10 +596,12 @@ fn build_candidate_for_unknown(
     link_scan: &LinkScanData,
     articles: &HashMap<String, ArticleMeta>,
 ) -> ResubmitCandidate {
-    let meta = articles.get(&drift_url.slug).or_else(|| {
-        let last = drift_url.slug.trim_end_matches('/').rsplit('/').next()?;
-        articles.get(last)
-    });
+    let meta = articles
+        .get(&crate::content::slug::normalize_url_slug(&drift_url.slug))
+        .or_else(|| {
+            let last = drift_url.slug.trim_end_matches('/').rsplit('/').next()?;
+            articles.get(&crate::content::slug::normalize_url_slug(last))
+        });
 
     let incoming_link_count = meta
         .and_then(|m| link_scan.incoming_by_id.get(&m.id).copied())

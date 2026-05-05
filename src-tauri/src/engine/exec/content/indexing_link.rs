@@ -419,9 +419,9 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
         };
 
         // Skip if already links to target
-        if content.contains(&format!("/blog/{}", target_slug)) {
+        if content.contains(&crate::content::slug::format_blog_link(&target_slug)) {
             log::info!(
-                "[indexing_link_apply] {} already links to /blog/{} — skipping",
+                "[indexing_link_apply] {} already links to {} — skipping",
                 source_basename,
                 target_slug
             );
@@ -466,7 +466,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                 links_added += 1;
                 snapshots.push(snapshot);
                 log::info!(
-                    "[indexing_link_apply] {} — added {} link to /blog/{}",
+                    "[indexing_link_apply] {} — added {} link to {}",
                     source_basename,
                     placement,
                     target_slug
@@ -517,7 +517,7 @@ fn apply_related_section_link(content: &str, anchor_text: &str, target_slug: &st
         t.starts_with("##") && t.to_lowercase().contains("related")
     });
 
-    let new_link_line = format!("- [{}](/blog/{})\n", anchor_text, target_slug);
+    let new_link_line = format!("- [{}]{}\n", anchor_text, crate::content::slug::format_blog_link(target_slug));
 
     if let Some(start_idx) = related_section_start {
         let lines: Vec<&str> = content.lines().collect();
@@ -613,7 +613,7 @@ fn insert_contextual_link(content: &str, anchor_text: &str, target_slug: &str) -
     })?;
 
     let insertion_sentence = format!(
-        " For more on this, see [{}](/blog/{}).",
+        " For more on this, see [{}]({}).",
         anchor_text, target_slug
     );
 
@@ -733,7 +733,7 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
             let file_path = content_dir.join(&p.file);
             std::fs::read_to_string(&file_path)
                 .ok()
-                .map(|content| content.contains(&format!("/blog/{}", target_slug)))
+                .map(|content| content.contains(&crate::content::slug::format_blog_link(&target_slug)))
                 .unwrap_or(false)
         })
         .map(|p| p.file.clone())

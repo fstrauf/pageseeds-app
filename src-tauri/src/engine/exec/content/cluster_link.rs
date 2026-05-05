@@ -648,15 +648,16 @@ pub(crate) fn exec_cluster_link_apply(
         // Build list of new link lines, skipping slugs already present in the file
         let mut new_link_lines: Vec<String> = Vec::new();
         for (title, slug) in new_links {
-            if content.contains(slug.as_str()) {
+            let blog_link = crate::content::slug::format_blog_link(&slug);
+            if content.contains(&blog_link) {
                 log::info!(
-                    "[cluster_link_apply] {} already links to /blog/{} — skipping",
+                    "[cluster_link_apply] {} already links to {} — skipping",
                     source_basename,
-                    slug
+                    blog_link
                 );
                 continue;
             }
-            new_link_lines.push(format!("- [{}](/blog/{})\n", title, slug));
+            new_link_lines.push(format!("- [{}]{}\n", title, blog_link));
         }
 
         if new_link_lines.is_empty() {
@@ -686,7 +687,7 @@ pub(crate) fn exec_cluster_link_apply(
                     let idx = l.find("/blog/")?;
                     let start = idx + "/blog/".len();
                     let end = l[start..].find(')').unwrap_or(l[start..].len());
-                    Some(l[start..start + end].to_string())
+                    Some(crate::content::slug::normalize_url_slug(&l[start..start + end]))
                 })
                 .collect();
 
@@ -700,13 +701,14 @@ pub(crate) fn exec_cluster_link_apply(
                 let new_slug = line.find("/blog/").and_then(|idx| {
                     let start = idx + "/blog/".len();
                     let end = line[start..].find(')').unwrap_or(line[start..].len());
-                    Some(line[start..start + end].to_string())
+                    Some(crate::content::slug::normalize_url_slug(&line[start..start + end]))
                 });
                 if let Some(ref slug) = new_slug {
                     if existing_slugs.contains(slug) {
                         log::info!(
-                            "[cluster_link_apply] {} already links to /blog/{} in Related Articles — skipping",
-                            source_basename, slug
+                            "[cluster_link_apply] {} already links to {} in Related Articles — skipping",
+                            source_basename,
+                            crate::content::slug::format_blog_link(slug)
                         );
                         continue;
                     }
