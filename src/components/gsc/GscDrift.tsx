@@ -322,8 +322,15 @@ function LinkFixCard({
   onCreateTask: () => void
   creating: boolean
 }) {
-  const orphanCount = candidates.filter((c) => !c.has_internal_links).length
-  if (orphanCount === 0) return null
+  const orphans = candidates.filter((c) => !c.has_internal_links)
+  const blocked = orphans.filter((c) =>
+    c.recovery_status === 'linked' || c.recovery_status === 'pending' || c.recovery_status === 'resolved'
+  )
+  const eligible = orphans.filter((c) =>
+    !c.recovery_status || c.recovery_status === 'failed'
+  )
+
+  if (orphans.length === 0) return null
 
   return (
     <Card className="border-amber-500/20 bg-amber-500/5">
@@ -333,22 +340,40 @@ function LinkFixCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-3">
               <div className="text-xs text-amber-900 dark:text-amber-200">
-                <span className="font-medium">{orphanCount} URL{orphanCount === 1 ? '' : 's'}</span> in the priority list have{' '}
-                <span className="font-medium">zero internal incoming links</span>. Google cannot discover these pages.
+                {eligible.length > 0 ? (
+                  <>
+                    <span className="font-medium">{eligible.length} URL{eligible.length === 1 ? '' : 's'}</span> in the priority list have{' '}
+                    <span className="font-medium">zero internal incoming links</span> and are eligible for recovery.
+                  </>
+                ) : blocked.length > 0 ? (
+                  <>
+                    <span className="font-medium">{blocked.length} URL{blocked.length === 1 ? '' : 's'}</span> have zero incoming links but{' '}
+                    <span className="font-medium">were already processed</span> by a previous recovery run.
+                  </>
+                ) : (
+                  <>All URLs in the priority list have internal links.</>
+                )}
               </div>
               <Button
                 variant="outline"
                 size="sm"
                 className="shrink-0 text-xs h-7 border-amber-500/30 hover:bg-amber-500/10"
                 onClick={onCreateTask}
-                disabled={creating}
+                disabled={creating || eligible.length === 0}
               >
-                {creating ? 'Starting…' : 'Start link recovery'}
+                {creating ? 'Starting…' : eligible.length === 0 ? 'Nothing to recover' : 'Start link recovery'}
               </Button>
             </div>
-            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
-              This starts a <strong>GSC indexing recovery</strong> campaign that refreshes data, plans targets, and spawns one focused link-fix task per eligible URL.
-            </p>
+            {eligible.length === 0 && blocked.length > 0 && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                These URLs were already targeted by a previous recovery campaign. Recovery avoids duplicates to prevent link spam. If you want to retry, clear the recovery history from the database.
+              </p>
+            )}
+            {eligible.length > 0 && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                This starts a <strong>GSC indexing recovery</strong> campaign that refreshes data, plans targets, and spawns one focused link-fix task per eligible URL.
+              </p>
+            )}
           </div>
         </div>
       </CardContent>
@@ -458,6 +483,7 @@ function CandidateTable({ candidates, projectId }: { candidates: ResubmitCandida
               <TableHead className="text-xs">URL</TableHead>
               <TableHead className="text-xs">Reason</TableHead>
               <TableHead className="text-xs">Links</TableHead>
+              <TableHead className="text-xs">Recovery</TableHead>
               <TableHead className="text-xs">Keyword</TableHead>
               <TableHead className="text-xs">Published</TableHead>
             </TableRow>
@@ -489,6 +515,13 @@ function CandidateTable({ candidates, projectId }: { candidates: ResubmitCandida
                     <span className="text-emerald-600">{c.incoming_link_count}</span>
                   ) : (
                     <span className="text-red-500 font-medium">0</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-xs">
+                  {c.recovery_status ? (
+                    <RecoveryBadge status={c.recovery_status} />
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
                   )}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
@@ -642,6 +675,26 @@ function ReasonBadge({ reason }: { reason: string }) {
 
   const mapped = variantMap[reason] ?? {
     label: reason.replace(/_/g, ' '),
+    className: 'bg-muted text-muted-foreground',
+  }
+
+  return (
+    <Badge variant="outline" className={`text-[10px] capitalize ${mapped.className}`}>
+      {mapped.label}
+    </Badge>
+  )
+}
+
+function RecoveryBadge({ status }: { status: string }) {
+  const variantMap: Record<string, { label: string; className: string }> = {
+    linked: { label: 'Linked', className: 'bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20' },
+    pending: { label: 'Pending', className: 'bg-amber-500/10 text-amber-700 hover:bg-amber-500/20' },
+    resolved: { label: 'Resolved', className: 'bg-blue-500/10 text-blue-700 hover:bg-blue-500/20' },
+    failed: { label: 'Failed', className: 'bg-red-500/10 text-red-700 hover:bg-red-500/20' },
+  }
+
+  const mapped = variantMap[status] ?? {
+    label: status,
     className: 'bg-muted text-muted-foreground',
   }
 

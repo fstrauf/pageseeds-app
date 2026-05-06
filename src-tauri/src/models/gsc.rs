@@ -206,6 +206,9 @@ pub struct ResubmitCandidate {
     pub target_keyword: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_date: Option<String>,
+    /// Latest recovery history status for this URL (linked, pending, resolved, failed, or null).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

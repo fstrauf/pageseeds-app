@@ -168,6 +168,25 @@ pub(crate) async fn exec_gsc_drift(
         candidates.push(candidate);
     }
 
+    // Attach latest recovery history status to each candidate
+    if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+        let mut stmt = db.prepare(
+            "SELECT url, outcome_status FROM gsc_recovery_history WHERE project_id = ?1"
+        ).ok();
+        if let Some(ref mut s) = stmt {
+            if let Ok(rows) = s.query_map([project_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            }) {
+                let history: HashMap<String, String> = rows.filter_map(|r| r.ok()).collect();
+                for c in &mut candidates {
+                    if let Some(status) = history.get(&c.url) {
+                        c.recovery_status = Some(status.clone());
+                    }
+                }
+            }
+        }
+    }
+
     // Sort by priority score descending
     candidates.sort_by(|a, b| b.priority_score.cmp(&a.priority_score));
 
@@ -595,6 +614,7 @@ fn build_candidate(
         gsc_impressions: meta.and_then(|m| m.gsc_impressions),
         target_keyword: meta.and_then(|m| m.target_keyword.clone()),
         published_date: meta.and_then(|m| m.published_date.clone()),
+        recovery_status: None,
     })
 }
 
@@ -658,5 +678,6 @@ fn build_candidate_for_unknown(
         gsc_impressions: meta.and_then(|m| m.gsc_impressions),
         target_keyword: meta.and_then(|m| m.target_keyword.clone()),
         published_date: meta.and_then(|m| m.published_date.clone()),
+        recovery_status: None,
     }
 }
