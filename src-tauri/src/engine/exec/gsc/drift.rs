@@ -41,10 +41,17 @@ pub(crate) async fn exec_gsc_drift(
     // 3. Load GSC inspection data
     let gsc_items = load_gsc_items(&paths, project_id)?;
 
-    // 4. Load link scan data (trigger fresh scan if missing)
+    // 4. Load link scan data (trigger fresh scan if missing or stale >24h)
     let link_scan_path = paths.automation_dir.join("link_scan.json");
-    let link_scan = if !link_scan_path.exists() {
-        log::info!("[gsc_drift] link_scan.json missing — triggering fresh scan");
+    let link_scan_stale = file_age_hours(&link_scan_path)
+        .map(|h| h >= 24)
+        .unwrap_or(true);
+    let link_scan = if !link_scan_path.exists() || link_scan_stale {
+        if !link_scan_path.exists() {
+            log::info!("[gsc_drift] link_scan.json missing — triggering fresh scan");
+        } else {
+            log::info!("[gsc_drift] link_scan.json stale — triggering fresh scan");
+        }
         if let Ok(articles) = load_articles_for_scan(&paths) {
             if let Ok(content_dir) =
                 crate::content::ops::resolve_content_dir(&paths.automation_dir, &paths.repo_root)
