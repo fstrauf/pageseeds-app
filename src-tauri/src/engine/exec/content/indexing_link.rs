@@ -38,11 +38,50 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
         .unwrap_or("")
         .to_string();
 
-    // Load link scan
+    // Load link scan — trigger fresh scan if missing or stale (>1 hour)
     let link_scan_path = paths.automation_dir.join("link_scan.json");
-    let link_scan: Option<serde_json::Value> = std::fs::read_to_string(&link_scan_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok());
+    let link_scan: Option<serde_json::Value> = {
+        let stale = match std::fs::metadata(&link_scan_path) {
+            Ok(m) => m
+                .modified()
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|d| d.as_secs() > 3600)
+                .unwrap_or(true),
+            Err(_) => true,
+        };
+        let fresh_scan = if stale {
+            log::info!("[indexing_link_context] link_scan.json missing or stale — triggering fresh scan");
+            let repo_root = std::path::Path::new(project_path);
+            if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+                if let Ok(articles) = crate::content::article_index::list_articles(&db, &task.project_id) {
+                    let articles: Vec<_> = articles.into_iter().filter(|a| !a.file.is_empty()).collect();
+                    if let Some(content_dir) = crate::content::locator::resolve(repo_root, None).selected {
+                        if let Ok(scan_result) = crate::content::linking::scan_links(&content_dir, &articles) {
+                            let scan_json = serde_json::to_string_pretty(&scan_result).unwrap_or_default();
+                            let _ = std::fs::write(&link_scan_path, &scan_json);
+                            serde_json::from_str(&scan_json).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        fresh_scan.or_else(|| {
+            std::fs::read_to_string(&link_scan_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+        })
+    };
 
     // Find target profile
     let target_profile = link_scan
@@ -371,6 +410,8 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
 
     let mut files_modified: Vec<String> = Vec::new();
     let mut links_added = 0usize;
+    let mut links_skipped_existing = 0usize;
+    let mut links_failed = 0usize;
     let mut snapshots: Vec<crate::content::snapshot::FileSnapshot> = Vec::new();
 
     for link in &links {
@@ -394,6 +435,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                     "[indexing_link_apply] no file found for source article {}",
                     source_id
                 );
+                links_failed += 1;
                 continue;
             }
         };
@@ -403,6 +445,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                 "[indexing_link_apply] source file not found in content dir: {}",
                 source_basename
             );
+            links_failed += 1;
             continue;
         };
 
@@ -414,6 +457,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                     file_path.display(),
                     e
                 );
+                links_failed += 1;
                 continue;
             }
         };
@@ -425,6 +469,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                 source_basename,
                 target_slug
             );
+            links_skipped_existing += 1;
             continue;
         }
 
@@ -437,6 +482,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                     file_path.display(),
                     e
                 );
+                links_failed += 1;
                 continue;
             }
         };
@@ -450,6 +496,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                             "[indexing_link_apply] could not find insertion point for contextual link in {}",
                             source_basename
                         );
+                        links_failed += 1;
                         continue;
                     }
                 }
@@ -478,6 +525,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                     file_path.display(),
                     e
                 );
+                links_failed += 1;
             }
         }
     }
@@ -495,18 +543,40 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
     let summary = serde_json::json!({
         "target_slug": target_slug,
         "links_added": links_added,
+        "links_skipped_existing": links_skipped_existing,
+        "links_failed": links_failed,
         "source_files_modified": files_modified,
         "snapshots": snapshot_json,
     });
 
-    StepResult {
-        success: links_added > 0,
-        message: format!(
+    // Success if we added links, OR if all planned links already existed.
+    // Failure only if there were actual errors (file not found, write failed, etc.)
+    let success = links_added > 0
+        || (links_failed == 0 && links_skipped_existing > 0);
+    let message = if links_added > 0 {
+        format!(
             "Applied {} link(s) to {} for target {}",
             links_added,
             files_modified.join(", "),
             target_slug
-        ),
+        )
+    } else if links_skipped_existing > 0 && links_failed == 0 {
+        format!(
+            "Link(s) to {} already exist — no changes needed",
+            target_slug
+        )
+    } else {
+        format!(
+            "Applied {} link(s) to {} for target {}",
+            links_added,
+            files_modified.join(", "),
+            target_slug
+        )
+    };
+
+    StepResult {
+        success,
+        message,
         output: Some(summary.to_string()),
     }
 }
