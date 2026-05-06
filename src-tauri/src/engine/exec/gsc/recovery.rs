@@ -515,6 +515,28 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
     // Sort by priority score descending
     targets.sort_by(|a, b| b.priority_score.cmp(&a.priority_score));
 
+    // Log skip reasons so users can understand why recovery produced 0 tasks
+    if !skipped.is_empty() {
+        log::info!("[recovery_plan] {} candidate(s) skipped:", skipped.len());
+        for s in &skipped {
+            log::info!("  - {}: {}", s.url, s.skip_reason);
+        }
+    }
+    if targets.is_empty() {
+        log::warn!("[recovery_plan] 0 eligible targets after filtering — no recovery tasks will be created");
+    } else {
+        log::info!("[recovery_plan] {} eligible target(s) after filtering", targets.len());
+        for t in &targets {
+            log::info!(
+                "  - {} (score={}, incoming={}, sources={})",
+                t.url,
+                t.priority_score,
+                t.incoming_link_count_before,
+                t.source_candidates.len()
+            );
+        }
+    }
+
     let plan = RecoveryPlan {
         generated_at: chrono::Utc::now().to_rfc3339(),
         project_id: task.project_id.clone(),

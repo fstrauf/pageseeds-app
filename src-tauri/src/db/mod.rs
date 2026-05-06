@@ -1178,6 +1178,17 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
     }
 
+    // Repair: fix recovery history entries incorrectly marked 'failed' when links actually exist.
+    {
+        let affected = conn.execute(
+            "UPDATE gsc_recovery_history SET outcome_status = 'linked' WHERE outcome_status = 'failed' AND incoming_after >= 1",
+            [],
+        )?;
+        if affected > 0 {
+            log::info!("[db::run_migrations] Fixed {} recovery history entries from 'failed' to 'linked' (incoming_after >= 1)", affected);
+        }
+    }
+
     Ok(())
 }
 

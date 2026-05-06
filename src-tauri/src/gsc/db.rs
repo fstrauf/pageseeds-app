@@ -272,7 +272,11 @@ pub fn update_recovery_history_on_complete(
         "UPDATE gsc_recovery_history
          SET incoming_after = ?1,
              links_added = ?2,
-             outcome_status = CASE WHEN ?2 > 0 THEN 'linked' ELSE 'failed' END,
+             outcome_status = CASE
+                 WHEN ?1 >= 1 THEN 'linked'
+                 WHEN ?2 > 0 THEN 'linked'
+                 ELSE 'failed'
+             END,
              resolved_at = ?3
          WHERE child_task_id = ?4",
         rusqlite::params![incoming_after, links_added, now, child_task_id],
