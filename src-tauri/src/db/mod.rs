@@ -619,29 +619,6 @@ pub fn init(path: &Path) -> Result<Connection> {
 pub fn init_with_conn(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     run_migrations(conn)?;
-    // Repair: ensure global_settings exists even if V14 was skipped or the table was dropped.
-    {
-        let table_exists: bool = conn
-            .prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='global_settings'")?
-            .query_row([], |r| r.get::<_, i64>(0))
-            .unwrap_or(0)
-            > 0;
-        if !table_exists {
-            let now = chrono::Utc::now().to_rfc3339();
-            conn.execute_batch(
-                "CREATE TABLE global_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );",
-            )?;
-            conn.execute(
-                "INSERT OR IGNORE INTO global_settings (key, value, updated_at) VALUES ('agent_provider', 'kimi', ?1)",
-                [&now],
-            )?;
-        }
-    }
-
     Ok(())
 }
 
@@ -1165,6 +1142,40 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (38, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
+    }
+
+    // Repair: ensure global_settings exists even if V14 was skipped or the table was dropped.
+    {
+        let table_exists: bool = conn
+            .prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='global_settings'")?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+        if !table_exists {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute_batch(
+                "CREATE TABLE global_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );",
+            )?;
+            conn.execute(
+                "INSERT OR IGNORE INTO global_settings (key, value, updated_at) VALUES ('agent_provider', 'kimi', ?1)",
+                [&now],
+            )?;
+        }
+    }
+
+    // Sanitize: clear invalid legacy agent_provider values from projects so they fall back to global.
+    {
+        let affected = conn.execute(
+            "UPDATE projects SET agent_provider = NULL WHERE agent_provider IS NOT NULL AND agent_provider NOT IN ('kimi', 'claude', 'openai', 'ollama')",
+            [],
+        )?;
+        if affected > 0 {
+            log::info!("[db::run_migrations] Cleared invalid agent_provider from {} project(s)", affected);
+        }
     }
 
     Ok(())
