@@ -219,7 +219,7 @@ export function TaskRunner({
                 expanded={expanded.has(item.task.id)}
                 onToggle={() => toggleExpand(item.task.id)}
                 onRunNow={(taskId) => {
-                  queue.enqueueNext([{
+                  queue.enqueue([{
                     taskId,
                     projectId: item.task.projectId ?? '',
                     title: `Follow-up task`,

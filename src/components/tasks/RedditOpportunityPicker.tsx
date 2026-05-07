@@ -131,7 +131,7 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
       
       // Auto-add created tasks to the queue (shopping cart pattern)
       if (newTasks.length > 0) {
-        queue.enqueueNext(
+        queue.enqueue(
           newTasks.map(t => ({
             taskId: t.id,
             projectId: t.project_id,

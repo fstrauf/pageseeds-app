@@ -140,7 +140,7 @@ pub struct DifficultyWrapper {
 pub fn select_keywords_deterministic(
     pipeline_json: &str,
     is_landing_page: bool,
-) -> Result<KeywordPickerOutput, String> {
+) -> Result<(KeywordPickerOutput, bool), String> {
     // Parse pipeline output
     let pipeline: KeywordPipelineOutput = serde_json::from_str(pipeline_json)
         .map_err(|e| format!("Failed to parse pipeline output: {}", e))?;
@@ -152,6 +152,7 @@ pub fn select_keywords_deterministic(
     // Filter to keywords with data, acceptable KD, and non-navigational intent
     let mut candidates: Vec<_> = pipeline
         .keywords
+        .clone()
         .into_iter()
         .filter(|k| {
             let has_data = k.has_data.unwrap_or(false);
@@ -165,6 +166,29 @@ pub fn select_keywords_deterministic(
             has_data && kd_ok && intent_ok
         })
         .collect();
+
+    let mut used_fallback = false;
+
+    // Fallback: if strict filtering drops everything (e.g., API unavailable),
+    // return the best available keywords so the user can still review/select.
+    if candidates.is_empty() && !pipeline.keywords.is_empty() {
+        log::warn!(
+            "[select_keywords_deterministic] Strict filter yielded 0 results ({} candidates, {} with data). Using fallback.",
+            total_candidates,
+            pipeline.with_data_count
+        );
+        candidates = pipeline
+            .keywords
+            .into_iter()
+            .filter(|k| {
+                k.intent
+                    .as_deref()
+                    .map(|i| !i.eq_ignore_ascii_case("navigational"))
+                    .unwrap_or(true)
+            })
+            .collect();
+        used_fallback = true;
+    }
 
     // Sort by volume desc, then KD asc
     candidates.sort_by(|a, b| {
@@ -182,7 +206,7 @@ pub fn select_keywords_deterministic(
     let filtered_out = total_candidates.saturating_sub(selected.len());
 
     if is_landing_page {
-        Ok(KeywordPickerOutput {
+        Ok((KeywordPickerOutput {
             landing_page_candidates: selected
                 .into_iter()
                 .map(|k| LandingPageCandidate {
@@ -206,7 +230,7 @@ pub fn select_keywords_deterministic(
             difficulty: None,
             total_candidates,
             filtered_out,
-        })
+        }, used_fallback))
     } else {
         let results: Vec<_> = selected
             .into_iter()
@@ -225,7 +249,7 @@ pub fn select_keywords_deterministic(
             .collect();
 
         let successful = results.len();
-        Ok(KeywordPickerOutput {
+        Ok((KeywordPickerOutput {
             landing_page_candidates: Vec::new(),
             difficulty: Some(DifficultyWrapper {
                 total: successful,
@@ -234,7 +258,7 @@ pub fn select_keywords_deterministic(
             }),
             total_candidates,
             filtered_out,
-        })
+        }, used_fallback))
     }
 }
 
@@ -341,7 +365,7 @@ pub fn exec_research_final_selection(
     );
 
     match select_keywords_deterministic(pipeline_json, is_landing_page) {
-        Ok(output) => {
+        Ok((output, used_fallback)) => {
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
                 Err(e) => {
@@ -363,12 +387,21 @@ pub fn exec_research_final_selection(
                     .unwrap_or(0)
             };
 
+            let msg = if used_fallback {
+                format!(
+                    "Selected {} keywords (API data unavailable; showing best candidates without KD/volume filters)",
+                    count
+                )
+            } else {
+                format!(
+                    "Selected {} keywords deterministically (KD <= 30, sorted by volume)",
+                    count
+                )
+            };
+
             StepResult {
                 success: true,
-                message: format!(
-                    "Selected {} keywords deterministically (KD <= 10, sorted by volume)",
-                    count
-                ),
+                message: msg,
                 output: Some(json),
             }
         }

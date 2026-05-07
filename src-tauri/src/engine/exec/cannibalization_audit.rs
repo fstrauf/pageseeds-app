@@ -1715,6 +1715,7 @@ pub(crate) fn exec_can_analyze_candidates(
                     agent_provider,
                     &chosen_prompt,
                     Some("You are an expert SEO strategist. Analyze the candidate and return structured JSON."),
+                    Some("direct"),
                 )
                 .await
             })

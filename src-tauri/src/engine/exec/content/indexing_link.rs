@@ -32,6 +32,14 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
     };
 
     let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
+    if target_article_id == 0 {
+        return StepResult {
+            success: false,
+            message: "Target article_id is 0 — no matching article found in DB".to_string(),
+            output: None,
+        };
+    }
+
     let target_slug = crate::content::slug::normalize_url_slug(target_data["slug"].as_str().unwrap_or(""));
     let target_keyword = target_data["target_keyword"]
         .as_str()
@@ -353,6 +361,15 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
         }
     };
 
+    let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
+    if target_article_id == 0 {
+        return StepResult {
+            success: false,
+            message: "Target article_id is 0 — no matching article found in DB".to_string(),
+            output: None,
+        };
+    }
+
     let target_slug = crate::content::slug::normalize_url_slug(target_data["slug"].as_str().unwrap_or(""));
     let target_title = target_data["target_keyword"]
         .as_str()
@@ -587,7 +604,7 @@ fn apply_related_section_link(content: &str, anchor_text: &str, target_slug: &st
         t.starts_with("##") && t.to_lowercase().contains("related")
     });
 
-    let new_link_line = format!("- [{}]{}\n", anchor_text, crate::content::slug::format_blog_link(target_slug));
+    let new_link_line = format!("- [{}]({})\n", anchor_text, crate::content::slug::format_blog_link(target_slug));
 
     if let Some(start_idx) = related_section_start {
         let lines: Vec<&str> = content.lines().collect();
@@ -684,7 +701,7 @@ fn insert_contextual_link(content: &str, anchor_text: &str, target_slug: &str) -
 
     let insertion_sentence = format!(
         " For more on this, see [{}]({}).",
-        anchor_text, target_slug
+        anchor_text, crate::content::slug::format_blog_link(target_slug)
     );
 
     let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
@@ -714,6 +731,14 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
     };
 
     let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
+    if target_article_id == 0 {
+        return StepResult {
+            success: false,
+            message: "Target article_id is 0 — no matching article found in DB".to_string(),
+            output: None,
+        };
+    }
+
     let target_slug = crate::content::slug::normalize_url_slug(target_data["slug"].as_str().unwrap_or(""));
     let incoming_before = target_data["incoming_link_count_before"]
         .as_u64()
@@ -1052,5 +1077,86 @@ mod tests {
         assert_eq!(normalize_url_slug("blog/my-post"), "my-post");
         assert_eq!(normalize_url_slug("/blog/my-post"), "my-post");
         assert_eq!(normalize_url_slug("tools/blog/my-post"), "my-post");
+        // Double numeric prefix (date + sequence) — must be fully stripped
+        assert_eq!(
+            normalize_url_slug("2025-08-01-the-good-enough-mindset"),
+            "the-good-enough-mindset"
+        );
+        assert_eq!(
+            normalize_url_slug("01-the-good-enough-mindset"),
+            "the-good-enough-mindset"
+        );
+    }
+
+    /// End-to-end test: apply a link to the real learnedlate repo file and verify
+    /// scan_links detects it. This exercises the full apply → verify path.
+    #[test]
+    #[ignore = "requires filesystem + DB"] // run with: cargo test -- --ignored
+    fn apply_and_verify_on_real_file() {
+        let project_path = "/Users/fstrauf/01_code/learnedlate";
+        let content_dir = std::path::Path::new(project_path).join("src/blog/posts");
+        let source_file = content_dir.join("070_product_management_for_non_technical_founders_a_practical_guide.mdx");
+
+        // Read original content
+        let original = std::fs::read_to_string(&source_file).expect("read source");
+
+        // Apply link using the fixed function
+        let modified = apply_related_section_link(&original, "the good enough mindset", "the-good-enough-mindset");
+
+        // Sanity: the link line must contain proper markdown ()
+        assert!(
+            modified.contains("[the good enough mindset](/blog/the-good-enough-mindset)"),
+            "link must be properly formatted markdown"
+        );
+
+        // Write to a temp copy so we don't mutate the repo
+        let temp_dir = std::path::PathBuf::from(format!("/tmp/test_link_fix_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let temp_file = temp_dir.join("070_product_management_for_non_technical_founders_a_practical_guide.mdx");
+        std::fs::write(&temp_file, &modified).expect("write temp");
+
+        // Also copy the target file so scan_links can build profiles for it
+        let target_file = content_dir.join("2025-08-01-the-good-enough-mindset.mdx");
+        let temp_target = temp_dir.join("2025-08-01-the-good-enough-mindset.mdx");
+        std::fs::copy(&target_file, &temp_target).expect("copy target");
+
+        // Load articles from DB (need at least source + target)
+        let db_path = crate::db::default_db_path();
+        let db = rusqlite::Connection::open(&db_path).expect("open db");
+        let articles: Vec<crate::models::article::Article> = crate::content::article_index::list_articles(&db, "learnedlate")
+            .expect("list articles")
+            .into_iter()
+            .filter(|a| {
+                a.file.contains("070_product_management")
+                    || a.file.contains("2025-08-01-the-good-enough-mindset")
+            })
+            .collect();
+
+        assert!(
+            articles.iter().any(|a| a.id == 70),
+            "source article 70 must be in DB"
+        );
+        assert!(
+            articles.iter().any(|a| a.id == 19),
+            "target article 19 must be in DB"
+        );
+
+        // Scan links in the temp dir
+        let scan_result = crate::content::linking::scan_links(&temp_dir, &articles)
+            .expect("scan_links");
+
+        // Find target profile
+        let target_profile = scan_result.profiles.iter().find(|p| p.id == 19);
+        let incoming_after = target_profile.map(|p| p.incoming_ids.len()).unwrap_or(0);
+
+        assert!(
+            incoming_after > 0,
+            "target article 19 must have >0 inbound links after apply; found {}. Profiles: {:?}",
+            incoming_after,
+            scan_result.profiles
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

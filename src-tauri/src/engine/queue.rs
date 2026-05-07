@@ -609,13 +609,16 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                             "[queue_runner] No pending items ready now; earliest delayed item at {}. Sleeping until then.",
                             not_before
                         );
-                        // Sleep until the earliest delayed item is due
+                        // Sleep until the earliest delayed item is due.
+                        // Cap to short chunks so we re-check the DB periodically
+                        // and can exit promptly if the queue is paused/dismissed.
                         if let Ok(due) = chrono::DateTime::parse_from_rfc3339(&not_before) {
                             let now = chrono::Utc::now();
                             let due_utc = due.with_timezone(&chrono::Utc);
                             if due_utc > now {
                                 let sleep_secs = (due_utc - now).num_seconds() as u64;
-                                tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs))
+                                let chunk = std::cmp::min(sleep_secs, 5);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(chunk))
                                     .await;
                                 continue;
                             }

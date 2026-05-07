@@ -381,6 +381,15 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
             .to_string();
 
         // Check incoming link count
+        if article_id == 0 {
+            skipped.push(SkippedTarget {
+                url: candidate.url.clone(),
+                reason_code: reason.to_string(),
+                skip_reason: "no matching article found in DB".to_string(),
+            });
+            continue;
+        }
+
         let incoming_before = incoming_counts.get(&article_id).copied().unwrap_or(0);
         if incoming_before >= 1 {
             skipped.push(SkippedTarget {
@@ -474,6 +483,10 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        if article_id == 0 {
+            continue;
+        }
 
         let incoming_before = incoming_counts.get(&article_id).copied().unwrap_or(0);
         if incoming_before >= 1 {

@@ -172,6 +172,41 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
             Ok(_) => {}
             Err(e) => log::warn!("[date_enforce] Failed after {}: {}", ctx.step.name, e),
         }
+
+        // ─── Slug guard: prevent agent from changing frontmatter slug ──────────
+        if let Some((expected, file_path)) = find_expected_slug_and_file(ctx) {
+            if let Ok(content) = std::fs::read_to_string(&file_path) {
+                if let Some((fm_text, body)) = crate::content::frontmatter::split_mdx(&content) {
+                    let actual = crate::content::frontmatter::parse(fm_text)
+                        .ok()
+                        .and_then(|fm| fm.parsed["slug"].as_str().map(String::from));
+                    if let Some(actual) = actual {
+                        let actual_clean = actual.trim().trim_matches('"').trim_matches('\'');
+                        let expected_clean = expected.trim().trim_matches('"').trim_matches('\'');
+                        if !actual_clean.is_empty() && actual_clean != expected_clean {
+                            log::warn!(
+                                "[slug_guard] Agent changed slug from '{}' to '{}' in {}. Restoring...",
+                                expected_clean,
+                                actual_clean,
+                                file_path.display()
+                            );
+                            let new_fm = crate::content::frontmatter::replace_scalar(fm_text, "slug", expected_clean);
+                            let new_content = format!("---\n{}---\n{}", new_fm, body);
+                            if let Err(e) = std::fs::write(&file_path, new_content) {
+                                log::warn!("[slug_guard] Failed to restore slug in {}: {}", file_path.display(), e);
+                            } else {
+                                log::info!("[slug_guard] Restored slug to '{}' in {}", expected_clean, file_path.display());
+                                override_out.status = Some("failed".to_string());
+                                override_out.message = Some(format!(
+                                    "Agent attempted to change slug from '{}' to '{}'. Slug restored. Review agent output to ensure other changes are still valid.",
+                                    expected_clean, actual_clean
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     override_out
@@ -694,4 +729,86 @@ fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<Strin
         }
     }
     (keyword, kd, volume)
+}
+
+/// Derive the expected URL slug from a filename stem and find the resolved file path
+/// for a content-modifying task.
+///
+/// Returns `Some((expected_slug, absolute_file_path))` if the task modifies a single
+/// known article file, or `None` for new-article tasks where no baseline exists.
+fn find_expected_slug_and_file(ctx: &PostStepContext<'_>) -> Option<(String, std::path::PathBuf)> {
+    let project_path = std::path::Path::new(ctx.project_path);
+    let desc = ctx.task.description.as_deref().unwrap_or("");
+
+    // Try to extract a file path from the description.
+    // Patterns:
+    //   "File: ./src/blog/posts/02_post.mdx"
+    //   "File: ./webapp/content/blog/13_post.mdx"
+    let file_path = if let Some(start) = desc.find("File: ") {
+        let rest = &desc[start + 6..];
+        let end = rest.find(" |").unwrap_or(rest.len());
+        let path_str = rest[..end].trim();
+        let path = std::path::Path::new(path_str);
+        if path.is_relative() {
+            project_path.join(path)
+        } else {
+            path.to_path_buf()
+        }
+    } else if let Some(start) = desc.find("File:") {
+        // Handle "File:./path" without space
+        let rest = &desc[start + 5..];
+        let end = rest.find(" |").or_else(|| rest.find('\n')).unwrap_or(rest.len());
+        let path_str = rest[..end].trim();
+        let path = std::path::Path::new(path_str);
+        if path.is_relative() {
+            project_path.join(path)
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        // Fallback: try to parse "Article ID: X" and look up the file in DB
+        if let Some(start) = desc.find("Article ID:") {
+            let rest = &desc[start + 11..];
+            let id_str = rest.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
+            if let Ok(article_id) = id_str.parse::<i64>() {
+                if let Ok(articles) = task_store::list_articles(ctx.conn, &ctx.task.project_id) {
+                    if let Some(article) = articles.iter().find(|a| a.id == article_id) {
+                        let path = std::path::Path::new(&article.file);
+                        if path.is_relative() {
+                            project_path.join(path)
+                        } else {
+                            path.to_path_buf()
+                        }
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    };
+
+    if !file_path.exists() {
+        return None;
+    }
+
+    // Derive expected slug from filename stem (same logic as article_index.rs)
+    let stem = file_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let expected = crate::content::slug::strip_numeric_prefix(stem)
+        .to_lowercase()
+        .replace('_', "-");
+
+    if expected.is_empty() {
+        return None;
+    }
+
+    Some((expected, file_path))
 }

@@ -471,7 +471,7 @@ pub(crate) async fn exec_content_review_recommend(
 
     let rec = match crate::rig::extraction::extract_structured::<
         crate::models::content_review::ContentReviewRecommendations,
-    >(agent_provider, &prompt, Some(preamble))
+    >(agent_provider, &prompt, Some(preamble), Some("direct"))
     .await
     {
         Ok(output) => output,

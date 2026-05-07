@@ -248,6 +248,7 @@ pub(crate) async fn exec_territory_strategy(
         agent_provider,
         &prompt,
         Some(preamble),
+        Some("direct"),
     )
     .await
     {

@@ -23,6 +23,10 @@ use crate::rig::provider::{resolve_backend, LlmBackend};
 /// * `provider_name` - The LLM provider (`"kimi"`, `"claude"`, `"openai"`, `"ollama"`)
 /// * `prompt` - The user prompt / extraction instruction
 /// * `preamble` - Optional system preamble (added to extractor's built-in preamble)
+/// * `backend_preference` - Kimi bridge routing: `Some("direct")` for fast stateless
+///   extraction (recommended for analysis, recommendations, audits), or `Some("acp")`
+///   for project-aware extraction that may need persistent session / file I/O.
+///   Pass `None` to let the bridge decide its default.
 ///
 /// # Errors
 /// Returns `Err(String)` on:
@@ -42,12 +46,14 @@ use crate::rig::provider::{resolve_backend, LlmBackend};
 ///     "kimi",
 ///     "Extract 3 research themes from this brief: ...",
 ///     Some("You are a keyword research assistant."),
+///     Some("direct"),
 /// ).await?;
 /// ```
 pub async fn extract_structured<T>(
     provider_name: &str,
     prompt: &str,
     preamble: Option<&str>,
+    backend_preference: Option<&str>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
@@ -68,13 +74,14 @@ where
         _ => {}
     }
 
-    extract_with_backend(&backend, prompt, preamble).await
+    extract_with_backend(&backend, prompt, preamble, backend_preference).await
 }
 
 pub(crate) async fn extract_with_backend<T>(
     backend: &LlmBackend,
     prompt: &str,
     preamble: Option<&str>,
+    backend_preference: Option<&str>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
@@ -85,14 +92,17 @@ where
 
     match backend {
         LlmBackend::KimiBridge { base_url, model } => {
-            // Structured extraction uses native tool calls, which require ACP.
-            // Explicitly request acp so the bridge does not default to direct.
+            // `backend_preference` is passed as the X-Kimi-Backend header.
+            // - "direct": 120s timeout, fast, stateless. Falls back to JSON mode
+            //   if native tool calls are not supported.
+            // - "acp": 300s timeout, project-aware, may queue behind concurrency limit.
+            // - None: bridge default (usually direct).
             crate::rig::compat::kimi::extract_structured::<T>(
                 base_url,
                 model,
                 prompt,
                 preamble,
-                Some("acp"),
+                backend_preference,
             )
             .await
         }
@@ -152,7 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_structured_rejects_unknown_provider() {
-        let result = extract_structured::<TestOutput>("unknown_provider", "test", None).await;
+        let result = extract_structured::<TestOutput>("unknown_provider", "test", None, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Unknown provider"));
@@ -162,7 +172,7 @@ mod tests {
     async fn test_extract_with_backend_rejects_kimi_direct() {
         // Test the backend directly — avoids env-var sensitivity from resolve_backend.
         let backend = LlmBackend::KimiDirect;
-        let result: Result<TestOutput, String> = extract_with_backend(&backend, "test", None).await;
+        let result: Result<TestOutput, String> = extract_with_backend(&backend, "test", None, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("KimiDirect"));
@@ -231,6 +241,7 @@ mod tests {
         let result: TestOutput = extract_with_backend(
             &backend,
             "Extract the name and count from this prompt.",
+            None,
             None,
         )
         .await

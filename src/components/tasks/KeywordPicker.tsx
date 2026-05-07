@@ -462,7 +462,7 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
       
       // Auto-add created tasks to the queue (shopping cart pattern)
       if (tasks.length > 0) {
-        queue.enqueueNext(
+        queue.enqueue(
           tasks.map(t => ({
             taskId: t.id,
             projectId: t.project_id,

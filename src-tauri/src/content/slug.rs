@@ -90,7 +90,16 @@ pub fn normalize_url_slug(slug: &str) -> String {
     let slug = slug.trim();
     let slug = slug.trim_start_matches('/').trim_end_matches('/');
     let slug = slug.rsplit('/').next().unwrap_or(slug);
-    let slug = numeric_prefix_re().replace(slug, "");
+    // Strip ALL leading numeric prefixes (e.g. 2025-08-01- → "")
+    let re = numeric_prefix_re();
+    let mut slug = slug.to_string();
+    while re.is_match(&slug) {
+        let next = re.replace(&slug, "").to_string();
+        if next == slug {
+            break;
+        }
+        slug = next;
+    }
     slug.replace('_', "-").replace(' ', "-").to_lowercase()
 }
 

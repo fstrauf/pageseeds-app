@@ -657,7 +657,7 @@ pub(crate) fn exec_cluster_link_apply(
                 );
                 continue;
             }
-            new_link_lines.push(format!("- [{}]{}\n", title, blog_link));
+            new_link_lines.push(format!("- [{}]({})\n", title, blog_link));
         }
 
         if new_link_lines.is_empty() {
