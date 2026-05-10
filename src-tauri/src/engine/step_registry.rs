@@ -944,6 +944,14 @@ impl StepRegistry {
             crate::engine::exec::consolidate_cluster::exec_merge_sync_articles
         );
 
+        // ─── Keyword Research: Territory Analysis ───────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::ResearchTerritoryAnalysis,
+            crate::engine::exec::keywords::exec_research_territory_analysis
+        );
+
         // ─── Territory Research ─────────────────────────────────────────────────
 
         register_blocking!(

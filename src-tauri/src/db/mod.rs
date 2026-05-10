@@ -5,6 +5,7 @@ use crate::error::Result;
 
 pub mod export;
 pub mod global_settings;
+pub mod research_shortlist;
 
 /// Get the default database path based on platform conventions.
 /// Used when we need to access the DB without having the AppState.
@@ -1140,6 +1141,40 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (38, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 39 {
+        // Research shortlist: persistent queue of themes/keywords to research
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS research_shortlist (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id          TEXT NOT NULL,
+                theme               TEXT NOT NULL,
+                seeds               TEXT NOT NULL DEFAULT '[]',
+                source              TEXT NOT NULL DEFAULT 'territory_analysis',
+                status              TEXT NOT NULL DEFAULT 'pending',
+                priority            TEXT NOT NULL DEFAULT 'medium',
+                article_count       INTEGER,
+                total_impressions   REAL,
+                added_at            TEXT NOT NULL,
+                researched_at       TEXT,
+                covered_at          TEXT,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_research_shortlist_project ON research_shortlist(project_id);
+            CREATE INDEX IF NOT EXISTS idx_research_shortlist_status ON research_shortlist(status);
+            CREATE INDEX IF NOT EXISTS idx_research_shortlist_project_status ON research_shortlist(project_id, status);"
+        )?;
+        // Clean up deprecated territory_research tasks (delete child runs first to satisfy FK).
+        // Wrapped in its own execute_batch so a missing task_runs table doesn't block the migration.
+        let _ = conn.execute_batch(
+            "DELETE FROM task_runs WHERE task_id IN (SELECT id FROM tasks WHERE type = 'territory_research');
+             DELETE FROM tasks WHERE type = 'territory_research';"
+        );
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (39, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }

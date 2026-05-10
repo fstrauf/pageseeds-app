@@ -305,19 +305,6 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
-    // Territory research → spawn write_article tasks from content recommendations
-    if ctx.task.task_type == "territory_research" {
-        if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
-            follow_up_ids.extend(
-                crate::engine::exec::territory_research::create_territory_write_tasks(
-                    ctx.conn,
-                    &reloaded,
-                    ctx.project_path,
-                ),
-            );
-        }
-    }
-
     // cluster_and_link / interlinking → spawn follow-up if orphans remain
     if matches!(
         ctx.task.task_type.as_str(),

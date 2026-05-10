@@ -1,0 +1,145 @@
+{
+  "generated_at": "2026-05-10T18:15:02Z",
+  "links_to_add": [
+    {
+      "source_article_id": 2,
+      "target_article_id": 98,
+      "target_title": "Best Stocks To Sell Put Options Next Week",
+      "target_slug": "best-stocks-to-sell-put-options-next-week",
+      "reason": "The screening guide for cash-secured puts naturally leads readers to timely, actionable picks for the upcoming week."
+    },
+    {
+      "source_article_id": 2,
+      "target_article_id": 94,
+      "target_title": "Best Stocks To Sell Put Options Today",
+      "target_slug": "best-stocks-to-sell-put-options-today",
+      "reason": "Readers looking for the best CSP stocks will also want today's specific trade ideas."
+    },
+    {
+      "source_article_id": 2,
+      "target_article_id": 96,
+      "target_title": "Best Stocks To Sell Put Options This Week",
+      "target_slug": "best-stocks-to-sell-put-options-this-week",
+      "reason": "The 2026 screening guide should funnel readers to this week's curated put-selling candidates."
+    },
+    {
+      "source_article_id": 2,
+      "target_article_id": 97,
+      "target_title": "Best Stocks To Sell Put Options Right Now",
+      "target_slug": "best-stocks-to-sell-put-options-right-now",
+      "reason": "A natural downstream link from the general screening guide to immediate trade opportunities."
+    },
+    {
+      "source_article_id": 2,
+      "target_article_id": 119,
+      "target_title": "Best Stocks To Sell Put Options On December 2026",
+      "target_slug": "best-stocks-to-sell-put-options-on-december-2026",
+      "reason": "The screening guide covers horizon-based picks; December 2026 is a logical future-dated extension."
+    },
+    {
+      "source_article_id": 2,
+      "target_article_id": 120,
+      "target_title": "Best Stocks To Sell Put Options June 2026",
+      "target_slug": "best-stocks-to-sell-put-options-june-2026",
+      "reason": "June 2026 picks are a direct thematic match for the CSP screening guide's horizon coverage."
+    },
+    {
+      "source_article_id": 2,
+      "target_article_id": 121,
+      "target_title": "Best Stocks To Sell Put Options May 2026",
+      "target_slug": "best-stocks-to-sell-put-options-may-2026",
+      "reason": "May 2026 picks fit the same hub-and-spoke pattern under the cash-secured puts screening guide."
+    },
+    {
+      "source_article_id": 7,
+      "target_article_id": 103,
+      "target_title": "Wheel Options Trading Strategy Review",
+      "target_slug": "wheel-options-trading-strategy-review",
+      "reason": "The Wheel guide should reference the strategy review for readers wanting a deeper performance analysis."
+    },
+    {
+      "source_article_id": 25,
+      "target_article_id": 127,
+      "target_title": "What Is 0DTE Options? A Plain-English Explanation",
+      "target_slug": "what-is-0dte-options",
+      "reason": "The 0DTE strategy guide should link to the plain-English explainer for newcomers to the concept."
+    },
+    {
+      "source_article_id": 25,
+      "target_article_id": 128,
+      "target_title": "What Are 0DTE Options? The Concise Answer for New Traders",
+      "target_slug": "what-are-0dte-options",
+      "reason": "The strategy guide naturally funnels beginners to the concise definition article before diving into tactics."
+    },
+    {
+      "source_article_id": 124,
+      "target_article_id": 135,
+      "target_title": "IRA Options for High Income Earners: Backdoor Roth, Mega Backdoor, and Tax-Efficient Strategies",
+      "target_slug": "ira-options-for-high-income-earners",
+      "reason": "The IRA options rules article should point high-income readers to the advanced tax-efficient strategies guide."
+    },
+    {
+      "source_article_id": 13,
+      "target_article_id": 140,
+      "target_title": "Option Price Calculator: How to Value Options Before You Trade",
+      "target_slug": "option-price-calculator",
+      "reason": "A calculators roundup should include the option price calculator as a direct tool recommendation."
+    },
+    {
+      "source_article_id": 129,
+      "target_article_id": 140,
+      "target_title": "Option Price Calculator: How to Value Options Before You Trade",
+      "target_slug": "option-price-calculator",
+      "reason": "The profit-calculation article should reference the option price calculator for hands-on valuation."
+    },
+    {
+      "source_article_id": 9,
+      "target_article_id": 19,
+      "target_title": "What Are the Greeks in Options: Beginner's Reference Guide",
+      "target_slug": "what-are-greeks-options",
+      "reason": "The income trader's Greeks guide should link to the beginner's reference for readers needing foundational context."
+    },
+    {
+      "source_article_id": 9,
+      "target_article_id": 45,
+      "target_title": "What Are the Greeks in Options: Beginner's Q&A Guide",
+      "target_slug": "what-are-greeks-faq",
+      "reason": "The main Greeks guide should funnel readers to the Q&A format for common beginner questions."
+    },
+    {
+      "source_article_id": 137,
+      "target_article_id": 138,
+      "target_title": "Short VIX ETF: How Inverse Volatility Products Work and How Traders Use Them",
+      "target_slug": "short-vix-etf",
+      "reason": "The VXX explainer should naturally reference its inverse counterpart for traders comparing products."
+    },
+    {
+      "source_article_id": 1,
+      "target_article_id": 156,
+      "target_title": "Options Trading Example: Real Trades Explained Step by Step",
+      "target_slug": "options-trading-example",
+      "reason": "The CSP playbook should link to real trade examples so readers can see the strategy in practice."
+    },
+    {
+      "source_article_id": 5,
+      "target_article_id": 156,
+      "target_title": "Options Trading Example: Real Trades Explained Step by Step",
+      "target_slug": "options-trading-example",
+      "reason": "The IB walkthrough should point readers to concrete trade examples after learning platform mechanics."
+    },
+    {
+      "source_article_id": 134,
+      "target_article_id": 131,
+      "target_title": "Protective Put Option: Complete Portfolio Insurance Guide (2026)",
+      "target_slug": "protective-put-option",
+      "reason": "The beginner's guide should introduce protective puts as a core risk-management concept for new traders."
+    },
+    {
+      "source_article_id": 88,
+      "target_article_id": 156,
+      "target_title": "Options Trading Example: Real Trades Explained Step by Step",
+      "target_slug": "options-trading-example",
+      "reason": "The analytics dashboard article should reference real trade examples to show how portfolio insights translate into action."
+    }
+  ]
+}

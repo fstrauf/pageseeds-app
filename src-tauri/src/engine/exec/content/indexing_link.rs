@@ -340,9 +340,6 @@ Requirements:
 
 /// Deterministic apply: append a Related Articles link or insert a contextual
 /// paragraph link to the chosen source file.
-///
-/// Uses snapshot/rollback for safety. If validation fails after a
-/// contextual_paragraph edit, the original file is restored.
 pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepResult {
     use std::path::Path;
 
@@ -429,7 +426,6 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
     let mut links_added = 0usize;
     let mut links_skipped_existing = 0usize;
     let mut links_failed = 0usize;
-    let mut snapshots: Vec<crate::content::snapshot::FileSnapshot> = Vec::new();
 
     for link in &links {
         let source_id = link["source_article_id"].as_i64().unwrap_or(0);
@@ -490,20 +486,6 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
             continue;
         }
 
-        // Create snapshot before editing
-        let snapshot = match crate::content::snapshot::snapshot_file(file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!(
-                    "[indexing_link_apply] failed to snapshot {}: {}",
-                    file_path.display(),
-                    e
-                );
-                links_failed += 1;
-                continue;
-            }
-        };
-
         let new_content = match placement {
             "contextual_paragraph" => {
                 match insert_contextual_link(&content, &anchor_text, &target_slug) {
@@ -528,7 +510,6 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
             Ok(_) => {
                 files_modified.push(source_basename.clone());
                 links_added += 1;
-                snapshots.push(snapshot);
                 log::info!(
                     "[indexing_link_apply] {} — added {} link to {}",
                     source_basename,
@@ -547,23 +528,12 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
         }
     }
 
-    let snapshot_json: Vec<serde_json::Value> = snapshots
-        .iter()
-        .map(|s| {
-            serde_json::json!({
-                "original_path": s.original_path.to_string_lossy(),
-                "backup_path": s.backup_path.to_string_lossy(),
-            })
-        })
-        .collect();
-
     let summary = serde_json::json!({
         "target_slug": target_slug,
         "links_added": links_added,
         "links_skipped_existing": links_skipped_existing,
         "links_failed": links_failed,
         "source_files_modified": files_modified,
-        "snapshots": snapshot_json,
     });
 
     // Success if we added links, OR if all planned links already existed.
@@ -836,9 +806,6 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
 
     let passed = incoming_after > incoming_before;
 
-    // Commit or rollback snapshots based on verification result
-    let snapshot_actions = handle_snapshots(task, passed);
-
     let verification = serde_json::json!({
         "target_article_id": target_article_id,
         "target_slug": target_slug,
@@ -847,83 +814,22 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
         "links_added": links_added,
         "source_files_modified": source_files_modified,
         "passed": passed,
-        "snapshot_actions": snapshot_actions,
     });
 
     StepResult {
         success: passed,
         message: if passed {
             format!(
-                "Verification passed: target {} gained {} inbound link(s) ({} → {}). {}",
-                target_slug, links_added, incoming_before, incoming_after, snapshot_actions
+                "Verification passed: target {} gained {} inbound link(s) ({} → {})",
+                target_slug, links_added, incoming_before, incoming_after
             )
         } else {
             format!(
-                "Verification FAILED: target {} still has {} inbound link(s) (expected > {}). {}",
-                target_slug, incoming_after, incoming_before, snapshot_actions
+                "Verification FAILED: target {} still has {} inbound link(s) (expected > {})",
+                target_slug, incoming_after, incoming_before
             )
         },
         output: Some(verification.to_string()),
-    }
-}
-
-/// Commit snapshots on success, rollback on failure.
-/// Reads snapshot paths from the indexing_link_apply artifact.
-fn handle_snapshots(task: &Task, passed: bool) -> String {
-    let apply_artifact = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "indexing_link_apply");
-
-    let snapshots = match apply_artifact {
-        Some(a) => match a.content.as_ref() {
-            Some(c) => match serde_json::from_str::<serde_json::Value>(c) {
-                Ok(v) => v["snapshots"].as_array().cloned().unwrap_or_default(),
-                Err(_) => return "No snapshot info found in apply artifact".to_string(),
-            },
-            None => return "No snapshot info found in apply artifact".to_string(),
-        },
-        None => return "No apply artifact found".to_string(),
-    };
-
-    let mut committed = 0usize;
-    let mut rolled_back = 0usize;
-    let mut errors: Vec<String> = Vec::new();
-
-    for snap in &snapshots {
-        let original = snap["original_path"].as_str().unwrap_or("");
-        let backup = snap["backup_path"].as_str().unwrap_or("");
-        if original.is_empty() || backup.is_empty() {
-            continue;
-        }
-
-        let snapshot = crate::content::snapshot::FileSnapshot {
-            original_path: std::path::PathBuf::from(original),
-            backup_path: std::path::PathBuf::from(backup),
-            created_at: String::new(),
-        };
-
-        if passed {
-            match crate::content::snapshot::commit_snapshot(&snapshot) {
-                Ok(_) => committed += 1,
-                Err(e) => errors.push(format!("commit {}: {}", original, e)),
-            }
-        } else {
-            match crate::content::snapshot::rollback_file(&snapshot) {
-                Ok(_) => rolled_back += 1,
-                Err(e) => errors.push(format!("rollback {}: {}", original, e)),
-            }
-        }
-    }
-
-    if !errors.is_empty() {
-        log::warn!("[handle_snapshots] errors: {}", errors.join("; "));
-    }
-
-    if passed {
-        format!("Committed {} snapshot(s)", committed)
-    } else {
-        format!("Rolled back {} snapshot(s)", rolled_back)
     }
 }
 

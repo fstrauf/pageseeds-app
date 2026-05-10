@@ -10,9 +10,11 @@
 mod auto_spawn;
 mod coverage_filter;
 mod research_pipeline;
+mod territory_analysis;
 mod tests;
 mod theme_extraction;
 
 pub(crate) use coverage_filter::*;
 pub(crate) use research_pipeline::*;
+pub(crate) use territory_analysis::*;
 pub(crate) use theme_extraction::*;

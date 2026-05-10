@@ -403,14 +403,15 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
-    // Territory research (stub — full handler in Phase 5)
+    // update_research_shortlist: deterministic territory + coverage gap analysis
+    // that feeds the persistent research_shortlist table for keyword research.
     TaskDefinition {
-        task_type: "territory_research",
-        phase: "research",
-        run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::ArtifactReview,
-        follow_up_policy: FollowUpPolicy::BackendAuto,
-        handler_family: HandlerFamily::TerritoryResearch,
+        task_type: "update_research_shortlist",
+        phase: "investigation",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Research,
     },
     // Calculator rollout (stub — full handler in Phase 6)
     TaskDefinition {

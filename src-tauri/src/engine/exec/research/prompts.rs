@@ -65,6 +65,44 @@ fn build_coverage_summary(coverage: &serde_json::Value) -> String {
     }
 }
 
+/// Build a text summary from the research_shortlist SQLite table.
+/// Shows pending open territories so the LLM can prioritize them.
+fn build_shortlist_summary(project_id: &str) -> String {
+    let db_path = crate::db::default_db_path();
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(_) => return "(shortlist unavailable)".to_string(),
+    };
+    let entries = match crate::db::research_shortlist::list_entries(&conn, project_id, Some("pending")) {
+        Ok(e) => e,
+        Err(_) => return "(shortlist unavailable)".to_string(),
+    };
+
+    if entries.is_empty() {
+        return "No pending territory research items.".to_string();
+    }
+
+    let mut lines: Vec<String> = vec![
+        "The following themes were identified as open territories (low coverage + high impressions). \
+         Prioritize these in your theme extraction:".to_string(),
+    ];
+    for entry in entries {
+        let seed_hint = if entry.seeds.is_empty() {
+            String::new()
+        } else {
+            format!(" → suggested seeds: {}", entry.seeds.join(", "))
+        };
+        lines.push(format!(
+            "- {} ({} impressions, {} articles){}",
+            entry.theme,
+            entry.total_impressions.map(|i| format!("{:.0}", i)).unwrap_or_else(|| "unknown".to_string()),
+            entry.article_count.map(|c| c.to_string()).unwrap_or_else(|| "unknown".to_string()),
+            seed_hint
+        ));
+    }
+    lines.join("\n")
+}
+
 /// Build system and user prompts for a research workflow step
 ///
 /// The `previous_output` parameter contains the output from the previous step,
@@ -117,10 +155,14 @@ pub fn build_research_prompts(
                     }
                 };
 
+            // ── Research shortlist (open territories from GSC analysis) ───────────
+            let shortlist_summary = build_shortlist_summary(&task.project_id);
+
             let user = format!(
-                "## Project Context\n\n{}\n\n## Existing Content Coverage\n\n{}\n\n## Task Description\n\n{}\n\n## Project Path\n\n{}",
+                "## Project Context\n\n{}\n\n## Existing Content Coverage\n\n{}\n\n## Research Shortlist (Priority Territories)\n\n{}\n\n## Task Description\n\n{}\n\n## Project Path\n\n{}",
                 brief_content,
                 coverage_summary,
+                shortlist_summary,
                 task.description.as_deref().unwrap_or("(no description)"),
                 project_path
             );

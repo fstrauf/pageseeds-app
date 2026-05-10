@@ -495,6 +495,24 @@ pub(crate) fn exec_keyword_research_native(
     // ── Pre-parse validated seeds (needs task borrow, must happen before thread spawn) ──
     let validated_seeds = parse_validated_seeds_artifact(task);
 
+    // ── Read pending territory shortlist entries ──────────────────────────────
+    let pending_shortlist = read_pending_shortlist(task);
+    let pending_shortlist_ids: Vec<i64> = pending_shortlist.iter().filter_map(|e| e.id).collect();
+    let shortlist_seeds: Vec<(String, String)> = pending_shortlist
+        .into_iter()
+        .flat_map(|entry| {
+            let theme = entry.theme.clone();
+            entry.seeds.into_iter().map(move |seed| (theme.clone(), seed))
+        })
+        .collect();
+    if !shortlist_seeds.is_empty() {
+        log::info!(
+            "[keyword_research_native] {} pending shortlist entries ({} seeds) to research",
+            pending_shortlist_ids.len(),
+            shortlist_seeds.len()
+        );
+    }
+
     // ── Bridge to tokio async runtime ─────────────────────────────────────────
     // Spawn a new thread with its own runtime to avoid block_on issues when called
     // from within an async context (queue executor)
@@ -506,6 +524,7 @@ pub(crate) fn exec_keyword_research_native(
     let seo_provider_thread = seo_provider.to_string();
     let project_path_thread = project_path.to_string();
     let validated_seeds_thread = validated_seeds;
+    let shortlist_seeds_thread = shortlist_seeds;
 
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
@@ -528,12 +547,19 @@ pub(crate) fn exec_keyword_research_native(
                     );
                 }
 
-                // Use validated seeds if available, otherwise fall back to raw themes
-                let seeds_to_use: Vec<(String, String)> = if !validated_seeds_thread.is_empty() {
+                // Use validated seeds if available, otherwise fall back to raw themes.
+                // Also inject pending territory shortlist seeds so they get validated.
+                let mut seeds_to_use: Vec<(String, String)> = if !validated_seeds_thread.is_empty() {
                     validated_seeds_thread
                 } else {
                     themes_thread.iter().map(|t| (t.clone(), t.clone())).collect()
                 };
+                seeds_to_use.extend(shortlist_seeds_thread);
+                // Deduplicate by seed string
+                {
+                    let mut seen_seeds = HashSet::new();
+                    seeds_to_use.retain(|(_, seed)| seen_seeds.insert(seed.clone()));
+                }
 
                 log::info!(
                     "[keyword_research_native] {} (theme, seed) pairs to query",
@@ -580,7 +606,14 @@ pub(crate) fn exec_keyword_research_native(
                 );
             } else {
                 // ── Ahrefs/Google Autocomplete path (legacy) ──────────────────────
-                for theme in &themes_thread {
+                // Build theme list from normal themes + shortlist themes
+                let mut all_themes = themes_thread.clone();
+                for (theme, _) in &shortlist_seeds_thread {
+                    if !all_themes.contains(theme) {
+                        all_themes.push(theme.clone());
+                    }
+                }
+                for theme in &all_themes {
                     log::info!("[keyword_research_native] fetching Google autocomplete ideas for theme '{}'", theme);
                     match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
                         Ok(result) => {
@@ -828,6 +861,16 @@ pub(crate) fn exec_keyword_research_native(
             }
         };
 
+    // Mark shortlist entries as researched
+    if !pending_shortlist_ids.is_empty() {
+        if let Ok(conn) = rusqlite::Connection::open(crate::db::default_db_path()) {
+            match crate::db::research_shortlist::mark_researched(&conn, &pending_shortlist_ids) {
+                Ok(n) => log::info!("[keyword_research_native] Marked {} shortlist entries as researched", n),
+                Err(e) => log::warn!("[keyword_research_native] Failed to mark shortlist entries as researched: {}", e),
+            }
+        }
+    }
+
     if total_candidates == 0 {
         return crate::engine::workflows::StepResult {
             success: false,
@@ -904,5 +947,24 @@ pub(crate) fn exec_keyword_research_native(
             analyzed_count
         ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
+    }
+}
+
+/// Read pending shortlist entries from SQLite for this task's project.
+fn read_pending_shortlist(task: &Task) -> Vec<crate::db::research_shortlist::ResearchShortlistEntry> {
+    let db_path = crate::db::default_db_path();
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[keyword_research_native] Failed to open DB for shortlist: {}", e);
+            return Vec::new();
+        }
+    };
+    match crate::db::research_shortlist::list_entries(&conn, &task.project_id, Some("pending")) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!("[keyword_research_native] Failed to read shortlist: {}", e);
+            Vec::new()
+        }
     }
 }

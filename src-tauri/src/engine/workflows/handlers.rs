@@ -80,24 +80,39 @@ impl WorkflowHandler for ResearchHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "research_keywords" | "custom_keyword_research" | "research_landing_pages"
+            "research_keywords" | "custom_keyword_research" | "research_landing_pages" | "update_research_shortlist"
         )
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
+            "update_research_shortlist" => vec![
+                // Deterministic: run territory analysis and sync to SQLite shortlist.
+                WorkflowStep::new(
+                    "research_territory_analysis",
+                    StepKind::ResearchTerritoryAnalysis,
+                ),
+            ],
             "research_keywords" | "research_landing_pages" => {
-                // 5-step hybrid workflow:
-                // agentic → deterministic → agentic → deterministic → deterministic
+                // 6-step hybrid workflow:
+                // deterministic → agentic → deterministic → agentic → deterministic → deterministic
                 vec![
-                    // Step 1 (agentic): LLM extracts 3-4 themes from project brief.
+                    // Step 1 (deterministic): Territory analysis — reads articles + GSC data,
+                    // groups by target_keyword, identifies open territories and saturated themes.
+                    // Writes findings to the persistent research_shortlist SQLite table.
+                    WorkflowStep::new(
+                        "research_territory_analysis",
+                        StepKind::ResearchTerritoryAnalysis,
+                    ),
+                    // Step 2 (agentic): LLM extracts 3-4 themes from project brief.
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires reading intent from free-form text.
+                    // Now also reads the research_shortlist to prioritize open territories.
                     WorkflowStep::new("research_seed_extraction", StepKind::Agentic),
-                    // Step 2 (deterministic): fetch Google Autocomplete for all themes.
+                    // Step 3 (deterministic): fetch Google Autocomplete for all themes.
                     // Free API, always returns results. Outputs structured JSON: [{theme, suggestions}].
                     WorkflowStep::new("research_autocomplete", StepKind::ResearchAutocomplete),
-                    // Step 3 (agentic): LLM filters autocomplete suggestions for domain relevance.
+                    // Step 4 (agentic): LLM filters autocomplete suggestions for domain relevance.
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires understanding what is on-topic for this
                     // specific product/site. Hard-coding a relevance rule would produce silent errors
@@ -105,13 +120,14 @@ impl WorkflowHandler for ResearchHandler {
                     // Input contract: [{theme, suggestions: [string]}]
                     // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
                     WorkflowStep::new("research_seed_validation", StepKind::Agentic),
-                    // Step 4 (deterministic): DataForSEO related_keywords per validated seed.
+                    // Step 5 (deterministic): DataForSEO related_keywords per validated seed.
                     // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
+                    // Also consumes pending territory themes from research_shortlist as extra seeds.
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
                         .with_latest_raw_policy(
                             crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
                         ),
-                    // Step 5 (deterministic): Select best candidates from structured data.
+                    // Step 6 (deterministic): Select best candidates from structured data.
                     // Outputs clean JSON directly — no normalizer needed because upstream
                     // agentic steps now use Extractor<T>.
                     WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection),

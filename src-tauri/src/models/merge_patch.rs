@@ -125,7 +125,6 @@ pub struct ExtractedFaq {
 pub struct MergeValidationReport {
     pub keeper_valid: bool,
     pub keeper_word_count: usize,
-    pub snapshot_path: Option<String>,
     pub redirect_map_path: Option<String>,
     pub issues: Vec<String>,
 }

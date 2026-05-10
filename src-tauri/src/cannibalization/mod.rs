@@ -357,36 +357,6 @@ pub fn spawn_tasks_from_approved(
         }
     }
 
-    // Territory recommendations
-    for rec in &strategy.territory_recommendations {
-        let key = format!("territory:{}", rec.theme);
-        if !approved.contains(&key) {
-            continue;
-        }
-        let idempotency_key = format!("can_fix:territory:{}:{}", project_id, rec.theme);
-        let spec = TaskSpec {
-            project_id: project_id.to_string(),
-            task_type: "territory_research".to_string(),
-            title: Some(format!("Research territory: {}", rec.theme)),
-            description: Some(format!(
-                "Approved territory research: {} (priority: {})",
-                rec.theme, rec.priority
-            )),
-            priority: Priority::Medium,
-            run_policy: Some(TaskRunPolicy::UserEnqueue),
-            agent_policy: AgentPolicy::Required,
-            depends_on: depends_on.clone(),
-            artifacts: vec![artifact.clone()],
-            idempotency_key: Some(idempotency_key),
-            dedup_policy: Some(DeduplicationPolicy::SkipIfAnyExists),
-            ..Default::default()
-        };
-        match TaskSpawner::spawn(db, spec) {
-            Ok(task) => created_ids.push(task.id),
-            Err(e) => log::warn!("Failed to create territory task: {}", e),
-        }
-    }
-
     // Calculator recommendations
     for rec in &strategy.calculator_recommendations {
         let key = format!("calculator:{}", rec.strategy);
@@ -500,21 +470,6 @@ pub fn spawn_tasks_from_selection(
             if !id.is_empty() {
                 valid_keys.insert(format!("hub:{}", id));
                 hub_map.insert(id.to_string(), rec);
-            }
-        }
-    }
-
-    let territory_recs = strategy
-        .get("territory_recommendations")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut territory_map = std::collections::HashMap::new();
-    for rec in &territory_recs {
-        if let Some(id) = get_str(rec, "theme") {
-            if !id.is_empty() {
-                valid_keys.insert(format!("territory:{}", id));
-                territory_map.insert(id.to_string(), rec);
             }
         }
     }
@@ -657,32 +612,6 @@ pub fn spawn_tasks_from_selection(
                 };
                 TaskSpawner::spawn(db, spec)?
             }
-            "territory" => {
-                let rec = territory_map.get(&sel.recommendation_id).ok_or_else(|| {
-                    crate::error::Error::Validation("Territory rec not found".to_string())
-                })?;
-                let theme = sel.recommendation_id.clone();
-                let priority = get_str(rec, "priority").unwrap_or("medium").to_string();
-                let idempotency_key = format!("can_fix:territory:{}:{}", project_id, theme);
-                let spec = TaskSpec {
-                    project_id: project_id.clone(),
-                    task_type: "territory_research".to_string(),
-                    title: Some(format!("Research territory: {}", theme)),
-                    description: Some(format!(
-                        "Territory research: {} (priority: {})",
-                        theme, priority
-                    )),
-                    priority: Priority::Medium,
-                    run_policy: Some(TaskRunPolicy::UserEnqueue),
-                    agent_policy: AgentPolicy::Required,
-                    depends_on: depends_on.clone(),
-                    artifacts: vec![artifact.clone()],
-                    idempotency_key: Some(idempotency_key),
-                    dedup_policy: Some(DeduplicationPolicy::SkipIfAnyExists),
-                    ..Default::default()
-                };
-                TaskSpawner::spawn(db, spec)?
-            }
             "calculator" => {
                 let rec = calculator_map.get(&sel.recommendation_id).ok_or_else(|| {
                     crate::error::Error::Validation("Calculator rec not found".to_string())
@@ -799,13 +728,6 @@ mod tests {
                     "reason": "Gap detected"
                 }
             ],
-            "territory_recommendations": [
-                {
-                    "theme": "portfolio-hedging",
-                    "priority": "high",
-                    "suggested_tasks": ["Research hedging strategies"]
-                }
-            ],
             "calculator_recommendations": [
                 {
                     "strategy": "black-scholes",
@@ -905,22 +827,17 @@ mod tests {
                 recommendation_id: "risk-management".to_string(),
             },
             CannibalizationSelection {
-                recommendation_type: "territory".to_string(),
-                recommendation_id: "portfolio-hedging".to_string(),
-            },
-            CannibalizationSelection {
                 recommendation_type: "calculator".to_string(),
                 recommendation_id: "black-scholes".to_string(),
             },
         ];
 
         let tasks = spawn_tasks_from_selection(&conn, &parent.id, &selections).unwrap();
-        assert_eq!(tasks.len(), 4);
+        assert_eq!(tasks.len(), 3);
 
         let types: Vec<String> = tasks.iter().map(|t| t.task_type.clone()).collect();
         assert!(types.contains(&"consolidate_cluster".to_string()));
         assert!(types.contains(&"write_article".to_string()));
-        assert!(types.contains(&"territory_research".to_string()));
         assert!(types.contains(&"calculator_rollout".to_string()));
     }
 

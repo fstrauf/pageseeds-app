@@ -52,6 +52,8 @@ pub enum StepKind {
     ResearchSeedValidation,
     /// Rig Agent with native tool calling for keyword research (experimental).
     KeywordResearchToolAgent,
+    /// Deterministic territory analysis: groups articles by keyword, finds open/saturated themes.
+    ResearchTerritoryAnalysis,
     /// Build structured context for CTR audit (deterministic data collection).
     CtrBuildContext,
     /// Agentic CTR analysis — titles, meta, snippets, FAQ (agentic).
@@ -186,6 +188,7 @@ impl StepKind {
             Self::ResearchAutocomplete => "research_autocomplete",
             Self::ResearchSeedValidation => "research_seed_validation",
             Self::KeywordResearchToolAgent => "keyword_research_tool_agent",
+            Self::ResearchTerritoryAnalysis => "research_territory_analysis",
             Self::CtrBuildContext => "ctr_build_context",
             Self::CtrAnalyze => "ctr_analyze",
             Self::CanBuildContext => "can_build_context",
@@ -291,6 +294,7 @@ impl FromStr for StepKind {
             "research_autocomplete" => Ok(Self::ResearchAutocomplete),
             "research_seed_validation" => Ok(Self::ResearchSeedValidation),
             "keyword_research_tool_agent" => Ok(Self::KeywordResearchToolAgent),
+            "research_territory_analysis" => Ok(Self::ResearchTerritoryAnalysis),
             "ctr_build_context" => Ok(Self::CtrBuildContext),
             "ctr_analyze" => Ok(Self::CtrAnalyze),
             "can_build_context" => Ok(Self::CanBuildContext),
@@ -406,6 +410,7 @@ mod tests {
             StepKind::ResearchAutocomplete,
             StepKind::ResearchSeedValidation,
             StepKind::KeywordResearchToolAgent,
+            StepKind::ResearchTerritoryAnalysis,
             StepKind::CtrBuildContext,
             StepKind::CtrAnalyze,
             StepKind::CtrFixGenerate,

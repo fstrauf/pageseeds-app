@@ -808,7 +808,6 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
     let report = MergeValidationReport {
         keeper_valid,
         keeper_word_count: word_count,
-        snapshot_path: None,
         redirect_map_path: Some(csv_path.to_string_lossy().to_string()),
         issues: issues.clone(),
     };

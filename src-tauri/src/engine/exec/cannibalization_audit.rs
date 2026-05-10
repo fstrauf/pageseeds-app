@@ -1,7 +1,7 @@
 /// Keyword cannibalization audit execution module.
 ///
 /// Covers:
-///   - exec_can_build_context   (deterministic TF-IDF clustering + link graph + hub gaps + territory analysis)
+///   - exec_can_build_context   (deterministic TF-IDF clustering + link graph + hub gaps)
 ///   - create_can_fix_tasks     (spawn follow-up fix tasks)
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -266,9 +266,6 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     // ── 7. Detect hub gaps ────────────────────────────────────────────────────
     let hub_gaps = detect_hub_gaps(&records, &clusters, db_conn.as_ref(), &task.project_id);
 
-    // ── 8. Analyse territories ────────────────────────────────────────────────
-    let territory_analysis = analyze_territories(&records);
-
     // ── 9. Build serializable article list ────────────────────────────────────
     let articles_json: Vec<serde_json::Value> = records
         .iter()
@@ -396,58 +393,31 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         );
     }
 
-    let territory_path = paths.automation_dir.join("territory_analysis.json");
-    let territory_doc = serde_json::json!({
-        "generated_at": &now_iso,
-        "territory_analysis": &territory_analysis,
-    });
-    if let Err(e) = std::fs::write(
-        &territory_path,
-        serde_json::to_string_pretty(&territory_doc).unwrap_or_default() + "\n",
-    ) {
-        log::warn!(
-            "[cannibalization_audit] Failed to write territory_analysis.json: {}",
-            e
-        );
-    }
-
-    // ── 12. Return compact artifact summary (full context stays on disk) ─────
-    let territory_count = territory_analysis["saturated_themes"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0)
-        + territory_analysis["open_territories"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0);
-
+    // ── 11. Return compact artifact summary (full context stays on disk) ─────
     let summary = serde_json::json!({
         "artifact_paths": {
             "context": ".github/automation/cannibalization_audit_context.json",
             "clusters": ".github/automation/cannibalization_clusters.json",
-            "hub_gaps": ".github/automation/hub_gaps.json",
-            "territory_analysis": ".github/automation/territory_analysis.json"
+            "hub_gaps": ".github/automation/hub_gaps.json"
         },
         "summary": {
             "total_articles": articles_json.len(),
             "total_impressions": total_impressions,
             "similarity_pairs": similarity_pairs.len(),
             "candidate_clusters": clusters.len(),
-            "hub_gaps": hub_gaps.len(),
-            "territories": territory_count
+            "hub_gaps": hub_gaps.len()
         }
     });
 
     StepResult {
         success: true,
         message: format!(
-            "Cannibalization context built: {} articles, {} similar pairs, {} keyword groups, {} clusters, {} hub gaps, {} territories",
+            "Cannibalization context built: {} articles, {} similar pairs, {} keyword groups, {} clusters, {} hub gaps",
             articles_json.len(),
             similarity_pairs.len(),
             keyword_groups_json.len(),
             clusters.len(),
             hub_gaps.len(),
-            territory_count,
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
     }
@@ -954,154 +924,6 @@ fn capitalize_words(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Territory analysis
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Build a canonical keyword form for semantic grouping.
-/// Splits into words, sorts them, and re-joins so that
-/// "covered calls strategy" and "strategy covered calls" group together.
-fn canonical_keyword(kw: &str) -> String {
-    let mut words: Vec<String> = kw
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
-        .collect();
-    words.sort_unstable();
-    words.join(" ")
-}
-
-/// Compute Jaccard similarity between two keyword strings (0.0–1.0).
-fn keyword_jaccard(a: &str, b: &str) -> f64 {
-    let set_a: HashSet<String> = a
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
-        .collect();
-    let set_b: HashSet<String> = b
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
-        .collect();
-    if set_a.is_empty() || set_b.is_empty() {
-        return 0.0;
-    }
-    let intersection: HashSet<&String> = set_a.intersection(&set_b).collect();
-    let union_count = set_a.len() + set_b.len() - intersection.len();
-    if union_count == 0 {
-        return 0.0;
-    }
-    intersection.len() as f64 / union_count as f64
-}
-
-/// Analyse content coverage to find saturated themes and open territories.
-///
-/// Improvements:
-/// - Semantic grouping collapses keyword variations (e.g. "covered calls" / "covered call strategy")
-/// - Open territory threshold raised to 5,000 impressions
-/// - Open territories capped at top 10 by impressions
-fn analyze_territories(records: &[ArticleRecord]) -> serde_json::Value {
-    // Raw grouping by exact target_keyword
-    let mut raw_groups: HashMap<String, Vec<i64>> = HashMap::new();
-    for r in records {
-        let kw = r.target_keyword.trim().to_lowercase();
-        if kw.is_empty() {
-            continue;
-        }
-        raw_groups.entry(kw).or_default().push(r.id);
-    }
-
-    // Semantic grouping: merge keywords that are canonical duplicates or high Jaccard overlap
-    let mut merged_groups: HashMap<String, (Vec<i64>, Vec<String>)> = HashMap::new();
-    let mut canonical_to_representative: HashMap<String, String> = HashMap::new();
-
-    for (kw, ids) in raw_groups {
-        let canonical = canonical_keyword(&kw);
-        let mut merged = false;
-
-        // Try to merge with an existing group if Jaccard > 0.5
-        for (rep, (existing_ids, existing_kws)) in merged_groups.iter_mut() {
-            if keyword_jaccard(&kw, rep) > 0.5 {
-                existing_ids.extend(ids.clone());
-                existing_kws.push(kw.clone());
-                merged = true;
-                break;
-            }
-        }
-
-        if !merged {
-            canonical_to_representative.insert(canonical.clone(), kw.clone());
-            let kw_clone = kw.clone();
-            merged_groups.insert(kw, (ids, vec![kw_clone]));
-        }
-    }
-
-    // Deduplicate article IDs within each merged group
-    for (ids, _) in merged_groups.values_mut() {
-        ids.sort_unstable();
-        ids.dedup();
-    }
-
-    let mut saturated_themes: Vec<serde_json::Value> = Vec::new();
-    let mut open_territories: Vec<serde_json::Value> = Vec::new();
-
-    for (representative, (ids, source_kws)) in &merged_groups {
-        let total_impressions: f64 = ids
-            .iter()
-            .filter_map(|&id| records.iter().find(|r| r.id == id))
-            .map(|r| r.gsc["impressions"].as_f64().unwrap_or(0.0))
-            .sum();
-
-        if ids.len() > 5 {
-            saturated_themes.push(serde_json::json!({
-                "theme": representative,
-                "article_count": ids.len(),
-                "total_impressions": total_impressions,
-                "source_keywords": source_kws,
-                "reason": format!("{} articles ({} merged keywords) target the same narrow theme.", ids.len(), source_kws.len()),
-            }));
-        } else if ids.len() <= 1 {
-            // Only flag as open if it has meaningful impressions (evidence of demand)
-            const OPEN_TERRITORY_IMPRESSION_THRESHOLD: f64 = 5000.0;
-            if total_impressions >= OPEN_TERRITORY_IMPRESSION_THRESHOLD {
-                open_territories.push(serde_json::json!({
-                    "theme": representative,
-                    "article_count": ids.len(),
-                    "total_impressions": total_impressions,
-                    "source_keywords": source_kws,
-                    "reason": "Low coverage but existing impressions suggest demand.",
-                }));
-            }
-        }
-    }
-
-    // Sort by total impressions descending
-    saturated_themes.sort_by(|a, b| {
-        let ta = a["total_impressions"].as_f64().unwrap_or(0.0);
-        let tb = b["total_impressions"].as_f64().unwrap_or(0.0);
-        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    open_territories.sort_by(|a, b| {
-        let ta = a["total_impressions"].as_f64().unwrap_or(0.0);
-        let tb = b["total_impressions"].as_f64().unwrap_or(0.0);
-        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    // Cap open territories to top 10 so the strategy doesn't drown in low-value suggestions
-    const MAX_OPEN_TERRITORIES: usize = 10;
-    let open_territories_count = open_territories.len();
-    if open_territories.len() > MAX_OPEN_TERRITORIES {
-        open_territories.truncate(MAX_OPEN_TERRITORIES);
-    }
-
-    serde_json::json!({
-        "saturated_themes": saturated_themes,
-        "open_territories": open_territories,
-        "open_territories_dropped": open_territories_count.saturating_sub(MAX_OPEN_TERRITORIES),
-        "total_themes": merged_groups.len(),
-    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1862,7 +1684,7 @@ fn build_merge_prompt_trimmed(
 /// Deterministic reducer that merges batch outputs into the final
 /// `cannibalization_strategy.json`.
 ///
-/// Validates merge recommendations and includes deterministic hub/territory data.
+/// Validates merge recommendations and includes deterministic hub data.
 pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
@@ -1882,19 +1704,6 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| serde_json::json!({ "hub_gaps": [] }));
-
-    let territory_path = paths.automation_dir.join("territory_analysis.json");
-    let territory_doc: serde_json::Value = std::fs::read_to_string(&territory_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "territory_analysis": {
-                    "saturated_themes": [],
-                    "open_territories": []
-                }
-            })
-        });
 
     let mut merge_recommendations: Vec<serde_json::Value> = Vec::new();
     let mut risks: Vec<String> = Vec::new();
@@ -2005,41 +1814,10 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
         })
         .collect();
 
-    let mut territory_recommendations: Vec<serde_json::Value> = Vec::new();
-    if let Some(saturated) = territory_doc["territory_analysis"]["saturated_themes"].as_array() {
-        for theme in saturated {
-            territory_recommendations.push(serde_json::json!({
-                "theme": theme["theme"],
-                "opportunity": format!(
-                    "Saturated territory: {} articles. Consider consolidation or hub creation.",
-                    theme["article_count"].as_i64().unwrap_or(0)
-                ),
-                "suggested_articles": Vec::<String>::new(),
-                "priority": "medium",
-                "deterministic": true,
-            }));
-        }
-    }
-    if let Some(open) = territory_doc["territory_analysis"]["open_territories"].as_array() {
-        for theme in open {
-            territory_recommendations.push(serde_json::json!({
-                "theme": theme["theme"],
-                "opportunity": format!(
-                    "Open territory with {} impressions. Consider new content.",
-                    theme["total_impressions"].as_f64().unwrap_or(0.0) as i64
-                ),
-                "suggested_articles": Vec::<String>::new(),
-                "priority": "high",
-                "deterministic": true,
-            }));
-        }
-    }
-
     let strategy = serde_json::json!({
         "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         "merge_recommendations": merge_recommendations,
         "hub_recommendations": hub_recommendations,
-        "territory_recommendations": territory_recommendations,
         "risks": risks,
     });
 
@@ -2061,10 +1839,9 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
     StepResult {
         success: true,
         message: format!(
-            "Strategy reduced: {} merge recommendations, {} hub recommendations, {} territory recommendations, {} risks",
+            "Strategy reduced: {} merge recommendations, {} hub recommendations, {} risks",
             merge_recommendations.len(),
             hub_recommendations.len(),
-            territory_recommendations.len(),
             risks.len()
         ),
         output: Some(serde_json::to_string_pretty(&strategy).unwrap_or_default()),
@@ -2077,8 +1854,8 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
 
 /// No longer auto-spawns destructive fix tasks.
 ///
-/// Phase 2 requires explicit approval via the review UI before any merge,
-/// hub, or territory tasks are created. The strategy is persisted as an
+/// Phase 2 requires explicit approval via the review UI before any merge
+/// or hub tasks are created. The strategy is persisted as an
 /// artifact and in `cannibalization_strategy.json` for review.
 pub(crate) fn create_can_fix_tasks(
     _conn: &Connection,
@@ -2300,8 +2077,6 @@ Cash secured puts are a great way to generate income.
         assert!(auto_dir.join("cannibalization_audit_context.json").exists());
         assert!(auto_dir.join("cannibalization_clusters.json").exists());
         assert!(auto_dir.join("hub_gaps.json").exists());
-        assert!(auto_dir.join("territory_analysis.json").exists());
-
         // Verify clusters artifact has the expected content
         let clusters_content =
             std::fs::read_to_string(auto_dir.join("cannibalization_clusters.json")).unwrap();
@@ -2395,12 +2170,13 @@ Some content here.
 
         let output: serde_json::Value =
             serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
-        assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 2);
+        // Articles without GSC data are filtered out from clustering
+        assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 0);
         assert_eq!(
             output["summary"]["total_impressions"].as_f64().unwrap(),
             0.0
         );
-        assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 1);
+        assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 0);
 
         cleanup(&path);
     }
@@ -2494,138 +2270,6 @@ Some content here.
             gaps.is_empty(),
             "Should not report hub gap when hub exists in cluster"
         );
-    }
-
-    #[test]
-    fn test_territory_analysis() {
-        let records = vec![
-            ArticleRecord {
-                id: 1,
-                url_slug: "a".to_string(),
-                title: "A".to_string(),
-                h1: "A".to_string(),
-                target_keyword: "saturated theme".to_string(),
-                first_200_words: "...".to_string(),
-                file: "a.mdx".to_string(),
-                gsc: serde_json::json!({"impressions": 1000.0}),
-                tokens: vec![],
-                incoming_links: 0,
-                outgoing_links: 0,
-                published_date: "".to_string(),
-                word_count: 100,
-                page_type: None,
-            },
-            ArticleRecord {
-                id: 2,
-                url_slug: "b".to_string(),
-                title: "B".to_string(),
-                h1: "B".to_string(),
-                target_keyword: "saturated theme".to_string(),
-                first_200_words: "...".to_string(),
-                file: "b.mdx".to_string(),
-                gsc: serde_json::json!({"impressions": 1000.0}),
-                tokens: vec![],
-                incoming_links: 0,
-                outgoing_links: 0,
-                published_date: "".to_string(),
-                word_count: 100,
-                page_type: None,
-            },
-            ArticleRecord {
-                id: 3,
-                url_slug: "c".to_string(),
-                title: "C".to_string(),
-                h1: "C".to_string(),
-                target_keyword: "saturated theme".to_string(),
-                first_200_words: "...".to_string(),
-                file: "c.mdx".to_string(),
-                gsc: serde_json::json!({"impressions": 1000.0}),
-                tokens: vec![],
-                incoming_links: 0,
-                outgoing_links: 0,
-                published_date: "".to_string(),
-                word_count: 100,
-                page_type: None,
-            },
-            ArticleRecord {
-                id: 4,
-                url_slug: "d".to_string(),
-                title: "D".to_string(),
-                h1: "D".to_string(),
-                target_keyword: "saturated theme".to_string(),
-                first_200_words: "...".to_string(),
-                file: "d.mdx".to_string(),
-                gsc: serde_json::json!({"impressions": 1000.0}),
-                tokens: vec![],
-                incoming_links: 0,
-                outgoing_links: 0,
-                published_date: "".to_string(),
-                word_count: 100,
-                page_type: None,
-            },
-            ArticleRecord {
-                id: 5,
-                url_slug: "e".to_string(),
-                title: "E".to_string(),
-                h1: "E".to_string(),
-                target_keyword: "saturated theme".to_string(),
-                first_200_words: "...".to_string(),
-                file: "e.mdx".to_string(),
-                gsc: serde_json::json!({"impressions": 1000.0}),
-                tokens: vec![],
-                incoming_links: 0,
-                outgoing_links: 0,
-                published_date: "".to_string(),
-                word_count: 100,
-                page_type: None,
-            },
-            ArticleRecord {
-                id: 6,
-                url_slug: "f".to_string(),
-                title: "F".to_string(),
-                h1: "F".to_string(),
-                target_keyword: "saturated theme".to_string(),
-                first_200_words: "...".to_string(),
-                file: "f.mdx".to_string(),
-                gsc: serde_json::json!({"impressions": 1000.0}),
-                tokens: vec![],
-                incoming_links: 0,
-                outgoing_links: 0,
-                published_date: "".to_string(),
-                word_count: 100,
-                page_type: None,
-            },
-            ArticleRecord {
-                id: 7,
-                url_slug: "g".to_string(),
-                title: "G".to_string(),
-                h1: "G".to_string(),
-                target_keyword: "open territory".to_string(),
-                first_200_words: "...".to_string(),
-                file: "g.mdx".to_string(),
-                gsc: serde_json::json!({"impressions": 5000.0}),
-                tokens: vec![],
-                incoming_links: 0,
-                outgoing_links: 0,
-                published_date: "".to_string(),
-                word_count: 100,
-                page_type: None,
-            },
-        ];
-
-        let analysis = analyze_territories(&records);
-        let saturated = analysis["saturated_themes"].as_array().unwrap();
-        let open = analysis["open_territories"].as_array().unwrap();
-
-        assert_eq!(saturated.len(), 1, "Should detect saturated theme");
-        assert_eq!(saturated[0]["theme"].as_str().unwrap(), "saturated theme");
-
-        assert_eq!(
-            open.len(),
-            1,
-            "Should detect open territory with impressions"
-        );
-        assert_eq!(open[0]["theme"].as_str().unwrap(), "open territory");
     }
 
     #[test]
@@ -2898,7 +2542,7 @@ Some content here.
         )
         .unwrap();
 
-        // Write minimal hub gaps and territory analysis
+        // Write minimal hub gaps
         let hub_doc = serde_json::json!({
             "hub_gaps": [
                 {
@@ -2913,18 +2557,6 @@ Some content here.
         std::fs::write(
             auto_dir.join("hub_gaps.json"),
             serde_json::to_string_pretty(&hub_doc).unwrap(),
-        )
-        .unwrap();
-
-        let territory_doc = serde_json::json!({
-            "territory_analysis": {
-                "saturated_themes": [{"theme": "saturated", "article_count": 6, "total_impressions": 1000.0}],
-                "open_territories": [{"theme": "open", "article_count": 1, "total_impressions": 2000.0}]
-            }
-        });
-        std::fs::write(
-            auto_dir.join("territory_analysis.json"),
-            serde_json::to_string_pretty(&territory_doc).unwrap(),
         )
         .unwrap();
 
@@ -2970,10 +2602,6 @@ Some content here.
         // Should include hub from deterministic data
         let hubs = strategy["hub_recommendations"].as_array().unwrap();
         assert_eq!(hubs.len(), 1);
-
-        // Should include territories from deterministic data
-        let territories = strategy["territory_recommendations"].as_array().unwrap();
-        assert_eq!(territories.len(), 2);
 
         // Should record the failed candidate as a risk
         let risks = strategy["risks"].as_array().unwrap();
