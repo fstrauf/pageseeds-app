@@ -208,6 +208,7 @@ pub async fn extract_structured<T>(
     prompt: &str,
     preamble: Option<&str>,
     backend: Option<&str>,
+    max_tokens: Option<u64>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Send + Sync,
@@ -310,6 +311,7 @@ where
                 preamble,
                 &schema_value,
                 backend,
+                max_tokens,
             )
             .await;
         }
@@ -399,6 +401,7 @@ async fn extract_structured_json_mode<T>(
     preamble: Option<&str>,
     schema: &serde_json::Value,
     backend: Option<&str>,
+    max_tokens: Option<u64>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Send + Sync,
@@ -430,7 +433,7 @@ where
             content: user_content,
         }],
         temperature: Some(0.1),
-        max_tokens: None,
+        max_tokens,
         tools: None,
         tool_choice: None,
         response_format: Some(ResponseFormat {
@@ -784,6 +787,11 @@ mod tests {
             "test-model",
             "Say hello",
             Some("You are a helpful assistant."),
+            None,
+            None,
+            None,
+            None,
+            None,
             None,
         )
         .await

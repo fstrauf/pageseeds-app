@@ -215,6 +215,96 @@ cargo test --manifest-path src-tauri/Cargo.toml step_registry
 
 ---
 
+## Scenario: Building a Per-Article Fix Pipeline (Canonical Pattern)
+
+**Use when:** A parent task audits/analyzes a collection and produces per-item fix tasks that need structured, reliable application — e.g. `ctr_audit` → `fix_ctr_article`, `content_review` → `fix_content_article`.
+
+**Why this pattern exists:** The old approach used a single generic `Agentic` step with no skill and no output constraints. This produced vague prompts, unconstrained LLM output, and timeouts. The fix pipeline replaces that with a typed, deterministic hybrid workflow.
+
+**Primitive:** Deterministic context → Structured extraction (`Extractor<T>`) → Deterministic apply → Deterministic verify
+
+**Reference implementations (study these before building):**
+- **CTR audit** (`fix_ctr_article`) — the canonical example in `engine/exec/ctr_audit/`
+  - `exec_ctr_analyze` → `exec_ctr_fix_generate` → `exec_ctr_fix_apply` → `exec_ctr_verify_fix`
+- **Content review** (`fix_content_article`) — the second example in `engine/exec/content/`
+  - `exec_fix_content_article_context` → `exec_fix_content_article_generate` → `exec_fix_content_article_apply` → `exec_fix_content_article_verify`
+
+**The 4-step structure:**
+
+| Step | Kind | Responsibility | Output |
+|------|------|----------------|--------|
+| 1. Context | **Deterministic** | Load audit data + read target file → build structured JSON context | `latest_raw` or artifact |
+| 2. Generate | **Agentic** | Load skill → call `rig::extraction::extract_with_backend::<PatchType>()` → validate → repair once | Typed `PatchType` JSON artifact |
+| 3. Apply | **Deterministic** | Parse patch → snapshot file → apply changes → rebuild MDX → validate structure → restore on corruption | Modified file on disk |
+| 4. Verify | **Deterministic** | Re-run health checks against thresholds → report pass/fail per field | `VerificationReport` JSON |
+
+**Files touched (in order):**
+
+1. **Skill** — `.github/skills/{fix-skill}/SKILL.md`
+   - Must specify the exact `PatchType` output contract
+   - Must list validation rules the Rust side will enforce
+   - Must say "Return ONLY a valid JSON object matching the schema"
+
+2. **Model** — `src-tauri/src/models/{domain}.rs`
+   - Add `PatchType` struct with `#[derive(JsonSchema, TS)]` + `#[ts(export)]`
+   - Add `PatchChanges` struct with optional fields for each fix category
+   - Add `VerificationReport` + `VerifiedItem` structs
+   - Reuse existing models from `ctr.rs` or `content_review.rs` as templates
+
+3. **Step kinds** — `src-tauri/src/engine/workflows/step_kind.rs`
+   - Add `{Domain}FixContext`, `{Domain}FixGenerate`, `{Domain}FixApply`, `{Domain}FixVerify`
+   - Register string mappings in `as_str()`, `from_str()`, and test array
+
+4. **Step registry** — `src-tauri/src/engine/step_registry.rs`
+   - Context: `register_blocking!(..., exec_{domain}_fix_context)`
+   - Generate: `handlers.insert(..., Box::new(|step, ctx| { ... exec_{domain}_fix_generate(...).await }))`
+   - Apply/Verify: `register_blocking!` or `handlers.insert` with `spawn_blocking`
+
+5. **Handler plan** — `src-tauri/src/engine/workflows/handlers.rs`
+   - Replace generic `WorkflowStep::new("...", StepKind::Agentic)` with the 4-step sequence
+   - Set `.with_param(step_params::SKILL, "{fix-skill}")` on generate step
+   - Set `.with_param(step_params::ARTIFACT_NAME, "{domain}_fix_patch")` on generate step
+   - Set `.with_latest_raw_policy(ReplaceWithOutput)` on context step
+
+6. **Execution modules** — `src-tauri/src/engine/exec/{domain}/`
+   - `{domain}_fix_context.rs` — deterministic data gathering
+   - `{domain}_fix_generate.rs` — structured extraction with `extract_with_backend::<PatchType>()`
+   - `{domain}_fix_apply.rs` — deterministic file patch application
+   - `{domain}_fix_verify.rs` — deterministic health check re-run
+   - Update `mod.rs` to declare and re-export all four
+
+7. **Task spawner** — `src-tauri/src/engine/exec/{domain}/task_spawner.rs` (or `post_actions.rs`)
+   - Create per-item follow-up tasks with full single-item context embedded in artifacts
+   - Do NOT store lightweight references — the task must be self-contained
+
+**Critical rules:**
+- **Never** use a bare `StepKind::Agentic` with `skill: None` for fix tasks. It will timeout or produce garbage.
+- **Always** use `rig::extraction::extract_with_backend::<T>()` for the generate step. This gives JSON schema enforcement + automatic repair retry.
+- **Always** constrain the prompt: "Return ONLY a valid JSON object." Raw prose prompts cause timeouts on long generation.
+- The apply step must **snapshot** the original file, apply changes, **validate MDX structure**, and **restore** on corruption.
+- The verify step must check the same thresholds the audit used (title length, meta length, snippet word count, etc.).
+
+**Files NOT touched:**
+- `engine/executor.rs` (the generic executor orchestrates; step registry wires your steps)
+- `commands/` (unless you need a new UI command — follow the frontend scenario above)
+- Do not add a new `HandlerFamily` unless the step graph structure is genuinely different
+
+**Validation:**
+```bash
+# Verify StepKind round-trips
+cargo test --manifest-path src-tauri/Cargo.toml step_registry
+
+# Verify the full pipeline compiles
+cargo check --manifest-path src-tauri/Cargo.toml
+
+# Verify structured extraction schema is valid JSON Schema
+cargo test --manifest-path src-tauri/Cargo.toml extract_structured
+```
+
+**Anti-pattern:** Reusing `StepKind::Agentic` with a generic prompt for per-article fixes. The agent doesn't know what to fix, doesn't know the output format, and generates unconstrained prose that hits the 120s timeout. Always use the 4-step hybrid pattern.
+
+---
+
 ## Scenario: Adding Article Persistence
 
 **Use when:** You need to save, update, or export article data.

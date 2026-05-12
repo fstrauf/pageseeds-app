@@ -242,6 +242,35 @@ Requirements:
     )
 }
 
+/// Build a prompt for a single article — used in per-article extraction.
+pub(crate) fn build_single_article_prompt(article: &serde_json::Value) -> String {
+    let article_json = serde_json::to_string_pretty(article).unwrap_or_default();
+    format!(
+        r#"Analyze the following article and generate specific, actionable SEO recommendations.
+
+Input context:
+{article_json}
+
+Examine:
+1. Title and H1 quality — keyword presence, clarity, length
+2. Meta description — presence, length (50-155 chars), keyword inclusion
+3. Introduction — engagement, keyword placement
+4. Content structure — H2 headings, readability
+5. Internal links — quantity, relevance
+6. EEAT signals — credibility, authoritativeness
+7. Call-to-action — clarity and placement
+8. Year freshness — compare any year mentioned in the title or H1 against the published_date
+
+For each suggestion, use one of these categories: title, meta_description, intro, h1, internal_links, faq, eeat, cta, date.
+
+Requirements:
+- 4-8 actionable suggestions for THIS article only.
+- Use only the provided context.
+- Be specific: include the exact current text and proposed replacement."#,
+        article_json = article_json,
+    )
+}
+
 /// Execute the `content_review_apply` task.
 ///
 /// Reads the `recommendations` artifact embedded in the task, builds a
@@ -446,14 +475,39 @@ pub(crate) async fn exec_content_review_recommend(
         };
     }
 
-    let context = build_review_context(&selected, repo_root, 2600);
-    let n_context = context["articles"].as_array().map(|a| a.len()).unwrap_or(0);
-    log::info!(
-        "[content_review_recommend] context built for {} articles",
-        n_context
-    );
+    // Build individual contexts — one per article, full excerpt, no cap
+    let contexts: Vec<serde_json::Value> = selected
+        .iter()
+        .filter_map(|article| {
+            let file_ref = article["file"].as_str().unwrap_or("");
+            if file_ref.is_empty() {
+                return None;
+            }
+            let source = crate::engine::exec::utils::read_source_file(repo_root, file_ref);
+            let source_excerpt = source
+                .as_deref()
+                .map(|s| {
+                    s.char_indices()
+                        .nth(2600)
+                        .map_or(s, |(i, _)| &s[..i])
+                        .to_string()
+                })
+                .unwrap_or_default();
+            Some(serde_json::json!({
+                "article_id": article["id"],
+                "article_title": article["title"],
+                "article_file": file_ref,
+                "url_slug": article["url_slug"],
+                "target_keyword": article["target_keyword"],
+                "published_date": article["published_date"],
+                "gsc_snapshot": article["gsc"],
+                "failed_checks": article["_failed_checks"],
+                "source_excerpt": source_excerpt,
+            }))
+        })
+        .collect();
 
-    if n_context == 0 {
+    if contexts.is_empty() {
         return crate::engine::workflows::StepResult {
             success: false,
             message: "Could not read source files for selected articles — check file paths in articles.json".to_string(),
@@ -461,27 +515,101 @@ pub(crate) async fn exec_content_review_recommend(
         };
     }
 
-    let prompt = build_review_prompt(&context);
-    let preamble = "You are an expert SEO content reviewer. Analyze articles and generate structured recommendations using the submit tool.";
-    log::info!(
-        "[content_review_recommend] running structured extraction ({} chars prompt, provider={})",
-        prompt.len(),
-        agent_provider
-    );
+    // Process articles individually with concurrency limit 2 (matches bridge limit)
+    let preamble = "You are an expert SEO content reviewer. Analyze the single article below and generate structured recommendations using the submit tool.";
+    let mut all_articles: Vec<crate::models::content_review::ReviewArticleRecommendation> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
 
-    let rec = match crate::rig::extraction::extract_structured::<
-        crate::models::content_review::ContentReviewRecommendations,
-    >(agent_provider, &prompt, Some(preamble), Some("direct"))
-    .await
-    {
-        Ok(output) => output,
-        Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Structured extraction failed: {}", e),
-                output: None,
+    async fn extract_one(
+        agent_provider: &str,
+        ctx: &serde_json::Value,
+        preamble: &str,
+    ) -> Result<crate::models::content_review::SingleArticleRecommendations, String> {
+        let prompt = build_single_article_prompt(ctx);
+        log::info!(
+            "[content_review_recommend] extracting article {} ({} chars prompt)",
+            ctx["article_id"].as_i64().unwrap_or(0),
+            prompt.len()
+        );
+        crate::rig::extraction::extract_structured::<
+            crate::models::content_review::SingleArticleRecommendations,
+        >(agent_provider, &prompt, Some(preamble), Some("direct"), None)
+        .await
+    }
+
+    for chunk in contexts.chunks(2) {
+        match chunk.len() {
+            1 => {
+                let ctx = &chunk[0];
+                let article_id = ctx["article_id"].as_i64().unwrap_or(0);
+                match extract_one(agent_provider, ctx, preamble).await {
+                    Ok(single) => {
+                        let article_rec = crate::models::content_review::ReviewArticleRecommendation {
+                            article_id,
+                            article_title: ctx["article_title"].as_str().unwrap_or("").to_string(),
+                            article_file: ctx["article_file"].as_str().unwrap_or("").to_string(),
+                            url_slug: ctx["url_slug"].as_str().unwrap_or("").to_string(),
+                            target_keyword: ctx["target_keyword"].as_str().map(|s| s.to_string()),
+                            suggestions: single.suggestions,
+                        };
+                        all_articles.push(article_rec);
+                        log::info!(
+                            "[content_review_recommend] article {} extracted successfully",
+                            article_id
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[content_review_recommend] article {} failed: {}",
+                            article_id,
+                            e
+                        );
+                        failed.push(format!("article {}: {}", article_id, e));
+                    }
+                }
             }
+            2 => {
+                let (r1, r2) = tokio::join!(
+                    extract_one(agent_provider, &chunk[0], preamble),
+                    extract_one(agent_provider, &chunk[1], preamble),
+                );
+                for (ctx, result) in chunk.iter().zip([r1, r2].into_iter()) {
+                    let article_id = ctx["article_id"].as_i64().unwrap_or(0);
+                    match result {
+                        Ok(single) => {
+                            let article_rec = crate::models::content_review::ReviewArticleRecommendation {
+                                article_id,
+                                article_title: ctx["article_title"].as_str().unwrap_or("").to_string(),
+                                article_file: ctx["article_file"].as_str().unwrap_or("").to_string(),
+                                url_slug: ctx["url_slug"].as_str().unwrap_or("").to_string(),
+                                target_keyword: ctx["target_keyword"].as_str().map(|s| s.to_string()),
+                                suggestions: single.suggestions,
+                            };
+                            all_articles.push(article_rec);
+                            log::info!(
+                                "[content_review_recommend] article {} extracted successfully",
+                                article_id
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[content_review_recommend] article {} failed: {}",
+                                article_id,
+                                e
+                            );
+                            failed.push(format!("article {}: {}", article_id, e));
+                        }
+                    }
+                }
+            }
+            _ => unreachable!(),
         }
+    }
+
+    let rec = crate::models::content_review::ContentReviewRecommendations {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        total_articles: all_articles.len(),
+        articles: all_articles,
     };
 
     let rec_value = match serde_json::to_value(&rec) {

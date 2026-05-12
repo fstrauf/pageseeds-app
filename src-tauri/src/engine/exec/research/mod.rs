@@ -317,7 +317,7 @@ where
         + Sync
         + 'static,
 {
-    match crate::rig::extraction::extract_structured::<T>(provider, prompt, Some(preamble), Some("direct")).await {
+    match crate::rig::extraction::extract_structured::<T>(provider, prompt, Some(preamble), Some("direct"), None).await {
         Ok(output) => {
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,

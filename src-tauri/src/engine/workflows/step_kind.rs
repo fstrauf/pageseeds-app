@@ -90,6 +90,15 @@ pub enum StepKind {
     CtrOutcomeCompare,
     /// Deterministic generation of CTR outcome report artifact.
     CtrOutcomeReport,
+    // ─── Fix Content Article ────────────────────────────────────────────────────
+    /// Deterministic: load recommendations + file content for a single article.
+    FixContentArticleContext,
+    /// Agentic: generate structured ContentFixPatch using skill + Rig extraction.
+    FixContentArticleGenerate,
+    /// Deterministic: apply agent-generated content fix patch to MDX file.
+    FixContentArticleApply,
+    /// Deterministic: verify applied content fixes meet health thresholds.
+    FixContentArticleVerify,
     /// Load approved merge plan from strategy artifact.
     MergeLoadPlan,
     /// Preflight checks before merging (files exist, no cycles, keeper indexable).
@@ -207,6 +216,10 @@ impl StepKind {
             Self::CtrSchemaVerifyRender => "ctr_schema_verify_render",
             Self::CtrOutcomeCompare => "ctr_outcome_compare",
             Self::CtrOutcomeReport => "ctr_outcome_report",
+            Self::FixContentArticleContext => "fix_content_article_context",
+            Self::FixContentArticleGenerate => "fix_content_article_generate",
+            Self::FixContentArticleApply => "fix_content_article_apply",
+            Self::FixContentArticleVerify => "fix_content_article_verify",
             Self::MergeLoadPlan => "merge_load_plan",
             Self::MergePreflight => "merge_preflight",
             Self::MergeExtractSections => "merge_extract_sections",
@@ -313,6 +326,10 @@ impl FromStr for StepKind {
             "ctr_schema_verify_render" => Ok(Self::CtrSchemaVerifyRender),
             "ctr_outcome_compare" => Ok(Self::CtrOutcomeCompare),
             "ctr_outcome_report" => Ok(Self::CtrOutcomeReport),
+            "fix_content_article_context" => Ok(Self::FixContentArticleContext),
+            "fix_content_article_generate" => Ok(Self::FixContentArticleGenerate),
+            "fix_content_article_apply" => Ok(Self::FixContentArticleApply),
+            "fix_content_article_verify" => Ok(Self::FixContentArticleVerify),
             "merge_load_plan" => Ok(Self::MergeLoadPlan),
             "merge_preflight" => Ok(Self::MergePreflight),
             "merge_extract_sections" => Ok(Self::MergeExtractSections),
@@ -430,6 +447,10 @@ mod tests {
             StepKind::CtrSchemaVerifyRender,
             StepKind::CtrOutcomeCompare,
             StepKind::CtrOutcomeReport,
+            StepKind::FixContentArticleContext,
+            StepKind::FixContentArticleGenerate,
+            StepKind::FixContentArticleApply,
+            StepKind::FixContentArticleVerify,
             StepKind::MergeLoadPlan,
             StepKind::MergePreflight,
             StepKind::MergeExtractSections,

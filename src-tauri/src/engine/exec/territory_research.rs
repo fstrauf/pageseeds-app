@@ -249,6 +249,7 @@ pub(crate) async fn exec_territory_strategy(
         &prompt,
         Some(preamble),
         Some("direct"),
+        None,
     )
     .await
     {

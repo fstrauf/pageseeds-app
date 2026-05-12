@@ -261,10 +261,31 @@ impl WorkflowHandler for ImplementationHandler {
                 )]
             }
             "fix_content_article" => vec![
-                // Per-article content fix: reads the recommendations artifact embedded in the task
-                // and applies SEO improvements (title, meta, intro, internal links, FAQ, EEAT, CTA)
-                // to a single MDX file. One focused agent call per article.
-                WorkflowStep::new("fix_content_article_apply", StepKind::Agentic),
+                // Step 1 (deterministic): load the article's recommendations from
+                // recommendations.json and read the current file state. Builds structured
+                // context consumed by the generate step.
+                WorkflowStep::new(
+                    "fix_content_article_context",
+                    StepKind::FixContentArticleContext,
+                )
+                .with_latest_raw_policy(
+                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                )
+                .with_param(step_params::ARTIFACT_NAME, "content_fix_context"),
+                // Step 2 (agentic): generate structured ContentFixPatch via Rig extraction.
+                // Cannot be deterministic: the agent must interpret recommendations and write
+                // prose that satisfies SEO rules, brand voice, and keyword context.
+                // Input contract: structured context with file content + recommendations.
+                // Output contract: ContentFixPatch JSON.
+                WorkflowStep::new("fix_content_article_generate", StepKind::FixContentArticleGenerate)
+                    .with_param(step_params::SKILL, "content-fix-apply")
+                    .with_param(step_params::ARTIFACT_NAME, "content_fix_patch"),
+                // Step 3 (deterministic): apply the patch to the MDX file.
+                // Snapshots original, replaces frontmatter/body, validates structure, restores on corruption.
+                WorkflowStep::new("fix_content_article_apply", StepKind::FixContentArticleApply),
+                // Step 4 (deterministic): re-run health checks to verify fixes meet thresholds.
+                // Produces ContentFixVerificationReport. Status = done if all pass, review if partial.
+                WorkflowStep::new("fix_content_article_verify", StepKind::FixContentArticleVerify),
             ],
             "fix_ctr_article" => vec![
                 // Step 1 (agentic): Analyze the single article's CTR context and produce a

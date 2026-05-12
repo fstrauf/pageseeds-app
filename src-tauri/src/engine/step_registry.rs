@@ -823,6 +823,79 @@ impl StepRegistry {
             }),
         );
 
+        // ─── Fix Content Article ────────────────────────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::FixContentArticleContext,
+            crate::engine::exec::content::exec_fix_content_article_context
+        );
+
+        handlers.insert(
+            StepKind::FixContentArticleGenerate,
+            Box::new(|step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                let agent_provider = ctx.agent_provider.to_string();
+                let step = step.clone();
+                Box::pin(async move {
+                    crate::engine::exec::content::exec_fix_content_article_generate(
+                        &step,
+                        &task,
+                        &project_path,
+                        &agent_provider,
+                    )
+                    .await
+                })
+            }),
+        );
+
+        handlers.insert(
+            StepKind::FixContentArticleApply,
+            Box::new(|_step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                let latest_raw = ctx.latest_raw.map(|s| s.to_string());
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::engine::exec::content::exec_fix_content_article_apply(
+                            &task,
+                            &project_path,
+                            latest_raw.as_deref(),
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| StepResult {
+                        success: false,
+                        message: format!("Step panicked: {}", e),
+                        output: None,
+                    })
+                })
+            }),
+        );
+
+        handlers.insert(
+            StepKind::FixContentArticleVerify,
+            Box::new(|_step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::engine::exec::content::exec_fix_content_article_verify(
+                            &task,
+                            &project_path,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| StepResult {
+                        success: false,
+                        message: format!("Step panicked: {}", e),
+                        output: None,
+                    })
+                })
+            }),
+        );
+
         register_blocking!(
             handlers,
             StepKind::CtrTemplateVerifyRender,

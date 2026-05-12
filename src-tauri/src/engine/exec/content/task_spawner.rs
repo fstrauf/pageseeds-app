@@ -17,7 +17,7 @@ pub(crate) fn recommendation_article_id(article: &serde_json::Value) -> Option<i
     }
 }
 
-fn fix_content_article_id(task: &Task) -> Option<i64> {
+pub(crate) fn fix_content_article_id(task: &Task) -> Option<i64> {
     task.artifacts.iter().find_map(|artifact| {
         artifact
             .content
@@ -175,26 +175,28 @@ pub(crate) fn create_content_review_apply_task(
             continue;
         }
 
-        // Store a lightweight reference instead of the full recommendation JSON.
-        // The full recommendations live in recommendations.json on disk;
-        // duplicating them here bloats every follow-up task row and accumulates
-        // in memory when list_tasks loads all tasks.
-        let article_ref = serde_json::json!({
+        // Store the full single-article recommendations so the fix task is self-contained.
+        // This matches the CTR pattern where follow-up tasks carry their full context.
+        let article_rec = serde_json::json!({
             "article_id": article_id,
+            "article_title": article_title,
             "article_file": article_file,
+            "url_slug": article["url_slug"].as_str().unwrap_or(""),
+            "target_keyword": article["target_keyword"].as_str().unwrap_or(""),
+            "suggestions": article["suggestions"].clone(),
         });
-        let article_ref_str = serde_json::to_string(&article_ref).unwrap_or_default();
+        let article_rec_str = serde_json::to_string(&article_rec).unwrap_or_default();
         let article_id_str = article_id.to_string();
 
         let title = format!("Fix: {}", article_title);
 
-        // Create individual artifact for this article — minimal reference only
+        // Create individual artifact for this article
         let artifact = TaskArtifact {
             key: format!("recommendations_{}", article_id_str),
             path: None,
             artifact_type: Some("json".to_string()),
             source: Some("content_review".to_string()),
-            content: Some(article_ref_str),
+            content: Some(article_rec_str),
         };
 
         // Idempotency key per article: content_review_apply:{project_id}:{article_id}

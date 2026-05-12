@@ -54,6 +54,7 @@ pub async fn extract_structured<T>(
     prompt: &str,
     preamble: Option<&str>,
     backend_preference: Option<&str>,
+    max_tokens: Option<u64>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
@@ -74,7 +75,7 @@ where
         _ => {}
     }
 
-    extract_with_backend(&backend, prompt, preamble, backend_preference).await
+    extract_with_backend(&backend, prompt, preamble, backend_preference, max_tokens).await
 }
 
 pub(crate) async fn extract_with_backend<T>(
@@ -82,6 +83,7 @@ pub(crate) async fn extract_with_backend<T>(
     prompt: &str,
     preamble: Option<&str>,
     backend_preference: Option<&str>,
+    max_tokens: Option<u64>,
 ) -> Result<T, String>
 where
     T: JsonSchema + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
@@ -103,6 +105,7 @@ where
                 prompt,
                 preamble,
                 backend_preference,
+                max_tokens,
             )
             .await
         }
@@ -162,7 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_structured_rejects_unknown_provider() {
-        let result = extract_structured::<TestOutput>("unknown_provider", "test", None, None).await;
+        let result = extract_structured::<TestOutput>("unknown_provider", "test", None, None, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Unknown provider"));
@@ -172,7 +175,7 @@ mod tests {
     async fn test_extract_with_backend_rejects_kimi_direct() {
         // Test the backend directly — avoids env-var sensitivity from resolve_backend.
         let backend = LlmBackend::KimiDirect;
-        let result: Result<TestOutput, String> = extract_with_backend(&backend, "test", None, None).await;
+        let result: Result<TestOutput, String> = extract_with_backend(&backend, "test", None, None, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("KimiDirect"));
@@ -241,6 +244,7 @@ mod tests {
         let result: TestOutput = extract_with_backend(
             &backend,
             "Extract the name and count from this prompt.",
+            None,
             None,
             None,
         )

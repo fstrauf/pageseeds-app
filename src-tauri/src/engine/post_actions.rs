@@ -191,7 +191,7 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
                                 file_path.display()
                             );
                             let new_fm = crate::content::frontmatter::replace_scalar(fm_text, "slug", expected_clean);
-                            let new_content = format!("---\n{}---\n{}", new_fm, body);
+                            let new_content = crate::content::cleaner::rebuild_mdx(&new_fm, body);
                             if let Err(e) = std::fs::write(&file_path, new_content) {
                                 log::warn!("[slug_guard] Failed to restore slug in {}: {}", file_path.display(), e);
                             } else {

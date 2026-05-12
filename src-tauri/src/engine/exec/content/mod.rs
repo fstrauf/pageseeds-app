@@ -15,11 +15,23 @@ mod indexing_link;
 ///   - build_review_prompt         (prompt assembly)
 ///   - create_content_review_apply_task (auto-spawn follow-up task)
 ///   - create_cluster_and_link_task    (auto-spawn follow-up task after write_article)
+///   - exec_fix_content_article_context   (deterministic: load recs + file for per-article fix)
+///   - exec_fix_content_article_generate  (agentic: structured extraction of ContentFixPatch)
+///   - exec_fix_content_article_apply     (deterministic: apply patch to MDX)
+///   - exec_fix_content_article_verify    (deterministic: verify fixes meet thresholds)
+mod fix_apply;
+mod fix_context;
+mod fix_generate;
+mod fix_verify;
 mod review;
 mod sync;
 mod task_spawner;
 
 pub(crate) use cluster_link::*;
+pub(crate) use fix_apply::*;
+pub(crate) use fix_context::*;
+pub(crate) use fix_generate::*;
+pub(crate) use fix_verify::*;
 pub(crate) use indexing_link::*;
 pub(crate) use review::*;
 #[cfg(test)]

@@ -326,6 +326,17 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 |---|---|---|---|
 | `exec_content_audit()` | `engine/exec/content_audit.rs` | 13-rule deterministic audit | One-off frontmatter/check structure validators |
 
+### Per-Article Fix Pipeline (`engine/exec/content/`)
+
+| Function | File | What it does | Use instead of writing... |
+|---|---|---|---|
+| `exec_fix_content_article_context()` | `engine/exec/content/fix_context.rs` | Deterministic: loads recommendations + file content for a single article | Ad-hoc file reading in agentic steps |
+| `exec_fix_content_article_generate()` | `engine/exec/content/fix_generate.rs` | Agentic: structured `ContentFixPatch` extraction via Rig | Raw agent calls with regex JSON extraction |
+| `exec_fix_content_article_apply()` | `engine/exec/content/fix_apply.rs` | Deterministic: applies typed patch to MDX with snapshot/restore | Inline string manipulation for file edits |
+| `exec_fix_content_article_verify()` | `engine/exec/content/fix_verify.rs` | Deterministic: re-runs health checks after fixes | One-off validation scripts |
+
+**CTR equivalents** (same pattern, older codebase): `exec_ctr_analyze`, `exec_ctr_fix_generate`, `exec_ctr_fix_apply`, `exec_ctr_verify_fix` in `engine/exec/ctr_audit/`.
+
 ---
 
 ## How to Add a Feature
@@ -374,6 +385,8 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 5. Execution runs through `engine/executor.rs` unchanged.
 
 **Step constructors are typed:** Use `WorkflowStep::new("name", StepKind::X)` — never pass string step kinds.
+
+**If the new task type is a per-article fix pipeline** (parent audits → child fixes individual items), follow the canonical 4-step pattern documented in `docs/AGENT_DEVELOPMENT_PLAYBOOK.md` → **"Building a Per-Article Fix Pipeline"**. Do not use a bare `StepKind::Agentic` with no skill — it will timeout or produce garbage. Use deterministic context → structured extraction (`Extractor<T>`) → deterministic apply → deterministic verify.
 
 ---
 

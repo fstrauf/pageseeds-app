@@ -127,6 +127,7 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
              Every requested fix must be represented in the patch unless the current file already satisfies the requirement.",
         ),
         Some("direct"),
+        None,
     )
     .await
     {
@@ -384,6 +385,7 @@ Fix the patch so it passes all validation rules. Return only the corrected CtrFi
              Return only the corrected CtrFixPatch by calling the submit tool.",
         ),
         Some("direct"),
+        None,
     )
     .await
 }

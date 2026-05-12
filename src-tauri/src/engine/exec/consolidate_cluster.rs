@@ -496,6 +496,7 @@ pub(crate) fn exec_merge_draft_patch(
             &prompt,
             Some("You are an expert content editor. Draft a precise ContentMergePatch JSON."),
             Some("direct"),
+            None,
         )
         .await
     });

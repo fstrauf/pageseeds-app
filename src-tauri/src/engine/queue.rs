@@ -109,7 +109,14 @@ fn create_run(conn: &Connection) -> Result<QueueRun> {
 fn get_or_create_active_run(conn: &Connection) -> Result<QueueRun> {
     match get_active_run(conn)? {
         Some(run) => Ok(run),
-        None => create_run(conn),
+        None => {
+            // Reuse the most recent finished/failed run so retries don't
+            // orphan the rest of the queue in an invisible run.
+            match get_recent_finished_run(conn)? {
+                Some(run) => Ok(run),
+                None => create_run(conn),
+            }
+        }
     }
 }
 
