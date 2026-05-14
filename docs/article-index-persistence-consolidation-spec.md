@@ -95,7 +95,7 @@ These paths should be migrated away from direct `articles.json` access:
 - `src-tauri/src/engine/exec/content/cluster_link.rs` — reads article list from `articles.json`
 - `src-tauri/src/engine/exec/content/review.rs`
   - `exec_content_review_recommend` — reads article list from `articles.json`
-  - `exec_content_review_apply` — embeds `articles.json` path in LLM prompt (indirect risk)
+  - `exec_fix_content_article_apply` — embeds `articles.json` path in LLM prompt (indirect risk)
 
 ### Write-only (indirect / hybrid)
 - `src-tauri/src/engine/post_actions.rs` — calls `db::export::export_articles` then writes directly with `std::fs::write`

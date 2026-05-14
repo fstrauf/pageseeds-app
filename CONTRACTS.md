@@ -78,7 +78,6 @@ Steps are defined by handlers in `engine/workflows/handlers.rs` and executed by 
 | `"gsc_sync_articles"` | Deterministic: fetch GSC analytics → update articles.json | Updated articles.json | Nothing |
 | `"keyword_research_cli"` | Deterministic: Ahrefs keyword API calls + dedup + ranking | Keyword JSON artifact | Optional theme artifact |
 | `"content_review_recommend"` | Hybrid: deterministic article scoring + single agentic recommendation call | `recommendations.json` | `content_audit.json`, articles.json |
-| `"content_review_apply_execute"` | Agentic: reads recommendations artifact, applies changes to MDX files | Updated content files | `recommendations.json` |
 | `"content_sync"` | Deterministic: validate articles.json ↔ content files | Validation report | Nothing |
 | `"content_audit"` | Deterministic: 13-rule article check + health scoring | `content_audit.json` | articles.json |
 
@@ -143,8 +142,8 @@ Certain task types automatically create follow-up tasks when they complete succe
 
 | Task type | Auto-spawns | Spawning function |
 |---|---|---|
-| `"content_review"` | `content_review_apply` task | `create_content_review_apply_task()` in `executor.rs` |
-| `"content_audit"` | `content_review_apply` task | same |
+| `"content_review"` | `fix_content_article` tasks | `create_fix_content_article_tasks()` in `post_actions.rs` |
+| `"content_audit"` | `fix_content_article` tasks | same |
 | `"collect_gsc"` | Fix tasks from `gsc_collection.json` artifact | `create_tasks_from_collection_after_exec()` in `executor.rs` |
 | `"research_keywords"` | Adds self to follow-up list (for UI review picker) | Inline at `executor.rs` ~line 271 |
 
@@ -159,7 +158,7 @@ Handlers in `engine/workflows/handlers.rs::default_handlers()` are matched **fir
 2. InvestigationHandler     — matches: investigate_gsc
 3. ResearchHandler          — matches: research_keywords, custom_keyword_research, research_landing_pages
 4. ContentHandler           — matches: write_article, optimize_article
-5. ContentReviewHandler     — matches: content_review, content_audit, content_review_apply, content_review_recommend, content_review_apply_execute, content_sync
+5. ContentReviewHandler     — matches: content_review, content_audit, content_review_recommend, content_sync
 6. RedditHandler            — matches: reddit_search, reddit_reply
 7. PerformanceHandler       — matches: gsc_performance
 8. ImplementationHandler    — matches explicit list + ANYTHING starting with "fix_"

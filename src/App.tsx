@@ -358,6 +358,7 @@ export default function App() {
           onResume={queue.resume}
           onRemove={queue.removeItem}
           onClose={queue.close}
+          onClearCompleted={queue.clearCompleted}
           onOpenTask={handleOpenTask}
         />
       )}

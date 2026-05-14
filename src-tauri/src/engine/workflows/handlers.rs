@@ -157,19 +157,10 @@ impl WorkflowHandler for ContentHandler {
                 | "optimize_content"
                 | "create_hub_page"
                 | "refresh_hub_page"
-                | "content_review_apply"
         )
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
-        if task_type(task) == "content_review_apply" {
-            // Dedicated step runner that reads the recommendations artifact and
-            // builds a structured apply prompt — not a generic skill/agentic call.
-            return vec![WorkflowStep::new(
-                "content_review_apply_execute",
-                StepKind::ContentReviewApplyExecute,
-            )];
-        }
         // Agentic: the agent reads the article spec and writes the MDX file.
         let has_hub_brief = task.artifacts.iter().any(|a| a.key == "hub_brief");
         let is_hub =

@@ -519,6 +519,11 @@ pub fn dismiss_queue(conn: &Connection) -> Result<()> {
         for task_id in queued {
             let _ = task_store::update_task_status(conn, &task_id, TaskStatus::Todo);
         }
+        // Delete all queue items so the dismissed run doesn't reappear
+        conn.execute(
+            "DELETE FROM queue_items WHERE run_id = ?1",
+            [&run.id],
+        )?;
     }
     Ok(())
 }

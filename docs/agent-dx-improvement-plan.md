@@ -23,8 +23,8 @@ src-tauri/src/engine/
 └── exec/
     ├── mod.rs           # re-exports all public exec_* functions
     ├── keywords.rs      # exec_keyword_research_native + theme/brief extractors (~400 lines)
-    ├── content.rs       # exec_content_review_apply/recommend, select_priority_articles,
-    │                    # build_review_context/prompt, create_content_review_apply_task (~550 lines)
+    ├── content.rs       # exec_content_review_recommend, select_priority_articles,
+    │                    # build_review_context/prompt, create_fix_content_article_tasks (~550 lines)
     ├── content_audit.rs # exec_content_audit, audit_one_article, read_source_file,
     │                    # parse_frontmatter (~300 lines)
     ├── reddit.rs        # exec_reddit_search, persist_reddit_opportunities, exec_reddit_enrich,

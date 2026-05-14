@@ -53,7 +53,7 @@ If a new audit finds different CTR issues for the same article (different conten
 | **`quick_run`** | Manual (frontend button) | `quick_run:{type}:{timestamp}` | ✅ `find_active_task_by_type` | ❌ | **BROKEN** |
 | **GSC fix** | Auto (`post_actions`) | `gsc:{reason}:{url}` | ✅ + 14-day cooldown | ✅ 14 days | Works but hardcoded |
 | **CTR fix** | Auto (`post_actions`) | `ctr_fix:article:{project}:{id}:{hash}:{issues}` | ✅ Active scan | ❌ | Works but O(n) scan |
-| **Content review apply** | Auto (`post_actions`) | `content_review_apply:{project}:{article_id}` | ✅ Status check | ❌ | Works |
+| **Content review fix** | Auto (`post_actions`) | `fix_content_article:{project}:{article_id}` | ✅ Status check | ❌ | Works |
 | **Follow-up** | Auto (`post_actions`) | `followup:{parent}:{type}:{title}` | ✅ Blocks forever | ❌ Permanent | Too aggressive |
 | **Scheduler** | Auto (`scheduler.rs`) | `scheduler:{rule_id}:{YYYYMMDD}` | ✅ Key only | ❌ Daily only | Works |
 
@@ -146,7 +146,7 @@ Each domain spawner is updated to use `TaskSpawner` with an explicit policy inst
 |---|---|---|---|
 | **GSC fix** | Custom `should_skip_issue()` with 14-day hardcoded logic | `Cooldown { days: 14 }` | `gsc:{reason}:{url}` |
 | **CTR fix** | Custom active scan + idempotency | `SkipIfActive` | `ctr_fix:article:{project}:{id}:{signature}` |
-| **Content review** | Status check in spawner | `SkipIfActive` | `content_review_apply:{project}:{article_id}` |
+| **Content review** | Status check in spawner | `SkipIfActive` | `fix_content_article:{project}:{article_id}` |
 | **Cannibalization** | Broken (includes strategy_id) | `SkipIfActive` | `can_fix:{type}:{project}:{rec_id}` |
 | **Follow-up** | Blocks forever | `SkipIfActive` | `followup:{parent}:{type}:{title}` |
 | **Scheduler** | Daily key | `SkipIfAnyExists` | `scheduler:{rule_id}:{YYYYMMDD}` |

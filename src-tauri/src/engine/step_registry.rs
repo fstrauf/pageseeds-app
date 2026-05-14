@@ -324,13 +324,6 @@ impl StepRegistry {
 
         register_blocking!(
             handlers,
-            StepKind::ContentReviewApplyExecute,
-            crate::engine::exec::content::exec_content_review_apply,
-            agent_provider
-        );
-
-        register_blocking!(
-            handlers,
             StepKind::KeywordResearchNative,
             crate::engine::exec::keywords::exec_keyword_research_native,
             seo_provider

@@ -444,22 +444,6 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
             </>
           )}
 
-          {/* Recommendations preview for content_review_apply tasks */}
-          {task.type === 'content_review_apply' && (() => {
-            const recArtifact = task.artifacts.find(a => a.key === 'recommendations')
-            if (!recArtifact?.content) return null
-            let articles: Array<{
-              article_id: number
-              article_title: string
-              article_file: string
-              failed_checks: Array<{ check_id: string; label: string }>
-              suggestions: Array<{ category: string; current: string; proposed: string; reason: string }>
-            }> = []
-            try { articles = JSON.parse(recArtifact.content).articles ?? [] } catch { return null }
-            if (articles.length === 0) return null
-            return <RecommendationsPreview articles={articles} />
-          })()}
-
           {/* Timestamps */}
           <Separator className="bg-border" />
           <div className="text-xs space-y-1 text-muted-foreground">

@@ -548,10 +548,10 @@ async fn send_request(
     backend: Option<&str>,
 ) -> Result<ChatResponse, String> {
     // Per-backend timeouts per the Kimi bridge provider spec:
-    // - direct: 120s (fast, stateless)
+    // - direct: 180s (fast, stateless)
     // - acp / none: 300s (project-aware, may queue behind concurrency limit)
     let timeout_secs: u64 = match backend {
-        Some("direct") => 120,
+        Some("direct") => 180,
         _ => 300,
     };
     let client = reqwest::Client::builder()

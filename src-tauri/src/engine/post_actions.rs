@@ -148,7 +148,6 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
 
     const CONTENT_WRITE_STEPS: &[&str] = &[
         "content_write_stage",
-        "content_review_apply_execute",
         "fix_content_article_apply",
         "fix_ctr_article_apply",
         "sanitize_content_run",
@@ -241,7 +240,7 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         ctx.task.task_type.as_str(),
         "content_review" | "content_audit"
     ) {
-        let fix_task_ids = crate::engine::exec::content::create_content_review_apply_task(
+        let fix_task_ids = crate::engine::exec::content::create_fix_content_article_tasks(
             ctx.conn,
             ctx.task,
             ctx.project_path,
@@ -362,19 +361,22 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
-    // Indexing diagnostics → collect spawned fix task IDs from step output
+    // Indexing diagnostics → collect spawned fix task IDs from task artifact
+    // (step output is truncated at 4,000 chars, so we store the full result as an artifact)
     if ctx.task.task_type == "indexing_diagnostics" {
-        if let Some(step_result) = ctx
-            .progress
-            .iter()
-            .find(|p| p.step_name == "indexing_diagnostics_run")
-        {
-            if let Some(ref out) = step_result.output {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(out) {
-                    if let Some(ids) = val.get("spawned_task_ids").and_then(|v| v.as_array()) {
-                        for id in ids {
-                            if let Some(s) = id.as_str() {
-                                follow_up_ids.push(s.to_string());
+        if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
+            if let Some(artifact) = reloaded
+                .artifacts
+                .iter()
+                .find(|a| a.key == "indexing_diagnostics_result")
+            {
+                if let Some(ref content) = artifact.content {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+                        if let Some(ids) = val.get("spawned_task_ids").and_then(|v| v.as_array()) {
+                            for id in ids {
+                                if let Some(s) = id.as_str() {
+                                    follow_up_ids.push(s.to_string());
+                                }
                             }
                         }
                     }

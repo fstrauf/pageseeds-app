@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X, AlertTriangle, RefreshCw } from 'lucide-react'
+import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react'
 import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
 import { canEnqueue, getReviewLabel } from '../../lib/taskCapabilities'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,7 @@ interface Props {
   onResume: () => void
   onRemove: (taskId: string) => void
   onClose: () => void
+  onClearCompleted?: () => void
   onOpenTask?: (taskId: string) => void
 }
 
@@ -36,6 +37,7 @@ export function TaskRunner({
   onResume,
   onRemove,
   onClose,
+  onClearCompleted,
   onOpenTask,
 }: Props) {
   logger.entry('TaskRunner', { itemCount: items.length, isRunning, isPaused });
@@ -183,6 +185,17 @@ export function TaskRunner({
                 <><ChevronUp size={12} className="mr-1" />Expand</>
               )}
             </Button>
+            {!isRunning && completed > 0 && onClearCompleted && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={onClearCompleted}
+                className="text-xs text-muted-foreground"
+              >
+                <Trash2 size={12} className="mr-1" />
+                Clear finished
+              </Button>
+            )}
             {!isRunning && (
               <Button
                 variant="ghost"

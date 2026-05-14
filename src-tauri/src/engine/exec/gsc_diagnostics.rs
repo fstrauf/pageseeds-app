@@ -13,7 +13,7 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
 use crate::engine::workflows::StepResult;
 use crate::gsc::db::{self, UrlIndexingStatus};
-use crate::models::task::{AgentPolicy, Priority, Task, TaskRunPolicy};
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRunPolicy};
 
 /// Number of days before a previously-passing URL is re-checked.
 const PASS_RECHECK_DAYS: i64 = 14;
@@ -378,8 +378,22 @@ pub(crate) fn exec_indexing_diagnostics(
         inspected_count += 1;
     }
 
-    // Build summary output
-    let summary = serde_json::json!({
+    // Build summary output (compact so it doesn't get truncated in execution progress)
+    let short_summary = serde_json::json!({
+        "inspected_count": inspected_count,
+        "new_issues": new_issue_count,
+        "regressed": regressed_count,
+        "resolved": resolved_count,
+        "unchanged_issues": unchanged_issue_count,
+        "spawned_tasks": spawned_tasks.len(),
+        "site_url": site_url,
+        "sitemap_url": sitemap_url,
+        "checked_at": now_iso,
+    });
+
+    // Full summary with task IDs stored as a task artifact so post_actions can read it
+    // without relying on step output (which is truncated at 4,000 chars).
+    let full_summary = serde_json::json!({
         "inspected_count": inspected_count,
         "new_issues": new_issue_count,
         "regressed": regressed_count,
@@ -391,6 +405,16 @@ pub(crate) fn exec_indexing_diagnostics(
         "sitemap_url": sitemap_url,
         "checked_at": now_iso,
     });
+    let artifact = TaskArtifact {
+        key: "indexing_diagnostics_result".to_string(),
+        path: None,
+        artifact_type: Some("json".to_string()),
+        source: Some("indexing_diagnostics".to_string()),
+        content: Some(serde_json::to_string_pretty(&full_summary).unwrap_or_default()),
+    };
+    if let Err(e) = crate::engine::task_store::upsert_task_artifact(conn, &task.id, &artifact) {
+        log::warn!("[indexing_diagnostics] failed to store result artifact: {}", e);
+    }
 
     StepResult {
         success: true,
@@ -398,7 +422,7 @@ pub(crate) fn exec_indexing_diagnostics(
             "Diagnostics complete: {} URLs checked, {} new issues, {} regressed, {} resolved, {} tasks spawned",
             inspected_count, new_issue_count, regressed_count, resolved_count, spawned_tasks.len()
         ),
-        output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        output: Some(serde_json::to_string_pretty(&short_summary).unwrap_or_default()),
     }
 }
 

@@ -181,7 +181,7 @@ When a task completes with follow-ups:
 │                                         │
 │ Follow-up tasks created:                │
 │ ┌─────────────────────────────────────┐ │
-│ │ content_review_apply        [Run]   │ │
+│ │ fix_content_article         [Run]   │ │
 │ └─────────────────────────────────────┘ │
 └─────────────────────────────────────────┘
 ```

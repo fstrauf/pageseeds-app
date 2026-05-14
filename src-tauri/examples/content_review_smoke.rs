@@ -9,7 +9,7 @@
 ///   3. Creates a `content_review` task
 ///   4. Executes the task through execute_task (same path as the real app)
 ///   5. Prints each step result + the final task status
-///   6. Prints the created content_review_apply task and its recommendations artifact
+///   6. Prints the created fix_content_article tasks and their recommendations artifacts
 ///
 /// To test with a different project, change PROJECT_PATH below.
 use pageseeds_lib::{
@@ -145,20 +145,20 @@ fn main() {
     // ── Check spawned apply task ──────────────────────────────────────────────
     println!("━━━━━━━━━━━━━━━━━━━  Follow-up  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     let all_tasks = task_store::list_tasks(&conn, "smoke-project").expect("list_tasks failed");
-    let apply_tasks: Vec<&Task> = all_tasks
+    let fix_tasks: Vec<&Task> = all_tasks
         .iter()
-        .filter(|t| t.task_type == "content_review_apply")
+        .filter(|t| t.task_type == "fix_content_article")
         .collect();
 
-    if apply_tasks.is_empty() {
-        println!("✗  No content_review_apply task was created.");
+    if fix_tasks.is_empty() {
+        println!("✗  No fix_content_article tasks were created.");
         println!("   Possible reasons:");
         println!("   - content_review_recommend step failed");
         println!("   - No priority articles found (all healthy)");
         println!("   - recommendations.json has 0 articles");
     } else {
-        for t in &apply_tasks {
-            println!("✓ Apply task created: {} (status={})", t.id, t.status);
+        for t in &fix_tasks {
+            println!("✓ Fix task created: {} (status={})", t.id, t.status);
             println!("  title: {:?}", t.title);
             for a in &t.artifacts {
                 println!(
@@ -180,9 +180,9 @@ fn main() {
             }
         }
         println!();
-        println!("Next: run the apply task to edit the actual article files.");
-        println!("  let apply_id = {:?};", apply_tasks[0].id);
-        println!("  executor::execute_task(&conn, &apply_id);");
+        println!("Next: run a fix_content_article task to edit the actual article files.");
+        println!("  let fix_id = {:?};", fix_tasks[0].id);
+        println!("  executor::execute_task(&conn, &fix_id);");
     }
 
     // ── Check recommendations.json on disk ───────────────────────────────────

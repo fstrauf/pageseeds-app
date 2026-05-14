@@ -4,7 +4,6 @@ mod indexing_link;
 /// Content review and sync execution module.
 ///
 /// Covers:
-///   - exec_content_review_apply   (apply agent-generated recommendations to MDX files)
 ///   - exec_content_sync           (sync articles.json ↔ MDX files)
 ///   - exec_content_review_recommend (select priority articles + run agent)
 ///   - exec_cluster_link_scan      (native Rust internal-link scan for cluster_and_link step 1)
@@ -13,7 +12,7 @@ mod indexing_link;
 ///   - select_priority_articles    (scoring formula)
 ///   - build_review_context        (structured context for LLM)
 ///   - build_review_prompt         (prompt assembly)
-///   - create_content_review_apply_task (auto-spawn follow-up task)
+///   - create_fix_content_article_tasks (auto-spawn follow-up task after content_review)
 ///   - create_cluster_and_link_task    (auto-spawn follow-up task after write_article)
 ///   - exec_fix_content_article_context   (deterministic: load recs + file for per-article fix)
 ///   - exec_fix_content_article_generate  (agentic: structured extraction of ContentFixPatch)
@@ -402,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn create_content_review_apply_task_uses_numeric_article_ids_in_idempotency_keys() {
+    fn create_fix_content_article_tasks_uses_numeric_article_ids_in_idempotency_keys() {
         let conn = in_memory_db();
         let project_dir = TempProjectDir::new();
         let project_path = project_dir.path().to_string_lossy().to_string();
@@ -431,14 +430,14 @@ mod tests {
         );
 
         let parent = make_parent_task("proj1");
-        let created = create_content_review_apply_task(&conn, &parent, &project_path);
+        let created = create_fix_content_article_tasks(&conn, &parent, &project_path);
 
         assert_eq!(created.len(), 2);
         assert_eq!(
             idempotency_keys(&conn),
             vec![
-                "content_review_apply:proj1:109".to_string(),
-                "content_review_apply:proj1:111".to_string(),
+                "fix_content_article:proj1:109".to_string(),
+                "fix_content_article:proj1:111".to_string(),
             ]
         );
 
@@ -476,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn create_content_review_apply_task_skips_invalid_and_duplicate_article_ids() {
+    fn create_fix_content_article_tasks_skips_invalid_and_duplicate_article_ids() {
         let conn = in_memory_db();
         let project_dir = TempProjectDir::new();
         let project_path = project_dir.path().to_string_lossy().to_string();
@@ -509,12 +508,12 @@ mod tests {
         );
 
         let parent = make_parent_task("proj1");
-        let created = create_content_review_apply_task(&conn, &parent, &project_path);
+        let created = create_fix_content_article_tasks(&conn, &parent, &project_path);
 
         assert_eq!(created.len(), 1);
         assert_eq!(
             idempotency_keys(&conn),
-            vec!["content_review_apply:proj1:109".to_string()]
+            vec!["fix_content_article:proj1:109".to_string()]
         );
     }
 

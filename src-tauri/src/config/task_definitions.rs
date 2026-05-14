@@ -82,14 +82,6 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
-    TaskDefinition {
-        task_type: "content_review_apply",
-        phase: "implementation",
-        run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        handler_family: HandlerFamily::Content,
-    },
     // Content Review
     TaskDefinition {
         task_type: "content_review",

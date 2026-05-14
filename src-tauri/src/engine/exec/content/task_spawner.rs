@@ -105,11 +105,8 @@ pub(crate) fn mark_fix_content_article_reviewed(
 /// After a successful content review, create individual `fix_content_article` tasks
 /// for each article in recommendations.json.
 ///
-/// This replaces the previous monolithic `content_review_apply` approach with
-/// per-article tasks that can be run independently.
-///
 /// Skips if recommendations.json is absent (review found nothing).
-pub(crate) fn create_content_review_apply_task(
+pub(crate) fn create_fix_content_article_tasks(
     conn: &Connection,
     parent_task: &Task,
     project_path: &str,
@@ -199,9 +196,9 @@ pub(crate) fn create_content_review_apply_task(
             content: Some(article_rec_str),
         };
 
-        // Idempotency key per article: content_review_apply:{project_id}:{article_id}
+        // Idempotency key per article: fix_content_article:{project_id}:{article_id}
         let idempotency_key = format!(
-            "content_review_apply:{}:{}",
+            "fix_content_article:{}:{}",
             parent_task.project_id, article_id_str
         );
 

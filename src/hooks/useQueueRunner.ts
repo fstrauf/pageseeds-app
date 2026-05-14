@@ -52,6 +52,7 @@ export function useQueueRunner(onCompleted?: () => void) {
   const pauseStore = useQueueStore((s) => s.pause);
   const resumeStore = useQueueStore((s) => s.resume);
   const closeStore = useQueueStore((s) => s.close);
+  const clearCompletedStore = useQueueStore((s) => s.clearCompleted);
   const setupEventListeners = useQueueStore((s) => s.setupEventListeners);
 
   const isRunning = snapshot?.run?.status === 'running' || isStarting;
@@ -156,7 +157,13 @@ export function useQueueRunner(onCompleted?: () => void) {
         closeStore();
         logger.exit('close');
       },
+
+      clearCompleted: () => {
+        logger.entry('clearCompleted');
+        clearCompletedStore();
+        logger.exit('clearCompleted');
+      },
     }),
-    [items, isRunning, isPaused, isVisible, isStarting, enqueueStore, removeItemStore, pauseStore, resumeStore, closeStore]
+    [items, isRunning, isPaused, isVisible, isStarting, enqueueStore, removeItemStore, pauseStore, resumeStore, closeStore, clearCompletedStore]
   );
 }

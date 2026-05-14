@@ -367,7 +367,7 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 | Question | If yes → |
 |---|---|
 | Does the output go into the content directory as an MDX file? | Reuse `write_article` with a different `skill` parameter. Do not create a new handler. |
-| Does it apply structured recommendations to existing MDX files? | Reuse `fix_content_article` or `content_review_apply`. |
+| Does it apply structured recommendations to existing MDX files? | Reuse `fix_content_article`. |
 | Does it add/remove internal links between articles? | Reuse `cluster_and_link` (or its deterministic steps). |
 | Does it read GSC data and spawn fix tasks? | Reuse `collect_gsc` or `indexing_diagnostics`. |
 | Does it audit article health? | Reuse `content_audit` or `content_review`. |

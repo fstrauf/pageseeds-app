@@ -59,7 +59,7 @@ pub trait WorkflowHandler: Send + Sync {
 2. InvestigationHandler   — investigate_gsc
 3. ResearchHandler        — research_keywords, custom_keyword_research
 4. ContentHandler         — write_article, optimize_article
-5. ContentReviewHandler   — content_review, content_audit, content_review_apply
+5. ContentReviewHandler   — content_review, content_audit
 6. RedditHandler          — reddit_search, reddit_reply
 7. PerformanceHandler     — gsc_performance
 8. ImplementationHandler  — fix_* (catch-all prefix match)
@@ -205,8 +205,7 @@ Certain task types automatically create follow-up tasks on success. **Do not cre
 
 | Parent Task | Auto-Spawns | Spawning Logic |
 |-------------|-------------|----------------|
-| `content_review` | `content_review_apply` | `engine/spawner.rs` via `spawn_follow_up()` |
-| `content_audit` | `content_review_apply` | Same |
+
 | `collect_gsc` | Fix tasks (`fix_technical`, `fix_indexing`, etc.) | Reads `gsc_collection.json` artifact |
 | `write_article` | `cluster_and_link` | Optional, if linking module enabled |
 | `content_review` | `fix_content_article` tasks (one per article) | Reads `recommendations.json` and creates individual tasks |
@@ -218,9 +217,7 @@ When `content_review` completes successfully, the system automatically:
 3. Each task contains only that article's specific recommendations
 4. Tasks are `Batchable` priority (can run in batch) and sorted by issue count (more issues = higher priority)
 
-This replaces the previous monolithic `content_review_apply` approach. Instead of one task that fixes all articles, you get individual tasks that can run independently.
-
-**Idempotency:** Each fix task uses idempotency key `content_review_apply:{project_id}:{article_id}` to prevent duplicates if the review is re-run.
+**Idempotency:** Each fix task uses idempotency key `fix_content_article:{project_id}:{article_id}` to prevent duplicates if the review is re-run.
 
 ---
 

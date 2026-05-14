@@ -170,9 +170,9 @@ Step 4: content_review_recommend (agentic)
   ↓
 Status: done
   ↓
-Auto-spawns: content_review_apply task (one per review)
+Auto-spawns: fix_content_article tasks (one per recommended article)
   ↓
-User runs content_review_apply → agent applies fixes to MDX files
+System runs fix_content_article → agent applies fixes to MDX files
 ```
 
 ### Key Files
@@ -416,7 +416,7 @@ Status: done
 
 ### Spawned by
 - `collect_gsc` → fix_technical, fix_indexing, fix_gsc_access
-- `content_review` → content_review_apply
+- `content_review` → fix_content_article
 - Manual creation → fix_404s, fix_redirects, etc.
 
 ### Handler Routing
@@ -428,7 +428,7 @@ impl WorkflowHandler for ImplementationHandler {
     fn can_handle(&self, task: &Task) -> bool {
         task.task_type.starts_with("fix_") 
             || matches!(task.task_type.as_str(), 
-                "content_review_apply" | "optimize_article" | ...)
+                "optimize_article" | ...)
     }
     
     fn plan(&self, task: &Task, ctx: &HandlerContext) -> Vec<WorkflowStep> {
@@ -453,7 +453,7 @@ research_keywords ──selected──▶ write_article ──success──▶ c
        ▼
 content_review ◀────────────── content_audit ◀─────────────── publish
        │
-       └──▶ content_review_apply ──▶ (updates MDX files)
+       └──▶ fix_content_article ──▶ (updates MDX files)
 
 collect_gsc ──issues found──▶ fix_* tasks ──▶ (manual resolution)
        │
