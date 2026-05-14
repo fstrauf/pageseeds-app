@@ -423,10 +423,10 @@ pub fn enqueue_tasks(
     let run = get_or_create_active_run(conn)?;
     insert_queue_items(conn, &run.id, items, mode)?;
 
-    // If run was finished/failed/paused, resurrect it as idle so runner can pick it up
+    // If run was finished/failed, resurrect it as idle so runner can pick it up.
+    // Paused runs stay paused — the user must explicitly resume.
     if run.status == QueueRunStatus::Finished
         || run.status == QueueRunStatus::Failed
-        || run.status == QueueRunStatus::Paused
     {
         update_run_status(conn, &run.id, QueueRunStatus::Idle)?;
     }
@@ -488,13 +488,24 @@ pub fn get_queue_snapshot(conn: &Connection) -> Result<QueueSnapshot> {
 }
 
 pub fn clear_completed_queue_items(conn: &Connection) -> Result<QueueSnapshot> {
-    if let Some(run) = get_active_run(conn)? {
-        conn.execute(
-            "DELETE FROM queue_items WHERE run_id = ?1 AND status IN ('completed', 'failed', 'skipped')",
-            [&run.id],
-        )?;
-        renumber_positions(conn, &run.id)?;
-    }
+    // Delete completed/failed/skipped items from ALL finished/failed runs so
+    // old phantom queues don't surface after clearing the current one.
+    conn.execute(
+        "DELETE FROM queue_items
+         WHERE run_id IN (
+             SELECT id FROM queue_runs WHERE status IN ('finished', 'failed')
+         )
+         AND status IN ('completed', 'failed', 'skipped')",
+        [],
+    )?;
+    // Also clean up any finished/failed runs that now have zero items so they
+    // don't hang around in the DB.
+    conn.execute(
+        "DELETE FROM queue_runs
+         WHERE status IN ('finished', 'failed')
+         AND id NOT IN (SELECT DISTINCT run_id FROM queue_items)",
+        [],
+    )?;
     get_queue_snapshot(conn)
 }
 

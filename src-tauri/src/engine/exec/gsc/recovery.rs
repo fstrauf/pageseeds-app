@@ -391,7 +391,10 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
         }
 
         let incoming_before = incoming_counts.get(&article_id).copied().unwrap_or(0);
-        if incoming_before >= 1 {
+        // For not_indexed_crawled URLs, having internal links is NOT a reason to skip.
+        // The root cause is likely content quality / cannibalization, not link count.
+        // Only skip on link count for "not_in_gsc" URLs where discovery is the issue.
+        if incoming_before >= 1 && reason != "not_indexed_crawled" && reason != "not_indexed_discovered" && reason != "not_indexed_other" {
             skipped.push(SkippedTarget {
                 url: candidate.url.clone(),
                 reason_code: reason.to_string(),

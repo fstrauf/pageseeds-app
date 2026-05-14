@@ -3,6 +3,7 @@ pub mod cannibalization;
 pub mod content_review;
 pub mod ctr;
 pub mod gsc;
+pub mod indexing_health;
 pub mod live_site;
 pub mod merge_patch;
 pub mod project;

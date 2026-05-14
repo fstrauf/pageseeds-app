@@ -4,8 +4,6 @@
 ///   - exec_gsc_sync_articles              (sync GSC metrics → articles.json)
 ///   - exec_collect_gsc                    (URL Inspection API → gsc_collection.json)
 ///   - exec_gsc_investigate                (agentic investigation of collection results)
-///   - create_tasks_from_collection_after_exec  (post-completion task spawner)
-///   - create_tasks_from_collection        (parse gsc_collection.json → fix tasks)
 ///   - normalize_site_for_url_match        (sc-domain: normalisation)
 ///   - normalize_url_for_comparison        (URL normalization for domain matching)
 mod collect;
@@ -20,7 +18,6 @@ pub(crate) use drift::*;
 pub(crate) use investigate::*;
 pub(crate) use recovery::*;
 pub(crate) use sync::*;
-pub(crate) use task_spawner::*;
 
 /// Normalize a URL for domain comparison by stripping scheme and www.
 ///

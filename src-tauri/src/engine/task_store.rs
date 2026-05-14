@@ -702,11 +702,19 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
     };
 
     // Workflow activity: last completed run per key workflow type + scheduler interval
+    // Must stay in sync with QUICK_ACTIONS in src/components/overview/Overview.tsx
     let key_workflows: &[(&str, &str)] = &[
-        ("research_keywords", "Keyword Research"),
-        ("content_review", "Content Review"),
-        ("reddit_opportunity_search", "Reddit Search"),
         ("collect_gsc", "GSC Collection"),
+        ("research_keywords", "Keyword Research"),
+        ("research_landing_pages", "Landing Page Research"),
+        ("reddit_opportunity_search", "Reddit Search"),
+        ("analyze_keyword_coverage", "Analyze Coverage"),
+        ("content_review", "Content Review"),
+        ("cannibalization_audit", "Cannibalization Audit"),
+        ("ctr_audit", "CTR Audit"),
+        ("indexing_health_campaign", "Indexing Health Campaign"),
+        ("content_cleanup", "Content Cleanup"),
+        ("sanitize_content", "Sanitize Content"),
     ];
 
     // Build a map of task_type → last successful run finished_at from task_runs.

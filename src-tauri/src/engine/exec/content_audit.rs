@@ -56,6 +56,8 @@ pub(crate) fn exec_content_audit(
     let link_syntax_re = Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap();
     let md_syntax_re = Regex::new(r"[#*_`>|]").unwrap();
     let link_extract_re = Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
+    // Detect malformed links like `[text]/blog/slug` (missing parentheses)
+    let malformed_link_re = Regex::new(r"\][ \t]*(/blog/[^)\s]*)").unwrap();
 
     let mut results: Vec<serde_json::Value> = to_audit
         .iter()
@@ -68,6 +70,7 @@ pub(crate) fn exec_content_audit(
                 &link_syntax_re,
                 &md_syntax_re,
                 &link_extract_re,
+                &malformed_link_re,
             )
         })
         .collect();
@@ -136,6 +139,7 @@ pub(crate) fn audit_one_article(
     link_syntax_re: &regex::Regex,
     md_syntax_re: &regex::Regex,
     link_extract_re: &regex::Regex,
+    malformed_link_re: &regex::Regex,
 ) -> serde_json::Value {
     let keyword = article
         .target_keyword
@@ -248,6 +252,13 @@ pub(crate) fn audit_one_article(
         }
     }
 
+    // Malformed links — detect `[text]/blog/slug` (missing parentheses around URL)
+    let mut malformed_links = Vec::new();
+    for c in malformed_link_re.captures_iter(&body) {
+        let href = c.get(1).map(|m| m.as_str()).unwrap_or("");
+        malformed_links.push(serde_json::json!({ "href": href, "issue": "missing parentheses around URL" }));
+    }
+
     // ─── Checks ──────────────────────────────────────────────────────────────
     let check_pass = |pass: Option<bool>, label: &str| -> serde_json::Value {
         serde_json::json!({ "pass": pass, "label": label })
@@ -302,6 +313,7 @@ pub(crate) fn audit_one_article(
         "h2_structure":         check_val(Some(h2_count >= 2), serde_json::json!(h2_count), "Has ≥2 H2 headings"),
         "internal_links":       check_val(Some(internal_link_count >= 3), serde_json::json!(internal_link_count), "Has ≥3 internal links"),
         "broken_links":         serde_json::json!({ "pass": broken_links.is_empty(), "value": broken_links.len(), "issues": broken_links, "label": "No broken/placeholder links" }),
+        "malformed_links":      serde_json::json!({ "pass": malformed_links.is_empty(), "value": malformed_links.len(), "issues": malformed_links, "label": "No malformed markdown links (missing parentheses around URL)" }),
         "gsc_data":             check_pass(Some(!gsc.is_null()), "GSC data synced"),
         "source_file_found":    check_pass(Some(source.is_some()), "Source file readable"),
         "frontmatter_complete": check_pass(Some(frontmatter_complete), "Frontmatter has title, date, and description"),
@@ -312,6 +324,7 @@ pub(crate) fn audit_one_article(
     // ─── Scoring ─────────────────────────────────────────────────────────────
     let weights = [
         ("broken_links", 30i64),
+        ("malformed_links", 25),
         ("source_file_found", 20),
         ("title_keyword", 10),
         ("h1_keyword", 10),

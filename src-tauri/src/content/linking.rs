@@ -71,6 +71,8 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
     let re_canonical = Regex::new(r"\[([^\]]+)\]\(/blog/([^/)]+)/?[^)]*\)").unwrap();
     let re_relative = Regex::new(r"\[([^\]]+)\]\(\./([^)]+\.mdx?)\)").unwrap();
     let re_related_heading = Regex::new(r"(?im)^#{1,4}\s+Related\s+Articles").unwrap();
+    // Detect malformed links like `[text]/blog/slug` (missing parentheses around URL)
+    let re_malformed = Regex::new(r"\][ \t]*(/blog/[^)\s]*)").unwrap();
 
     let mut all_links: Vec<InternalLink> = Vec::new();
     // Map from article id → set of (outgoing target ids)
@@ -179,6 +181,15 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
                     line_number: lineno,
                     in_related_section: in_related,
                 });
+            }
+
+            // Detect malformed links like `[text]/blog/slug` (missing parentheses)
+            for cap in re_malformed.captures_iter(line) {
+                let href = cap[1].to_string();
+                unresolved_map
+                    .entry(source_id)
+                    .or_default()
+                    .push(format!("{} (malformed link — missing parentheses)", href));
             }
         }
     }

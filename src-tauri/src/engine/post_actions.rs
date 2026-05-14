@@ -262,17 +262,6 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
-    // Collect GSC → spawn fix tasks from collection artifact
-    if ctx.task.task_type == "collect_gsc" {
-        follow_up_ids.extend(
-            crate::engine::exec::gsc::create_tasks_from_collection_after_exec(
-                ctx.conn,
-                ctx.task,
-                ctx.project_path,
-            ),
-        );
-    }
-
     // CTR audit → spawn CTR fix tasks
     if ctx.task.task_type == "ctr_audit" {
         if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
@@ -302,6 +291,16 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
                 ),
             );
         }
+    }
+
+    // Indexing health campaign → spawn child fix tasks from campaign plan
+    if ctx.task.task_type == "indexing_health_campaign" {
+        let spawned = crate::engine::exec::indexing_health_campaign::spawn_campaign_children(
+            ctx.conn,
+            ctx.task,
+            ctx.project_path,
+        );
+        follow_up_ids.extend(spawned);
     }
 
     // cluster_and_link / interlinking → spawn follow-up if orphans remain

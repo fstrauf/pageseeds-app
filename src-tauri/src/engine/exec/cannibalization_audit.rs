@@ -172,12 +172,12 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         });
     }
 
-    // ── 1b. Skip articles without GSC data from clustering — if Google can't
-    //     see them, they can't cannibalize in search results.
-    let mut records: Vec<ArticleRecord> = records
-        .into_iter()
-        .filter(|r| r.gsc.as_object().map(|o| !o.is_empty()).unwrap_or(false))
-        .collect();
+    // ── 1b. Include ALL articles in clustering, even those with no GSC data.
+    //     Articles with zero GSC impressions are often the ones most in need of
+    //     cannibalization detection (e.g. not_indexed_crawled pages). They are
+    //     excluded from GSC-based scoring but still clustered via TF-IDF similarity.
+    //     We keep the full list; downstream scoring will handle GSC weighting.
+    let mut records: Vec<ArticleRecord> = records;
 
     // ── 2. Compute TF-IDF vectors ─────────────────────────────────────────────
     let all_tokens: Vec<Vec<String>> = records.iter().map(|r| r.tokens.clone()).collect();

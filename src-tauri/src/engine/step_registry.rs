@@ -1138,6 +1138,34 @@ impl StepRegistry {
             crate::engine::exec::gsc::exec_gsc_indexing_outcome_report
         );
 
+        // ─── Indexing Health Campaign ───────────────────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::IhcCheckPrerequisites,
+            crate::engine::exec::indexing_health_campaign::exec_ihc_check_prerequisites
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IhcBuildTargetContext,
+            crate::engine::exec::indexing_health_campaign::exec_ihc_build_target_context
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IhcDistinctivenessReview,
+            crate::engine::exec::indexing_health_campaign::exec_ihc_distinctiveness_review,
+            agent_provider,
+            optional_context
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IhcReducePlan,
+            crate::engine::exec::indexing_health_campaign::exec_ihc_reduce_plan
+        );
+
         Self { handlers }
     }
 

@@ -228,6 +228,7 @@ impl WorkflowHandler for ImplementationHandler {
                 | "gsc_indexing_recovery"
                 | "fix_indexing_internal_links"
                 | "gsc_indexing_outcome_review"
+                | "indexing_health_campaign"
         ) || t.starts_with("fix_")
     }
 
@@ -322,6 +323,27 @@ impl WorkflowHandler for ImplementationHandler {
                 // only re-checks stale or known-bad URLs, and spawns fix tasks for new/regressed
                 // or unresolved issues. Deterministic because it is pure API calls + DB comparison.
                 WorkflowStep::new("indexing_diagnostics_run", StepKind::IndexingDiagnosticsRun),
+            ],
+            "indexing_health_campaign" => vec![
+                // Step 1 (deterministic): check prerequisite artifacts for freshness.
+                // Writes indexing_prerequisites.json. Auto-runnable prerequisites are enqueued
+                // by post-action; manual ones surface in the task output.
+                WorkflowStep::new("ihc_check_prerequisites", StepKind::IhcCheckPrerequisites),
+                // Step 2 (deterministic): compute drift from current sitemap/GSC/link data.
+                // Reuses existing drift computation.
+                WorkflowStep::new("ihc_drift_analysis", StepKind::GscRecoveryDrift),
+                // Step 3 (deterministic): build per-target cluster context for not-indexed URLs.
+                // Loads cannibalization clusters and content audit, matches each URL to siblings.
+                WorkflowStep::new("ihc_build_target_context", StepKind::IhcBuildTargetContext),
+                // Step 4 (deterministic): run or refresh content audit.
+                WorkflowStep::new("ihc_content_audit", StepKind::ContentAudit),
+                // Step 5 (agentic): judge title/H1 distinctiveness against cluster siblings.
+                // One agent call per target. Uses indexing-distinctiveness skill.
+                WorkflowStep::new("ihc_distinctiveness_review", StepKind::IhcDistinctivenessReview)
+                    .with_param(step_params::SKILL, "indexing-distinctiveness"),
+                // Step 6 (deterministic): merge all inputs into campaign plan.
+                // Writes indexing_campaign_plan.json consumed by post-actions.
+                WorkflowStep::new("ihc_reduce_plan", StepKind::IhcReducePlan),
             ],
             "fix_indexing" | "fix_technical" => vec![
                 // Step 1 (deterministic): load the target MDX file and extract structured context
@@ -1217,6 +1239,15 @@ pub async fn exec_agentic(
                      - New articles must be written as `.mdx` files (never `.md`).\n\
                      - If you propose a filename, it must end in `.mdx`.\n\
                      - Preserve valid frontmatter and markdown/MDX syntax.",
+        );
+
+        prompt.push_str(
+            "\n\n## Internal Link Format (Required)\n\
+                     - All internal links MUST use standard markdown syntax: `[anchor text](/blog/slug)`\n\
+                     - The URL path must be wrapped in parentheses `()` immediately after the closing bracket `]`.\n\
+                     - WRONG: `[anchor text]/blog/slug` or `[anchor text] /blog/slug`\n\
+                     - CORRECT: `[anchor text](/blog/slug)`\n\
+                     - If you include a 'Related Articles' section, use the same `[title](/blog/slug)` format for every bullet.",
         );
 
         if let Some((_dir, _before, Some(style))) = &content_context {

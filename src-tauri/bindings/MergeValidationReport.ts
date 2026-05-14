@@ -3,4 +3,4 @@
 /**
  * Validation report after merge apply.
  */
-export type MergeValidationReport = { keeper_valid: boolean, keeper_word_count: number, snapshot_path: string | null, redirect_map_path: string | null, issues: Array<string>, };
+export type MergeValidationReport = { keeper_valid: boolean, keeper_word_count: number, redirect_map_path: string | null, issues: Array<string>, };

@@ -130,7 +130,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
         phase: "collection",
         run_policy: TaskRunPolicy::AutoEnqueue,
         review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::BackendAuto,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Collection,
     },
     TaskDefinition {
@@ -420,6 +420,17 @@ const DEFINITIONS: &[TaskDefinition] = &[
         phase: "investigation",
         run_policy: TaskRunPolicy::AutoEnqueue,
         review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
+        handler_family: HandlerFamily::Implementation,
+    },
+    // Unified indexing health campaign
+    // Orchestrates prerequisite checks, drift, cluster context, distinctiveness review,
+    // and spawns the appropriate child fix tasks.
+    TaskDefinition {
+        task_type: "indexing_health_campaign",
+        phase: "investigation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Implementation,
     },

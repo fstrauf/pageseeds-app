@@ -145,6 +145,15 @@ pub enum StepKind {
     GscIndexingOutcomeInspect,
     /// Deterministic: compare before/after indexing status and write report.
     GscIndexingOutcomeReport,
+    // ─── Indexing Health Campaign ─────────────────────────────────────────────
+    /// Deterministic: check prerequisite artifact freshness.
+    IhcCheckPrerequisites,
+    /// Deterministic: build per-target cluster context for not-indexed URLs.
+    IhcBuildTargetContext,
+    /// Agentic: judge title/H1 distinctiveness against cluster siblings.
+    IhcDistinctivenessReview,
+    /// Deterministic: reduce all inputs into a campaign plan.
+    IhcReducePlan,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -240,6 +249,10 @@ impl StepKind {
             Self::IndexingLinkVerify => "indexing_link_verify",
             Self::GscIndexingOutcomeInspect => "gsc_indexing_outcome_inspect",
             Self::GscIndexingOutcomeReport => "gsc_indexing_outcome_report",
+            Self::IhcCheckPrerequisites => "ihc_check_prerequisites",
+            Self::IhcBuildTargetContext => "ihc_build_target_context",
+            Self::IhcDistinctivenessReview => "ihc_distinctiveness_review",
+            Self::IhcReducePlan => "ihc_reduce_plan",
             Self::Unknown => "unknown",
         }
     }
@@ -349,6 +362,10 @@ impl FromStr for StepKind {
             "indexing_link_verify" => Ok(Self::IndexingLinkVerify),
             "gsc_indexing_outcome_inspect" => Ok(Self::GscIndexingOutcomeInspect),
             "gsc_indexing_outcome_report" => Ok(Self::GscIndexingOutcomeReport),
+            "ihc_check_prerequisites" => Ok(Self::IhcCheckPrerequisites),
+            "ihc_build_target_context" => Ok(Self::IhcBuildTargetContext),
+            "ihc_distinctiveness_review" => Ok(Self::IhcDistinctivenessReview),
+            "ihc_reduce_plan" => Ok(Self::IhcReducePlan),
             _ => Err(()),
         }
     }
@@ -468,6 +485,10 @@ mod tests {
             StepKind::IndexingLinkVerify,
             StepKind::GscIndexingOutcomeInspect,
             StepKind::GscIndexingOutcomeReport,
+            StepKind::IhcCheckPrerequisites,
+            StepKind::IhcBuildTargetContext,
+            StepKind::IhcDistinctivenessReview,
+            StepKind::IhcReducePlan,
         ];
 
         for variant in &variants {

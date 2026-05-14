@@ -788,11 +788,6 @@ mod tests {
             "Say hello",
             Some("You are a helpful assistant."),
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
         )
         .await
         .unwrap();
@@ -883,6 +878,7 @@ mod tests {
             "Extract name and count.",
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -918,6 +914,7 @@ mod tests {
             "Extract name and count.",
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -942,6 +939,7 @@ mod tests {
             &format!("{}/v1", mock_server.uri()),
             "test-model",
             "Extract name and count.",
+            None,
             None,
             None,
         )
@@ -1119,6 +1117,7 @@ mod tests {
             "Extract items and total.",
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1170,6 +1169,7 @@ mod tests {
             "Extract name and count.",
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1204,6 +1204,7 @@ mod tests {
             &format!("{}/v1", mock_server.uri()),
             "test-model",
             "Extract name and count.",
+            None,
             None,
             None,
         )
@@ -1251,6 +1252,7 @@ mod tests {
             &format!("{}/v1", mock_server.uri()),
             "test-model",
             "Extract name and count.",
+            None,
             None,
             None,
         )

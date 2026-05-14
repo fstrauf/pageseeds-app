@@ -31,6 +31,7 @@ const TASK_TYPES = [
   'implementation',
   'ctr_audit',
   'cannibalization_audit',
+  'indexing_health_campaign',
 ]
 
 const KEYWORD_RESEARCH_TYPES = new Set(['research_keywords', 'custom_keyword_research', 'research_landing_pages'])

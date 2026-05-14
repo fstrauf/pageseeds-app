@@ -3,7 +3,7 @@ import {
   Zap, RefreshCw, CheckCircle2, Clock, AlertCircle,
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
   PlayCircle, TrendingUp, Users, ArrowRight, Send, PieChart, Target,
-  Activity, Wrench,
+  Activity, Wrench, HeartPulse,
 } from 'lucide-react'
 import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
@@ -24,17 +24,31 @@ interface ActionDef {
   description: string
   icon: React.ReactNode
   phase: string
+  frequency: string
   nextView: import('../../lib/types').View
   nextLabel: string
 }
 
 const QUICK_ACTIONS: ActionDef[] = [
+  // ── Collection (run first, weekly) ─────────────────────────────────────────
+  {
+    task_type: 'collect_gsc',
+    label: 'GSC Collection',
+    description: 'Pull the latest Search Console analytics into the project workspace',
+    icon: <Globe size={16} />,
+    phase: 'collection',
+    frequency: 'weekly',
+    nextView: 'gsc',
+    nextLabel: 'View Search Console data',
+  },
+  // ── Research (monthly / as needed) ─────────────────────────────────────────
   {
     task_type: 'research_keywords',
     label: 'Keyword Research',
     description: 'Find new long-tail keyword opportunities for your site, then select which to write about',
     icon: <Search size={16} />,
     phase: 'research',
+    frequency: 'monthly',
     nextView: 'tasks',
     nextLabel: 'Select keywords & create articles',
   },
@@ -44,26 +58,9 @@ const QUICK_ACTIONS: ActionDef[] = [
     description: 'Research high-intent keywords for conversion-focused landing pages with strategic context',
     icon: <Target size={16} />,
     phase: 'research',
+    frequency: 'monthly',
     nextView: 'tasks',
     nextLabel: 'Select keywords & create landing pages',
-  },
-  {
-    task_type: 'content_review',
-    label: 'Content Review',
-    description: 'Sync GSC data and generate recommendations for the highest-priority article',
-    icon: <TrendingUp size={16} />,
-    phase: 'investigation',
-    nextView: 'tasks',
-    nextLabel: 'See optimization tasks',
-  },
-  {
-    task_type: 'collect_gsc',
-    label: 'GSC Collection',
-    description: 'Pull the latest Search Console analytics into the project workspace',
-    icon: <Globe size={16} />,
-    phase: 'collection',
-    nextView: 'gsc',
-    nextLabel: 'View Search Console data',
   },
   {
     task_type: 'reddit_opportunity_search',
@@ -71,26 +68,9 @@ const QUICK_ACTIONS: ActionDef[] = [
     description: 'Search subreddits for posts to engage with and save pending opportunities',
     icon: <Users size={16} />,
     phase: 'research',
+    frequency: 'weekly',
     nextView: 'reddit',
     nextLabel: 'Review pending opportunities',
-  },
-  {
-    task_type: 'content_cleanup',
-    label: 'Content Cleanup',
-    description: 'Scan MDX files for structural issues — heading duplicates, broken frontmatter',
-    icon: <FileText size={16} />,
-    phase: 'implementation',
-    nextView: 'tasks',
-    nextLabel: 'See cleanup tasks',
-  },
-  {
-    task_type: 'indexing_diagnostics',
-    label: 'Indexing Diagnostics',
-    description: 'Inspect sitemap URLs in Search Console and find non-indexed pages',
-    icon: <BookOpen size={16} />,
-    phase: 'investigation',
-    nextView: 'tasks',
-    nextLabel: 'See indexing tasks',
   },
   {
     task_type: 'analyze_keyword_coverage',
@@ -98,17 +78,20 @@ const QUICK_ACTIONS: ActionDef[] = [
     description: 'Analyze your content portfolio and identify topic clusters + coverage gaps',
     icon: <PieChart size={16} />,
     phase: 'research',
+    frequency: 'monthly',
     nextView: 'tasks',
     nextLabel: 'View coverage results',
   },
+  // ── Investigation (bi-weekly / after collection) ───────────────────────────
   {
-    task_type: 'ctr_audit',
-    label: 'CTR Audit',
-    description: 'Analyze titles, meta descriptions, and snippet readiness to fix low CTR',
-    icon: <BarChart2 size={16} />,
+    task_type: 'content_review',
+    label: 'Content Review',
+    description: 'Sync GSC data and generate recommendations for the highest-priority article',
+    icon: <TrendingUp size={16} />,
     phase: 'investigation',
+    frequency: 'bi-weekly',
     nextView: 'tasks',
-    nextLabel: 'See CTR fix tasks',
+    nextLabel: 'See optimization tasks',
   },
   {
     task_type: 'cannibalization_audit',
@@ -116,8 +99,40 @@ const QUICK_ACTIONS: ActionDef[] = [
     description: 'Detect overlapping content, find merge candidates, and identify hub gaps',
     icon: <Target size={16} />,
     phase: 'investigation',
+    frequency: 'monthly',
     nextView: 'tasks',
     nextLabel: 'See merge & hub tasks',
+  },
+  {
+    task_type: 'ctr_audit',
+    label: 'CTR Audit',
+    description: 'Analyze titles, meta descriptions, and snippet readiness to fix low CTR',
+    icon: <BarChart2 size={16} />,
+    phase: 'investigation',
+    frequency: 'monthly',
+    nextView: 'tasks',
+    nextLabel: 'See CTR fix tasks',
+  },
+  {
+    task_type: 'indexing_health_campaign',
+    label: 'Indexing Health Campaign',
+    description: 'Unified workflow: checks prerequisites, reviews distinctiveness against cluster siblings, and spawns targeted fixes for non-indexed pages',
+    icon: <HeartPulse size={16} />,
+    phase: 'investigation',
+    frequency: 'bi-weekly',
+    nextView: 'tasks',
+    nextLabel: 'See campaign results',
+  },
+  // ── Implementation (as needed) ─────────────────────────────────────────────
+  {
+    task_type: 'content_cleanup',
+    label: 'Content Cleanup',
+    description: 'Scan MDX files for structural issues — heading duplicates, broken frontmatter',
+    icon: <FileText size={16} />,
+    phase: 'implementation',
+    frequency: 'as needed',
+    nextView: 'tasks',
+    nextLabel: 'See cleanup tasks',
   },
   {
     task_type: 'sanitize_content',
@@ -125,6 +140,7 @@ const QUICK_ACTIONS: ActionDef[] = [
     description: 'Normalize frontmatter field names (metaDescription → description) across all MDX files',
     icon: <Wrench size={16} />,
     phase: 'implementation',
+    frequency: 'as needed',
     nextView: 'tasks',
     nextLabel: 'See sanitize results',
   },
@@ -153,6 +169,7 @@ const WORKFLOW_ICONS: Record<string, React.ReactNode> = {
   collect_gsc:              <Globe size={13} />,
   ctr_audit:                <BarChart2 size={13} />,
   sanitize_content:         <Wrench size={13} />,
+  indexing_health_campaign: <HeartPulse size={13} />,
 }
 
 function relativeDate(iso: string): string {
@@ -247,6 +264,51 @@ const PHASE_BADGE: Record<string, string> = {
   research: 'bg-amber-100 text-amber-700',
   implementation: 'bg-emerald-100 text-emerald-700',
   verification: 'bg-pink-100 text-pink-700',
+}
+
+const FREQUENCY_BADGE: Record<string, string> = {
+  weekly: 'bg-sky-100 text-sky-700',
+  'bi-weekly': 'bg-indigo-100 text-indigo-700',
+  monthly: 'bg-slate-100 text-slate-700',
+  'as needed': 'bg-stone-100 text-stone-600',
+}
+
+const PHASE_ORDER = ['collection', 'research', 'investigation', 'implementation']
+
+function getActionStatus(
+  action: ActionDef,
+  activityItems: WorkflowActivity[],
+): { lastRun: string | null; overdue: boolean; dueText: string } {
+  const item = activityItems.find(i => i.task_type === action.task_type)
+  const lastRun = item?.last_run_at ?? null
+
+  if (!lastRun) {
+    return { lastRun: null, overdue: true, dueText: 'never run' }
+  }
+
+  const lastRunMs = new Date(lastRun).getTime()
+  const nowMs = Date.now()
+  const hoursSince = (nowMs - lastRunMs) / (1000 * 60 * 60)
+
+  const intervalHours: Record<string, number> = {
+    weekly: 24 * 7,
+    'bi-weekly': 24 * 14,
+    monthly: 24 * 30,
+  }
+
+  const threshold = intervalHours[action.frequency] ?? Infinity
+  const overdue = hoursSince > threshold
+
+  let dueText: string
+  if (overdue) {
+    const daysOver = Math.floor((hoursSince - threshold) / 24)
+    dueText = daysOver <= 0 ? 'due now' : `${daysOver}d overdue`
+  } else {
+    const daysUntil = Math.ceil((threshold - hoursSince) / 24)
+    dueText = daysUntil <= 0 ? 'due soon' : `in ${daysUntil}d`
+  }
+
+  return { lastRun, overdue, dueText }
 }
 
 // ─── Pending Landing Page Research Card ───────────────────────────────────────
@@ -608,42 +670,91 @@ export function Overview({
                   {liveSiteMsg}
                 </div>
               )}
-              {(isLiveSiteProject
-                ? QUICK_ACTIONS.filter(a =>
-                    ['research_keywords', 'research_landing_pages', 'collect_gsc',
-                     'reddit_opportunity_search', 'analyze_keyword_coverage'].includes(a.task_type)
-                  )
-                : QUICK_ACTIONS
-              ).map(action => (
-                <button
-                  key={action.task_type}
-                  onClick={() => handleQuickAction(action)}
-                  disabled={runningActionLabel === action.label}
-                  className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors',
-                    'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
-                    runningActionLabel === action.label && 'bg-secondary ring-1 ring-blue-700/50',
-                  )}
-                >
-                  <span className="shrink-0 text-muted-foreground">{action.icon}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-foreground font-medium">{action.label}</span>
+              {(() => {
+                const visibleActions = isLiveSiteProject
+                  ? QUICK_ACTIONS.filter(a =>
+                      ['research_keywords', 'research_landing_pages', 'collect_gsc',
+                       'reddit_opportunity_search', 'analyze_keyword_coverage'].includes(a.task_type)
+                    )
+                  : QUICK_ACTIONS
+                const grouped = PHASE_ORDER.map(phase => ({
+                  phase,
+                  actions: visibleActions.filter(a => a.phase === phase),
+                })).filter(g => g.actions.length > 0)
+                return grouped.map(({ phase, actions }) => (
+                  <div key={phase} className="space-y-1">
+                    <div className="flex items-center gap-2 px-1 pt-2 pb-1">
                       <span className={cn(
-                        'text-xs px-1.5 py-0.5 rounded border-transparent',
-                        PHASE_BADGE[action.phase] ?? 'bg-secondary text-muted-foreground',
+                        'text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded',
+                        PHASE_BADGE[phase] ?? 'bg-secondary text-muted-foreground',
                       )}>
-                        {action.phase}
+                        {phase}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {phase === 'collection' && 'Run first — weekly'}
+                        {phase === 'research' && 'Monthly or as needed'}
+                        {phase === 'investigation' && 'After collection — bi-weekly'}
+                        {phase === 'implementation' && 'Spawned by investigations'}
                       </span>
                     </div>
-                    <span className="text-xs text-muted-foreground leading-snug">{action.description}</span>
+                    {actions.map(action => {
+                      const status = getActionStatus(action, overview?.workflow_activity ?? [])
+                      return (
+                        <button
+                          key={action.task_type}
+                          onClick={() => handleQuickAction(action)}
+                          disabled={runningActionLabel === action.label}
+                          className={cn(
+                            'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors group',
+                            'hover:bg-secondary disabled:opacity-50 disabled:cursor-not-allowed',
+                            runningActionLabel === action.label && 'bg-secondary ring-1 ring-blue-700/50',
+                          )}
+                        >
+                          <span className="shrink-0 text-muted-foreground">{action.icon}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm text-foreground font-medium">{action.label}</span>
+                              <span className={cn(
+                                'text-[10px] px-1.5 py-0.5 rounded',
+                                FREQUENCY_BADGE[action.frequency] ?? 'bg-secondary text-muted-foreground',
+                              )}>
+                                {action.frequency}
+                              </span>
+                            </div>
+                            <span className="text-xs text-muted-foreground leading-snug">{action.description}</span>
+                          </div>
+                          <div className="shrink-0 flex flex-col items-end gap-0.5">
+                            {status.lastRun ? (
+                              <span className={cn(
+                                'text-[10px] shrink-0',
+                                status.overdue ? 'text-amber-600 font-medium' : 'text-muted-foreground',
+                              )}>
+                                {relativeDate(status.lastRun)}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-destructive shrink-0 font-medium">never</span>
+                            )}
+                            {action.frequency !== 'as needed' && (
+                              <span className={cn(
+                                'text-[10px] px-1 py-0.5 rounded shrink-0',
+                                status.overdue
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-emerald-100 text-emerald-700',
+                              )}>
+                                {status.dueText}
+                              </span>
+                            )}
+                          </div>
+                          {runningActionLabel === action.label
+                            ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
+                            : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                          }
+                        </button>
+                      )
+                    })}
                   </div>
-                  {runningActionLabel === action.label
-                    ? <RefreshCw size={13} className="shrink-0 animate-spin text-blue-600" />
-                    : <PlayCircle size={13} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                  }
-                </button>
-              ))}
+                ))
+              })()}
               {isLiveSiteProject ? (
                 <button
                   onClick={handleImportLiveSite}
@@ -705,13 +816,7 @@ export function Overview({
               onViewTask={(taskId) => onViewChange('tasks', taskId)}
             />
 
-            {/* Workflow activity timeline */}
-            <WorkflowActivityCard
-              items={overview?.workflow_activity ?? []}
-              lastPublishedDate={overview?.articles.last_published_date}
-            />
-
-            {/* CTR Health Summary */}
+            {/* CTR Health Summary -->
             {!isLiveSiteProject && (
               <Card className="bg-card border-border">
                 <CardHeader className="pb-2">

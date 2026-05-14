@@ -164,6 +164,27 @@ pub(crate) fn exec_indexing_fix_apply(
         })
         .unwrap_or_default();
 
+    // Load cluster context from task artifacts (set by indexing_health_campaign)
+    let cluster_context_block = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "indexing_target_context")
+        .and_then(|a| a.content.as_ref())
+        .and_then(|json| serde_json::from_str::<crate::models::indexing_health::IndexingTargetContext>(json).ok())
+        .map(|ctx| {
+            let siblings = match &ctx.cluster {
+                Some(c) => serde_json::to_string_pretty(&c.siblings).unwrap_or_default(),
+                None => "[]".to_string(),
+            };
+            format!(
+                "\n\n## Cluster Context (from site-wide audit)\n\nThis page belongs to the '{}' cluster.\n\nSibling articles that may overlap topically:\n```json\n{}```\n\nShared headings detected in cluster: {:?}\n\nWhen editing, ensure the title, H1, and opening sections are DISTINCT from these siblings.",
+                ctx.cluster.as_ref().map(|c| c.theme.clone()).unwrap_or_default(),
+                siblings,
+                ctx.cluster.as_ref().and_then(|c| c.shared_headings.clone()).unwrap_or_default()
+            )
+        })
+        .unwrap_or_default();
+
     let file_instruction = if file_path_hint.is_empty() {
         "Find the MDX file for this URL in the content directory and edit it directly.".to_string()
     } else {
@@ -181,6 +202,7 @@ pub(crate) fn exec_indexing_fix_apply(
          - Issue: {}\n\
          - Suggested Action: {}\n\
          - Repo: {}\n\
+         {}\
          {}\n\n\
          ## Instructions\n\n\
          {}\n\n\
@@ -192,6 +214,15 @@ pub(crate) fn exec_indexing_fix_apply(
          For `robots_blocked` / `noindex` / `fetch_error` / `canonical_mismatch`:\n\
          - Fix the technical root cause in the MDX frontmatter or site config\n\
          - Explain what you changed and why\n\n\
+
+         For `not_indexed_crawled` specifically (page is crawled but not indexed):\n\
+         - This usually means Google sees the page but chooses not to index it.\n\
+         - The page is already long and may have internal links — focus on DISTINCTIVENESS, not just length.\n\
+         - Make the title, H1, and opening sections clearly different from cluster siblings listed above.\n\
+         - Remove or merge sections that overlap with sibling articles.\n\
+         - If the page cannot be made distinct enough, suggest a merge target instead.\n\
+
+
          CRITICAL: You MUST actually write changes to the file. Do NOT just describe what you would do.\n\
          Do NOT create any markdown reports, summary files, or documentation.\n\
          Only edit the MDX file and return a brief text summary of what you changed.\n\n\
@@ -202,6 +233,7 @@ pub(crate) fn exec_indexing_fix_apply(
         action,
         project_path,
         context_block,
+        cluster_context_block,
         file_instruction,
     );
 
