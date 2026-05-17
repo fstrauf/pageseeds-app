@@ -97,6 +97,7 @@ export type {
   // SEO Models
   IntentClassification,
   OpportunityScore,
+  ResearchShortlistEntry,
   
   // Cannibalization Models
   ApprovalStatus,

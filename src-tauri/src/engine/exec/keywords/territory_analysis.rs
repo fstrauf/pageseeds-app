@@ -284,13 +284,15 @@ fn analyze_territories(articles: &[ArticleSummary]) -> TerritoryAnalysis {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn canonical_keyword(kw: &str) -> String {
-    let mut words: Vec<String> = kw
-        .split(|c: char| !c.is_alphanumeric())
+    // Normalize: lowercase, strip non-alphanumeric, collapse to single spaces.
+    // Preserve original word order so the theme remains readable.
+    // Jaccard similarity (used for merging) already handles word-reorder
+    // duplicates — sorting here only destroys readability.
+    kw.split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_lowercase())
-        .collect();
-    words.sort_unstable();
-    words.join(" ")
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn keyword_jaccard(a: &str, b: &str) -> f64 {
@@ -340,8 +342,11 @@ mod tests {
 
     #[test]
     fn test_canonical_keyword_normalises() {
-        assert_eq!(canonical_keyword("covered calls"), canonical_keyword("calls covered"));
+        // Normalization preserves word order (readability) but lowercases and strips punctuation.
+        assert_eq!(canonical_keyword("covered calls"), "covered calls");
         assert_eq!(canonical_keyword("Coffee-Maker"), "coffee maker");
+        // Word-reorder duplicates are still merged by keyword_jaccard (similarity = 1.0)
+        assert_eq!(keyword_jaccard("covered calls", "calls covered"), 1.0);
     }
 
     #[test]

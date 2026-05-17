@@ -879,6 +879,26 @@ export const scoreKeywordOpportunities = (
 ): Promise<OpportunityScore[]> =>
   invoke('score_keyword_opportunities', { projectId, keywords, intents, existingSlugs: existingSlugs })
 
+export const listResearchShortlist = (
+  projectId: string,
+  statusFilter?: string,
+): Promise<import('./types').ResearchShortlistEntry[]> =>
+  invoke('list_research_shortlist', { projectId, statusFilter })
+
+export const addResearchShortlistEntry = (
+  projectId: string,
+  theme: string,
+  seeds: string[],
+  priority?: string,
+): Promise<import('./types').ResearchShortlistEntry> =>
+  invoke('add_research_shortlist_entry', { projectId, theme, seeds, priority })
+
+export const deleteResearchShortlistEntry = (id: bigint): Promise<void> =>
+  invoke('delete_research_shortlist_entry', { id })
+
+export const resetResearchShortlistEntry = (id: bigint): Promise<void> =>
+  invoke('reset_research_shortlist_entry', { id })
+
 export const compareCompetitorContent = (
   keyword: string,
   competitorUrls: string[],

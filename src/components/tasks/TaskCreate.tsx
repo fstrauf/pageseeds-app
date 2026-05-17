@@ -18,7 +18,6 @@ import {
 const TASK_TYPES = [
   'write_article',
   'create_landing_page',
-  'collect_gsc',
   'collect_posthog',
   'research_keywords',
   'research_landing_pages',

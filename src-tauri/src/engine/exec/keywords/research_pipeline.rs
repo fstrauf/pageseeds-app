@@ -384,9 +384,29 @@ pub(crate) fn exec_keyword_research_native(
     // descriptions produces garbage (sentence fragments → bad API queries).
     // Step 1 (research_seed_extraction) must run first and produce themes.
     let SeedArtifact {
-        themes,
+        mut themes,
         competitors: agent_competitors,
     } = parse_seed_extraction_artifact(task);
+
+    // Fallback for custom_keyword_research: read themes from task description
+    // when seed extraction artifact is missing. This lets users run streamlined
+    // research on a small set of known keywords without the full agentic pipeline.
+    if themes.is_empty() && task.task_type == "custom_keyword_research" {
+        if let Some(desc) = &task.description {
+            let desc_themes: Vec<String> = desc
+                .lines()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !desc_themes.is_empty() {
+                log::info!(
+                    "[keyword_research_native] custom_keyword_research: using {} themes from description",
+                    desc_themes.len()
+                );
+                themes = desc_themes;
+            }
+        }
+    }
 
     if themes.is_empty() {
         return crate::engine::workflows::StepResult {

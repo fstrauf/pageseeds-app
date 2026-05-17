@@ -199,6 +199,87 @@ pub async fn score_keyword_opportunities(
     Ok(score_opportunities(&keywords, &intents, &existing_slugs))
 }
 
+// ─── Research Shortlist ───────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_research_shortlist(
+    state: State<'_, AppState>,
+    project_id: String,
+    status_filter: Option<String>,
+) -> Result<Vec<crate::db::research_shortlist::ResearchShortlistEntry>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    crate::db::research_shortlist::list_entries(
+        &db,
+        &project_id,
+        status_filter.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_research_shortlist_entry(
+    state: State<'_, AppState>,
+    project_id: String,
+    theme: String,
+    seeds: Vec<String>,
+    priority: Option<String>,
+) -> Result<crate::db::research_shortlist::ResearchShortlistEntry, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let entry = crate::db::research_shortlist::ResearchShortlistEntry::new(
+        &project_id,
+        &theme,
+        seeds,
+        "manual",
+        priority.as_deref().unwrap_or("medium"),
+        None,
+        None,
+    );
+    let id = crate::db::research_shortlist::upsert_entry(&db, &entry)
+        .map_err(|e| e.to_string())?;
+    
+    // Force status to 'pending' — if the user explicitly adds a theme,
+    // they intend to research it. Don't leave it stuck as 'researched'.
+    db.execute(
+        "UPDATE research_shortlist SET status = 'pending', researched_at = NULL WHERE id = ?1",
+        rusqlite::params![id],
+    )
+    .map_err(|e| e.to_string())?;
+    
+    // Return the created entry with its ID (search across all statuses,
+    // because upsert may have matched an existing entry with status != pending).
+    let mut entries = crate::db::research_shortlist::list_entries(&db, &project_id, None)
+        .map_err(|e| e.to_string())?;
+    entries.into_iter().find(|e| e.id == Some(id))
+        .ok_or_else(|| "Failed to retrieve created entry".to_string())
+}
+
+#[tauri::command]
+pub fn delete_research_shortlist_entry(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.execute("DELETE FROM research_shortlist WHERE id = ?1", rusqlite::params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Reset a shortlist entry back to 'pending' so it can be researched again.
+#[tauri::command]
+pub fn reset_research_shortlist_entry(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute(
+        "UPDATE research_shortlist SET status = 'pending', researched_at = NULL, added_at = ?1 WHERE id = ?2",
+        rusqlite::params![&now, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn capsolver_key(db: &rusqlite::Connection, project_id: &str) -> Result<String, String> {
     let project = task_store::get_project(db, project_id).map_err(|e| e.to_string())?;
     let resolver = EnvResolver::new(&project.path);

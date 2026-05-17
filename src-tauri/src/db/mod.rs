@@ -1224,6 +1224,54 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
     }
 
+    // One-off: clean up research_shortlist entries mangled by the old canonical_keyword bug
+    // (words were sorted alphabetically, destroying readability). Runs once per database.
+    {
+        let already_done: bool = conn
+            .prepare("SELECT COUNT(*) FROM global_settings WHERE key = 'shortlist_repair_v1_done'")?
+            .query_row([], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            > 0;
+
+        if !already_done {
+            let entries = crate::db::research_shortlist::list_entries(conn, "", None)
+                .unwrap_or_default();
+            let mut deleted = 0usize;
+            for entry in entries {
+                let words: Vec<String> = entry
+                    .theme
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_lowercase())
+                    .collect();
+                if words.len() >= 3 {
+                    let mut sorted = words.clone();
+                    sorted.sort_unstable();
+                    if words == sorted {
+                        if let Some(id) = entry.id {
+                            let _ = conn.execute(
+                                "DELETE FROM research_shortlist WHERE id = ?1",
+                                rusqlite::params![id],
+                            );
+                            deleted += 1;
+                        }
+                    }
+                }
+            }
+            if deleted > 0 {
+                log::info!(
+                    "[db::run_migrations] Deleted {} mangled research_shortlist entries (old canonical_keyword bug)",
+                    deleted
+                );
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT OR IGNORE INTO global_settings (key, value, updated_at) VALUES ('shortlist_repair_v1_done', '1', ?1)",
+                [&now],
+            )?;
+        }
+    }
+
     Ok(())
 }
 

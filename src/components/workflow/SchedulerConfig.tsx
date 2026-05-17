@@ -21,7 +21,6 @@ interface SchedulerConfigProps {
 const PHASES = ['collection', 'investigation', 'research', 'implementation', 'verification']
 const PRIORITIES = ['high', 'medium', 'low']
 const DEFAULT_TASK_TYPES = [
-  'collect_gsc',
   'investigate_gsc',
   'research_keywords',
   'reddit_opportunity_search',

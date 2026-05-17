@@ -30,17 +30,6 @@ interface ActionDef {
 }
 
 const QUICK_ACTIONS: ActionDef[] = [
-  // ── Collection (run first, weekly) ─────────────────────────────────────────
-  {
-    task_type: 'collect_gsc',
-    label: 'GSC Collection',
-    description: 'Pull the latest Search Console analytics into the project workspace',
-    icon: <Globe size={16} />,
-    phase: 'collection',
-    frequency: 'weekly',
-    nextView: 'gsc',
-    nextLabel: 'View Search Console data',
-  },
   // ── Research (monthly / as needed) ─────────────────────────────────────────
   {
     task_type: 'research_keywords',
@@ -673,7 +662,7 @@ export function Overview({
               {(() => {
                 const visibleActions = isLiveSiteProject
                   ? QUICK_ACTIONS.filter(a =>
-                      ['research_keywords', 'research_landing_pages', 'collect_gsc',
+                      ['research_keywords', 'research_landing_pages',
                        'reddit_opportunity_search', 'analyze_keyword_coverage'].includes(a.task_type)
                     )
                   : QUICK_ACTIONS

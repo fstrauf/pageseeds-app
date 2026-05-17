@@ -12,10 +12,12 @@
 ///   - write_article: marks entries as covered when an article is published
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::error::Result;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ResearchShortlistEntry {
     pub id: Option<i64>,
     pub project_id: String,

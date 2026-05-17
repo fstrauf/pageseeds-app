@@ -133,6 +133,19 @@ impl WorkflowHandler for ResearchHandler {
                     WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection),
                 ]
             }
+            "custom_keyword_research" => {
+                // Streamlined pipeline for user-provided keywords.
+                // Skips agentic seed extraction / autocomplete / validation —
+                // the user already knows what they want to research.
+                // Reads themes directly from task.description (one per line).
+                vec![
+                    WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
+                        .with_latest_raw_policy(
+                            crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                        ),
+                    WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection),
+                ]
+            }
             _ => {
                 // Legacy path: raw agentic call via seo-keyword-research skill.
                 // The output is raw agent text; downstream consumers must parse JSON if needed.

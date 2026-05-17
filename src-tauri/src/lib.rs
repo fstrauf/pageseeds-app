@@ -188,6 +188,10 @@ pub fn run() {
             commands::set_seo_provider,
             commands::classify_search_intent,
             commands::score_keyword_opportunities,
+            commands::list_research_shortlist,
+            commands::add_research_shortlist_entry,
+            commands::delete_research_shortlist_entry,
+            commands::reset_research_shortlist_entry,
             // Phase 6 — Workflow Engine + Batch + Scheduler + Ledger
             commands::execute_task,
             commands::dry_run_task,
