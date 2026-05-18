@@ -465,17 +465,6 @@ pub(crate) fn exec_keyword_research_native(
         };
     }
 
-    // ── Pre-flight: keyword_coverage.json must exist ──────────────────────────
-    let coverage_path = paths.automation_dir.join("keyword_coverage.json");
-    if !coverage_path.exists() {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: "keyword_coverage.json not found. Run 'Analyze Keyword Coverage' first."
-                .into(),
-            output: None,
-        };
-    }
-
     // Load existing keywords from SQLite so we can skip already-covered ones.
     let existing_keywords: HashSet<String> = if is_live_site_project {
         match crate::live_site::list_live_site_pages(&db, &task.project_id) {
@@ -586,6 +575,9 @@ pub(crate) fn exec_keyword_research_native(
                     seeds_to_use.len()
                 );
 
+                let mut dataforseo_successes = 0usize;
+                let mut dataforseo_failures = 0usize;
+
                 for (theme, seed) in &seeds_to_use {
                     tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
                     match provider.keyword_ideas(seed, "us", "google").await {
@@ -595,6 +587,7 @@ pub(crate) fn exec_keyword_research_native(
                                 "[keyword_research_native] theme '{}' seed '{}' → {} ideas",
                                 theme, seed, count
                             );
+                            dataforseo_successes += 1;
                             for idea in result.ideas.iter().chain(result.question_ideas.iter()) {
                                 let kw_lower = idea.keyword.to_lowercase();
                                 if existing_keywords_thread.contains(&kw_lower) || seen.contains(&kw_lower) {
@@ -612,17 +605,40 @@ pub(crate) fn exec_keyword_research_native(
                             }
                         }
                         Err(e) => {
+                            let err_str = e.to_string();
                             log::warn!(
                                 "[keyword_research_native] DataForSEO failed for seed '{}': {}",
-                                seed, e
+                                seed, err_str
                             );
+                            dataforseo_failures += 1;
+                            // Credit exhaustion is a hard stop — don't waste calls or mislead the user.
+                            if err_str.contains("402") || err_str.contains("Payment Required") {
+                                return Err(crate::error::Error::Other(
+                                    "DataForSEO credits exhausted (402 Payment Required). \
+                                     Please top up your DataForSEO account and retry.".to_string()
+                                ));
+                            }
                         }
                     }
                 }
 
+                // If every single DataForSEO call failed, the result set is unreliable.
+                // Fail the step so the user knows something is wrong instead of getting empty/partial data.
+                if dataforseo_successes == 0 && dataforseo_failures > 0 {
+                    return Err(crate::error::Error::Other(
+                        format!(
+                            "DataForSEO failed for all {} seeds. No keyword data could be retrieved. \
+                             Check your API credentials and account status, then retry.",
+                            dataforseo_failures
+                        )
+                    ));
+                }
+
                 log::info!(
-                    "[keyword_research_native] DataForSEO phase complete → {} total candidates",
-                    candidates.len()
+                    "[keyword_research_native] DataForSEO phase complete → {} total candidates ({} seeds ok, {} failed)",
+                    candidates.len(),
+                    dataforseo_successes,
+                    dataforseo_failures
                 );
             } else {
                 // ── Ahrefs/Google Autocomplete path (legacy) ──────────────────────

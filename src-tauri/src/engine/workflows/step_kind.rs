@@ -43,6 +43,9 @@ pub enum StepKind {
     CoverageLoadArticles,
     CoverageClusterAnalysis,
     CoverageSave,
+    /// Deterministic: ensure keyword_coverage.json exists and is fresh.
+    /// If stale or missing, runs coverage analysis inline before dependent steps proceed.
+    EnsureCoverageFresh,
     RedditPostReply,
     SocialExtractArticle,
     /// Fetch Google Autocomplete suggestions per theme (deterministic).
@@ -199,6 +202,7 @@ impl StepKind {
             Self::CoverageLoadArticles => "coverage_load_articles",
             Self::CoverageClusterAnalysis => "coverage_cluster_analysis",
             Self::CoverageSave => "coverage_save",
+            Self::EnsureCoverageFresh => "ensure_coverage_fresh",
             Self::RedditPostReply => "reddit_post_reply",
             Self::SocialExtractArticle => "social_extract_article",
             Self::ResearchAutocomplete => "research_autocomplete",
@@ -312,6 +316,7 @@ impl FromStr for StepKind {
             "coverage_load_articles" => Ok(Self::CoverageLoadArticles),
             "coverage_cluster_analysis" => Ok(Self::CoverageClusterAnalysis),
             "coverage_save" => Ok(Self::CoverageSave),
+            "ensure_coverage_fresh" => Ok(Self::EnsureCoverageFresh),
             "reddit_post_reply" => Ok(Self::RedditPostReply),
             "social_extract_article" => Ok(Self::SocialExtractArticle),
             "research_autocomplete" => Ok(Self::ResearchAutocomplete),
@@ -435,6 +440,7 @@ mod tests {
             StepKind::CoverageLoadArticles,
             StepKind::CoverageClusterAnalysis,
             StepKind::CoverageSave,
+            StepKind::EnsureCoverageFresh,
             StepKind::RedditPostReply,
             StepKind::SocialExtractArticle,
             StepKind::ResearchAutocomplete,

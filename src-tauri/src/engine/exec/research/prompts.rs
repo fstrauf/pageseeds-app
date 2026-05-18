@@ -147,12 +147,7 @@ pub fn build_research_prompts(
             let coverage_summary =
                 match crate::engine::exec::coverage::read_keyword_coverage(project_path) {
                     Some(coverage) => build_coverage_summary(&coverage),
-                    None => {
-                        return Err(
-                        "keyword_coverage.json not found. Run 'Analyze Keyword Coverage' first."
-                            .to_string(),
-                    );
-                    }
+                    None => "(no coverage data available)".to_string(),
                 };
 
             // ── Research shortlist (open territories from GSC analysis) ───────────

@@ -2,7 +2,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { KeywordResearch } from './KeywordResearch'
 import { BacklinkView } from './BacklinkView'
 import { TrafficOverview } from './TrafficOverview'
-import { KeywordCoveragePanel } from './KeywordCoverage'
 import { ResearchShortlist } from './ResearchShortlist'
 import type { Project, Task } from '../../lib/types'
 
@@ -24,7 +23,6 @@ export function SEO({ projectId, project, onRunTasks }: Props) {
             {[
               { value: 'keywords', label: 'Keywords' },
               { value: 'shortlist', label: 'Shortlist' },
-              { value: 'coverage', label: 'Coverage' },
               { value: 'backlinks', label: 'Backlinks' },
               { value: 'traffic', label: 'Traffic' },
             ].map(tab => (
@@ -45,10 +43,6 @@ export function SEO({ projectId, project, onRunTasks }: Props) {
 
         <TabsContent value="shortlist" className="flex-1 overflow-hidden mt-0 p-0">
           <ResearchShortlist projectId={projectId} />
-        </TabsContent>
-
-        <TabsContent value="coverage" className="flex-1 overflow-hidden mt-0 p-0">
-          <KeywordCoveragePanel project={project ?? null} onRunTasks={onRunTasks} />
         </TabsContent>
 
         <TabsContent value="backlinks" className="flex-1 overflow-hidden mt-0 p-0">

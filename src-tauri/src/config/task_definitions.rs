@@ -11,7 +11,6 @@ pub enum HandlerFamily {
     Reddit,
     Social,
     Performance,
-    Coverage,
     CtrAudit,
     CannibalizationAudit,
     ConsolidateCluster,
@@ -338,15 +337,6 @@ const DEFINITIONS: &[TaskDefinition] = &[
         review_surface: TaskReviewSurface::None,
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Performance,
-    },
-    // Coverage
-    TaskDefinition {
-        task_type: "analyze_keyword_coverage",
-        phase: "investigation",
-        run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        handler_family: HandlerFamily::Coverage,
     },
     // CTR Audit
     TaskDefinition {

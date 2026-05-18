@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useErrorHandler } from '../../lib/toast-context'
-import { seoGetKeywordIdeas, seoGetKeywordDifficulty, classifySearchIntent, scoreKeywordOpportunities, listArticles } from '../../lib/tauri'
+import { seoGetKeywordIdeas, seoGetKeywordDifficulty, classifySearchIntent, scoreKeywordOpportunities, listArticles, addResearchShortlistEntry } from '../../lib/tauri'
 import type { KeywordIdea, KeywordIdeasResult, KeywordDifficultyResult, SerpEntry, IntentClassification, OpportunityScore, Article } from '../../lib/types'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { Badge } from '../ui/badge'
@@ -43,9 +43,13 @@ interface IdeaTableProps {
   intents?: Map<string, IntentClassification>
   scores?: Map<string, OpportunityScore>
   showScores?: boolean
+  onExplore?: (keyword: string) => void
+  onAddToShortlist?: (keyword: string) => void
+  addedToShortlist?: Set<string>
+  addingToShortlist?: Set<string>
 }
 
-function IdeaTable({ ideas, intents, scores, showScores }: IdeaTableProps) {
+function IdeaTable({ ideas, intents, scores, showScores, onExplore, onAddToShortlist, addedToShortlist, addingToShortlist }: IdeaTableProps) {
   if (ideas.length === 0) {
     return <p className="text-sm text-muted-foreground py-4">No results.</p>
   }
@@ -69,7 +73,9 @@ function IdeaTable({ ideas, intents, scores, showScores }: IdeaTableProps) {
             <th className="py-2 pr-4 font-medium">Intent</th>
             <th className="py-2 pr-4 font-medium">Difficulty</th>
             <th className="py-2 pr-4 font-medium">Volume</th>
-            <th className="py-2 font-medium">Type</th>
+            <th className="py-2 pr-4 font-medium">Type</th>
+            {onExplore && <th className="py-2 font-medium"></th>}
+            {onAddToShortlist && <th className="py-2 font-medium"></th>}
           </tr>
         </thead>
         <tbody>
@@ -120,6 +126,33 @@ function IdeaTable({ ideas, intents, scores, showScores }: IdeaTableProps) {
                     {idea.idea_type}
                   </span>
                 </td>
+                {onExplore && (
+                  <td className="py-2">
+                    <button
+                      onClick={() => onExplore(idea.keyword)}
+                      className="text-xs px-2 py-0.5 rounded border border-border bg-card hover:bg-primary hover:text-primary-foreground transition-colors"
+                      title={`Explore "${idea.keyword}"`}
+                    >
+                      Explore
+                    </button>
+                  </td>
+                )}
+                {onAddToShortlist && (
+                  <td className="py-2">
+                    {addedToShortlist?.has(idea.keyword) ? (
+                      <span className="text-xs text-green-600 font-medium">Added</span>
+                    ) : (
+                      <button
+                        onClick={() => onAddToShortlist(idea.keyword)}
+                        disabled={addingToShortlist?.has(idea.keyword)}
+                        className="text-xs px-2 py-0.5 rounded border border-border bg-card hover:bg-primary hover:text-primary-foreground transition-colors disabled:opacity-50"
+                        title={`Add "${idea.keyword}" to shortlist`}
+                      >
+                        {addingToShortlist?.has(idea.keyword) ? 'Adding…' : 'Shortlist'}
+                      </button>
+                    )}
+                  </td>
+                )}
               </tr>
             )
           })}
@@ -189,7 +222,9 @@ export function KeywordResearch({ projectId }: Props) {
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [loadingDiff, setLoadingDiff] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
-  const { showError } = useErrorHandler()
+  const [addedToShortlist, setAddedToShortlist] = useState<Set<string>>(new Set())
+  const [addingToShortlist, setAddingToShortlist] = useState<Set<string>>(new Set())
+  const { showError, showSuccess } = useErrorHandler()
   
   // Load existing article slugs for opportunity scoring
   useEffect(() => {
@@ -201,8 +236,12 @@ export function KeywordResearch({ projectId }: Props) {
     })
   }, [projectId])
 
-  async function fetchIdeas() {
-    if (!keyword.trim()) return
+  async function fetchIdeas(seedKeyword?: string) {
+    const targetKeyword = seedKeyword ?? keyword
+    if (!targetKeyword.trim()) return
+    if (seedKeyword) {
+      setKeyword(seedKeyword)
+    }
     setLoadingIdeas(true)
     setAnalyzing(true)
     setIdeasResult(null)
@@ -210,7 +249,7 @@ export function KeywordResearch({ projectId }: Props) {
     setScores(new Map())
     
     try {
-      const result = await seoGetKeywordIdeas(projectId, keyword, country)
+      const result = await seoGetKeywordIdeas(projectId, targetKeyword, country)
       setIdeasResult(result)
       
       // Analyze intents and scores for all ideas
@@ -258,6 +297,23 @@ export function KeywordResearch({ projectId }: Props) {
     }
   }
 
+  async function handleAddToShortlist(keyword: string) {
+    setAddingToShortlist(prev => new Set(prev).add(keyword))
+    try {
+      await addResearchShortlistEntry(projectId, keyword, [keyword], 'medium')
+      setAddedToShortlist(prev => new Set(prev).add(keyword))
+      showSuccess(`"${keyword}" added to shortlist`)
+    } catch (e) {
+      showError(String(e))
+    } finally {
+      setAddingToShortlist(prev => {
+        const next = new Set(prev)
+        next.delete(keyword)
+        return next
+      })
+    }
+  }
+
   const allIdeas = ideasResult
     ? [...ideasResult.ideas, ...ideasResult.question_ideas]
     : []
@@ -295,7 +351,7 @@ export function KeywordResearch({ projectId }: Props) {
         </div>
         <button
           className="h-8 px-3 rounded bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
-          onClick={fetchIdeas}
+          onClick={() => fetchIdeas()}
           disabled={!keyword.trim() || loadingIdeas}
         >
           {loadingIdeas ? 'Solving CAPTCHA…' : 'Get Ideas'}
@@ -362,17 +418,21 @@ export function KeywordResearch({ projectId }: Props) {
                   ideas={allIdeas.filter(i => scores.get(i.keyword)?.tier === 'high')} 
                   intents={intents} 
                   scores={scores} 
-                  showScores={true} 
+                  showScores={true}
+                  onExplore={fetchIdeas}
+                  onAddToShortlist={handleAddToShortlist}
+                  addedToShortlist={addedToShortlist}
+                  addingToShortlist={addingToShortlist}
                 />
               </TabsContent>
               <TabsContent value="all">
-                <IdeaTable ideas={allIdeas} intents={intents} scores={scores} showScores={true} />
+                <IdeaTable ideas={allIdeas} intents={intents} scores={scores} showScores={true} onExplore={fetchIdeas} onAddToShortlist={handleAddToShortlist} addedToShortlist={addedToShortlist} addingToShortlist={addingToShortlist} />
               </TabsContent>
               <TabsContent value="ideas">
-                <IdeaTable ideas={ideasResult.ideas} intents={intents} scores={scores} showScores={true} />
+                <IdeaTable ideas={ideasResult.ideas} intents={intents} scores={scores} showScores={true} onExplore={fetchIdeas} onAddToShortlist={handleAddToShortlist} addedToShortlist={addedToShortlist} addingToShortlist={addingToShortlist} />
               </TabsContent>
               <TabsContent value="questions">
-                <IdeaTable ideas={ideasResult.question_ideas} intents={intents} scores={scores} showScores={true} />
+                <IdeaTable ideas={ideasResult.question_ideas} intents={intents} scores={scores} showScores={true} onExplore={fetchIdeas} onAddToShortlist={handleAddToShortlist} addedToShortlist={addedToShortlist} addingToShortlist={addingToShortlist} />
               </TabsContent>
             </Tabs>
           </div>

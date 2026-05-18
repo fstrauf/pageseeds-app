@@ -8,7 +8,6 @@ import type {
   FormatValidationResult,
   ImportResult,
   IngestOrphanResult,
-  KeywordCoverageStatus,
   MigrationResult,
   LiveSiteAuditReport,
   LiveSiteGscSyncResult,
@@ -849,8 +848,6 @@ export const runSocialCampaign = (campaignId: string): Promise<Task> =>
 // Keyword Coverage Analysis
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const getKeywordCoverage = (projectId: string): Promise<KeywordCoverageStatus> =>
-  invoke('get_keyword_coverage', { projectId })
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Readability Analysis

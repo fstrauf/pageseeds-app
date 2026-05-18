@@ -708,7 +708,6 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         ("research_keywords", "Keyword Research"),
         ("research_landing_pages", "Landing Page Research"),
         ("reddit_opportunity_search", "Reddit Search"),
-        ("analyze_keyword_coverage", "Analyze Coverage"),
         ("content_review", "Content Review"),
         ("cannibalization_audit", "Cannibalization Audit"),
         ("ctr_audit", "CTR Audit"),

@@ -619,6 +619,65 @@ pub fn read_keyword_coverage(project_path: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&content).ok()
 }
 
+/// Check if keyword coverage is fresh (within max_age_days).
+pub fn is_coverage_fresh(project_path: &str, max_age_days: u64) -> bool {
+    let paths = ProjectPaths::from_path(project_path);
+    let coverage_path = paths.automation_dir.join("keyword_coverage.json");
+
+    if !coverage_path.exists() {
+        return false;
+    }
+
+    let metadata = match std::fs::metadata(&coverage_path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+
+    let modified = match metadata.modified() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+
+    let now = std::time::SystemTime::now();
+    let age = now.duration_since(modified).unwrap_or_default();
+    age.as_secs() < max_age_days * 86400
+}
+
+/// Execute the `ensure_coverage_fresh` step.
+///
+/// Checks if keyword_coverage.json exists and is < 7 days old.
+/// If stale or missing, runs the full coverage analysis inline.
+pub(crate) fn exec_ensure_coverage_fresh(
+    task: &Task,
+    project_path: &str,
+    agent_provider: &str,
+) -> StepResult {
+    if is_coverage_fresh(project_path, 7) {
+        return StepResult {
+            success: true,
+            message: "Coverage data is fresh (< 7 days)".to_string(),
+            output: None,
+        };
+    }
+
+    log::info!(
+        "[ensure_coverage_fresh] Coverage stale or missing, refreshing inline..."
+    );
+
+    let load = exec_coverage_load_articles(task, project_path);
+    if !load.success {
+        return load;
+    }
+
+    let articles_json = load.output.unwrap_or_default();
+    let cluster = exec_coverage_cluster_analysis(task, project_path, agent_provider, &articles_json);
+    if !cluster.success {
+        return cluster;
+    }
+
+    exec_coverage_save(task, project_path)
+}
+
 /// Check if keyword coverage exists and return its age.
 ///
 /// Returns (exists, age_description) where age_description is human-readable.

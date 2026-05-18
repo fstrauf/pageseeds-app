@@ -4,6 +4,7 @@ use crate::seo::keywords::{KeywordDifficultyResult, KeywordIdea, KeywordIdeasRes
 use crate::seo::provider::SeoDataProvider;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 
 const DATAFORSEO_BASE_URL: &str = "https://api.dataforseo.com";
 
@@ -297,7 +298,6 @@ impl DataForSeoProvider {
     }
 
     /// Call the `keyword_suggestions` endpoint (substring matching against keyword database).
-    #[allow(dead_code)]
     async fn fetch_keyword_suggestions(
         &self,
         keyword: &str,
@@ -370,6 +370,76 @@ impl DataForSeoProvider {
 
         Ok(data)
     }
+
+    /// Build an empty result for fallback when one endpoint fails.
+    fn empty_result(keyword: &str, country: &str, search_engine: &str) -> KeywordIdeasResult {
+        KeywordIdeasResult {
+            keyword: keyword.to_string(),
+            country: country.to_string(),
+            search_engine: search_engine.to_string(),
+            ideas: vec![],
+            question_ideas: vec![],
+        }
+    }
+
+    /// Merge two keyword idea results, deduplicating by keyword (case-insensitive).
+    /// When a keyword appears in both, keeps the one with higher exact volume.
+    fn merge_results(
+        keyword: &str,
+        country: &str,
+        search_engine: &str,
+        a: KeywordIdeasResult,
+        b: KeywordIdeasResult,
+    ) -> KeywordIdeasResult {
+        let mut seen: HashMap<String, KeywordIdea> = HashMap::new();
+
+        for idea in a.ideas.into_iter().chain(a.question_ideas.into_iter()) {
+            seen.insert(idea.keyword.to_lowercase(), idea);
+        }
+
+        for idea in b.ideas.into_iter().chain(b.question_ideas.into_iter()) {
+            let key = idea.keyword.to_lowercase();
+            if let Some(existing) = seen.get(&key) {
+                let existing_vol = existing.volume_exact.unwrap_or(0);
+                let new_vol = idea.volume_exact.unwrap_or(0);
+                if new_vol > existing_vol {
+                    seen.insert(key, idea);
+                }
+            } else {
+                seen.insert(key, idea);
+            }
+        }
+
+        let mut ideas = Vec::new();
+        let mut question_ideas = Vec::new();
+        for (_, idea) in seen {
+            if idea.idea_type == "question" {
+                question_ideas.push(idea);
+            } else {
+                ideas.push(idea);
+            }
+        }
+
+        // Sort by volume descending
+        ideas.sort_by(|a, b| {
+            let av = a.volume_exact.unwrap_or(0);
+            let bv = b.volume_exact.unwrap_or(0);
+            bv.cmp(&av)
+        });
+        question_ideas.sort_by(|a, b| {
+            let av = a.volume_exact.unwrap_or(0);
+            let bv = b.volume_exact.unwrap_or(0);
+            bv.cmp(&av)
+        });
+
+        KeywordIdeasResult {
+            keyword: keyword.to_string(),
+            country: country.to_string(),
+            search_engine: search_engine.to_string(),
+            ideas,
+            question_ideas,
+        }
+    }
 }
 
 #[async_trait]
@@ -378,7 +448,7 @@ impl SeoDataProvider for DataForSeoProvider {
         &self,
         keyword: &str,
         country: &str,
-        _search_engine: &str,
+        search_engine: &str,
     ) -> Result<KeywordIdeasResult> {
         // Map country code to DataForSEO location code
         let location_code = match country.to_lowercase().as_str() {
@@ -391,10 +461,31 @@ impl SeoDataProvider for DataForSeoProvider {
             _ => "2840", // Default to US
         };
 
-        // Call related_keywords directly. The caller (exec/keywords.rs) is responsible
-        // for seed selection via Phase 1 (Google Autocomplete) and will retry with the
-        // next autocomplete seed if this returns 0 results. No fallback here.
-        self.fetch_related_keywords(keyword, location_code).await
+        // Call both endpoints concurrently for broader coverage.
+        // related_keywords = semantic discovery (Google "searches related to")
+        // keyword_suggestions = substring matching (finds variations)
+        let (related, suggestions) = tokio::join!(
+            self.fetch_related_keywords(keyword, location_code),
+            self.fetch_keyword_suggestions(keyword, location_code)
+        );
+
+        // If both failed, return the first error so the user sees what went wrong.
+        let related = match related {
+            Ok(r) => r,
+            Err(e) => {
+                return match suggestions {
+                    Ok(s) => Ok(Self::merge_results(keyword, country, search_engine, Self::empty_result(keyword, country, search_engine), s)),
+                    Err(_) => Err(e),
+                };
+            }
+        };
+
+        let suggestions = match suggestions {
+            Ok(s) => s,
+            Err(_) => return Ok(related),
+        };
+
+        Ok(Self::merge_results(keyword, country, search_engine, related, suggestions))
     }
 
     async fn keyword_difficulty(

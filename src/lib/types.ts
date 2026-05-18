@@ -178,35 +178,6 @@ export interface KeywordResearchResult {
   difficulty_skipped_keywords?: string[]
 }
 
-// ─── Keyword Coverage Analysis ────────────────────────────────────────────────
-
-export interface KeywordCoverageCluster {
-  cluster_id: string
-  cluster_name: string
-  article_ids: number[]
-  primary_keywords: string[]
-  article_count: number
-  // Authority scoring (new)
-  authority_score?: number
-  authority_level?: 'Strong' | 'Moderate' | 'Weak' | 'Minimal'
-  authority_description?: string
-  recommended_action?: string
-  avg_position?: number
-  total_impressions?: number
-}
-
-export interface KeywordCoverage {
-  generated_at: string
-  article_count: number
-  clusters: KeywordCoverageCluster[]
-}
-
-export interface KeywordCoverageStatus {
-  exists: boolean
-  last_analyzed: string
-  coverage?: KeywordCoverage
-}
-
 // ─── SEO Provider Types ───────────────────────────────────────────────────────
 
 export type SeoProvider = 'ahrefs' | 'dataforseo'

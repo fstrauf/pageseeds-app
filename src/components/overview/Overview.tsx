@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Zap, RefreshCw, CheckCircle2, Clock, AlertCircle,
   BarChart2, FileText, Search, Globe, BookOpen, Cpu, ChevronRight,
-  PlayCircle, TrendingUp, Users, ArrowRight, Send, PieChart, Target,
+  PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
 import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths } from '../../lib/tauri'
@@ -60,16 +60,6 @@ const QUICK_ACTIONS: ActionDef[] = [
     frequency: 'weekly',
     nextView: 'reddit',
     nextLabel: 'Review pending opportunities',
-  },
-  {
-    task_type: 'analyze_keyword_coverage',
-    label: 'Analyze Coverage',
-    description: 'Analyze your content portfolio and identify topic clusters + coverage gaps',
-    icon: <PieChart size={16} />,
-    phase: 'research',
-    frequency: 'monthly',
-    nextView: 'tasks',
-    nextLabel: 'View coverage results',
   },
   // ── Investigation (bi-weekly / after collection) ───────────────────────────
   {
@@ -663,7 +653,7 @@ export function Overview({
                 const visibleActions = isLiveSiteProject
                   ? QUICK_ACTIONS.filter(a =>
                       ['research_keywords', 'research_landing_pages',
-                       'reddit_opportunity_search', 'analyze_keyword_coverage'].includes(a.task_type)
+                       'reddit_opportunity_search'].includes(a.task_type)
                     )
                   : QUICK_ACTIONS
                 const grouped = PHASE_ORDER.map(phase => ({

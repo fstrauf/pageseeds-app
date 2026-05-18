@@ -92,13 +92,13 @@ fn create_run(conn: &Connection) -> Result<QueueRun> {
     let id = format!("run-{}", chrono::Utc::now().timestamp_millis());
     conn.execute(
         "INSERT INTO queue_runs (id, status, pause_on_error, created_at, updated_at)
-         VALUES (?1, 'idle', 0, ?2, ?2)",
+         VALUES (?1, 'idle', 1, ?2, ?2)",
         [&id, &now],
     )?;
     Ok(QueueRun {
         id,
         status: QueueRunStatus::Idle,
-        pause_on_error: false,
+        pause_on_error: true,
         created_at: now.clone(),
         updated_at: now,
         started_at: None,

@@ -674,6 +674,13 @@ impl StepRegistry {
 
         register_blocking!(
             handlers,
+            StepKind::EnsureCoverageFresh,
+            crate::engine::exec::coverage::exec_ensure_coverage_fresh,
+            agent_provider
+        );
+
+        register_blocking!(
+            handlers,
             StepKind::RedditPostReply,
             crate::engine::exec::reddit::exec_reddit_post_reply,
             db_conn

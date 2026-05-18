@@ -94,25 +94,28 @@ impl WorkflowHandler for ResearchHandler {
                 ),
             ],
             "research_keywords" | "research_landing_pages" => {
-                // 6-step hybrid workflow:
-                // deterministic → agentic → deterministic → agentic → deterministic → deterministic
+                // 7-step hybrid workflow:
+                // deterministic → deterministic → agentic → deterministic → agentic → deterministic → deterministic
                 vec![
-                    // Step 1 (deterministic): Territory analysis — reads articles + GSC data,
+                    // Step 1 (deterministic): Ensure coverage data is fresh (< 7 days).
+                    // If stale or missing, runs coverage analysis inline. Fully invisible to user.
+                    WorkflowStep::new("ensure_coverage_fresh", StepKind::EnsureCoverageFresh),
+                    // Step 2 (deterministic): Territory analysis — reads articles + GSC data,
                     // groups by target_keyword, identifies open territories and saturated themes.
                     // Writes findings to the persistent research_shortlist SQLite table.
                     WorkflowStep::new(
                         "research_territory_analysis",
                         StepKind::ResearchTerritoryAnalysis,
                     ),
-                    // Step 2 (agentic): LLM extracts 3-4 themes from project brief.
+                    // Step 3 (agentic): LLM extracts 3-4 themes from project brief.
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires reading intent from free-form text.
                     // Now also reads the research_shortlist to prioritize open territories.
                     WorkflowStep::new("research_seed_extraction", StepKind::Agentic),
-                    // Step 3 (deterministic): fetch Google Autocomplete for all themes.
+                    // Step 4 (deterministic): fetch Google Autocomplete for all themes.
                     // Free API, always returns results. Outputs structured JSON: [{theme, suggestions}].
                     WorkflowStep::new("research_autocomplete", StepKind::ResearchAutocomplete),
-                    // Step 4 (agentic): LLM filters autocomplete suggestions for domain relevance.
+                    // Step 5 (agentic): LLM filters autocomplete suggestions for domain relevance.
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires understanding what is on-topic for this
                     // specific product/site. Hard-coding a relevance rule would produce silent errors
@@ -120,14 +123,14 @@ impl WorkflowHandler for ResearchHandler {
                     // Input contract: [{theme, suggestions: [string]}]
                     // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
                     WorkflowStep::new("research_seed_validation", StepKind::Agentic),
-                    // Step 5 (deterministic): DataForSEO related_keywords per validated seed.
+                    // Step 6 (deterministic): DataForSEO related_keywords per validated seed.
                     // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
                     // Also consumes pending territory themes from research_shortlist as extra seeds.
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
                         .with_latest_raw_policy(
                             crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
                         ),
-                    // Step 6 (deterministic): Select best candidates from structured data.
+                    // Step 7 (deterministic): Select best candidates from structured data.
                     // Outputs clean JSON directly — no normalizer needed because upstream
                     // agentic steps now use Extractor<T>.
                     WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection),
@@ -139,6 +142,8 @@ impl WorkflowHandler for ResearchHandler {
                 // the user already knows what they want to research.
                 // Reads themes directly from task.description (one per line).
                 vec![
+                    // Step 1 (deterministic): Ensure coverage data is fresh.
+                    WorkflowStep::new("ensure_coverage_fresh", StepKind::EnsureCoverageFresh),
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
                         .with_latest_raw_policy(
                             crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
@@ -484,35 +489,6 @@ impl WorkflowHandler for RedditHandler {
     }
 }
 
-// ─── Keyword Coverage ─────────────────────────────────────────────────────────
-
-pub struct CoverageHandler;
-
-impl WorkflowHandler for CoverageHandler {
-    fn supports(&self, task: &Task) -> bool {
-        task_type(task) == "analyze_keyword_coverage"
-    }
-
-    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
-        vec![
-            // Step 1 (deterministic): Load articles from articles.json
-            WorkflowStep::new("coverage_load_articles", StepKind::CoverageLoadArticles)
-                .with_latest_raw_policy(
-                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
-                ),
-            // Step 2 (agentic): Cluster articles by semantic similarity
-            // Cannot be deterministic: understanding topic relationships and naming
-            // clusters requires semantic judgment about content themes.
-            WorkflowStep::new(
-                "coverage_cluster_analysis",
-                StepKind::CoverageClusterAnalysis,
-            ),
-            // Step 3 (deterministic): Save results to keyword_coverage.json
-            WorkflowStep::new("coverage_save", StepKind::CoverageSave),
-        ]
-    }
-}
-
 // ─── Performance ─────────────────────────────────────────────────────────────
 
 pub struct PerformanceHandler;
@@ -765,7 +741,6 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(RedditHandler),
         Box::new(SocialHandler),
         Box::new(PerformanceHandler),
-        Box::new(CoverageHandler),
         Box::new(CtrAuditHandler),
         Box::new(CannibalizationAuditHandler),
         Box::new(ConsolidateClusterHandler),
@@ -1046,8 +1021,11 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
 
 /// Return the `X-Kimi-Backend` header value for a given task/step.
 ///
-/// Content-writing tasks need ACP (persistent session, file I/O);
-/// everything else can use direct mode (fast, stateless).
+/// Content-writing tasks use ACP because generation reliably takes 160–170s,
+/// which exceeds the bridge's direct-mode hard timeout (120s). ACP has a
+/// 300s timeout and can handle long-running completions.
+///
+/// Non-writing tasks use direct mode: it is stateless, fast, and reliable.
 fn kimi_backend_preference_for_step(task: &Task, _step: &WorkflowStep) -> Option<&'static str> {
     match task.task_type.as_str() {
         "write_article" | "optimize_article" | "create_content" | "optimize_content"

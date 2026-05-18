@@ -371,7 +371,7 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 | Does it add/remove internal links between articles? | Reuse `cluster_and_link` (or its deterministic steps). |
 | Does it read GSC data and spawn fix tasks? | Reuse `collect_gsc` or `indexing_diagnostics`. |
 | Does it audit article health? | Reuse `content_audit` or `content_review`. |
-| Does it analyze keyword coverage? | Reuse `analyze_keyword_coverage`. |
+| Does it analyze keyword coverage? | It is now an invisible prerequisite — see "Invisible Prerequisites" below. |
 | Is the only difference from an existing task the prompt/skill used? | Reuse the existing handler — change the skill param, not the handler. |
 
 **Rule:** A new skill file (`.github/skills/{skill_name}/SKILL.md`) is ~20 lines. A new task type + handler + exec module is ~200+ lines. Prefer the skill.
@@ -387,6 +387,63 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 **Step constructors are typed:** Use `WorkflowStep::new("name", StepKind::X)` — never pass string step kinds.
 
 **If the new task type is a per-article fix pipeline** (parent audits → child fixes individual items), follow the canonical 4-step pattern documented in `docs/AGENT_DEVELOPMENT_PLAYBOOK.md` → **"Building a Per-Article Fix Pipeline"**. Do not use a bare `StepKind::Agentic` with no skill — it will timeout or produce garbage. Use deterministic context → structured extraction (`Extractor<T>`) → deterministic apply → deterministic verify.
+
+### Invisible Prerequisites (Support Tasks)
+
+Some tasks exist only to produce data artifacts consumed by other tasks. When a task has **no independent user value** and **only one or two consumers**, it should not appear in the UI as a standalone task. Instead, it becomes an **invisible prerequisite** that runs automatically when needed.
+
+**Canonical example: keyword coverage**
+
+`analyze_keyword_coverage` used to be a standalone task with its own handler, UI panel, and manual trigger. It was converted to an invisible prerequisite because:
+- Users never ran it for its own sake — they only ran it because `research_keywords` required the output
+- It had exactly one consumer family (research tasks)
+- It was lightweight (one deterministic load + one agentic clustering step)
+
+**How to convert a support task to an invisible prerequisite:**
+
+1. **Remove standalone task infrastructure:**
+   - Delete the task type from `config/task_definitions.rs`
+   - Delete the `WorkflowHandler` from `engine/workflows/handlers.rs`
+   - Delete the UI panel/component
+   - Delete the Tauri command and `tauri.ts` wrapper
+   - Remove from task creation menus (`Overview.tsx`, etc.)
+
+2. **Add a freshen step to consumers:**
+   - Add `StepKind::EnsureXxxFresh` variant to `engine/workflows/step_kind.rs`
+   - Register the exec function in `engine/step_registry.rs`
+   - Implement the exec function in the domain module (e.g. `engine/exec/coverage.rs`):
+     ```rust
+     pub(crate) fn exec_ensure_coverage_fresh(
+         task: &Task,
+         project_path: &str,
+         agent_provider: &str,
+     ) -> StepResult {
+         if is_coverage_fresh(project_path, 7) {
+             return StepResult::success("Coverage data is fresh");
+         }
+         // Inline: run the full analysis synchronously
+         let load = exec_coverage_load_articles(task, project_path)?;
+         let cluster = exec_coverage_cluster_analysis(task, project_path, agent_provider, &load.output.unwrap())?;
+         exec_coverage_save(task, project_path)
+     }
+     ```
+   - Add the step as **step 1** in every handler that needs the artifact:
+     ```rust
+     WorkflowStep::new("ensure_coverage_fresh", StepKind::EnsureCoverageFresh)
+     ```
+
+3. **Remove hard failures from downstream steps:**
+   - Replace `"artifact not found. Run X first"` errors with graceful fallbacks or no-ops
+   - The ensure step guarantees freshness, so downstream steps should assume the artifact exists
+
+**Rules:**
+- Only do this for tasks with **no user-facing value** and **≤2 consumers**
+- The ensure step MUST be deterministic (no agent calls in the freshness check itself)
+- The ensure step MAY trigger agentic work inline if the artifact is stale
+- Keep the artifact file and the read helper (`read_keyword_coverage`) — only the task infrastructure is removed
+- If a support task grows more than 2 consumers, consider making it a generic pre-flight hook instead
+
+**Threshold for generalization:** If you find yourself adding a 3rd invisible prerequisite, stop and build a generic artifact-freshen layer in the executor rather than hand-rolling `EnsureXxxFresh` steps.
 
 ---
 
