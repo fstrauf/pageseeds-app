@@ -195,8 +195,6 @@ pub fn exec_reddit_enrich(
     project_path: &str,
     agent_provider: &str,
 ) {
-    use crate::engine::agent;
-
     let project_id = &task.project_id;
     log::info!("[reddit_enrich] starting for project={}", project_id);
 
@@ -341,43 +339,16 @@ pub fn exec_reddit_enrich(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let prompt = format!(
-        r#"You are a copywriter. Your only job is to read the post titles below and produce a JSON array.
-
-DO NOT run any shell commands. DO NOT fetch any URLs. Work ONLY from the post titles and subreddits provided.
-
-## PROJECT CONTEXT
-{project_context}
-
-## REDDIT CONFIG
-{reddit_config_raw}
-
-## REPLY GUARDRAILS
-{guardrails}
-
-## PRODUCT MENTION RULES
-Product name: {product_name}
-Mention stance: {mention_stance_str}
-{stance_instruction}
-
-## POST TITLES
-{posts_block}
-
-## OUTPUT FORMAT
-Return a JSON array with exactly {count} objects:
-[
-  {{
-    "post_id": "<exact post_id>",
-    "relevance_score": <integer 0-10>,
-    "why_relevant": "<one sentence>",
-    "key_pain_points": ["<pain 1>", "<pain 2>"],
-    "website_fit": "<one sentence>",
-    "reply_text": "<3-5 sentence plain-text reply>"
-  }}
-]
-
-reply_text: plain text only, no markdown, no bullets, no URLs.
-Return ONLY the raw JSON array."#,
+    let context = format!(
+        "## PROJECT CONTEXT\n{project_context}\n\n\
+         ## REDDIT CONFIG\n{reddit_config_raw}\n\n\
+         ## REPLY GUARDRAILS\n{guardrails}\n\n\
+         ## PRODUCT MENTION RULES\n\
+         Product name: {product_name}\n\
+         Mention stance: {mention_stance_str}\n\
+         {stance_instruction}\n\n\
+         ## POST TITLES\n\
+         {posts_block}",
         project_context = project_context,
         reddit_config_raw = reddit_config_raw,
         guardrails = guardrails,
@@ -385,11 +356,17 @@ Return ONLY the raw JSON array."#,
         mention_stance_str = mention_stance_str,
         stance_instruction = stance_instruction,
         posts_block = posts_block,
-        count = rows.len(),
     );
 
-    let output = match agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
-        Ok(s) => s,
+    let repo_root = Path::new(project_path);
+    let output = match crate::engine::agent::run_agent_with_skill(
+        "reddit-enrich",
+        repo_root,
+        &context,
+        agent_provider,
+        &format!("[{{\"post_id\":\"...\",\"relevance_score\":0,\"why_relevant\":\"...\",\"key_pain_points\":[],\"website_fit\":\"...\",\"reply_text\":\"...\"}}] — exactly {} objects", rows.len()),
+    ) {
+        Ok(o) => o,
         Err(e) => {
             log::warn!("[reddit_enrich] agent failed: {}", e);
             return;

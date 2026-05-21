@@ -127,7 +127,6 @@ pub(crate) fn exec_indexing_fix_apply(
     agent_provider: &str,
     context_json: Option<&str>,
 ) -> StepResult {
-    use crate::engine::agent;
     use std::path::Path;
 
     let url = task
@@ -195,38 +194,14 @@ pub(crate) fn exec_indexing_fix_apply(
         )
     };
 
-    let prompt = format!(
-        "## Task: Fix Indexing Issue\n\n\
+    let context = format!(
+        "Task: Fix Indexing Issue\n\
          - Task ID: {}\n\
          - URL: {}\n\
          - Issue: {}\n\
          - Suggested Action: {}\n\
          - Repo: {}\n\
-         {}\
-         {}\n\n\
-         ## Instructions\n\n\
-         {}\n\n\
-         For `not_indexed_crawled` / `not_indexed_discovered` / `not_indexed_other`:\n\
-         - Improve content depth and uniqueness (aim for 600+ words if currently thin)\n\
-         - Add 3-5 relevant internal links to other pages on the site\n\
-         - Ensure the H1 and title are specific and distinct from similar pages\n\
-         - Add a clear meta description\n\n\
-         For `robots_blocked` / `noindex` / `fetch_error` / `canonical_mismatch`:\n\
-         - Fix the technical root cause in the MDX frontmatter or site config\n\
-         - Explain what you changed and why\n\n\
-
-         For `not_indexed_crawled` specifically (page is crawled but not indexed):\n\
-         - This usually means Google sees the page but chooses not to index it.\n\
-         - The page is already long and may have internal links — focus on DISTINCTIVENESS, not just length.\n\
-         - Make the title, H1, and opening sections clearly different from cluster siblings listed above.\n\
-         - Remove or merge sections that overlap with sibling articles.\n\
-         - If the page cannot be made distinct enough, suggest a merge target instead.\n\
-
-
-         CRITICAL: You MUST actually write changes to the file. Do NOT just describe what you would do.\n\
-         Do NOT create any markdown reports, summary files, or documentation.\n\
-         Only edit the MDX file and return a brief text summary of what you changed.\n\n\
-         Return a brief summary of changes made.",
+         {}{}",
         task.id,
         url,
         reason,
@@ -234,10 +209,16 @@ pub(crate) fn exec_indexing_fix_apply(
         project_path,
         context_block,
         cluster_context_block,
-        file_instruction,
     );
 
-    match agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
+    let repo_root = Path::new(project_path);
+    match crate::engine::agent::run_agent_with_skill(
+        "indexing-fix",
+        repo_root,
+        &context,
+        agent_provider,
+        &format!("{}", file_instruction),
+    ) {
         Ok(output) => StepResult {
             success: true,
             message: format!("Fix applied to {} ({} chars)", url, output.len()),

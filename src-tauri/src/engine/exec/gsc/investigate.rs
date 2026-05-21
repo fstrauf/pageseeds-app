@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::engine::agent;
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::{StepResult, WorkflowStep};
 use crate::models::task::Task;
@@ -152,31 +151,19 @@ pub(crate) fn exec_gsc_investigate(
         };
     };
 
-    let prompt = format!(
-        "## Task: Investigate GSC Indexing Results\n\n\
-         - Task ID: {}\n\
-         - Site: {}\n\
-         - Repo: {}\n\n\
-         ## {}\n\n\
-         ```json\n{}\n```\n\n\
-         ## Instructions\n\n\
-         The data above groups pages by indexing reason code with counts and example URLs.\n\
-         Your job is to interpret the patterns — not count or regroup them.\n\n\
-         For each non-indexed reason group:\n\
-         1. Explain the likely root cause in one sentence\n\
-         2. Recommend a specific corrective action\n\
-         3. Assign a priority (high/medium/low) based on count and impact\n\n\
-         Return a JSON object:\n\
-         ```json\n\
-         {{\n  \"summary\": \"...\",\n  \"issues_found\": [\n    {{\n      \
-         \"reason_code\": \"...\",\n      \"url_count\": 0,\n      \"root_cause\": \"...\",\n      \
-         \"recommendation\": \"...\",\n      \"priority\": \"high|medium|low\"\n    \
-         }}\n  ]\n}}\n\
-         ```",
+    let context = format!(
+        "Task ID: {}\nSite: {}\nRepo: {}\n\n## {}\n\n```json\n{}\n```",
         task.id, project_path, project_path, context_label, context_json,
     );
 
-    match agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
+    let repo_root = Path::new(project_path);
+    match crate::engine::agent::run_agent_with_skill(
+        "gsc-investigate",
+        repo_root,
+        &context,
+        agent_provider,
+        "{\"summary\":\"...\",\"issues_found\":[{\"reason_code\":\"...\",\"url_count\":0,\"root_cause\":\"...\",\"recommendation\":\"...\",\"priority\":\"high|medium|low\"}]}",
+    ) {
         Ok(output) => StepResult {
             success: true,
             message: format!("GSC investigation complete ({} chars)", output.len()),
