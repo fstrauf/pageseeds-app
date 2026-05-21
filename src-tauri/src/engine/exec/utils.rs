@@ -3,7 +3,7 @@
 /// Also includes artifact diffing utilities for the Health dashboard.
 
 /// Read an article source file. Returns None if not found or unreadable.
-pub(crate) fn read_source_file(repo_root: &std::path::Path, file_ref: &str) -> Option<String> {
+pub fn read_source_file(repo_root: &std::path::Path, file_ref: &str) -> Option<String> {
     if file_ref.is_empty() {
         return None;
     }
@@ -18,7 +18,7 @@ pub(crate) fn read_source_file(repo_root: &std::path::Path, file_ref: &str) -> O
 
 /// Parse YAML frontmatter from an MDX/markdown source string.
 /// Returns (frontmatter_map, body_string).
-pub(crate) fn parse_frontmatter(
+pub fn parse_frontmatter(
     source: &str,
 ) -> (std::collections::HashMap<String, String>, String) {
     let mut fm = std::collections::HashMap::new();

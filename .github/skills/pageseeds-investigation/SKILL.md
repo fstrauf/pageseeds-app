@@ -1,8 +1,9 @@
 # PageSeeds Investigation — Agent Skill
 
-You have access to a PageSeeds investigation CLI that can analyze any project
-connected to PageSeeds. This skill describes what tools are available, how to
-invoke them, and how to interpret results.
+You have access to PageSeeds CLI tools for analyzing any project connected
+to PageSeeds. Each tool is an individual subcommand that returns structured
+JSON. You decide which tools to call and in what order — there is no single
+"run everything" command.
 
 ## When to Use This Skill
 
@@ -11,77 +12,85 @@ invoke them, and how to interpret results.
 - User pastes a GSC URL and wants analysis
 - User mentions a project connected to PageSeeds
 
-## Available Investigation Tools
+## How to Use
 
-The investigation CLI has access to these data sources (same tools the PageSeeds
-desktop app uses):
-
-| Tool | What it returns | Use when |
-|------|----------------|----------|
-| `gsc_performance` | Page-level clicks, impressions, CTR, position | Impression trends, CTR issues |
-| `gsc_queries` | Search queries driving traffic per page | Keyword cannibalization, low-CTR queries |
-| `gsc_movers` | Gaining/declining pages vs previous period | Plateau detection, post-change impact |
-| `article_list` | All articles with metadata | Content inventory overview |
-| `article_frontmatter` | Title, description, date from MDX files | Per-article metadata |
-| `article_body_hash` | SHA-256 hashes of all article bodies | Exact duplicate detection |
-| `article_title_scan` | Title patterns: dupes, literal vars, truncation | Template bugs, title quality |
-| `content_audit_report` | 21-check per-article health report | Comprehensive article quality |
-| `run_content_audit` | Runs fresh audit and writes JSON | When cached data is stale |
-| `cannibalization_clusters` | Cannibalization clusters + merge recs | Content consolidation |
-| `indexing_status` | GSC URL indexing status | Indexing problems, sitemap gaps |
-| `ctr_health` | Per-article CTR health | CTR underperformance |
-| `framework_files` | Layouts, sitemap config, robots.txt | Template bugs, redirect issues |
-| `article_link_graph` | Internal link graph, orphans | Linking gaps, site structure |
-| `create_task` | Creates fix tasks in PageSeeds | Actionable content fixes |
-| `write_feature_spec` | Writes developer spec to target repo | Code-level fixes for devs |
-
-## How to Run an Investigation
+Run individual tools as needed:
 
 ```bash
-cargo run --bin investigate -- \
-  --project-path ~/code/<project-name> \
-  --project-id <project-id> \
-  "User's full question here"
+cargo run --bin pageseeds-cli -- <tool> -i <project-id> -p <project-path> [args...]
 ```
 
-### Finding the project-id
+**Example investigation flow:**
+1. Start with `article-list` to see what content exists
+2. Run `gsc-performance` to check impression trends
+3. Run `article-title-scan` to check for title bugs
+4. Run `article-body-hash` to find exact duplicates
+5. If suspicious patterns found, inspect specific files with `framework-files`
+6. Use `create-task` or `write-feature-spec` to act on findings
 
-The project-id is in the PageSeeds SQLite database. Run:
+## Finding the project-id
 
 ```bash
 sqlite3 ~/Library/Application\ Support/com.pageseeds.app/pageseeds.db \
   "SELECT id, name, path FROM projects"
 ```
 
-Use the `id` column value as `--project-id`.
+## Available Tools
 
-### Changing the agent provider
+### GSC Data (requires GSC connected)
 
-Default is `kimi` (Kimi bridge at localhost:8080). To use Claude:
+| Tool | Args | Returns |
+|------|------|---------|
+| `gsc-performance` | (none) | Page-level clicks, impressions, CTR, position |
+| `gsc-queries` | `--page-url URL` (optional) | Search queries driving traffic |
+| `gsc-movers` | (none) | Gaining/declining pages vs previous period |
 
-```bash
-PAGESEEDS_AGENT_PROVIDER=claude cargo run --bin investigate -- -p ~/code/site -i abc123 "question"
-```
+### Article Data
 
-Valid providers: `kimi`, `claude`, `openai`, `ollama`.
+| Tool | Args | Returns |
+|------|------|---------|
+| `article-list` | `--status published` (optional) | All articles with metadata |
+| `article-frontmatter` | `--slug SLUG` | Title, date, word count for one article |
+| `article-body-hash` | (none) | SHA-256 hashes, finds exact duplicates |
+| `article-title-scan` | (none) | Title patterns: dupes, literal vars, truncation |
+
+### Audit & Health
+
+| Tool | Args | Returns |
+|------|------|---------|
+| `content-audit-report` | (none) | 21-check per-article health from disk |
+| `run-content-audit` | (none) | Runs fresh audit, writes JSON |
+| `cannibalization-clusters` | (none) | Cannibalization clusters + merge recs |
+| `ctr-health` | (none) | Per-article CTR health summary |
+
+### Site Structure
+
+| Tool | Args | Returns |
+|------|------|---------|
+| `indexing-status` | (none) | GSC URL indexing status |
+| `framework-files` | `--file PATH` (optional) | Read layout files, sitemap, robots.txt |
+| `article-link-graph` | (none) | Internal link graph, orphan detection |
+
+### Actions (mutable)
+
+| Tool | Args | Returns |
+|------|------|---------|
+| `create-task` | `-t TYPE -T TITLE -r REASON` | Creates fix task in PageSeeds |
+| `write-feature-spec` | `-T TITLE -s SEVERITY -m IMPACT -f FILE -c CURRENT -F FIXED` | Writes developer spec to target repo |
+
+## Common Flags (all tools)
+
+- `-i` / `--project-id` — PageSeeds project ID (required)
+- `-p` / `--project-path` — Path to project repo (required, ~ expanded)
 
 ## Output
 
-The investigation:
-1. Prints the agent's natural language answer to stdout
-2. Saves structured evidence to `<project>/.github/automation/investigations/<id>/evidence.json`
-3. Saves the answer as markdown to `<project>/.github/automation/investigations/<id>/answer.md`
-4. Writes any developer feature specs to `<project>/.github/automation/seo_feature_spec.md`
-
-## What to Do After Investigation
-
-1. **Code-level issues** (template bugs, redirects): Read the feature spec, apply fixes in the target repo
-2. **Content issues** (duplicate articles, temporal URLs): The agent can create fix tasks via `create_task`
-3. **Informational findings**: Share the answer with the user; offer to dig deeper
+All tools print JSON to stdout. Errors go to stderr. Parse stdout as JSON to extract data.
 
 ## Notes
 
-- The agent must have GSC connected to use `gsc_*` tools. If GSC isn't configured, the tools will return errors — the agent will work with the other tools instead.
-- The investigation is read-mostly. Only `run_content_audit`, `create_task`, and `write_feature_spec` modify anything.
-- The agent is bounded to ~20 tool calls per investigation.
-- All tools are thin wrappers around existing Rust functions in `src-tauri/src/`.
+- Tools that read GSC data require GSC to be connected. If not configured, they'll return errors.
+- `run-content-audit` and `create-task`/`write-feature-spec` are the only tools that mutate anything.
+- The `article-body-hash` tool reads all MDX files and computes hashes — it's useful for finding exact duplicate content (often a sign of SSR fallback bugs).
+- The `framework-files` tool lists available framework files; use `--file` to read a specific one.
+- When investigating, start broad (article-list, gsc-performance) then narrow down (article-frontmatter, framework-files).

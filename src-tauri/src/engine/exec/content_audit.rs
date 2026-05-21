@@ -14,7 +14,7 @@ use crate::engine::project_paths::ProjectPaths;
 /// internal links, temporal URLs, page bloat, literal template variables, title
 /// token duplication, etc.), scores each article, and writes content_audit.json to
 /// automation/content_audit.json. No LLM or external API needed.
-pub(crate) fn exec_content_audit(
+pub fn exec_content_audit(
     task: &crate::models::task::Task,
     project_path: &str,
 ) -> crate::engine::workflows::StepResult {
