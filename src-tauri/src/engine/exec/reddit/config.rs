@@ -5,7 +5,7 @@ use std::path::Path;
 
 /// Structured Reddit configuration parsed from reddit_config.md.
 /// This is produced by the agentic `reddit_config_parse_stage` step.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct RedditSearchParams {
     pub product_name: Option<String>,
     pub mention_stance: String,
@@ -244,89 +244,62 @@ pub fn exec_reddit_config_parse(
         project_context = project_context
     );
 
-    // Call agent
-    match crate::engine::agent::run_agent(agent_provider, &prompt, Path::new(project_path)) {
-        Ok(output) => {
+    // Call agent with structured extraction
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            return crate::engine::workflows::StepResult {
+                success: false,
+                message: format!("Failed to create runtime for extraction: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    let result = rt.block_on(async {
+        crate::rig::extraction::extract_structured::<RedditSearchParams>(
+            agent_provider,
+            &prompt,
+            Some("You are a configuration parsing assistant. Parse the provided reddit_config.md into structured search parameters."),
+            Some("direct"),
+            None,
+        )
+        .await
+    });
+
+    match result {
+        Ok(params) => {
             log::info!(
-                "[reddit_config_parse] agent output ({} chars): {:?}",
-                output.len(),
-                &output[..output.len().min(2000)]
+                "[reddit_config_parse] structured extraction succeeded: {} keywords, {} topics, {} subreddits",
+                params.query_keywords.len(),
+                params.trigger_topics.len(),
+                params.seed_subreddits.len()
             );
 
-            // Try to extract JSON object from the output
-            let json_str = match crate::engine::text::extract_json_string(&output) {
-                Some(json) => {
-                    log::info!(
-                        "[reddit_config_parse] extracted JSON ({} chars)",
-                        json.len()
-                    );
-                    json
+            if params.query_keywords.is_empty() && params.trigger_topics.is_empty() {
+                crate::engine::workflows::StepResult {
+                    success: false,
+                    message: "No query keywords or trigger topics found in config — add them to reddit_config.md".to_string(),
+                    output: Some(serde_json::to_string_pretty(&params).unwrap_or_default()),
                 }
-                None => {
-                    log::warn!("[reddit_config_parse] JSON extraction failed: no valid JSON found");
-
-                    // Save full output for debugging
-                    let debug_path = std::env::temp_dir().join(format!(
-                        "kimi_error_{}.txt",
-                        chrono::Utc::now().timestamp_millis()
-                    ));
-                    let _ = std::fs::write(&debug_path, &output);
-                    log::warn!(
-                        "[reddit_config_parse] full output saved to: {:?}",
-                        debug_path
-                    );
-
-                    return crate::engine::workflows::StepResult {
-                        success: false,
-                        message: "Failed to extract JSON from agent output: no valid JSON found"
-                            .to_string(),
-                        output: Some(output),
-                    };
-                }
-            };
-
-            match serde_json::from_str::<RedditSearchParams>(&json_str) {
-                Ok(params) => {
-                    // Validate: we need at least some queries or topics
-                    if params.query_keywords.is_empty() && params.trigger_topics.is_empty() {
-                        crate::engine::workflows::StepResult {
-                            success: false,
-                            message: "No query keywords or trigger topics found in config — add them to reddit_config.md".to_string(),
-                            output: Some(json_str),
-                        }
-                    } else {
-                        crate::engine::workflows::StepResult {
-                            success: true,
-                            message: format!(
-                                "Parsed config: {} keywords, {} topics, {} subreddits",
-                                params.query_keywords.len(),
-                                params.trigger_topics.len(),
-                                params.seed_subreddits.len()
-                            ),
-                            output: Some(serde_json::to_string_pretty(&params).unwrap_or(json_str)),
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[reddit_config_parse] JSON parse error: {}", e);
-                    log::warn!(
-                        "[reddit_config_parse] extracted content that failed to parse: {}",
-                        &json_str[..json_str.len().min(1000)]
-                    );
-
-                    crate::engine::workflows::StepResult {
-                        success: false,
-                        message: format!("Agent returned invalid JSON structure: {}", e),
-                        output: Some(json_str),
-                    }
+            } else {
+                crate::engine::workflows::StepResult {
+                    success: true,
+                    message: format!(
+                        "Parsed config: {} keywords, {} topics, {} subreddits",
+                        params.query_keywords.len(),
+                        params.trigger_topics.len(),
+                        params.seed_subreddits.len()
+                    ),
+                    output: Some(serde_json::to_string_pretty(&params).unwrap_or_default()),
                 }
             }
         }
-        Err(err) => {
-            log::warn!("[reddit_config_parse] agent failed: {}", err);
+        Err(e) => {
+            log::warn!("[reddit_config_parse] structured extraction failed: {}", e);
             crate::engine::workflows::StepResult {
                 success: false,
-                message: format!("Config parsing agent failed: {}", err),
+                message: format!("Failed to extract RedditSearchParams: {}", e),
                 output: None,
             }
         }
