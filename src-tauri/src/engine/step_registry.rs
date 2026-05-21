@@ -1173,6 +1173,13 @@ impl StepRegistry {
             crate::engine::exec::indexing_health_campaign::exec_ihc_reduce_plan
         );
 
+        register_blocking!(
+            handlers,
+            StepKind::GenerateFeatureSpec,
+            crate::engine::exec::feature_spec::exec_generate_feature_spec,
+            agent_provider
+        );
+
         Self { handlers }
     }
 

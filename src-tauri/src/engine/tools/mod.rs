@@ -20,3 +20,11 @@ pub use investigate::{
     InvestigationContext,
     InvestigationToolError,
 };
+
+pub mod plateau_analysis;
+pub use plateau_analysis::{
+    analyze_plateau,
+    run_plateau_analysis_from_json,
+    GscPageMetric,
+    PlateauAnalysis,
+};

@@ -710,20 +710,11 @@ impl Tool for ArticleTitleScanTool {
                 }
             }
 
-            // Check token duplication (any token appears >= 3 times)
-            let tokens: Vec<String> = t_lower
-                .split(|c: char| !c.is_alphanumeric())
-                .filter(|tok| tok.len() > 2)
-                .map(String::from)
-                .collect();
-            let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for tok in &tokens {
-                *counts.entry(tok.clone()).or_insert(0) += 1;
-            }
-            if counts.values().any(|&c| c >= 3) {
+            // Check token duplication (any token appears >= 2 times — brand dup, keyword stuffing)
+            if counts.values().any(|&c| c >= 2) {
                 dup_token += 1;
                 if examples.len() < 5 {
-                    let dup_word = counts.iter().find(|(_, &c)| c >= 3).map(|(w, _)| w.clone()).unwrap_or_default();
+                    let dup_word = counts.iter().find(|(_, &c)| c >= 2).map(|(w, _)| w.clone()).unwrap_or_default();
                     examples.push(TitleScanExample {
                         title: t.to_string(), slug: a.url_slug.clone(),
                         issue: format!("Token '{}' appears {} times", dup_word, counts[&dup_word]),
@@ -1383,10 +1374,10 @@ pub fn scan_article_titles(ctx: &InvestigationContext) -> Result<serde_json::Val
         let tokens: Vec<&str> = tl.split(|c: char| !c.is_alphanumeric()).filter(|s| s.len() > 2).collect();
         let mut counts = std::collections::HashMap::new();
         for tok in &tokens { *counts.entry(*tok).or_insert(0) += 1; }
-        if counts.values().any(|&c| c >= 3) {
+        if counts.values().any(|&c| c >= 2) {
             dup += 1;
             if examples.len() < 5 {
-                let w = counts.iter().find(|(_, &c)| c >= 3).map(|(w, _)| *w).unwrap_or("");
+                let w = counts.iter().find(|(_, &c)| c >= 2).map(|(w, _)| *w).unwrap_or("");
                 examples.push(serde_json::json!({"title": t, "slug": a.url_slug, "issue": format!("token '{}' appears {} times", w, counts[w])}));
             }
         }

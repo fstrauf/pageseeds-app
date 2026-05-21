@@ -438,6 +438,13 @@ impl WorkflowHandler for ImplementationHandler {
                 // populated with keyword, page type, intent, volume, and KD.
                 WorkflowStep::new("landing_page_spec_write", StepKind::LandingPageSpecWrite),
             ],
+            "generate_feature_spec" => vec![
+                // Agentic: read all audit artifacts, synthesize findings via LLM,
+                // and write a prioritized developer feature spec to the automation dir.
+                // Distinguishes code fixes (P0), content fixes (P1), and structural changes (P2).
+                WorkflowStep::new("generate_feature_spec", StepKind::GenerateFeatureSpec)
+                    .with_param(step_params::SKILL, "feature-spec-generation"),
+            ],
             // fix_* and other implementation types: agentic for now.
             //
             // TODO: each fix_* type that gets implemented should follow the hybrid pattern:

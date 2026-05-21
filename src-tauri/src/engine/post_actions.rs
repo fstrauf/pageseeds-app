@@ -556,13 +556,47 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
-    // Generate feature spec after audit tasks complete
+    // Spawn agentic feature spec generation after audit tasks complete
     if matches!(
         ctx.task.task_type.as_str(),
         "content_review" | "content_audit" | "ctr_audit" | "indexing_health_campaign"
     ) {
-        if let Err(e) = generate_feature_spec(ctx.project_path, ctx.task) {
-            log::warn!("[post_actions] Failed to generate feature spec: {}", e);
+        let idempotency_key = format!(
+            "feature_spec:{}:{}:{}",
+            ctx.task.project_id,
+            ctx.task.task_type,
+            ctx.task.id
+        );
+        let spec = crate::engine::spawner::TaskSpec {
+            project_id: ctx.task.project_id.clone(),
+            task_type: "generate_feature_spec".to_string(),
+            title: Some(format!(
+                "Feature spec from {} audit",
+                ctx.task.task_type
+            )),
+            description: Some(format!(
+                "Agentic synthesis of {} findings into a developer feature specification.",
+                ctx.task.task_type
+            )),
+            priority: crate::models::task::Priority::Medium,
+            run_policy: Some(crate::models::task::TaskRunPolicy::AutoEnqueue),
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            depends_on: vec![ctx.task.id.clone()],
+            idempotency_key: Some(idempotency_key),
+            ..Default::default()
+        };
+        match crate::engine::spawner::TaskSpawner::spawn(ctx.conn, spec) {
+            Ok(task) => {
+                log::info!(
+                    "[post_actions] Spawned feature spec task {} for {}",
+                    task.id,
+                    ctx.task.id
+                );
+                follow_up_ids.push(task.id);
+            }
+            Err(e) => {
+                log::warn!("[post_actions] Failed to spawn feature spec task: {}", e);
+            }
         }
     }
 

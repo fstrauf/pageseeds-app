@@ -424,6 +424,15 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Implementation,
     },
+    // Feature Spec Generation
+    TaskDefinition {
+        task_type: "generate_feature_spec",
+        phase: "investigation",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
     // Social
     TaskDefinition {
         task_type: "social_generate_campaign",

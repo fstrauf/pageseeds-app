@@ -1629,7 +1629,7 @@ mod tests {
         let parent = dummy_task();
         let target = dummy_target_plan("fix_content");
         let ctx = dummy_target_ctx("poor", 3, true, "not_indexed_other");
-        let spec = build_fix_content_spec(&parent, &target, Some(&ctx));
+        let spec = build_fix_content_spec(&parent, &target, Some(&ctx), None);
         assert_eq!(spec.task_type, "fix_content_article");
         assert_eq!(spec.project_id, "proj-abc");
     }
@@ -1639,7 +1639,7 @@ mod tests {
         let parent = dummy_task();
         let target = dummy_target_plan("fix_content");
         let ctx = dummy_target_ctx("poor", 3, true, "not_indexed_other");
-        let spec = build_fix_content_spec(&parent, &target, Some(&ctx));
+        let spec = build_fix_content_spec(&parent, &target, Some(&ctx), None);
         let desc = spec.description.unwrap();
         assert!(desc.contains("test-article"));
         assert!(desc.contains("fix_content"));
@@ -1650,7 +1650,7 @@ mod tests {
         let parent = dummy_task();
         let target = dummy_target_plan("fix_content");
         let ctx = dummy_target_ctx("poor", 3, true, "not_indexed_other");
-        let spec = build_fix_content_spec(&parent, &target, Some(&ctx));
+        let spec = build_fix_content_spec(&parent, &target, Some(&ctx), None);
         assert_eq!(spec.artifacts.len(), 1);
         assert!(spec.artifacts[0].key.starts_with("recommendations_"));
         let content = spec.artifacts[0].content.as_ref().unwrap();

@@ -325,7 +325,7 @@ pub(crate) fn audit_one_article(
         || title.contains("| BrandName |")
         || title.contains("{BrandName}");
 
-    // 4. Title token duplication — any token appears ≥3 times in title
+    // 4. Title token duplication — any token appears ≥2 times in title (brand dup, stuffing)
     let title_tokens: Vec<String> = title
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -337,7 +337,7 @@ pub(crate) fn audit_one_article(
         *token_counts.entry(token.clone()).or_insert(0) += 1;
     }
     let max_token_count = token_counts.values().copied().max().unwrap_or(0);
-    let title_token_duplication = max_token_count >= 3;
+    let title_token_duplication = max_token_count >= 2;
 
     // Compute body hash for exact duplicate detection
     let mut hasher = Sha256::new();
@@ -408,7 +408,7 @@ pub(crate) fn audit_one_article(
         "temporal_url":         check_pass(Some(!temporal_url), "URL does not contain temporal patterns (month, year, seasonal, relative time)"),
         "page_bloat_proxy":     check_val(Some(!is_bloated), serde_json::json!({ "file_size": file_size, "image_count": image_count, "table_count": table_count, "code_block_count": code_block_count }), "Page is not bloated (file size ≤ 500KB, images ≤ 20, tables ≤ 30, code blocks ≤ 10)"),
         "literal_template_variable": check_pass(Some(!literal_template_variable), "Title does not contain literal template variables"),
-        "title_token_duplication": check_val(Some(!title_token_duplication), serde_json::json!(max_token_count), "No token appears ≥3 times in title"),
+        "title_token_duplication": check_val(Some(!title_token_duplication), serde_json::json!(max_token_count), "No token appears ≥2 times in title"),
     });
 
     // ─── Scoring ─────────────────────────────────────────────────────────────

@@ -157,6 +157,8 @@ pub enum StepKind {
     IhcDistinctivenessReview,
     /// Deterministic: reduce all inputs into a campaign plan.
     IhcReducePlan,
+    /// Agentic: synthesize audit findings into a prioritized developer feature spec.
+    GenerateFeatureSpec,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -257,6 +259,7 @@ impl StepKind {
             Self::IhcBuildTargetContext => "ihc_build_target_context",
             Self::IhcDistinctivenessReview => "ihc_distinctiveness_review",
             Self::IhcReducePlan => "ihc_reduce_plan",
+            Self::GenerateFeatureSpec => "generate_feature_spec",
             Self::Unknown => "unknown",
         }
     }
@@ -371,6 +374,7 @@ impl FromStr for StepKind {
             "ihc_build_target_context" => Ok(Self::IhcBuildTargetContext),
             "ihc_distinctiveness_review" => Ok(Self::IhcDistinctivenessReview),
             "ihc_reduce_plan" => Ok(Self::IhcReducePlan),
+            "generate_feature_spec" => Ok(Self::GenerateFeatureSpec),
             _ => Err(()),
         }
     }
@@ -495,6 +499,7 @@ mod tests {
             StepKind::IhcBuildTargetContext,
             StepKind::IhcDistinctivenessReview,
             StepKind::IhcReducePlan,
+            StepKind::GenerateFeatureSpec,
         ];
 
         for variant in &variants {
