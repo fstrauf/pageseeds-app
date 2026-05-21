@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
-use crate::engine::{agent, skills};
 use crate::models::merge_patch::{
     ContentMergePatch, ExtractedExample, ExtractedFaq, ExtractedHeading, ExtractedTable,
     MergePreflightReport, MergeValidationReport, RedirectRule, SectionInventory,
@@ -444,14 +443,10 @@ pub(crate) fn exec_merge_draft_patch(
 ) -> StepResult {
     let repo_root = Path::new(project_path);
 
-    let skill = match skills::load_skill(repo_root, "merge-content") {
-        Some(s) => s,
-        None => {
-            return StepResult {
-                success: false,
-                message: "Skill 'merge-content' not found".to_string(),
-                output: None,
-            };
+    let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "merge-content") {
+        Ok(s) => s,
+        Err(msg) => {
+            return StepResult { success: false, message: msg, output: None };
         }
     };
 

@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::skills;
 use crate::engine::workflows::StepResult;
 use crate::models::indexing_health::{
     DistinctivenessVerdict, IndexingCampaignPlan, IndexingCampaignSummary, IndexingTargetContext,
@@ -644,14 +643,10 @@ pub(crate) fn exec_ihc_distinctiveness_review(
 
     // Load skill
     let repo_root = Path::new(project_path);
-    let skill = match skills::load_skill(repo_root, "indexing-distinctiveness") {
-        Some(s) => s.content,
-        None => {
-            return StepResult {
-                success: false,
-                message: "Skill 'indexing-distinctiveness' not found".to_string(),
-                output: None,
-            }
+    let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "indexing-distinctiveness") {
+        Ok(s) => s.content,
+        Err(msg) => {
+            return StepResult { success: false, message: msg, output: None }
         }
     };
 

@@ -9,7 +9,6 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::skills;
 use crate::engine::workflows::StepResult;
 use crate::models::task::{FollowUpPolicy, Task, TaskReviewSurface};
 
@@ -1449,14 +1448,10 @@ pub(crate) fn exec_can_analyze_candidates(
     const TARGET_PROMPT_BYTES: usize = 15_000;
     const HARD_PROMPT_BYTES: usize = 20_000;
 
-    let skill = match skills::load_skill(repo_root, "cannibalization-strategy") {
-        Some(s) => s,
-        None => {
-            return StepResult {
-                success: false,
-                message: "Skill 'cannibalization-strategy' not found".to_string(),
-                output: None,
-            };
+    let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "cannibalization-strategy") {
+        Ok(s) => s,
+        Err(msg) => {
+            return StepResult { success: false, message: msg, output: None };
         }
     };
 

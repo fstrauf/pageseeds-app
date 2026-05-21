@@ -1,5 +1,4 @@
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::skills;
 use crate::engine::workflows::StepResult;
 use crate::models::cannibalization::{TerritoryRecommendation, TerritoryStrategy};
 use crate::models::task::{
@@ -220,14 +219,10 @@ pub(crate) async fn exec_territory_strategy(
 ) -> StepResult {
     let repo_root = Path::new(project_path);
 
-    let skill = match skills::load_skill(repo_root, "territory-strategy") {
-        Some(s) => s,
-        None => {
-            return StepResult {
-                success: false,
-                message: "Skill 'territory-strategy' not found".to_string(),
-                output: None,
-            };
+    let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "territory-strategy") {
+        Ok(s) => s,
+        Err(msg) => {
+            return StepResult { success: false, message: msg, output: None };
         }
     };
 

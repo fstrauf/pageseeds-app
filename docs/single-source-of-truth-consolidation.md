@@ -165,31 +165,31 @@ Some are intercepted (research gets routed to Rig extractor). Some are truly bar
 
 **2c. Add skill to bare agentic steps** — every `StepKind::Agentic` without a skill gets one or a documented exception. `fix_404s`/`fix_redirects` get proper handler plans.
 
-### Phase 3: Delete dead/legacy code (low risk cleanup)
+### Phase 3: Delete dead/legacy code
 
-**3a. Remove legacy hub page code** — Delete `hub_page.rs`, remove `create_hub_page`/`refresh_hub_page` from definitions, remove `gather_spoke_briefs()` call.
+**3a. Remove legacy hub page code** — DEFERRED. `hub_spoke_context()` actively calls `gather_spoke_briefs()` from `hub_page.rs`. Needs proper migration, not simple deletion.
 
-**3b. Audit social module** — Either integrate or delete the 8 dead-code-flagged files.
+**3b. Audit social module** — DEFERRED. 8 files with `#![allow(dead_code)]` mask minor unused helpers. Module is actively used. Cleanup is low-impact tedium.
 
-**3c. Delete `engine_clean.rs`** — Dead demo file.
+**3c. Delete `engine_clean.rs`** ✅ — 125-line dead demo file removed.
 
-### Phase 4: Agent invocation consolidation (structural, higher risk)
+### Phase 4: Agent invocation consolidation ✅ STARTED — PROOF OF CONCEPT DONE
 
-**4a. Centralize agent calls** — Add `RigAgenticContext` struct. Route 13 bypasses through central path.
+**4a. Centralize agent calls** ✅ — Added `run_agent_with_skill()` to `engine::agent` that standardizes: load skill → build prompt → call agent. Migrated `ctr_audit/analyze.rs` as proof of concept. 12 bypasses remain to be migrated.
 
-**4b. Centralize prompt construction** — Add typed prompt section builders to `engine::prompts`. Domain modules compose, don't build raw strings.
+**4b. Centralize prompt construction** — Remaining. The new `run_agent_with_skill` handles this for simple cases. Complex bypasses with domain-specific prompt assembly still build inline.
 
-**4c. Consolidate JSON extraction** — Route all callers through `engine::text::extract_json_as<T>()`. Standardize on Rig `Extractor<T>` for structured output.
+**4c. Consolidate JSON extraction** — Remaining. All bypasses should use `engine::text::extract_json_as<T>()` or Rig `Extractor<T>`.
 
-### Phase 5: DB access cleanup
+### Phase 5: DB access cleanup — NOT STARTED
 
-**5a. Eliminate raw SQL in exec/ modules** — Route through `article_index` or domain modules.
+**5a. Eliminate raw SQL in exec/ modules** — 6 raw SQL statements in 5 exec files.
 
-**5b. Pass connections instead of opening them** — 23 exec/ files should receive connections.
+**5b. Pass connections instead of opening them** — 23 exec/ modules open their own DB connections.
 
-### Phase 6: Handle split
+### Phase 6: Handle split — NOT STARTED
 
-Split `ImplementationHandler` into domain-specific handlers (CTR, content fixes, indexing recovery, campaign management) so new fix types don't depend on match-arm ordering.
+Split `ImplementationHandler` into domain-specific handlers.
 
 ---
 

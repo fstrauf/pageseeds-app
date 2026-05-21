@@ -115,6 +115,23 @@ pub fn load_skill(repo_root: &Path, skill_name: &str) -> Option<Skill> {
     load_embedded_skill(skill_name)
 }
 
+/// Load a skill or return a `StepResult` error message.
+///
+/// Standardizes the duplicated pattern across all agentic exec modules:
+/// ```ignore
+/// let skill = match skills::load_skill(repo_root, "name") {
+///     Some(s) => s,
+///     None => return StepResult { success: false, ... },
+/// };
+/// ```
+pub fn load_skill_or_fail<'a>(
+    repo_root: &Path,
+    skill_name: &str,
+) -> Result<Skill, String> {
+    load_skill(repo_root, skill_name)
+        .ok_or_else(|| format!("Skill '{}' not found in .github/skills/ or app defaults", skill_name))
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn load_skill_from_dir(dir: &Path, repo_root: &Path) -> Option<Skill> {
