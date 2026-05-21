@@ -147,22 +147,34 @@ pub fn open_feature_spec_in_vscode(
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
 
-    // 1. Find the task to get its project
+    // 1. Find the task to get its project and stored artifact path
     let task = task_store::get_task(&db, &task_id).map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &task.project_id).map_err(|e| e.to_string())?;
 
-    // 2. Build the unique spec path: seo_feature_spec_{task_id}.md
-    let repo_root = std::path::Path::new(&project.path);
-    let spec_path = repo_root
-        .join(".github")
-        .join("automation")
-        .join(format!("seo_feature_spec_{}.md", task_id));
+    // 2. Try to find the exact path from the task artifact (stored by executor)
+    let artifact_path = task.artifacts.iter().find_map(|a| {
+        if a.key == "generate_feature_spec" || a.key == "feature_spec_path" {
+            a.content.clone()
+        } else {
+            None
+        }
+    });
 
-    // Fallback to the latest symlink if the unique file doesn't exist
-    let path_to_open = if spec_path.exists() {
-        spec_path
+    let repo_root = std::path::Path::new(&project.path);
+    let path_to_open = if let Some(path_str) = artifact_path {
+        let p = std::path::PathBuf::from(path_str);
+        if p.exists() { p } else { repo_root.join(".github").join("automation").join("seo_feature_spec.md") }
     } else {
-        repo_root.join(".github").join("automation").join("seo_feature_spec.md")
+        // Fallback: deterministic unique filename
+        let spec_path = repo_root
+            .join(".github")
+            .join("automation")
+            .join(format!("seo_feature_spec_{}.md", task_id));
+        if spec_path.exists() {
+            spec_path
+        } else {
+            repo_root.join(".github").join("automation").join("seo_feature_spec.md")
+        }
     };
 
     if !path_to_open.exists() {
