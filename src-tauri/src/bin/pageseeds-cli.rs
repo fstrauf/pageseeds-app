@@ -61,6 +61,7 @@ fn main() {
                 .map_err(|e| e.to_string())
         }
         "article-link-graph" => investigate::scan_link_graph(&ctx).map_err(|e| e.to_string()),
+        "compare-rendered" => compare_rendered(&path, &args),
         "create-task" => create_task(&project_id, &db.to_string_lossy(), &args),
         "write-feature-spec" => write_spec(&path, &args),
         _ => Err(format!("Unknown tool '{}'. Run with --help for list.", tool)),
@@ -154,6 +155,12 @@ fn write_spec(project_path: &str, args: &[String]) -> Result<serde_json::Value, 
     Ok(serde_json::json!({"path": spec.to_string_lossy().to_string(), "issue": title}))
 }
 
+/// Compare source frontmatter titles with what Google actually sees (live HTML).
+fn compare_rendered(project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let max: usize = flag(args, "--max", "-m").and_then(|s| s.parse().ok()).unwrap_or(25);
+    pageseeds_lib::engine::exec::ctr_audit::rendered::compare_rendered_titles(project_path, max)
+}
+
 // ── GSC (async — kept inline since they need tokio runtime) ──────────────────
 
 fn gsc_perf(project_id: &str, project_path: &str) -> Result<serde_json::Value, String> {
@@ -233,7 +240,7 @@ Usage:
 Tools:  gsc-performance  gsc-queries  gsc-movers  article-list  article-frontmatter
         article-body-hash  article-title-scan  content-audit-report  run-content-audit
         cannibalization-clusters  indexing-status  ctr-health  framework-files
-        article-link-graph  create-task  write-feature-spec
+        article-link-graph  compare-rendered  create-task  write-feature-spec
 
 Common: -i/--project-id  -p/--project-path
 Run with <tool> --help for tool-specific flags.

@@ -698,8 +698,17 @@ impl Tool for ArticleTitleScanTool {
                 continue;
             }
 
-            // Check literal template variables
+            // Build token counts for duplication detection
             let t_lower = t.to_lowercase();
+            let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for word in t_lower.split_whitespace() {
+                let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric());
+                if cleaned.len() > 2 {
+                    *counts.entry(cleaned.to_string()).or_insert(0) += 1;
+                }
+            }
+
+            // Check literal template variables
             if t_lower.contains("| brand |") || t_lower.contains("{brand}") || t_lower.contains("{{title}}") {
                 literal_var += 1;
                 if examples.len() < 5 {

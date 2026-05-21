@@ -10,7 +10,7 @@ mod context;
 mod generate;
 mod outcome;
 mod patch;
-mod rendered;
+pub mod rendered;
 mod task_spawner;
 mod template;
 

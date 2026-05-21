@@ -168,6 +168,78 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
     }
 }
 
+/// Standalone: compare source titles with rendered (live) titles.
+/// Fetches live HTML for each article URL, extracts the rendered <title>,
+/// and reports discrepancies. Returns JSON suitable for CLI or agent consumption.
+pub fn compare_rendered_titles(project_path: &str, max_pages: usize) -> Result<serde_json::Value, String> {
+    let paths = ProjectPaths::from_path(project_path);
+    let site_url = resolve_site_url(&paths.automation_dir)
+        .ok_or_else(|| "No site_url in manifest.json".to_string())?;
+    let base_url = normalize_base_url(&site_url);
+
+    let articles_path = paths.automation_dir.join("articles.json");
+    let doc: serde_json::Value = std::fs::read_to_string(&articles_path)
+        .map_err(|e| format!("Failed to read articles.json: {e}"))?
+        .parse()
+        .map_err(|e| format!("Invalid articles.json: {e}"))?;
+
+    let articles = doc["articles"].as_array().cloned().unwrap_or_default();
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut mismatches = 0usize;
+    let mut errors = 0usize;
+
+    for article in articles.iter().take(max_pages) {
+        let slug = article["url_slug"].as_str().unwrap_or("");
+        let source_title = article["title"].as_str().unwrap_or("").to_string();
+        if slug.is_empty() { continue; }
+
+        let page_url = format!("{}{}", base_url, slug);
+        match fetch_rendered_title(&page_url) {
+            Ok(rendered_title) => {
+                let matches = source_title.trim().to_lowercase() == rendered_title.trim().to_lowercase();
+                if !matches { mismatches += 1; }
+                let issue = if matches { "none" } else { classify_title_issue(&source_title, &rendered_title) };
+                results.push(serde_json::json!({
+                    "slug": slug, "url": page_url,
+                    "source_title": source_title, "rendered_title": rendered_title,
+                    "matches": matches, "issue_source": issue,
+                }));
+            }
+            Err(e) => {
+                errors += 1;
+                results.push(serde_json::json!({
+                    "slug": slug, "url": page_url,
+                    "source_title": source_title, "error": e,
+                }));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "site_url": site_url, "pages_checked": results.len(),
+        "matches": results.len().saturating_sub(mismatches + errors),
+        "mismatches": mismatches, "errors": errors,
+        "results": results,
+    }))
+}
+
+/// Fetch just the rendered <title> from a live page URL.
+fn fetch_rendered_title(url: &str) -> Result<String, String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .user_agent("Mozilla/5.0 (compatible; PageSeeds/1.0)")
+            .build()
+            .map_err(|e| format!("HTTP client: {e}"))?;
+        let response = client.get(url).send().await.map_err(|e| format!("Fetch: {e}"))?;
+        if !response.status().is_success() { return Err(format!("HTTP {}", response.status())); }
+        let html = response.text().await.map_err(|e| format!("Body: {e}"))?;
+        let document = scraper::Html::parse_document(&html);
+        extract_title(&document).ok_or_else(|| "No <title> found".to_string())
+    })
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn resolve_site_url(automation_dir: &std::path::Path) -> Option<String> {
