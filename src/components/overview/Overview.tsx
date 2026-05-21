@@ -5,7 +5,7 @@ import {
   PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
-import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths, runHealthAudit } from '../../lib/tauri'
+import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths, runHealthAudit } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
 import type { Article, LandingPageResearchPending, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -418,6 +418,31 @@ export function Overview({
     { enabled: !!project?.id && !isLiveSiteProject, staleTime: 30_000 },
   )
 
+  const {
+    data: indexingHealth,
+    isLoading: loadingIndexingHealth,
+    refetch: refetchIndexingHealth,
+  } = useQuery(
+    `overview-indexing-health-${project?.id ?? 'none'}`,
+    () => getIndexingHealthSummary(project?.id ?? ''),
+    { enabled: !!project?.id && !isLiveSiteProject, staleTime: 30_000 },
+  )
+
+  const {
+    data: contentAuditReport,
+    isLoading: loadingContentAudit,
+    refetch: refetchContentAudit,
+  } = useQuery(
+    `overview-content-audit-${project?.id ?? 'none'}`,
+    () => getContentAuditReport(project?.id ?? '') as Promise<{
+      generated_at: string | null
+      total_audited: number
+      health_summary: { good: number; needs_improvement: number; poor: number }
+      articles: unknown[]
+    }>,
+    { enabled: !!project?.id && !isLiveSiteProject, staleTime: 30_000 },
+  )
+
   const load = useCallback(async () => {
     if (!project) return
     setLoading(true)
@@ -444,10 +469,12 @@ export function Overview({
     load()
     if (!isLiveSiteProject) {
       refetchCtrHealth()
+      refetchIndexingHealth()
+      refetchContentAudit()
     } else {
       refetchLiveSitePages()
     }
-  }, [project, runCompletedTick, load, isLiveSiteProject, refetchCtrHealth, refetchLiveSitePages])
+  }, [project, runCompletedTick, load, isLiveSiteProject, refetchCtrHealth, refetchIndexingHealth, refetchContentAudit, refetchLiveSitePages])
 
   async function handleRunFullAudit() {
     if (!project || runningFullAudit) return
@@ -678,6 +705,85 @@ export function Overview({
                   : <PlayCircle size={13} className="shrink-0 opacity-70 group-hover:opacity-100" />
                 }
               </button>
+
+              {/* Health snapshot — tells the user when to run the audit */}
+              {(() => {
+                const contentReviewActivity = overview?.workflow_activity?.find(
+                  a => a.task_type === 'content_review'
+                )
+                const lastAuditDate = contentReviewActivity?.last_run_at
+                  ? new Date(contentReviewActivity.last_run_at)
+                  : null
+                const daysSince = lastAuditDate
+                  ? Math.floor((Date.now() - lastAuditDate.getTime()) / (1000 * 60 * 60 * 24))
+                  : null
+                const auditOverdue = daysSince !== null && daysSince > 14
+
+                const contentIssues = contentAuditReport
+                  ? (contentAuditReport.health_summary?.needs_improvement ?? 0)
+                    + (contentAuditReport.health_summary?.poor ?? 0)
+                  : null
+                const indexingIssues = indexingHealth?.not_indexed ?? null
+                const ctrIssues = ctrHealth?.open_issues_count ?? null
+                const anyLoading = loadingCtrHealth || loadingIndexingHealth || loadingContentAudit
+                const hasEverRun = !!lastAuditDate
+                const totalIssues = (contentIssues ?? 0) + (indexingIssues ?? 0) + (ctrIssues ?? 0)
+
+                return (
+                  <div className="px-3 py-2 rounded-md bg-secondary/40 space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Status</span>
+                      {anyLoading ? (
+                        <span className="text-[10px] text-muted-foreground">Loading…</span>
+                      ) : !hasEverRun ? (
+                        <span className="text-[10px] text-amber-600 font-medium">Never audited</span>
+                      ) : auditOverdue ? (
+                        <span className="text-[10px] text-amber-600 font-medium">{daysSince}d since last audit</span>
+                      ) : totalIssues > 0 ? (
+                        <span className="text-[10px] text-amber-600 font-medium">{totalIssues} issue{totalIssues !== 1 ? 's' : ''} found</span>
+                      ) : (
+                        <span className="text-[10px] text-emerald-600 font-medium">All clear</span>
+                      )}
+                    </div>
+
+                    {hasEverRun && (
+                      <div className="flex flex-wrap gap-1">
+                        {daysSince !== null && (
+                          <Badge variant="outline" className={cn(
+                            'text-[10px] px-1.5 py-0.5 h-auto font-normal',
+                            auditOverdue
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          )}>
+                            {daysSince}d ago
+                          </Badge>
+                        )}
+                        {contentIssues !== null && contentIssues > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-amber-50 text-amber-700 border-amber-200">
+                            {contentIssues} content
+                          </Badge>
+                        )}
+                        {indexingIssues !== null && indexingIssues > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-rose-50 text-rose-700 border-rose-200">
+                            {indexingIssues} not indexed
+                          </Badge>
+                        )}
+                        {ctrIssues !== null && ctrIssues > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-orange-50 text-orange-700 border-orange-200">
+                            {ctrIssues} CTR
+                          </Badge>
+                        )}
+                        {totalIssues === 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-emerald-50 text-emerald-700 border-emerald-200">
+                            No issues
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
               <div className="h-px bg-border my-2" />
               {quickActionError && (
                 <div className="mb-2 px-2.5 py-2 rounded-md text-xs bg-destructive/10 text-destructive">
