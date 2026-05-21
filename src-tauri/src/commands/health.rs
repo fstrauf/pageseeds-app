@@ -184,26 +184,55 @@ pub fn open_feature_spec_in_vscode(
         ));
     }
 
-    // 3. Open in VS Code (platform-specific)
+    // 3. Open in VS Code, reusing the window that has the repo open.
+    //    -r  = force reuse of the last active VS Code window
     let path_str = path_to_open.to_string_lossy().to_string();
     let result = if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
-            .args(["-b", "com.microsoft.VSCode", &path_str])
-            .spawn()
+        // On macOS the `code` CLI may not be in PATH for GUI apps.
+        // Try common install locations before falling back to `open`.
+        let code_candidates = [
+            "/usr/local/bin/code",
+            "/opt/homebrew/bin/code",
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        ];
+        let mut child = None;
+        for candidate in &code_candidates {
+            if std::path::Path::new(candidate).exists() {
+                child = std::process::Command::new(candidate)
+                    .args(["-r", &path_str])
+                    .spawn()
+                    .ok();
+                if child.is_some() {
+                    break;
+                }
+            }
+        }
+        if child.is_none() {
+            // Fallback: open via bundle ID (cannot pass -r, so may open a new window)
+            child = std::process::Command::new("open")
+                .args(["-b", "com.microsoft.VSCode", &path_str])
+                .spawn()
+                .ok();
+        }
+        child.map(|c| Ok(c)).unwrap_or(Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "VS Code not found",
+        )))
     } else if cfg!(target_os = "windows") {
         std::process::Command::new("cmd")
-            .args(["/c", "code", &path_str])
+            .args(["/c", "code", "-r", &path_str])
             .spawn()
     } else {
         std::process::Command::new("code")
-            .arg(&path_str)
+            .args(["-r", &path_str])
             .spawn()
     };
 
     match result {
         Ok(_) => Ok(()),
         Err(e) => Err(format!(
-            "Failed to open VS Code ({}). Is 'code' in your PATH?",
+            "Failed to open VS Code ({}). Is the 'code' command installed? \
+             In VS Code, run Cmd+Shift+P → 'Shell Command: Install code command in PATH'.",
             e
         )),
     }
