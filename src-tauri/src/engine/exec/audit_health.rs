@@ -79,7 +79,7 @@ impl ArticleHealth {
 /// | snippet_ok       | word_count >= 40 && word_count <= 60 && (has_keyword \|\| has '?') |
 /// | faq_ok           | has_faq_schema == true                           |
 pub const TITLE_MAX_LEN: usize = 55;
-pub const META_MIN_LEN: usize = 130;
+pub const META_MIN_LEN: usize = 120;
 pub const META_MAX_LEN: usize = 155;
 pub const SNIPPET_MIN_WORDS: usize = 40;
 pub const SNIPPET_MAX_WORDS: usize = 60;

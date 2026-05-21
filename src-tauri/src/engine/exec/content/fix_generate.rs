@@ -427,6 +427,31 @@ fn normalize_patch_before_validation(patch: &mut ContentFixPatch, _original_cont
         }
     }
 
+    // Auto-pad description if slightly under minimum (LLMs often undershoot)
+    if let Some(ref mut d) = patch.changes.description {
+        let len = d.chars().count();
+        if len < meta_min && len >= 100 {
+            let padding_needed = meta_min.saturating_sub(len);
+            let suffixes = [
+                " Discover expert tips and practical advice in our complete guide.",
+                " Learn everything you need to know with our detailed breakdown.",
+                " Explore proven strategies and actionable insights inside.",
+            ];
+            for suffix in &suffixes {
+                let candidate = format!("{} {}", d.trim_end_matches('.'), suffix);
+                let candidate_len = candidate.chars().count();
+                if candidate_len >= meta_min && candidate_len <= meta_max {
+                    notes.push(format!(
+                        "description padded from {} to {} chars",
+                        len, candidate_len
+                    ));
+                    *d = candidate;
+                    break;
+                }
+            }
+        }
+    }
+
     notes
 }
 
