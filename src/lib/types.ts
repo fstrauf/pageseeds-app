@@ -629,6 +629,12 @@ export interface LandingPageResearchPending {
   updated_at: string
 }
 
+export interface PendingFeatureSpec {
+  id: string
+  title?: string
+  updated_at: string
+}
+
 export interface ProjectOverview {
   tasks: TaskStatusCounts
   recent_tasks: RecentTask[]
@@ -636,6 +642,7 @@ export interface ProjectOverview {
   ready_task_count: number
   workflow_activity: WorkflowActivity[]
   pending_landing_page_research: LandingPageResearchPending[]
+  pending_feature_specs: PendingFeatureSpec[]
 }
 
 export interface QuickAction {

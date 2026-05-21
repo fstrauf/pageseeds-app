@@ -629,6 +629,16 @@ pub struct ProjectOverview {
     pub workflow_activity: Vec<WorkflowActivity>,
     /// Landing page research tasks in 'review' status awaiting user selection
     pub pending_landing_page_research: Vec<LandingPageResearchPending>,
+    /// Feature spec tasks in 'review' status awaiting user confirmation
+    pub pending_feature_specs: Vec<PendingFeatureSpec>,
+}
+
+/// A generate_feature_spec task waiting for user confirmation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingFeatureSpec {
+    pub id: String,
+    pub title: Option<String>,
+    pub updated_at: String,
 }
 
 pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<ProjectOverview> {
@@ -792,6 +802,24 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         rows.filter_map(|r| r.ok()).collect()
     };
 
+    // Pending feature spec tasks in review status
+    let pending_feature_specs: Vec<PendingFeatureSpec> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, title, updated_at
+             FROM tasks
+             WHERE project_id = ?1 AND type = 'generate_feature_spec' AND status = 'review'
+             ORDER BY updated_at DESC LIMIT 5",
+        )?;
+        let rows = stmt.query_map([project_id], |row| {
+            Ok(PendingFeatureSpec {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                updated_at: row.get(2)?,
+            })
+        })?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
     Ok(ProjectOverview {
         tasks: counts,
         recent_tasks,
@@ -799,6 +827,7 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         ready_task_count,
         workflow_activity,
         pending_landing_page_research,
+        pending_feature_specs,
     })
 }
 

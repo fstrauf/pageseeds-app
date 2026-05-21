@@ -5,9 +5,9 @@ import {
   PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
-import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths, runHealthAudit } from '../../lib/tauri'
+import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths, runHealthAudit, updateTaskStatus } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
-import type { Article, LandingPageResearchPending, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
+import type { Article, LandingPageResearchPending, PendingFeatureSpec, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -356,6 +356,55 @@ function PendingLandingPageCard({
             </div>
           ))}
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Pending Feature Spec Card ────────────────────────────────────────────────
+
+function PendingFeatureSpecCard({
+  items,
+  onMarkDone,
+}: {
+  items: PendingFeatureSpec[]
+  onMarkDone: (taskId: string) => void
+}) {
+  if (!items || items.length === 0) return null
+
+  return (
+    <Card className="bg-card border-amber-200">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+          <FileText size={13} className="text-amber-600" />
+          Feature Specs Awaiting Implementation
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pb-3 space-y-2">
+        <p className="text-xs text-muted-foreground">
+          Implement these in the target repo, then mark as done.
+        </p>
+        {items.map(item => (
+          <div key={item.id} className="flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-foreground truncate">
+                {item.title || 'Feature Spec'}
+              </p>
+              <p className="text-[10px] text-muted-foreground">
+                {relativeDate(item.updated_at)}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px] px-2 py-0"
+              onClick={() => onMarkDone(item.id)}
+            >
+              <CheckCircle2 size={11} className="mr-1" />
+              Done
+            </Button>
+          </div>
+        ))}
       </CardContent>
     </Card>
   )
@@ -939,6 +988,19 @@ export function Overview({
             <PendingLandingPageCard 
               items={overview?.pending_landing_page_research ?? []}
               onViewTask={(taskId) => onViewChange('tasks', taskId)}
+            />
+
+            {/* Pending feature spec tasks */}
+            <PendingFeatureSpecCard
+              items={overview?.pending_feature_specs ?? []}
+              onMarkDone={async (taskId) => {
+                try {
+                  await updateTaskStatus(taskId, 'done')
+                  await load()
+                } catch (e: unknown) {
+                  setQuickActionError(String(e))
+                }
+              }}
             />
 
             {/* CTR Health Summary -->
