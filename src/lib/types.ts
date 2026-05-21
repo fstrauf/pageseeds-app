@@ -635,6 +635,12 @@ export interface PendingFeatureSpec {
   updated_at: string
 }
 
+export interface FixSummary {
+  completed: number
+  failed: number
+  pending: number
+}
+
 export interface ProjectOverview {
   tasks: TaskStatusCounts
   recent_tasks: RecentTask[]
@@ -643,6 +649,7 @@ export interface ProjectOverview {
   workflow_activity: WorkflowActivity[]
   pending_landing_page_research: LandingPageResearchPending[]
   pending_feature_specs: PendingFeatureSpec[]
+  fix_summary: FixSummary
 }
 
 export interface QuickAction {

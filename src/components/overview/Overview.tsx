@@ -781,29 +781,23 @@ export function Overview({
                   ? Math.floor((Date.now() - lastAuditDate.getTime()) / (1000 * 60 * 60 * 24))
                   : null
                 const auditOverdue = daysSince !== null && daysSince > 14
-
-                const contentIssues = contentAuditReport
-                  ? (contentAuditReport.health_summary?.needs_improvement ?? 0)
-                    + (contentAuditReport.health_summary?.poor ?? 0)
-                  : null
-                const indexingIssues = indexingHealth?.not_indexed ?? null
-                const ctrIssues = ctrHealth?.open_issues_count ?? null
-                const anyLoading = loadingCtrHealth || loadingIndexingHealth || loadingContentAudit
                 const hasEverRun = !!lastAuditDate
-                const totalIssues = (contentIssues ?? 0) + (indexingIssues ?? 0) + (ctrIssues ?? 0)
+
+                const fix = overview?.fix_summary
+                const hasFixes = fix && (fix.completed > 0 || fix.failed > 0 || fix.pending > 0)
 
                 return (
                   <div className="px-3 py-2 rounded-md bg-secondary/40 space-y-1.5">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Status</span>
-                      {anyLoading ? (
-                        <span className="text-[10px] text-muted-foreground">Loading…</span>
-                      ) : !hasEverRun ? (
+                      {!hasEverRun ? (
                         <span className="text-[10px] text-amber-600 font-medium">Never audited</span>
                       ) : auditOverdue ? (
                         <span className="text-[10px] text-amber-600 font-medium">{daysSince}d since last audit</span>
-                      ) : totalIssues > 0 ? (
-                        <span className="text-[10px] text-amber-600 font-medium">{totalIssues} issue{totalIssues !== 1 ? 's' : ''} found</span>
+                      ) : fix && fix.pending > 0 ? (
+                        <span className="text-[10px] text-blue-600 font-medium">{fix.pending} fix{fix.pending !== 1 ? 'es' : ''} in progress</span>
+                      ) : fix && fix.completed > 0 ? (
+                        <span className="text-[10px] text-emerald-600 font-medium">{fix.completed} fix{fix.completed !== 1 ? 'es' : ''} applied</span>
                       ) : (
                         <span className="text-[10px] text-emerald-600 font-medium">All clear</span>
                       )}
@@ -821,24 +815,24 @@ export function Overview({
                             {daysSince}d ago
                           </Badge>
                         )}
-                        {contentIssues !== null && contentIssues > 0 && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-amber-50 text-amber-700 border-amber-200">
-                            {contentIssues} content
-                          </Badge>
-                        )}
-                        {indexingIssues !== null && indexingIssues > 0 && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-rose-50 text-rose-700 border-rose-200">
-                            {indexingIssues} not indexed
-                          </Badge>
-                        )}
-                        {ctrIssues !== null && ctrIssues > 0 && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-orange-50 text-orange-700 border-orange-200">
-                            {ctrIssues} CTR
-                          </Badge>
-                        )}
-                        {totalIssues === 0 && (
+                        {fix && fix.completed > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-emerald-50 text-emerald-700 border-emerald-200">
-                            No issues
+                            {fix.completed} applied
+                          </Badge>
+                        )}
+                        {fix && fix.failed > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-rose-50 text-rose-700 border-rose-200">
+                            {fix.failed} failed
+                          </Badge>
+                        )}
+                        {fix && fix.pending > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-blue-50 text-blue-700 border-blue-200">
+                            {fix.pending} pending
+                          </Badge>
+                        )}
+                        {!hasFixes && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-emerald-50 text-emerald-700 border-emerald-200">
+                            No fixes needed
                           </Badge>
                         )}
                       </div>

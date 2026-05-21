@@ -631,6 +631,15 @@ pub struct ProjectOverview {
     pub pending_landing_page_research: Vec<LandingPageResearchPending>,
     /// Feature spec tasks in 'review' status awaiting user confirmation
     pub pending_feature_specs: Vec<PendingFeatureSpec>,
+    /// Fix tasks completed / failed since the most recent audit
+    pub fix_summary: FixSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FixSummary {
+    pub completed: i64,
+    pub failed: i64,
+    pub pending: i64,
 }
 
 /// A generate_feature_spec task waiting for user confirmation.
@@ -820,6 +829,41 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         rows.filter_map(|r| r.ok()).collect()
     };
 
+    // Count fix tasks since the most recent audit run
+    let fix_summary: FixSummary = {
+        let last_audit_at: Option<String> = conn.query_row(
+            "SELECT MAX(tr.finished_at)
+             FROM tasks t
+             JOIN task_runs tr ON t.id = tr.task_id
+             WHERE t.project_id = ?1 AND t.type IN ('content_review', 'indexing_health_campaign', 'ctr_audit') AND tr.success = 1",
+            [project_id],
+            |row| row.get(0),
+        ).ok().flatten();
+
+        let since_clause = match &last_audit_at {
+            Some(ts) => format!("AND updated_at > '{}'", ts),
+            None => String::new(),
+        };
+
+        let sql = format!(
+            "SELECT
+               SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN status IN ('todo', 'queued', 'in_progress') THEN 1 ELSE 0 END)
+             FROM tasks
+             WHERE project_id = ?1 AND type LIKE 'fix_%' {}",
+            since_clause
+        );
+
+        conn.query_row(&sql, [project_id], |row| {
+            Ok(FixSummary {
+                completed: row.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                failed: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                pending: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            })
+        }).unwrap_or(FixSummary { completed: 0, failed: 0, pending: 0 })
+    };
+
     Ok(ProjectOverview {
         tasks: counts,
         recent_tasks,
@@ -828,6 +872,7 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         workflow_activity,
         pending_landing_page_research,
         pending_feature_specs,
+        fix_summary,
     })
 }
 
