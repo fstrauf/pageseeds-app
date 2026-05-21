@@ -35,6 +35,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
+import { InvestigationPanel } from './InvestigationPanel'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -503,6 +504,9 @@ export function HealthDashboard({ projectId, onViewChange }: Props) {
               )}
             </>
           )}
+
+          {/* Agentic Investigation — available regardless of data loaded */}
+          <InvestigationPanel projectId={projectId} />
         </div>
       </ScrollArea>
     </div>

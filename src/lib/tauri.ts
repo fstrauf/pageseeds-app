@@ -8,6 +8,7 @@ import type {
   FormatValidationResult,
   ImportResult,
   IngestOrphanResult,
+  InvestigationResult,
   MigrationResult,
   LiveSiteAuditReport,
   LiveSiteGscSyncResult,
@@ -134,6 +135,12 @@ export const getIndexingHealthSummary = (projectId: string): Promise<{
   last_inspected_at: string | null
 }> =>
   invoke('get_indexing_health_summary', { projectId })
+
+export const investigate = (
+  projectId: string,
+  question: string,
+): Promise<InvestigationResult> =>
+  invoke('investigate', { projectId, question })
 
 // ─── Articles ─────────────────────────────────────────────────────────────────
 

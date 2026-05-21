@@ -20,6 +20,7 @@ pub mod reddit;
 pub mod research;
 pub mod social;
 pub mod territory_research;
+pub mod investigate;
 pub mod utils;
 
 #[cfg(test)]

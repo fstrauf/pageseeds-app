@@ -782,3 +782,23 @@ export type View =
   | 'settings'
   | 'scheduler'
   | 'history'
+  | 'health'
+
+// ─── Investigation ──────────────────────────────────────────────────────────
+
+export interface InvestigationResult {
+  id: string
+  question: string
+  answer: string
+  summary: string
+  evidence: unknown
+  findings: Array<{
+    title: string
+    description: string
+    evidence?: string
+    severity: 'critical' | 'warning' | 'info'
+    fix_type: 'auto_fixable' | 'developer_actionable' | 'hybrid' | 'informational'
+    auto_fix_task?: string
+  }>
+  created_at: string
+}

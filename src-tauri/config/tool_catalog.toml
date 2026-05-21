@@ -1,0 +1,81 @@
+# Tool catalog for agentic investigation.
+
+[tools.gsc_performance]
+purpose = "Get GSC page-level performance data (clicks, impressions, CTR, position) for the project"
+when_to_use = "When investigating impression trends, CTR changes, or ranking movements"
+when_not_to_use = "Do not use if GSC is not connected"
+mutates = false
+
+[tools.gsc_queries]
+purpose = "Get GSC query-level data: which search queries drive traffic to pages"
+when_to_use = "When investigating what queries bring traffic, which have low CTR, or keyword cannibalization signals"
+when_not_to_use = "Do not use if GSC is not connected"
+mutates = false
+
+[tools.gsc_movers]
+purpose = "Compare GSC performance between two periods to find gaining/declining pages and queries"
+when_to_use = "When investigating traffic changes over time, plateau detection, or post-change impact analysis"
+when_not_to_use = "Do not use if GSC is not connected"
+mutates = false
+
+[tools.article_list]
+purpose = "List all articles in the project with metadata"
+when_to_use = "When you need to know what content exists or get an overview of the site"
+when_not_to_use = ""
+
+[tools.article_frontmatter]
+purpose = "Read frontmatter from MDX files for specific articles"
+when_to_use = "When checking individual article metadata or title content"
+when_not_to_use = "Use article_list first to discover what articles exist"
+
+[tools.article_body_hash]
+purpose = "Compute SHA-256 hashes of all article bodies to find exact duplicate content groups"
+when_to_use = "When investigating duplicate content, SSR fallback pages, or content uniqueness"
+when_not_to_use = ""
+
+[tools.article_title_scan]
+purpose = "Scan all article titles for patterns: duplicated tokens, literal template variables, missing titles, truncation risk"
+when_to_use = "When investigating title quality, template bugs, or SERP display issues"
+when_not_to_use = ""
+
+[tools.content_audit_report]
+purpose = "Return the full content_audit.json report with 21 deterministic checks per article"
+when_to_use = "When you need comprehensive article health data"
+when_not_to_use = ""
+
+[tools.run_content_audit]
+purpose = "Run the deterministic content audit and write fresh content_audit.json"
+when_to_use = "When you need fresh audit data and none exists or existing data is stale"
+when_not_to_use = "If a recent audit exists, use content_audit_report instead"
+mutates = true
+
+[tools.cannibalization_clusters]
+purpose = "Return cannibalization clusters and merge recommendations"
+when_to_use = "When investigating keyword cannibalization or content consolidation"
+when_not_to_use = ""
+
+[tools.indexing_status]
+purpose = "Return GSC URL indexing status"
+when_to_use = "When investigating indexing problems or sitemap gaps"
+when_not_to_use = ""
+
+[tools.ctr_health]
+purpose = "Return per-article CTR health summary"
+when_to_use = "When investigating CTR underperformance"
+when_not_to_use = ""
+
+[tools.framework_files]
+purpose = "Read framework config files: layouts, sitemap config, robots.txt, redirect rules"
+when_to_use = "When investigating site-wide template bugs or framework configuration"
+when_not_to_use = "Only works if the project uses a framework with readable config files"
+
+[tools.article_link_graph]
+purpose = "Return the internal link graph"
+when_to_use = "When investigating internal linking gaps or site structure issues"
+when_not_to_use = ""
+
+[tools.create_task]
+purpose = "Create a fix task in PageSeeds to address issues found"
+when_to_use = "ONLY after investigation has found specific, actionable issues. Explain what each task will do and why."
+when_not_to_use = "Do NOT create tasks speculatively. Max 3 tasks per investigation."
+mutates = true

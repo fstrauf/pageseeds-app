@@ -182,6 +182,7 @@ pub fn run() {
             commands::run_health_audit,
             commands::get_content_audit_report,
             commands::get_indexing_health_summary,
+            commands::investigate,
             commands::seo_get_keyword_ideas,
             commands::seo_get_keyword_difficulty,
             commands::seo_batch_keyword_difficulty,
