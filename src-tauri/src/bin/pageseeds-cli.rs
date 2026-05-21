@@ -19,21 +19,21 @@ fn main() {
     }
 
     let tool = &args[1];
-    let project_id = flag(&args, "--project-id", "-i").unwrap_or_else(|| exit("--project-id required"));
-    let path = expand_tilde(&flag(&args, "--project-path", "-p").unwrap_or_else(|| exit("--project-path required")));
+    let project_id = flag(&args, "--project-id", "-i").unwrap_or_default();
+    let project_path = expand_tilde(&flag(&args, "--project-path", "-p").unwrap_or_else(|| exit("--project-path required")));
 
     let db = pageseeds_lib::db::default_db_path();
     let ctx = InvestigationContext {
         project_id: project_id.clone(),
-        project_path: path.clone(),
+        project_path: project_path.clone(),
         db_path: db.to_string_lossy().to_string(),
     };
 
     let result: Result<serde_json::Value, String> = match tool.as_str() {
         // ── GSC tools (async, kept inline since they need tokio) ──
-        "gsc-performance" => gsc_perf(&project_id, &path),
-        "gsc-queries" => gsc_q(&project_id, &path, flag(&args, "--page-url", "-u")),
-        "gsc-movers" => gsc_mov(&project_id, &path),
+        "gsc-performance" => gsc_perf(&project_id, &project_path),
+        "gsc-queries" => gsc_q(&project_id, &project_path, flag(&args, "--page-url", "-u")),
+        "gsc-movers" => gsc_mov(&project_id, &project_path),
 
         // ── Shared functions (single source of truth) ──
         "article-list" => {
@@ -43,7 +43,7 @@ fn main() {
         }
         "article-frontmatter" => {
             let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
-            article_frontmatter(&path, &slug)
+            article_frontmatter(&project_path, &slug)
         }
         "article-body-hash" => {
             investigate::hash_article_bodies(&ctx)
@@ -51,19 +51,19 @@ fn main() {
                 .map_err(|e| e.to_string())
         }
         "article-title-scan" => investigate::scan_article_titles(&ctx).map_err(|e| e.to_string()),
-        "content-audit-report" => investigate::read_content_audit_report(&path).map_err(|e| e.to_string()),
-        "run-content-audit" => run_audit(&project_id, &path),
-        "cannibalization-clusters" => investigate::read_cannibalization_clusters(&path).map_err(|e| e.to_string()),
+        "content-audit-report" => investigate::read_content_audit_report(&project_path).map_err(|e| e.to_string()),
+        "run-content-audit" => run_audit(&project_id, &project_path),
+        "cannibalization-clusters" => investigate::read_cannibalization_clusters(&project_path).map_err(|e| e.to_string()),
         "indexing-status" => investigate::get_indexing_status(&ctx).map_err(|e| e.to_string()),
-        "ctr-health" => ctr_health(&project_id, &path, &db.to_string_lossy()),
+        "ctr-health" => ctr_health(&project_id, &project_path, &db.to_string_lossy()),
         "framework-files" => {
-            investigate::read_framework_files(&path, flag(&args, "--file", "-f").as_deref())
+            investigate::read_framework_files(&project_path, flag(&args, "--file", "-f").as_deref())
                 .map_err(|e| e.to_string())
         }
         "article-link-graph" => investigate::scan_link_graph(&ctx).map_err(|e| e.to_string()),
-        "compare-rendered" => compare_rendered(&path, &args),
+        "compare-rendered" => compare_rendered(&project_path, &args),
         "create-task" => create_task(&project_id, &db.to_string_lossy(), &args),
-        "write-feature-spec" => write_spec(&path, &args),
+        "write-feature-spec" => write_spec(&project_path, &args),
         _ => Err(format!("Unknown tool '{}'. Run with --help for list.", tool)),
     };
 
