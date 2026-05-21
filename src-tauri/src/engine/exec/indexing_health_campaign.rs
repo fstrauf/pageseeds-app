@@ -995,6 +995,9 @@ pub(crate) fn spawn_campaign_children(
 
     let mut created_ids: Vec<String> = Vec::new();
 
+    // Collect all spawnable targets with priority ordering
+    let mut spawnable: Vec<(&IndexingTargetPlan, TaskSpec)> = Vec::new();
+
     for target in &plan.targets {
         let ctx = contexts.get(&target.url);
 
@@ -1047,24 +1050,47 @@ pub(crate) fn spawn_campaign_children(
         };
 
         if let Some(spec) = spec {
-            match TaskSpawner::spawn(conn, spec) {
-                Ok(task) => {
-                    log::info!(
-                        "[ihc_post_action] spawned {} for {}",
-                        task.task_type,
-                        target.url
-                    );
-                    created_ids.push(task.id);
-                }
-                Err(e) => {
-                    log::warn!(
-                        "[ihc_post_action] failed to spawn task for {}: {}",
-                        target.url,
-                        e
-                    );
-                }
+            spawnable.push((target, spec));
+        }
+    }
+
+    // Priority: fix_content > add_links > rewrite_title_h1
+    spawnable.sort_by(|(a, _), (b, _)| {
+        let priority = |action: &str| match action {
+            "fix_content" => 0,
+            "add_links" => 1,
+            "rewrite_title_h1" => 2,
+            _ => 3,
+        };
+        priority(a.recommended_action.as_str()).cmp(&priority(b.recommended_action.as_str()))
+    });
+
+    for (target, spec) in spawnable.into_iter().take(MAX_CAMPAIGN_CHILD_TASKS) {
+        match TaskSpawner::spawn(conn, spec) {
+            Ok(task) => {
+                log::info!(
+                    "[ihc_post_action] spawned {} for {}",
+                    task.task_type,
+                    target.url
+                );
+                created_ids.push(task.id);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[ihc_post_action] failed to spawn task for {}: {}",
+                    target.url,
+                    e
+                );
             }
         }
+    }
+
+    if plan.targets.len() > MAX_CAMPAIGN_CHILD_TASKS {
+        log::info!(
+            "[ihc_post_action] capped child tasks at {} ({} actionable targets in plan)",
+            MAX_CAMPAIGN_CHILD_TASKS,
+            plan.targets.len()
+        );
     }
 
     log::info!(
@@ -1081,7 +1107,8 @@ fn build_fix_content_spec(
     audit_row: Option<&serde_json::Value>,
 ) -> TaskSpec {
     let url_slug = crate::content::slug::extract_slug_from_url(&target.url);
-    let idempotency_key = format!("ihc-fix-content:{}:{}:{}", parent.project_id, parent.id, target.url);
+    let article_id = ctx.map(|c| c.target.article_id).unwrap_or(0);
+    let idempotency_key = format!("fix_content_article:{}:{}", parent.project_id, article_id);
 
     // Build artifacts required by the fix_content_article pipeline
     let mut artifacts = vec![];
@@ -1163,12 +1190,14 @@ fn build_fix_content_spec(
         priority: Priority::Medium,
         agent_policy: AgentPolicy::Required,
         idempotency_key: Some(idempotency_key),
-        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 7 }),
+        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 30 }),
         depends_on: vec![parent.id.clone()],
         artifacts,
         ..Default::default()
     }
 }
+
+const MAX_CAMPAIGN_CHILD_TASKS: usize = 20;
 
 fn build_add_links_spec(
     parent: &Task,
@@ -1230,7 +1259,7 @@ fn build_add_links_spec(
         priority: Priority::Medium,
         agent_policy: AgentPolicy::Required,
         idempotency_key: Some(idempotency_key),
-        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 7 }),
+        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 30 }),
         depends_on: vec![parent.id.clone()],
         artifacts,
         ..Default::default()
@@ -1289,7 +1318,7 @@ fn build_rewrite_spec(
         priority: Priority::Medium,
         agent_policy: AgentPolicy::Required,
         idempotency_key: Some(idempotency_key),
-        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 7 }),
+        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 30 }),
         depends_on: vec![parent.id.clone()],
         artifacts,
         ..Default::default()

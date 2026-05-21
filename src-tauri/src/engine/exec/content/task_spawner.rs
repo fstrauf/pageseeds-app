@@ -232,7 +232,7 @@ pub(crate) fn create_fix_content_article_tasks(
             priority,
             agent_policy: AgentPolicy::Required,
             idempotency_key: Some(idempotency_key),
-            dedup_policy: Some(crate::engine::spawner::DeduplicationPolicy::SkipIfActive),
+            dedup_policy: Some(crate::engine::spawner::DeduplicationPolicy::Cooldown { days: 30 }),
             artifacts: vec![artifact],
             depends_on: vec![],
             ..Default::default()

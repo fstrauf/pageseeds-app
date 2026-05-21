@@ -3,6 +3,7 @@ use crate::models::task::Task;
 
 const REVIEW_REVISIT_STALE_DAYS: i64 = 45;
 const REVIEW_REVISIT_REGRESSION_DAYS: i64 = 14;
+const ARTICLE_FIX_COOLDOWN_DAYS: i64 = 30;
 
 fn reviewed_article_revisit_reason(
     review_status: &str,
@@ -67,9 +68,23 @@ pub(crate) fn select_priority_articles(
             .unwrap_or("")
             .to_lowercase();
         let last_reviewed_at = article["last_reviewed_at"].as_str().unwrap_or("").trim();
+        let last_edited_at = article["last_edited_at"].as_str().unwrap_or("").trim();
         let file_rel = article["file"].as_str().unwrap_or("").to_string();
         if status == "draft" || review_status == "in_review" || file_rel.is_empty() {
             continue;
+        }
+
+        // Skip articles that were edited (fixed) recently — give them time to mature in GSC
+        if !last_edited_at.is_empty() {
+            if let Ok(edited) = chrono::DateTime::parse_from_rfc3339(last_edited_at) {
+                let days_since_edit = now
+                    .signed_duration_since(edited.with_timezone(&chrono::Utc))
+                    .num_days()
+                    .max(0);
+                if days_since_edit < ARTICLE_FIX_COOLDOWN_DAYS {
+                    continue;
+                }
+            }
         }
 
         let gsc = &article["gsc"];
@@ -373,7 +388,7 @@ pub(crate) async fn exec_content_review_recommend(
         .cloned()
         .collect();
 
-    let selected = select_priority_articles(&raw_articles, audit_articles, 5);
+    let selected = select_priority_articles(&raw_articles, audit_articles, 20);
     log::info!(
         "[content_review_recommend] {} priority articles selected (project={})",
         selected.len(),
