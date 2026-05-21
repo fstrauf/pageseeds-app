@@ -305,12 +305,21 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
         }
     }
 
-    // 3. Load content audit
-    let audit_path = paths.automation_dir.join("content_audit.json");
-    let audit_doc: serde_json::Value = std::fs::read_to_string(&audit_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({ "articles": [] }));
+    // 3. Load content audit (DB primary, JSON fallback)
+    let audit_doc: serde_json::Value = {
+        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
+            .ok()
+            .and_then(|conn| {
+                crate::db::content_audit::get_audit_report_as_json(&conn, &task.project_id).ok().flatten()
+            });
+        db_doc.unwrap_or_else(|| {
+            let audit_path = paths.automation_dir.join("content_audit.json");
+            std::fs::read_to_string(&audit_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({ "articles": [] }))
+        })
+    };
     let audit_articles = audit_doc["articles"].as_array().cloned().unwrap_or_default();
     let mut audit_by_slug: HashMap<String, &serde_json::Value> = HashMap::new();
     for article in &audit_articles {
@@ -975,12 +984,21 @@ pub(crate) fn spawn_campaign_children(
         })
         .collect();
 
-    // Load content audit so fix_content specs get actual failed checks
-    let audit_path = paths.automation_dir.join("content_audit.json");
-    let audit_doc: serde_json::Value = std::fs::read_to_string(&audit_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({"articles": []}));
+    // Load content audit so fix_content specs get actual failed checks (DB primary, JSON fallback)
+    let audit_doc: serde_json::Value = {
+        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
+            .ok()
+            .and_then(|conn| {
+                crate::db::content_audit::get_audit_report_as_json(&conn, &parent_task.project_id).ok().flatten()
+            });
+        db_doc.unwrap_or_else(|| {
+            let audit_path = paths.automation_dir.join("content_audit.json");
+            std::fs::read_to_string(&audit_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({"articles": []}))
+        })
+    };
     let audit_articles = audit_doc["articles"].as_array().cloned().unwrap_or_default();
     let mut audit_by_file: HashMap<String, &serde_json::Value> = HashMap::new();
     let mut audit_by_slug: HashMap<String, &serde_json::Value> = HashMap::new();

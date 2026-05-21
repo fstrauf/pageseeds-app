@@ -868,27 +868,9 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
             })
         }).unwrap_or(FixSummary { completed: 0, failed: 0, pending: 0, total_found: 0 });
 
-        // Read content_audit.json to get total articles with issues
-        let project_path: Option<String> = conn
-            .query_row(
-                "SELECT path FROM projects WHERE id = ?1",
-                [project_id],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(path) = project_path {
-            let audit_path = std::path::Path::new(&path)
-                .join(".github")
-                .join("automation")
-                .join("content_audit.json");
-            if let Ok(content) = std::fs::read_to_string(&audit_path) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let needs = json["health_summary"]["needs_improvement"].as_i64().unwrap_or(0);
-                    let poor = json["health_summary"]["poor"].as_i64().unwrap_or(0);
-                    summary.total_found = needs + poor;
-                }
-            }
+        // Read latest content audit from DB to get total articles with issues
+        if let Ok(count) = crate::db::content_audit::count_unhealthy_articles(conn, project_id) {
+            summary.total_found = count;
         }
 
         summary

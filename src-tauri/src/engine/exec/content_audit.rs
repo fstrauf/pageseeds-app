@@ -136,15 +136,47 @@ pub fn exec_content_audit(
         "health_summary": { "good": good, "needs_improvement": needs, "poor": poor },
         "duplicate_groups": duplicate_groups,
         "duplicate_articles": duplicate_groups.iter().map(|g| g["article_count"].as_u64().unwrap_or(0)).sum::<u64>(),
-        "articles": results,
+        "articles": &results,
     });
 
-    let out_path = paths.automation_dir.join("content_audit.json");
-    if let Err(e) =
-        crate::engine::exec::common::write_json(&out_path, &output_doc, "content_audit.json")
-    {
-        return e;
+    // ─── Write to database (new primary storage) ──────────────────────────────
+    let db_articles: Vec<crate::db::content_audit::ArticleContentAudit> = results
+        .iter()
+        .map(|r| crate::db::content_audit::ArticleContentAudit {
+            run_id: 0, // filled by save_audit_run
+            article_id: r["id"].as_i64().unwrap_or(0),
+            article_file: r["file"].as_str().unwrap_or("").to_string(),
+            title: r["title"].as_str().unwrap_or("").to_string(),
+            url_slug: r["url_slug"].as_str().unwrap_or("").to_string(),
+            health: r["health"].as_str().unwrap_or("unknown").to_string(),
+            health_score: r["health_score"].as_i64().unwrap_or(0),
+            priority_score: r["priority_score"].as_i64().unwrap_or(0),
+            data_json: r.to_string(),
+        })
+        .collect();
+
+    let duplicate_groups_json = serde_json::to_string(&duplicate_groups).unwrap_or_else(|_| "[]".to_string());
+    if let Err(e) = crate::db::content_audit::save_audit_run(
+        &db,
+        &task.project_id,
+        &now_iso,
+        results.len() as i64,
+        good as i64,
+        needs as i64,
+        poor as i64,
+        &duplicate_groups_json,
+        db_articles,
+    ) {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("Failed to save content audit to database: {}", e),
+            output: None,
+        };
     }
+
+    // ─── Keep JSON write as export during transition ──────────────────────────
+    let out_path = paths.automation_dir.join("content_audit.json");
+    let _ = crate::engine::exec::common::write_json(&out_path, &output_doc, "content_audit.json");
 
     // Update content_hash in articles table for each audited article
     for result in &results {

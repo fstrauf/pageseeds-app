@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::error::Result;
 
+pub mod content_audit;
 pub mod export;
 pub mod global_settings;
 pub mod research_shortlist;
@@ -1298,6 +1299,45 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                 [&now],
             )?;
         }
+    }
+
+    if version < 41 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS content_audit_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                run_at TEXT NOT NULL,
+                total_audited INTEGER NOT NULL DEFAULT 0,
+                good_count INTEGER NOT NULL DEFAULT 0,
+                needs_improvement_count INTEGER NOT NULL DEFAULT 0,
+                poor_count INTEGER NOT NULL DEFAULT 0,
+                duplicate_groups_json TEXT NOT NULL DEFAULT '[]',
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_audit_runs_project ON content_audit_runs(project_id);
+            CREATE INDEX IF NOT EXISTS idx_content_audit_runs_project_run_at ON content_audit_runs(project_id, run_at);
+
+            CREATE TABLE IF NOT EXISTS article_content_audits (
+                run_id INTEGER NOT NULL,
+                article_id INTEGER NOT NULL,
+                article_file TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                url_slug TEXT NOT NULL DEFAULT '',
+                health TEXT NOT NULL DEFAULT 'unknown',
+                health_score INTEGER DEFAULT 0,
+                priority_score INTEGER DEFAULT 0,
+                data_json TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY (run_id, article_id),
+                FOREIGN KEY (run_id) REFERENCES content_audit_runs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_article_content_audits_run ON article_content_audits(run_id);
+            CREATE INDEX IF NOT EXISTS idx_article_content_audits_health ON article_content_audits(health);
+            "
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (41, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
     }
 
     Ok(())

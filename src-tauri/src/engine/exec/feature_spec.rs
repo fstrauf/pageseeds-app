@@ -19,7 +19,26 @@ pub(crate) fn exec_generate_feature_spec(
 
     let mut sections: Vec<String> = Vec::new();
 
-    if let Some(audit) = load_json(automation_dir.join("content_audit.json")) {
+    // Load content audit from DB (new primary storage)
+    let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: format!("Failed to open app database: {}", e),
+                output: None,
+            };
+        }
+    };
+
+    let audit_json = crate::db::content_audit::get_audit_report_as_json(&db, &task.project_id)
+        .ok()
+        .flatten();
+
+    if let Some(ref audit) = audit_json {
+        sections.push(format_content_audit_section(audit));
+    } else if let Some(audit) = load_json(automation_dir.join("content_audit.json")) {
+        // Fallback to legacy JSON file during transition
         sections.push(format_content_audit_section(&audit));
     }
 

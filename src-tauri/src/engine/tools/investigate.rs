@@ -776,11 +776,19 @@ impl Tool for ContentAuditReportTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Primary: read from database
+        let db = rusqlite::Connection::open(crate::db::default_db_path())
+            .map_err(|e| InvestigationToolError::Execution(format!("Failed to open DB: {e}")))?;
+        if let Ok(Some(json)) = crate::db::content_audit::get_audit_report_as_json(&db, &self.ctx.project_id) {
+            return Ok(json);
+        }
+
+        // Fallback: legacy JSON file during transition
         let paths = self.ctx.paths();
         let audit_path = paths.automation_dir.join("content_audit.json");
         if !audit_path.exists() {
             return Err(InvestigationToolError::NotAvailable(
-                "No content_audit.json found. Run run_content_audit first.".into()
+                "No content audit found. Run run_content_audit first.".into()
             ));
         }
         let content = std::fs::read_to_string(&audit_path)
@@ -1422,12 +1430,29 @@ pub fn hash_article_bodies(ctx: &InvestigationContext) -> Result<Vec<serde_json:
         .collect())
 }
 
-/// Read content_audit.json from disk.
+/// Read content audit report from DB (primary) or legacy JSON file (fallback).
 pub fn read_content_audit_report(project_path: &str) -> Result<serde_json::Value, InvestigationToolError> {
+    // Try database first
+    if let Ok(conn) = rusqlite::Connection::open(crate::db::default_db_path()) {
+        let project_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM projects WHERE path = ?1",
+                [project_path],
+                |row| row.get(0),
+            )
+            .ok();
+        if let Some(pid) = project_id {
+            if let Ok(Some(json)) = crate::db::content_audit::get_audit_report_as_json(&conn, &pid) {
+                return Ok(json);
+            }
+        }
+    }
+
+    // Fallback: legacy JSON file during transition
     let paths = crate::engine::project_paths::ProjectPaths::from_path(project_path);
     let p = paths.automation_dir.join("content_audit.json");
     if !p.exists() {
-        return Err(InvestigationToolError::NotAvailable("No content_audit.json found. Run run_content_audit first.".into()));
+        return Err(InvestigationToolError::NotAvailable("No content audit found. Run run_content_audit first.".into()));
     }
     let s = std::fs::read_to_string(&p)
         .map_err(|e| InvestigationToolError::Execution(format!("Failed to read: {e}")))?;

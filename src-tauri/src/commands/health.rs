@@ -105,7 +105,7 @@ pub fn get_indexing_health_summary(
     })
 }
 
-/// Read the full content_audit.json artifact for a project.
+/// Read the full content audit report for a project.
 /// Returns the raw JSON value so the frontend can extract whatever
 /// checks it needs (temporal URLs, page bloat, literal variables, etc.).
 #[tauri::command]
@@ -114,6 +114,13 @@ pub fn get_content_audit_report(
     project_id: String,
 ) -> Result<serde_json::Value, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    // Primary: read from database
+    if let Ok(Some(json)) = crate::db::content_audit::get_audit_report_as_json(&db, &project_id) {
+        return Ok(json);
+    }
+
+    // Fallback: legacy JSON file during transition
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
     let repo_root = std::path::Path::new(&project.path);
     let audit_path = repo_root

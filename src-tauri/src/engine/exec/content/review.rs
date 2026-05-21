@@ -317,12 +317,29 @@ pub(crate) async fn exec_content_review_recommend(
     let paths = ProjectPaths::from_path(project_path);
     let repo_root = Path::new(project_path);
 
-    let audit_path = paths.automation_dir.join("content_audit.json");
-    let audit: serde_json::Value =
-        match crate::engine::exec::common::read_json(&audit_path, "content_audit.json") {
-            Ok(v) => v,
-            Err(e) => return e,
+    // Load content audit from DB (new primary storage), fallback to JSON
+    let audit: serde_json::Value = {
+        let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
+            Ok(conn) => conn,
+            Err(e) => {
+                return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: format!("Failed to open app database: {}", e),
+                    output: None,
+                };
+            }
         };
+        match crate::db::content_audit::get_audit_report_as_json(&db, &task.project_id) {
+            Ok(Some(json)) => json,
+            _ => {
+                let audit_path = paths.automation_dir.join("content_audit.json");
+                match crate::engine::exec::common::read_json(&audit_path, "content_audit.json") {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                }
+            }
+        }
+    };
 
     let articles_path = paths.automation_dir.join("articles.json");
     let articles_doc: serde_json::Value =
