@@ -264,7 +264,13 @@ pub fn ingest_orphans(
             }
         }
 
-        let url_slug = derive_url_slug(&basename);
+        let url_slug = {
+            let stem = std::path::Path::new(&basename)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&basename);
+            crate::content::slug::normalize_url_slug(stem)
+        };
         let title = meta.title.unwrap_or_else(|| url_slug.replace('-', " "));
         let content_rel = content_dir
             .strip_prefix(project_path)
@@ -345,19 +351,6 @@ pub fn set_metadata(
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
-
-/// Derive a URL slug from an MDX filename.
-/// "242_pour_over_coffee_cafes_auckland.mdx" → "pour-over-coffee-cafes-auckland"
-#[allow(dead_code)]
-fn derive_url_slug(filename: &str) -> String {
-    let base = std::path::Path::new(filename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(filename);
-    crate::content::slug::strip_numeric_prefix(base)
-        .to_lowercase()
-        .replace('_', "-")
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Tests

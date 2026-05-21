@@ -25,14 +25,13 @@ pub struct FileMetadata {
 /// Generate a url_slug from a filename.
 ///
 /// Convention: `{id:03d}_{slug}.mdx` → `{slug}` (underscores preserved).
+/// Delegates to `content::slug::strip_numeric_prefix`.
 pub fn slug_from_filename(filename: &str) -> String {
     let basename = Path::new(filename)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(filename);
-    // Strip leading numeric prefix: "042_my_article"  → "my_article"
-    let re = Regex::new(r"^\d+_").unwrap();
-    re.replace(basename, "").into_owned()
+    crate::content::slug::strip_numeric_prefix(basename)
 }
 
 /// Read a markdown file's frontmatter and count body words.
