@@ -811,13 +811,14 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         rows.filter_map(|r| r.ok()).collect()
     };
 
-    // Pending feature spec tasks in review status
+    // Pending feature spec tasks in review status — show only the most recent one
+    // to avoid cluttering the Overview with old specs from before dedup fixes.
     let pending_feature_specs: Vec<PendingFeatureSpec> = {
         let mut stmt = conn.prepare(
             "SELECT id, title, updated_at
              FROM tasks
              WHERE project_id = ?1 AND type = 'generate_feature_spec' AND status = 'review'
-             ORDER BY updated_at DESC LIMIT 5",
+             ORDER BY updated_at DESC LIMIT 1",
         )?;
         let rows = stmt.query_map([project_id], |row| {
             Ok(PendingFeatureSpec {

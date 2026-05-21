@@ -62,7 +62,7 @@ pub(crate) fn exec_generate_feature_spec(
 
 Your job: read the audit findings below, identify which issues require **code changes** (framework/template fixes), which require **content changes** (rewrites, merges), and which require **structural changes** (URL migrations, architecture decisions).
 
-Write a markdown document with this exact structure:
+Write a markdown document with this exact structure. Start IMMEDIATELY with the # heading. Do NOT write any introduction, summary, or meta-commentary about what you are doing.
 
 # SEO Feature Specification
 
@@ -109,13 +109,13 @@ A table summarizing all issues: | Issue | Priority | Type | Count | Status |
 
 ---
 
-Rules:
+CRITICAL RULES:
 - Be specific. Name exact files, exact slugs, exact titles.
 - Do not invent data. Only use what's in the findings above.
 - If an issue is clearly a framework/template bug (e.g., generic titles on many pages, duplicate brand names in template), mark it as P0 Code Change.
 - If an issue is a content-level problem (e.g., thin content, missing keywords), mark it as P1 Content Fix.
 - If an issue requires URL changes or redirects, mark it as P2 Structural.
-- Write only the markdown document. No commentary before or after.
+- Your ENTIRE output must be the markdown document. No preamble like "Done" or "Here is the spec". No postamble. No mentions of file paths you "saved" to. No commentary about the generation process.
 "#,
         timestamp = timestamp,
         task_title = task_title,
@@ -123,7 +123,7 @@ Rules:
         combined = combined,
     );
 
-    let spec_content = match crate::engine::agent::run_agent(
+    let raw_content = match crate::engine::agent::run_agent(
         agent_provider,
         &prompt,
         Path::new(project_path),
@@ -137,6 +137,9 @@ Rules:
             };
         }
     };
+
+    // Strip common meta-preambles/postambles that LLMs sometimes emit
+    let spec_content = strip_meta_commentary(&raw_content);
 
     // Use a unique filename per task so multiple specs don't clobber each other
     let spec_filename = format!("seo_feature_spec_{}.md", task.id);
@@ -172,6 +175,63 @@ Rules:
         ),
         output: Some(spec_path.to_string_lossy().to_string()),
     }
+}
+
+/// Strip common LLM meta-commentary that leaks outside the requested markdown format.
+fn strip_meta_commentary(raw: &str) -> String {
+    let mut cleaned = raw.trim().to_string();
+
+    // Strip common preambles (case-insensitive, anchored to start)
+    let preamble_patterns = [
+        r"(?i)^\s*done\.\s*",
+        r"(?i)^\s*ok\.\s*",
+        r"(?i)^\s*alright\.\s*",
+        r"(?i)^\s*here\s+is\s+(the\s+)?spec(ification)?[:\.]?\s*",
+        r"(?i)^\s*here\s+is\s+(the\s+)?markdown\s+document[:\.]?\s*",
+        r"(?i)^\s*i[''']?ve\s+written\s+(the\s+)?spec[:\.]?\s*",
+        r"(?i)^\s*the\s+spec\s+has\s+been\s+written\s+to[:\.]?\s*",
+        r"(?i)^\s*the\s+specification\s+is\s+below[:\.]?\s*",
+        r"(?i)^\s*below\s+is\s+(the\s+)?spec[:\.]?\s*",
+        r"(?i)^\s*generating\s+(the\s+)?spec[:\.]?\s*",
+        r"(?i)^.*written\s+to\s+`[^`]+`\s*",
+        r"(?i)^.*saved\s+to\s+`[^`]+`\s*",
+    ];
+
+    for pattern in &preamble_patterns {
+        let re = regex::Regex::new(pattern).unwrap();
+        cleaned = re.replace(&cleaned, "").to_string();
+    }
+
+    // Strip common postambles (case-insensitive, anchored to end)
+    let postamble_patterns = [
+        r"(?i)\s*let\s+me\s+know\s+if\s+you\s+need\s+anything\s+else[\.!]?\s*$",
+        r"(?i)\s*feel\s+free\s+to\s+ask\s+if\s+you\s+need\s+changes[\.!]?\s*$",
+        r"(?i)\s*this\s+spec\s+is\s+ready\s+for\s+implementation[\.!]?\s*$",
+        r"(?i)\s*the\s+spec\s+has\s+been\s+saved[\.!]?\s*$",
+        r"(?i)\s*saved\s+to\s+`[^`]+`\s*$",
+        r"(?i)\s*written\s+to\s+`[^`]+`\s*$",
+    ];
+
+    for pattern in &postamble_patterns {
+        let re = regex::Regex::new(pattern).unwrap();
+        cleaned = re.replace(&cleaned, "").to_string();
+    }
+
+    // If the cleaned text doesn't start with #, try to find the first markdown heading
+    let trimmed = cleaned.trim();
+    if !trimmed.starts_with('#') {
+        if let Some(pos) = trimmed.find("# SEO Feature Specification") {
+            cleaned = trimmed[pos..].to_string();
+        } else if let Some(pos) = trimmed.find('\n') {
+            // If first line is not a heading, check if second line starts with #
+            let after_first = &trimmed[pos + 1..].trim_start();
+            if after_first.starts_with('#') {
+                cleaned = after_first.to_string();
+            }
+        }
+    }
+
+    cleaned.trim().to_string()
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

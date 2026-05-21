@@ -154,7 +154,7 @@ pub fn open_feature_spec_in_vscode(
     // 2. Try to find the exact path from the task artifact (stored by executor)
     let artifact_path = task.artifacts.iter().find_map(|a| {
         if a.key == "generate_feature_spec" || a.key == "feature_spec_path" {
-            a.content.clone()
+            a.path.clone().or_else(|| a.content.clone())
         } else {
             None
         }
@@ -184,9 +184,12 @@ pub fn open_feature_spec_in_vscode(
         ));
     }
 
-    // 3. Open in VS Code, reusing the window that has the repo open.
-    //    -r  = force reuse of the last active VS Code window
+    // 3. Open in VS Code, ensuring the repo window is focused first.
+    //    Strategy: open the repo folder with -r (reuse / focus window), then open the file.
+    //    This guarantees the file opens in the repo's VS Code: window, not the last active one.
     let path_str = path_to_open.to_string_lossy().to_string();
+    let repo_str = repo_root.to_string_lossy().to_string();
+
     let result = if cfg!(target_os = "macos") {
         // On macOS the `code` CLI may not be in PATH for GUI apps.
         // Try common install locations before falling back to `open`.
@@ -195,34 +198,44 @@ pub fn open_feature_spec_in_vscode(
             "/opt/homebrew/bin/code",
             "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
         ];
-        let mut child = None;
+        let mut code_bin: Option<&str> = None;
         for candidate in &code_candidates {
             if std::path::Path::new(candidate).exists() {
-                child = std::process::Command::new(candidate)
-                    .args(["-r", &path_str])
-                    .spawn()
-                    .ok();
-                if child.is_some() {
-                    break;
-                }
+                code_bin = Some(candidate);
+                break;
             }
         }
-        if child.is_none() {
-            // Fallback: open via bundle ID (cannot pass -r, so may open a new window)
-            child = std::process::Command::new("open")
+
+        if let Some(code) = code_bin {
+            // Step 1: focus / open the repo folder window
+            let _ = std::process::Command::new(code)
+                .args(["-r", &repo_str])
+                .spawn();
+            // Small delay to let VS Code: focus the window (non-blocking is fine)
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            // Step 2: open the spec file in the focused window
+            std::process::Command::new(code)
+                .args(["-r", &path_str])
+                .spawn()
+        } else {
+            // Fallback: open via bundle ID (cannot guarantee window selection)
+            std::process::Command::new("open")
                 .args(["-b", "com.microsoft.VSCode", &path_str])
                 .spawn()
-                .ok();
         }
-        child.map(|c| Ok(c)).unwrap_or(Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "VS Code not found",
-        )))
     } else if cfg!(target_os = "windows") {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "code", "-r", &repo_str])
+            .spawn();
+        std::thread::sleep(std::time::Duration::from_millis(300));
         std::process::Command::new("cmd")
             .args(["/c", "code", "-r", &path_str])
             .spawn()
     } else {
+        let _ = std::process::Command::new("code")
+            .args(["-r", &repo_str])
+            .spawn();
+        std::thread::sleep(std::time::Duration::from_millis(300));
         std::process::Command::new("code")
             .args(["-r", &path_str])
             .spawn()
