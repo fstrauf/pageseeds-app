@@ -93,6 +93,12 @@ purpose = "Create a fix task in PageSeeds to address issues found"
 when_to_use = "ONLY after investigation found specific, actionable issues"
 when_not_to_use = "Do NOT create tasks speculatively. Max 3 per investigation."
 mutates = true
+
+[tools.write_feature_spec]
+purpose = "Write a developer feature spec to the target repo's .github/automation/seo_feature_spec.md"
+when_to_use = "When you find code-level issues that require changes to framework files (templates, redirects, sitemap). Each call appends one issue section with file path, current code, and fixed code."
+when_not_to_use = "Do not use for content-only issues that PageSeeds can auto-fix"
+mutates = true
 "#;
 
 /// Run an agentic investigation with full tool access.
