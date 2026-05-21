@@ -130,6 +130,19 @@ pub fn validate_dates(articles: &[Article], cfg: &DatePolicyConfig) -> DatePolic
     }
 }
 
+/// Find the most recent past date that is NOT in the `occupied` set.
+///
+/// Starting from the day before `today`, walks backward until an unoccupied
+/// date is found. This is the single source of truth for date assignment
+/// across all date-computing code paths.
+pub fn find_first_free_past_date(today: NaiveDate, occupied: &HashSet<NaiveDate>) -> NaiveDate {
+    let mut cursor = today - Duration::days(1);
+    while occupied.contains(&cursor) {
+        cursor -= Duration::days(1);
+    }
+    cursor
+}
+
 pub fn suggest_next_safe_date(articles: &[Article]) -> String {
     let today = Utc::now().date_naive();
     let occupied: HashSet<NaiveDate> = articles
@@ -138,11 +151,9 @@ pub fn suggest_next_safe_date(articles: &[Article]) -> String {
         .filter_map(parse_iso_date)
         .collect();
 
-    let mut cursor = today - Duration::days(1);
-    while occupied.contains(&cursor) {
-        cursor -= Duration::days(1);
-    }
-    cursor.format("%Y-%m-%d").to_string()
+    find_first_free_past_date(today, &occupied)
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 pub fn statuses_set(statuses: &[&str]) -> HashSet<String> {

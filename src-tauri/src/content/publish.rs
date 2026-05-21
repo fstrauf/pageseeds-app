@@ -460,16 +460,18 @@ fn detect_year_mismatch(article: &Article) -> Option<YearMismatch> {
 }
 
 /// Find the most recent free past date (i.e. not in `occupied` or `assigned`).
+///
+/// Delegates to `date_policy::find_first_free_past_date` — the single source of truth.
 fn assign_free_date(
     today: NaiveDate,
     occupied: &HashSet<NaiveDate>,
     assigned: &HashSet<NaiveDate>,
 ) -> String {
-    let mut cursor = today - chrono::Duration::days(1);
-    while occupied.contains(&cursor) || assigned.contains(&cursor) {
-        cursor -= chrono::Duration::days(1);
-    }
-    cursor.format("%Y-%m-%d").to_string()
+    let mut merged: HashSet<NaiveDate> = occupied.iter().copied().collect();
+    merged.extend(assigned.iter().copied());
+    crate::content::date_policy::find_first_free_past_date(today, &merged)
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

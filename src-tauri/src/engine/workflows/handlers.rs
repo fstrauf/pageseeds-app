@@ -1614,23 +1614,15 @@ fn load_coverage_context(automation_dir: &std::path::Path) -> String {
     )
 }
 
-/// Read articles.json from `{project_path}/.github/automation/articles.json` and return
-/// the next unoccupied past date for a new article.
+/// Read all articles for a project from SQLite and return the next
+/// unoccupied past date using the canonical `date_policy::suggest_next_safe_date`.
 ///
-/// Implements the same logic as `content::date_policy::suggest_next_safe_date` but reads
-/// Compute the next available past publish date from the SQLite database.
-///
-/// Reads all articles for the project and finds the most recent past date
-/// that is not already occupied. This is more current than reading articles.json
-/// because SQLite is updated by ingest_orphans before articles.json is exported.
+/// This is more current than reading articles.json because SQLite is
+/// updated by ingest_orphans before articles.json is exported.
 pub(crate) fn compute_next_publish_date(
     conn: &rusqlite::Connection,
     project_id: &str,
 ) -> Option<String> {
-    use chrono::{Duration, NaiveDate, Utc};
-    use std::collections::HashSet;
-
-    // Verify the project exists before computing a date.
     let project_exists: bool = conn
         .query_row(
             "SELECT 1 FROM projects WHERE id = ?1 LIMIT 1",
@@ -1643,20 +1635,7 @@ pub(crate) fn compute_next_publish_date(
     }
 
     let articles = crate::engine::task_store::list_articles(conn, project_id).ok()?;
-
-    let occupied: HashSet<NaiveDate> = articles
-        .iter()
-        .filter_map(|a| a.published_date.as_deref())
-        .filter(|d| !d.is_empty())
-        .filter_map(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .collect();
-
-    let today = Utc::now().date_naive();
-    let mut cursor = today - Duration::days(1);
-    while occupied.contains(&cursor) {
-        cursor -= Duration::days(1);
-    }
-    Some(cursor.format("%Y-%m-%d").to_string())
+    Some(crate::content::date_policy::suggest_next_safe_date(&articles))
 }
 
 fn rename_new_or_modified_md_to_mdx(
