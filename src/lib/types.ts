@@ -455,15 +455,7 @@ export interface RunnerItem {
   }
   status: 'queued' | 'running' | 'done' | 'failed'
   result?: import('./bindings').ExecutionResult
-  liveSteps?: import('./bindings').StepProgress[]
   error?: string
-}
-
-export interface TaskStepEvent {
-  task_id: string
-  step_name: string
-  status: string
-  message: string
 }
 
 export interface BatchTaskResult {

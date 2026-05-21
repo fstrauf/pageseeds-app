@@ -38,6 +38,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 1. A new skill file is ~20 lines. A new task type + handler + exec module is ~200+ lines. **Prefer the skill.**
 2. When the output is an MDX article, reuse `write_article` with a different skill — do not build a new pipeline.
 3. The queue is backend-managed. Components enqueue; they do not execute.
+4. **NEVER re-implement a primitive that already exists.** Before writing `split_whitespace().count()`, `parse_frontmatter()`, or a slug normalizer, check the DRY catalog below. The canonical version strips markdown, handles edge cases, and is the single source of truth. Fragmentation creates bugs that surface weeks later in unrelated workflows. See `docs/single-source-of-truth-consolidation.md` for the audit that proved this.
 
 ---
 
@@ -285,12 +286,20 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 
 | Function | File | What it does | Use instead of writing... |
 |---|---|---|---|
+| `count_words()` | `content/ops.rs` | Strips markdown syntax, then counts words. The SINGLE source of truth for word counts. | `text.split_whitespace().count()` — produces different counts for markdown content |
+| `frontmatter::split_mdx()` | `content/frontmatter.rs` | Splits MDX into (frontmatter, body). Canonical delimiter detection. | Ad-hoc `---` scanning or `parse_frontmatter()` |
+| `frontmatter::parse()` | `content/frontmatter.rs` | serde_yaml semantic parse of frontmatter. Returns `Frontmatter` struct. | Line-by-line `key: value` HashMap construction |
+| `frontmatter::extract_frontmatter_string()` | `content/frontmatter.rs` | Extract one top-level scalar value by key from MDX content. | Inline frontmatter field extraction with different delimiter detection |
+| `slug::normalize_url_slug()` | `content/slug.rs` | Canonical URL slug normalizer: strip prefix, lowercase, `_`→`-` | Custom `slugify()` or `n()` functions with inconsistent behavior |
+| `slug::strip_numeric_prefix()` | `content/slug.rs` | Strips leading numeric prefix (`001_` or `001-`) from file stems | Inline regex `^\d+_` |
+| `date_policy::find_first_free_past_date()` | `content/date_policy.rs` | Core backward-cursor algorithm: find nearest past date not in occupied set | Duplicate while-loop walking backwards from yesterday |
+| `date_policy::suggest_next_safe_date()` | `content/date_policy.rs` | Takes `&[Article]` → next free past date. Calls `find_first_free_past_date`. | Reading dates from SQLite and walking backward manually |
 | `ingest_orphan_files()` | `content/ops.rs` | Discovers untracked MDX files, assigns next ID, inserts into SQLite, exports `articles.json` | A new "save article to DB + disk" function |
 | `sync_and_validate()` | `content/ops.rs` | Cross-checks SQLite ↔ MDX files, patches dates, finds orphans | Ad-hoc file discovery or date-sync logic |
 | `read_file_metadata()` | `content/ops.rs` | Reads frontmatter + counts words from any MDX file | Inline `std::fs::read_to_string` + regex word counting |
 | `load_article_by_slug()` | `content/ops.rs` | DB lookup → resolve content dir → read file | Manual article lookup + path construction |
 | `resolve_content_dir()` | `content/ops.rs` | Finds content directory (project override → heuristics) | Any content path guessing logic |
-| `slug_from_filename()` | `content/ops.rs` | Strips numeric prefix, returns slug | String manipulation on filenames |
+| `slug_from_filename()` | `content/ops.rs` | Strips numeric prefix, returns slug (delegates to `slug::strip_numeric_prefix`) | String manipulation on filenames |
 | `apply_publish()` | `content/publish.rs` | Transitions articles to published, assigns safe dates, syncs frontmatter, exports JSON | Any publish/status-change workflow |
 | `content_health_check()` | `content/ops.rs` | Read-only sync check for UI health display | One-off file existence checks in UI code |
 
@@ -311,7 +320,7 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 | `exec_agentic()` | `engine/workflows/handlers.rs` | Loads skill, builds prompt, calls agent, enforces MDX naming, returns raw output | Custom agent invocation code |
 | `TaskSpawner::spawn()` | `engine/spawner.rs` | Creates tasks with idempotency, dependency validation | Direct `task_store::create_task` calls |
 | `TaskSpawner::spawn_follow_up()` | `engine/spawner.rs` | Idempotent follow-up creation | Manual follow-up task logic |
-| `compute_next_publish_date()` | `engine/workflows/handlers.rs` | Finds the next safe past date for publishing | Date math in article writing code |
+| `compute_next_publish_date()` | `engine/workflows/handlers.rs` | Reads from SQLite, delegates to `date_policy::suggest_next_safe_date` | Date math in article writing code |
 
 ### Linking / Clustering (`engine/exec/content/`)
 
@@ -378,11 +387,13 @@ The `social/` domain (`src-tauri/src/social/` and `src-tauri/src/engine/exec/soc
 
 #### If you still need a new task type
 
-1. Register the task type in `config/task_definitions.rs` (phase, execution mode, review behavior, handler family).
-2. Add a `WorkflowHandler` impl in `engine/workflows/handlers.rs`.
-3. Register it in `default_handlers()` (same file).
+1. Register the task type in `config/task_definitions.rs` (phase, execution mode, review behavior, handler family). **EVERY task type with a handler MUST be registered here — the `all_task_types_have_non_fallback_handler` test enforces this.** A task type registered in a handler's `plan()` but missing from definitions will silently fall back to `phase: "implementation", run_policy: UserEnqueue, review_surface: None, follow_up_policy: None`.
+2. Add a `WorkflowHandler` impl in `engine/workflows/handlers.rs`. **CRITICAL: The `supports()` method AND the `plan()` method must BOTH include the new task type.** A `plan()` match arm without a corresponding `supports()` entry will cause the task to fall through to `ManualFallbackHandler` (this happened to `generate_feature_spec`).
+3. Register the handler in `default_handlers()` (same file).
 4. Each handler only returns a `Vec<WorkflowStep>` — no execution logic.
 5. Execution runs through `engine/executor.rs` unchanged.
+
+**Verification:** Run `cargo test --lib all_task_types_have_non_fallback_handler` after adding a new task type. This test validates every definition has a non-fallback handler.
 
 **Step constructors are typed:** Use `WorkflowStep::new("name", StepKind::X)` — never pass string step kinds.
 
@@ -842,9 +853,10 @@ See `docs/async-architecture.md` for detailed comparison.
 
 ### Rust backend
 - [ ] **Checked for reuse**: Reviewed the "DRY: Core Reusable Functions" catalog above. If the feature writes MDX, reuses `write_article`; if it links articles, reuses `cluster_and_link`; if it exports articles.json, reuses `db::export::write_articles_to_repo`; etc.
+- [ ] **No re-implemented primitives**: No `split_whitespace().count()` for article content (use `count_words()`); no ad-hoc `parse_frontmatter()` (use `content::frontmatter`); no custom slug normalizers (use `content::slug`). See Golden Rule #4 and `docs/single-source-of-truth-consolidation.md`.
 - [ ] **Task lifecycle contract checked**: If the change creates, queues, reviews, or spawns tasks, identified the lifecycle lane and reused `TaskSpawner`, backend queue commands, `task_definitions`, and `post_actions` as appropriate.
 - [ ] `cargo check` passes before touching the frontend
-- [ ] `cargo test` passes — especially workflow routing and task definition tests
+- [ ] `cargo test` passes — especially `all_task_types_have_non_fallback_handler`
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] **Settings placed correctly**: User preferences → `global_settings`; Project config → `projects` table
 - [ ] No business logic added to `commands/*.rs` — only thin wrappers
@@ -855,7 +867,7 @@ See `docs/async-architecture.md` for detailed comparison.
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls — use Rust crates instead
 - [ ] Reviewed `CONTRACTS.md` for any affected implicit contracts (statuses, step ordering, auto-spawned tasks, handler registry order)
-- [ ] New task types added to `config/task_definitions.rs` before wiring handlers
+- [ ] New task types added to `config/task_definitions.rs` before wiring handlers (with matching `supports()` entry in handlers)
 - [ ] Every new agentic step has: (a) specific input context, (b) an output contract in a code comment, (c) a comment explaining why it cannot be deterministic
 - [ ] Every new deterministic step does not contain a hard-coded heuristic that substitutes for judgment (that is fake intelligence — use an agentic step for the selection)
 

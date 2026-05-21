@@ -136,11 +136,17 @@ export function TaskBoard({
 
   // Track the last initialTaskId we directly fetched so we don't loop.
   const fetchedTaskIdRef = useRef<string | null>(null)
+  // Guard to ensure we only process each initialTaskId once, even if tasks
+  // array refetches and causes the effect to re-run.
+  const processedInitialTaskIdRef = useRef<string | null>(null)
 
   // Auto-open a specific task when navigated here from Overview or the task runner.
   useEffect(() => {
-    console.log('[TaskBoard] auto-open effect running, initialTaskId:', initialTaskId, 'tasks count:', tasks.length, 'statusFilter:', statusFilter)
     if (!initialTaskId) return
+    if (processedInitialTaskIdRef.current === initialTaskId) return
+    processedInitialTaskIdRef.current = initialTaskId
+
+    console.log('[TaskBoard] auto-open effect running, initialTaskId:', initialTaskId, 'tasks count:', tasks.length, 'statusFilter:', statusFilter)
 
     // Already in the current list? Open immediately.
     const target = tasks.find(t => t.id === initialTaskId)

@@ -57,6 +57,7 @@ pub(crate) fn exec_ctr_analyze(
         repo_root,
         &context_json,
         agent_provider,
+        // Domain-specific output contract — CtrAgentOutput schema
         "{\"recommendations\":[{\"article_id\":0,\"article_title\":\"\",\"target_keyword\":\"\",\
          \"fixes\":[{\"fix_type\":\"title_bait|meta_description|snippet_bait|faq_schema\",\
          \"reason\":\"\",\"current_text\":\"\"}],\"priority\":0,\"clicks_lost\":0.0}]}",
@@ -65,7 +66,7 @@ pub(crate) fn exec_ctr_analyze(
         Err(e) => {
             return StepResult {
                 success: false,
-                message: format!("Agent error during CTR analysis: {}", e),
+                message: format!("Agent error: {}", e),
                 output: None,
             };
         }

@@ -16,15 +16,6 @@ use ts_rs::TS;
 
 // ─── Event Types ──────────────────────────────────────────────────────────────
 
-/// Emitted after each step so the frontend runner can show live progress.
-#[derive(Debug, Clone, Serialize)]
-pub struct TaskStepEvent {
-    pub task_id: String,
-    pub step_name: String,
-    pub status: String,
-    pub message: String,
-}
-
 // ─── Public Types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -237,19 +228,6 @@ pub async fn execute_task_with_token(
         };
         progress[i].message = result.message.clone();
         progress[i].output = result.output.as_deref().map(compact_progress_output);
-
-        // Emit step progress event for live UI updates
-        if let Some(ref handle) = app_handle {
-            let _ = handle.emit(
-                "task_step_progress",
-                &TaskStepEvent {
-                    task_id: task_id.to_string(),
-                    step_name: progress[i].step_name.clone(),
-                    status: progress[i].status.clone(),
-                    message: progress[i].message.clone(),
-                },
-            );
-        }
 
         // Persist step output as the durable artifact. Keep the in-memory task
         // in sync for downstream steps, but replace by key so reruns do not

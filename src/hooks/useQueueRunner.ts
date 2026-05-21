@@ -31,7 +31,6 @@ function mapQueueItemToRunnerItem(item: QueueItem): RunnerItem {
     },
     status: statusMap[item.status] ?? 'queued',
     error: item.error ?? undefined,
-    liveSteps: [],
     result: item.result_json
       ? (JSON.parse(item.result_json) as ExecutionResult)
       : undefined,

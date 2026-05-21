@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
 import { useQueue } from '../../lib/queue-context'
+import { useQueueStore } from '../../stores/queueStore'
 
 import { createLogger, LogTarget } from '../../lib/logging';
 const logger = createLogger(LogTarget.UI);
@@ -46,7 +47,8 @@ export function TaskRunner({
   const [isPanelExpanded, setIsPanelExpanded] = useState(true)
   const [prevStatusMap, setPrevStatusMap] = useState<Map<string, string>>(new Map())
   const queue = useQueue()
-  const autoOpenedRef = useRef<Set<string>>(new Set())
+  const markAutoOpened = useQueueStore((s) => s.markAutoOpened)
+  const hasAutoOpened = useQueueStore((s) => s.hasAutoOpened)
 
   // Derive auto-expand ids from status transitions using previous state map
   const autoExpandIds = useMemo(() => {
@@ -99,9 +101,9 @@ export function TaskRunner({
         const isReviewTask = item.result?.follow_up_tasks?.some(
           f => f.id === item.task.id && f.status === 'review'
         )
-        if (isReviewTask && onOpenTask && !autoOpenedRef.current.has(item.task.id)) {
+        if (isReviewTask && onOpenTask && !hasAutoOpened(item.task.id)) {
           logger.debug('auto-opening review task', { id: item.task.id })
-          autoOpenedRef.current.add(item.task.id)
+          markAutoOpened(item.task.id)
           onOpenTask(item.task.id)
         }
       }
@@ -303,8 +305,8 @@ interface ItemRowProps {
 }
 
 function ItemRow({ item, expanded, onToggle, onRunNow, onRetry, onRemove, onOpenTask }: ItemRowProps) {
-  const { task, status, result, error, liveSteps } = item
-  const hasDetails = !!(result?.steps?.length || result?.follow_up_tasks?.length || error || (liveSteps && liveSteps.length > 0))
+  const { task, status, result, error } = item
+  const hasDetails = !!(result?.steps?.length || result?.follow_up_tasks?.length || error)
 
   const durationMs =
     result
@@ -446,11 +448,6 @@ function ItemRow({ item, expanded, onToggle, onRunNow, onRetry, onRemove, onOpen
               {result.message}
             </div>
           )}
-
-          {/* Live steps (while running, before result arrives) */}
-          {!result && liveSteps && liveSteps.length > 0 && liveSteps.map((step, i) => (
-            <StepRow key={i} step={step} />
-          ))}
 
           {/* Steps from finished result */}
           {result?.steps?.map((step, i) => (

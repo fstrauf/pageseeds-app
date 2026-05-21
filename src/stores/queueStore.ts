@@ -62,8 +62,13 @@ interface QueueState {
   // UI preferences (persisted in this store)
   expandedTaskIds: Set<string>;
 
+  // Tracks which review tasks have already been auto-opened so we don't
+  // reopen them when the queue panel is dismissed and remounted.
+  autoOpenedTaskIds: Set<string>;
+
   // Actions
   sync: () => Promise<void>;
+  syncDebounced: () => Promise<void>;
   enqueue: (items: EnqueueItem[], mode?: EnqueueMode) => Promise<void>;
   enqueueNext: (items: EnqueueItem[]) => Promise<void>;
   removeItem: (taskId: string) => Promise<void>;
@@ -73,6 +78,8 @@ interface QueueState {
   resume: () => Promise<void>;
   show: () => void;
   toggleExpanded: (taskId: string) => void;
+  markAutoOpened: (taskId: string) => void;
+  hasAutoOpened: (taskId: string) => boolean;
 
   setupEventListeners: () => Promise<void>;
   cleanupEventListeners: () => void;
@@ -100,6 +107,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   unlisteners: [],
   isStarting: false,
   expandedTaskIds: new Set(),
+  autoOpenedTaskIds: new Set(),
 
   applySnapshot: (snapshot: QueueSnapshot) => {
     logger.debug('applySnapshot', { itemCount: snapshot.items.length, runStatus: snapshot.run?.status });
@@ -122,6 +130,26 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     }
     logger.exit('sync');
   },
+
+  // Debounced sync that coalesces rapid event bursts into a single fetch.
+  syncDebounced: (() => {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    return async () => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(async () => {
+        timeout = null;
+        logger.entry('syncDebounced');
+        try {
+          const snapshot = await getQueueSnapshot();
+          get().applySnapshot(snapshot);
+          logger.info('syncDebounced - success', { itemCount: snapshot.items.length });
+        } catch (error) {
+          logger.error('syncDebounced - failed', { error: String(error) });
+        }
+        logger.exit('syncDebounced');
+      }, 150);
+    };
+  })(),
 
   enqueue: async (items: EnqueueItem[], mode: EnqueueMode = 'append') => {
     logger.entry('enqueue', { count: items.length, mode });
@@ -230,39 +258,49 @@ export const useQueueStore = create<QueueState>((set, get) => ({
     });
   },
 
+  markAutoOpened: (taskId: string) => {
+    set((state) => ({
+      autoOpenedTaskIds: new Set([...state.autoOpenedTaskIds, taskId]),
+    }));
+  },
+
+  hasAutoOpened: (taskId: string) => {
+    return get().autoOpenedTaskIds.has(taskId);
+  },
+
   setupEventListeners: async () => {
     logger.entry('setupEventListeners');
-    const { cleanupEventListeners, sync } = get();
+    const { cleanupEventListeners, syncDebounced } = get();
     cleanupEventListeners();
     const unlisteners: UnlistenFn[] = [];
 
     const unlistenStarted = await listen<QueueProgressEvent>('queue:task-started', () => {
-      sync();
+      syncDebounced();
     });
     unlisteners.push(unlistenStarted);
 
     const unlistenCompleted = await listen<QueueProgressEvent>('queue:task-completed', () => {
-      sync();
+      syncDebounced();
     });
     unlisteners.push(unlistenCompleted);
 
     const unlistenFailed = await listen<QueueProgressEvent>('queue:task-failed', () => {
-      sync();
+      syncDebounced();
     });
     unlisteners.push(unlistenFailed);
 
     const unlistenSkipped = await listen<QueueProgressEvent>('queue:task-skipped', () => {
-      sync();
+      syncDebounced();
     });
     unlisteners.push(unlistenSkipped);
 
     const unlistenFollowUp = await listen<FollowUpCreatedEvent>('queue:follow-up-created', () => {
-      sync();
+      syncDebounced();
     });
     unlisteners.push(unlistenFollowUp);
 
     const unlistenFinished = await listen<{ status?: string; reason?: string }>('queue:finished', () => {
-      sync();
+      syncDebounced();
     });
     unlisteners.push(unlistenFinished);
 

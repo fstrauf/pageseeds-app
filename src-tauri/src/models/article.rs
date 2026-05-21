@@ -54,6 +54,12 @@ pub struct Article {
     /// Page type: "hub", "pillar", "spoke", "landing", etc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_type: Option<String>,
+    /// Content hash (SHA-256 of body) for change detection
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// When the article content was last modified (file mtime or fix apply)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_edited_at: Option<String>,
 }
 
 /// Category scores for quality breakdown

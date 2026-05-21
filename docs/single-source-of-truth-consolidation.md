@@ -147,23 +147,23 @@ Some are intercepted (research gets routed to Rig extractor). Some are truly bar
 
 ## Implementation Plan
 
-### Phase 1: Mechanical consolidation (low risk, high impact — start here)
+### Phase 1: Mechanical consolidation ✅ DONE
 
-**1a. Unify word count** — Replace 26 ad-hoc `split_whitespace().count()` with `content::ops::count_words()`. Pure cleanup, no behavior change intended.
+**1a. Unify word count** ✅ — Replaced 26 ad-hoc `split_whitespace().count()` with `content::ops::count_words()`. Also removed duplicate inline markdown stripping in `content_audit.rs` (deleted 2 now-unused regex params: `link_syntax_re`, `md_syntax_re`). 14 files touched.
 
-**1b. Unify date computation** — Parameterize `suggest_next_safe_date` to accept occupied dates. Delete `compute_next_publish_date` and `assign_free_date`.
+**1b. Unify date computation** ✅ — Extracted `find_first_free_past_date()` core algorithm in `date_policy.rs`. `compute_next_publish_date` now delegates to `suggest_next_safe_date`. `assign_free_date` now merges occupied+assigned sets and delegates. 3 files, ~36 lines of duplicate deleted.
 
-**1c. Unify frontmatter parsing** — Route all callers through `content::frontmatter`. Add `frontmatter::extract_frontmatter_string()` helper. Delete `cleaner::parse_frontmatter` and `utils::parse_frontmatter`.
+**1c. Unify frontmatter parsing** ✅ — `cleaner::parse_frontmatter` now delegates to `frontmatter::split_mdx`. `utils::parse_frontmatter` now delegates to `frontmatter::split_mdx` + `frontmatter::parse`. Added canonical `extract_frontmatter_string()` to `frontmatter.rs`. Deleted 2 ad-hoc copies in `indexing_fix.rs` and `gsc/drift.rs`. 5 files, ~73 lines deleted.
 
-**1d. Unify slug generation** — Audit each non-canonical caller. Either route through `content::slug` or add named variants there. Delete duplicates.
+**1d. Unify slug generation** ✅ — Deleted `derive_url_slug` (replaced with `normalize_url_slug` after stripping file extension). `slug_from_filename` now delegates to `strip_numeric_prefix`. 2 files.
 
-### Phase 2: Task type registry fix (low risk, structural)
+### Phase 2: Task type registry fix ✅ PARTIALLY DONE
 
-**2a. Register 9 missing task types** in `task_definitions.rs` with correct policies (`cluster_and_link` → AutoEnqueue, etc.)
+**2a. Register 9 missing task types** ✅ — `cluster_and_link`, `landing_page_spec`, `technical_fix`, `content_strategy`, `publish_content`, `territory_research`, `social_generate_from_article`, `social_regenerate_post`, `social_create_template` all registered with correct policies.
 
-**2b. Add compile-time guard** — test that every task type with a handler is in definitions and vice versa.
+**2b. Fix registry test** ✅ — `generate_feature_spec` had a `plan()` match arm in `ImplementationHandler` but was missing from `supports()`. Added to match list. The `all_task_types_have_non_fallback_handler` test now passes (was 1 of 5 pre-existing failures).
 
-**2c. Add skill to bare agentic steps** — every `StepKind::Agentic` without a skill gets one or a documented exception. `fix_404s`/`fix_redirects` get proper handler plans.
+**2c. Add skill to bare agentic steps** — DEFERRED. `content_write_stage` gets its skill from task metadata. Research steps are intercepted by Rig. Catch-all fallbacks handle unknown types that shouldn't exist in practice.
 
 ### Phase 3: Delete dead/legacy code
 

@@ -100,7 +100,7 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
 /// 3. Call the agent
 /// 4. Return raw output (caller handles JSON extraction and domain logic)
 ///
-/// `output_contract` is appended as an "## Output Contract" section instructing
+/// `output_contract` is appended as a "## Output Contract" section instructing
 /// the agent to return JSON matching a specific schema.
 pub fn run_agent_with_skill(
     skill_name: &str,

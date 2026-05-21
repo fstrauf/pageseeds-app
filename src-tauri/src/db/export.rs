@@ -301,6 +301,8 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
         let last_reviewed_at = a["last_reviewed_at"].as_str().map(String::from);
         let review_count = a["review_count"].as_i64().unwrap_or(0);
         let page_type = a["page_type"].as_str().map(String::from);
+        let content_hash = a["content_hash"].as_str().map(String::from);
+        let last_edited_at = a["last_edited_at"].as_str().map(String::from);
         let gaps =
             serde_json::to_string(&a["content_gaps_addressed"]).unwrap_or_else(|_| "[]".into());
         let estimated_traffic = a["estimated_traffic_monthly"].as_str().map(String::from);
@@ -310,8 +312,9 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
                 id, title, url_slug, file, target_keyword, keyword_difficulty,
                 target_volume, published_date, word_count, status,
                 review_status, review_started_at, last_reviewed_at, review_count,
-                content_gaps_addressed, estimated_traffic_monthly, page_type, project_id
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                content_gaps_addressed, estimated_traffic_monthly, page_type,
+                content_hash, last_edited_at, project_id
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
              ON CONFLICT(id, project_id) DO UPDATE SET
                 title                       = excluded.title,
                 url_slug                    = excluded.url_slug,
@@ -328,7 +331,9 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
                 review_count                = excluded.review_count,
                 content_gaps_addressed      = excluded.content_gaps_addressed,
                 estimated_traffic_monthly   = excluded.estimated_traffic_monthly,
-                page_type                   = excluded.page_type",
+                page_type                   = excluded.page_type,
+                content_hash                = excluded.content_hash,
+                last_edited_at              = excluded.last_edited_at",
             rusqlite::params![
                 id,
                 title,
@@ -347,6 +352,8 @@ pub fn import_articles(conn: &Connection, project_id: &str, json: &str) -> Resul
                 gaps,
                 estimated_traffic,
                 page_type,
+                content_hash,
+                last_edited_at,
                 project_id,
             ],
         )?;
@@ -369,7 +376,8 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
         "SELECT id, title, url_slug, file, target_keyword, keyword_difficulty,
                 target_volume, published_date, word_count, status,
                 review_status, review_started_at, last_reviewed_at, review_count,
-                content_gaps_addressed, estimated_traffic_monthly, page_type
+                content_gaps_addressed, estimated_traffic_monthly, page_type,
+                content_hash, last_edited_at
          FROM articles WHERE project_id = ?1 ORDER BY id ASC",
     )?;
 
@@ -392,6 +400,8 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
             let gaps_str: String = row.get(14)?;
             let estimated_traffic: Option<String> = row.get(15)?;
             let page_type: Option<String> = row.get(16)?;
+            let content_hash: Option<String> = row.get(17)?;
+            let last_edited_at: Option<String> = row.get(18)?;
             Ok((
                 id,
                 title,
@@ -410,6 +420,8 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
                 gaps_str,
                 estimated_traffic,
                 page_type,
+                content_hash,
+                last_edited_at,
             ))
         })?
         .filter_map(|r| r.ok())
@@ -432,6 +444,8 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
                 gaps_str,
                 estimated_traffic,
                 page_type,
+                content_hash,
+                last_edited_at,
             )| {
                 let gaps: Value = serde_json::from_str(&gaps_str).unwrap_or(Value::Array(vec![]));
                 let mut article = serde_json::json!({
@@ -462,6 +476,12 @@ pub fn export_articles(conn: &Connection, project_id: &str) -> Result<String> {
                 }
                 if review_count > 0 {
                     article["review_count"] = Value::from(review_count);
+                }
+                if let Some(content_hash) = content_hash.filter(|s| !s.is_empty()) {
+                    article["content_hash"] = Value::String(content_hash);
+                }
+                if let Some(last_edited_at) = last_edited_at.filter(|s| !s.is_empty()) {
+                    article["last_edited_at"] = Value::String(last_edited_at);
                 }
                 article
             },
@@ -517,6 +537,8 @@ fn validate_export_date_policy(conn: &Connection, project_id: &str) -> Result<()
                 quality_rated_at: None,
                 publishing_ready: None,
                 quality_breakdown: None,
+                content_hash: None,
+                last_edited_at: None,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

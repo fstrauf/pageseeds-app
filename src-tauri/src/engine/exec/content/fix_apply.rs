@@ -189,6 +189,24 @@ pub(crate) fn exec_fix_content_article_apply(
     // Clean up snapshot on success
     let _ = std::fs::remove_file(&snapshot_path);
 
+    // Update last_edited_at in articles table
+    if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+        let now = chrono::Utc::now().to_rfc3339();
+        // Try to resolve article_id from the file path
+        let article_id = task.artifacts.iter().find_map(|a| {
+            a.content.as_deref().and_then(|c| {
+                serde_json::from_str::<serde_json::Value>(c).ok()
+                    .and_then(|v| v["article_id"].as_i64())
+            })
+        });
+        if let Some(id) = article_id {
+            let _ = db.execute(
+                "UPDATE articles SET last_edited_at = ?1 WHERE id = ?2 AND project_id = ?3",
+                rusqlite::params![&now, id, &task.project_id],
+            );
+        }
+    }
+
     let summary = if applied.is_empty() {
         "No changes applied — patch was empty or already satisfied".to_string()
     } else {

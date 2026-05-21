@@ -14,7 +14,6 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '../../lib/utils'
 import { SetupWarnings } from './SetupWarnings'
 import { PublishPanel } from '../articles/PublishPanel'
-import { HealthDashboard } from '../health/HealthDashboard'
 import { useQuery } from '../../hooks/useQuery'
 
 // ─── Quick actions definition ─────────────────────────────────────────────────
@@ -1066,6 +1065,7 @@ export function Overview({
               <CardContent className="pb-3 grid grid-cols-2 gap-1.5">
                 {([
                   ['articles', 'Articles', <FileText size={13} />],
+                  ['health', 'Health Audit', <HeartPulse size={13} />],
                   ['gsc', 'Search Console', <Globe size={13} />],
                   ['reddit', 'Reddit', <Users size={13} />],
                   ['scheduler', 'Scheduler', <Clock size={13} />],
@@ -1089,10 +1089,6 @@ export function Overview({
         </div>
       </div>
 
-      {/* Full Health Dashboard — sits below the 2-column grid */}
-      <div className="mt-6">
-        <HealthDashboard project={project} />
-      </div>
     </div>
     {/* Landing Page Research Dialog */}
     {lpDialogOpen && (

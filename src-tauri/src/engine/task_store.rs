@@ -451,7 +451,8 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
         "SELECT id, title, url_slug, file, target_keyword, keyword_difficulty,
                 target_volume, published_date, word_count, status,
                 review_status, review_started_at, last_reviewed_at, review_count,
-                content_gaps_addressed, estimated_traffic_monthly, page_type
+                content_gaps_addressed, estimated_traffic_monthly, page_type,
+                content_hash, last_edited_at
          FROM articles WHERE project_id = ?1 ORDER BY id ASC",
     )?;
     let articles: Vec<Article> = stmt
@@ -476,6 +477,8 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
                 content_gaps_addressed: gaps,
                 estimated_traffic_monthly: row.get(15)?,
                 page_type: row.get(16)?,
+                content_hash: row.get(17)?,
+                last_edited_at: row.get(18)?,
                 project_id: project_id.to_string(),
                 quality_score: None,
                 quality_grade: None,

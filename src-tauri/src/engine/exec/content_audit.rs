@@ -146,6 +146,16 @@ pub fn exec_content_audit(
         return e;
     }
 
+    // Update content_hash in articles table for each audited article
+    for result in &results {
+        if let (Some(id), Some(hash)) = (result["id"].as_i64(), result["md5_body_hash"].as_str()) {
+            let _ = db.execute(
+                "UPDATE articles SET content_hash = ?1 WHERE id = ?2 AND project_id = ?3",
+                rusqlite::params![hash, id, &task.project_id],
+            );
+        }
+    }
+
     crate::engine::workflows::StepResult {
         success: true,
         message: format!(

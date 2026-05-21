@@ -21,6 +21,10 @@ use crate::models::task::TaskStatus;
 
 static RUNNER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Default behavior: the queue should continue processing even when individual
+/// tasks fail. Only pause when the user explicitly requests it.
+const DEFAULT_PAUSE_ON_ERROR: bool = false;
+
 /// Guard that ensures RUNNER_ACTIVE is reset when the runner exits,
 /// even if the runner task panics.
 struct RunnerGuard;
@@ -98,7 +102,7 @@ fn create_run(conn: &Connection) -> Result<QueueRun> {
     Ok(QueueRun {
         id,
         status: QueueRunStatus::Idle,
-        pause_on_error: false,
+        pause_on_error: DEFAULT_PAUSE_ON_ERROR,
         created_at: now.clone(),
         updated_at: now,
         started_at: None,
@@ -542,16 +546,26 @@ pub fn dismiss_queue(conn: &Connection) -> Result<()> {
 
 /// Recover any queue items left running from a crashed session.
 pub fn recover_queue_on_startup(conn: &Connection) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+
     // Reset running queue items back to pending
     conn.execute(
         "UPDATE queue_items SET status = 'pending', updated_at = ?1 WHERE status = 'running'",
-        [chrono::Utc::now().to_rfc3339()],
+        [&now],
     )?;
 
     // Reset active runs from running to paused so user can decide to resume
     conn.execute(
         "UPDATE queue_runs SET status = 'paused', updated_at = ?1 WHERE status = 'running'",
-        [chrono::Utc::now().to_rfc3339()],
+        [&now],
+    )?;
+
+    // Reset orphaned in_progress tasks to todo so they can be re-enqueued.
+    // A task can be in_progress with no running queue item if the runner
+    // crashed between starting the task and finishing it.
+    conn.execute(
+        "UPDATE tasks SET status = 'todo', updated_at = ?1 WHERE status = 'in_progress'",
+        [&now],
     )?;
 
     Ok(())
@@ -584,11 +598,11 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
 
     loop {
         // Open a fresh connection each iteration so we don't hold a lock
-        let conn = match Connection::open(&db_path) {
+        let mut conn = match Connection::open(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 log::error!("[queue_runner] Failed to open DB: {}", e);
-                break;
+                break; // terminal: cannot operate without DB
             }
         };
 
@@ -596,29 +610,29 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
             Ok(Some(r)) => r,
             Ok(None) => {
                 log::info!("[queue_runner] No active queue run, exiting");
-                break;
+                break; // terminal: nothing to do
             }
             Err(e) => {
                 log::error!("[queue_runner] Failed to get active run: {}", e);
-                break;
+                break; // terminal: cannot determine run state
             }
         };
 
         if run.status == QueueRunStatus::Paused {
             log::info!("[queue_runner] Queue is paused, exiting runner");
-            break;
+            break; // terminal: user paused the queue
         }
 
         if run.status == QueueRunStatus::Finished || run.status == QueueRunStatus::Failed {
             log::info!("[queue_runner] Queue is finished/failed, exiting runner");
-            break;
+            break; // terminal: run has reached a terminal state
         }
 
         // Start the run if it's idle
         if run.status == QueueRunStatus::Idle {
             if let Err(e) = set_run_started(&conn, &run.id) {
                 log::error!("[queue_runner] Failed to mark run as started: {}", e);
-                break;
+                break; // terminal: cannot transition run to running
             }
         }
 
@@ -659,10 +673,10 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                 }
             }
             Err(e) => {
-                log::error!("[queue_runner] Failed to get next item: {}", e);
-                let _ = set_run_finished(&conn, &run.id, QueueRunStatus::Failed);
-                emit_finished(&app_handle);
-                break;
+                // Transient DB error — log and retry rather than killing the entire run.
+                log::error!("[queue_runner] Failed to get next item: {}. Will retry on next loop iteration.", e);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
             }
         };
 
@@ -672,22 +686,23 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
             item.title.as_deref().unwrap_or("Untitled")
         );
 
-        // Mark as running in queue_items
-        if let Err(e) = update_item_status(
-            &conn,
-            &run.id,
-            &item.task_id,
-            QueueItemStatus::Running,
-            None,
-            None,
-        ) {
-            log::error!("[queue_runner] Failed to mark item as running: {}", e);
-        }
-
-        // Mark underlying task as in_progress
-        if let Err(e) = task_store::update_task_status(&conn, &item.task_id, TaskStatus::InProgress)
-        {
-            log::error!("[queue_runner] Failed to mark task as in_progress: {}", e);
+        // Atomically mark queue item and task as running so they cannot drift
+        // if the app crashes between the two updates.
+        if let Err(e) = (|| -> Result<()> {
+            let tx = conn.transaction()?;
+            update_item_status(
+                &tx,
+                &run.id,
+                &item.task_id,
+                QueueItemStatus::Running,
+                None,
+                None,
+            )?;
+            task_store::update_task_status(&tx, &item.task_id, TaskStatus::InProgress)?;
+            tx.commit()?;
+            Ok(())
+        })() {
+            log::error!("[queue_runner] Failed to mark item/task as running: {}", e);
         }
 
         emit_started(&app_handle, &item);
@@ -725,11 +740,11 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
         .await;
 
         // Re-open connection for updates
-        let conn = match Connection::open(&db_path) {
+        let mut conn = match Connection::open(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 log::error!("[queue_runner] Failed to reopen DB after task: {}", e);
-                break;
+                break; // terminal: cannot persist task result
             }
         };
 
@@ -771,67 +786,88 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                         }
                     }
                 } else {
-                    update_item_status(
-                        &conn,
-                        &run.id,
-                        &item.task_id,
-                        QueueItemStatus::Failed,
-                        Some(&exec_result.message),
-                        result_json.as_deref(),
-                    )
-                    .ok();
+                    if let Err(e) = (|| -> Result<()> {
+                        let tx = conn.transaction()?;
+                        update_item_status(
+                            &tx,
+                            &run.id,
+                            &item.task_id,
+                            QueueItemStatus::Failed,
+                            Some(&exec_result.message),
+                            result_json.as_deref(),
+                        )?;
+                        task_store::update_task_status(&tx, &item.task_id, TaskStatus::Failed)?;
+                        tx.commit()?;
+                        Ok(())
+                    })() {
+                        log::error!("[queue_runner] Failed to persist task failure: {}", e);
+                    }
                     emit_failed(&app_handle, &item, &exec_result.message);
 
                     if run.pause_on_error {
-                        log::warn!("[queue_runner] Pausing queue due to task failure");
+                        log::warn!("[queue_runner] Pausing queue because pause_on_error=true. Task {} failed with: {}", item.task_id, exec_result.message);
                         update_run_status(&conn, &run.id, QueueRunStatus::Paused).ok();
                         emit_finished(&app_handle);
-                        break;
+                        break; // terminal: user requested pause on error
                     }
+                    log::warn!("[queue_runner] Task {} failed but queue continues (pause_on_error=false). Error: {}", item.task_id, exec_result.message);
                 }
             }
             Ok(Err(e)) => {
-                update_item_status(
-                    &conn,
-                    &run.id,
-                    &item.task_id,
-                    QueueItemStatus::Failed,
-                    Some(&e),
-                    None,
-                )
-                .ok();
-                // Ensure the underlying task is marked as failed so it can be retried.
-                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Failed).ok();
+                if let Err(db_err) = (|| -> Result<()> {
+                    let tx = conn.transaction()?;
+                    update_item_status(
+                        &tx,
+                        &run.id,
+                        &item.task_id,
+                        QueueItemStatus::Failed,
+                        Some(&e),
+                        None,
+                    )?;
+                    task_store::update_task_status(&tx, &item.task_id, TaskStatus::Failed)?;
+                    tx.commit()?;
+                    Ok(())
+                })() {
+                    log::error!("[queue_runner] Failed to persist task error: {}", db_err);
+                }
                 emit_failed(&app_handle, &item, &e);
 
                 if run.pause_on_error {
-                    log::warn!("[queue_runner] Pausing queue due to task failure");
+                    log::warn!("[queue_runner] Pausing queue because pause_on_error=true. Task {} errored with: {}", item.task_id, e);
                     update_run_status(&conn, &run.id, QueueRunStatus::Paused).ok();
                     emit_finished(&app_handle);
-                    break;
+                    break; // terminal: user requested pause on error
                 }
+                log::warn!("[queue_runner] Task {} errored but queue continues (pause_on_error=false). Error: {}", item.task_id, e);
             }
             Err(e) => {
                 let err = format!("Task panicked: {:?}", e);
-                update_item_status(
-                    &conn,
-                    &run.id,
-                    &item.task_id,
-                    QueueItemStatus::Failed,
-                    Some(&err),
-                    None,
-                )
-                .ok();
-                // Panic means the executor never got to reset task status — do it here.
-                task_store::update_task_status(&conn, &item.task_id, TaskStatus::Failed).ok();
+                log::error!("TASK PANIC: task_id={} type={} error={}", item.task_id, item.task_type.as_deref().unwrap_or("unknown"), err);
+                if let Err(db_err) = (|| -> Result<()> {
+                    let tx = conn.transaction()?;
+                    update_item_status(
+                        &tx,
+                        &run.id,
+                        &item.task_id,
+                        QueueItemStatus::Failed,
+                        Some(&err),
+                        None,
+                    )?;
+                    task_store::update_task_status(&tx, &item.task_id, TaskStatus::Failed)?;
+                    tx.commit()?;
+                    Ok(())
+                })() {
+                    log::error!("[queue_runner] Failed to persist panic status: {}", db_err);
+                }
                 emit_failed(&app_handle, &item, &err);
 
                 if run.pause_on_error {
-                    log::warn!("[queue_runner] Pausing queue due to task panic");
+                    log::warn!("[queue_runner] Pausing queue because pause_on_error=true. Task {} panicked.", item.task_id);
                     update_run_status(&conn, &run.id, QueueRunStatus::Paused).ok();
                     emit_finished(&app_handle);
-                    break;
+                    break; // terminal: user requested pause on error
                 }
+                log::warn!("[queue_runner] Task {} panicked but queue continues (pause_on_error=false).", item.task_id);
             }
         }
 

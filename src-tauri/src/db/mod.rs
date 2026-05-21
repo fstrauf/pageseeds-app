@@ -1116,6 +1116,34 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 40 {
+        // Add content_hash and last_edited_at to articles for tracking
+        let _ = conn.execute_batch("ALTER TABLE articles ADD COLUMN content_hash TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE articles ADD COLUMN last_edited_at TEXT;");
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (40, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    // Repair: ensure content_hash and last_edited_at exist even if V40 was skipped
+    {
+        let tracking_columns = [
+            ("content_hash", "ALTER TABLE articles ADD COLUMN content_hash TEXT;"),
+            ("last_edited_at", "ALTER TABLE articles ADD COLUMN last_edited_at TEXT;"),
+        ];
+        for (name, sql) in tracking_columns {
+            let has_col: bool = conn
+                .prepare("SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name = ?1")?
+                .query_row([name], |r| r.get::<_, i64>(0))
+                .unwrap_or(0)
+                > 0;
+            if !has_col {
+                conn.execute_batch(sql)?;
+            }
+        }
+    }
+
     if version < 38 {
         // GSC indexing recovery history: track attempts and outcomes per URL
         conn.execute_batch(

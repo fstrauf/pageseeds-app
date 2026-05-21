@@ -279,12 +279,29 @@ pub fn ingest_orphans(
             .replace('\\', "/");
         let file_ref = format!("./{}/{}", content_rel, basename);
 
+        // Compute content hash from file content
+        let content_hash = std::fs::read_to_string(&file_path).ok().map(|content| {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(content.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
+
+        // Get file modification time for last_edited_at
+        let last_edited_at = std::fs::metadata(&file_path)
+            .and_then(|m| m.modified())
+            .ok()
+            .map(|t| {
+                chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+            });
+
         conn.execute(
             "INSERT INTO articles (
                 id, title, url_slug, file, target_keyword, keyword_difficulty,
                 target_volume, published_date, word_count, status,
-                content_gaps_addressed, estimated_traffic_monthly, project_id
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                content_gaps_addressed, estimated_traffic_monthly, project_id,
+                content_hash, last_edited_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             rusqlite::params![
                 next_id,
                 title,
@@ -299,6 +316,8 @@ pub fn ingest_orphans(
                 "[]",
                 Option::<String>::None,
                 project_id,
+                content_hash,
+                last_edited_at,
             ],
         )?;
 

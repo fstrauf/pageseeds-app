@@ -713,6 +713,8 @@ fn enrich_link_metrics(records: &mut [ArticleRecord], project_path: &str) {
             quality_rated_at: None,
             publishing_ready: None,
             quality_breakdown: None,
+            content_hash: None,
+            last_edited_at: None,
         })
         .collect();
 
