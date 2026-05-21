@@ -23,21 +23,9 @@ pub struct CleaningResult {
     pub issues_fixed: usize,
 }
 
-/// Parse YAML frontmatter from MDX content.
-/// Returns (frontmatter_str, body_str) or None if no frontmatter found.
+/// Parse YAML frontmatter from MDX content — delegates to `frontmatter::split_mdx`.
 pub fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
-    if !content.starts_with("---\n") {
-        return None;
-    }
-    // Find closing \n---\n (more precise than \n--- to avoid matching --- inside YAML values)
-    let after_open = &content[4..];
-    let close = after_open.find("\n---\n")?;
-    let fm = &after_open[..close];
-    let body_start = close + 5; // skip \n---\n
-    let body = after_open[body_start..]
-        .strip_prefix('\n')
-        .unwrap_or(&after_open[body_start..]);
-    Some((fm, body))
+    crate::content::frontmatter::split_mdx(content)
 }
 
 /// Extract a quoted string value from YAML frontmatter.

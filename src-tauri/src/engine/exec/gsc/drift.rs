@@ -485,7 +485,7 @@ fn diagnose_url(content_dir: Option<&std::path::Path>, url: &str) -> Vec<String>
     }
 
     // Check for canonical mismatch
-    let canonical = extract_frontmatter_string(&content, "canonical");
+    let canonical = crate::content::frontmatter::extract_frontmatter_string(&content, "canonical");
     if let Some(canonical_url) = canonical {
         let canonical_slug = crate::content::slug::extract_slug_from_url(&canonical_url);
         if canonical_slug != target {
@@ -494,7 +494,7 @@ fn diagnose_url(content_dir: Option<&std::path::Path>, url: &str) -> Vec<String>
     }
 
     // Check for missing description
-    if extract_frontmatter_string(&content, "description").is_none() {
+    if crate::content::frontmatter::extract_frontmatter_string(&content, "description").is_none() {
         issues.push("missing meta description".to_string());
     }
 
@@ -506,29 +506,6 @@ fn diagnose_url(content_dir: Option<&std::path::Path>, url: &str) -> Vec<String>
 
     issues
 }
-
-fn extract_frontmatter_string(content: &str, key: &str) -> Option<String> {
-    // Simple frontmatter parser: looks for `key: value` before the first `---` or empty line
-    let prefix = format!("{}:", key);
-    for line in content.lines() {
-        if line.trim() == "---" {
-            break;
-        }
-        let trimmed = line.trim_start();
-        if trimmed.starts_with(&prefix) {
-            let val = trimmed[prefix.len()..]
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'');
-            if !val.is_empty() {
-                return Some(val.to_string());
-            }
-        }
-    }
-    None
-}
-
-
 
 fn build_candidate(
     drift_url: &DriftUrl,

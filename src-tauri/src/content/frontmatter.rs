@@ -392,6 +392,16 @@ pub fn split_field_line(line: &str) -> Option<(&str, &str)> {
     Some((key, val))
 }
 
+/// Extract a single top-level scalar value from MDX frontmatter by key.
+///
+/// Delegates to `split_mdx` + `parse` for canonical YAML parsing.
+/// Returns the string value if the key exists and is a scalar, or `None`.
+pub fn extract_frontmatter_string(content: &str, key: &str) -> Option<String> {
+    let (fm_text, _body) = split_mdx(content)?;
+    let parsed = parse(fm_text).ok()?;
+    parsed.parsed.get(key)?.as_str().map(|s| s.to_string())
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════════

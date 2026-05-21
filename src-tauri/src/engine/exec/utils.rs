@@ -17,26 +17,32 @@ pub fn read_source_file(repo_root: &std::path::Path, file_ref: &str) -> Option<S
 }
 
 /// Parse YAML frontmatter from an MDX/markdown source string.
+///
+/// Delegates to `frontmatter::split_mdx` + `frontmatter::parse` — the
+/// single source of truth for frontmatter parsing.
 /// Returns (frontmatter_map, body_string).
 pub fn parse_frontmatter(
     source: &str,
 ) -> (std::collections::HashMap<String, String>, String) {
     let mut fm = std::collections::HashMap::new();
-    if !source.starts_with("---") {
-        return (fm, source.to_string());
-    }
-    let end = match source[3..].find("\n---") {
-        Some(i) => i + 3,
+
+    let (fm_text, body) = match crate::content::frontmatter::split_mdx(source) {
+        Some((t, b)) => (t, b.to_string()),
         None => return (fm, source.to_string()),
     };
-    let fm_text = &source[3..end];
-    let body = source[end + 4..].trim_start().to_string();
-    for line in fm_text.lines() {
-        if let Some((k, v)) = line.split_once(':') {
-            let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-            fm.insert(k.trim().to_string(), val);
+
+    if let Ok(parsed) = crate::content::frontmatter::parse(fm_text) {
+        if let Some(mapping) = parsed.parsed.as_mapping() {
+            for (key, value) in mapping {
+                if let Some(k) = key.as_str() {
+                    if let Some(v) = value.as_str() {
+                        fm.insert(k.to_string(), v.to_string());
+                    }
+                }
+            }
         }
     }
+
     (fm, body)
 }
 

@@ -85,10 +85,10 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
         if let Ok(content) = std::fs::read_to_string(path) {
             ctx.word_count = crate::content::ops::count_words(&content);
             ctx.h1 = extract_first_h1(&content);
-            ctx.title = extract_frontmatter_string(&content, "title");
-            ctx.meta_description = extract_frontmatter_string(&content, "description");
-            ctx.canonical = extract_frontmatter_string(&content, "canonical");
-            ctx.publish_date = extract_frontmatter_string(&content, "date");
+            ctx.title = crate::content::frontmatter::extract_frontmatter_string(&content, "title");
+            ctx.meta_description = crate::content::frontmatter::extract_frontmatter_string(&content, "description");
+            ctx.canonical = crate::content::frontmatter::extract_frontmatter_string(&content, "canonical");
+            ctx.publish_date = crate::content::frontmatter::extract_frontmatter_string(&content, "date");
             ctx.internal_links = extract_internal_links(&content);
             ctx.internal_link_count = ctx.internal_links.len();
         }
@@ -318,25 +318,6 @@ fn extract_first_h1(content: &str) -> Option<String> {
     for line in content.lines() {
         if line.trim_start().starts_with("# ") {
             return Some(line.trim_start_matches("# ").trim().to_string());
-        }
-    }
-    None
-}
-
-fn extract_frontmatter_string(content: &str, key: &str) -> Option<String> {
-    if !content.starts_with("---") {
-        return None;
-    }
-    if let Some(end) = content.find("\n---\n") {
-        let fm = &content[4..end];
-        for line in fm.lines() {
-            if let Some(pos) = line.find(':') {
-                let k = line[..pos].trim();
-                if k == key {
-                    let v = line[pos + 1..].trim().trim_matches('"').trim_matches('\'');
-                    return Some(v.to_string());
-                }
-            }
         }
     }
     None
