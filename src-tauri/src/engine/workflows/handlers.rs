@@ -247,6 +247,7 @@ impl WorkflowHandler for ImplementationHandler {
                 | "fix_indexing_internal_links"
                 | "gsc_indexing_outcome_review"
                 | "indexing_health_campaign"
+                | "generate_feature_spec"
         ) || t.starts_with("fix_")
     }
 

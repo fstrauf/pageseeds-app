@@ -65,6 +65,16 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Implementation,
     },
+    // Deterministic landing page spec: write structured spec from keyword metadata.
+    // Shared handler with create_landing_page; no LLM needed.
+    TaskDefinition {
+        task_type: "landing_page_spec",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
+        handler_family: HandlerFamily::Implementation,
+    },
     TaskDefinition {
         task_type: "create_content",
         phase: "implementation",
@@ -231,6 +241,32 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
+    // Additional Implementation task types registered in handlers but previously
+    // missing from definitions (falling through to silent defaults).
+    TaskDefinition {
+        task_type: "technical_fix",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
+    TaskDefinition {
+        task_type: "content_strategy",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
+    TaskDefinition {
+        task_type: "publish_content",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
     // GSC Indexing Recovery Campaign
     // Parent campaign task: refreshes GSC/link data, computes drift, plans targets,
     // and spawns focused fix_indexing_internal_links children via post-actions.
@@ -271,6 +307,16 @@ const DEFINITIONS: &[TaskDefinition] = &[
         run_policy: TaskRunPolicy::UserEnqueue,
         review_surface: TaskReviewSurface::None,
         follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
+    // Cluster and link: scanned link graph + strategize + apply Related Articles.
+    // Auto-enqueued by post-actions after article creation. Uses 3-step plan.
+    TaskDefinition {
+        task_type: "cluster_and_link",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Implementation,
     },
     TaskDefinition {
@@ -395,6 +441,16 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Research,
     },
+    // Territory research: 4-step pipeline (load recommendation → build context →
+    // strategy → apply). Fully implemented with dedicated TerritoryResearchHandler.
+    TaskDefinition {
+        task_type: "territory_research",
+        phase: "research",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::UserSelection,
+        handler_family: HandlerFamily::TerritoryResearch,
+    },
     // Calculator rollout (stub — full handler in Phase 6)
     TaskDefinition {
         task_type: "calculator_rollout",
@@ -460,6 +516,32 @@ const DEFINITIONS: &[TaskDefinition] = &[
     },
     TaskDefinition {
         task_type: "social_save_template",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Social,
+    },
+    // Additional social task types registered in SocialHandler but previously
+    // missing from definitions.
+    TaskDefinition {
+        task_type: "social_generate_from_article",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Social,
+    },
+    TaskDefinition {
+        task_type: "social_regenerate_post",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Social,
+    },
+    TaskDefinition {
+        task_type: "social_create_template",
         phase: "implementation",
         run_policy: TaskRunPolicy::UserEnqueue,
         review_surface: TaskReviewSurface::None,
