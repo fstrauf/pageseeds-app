@@ -1,4 +1,4 @@
-use super::{extract_json_array, load_search_params_from_artifact};
+use super::load_search_params_from_artifact;
 use crate::models::task::Task;
 use rusqlite::Connection;
 use std::path::Path;
@@ -396,12 +396,19 @@ Return ONLY the raw JSON array."#,
         }
     };
 
-    let json_str = extract_json_array(&output);
-    let enrichments: Vec<serde_json::Value> = match serde_json::from_str(&json_str) {
-        Ok(serde_json::Value::Array(arr)) => arr,
-        _ => {
+    let enrichments: Vec<serde_json::Value> = match crate::engine::text::extract_json(&output) {
+        Some(value) => match value {
+            serde_json::Value::Array(arr) => arr,
+            _ => {
+                let preview = crate::engine::text::char_prefix(&output, 300);
+                log::warn!("[reddit_enrich] agent output is not a JSON array — first 300 chars: {:?}",
+                    preview);
+                return;
+            }
+        },
+        None => {
             let preview = crate::engine::text::char_prefix(&output, 300);
-            log::warn!("[reddit_enrich] could not parse agent output as JSON array — first 300 chars: {:?}",
+            log::warn!("[reddit_enrich] could not extract JSON from agent output — first 300 chars: {:?}",
                 preview);
             return;
         }

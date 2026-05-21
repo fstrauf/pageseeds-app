@@ -339,6 +339,7 @@ pub(crate) fn extract_post_details_from_task(task: &Task) -> Option<(String, Str
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Strip markdown code fences and extract the first JSON array from agent output.
+#[allow(dead_code)]
 pub(crate) fn extract_json_array(output: &str) -> String {
     let trimmed = output.trim();
     if let Some(start) = trimmed.find('[') {
