@@ -763,7 +763,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
         );
         assert!(first_paragraph.contains("test article?") || first_paragraph.contains('?'));
         assert!(
-            first_paragraph.split_whitespace().count()
+            crate::content::ops::count_words(&first_paragraph)
                 <= crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
         );
 

@@ -148,7 +148,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         } else {
             published_date
         };
-        let word_count = first_200_words.split_whitespace().count();
+        let word_count = crate::content::ops::count_words(&first_200_words);
 
         let page_type = article["page_type"].as_str().map(String::from);
         let combined_text = format!("{} {} {} {}", title, h1, target_keyword, first_200_words);

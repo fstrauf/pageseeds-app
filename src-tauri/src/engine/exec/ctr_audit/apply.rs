@@ -430,7 +430,7 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
             CtrFixType::SnippetBait => {
                 let keyword_lower = target_keyword.to_lowercase();
                 // Backward-compatible check: first paragraph
-                let word_count = first_paragraph.split_whitespace().count();
+                let word_count = crate::content::ops::count_words(&first_paragraph);
                 let has_kw_or_q = keyword_lower.is_empty()
                     || first_paragraph.to_lowercase().contains(&keyword_lower)
                     || first_paragraph.contains('?');
@@ -597,7 +597,7 @@ fn check_snippet_structure(body: &str, keyword_lower: &str) -> SnippetCheck {
                     }
                     if !next.starts_with('|') && !next.starts_with("1.") && !next.starts_with("- ")
                     {
-                        word_count += next.split_whitespace().count();
+                        word_count += crate::content::ops::count_words(&next);
                     }
                 }
                 result.answer_word_count = word_count;

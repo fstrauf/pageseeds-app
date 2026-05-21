@@ -266,7 +266,7 @@ fn analyze_structure(content: &ContentToAnalyze) -> QualityDetails {
     }
 
     // Word count
-    let word_count = text.split_whitespace().count();
+    let word_count = crate::content::ops::count_words(text);
 
     // Paragraph analysis
     let _paragraphs: Vec<&str> = text

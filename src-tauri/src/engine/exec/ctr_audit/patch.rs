@@ -57,7 +57,7 @@ pub(crate) fn normalize_patch_before_validation(
     if let Some(first_paragraph) = patch.changes.first_paragraph.as_mut() {
         normalize_whitespace_in_place(first_paragraph, "first_paragraph whitespace", &mut repairs);
 
-        let word_count = first_paragraph.split_whitespace().count();
+        let word_count = crate::content::ops::count_words(first_paragraph);
         let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
         if word_count > max_words && word_count <= max_words + 5 {
             *first_paragraph = first_paragraph
@@ -105,7 +105,7 @@ pub(crate) fn normalize_patch_before_validation(
             "snippet answer whitespace",
             &mut repairs,
         );
-        let word_count = snippet.answer_paragraph.split_whitespace().count();
+        let word_count = crate::content::ops::count_words(&snippet.answer_paragraph);
         let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
         if word_count > max_words && word_count <= max_words + 5 {
             snippet.answer_paragraph = snippet
@@ -162,7 +162,7 @@ pub(crate) fn validate_patch_before_write(
     }
 
     if let Some(first_paragraph) = patch.changes.first_paragraph.as_deref() {
-        let word_count = first_paragraph.split_whitespace().count();
+        let word_count = crate::content::ops::count_words(first_paragraph);
         if word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
             || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
         {
@@ -217,7 +217,7 @@ pub(crate) fn validate_patch_before_write(
     }
 
     if let Some(snippet) = patch.changes.snippet_patch.as_ref() {
-        let answer_word_count = snippet.answer_paragraph.split_whitespace().count();
+        let answer_word_count = crate::content::ops::count_words(&snippet.answer_paragraph);
         if answer_word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
             || answer_word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
         {
@@ -339,7 +339,7 @@ pub(crate) fn validate_patch_against_recommendation(
         && patch.changes.first_paragraph.is_none()
         && patch.changes.snippet_patch.is_none()
     {
-        let word_count = current_first.split_whitespace().count();
+        let word_count = crate::content::ops::count_words(&current_first);
         if word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
             || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
         {
@@ -472,7 +472,7 @@ fn has_keyword_or_question(value: &str, target_keyword: &str) -> bool {
 
 fn add_keyword_or_question_marker(value: &mut String, target_keyword: &str) {
     let keyword_word_count = target_keyword.split_whitespace().count();
-    let word_count = value.split_whitespace().count();
+    let word_count = crate::content::ops::count_words(value);
     let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
     if !target_keyword.is_empty() && word_count + keyword_word_count <= max_words {
         if !value.ends_with(' ') {

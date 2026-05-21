@@ -363,7 +363,7 @@ Only include fields that need to change. Do not include title/description/intro 
         meta_min = meta_min,
         meta_max = meta_max,
         current_first = current_first,
-        first_words = current_first.split_whitespace().count(),
+        first_words = crate::content::ops::count_words(&current_first),
         has_faq = if has_faq {
             "yes — do NOT generate faq_questions"
         } else {

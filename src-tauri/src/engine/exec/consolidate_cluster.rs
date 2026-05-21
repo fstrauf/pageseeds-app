@@ -310,7 +310,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
             })
             .unwrap_or_else(|| slug.replace('-', " "));
 
-        let word_count = body.split_whitespace().count();
+        let word_count = crate::content::ops::count_words(&body);
 
         // Excerpt: first 200 chars of body
         const EXCERPT_CHARS: usize = 200;
@@ -636,7 +636,7 @@ pub(crate) fn exec_merge_apply_patch(
     // Validate MDX structure
     let validation = crate::content::cleaner::validate_mdx_structure(&modified);
 
-    let word_count = modified.split_whitespace().count();
+    let word_count = crate::content::ops::count_words(&modified);
 
     StepResult {
         success: validation.is_ok(),
@@ -797,7 +797,7 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
     let word_count = keeper_file
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|c| c.split_whitespace().count())
+        .map(|c| crate::content::ops::count_words(&c))
         .unwrap_or(0);
 
     let csv_path = paths.automation_dir.join("redirects.csv");

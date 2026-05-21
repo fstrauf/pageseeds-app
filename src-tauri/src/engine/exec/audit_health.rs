@@ -95,7 +95,7 @@ pub fn check_article_health(
     let title_ok = title.len() <= TITLE_MAX_LEN;
     let meta_ok = !meta.is_empty() && meta.len() >= META_MIN_LEN && meta.len() <= META_MAX_LEN;
 
-    let snippet_word_count = first_paragraph.split_whitespace().count();
+    let snippet_word_count = crate::content::ops::count_words(first_paragraph);
     let first_lower = first_paragraph.to_lowercase();
     let keyword_lower = target_keyword.to_lowercase();
     let snippet_has_keyword_or_question = keyword_lower.is_empty()

@@ -129,7 +129,7 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         let first_para = crate::content::cleaner::find_first_paragraph_range(body)
             .map(|(start, end)| body[start..end].trim().to_string())
             .unwrap_or_default();
-        let word_count = first_para.split_whitespace().count();
+        let word_count = crate::content::ops::count_words(&first_para);
         let snippet_min = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
         let snippet_max = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
         if word_count >= snippet_min && word_count <= snippet_max {

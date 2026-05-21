@@ -56,8 +56,6 @@ pub fn exec_content_audit(
     // Previously each article re-compiled 4 regexes — for 500 articles that's
     // 2000 regex compilations, each allocating significant temporary memory.
     let code_block_re = Regex::new(r"(?s)```.*?```").unwrap();
-    let link_syntax_re = Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap();
-    let md_syntax_re = Regex::new(r"[#*_`>|]").unwrap();
     let link_extract_re = Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
     // Detect malformed links like `[text]/blog/slug` (missing parentheses)
     let malformed_link_re = Regex::new(r"\][ \t]*(/blog/[^)\s]*)").unwrap();
@@ -74,8 +72,6 @@ pub fn exec_content_audit(
                 &paths.repo_root,
                 &num_prefix_re,
                 &code_block_re,
-                &link_syntax_re,
-                &md_syntax_re,
                 &link_extract_re,
                 &malformed_link_re,
                 &temporal_url_re,
@@ -171,13 +167,11 @@ pub fn exec_content_audit(
 }
 
 /// Run all deterministic checks on one article, return an audit record Value.
-pub(crate) fn audit_one_article(
+    pub(crate) fn audit_one_article(
     article: &crate::models::article::Article,
     repo_root: &std::path::Path,
     num_prefix_re: &regex::Regex,
     code_block_re: &regex::Regex,
-    link_syntax_re: &regex::Regex,
-    md_syntax_re: &regex::Regex,
     link_extract_re: &regex::Regex,
     malformed_link_re: &regex::Regex,
     temporal_url_re: &regex::Regex,
@@ -253,14 +247,7 @@ pub(crate) fn audit_one_article(
         })
         .count();
 
-    // Word count (strip markdown syntax) — reuse pre-compiled regexes
-    let plain = {
-        let no_code = code_block_re.replace_all(&body, " ");
-        let no_links = link_syntax_re.replace_all(&no_code, "$1");
-        let no_md = md_syntax_re.replace_all(&no_links, " ");
-        no_md.into_owned()
-    };
-    let actual_word_count = plain.split_whitespace().count();
+    let actual_word_count = crate::content::ops::count_words(&body);
 
     // Keyword density — avoid full body.to_lowercase() by searching case-insensitively
     let kw_count = if keyword.is_empty() {

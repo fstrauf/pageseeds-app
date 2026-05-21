@@ -44,7 +44,7 @@ pub fn validate_reply(text: &str) -> ValidationResult {
             )),
         };
     }
-    let word_count = text.split_whitespace().count();
+    let word_count = crate::content::ops::count_words(text);
     if word_count < 30 {
         return ValidationResult {
             valid: false,

@@ -154,7 +154,7 @@ Rules:
         };
     }
 
-    let word_count = spec_content.split_whitespace().count();
+    let word_count = crate::content::ops::count_words(&spec_content);
     StepResult {
         success: true,
         message: format!(
