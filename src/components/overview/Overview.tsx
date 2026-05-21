@@ -5,7 +5,7 @@ import {
   PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
-import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths, runHealthAudit, updateTaskStatus } from '../../lib/tauri'
+import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, openFeatureSpecInVSCode, repairArticlePaths, runHealthAudit, updateTaskStatus } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
 import type { Article, LandingPageResearchPending, PendingFeatureSpec, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -394,6 +394,20 @@ function PendingFeatureSpecCard({
                 {relativeDate(item.updated_at)}
               </p>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-[11px] px-2 py-0 text-muted-foreground hover:text-foreground"
+              onClick={async () => {
+                try {
+                  await openFeatureSpecInVSCode(item.id)
+                } catch (e: unknown) {
+                  // ignore — user will see if VS Code doesn't open
+                }
+              }}
+            >
+              Open
+            </Button>
             <Button
               variant="outline"
               size="sm"

@@ -138,7 +138,9 @@ Rules:
         }
     };
 
-    let spec_path = automation_dir.join("seo_feature_spec.md");
+    // Use a unique filename per task so multiple specs don't clobber each other
+    let spec_filename = format!("seo_feature_spec_{}.md", task.id);
+    let spec_path = automation_dir.join(&spec_filename);
     if let Err(e) = std::fs::create_dir_all(automation_dir) {
         return StepResult {
             success: false,
@@ -154,7 +156,13 @@ Rules:
         };
     }
 
+    // Also write a stable symlink/latest reference for convenience
+    let latest_path = automation_dir.join("seo_feature_spec.md");
+    let _ = std::fs::remove_file(&latest_path);
+    let _ = std::fs::hard_link(&spec_path, &latest_path);
+
     let word_count = crate::content::ops::count_words(&spec_content);
+
     StepResult {
         success: true,
         message: format!(

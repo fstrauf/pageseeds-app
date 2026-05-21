@@ -137,3 +137,62 @@ pub fn get_content_audit_report(
 
     Ok(value)
 }
+
+/// Open a generated feature spec markdown file in the user's default editor.
+/// Uses VS Code when available, otherwise falls back to the system default.
+#[tauri::command]
+pub fn open_feature_spec_in_vscode(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    // 1. Find the task to get its project
+    let task = task_store::get_task(&db, &task_id).map_err(|e| e.to_string())?;
+    let project = task_store::get_project(&db, &task.project_id).map_err(|e| e.to_string())?;
+
+    // 2. Build the unique spec path: seo_feature_spec_{task_id}.md
+    let repo_root = std::path::Path::new(&project.path);
+    let spec_path = repo_root
+        .join(".github")
+        .join("automation")
+        .join(format!("seo_feature_spec_{}.md", task_id));
+
+    // Fallback to the latest symlink if the unique file doesn't exist
+    let path_to_open = if spec_path.exists() {
+        spec_path
+    } else {
+        repo_root.join(".github").join("automation").join("seo_feature_spec.md")
+    };
+
+    if !path_to_open.exists() {
+        return Err(format!(
+            "Feature spec not found at {}",
+            path_to_open.display()
+        ));
+    }
+
+    // 3. Open in VS Code (platform-specific)
+    let path_str = path_to_open.to_string_lossy().to_string();
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .args(["-b", "com.microsoft.VSCode", &path_str])
+            .spawn()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/c", "code", &path_str])
+            .spawn()
+    } else {
+        std::process::Command::new("code")
+            .arg(&path_str)
+            .spawn()
+    };
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!(
+            "Failed to open VS Code ({}). Is 'code' in your PATH?",
+            e
+        )),
+    }
+}

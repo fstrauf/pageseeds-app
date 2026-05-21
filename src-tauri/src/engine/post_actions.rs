@@ -561,11 +561,12 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         ctx.task.task_type.as_str(),
         "content_review" | "content_audit" | "ctr_audit" | "indexing_health_campaign"
     ) {
+        // Deduplicate by audit type (not by parent task id) so re-running the same
+        // audit type within the cooldown window does not create duplicate specs.
         let idempotency_key = format!(
-            "feature_spec:{}:{}:{}",
+            "feature_spec:{}:{}",
             ctx.task.project_id,
-            ctx.task.task_type,
-            ctx.task.id
+            ctx.task.task_type
         );
         let spec = crate::engine::spawner::TaskSpec {
             project_id: ctx.task.project_id.clone(),
@@ -583,6 +584,7 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
             agent_policy: crate::models::task::AgentPolicy::Required,
             depends_on: vec![ctx.task.id.clone()],
             idempotency_key: Some(idempotency_key),
+            dedup_policy: Some(crate::engine::spawner::DeduplicationPolicy::Cooldown { days: 30 }),
             ..Default::default()
         };
         match crate::engine::spawner::TaskSpawner::spawn(ctx.conn, spec) {

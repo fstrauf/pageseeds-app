@@ -136,6 +136,9 @@ export const getIndexingHealthSummary = (projectId: string): Promise<{
 }> =>
   invoke('get_indexing_health_summary', { projectId })
 
+export const openFeatureSpecInVSCode = (taskId: string): Promise<void> =>
+  invoke('open_feature_spec_in_vscode', { taskId })
+
 export const investigate = (
   projectId: string,
   question: string,
