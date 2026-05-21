@@ -78,16 +78,11 @@ fn set_last_tokens(prompt: Option<u64>, completion: Option<u64>) {
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-/// Run an agent with the given prompt and return the captured stdout.
+/// Run an agent prompt through the standard agent pipeline.
 ///
-/// This function now delegates to `crate::rig::provider` when a rig-compatible
-/// backend is available (bridge, Claude, OpenAI, Ollama). It falls back to the
-/// direct CLI subprocess (`agent-wrapper`) only for `KimiDirect` or when the
-/// bridge health check fails.
-///
-/// The function is still **synchronous** to maintain backward compatibility
-/// with all existing step executors. Internally it uses `block_on` when an
-/// async rig backend is selected.
+/// This is the single entry point for all agent calls in the codebase.
+/// Bypass callers should use this (or `run_agent_with_skill`) instead of
+/// constructing prompts and calling `run_agent` directly with inline prompts.
 ///
 /// **Backend routing:** This function defaults to `direct` mode for the Kimi
 /// bridge, which is appropriate for stateless analysis and short generation
@@ -95,6 +90,43 @@ fn set_last_tokens(prompt: Option<u64>, completion: Option<u64>) {
 /// should call `run_agent_with_backend(..., Some("acp"))` explicitly.
 pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<String, String> {
     run_agent_with_backend(provider, prompt, project_path, Some("direct"))
+}
+
+/// Load a skill, assemble a prompt, and run it through the agent pipeline.
+///
+/// Standardizes the pattern repeated across 13 exec modules:
+/// 1. Load skill from project repo or app defaults
+/// 2. Build prompt from skill content + context + output contract
+/// 3. Call the agent
+/// 4. Return raw output (caller handles JSON extraction and domain logic)
+///
+/// `output_contract` is appended as an "## Output Contract" section instructing
+/// the agent to return JSON matching a specific schema.
+pub fn run_agent_with_skill(
+    skill_name: &str,
+    repo_root: &Path,
+    context: &str,
+    agent_provider: &str,
+    output_contract: &str,
+) -> Result<String, String> {
+    let skill = crate::engine::skills::load_skill(repo_root, skill_name).ok_or_else(|| {
+        format!(
+            "Skill '{}' not found in .github/skills/ or app defaults",
+            skill_name
+        )
+    })?;
+
+    let prompt = format!(
+        "{}\n\n---\n\n## Context\n\n{}\n\n## Output Contract\n\n{}\n\n\
+         CRITICAL: Return ONLY a single JSON object matching the Output Contract above. \
+         Do not include markdown prose, summaries, tables, or explanations outside the JSON. \
+         Do not write files. Output the JSON directly in your response.",
+        skill.content,
+        context,
+        output_contract,
+    );
+
+    run_agent(agent_provider, &prompt, repo_root)
 }
 
 /// Run an agent with an optional backend preference for the Kimi bridge.

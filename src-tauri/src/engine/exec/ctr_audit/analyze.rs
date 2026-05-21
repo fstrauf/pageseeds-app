@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;
-use crate::engine::{agent, skills};
 use crate::models::ctr::CtrRecommendation;
 use crate::models::task::Task;
 
@@ -53,102 +52,86 @@ pub(crate) fn exec_ctr_analyze(
 
     let repo_root = Path::new(project_path);
 
-    let skill = match skills::load_skill(repo_root, "ctr-optimization") {
-        Some(s) => s,
-        None => {
+    let output = match crate::engine::agent::run_agent_with_skill(
+        "ctr-optimization",
+        repo_root,
+        &context_json,
+        agent_provider,
+        "{\"recommendations\":[{\"article_id\":0,\"article_title\":\"\",\"target_keyword\":\"\",\
+         \"fixes\":[{\"fix_type\":\"title_bait|meta_description|snippet_bait|faq_schema\",\
+         \"reason\":\"\",\"current_text\":\"\"}],\"priority\":0,\"clicks_lost\":0.0}]}",
+    ) {
+        Ok(o) => o,
+        Err(e) => {
             return StepResult {
                 success: false,
-                message: "Skill 'ctr-optimization' not found in .github/skills/ or app defaults"
-                    .to_string(),
+                message: format!("Agent error during CTR analysis: {}", e),
                 output: None,
             };
         }
     };
 
-    let prompt = skill.content
-        + "\n\n---\n\n## CTR Audit Context\n\n"
-        + &context_json
-        + "\n\nPlease analyze the above context and provide actionable CTR optimization recommendations."
-        + "\n\nCRITICAL: Return ONLY a single JSON object matching the Output Contract above."
-        + " Do not include markdown prose, summaries, tables, or explanations outside the JSON."
-        + " Do not write files. Output the JSON directly in your response.";
-
-    match agent::run_agent(agent_provider, &prompt, repo_root) {
-        Ok(output) => {
-            let extracted = crate::engine::text::extract_json(&output);
-            let final_output = match extracted {
-                Some(ref val) => {
-                    // Per-article mode: if the context has exactly one article,
-                    // extract the single recommendation so downstream fix steps
-                    // receive a plain CtrRecommendation instead of CtrAgentOutput.
-                    let articles = context_doc["articles"].as_array();
-                    let is_single_article = articles.map(|a| a.len()).unwrap_or(0) == 1;
-                    if is_single_article {
-                        if let Some(recs) = val["recommendations"].as_array() {
-                            if let Some(first) = recs.first() {
-                                serde_json::to_string_pretty(first)
-                                    .unwrap_or_else(|_| output.clone())
-                            } else {
-                                // Empty recommendations array: agent found no fixes.
-                                // Construct a valid CtrRecommendation with fixes: [] so
-                                // downstream steps can parse it and short-circuit gracefully.
-                                let article = context_doc["articles"]
-                                    .as_array()
-                                    .and_then(|a| a.first())
-                                    .unwrap_or(&serde_json::Value::Null);
-                                let rec = CtrRecommendation {
-                                    article_id: article["id"].as_i64().unwrap_or(0),
-                                    url_slug: article["url_slug"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    file: article["file"].as_str().unwrap_or("").to_string(),
-                                    target_keyword: article["target_keyword"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    fixes: vec![],
-                                    priority: None,
-                                    expected_ctr_improvement: None,
-                                };
-                                serde_json::to_string_pretty(&rec)
-                                    .unwrap_or_else(|_| output.clone())
-                            }
-                        } else {
-                            serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
-                        }
+    let extracted = crate::engine::text::extract_json(&output);
+    let final_output = match extracted {
+        Some(ref val) => {
+            let articles = context_doc["articles"].as_array();
+            let is_single_article = articles.map(|a| a.len()).unwrap_or(0) == 1;
+            if is_single_article {
+                if let Some(recs) = val["recommendations"].as_array() {
+                    if let Some(first) = recs.first() {
+                        serde_json::to_string_pretty(first)
+                            .unwrap_or_else(|_| output.clone())
                     } else {
-                        serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
+                        let article = context_doc["articles"]
+                            .as_array()
+                            .and_then(|a| a.first())
+                            .unwrap_or(&serde_json::Value::Null);
+                        let rec = CtrRecommendation {
+                            article_id: article["id"].as_i64().unwrap_or(0),
+                            url_slug: article["url_slug"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            file: article["file"].as_str().unwrap_or("").to_string(),
+                            target_keyword: article["target_keyword"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            fixes: vec![],
+                            priority: None,
+                            expected_ctr_improvement: None,
+                        };
+                        serde_json::to_string_pretty(&rec)
+                            .unwrap_or_else(|_| output.clone())
                     }
+                } else {
+                    serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
                 }
-                None => {
-                    let preview = crate::engine::text::char_prefix(&output, 300);
-                    log::warn!(
-                        "[ctr_audit] Agent response contained no parseable JSON. Preview: {:?}",
-                        preview
-                    );
-                    return StepResult {
-                        success: false,
-                        message: format!(
-                            "CTR analysis agent did not return valid JSON. \
-                             The prompt asked for a JSON object but the agent responded with non-JSON text. \
-                             Preview: {:?}",
-                            preview
-                        ),
-                        output: Some(output),
-                    };
-                }
-            };
-            StepResult {
-                success: true,
-                message: "CTR analysis completed".to_string(),
-                output: Some(final_output),
+            } else {
+                serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Agent error during CTR analysis: {}", e),
-            output: None,
-        },
+        None => {
+            let preview = crate::engine::text::char_prefix(&output, 300);
+            log::warn!(
+                "[ctr_audit] Agent response contained no parseable JSON. Preview: {:?}",
+                preview
+            );
+            return StepResult {
+                success: false,
+                message: format!(
+                    "CTR analysis agent did not return valid JSON. \
+                     The prompt asked for a JSON object but the agent responded with non-JSON text. \
+                     Preview: {:?}",
+                    preview
+                ),
+                output: Some(output),
+            };
+        }
+    };
+    StepResult {
+        success: true,
+        message: "CTR analysis completed".to_string(),
+        output: Some(final_output),
     }
 }
