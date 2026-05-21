@@ -980,6 +980,24 @@ pub(crate) fn spawn_campaign_children(
         })
         .collect();
 
+    // Load content audit so fix_content specs get actual failed checks
+    let audit_path = paths.automation_dir.join("content_audit.json");
+    let audit_doc: serde_json::Value = std::fs::read_to_string(&audit_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({"articles": []}));
+    let audit_articles = audit_doc["articles"].as_array().cloned().unwrap_or_default();
+    let mut audit_by_file: HashMap<String, &serde_json::Value> = HashMap::new();
+    let mut audit_by_slug: HashMap<String, &serde_json::Value> = HashMap::new();
+    for a in &audit_articles {
+        if let Some(f) = a["file"].as_str() {
+            if !f.is_empty() { audit_by_file.insert(f.to_string(), a); }
+        }
+        if let Some(s) = a["url_slug"].as_str() {
+            if !s.is_empty() { audit_by_slug.insert(s.to_string(), a); }
+        }
+    }
+
     let mut created_ids: Vec<String> = Vec::new();
 
     for target in &plan.targets {
@@ -1010,8 +1028,15 @@ pub(crate) fn spawn_campaign_children(
             }
         }
 
+        // Look up audit row for this target so fix_content gets real issues
+        let audit_row = ctx.and_then(|c| {
+            audit_by_file.get(&c.target.file)
+                .or_else(|| audit_by_slug.get(&c.target.slug))
+                .copied()
+        });
+
         let spec = match target.recommended_action.as_str() {
-            "fix_content" => Some(build_fix_content_spec(parent_task, target, ctx)),
+            "fix_content" => Some(build_fix_content_spec(parent_task, target, ctx, audit_row)),
             "add_links" => Some(build_add_links_spec(parent_task, target, ctx)),
             "rewrite_title_h1" => Some(build_rewrite_spec(parent_task, target, ctx)),
             "merge" => {
@@ -1058,6 +1083,7 @@ fn build_fix_content_spec(
     parent: &Task,
     target: &IndexingTargetPlan,
     ctx: Option<&IndexingTargetContext>,
+    audit_row: Option<&serde_json::Value>,
 ) -> TaskSpec {
     let url_slug = crate::content::slug::extract_slug_from_url(&target.url);
     let idempotency_key = format!("ihc-fix-content:{}:{}:{}", parent.project_id, parent.id, target.url);
@@ -1067,23 +1093,58 @@ fn build_fix_content_spec(
     if let Some(ctx) = ctx {
         let article_id = ctx.target.article_id;
         if article_id > 0 {
-            // Artifact 1: article_id (used by fix_content_article_id)
+            // Build suggestions from actual audit failed checks instead of generic stubs
+            let mut suggestions = vec![];
+            if let Some(audit) = audit_row {
+                if let Some(checks) = audit["checks"].as_object() {
+                    for (check_name, check_data) in checks {
+                        if check_data["pass"].as_bool() == Some(false) {
+                            let label = check_data["label"].as_str().unwrap_or(check_name);
+                            let value = check_data["value"].as_str().unwrap_or("");
+                            let current = if value.is_empty() { "check failed".to_string() } else { value.to_string() };
+                            suggestions.push(serde_json::json!({
+                                "category": check_name,
+                                "current": current,
+                                "proposed": format!("Fix: {}", label),
+                                "reason": label,
+                                "priority": "high"
+                            }));
+                        }
+                    }
+                }
+                // Also include quality critical issues if present
+                if let Some(critical) = audit["quality_critical"].as_array() {
+                    for issue in critical {
+                        if let Some(text) = issue.as_str() {
+                            suggestions.push(serde_json::json!({
+                                "category": "quality_critical",
+                                "current": "quality issue",
+                                "proposed": format!("Fix: {}", text),
+                                "reason": text,
+                                "priority": "high"
+                            }));
+                        }
+                    }
+                }
+            }
+            // Fallback to at least one generic suggestion if audit had no failed checks
+            if suggestions.is_empty() {
+                suggestions.push(serde_json::json!({
+                    "category": "content_depth",
+                    "current": "content flagged as poor",
+                    "proposed": "Improve depth, structure, and keyword usage",
+                    "reason": "Content audit health = poor but no specific check failures were recorded",
+                    "priority": "medium"
+                }));
+            }
+
             let rec_key = format!("recommendations_{}", article_id);
             let rec_content = serde_json::json!({
                 "article_id": article_id,
                 "article_file": &ctx.target.file,
                 "article_title": &ctx.target.title,
                 "target_keyword": &ctx.target.title,
-                "suggestions": [
-                    {
-                        "rule": "content_depth",
-                        "message": "Content flagged as poor by indexing health campaign. Improve depth, structure, and keyword usage."
-                    },
-                    {
-                        "rule": "keyword_optimization",
-                        "message": "Ensure the target keyword appears naturally in H1, title, and first 200 words."
-                    }
-                ]
+                "suggestions": suggestions
             });
             artifacts.push(crate::models::task::TaskArtifact {
                 key: rec_key,

@@ -556,7 +556,130 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
+    // Generate feature spec after audit tasks complete
+    if matches!(
+        ctx.task.task_type.as_str(),
+        "content_review" | "content_audit" | "ctr_audit" | "indexing_health_campaign"
+    ) {
+        if let Err(e) = generate_feature_spec(ctx.project_path, ctx.task) {
+            log::warn!("[post_actions] Failed to generate feature spec: {}", e);
+        }
+    }
+
     follow_up_ids
+}
+
+/// Generate a developer feature spec from audit artifacts.
+/// Writes seo_feature_spec.md to the project's automation directory.
+fn generate_feature_spec(project_path: &str, task: &Task) -> Result<(), String> {
+    let paths = crate::engine::project_paths::ProjectPaths::from_path(project_path);
+    let automation_dir = &paths.automation_dir;
+
+    let mut issues: Vec<String> = Vec::new();
+
+    // 1. Read content_audit.json for developer-actionable issues
+    let audit_path = automation_dir.join("content_audit.json");
+    if let Ok(content) = std::fs::read_to_string(&audit_path) {
+        if let Ok(audit) = serde_json::from_str::<serde_json::Value>(&content) {
+            // Literal template variables in titles
+            if let Some(articles) = audit["articles"].as_array() {
+                let literal_vars: Vec<&serde_json::Value> = articles
+                    .iter()
+                    .filter(|a| a["checks"]["literal_template_variable"]["pass"].as_bool() == Some(false))
+                    .collect();
+                if !literal_vars.is_empty() {
+                    issues.push(format!(
+                        "## Title Template Variables\n\n{} articles have unrendered template variables in their titles (e.g., `| Brand |`, `{{Brand}}`, `{{{{title}}}}`).\n\n### Affected articles\n{}",
+                        literal_vars.len(),
+                        literal_vars.iter().map(|a| {
+                            format!("- `{}`: {}\n", a["file"].as_str().unwrap_or("unknown"), a["title"].as_str().unwrap_or(""))
+                        }).collect::<String>()
+                    ));
+                }
+
+                // Exact duplicate content
+                if let Some(dup_groups) = audit["duplicate_groups"].as_array() {
+                    if !dup_groups.is_empty() {
+                        issues.push(format!(
+                            "## Exact Duplicate Content\n\n{} groups of articles share identical body content. This often indicates SSR fallback pages or template errors serving the same HTML for different URLs.\n\n### Duplicate groups\n{}",
+                            dup_groups.len(),
+                            dup_groups.iter().map(|g| {
+                                let articles = g["articles"].as_array().map(|a| {
+                                    a.iter().map(|art| format!("- `{}`\n", art["file"].as_str().unwrap_or("unknown"))).collect::<String>()
+                                }).unwrap_or_default();
+                                format!("**Group** ({} articles):\n{}", g["article_count"].as_u64().unwrap_or(0), articles)
+                            }).collect::<String>()
+                        ));
+                    }
+                }
+
+                // Temporal URLs
+                let temporal: Vec<&serde_json::Value> = articles
+                    .iter()
+                    .filter(|a| a["checks"]["temporal_url"]["pass"].as_bool() == Some(false))
+                    .collect();
+                if !temporal.is_empty() {
+                    issues.push(format!(
+                        "## Temporal URLs\n\n{} articles have time-sensitive URL slugs (month names, years, seasonal terms, relative time). These decay in SEO value and should be rewritten to evergreen slugs with 301 redirects.\n\n### Affected articles\n{}",
+                        temporal.len(),
+                        temporal.iter().map(|a| {
+                            format!("- `{}` → `{}`\n", a["url_slug"].as_str().unwrap_or(""), a["file"].as_str().unwrap_or("unknown"))
+                        }).collect::<String>()
+                    ));
+                }
+            }
+        }
+    }
+
+    // 2. Read ctr_audit_context.json for template issues
+    let ctr_path = automation_dir.join("ctr_audit_context.json");
+    if let Ok(content) = std::fs::read_to_string(&ctr_path) {
+        if let Ok(ctr) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(articles) = ctr["articles"].as_array() {
+                let template_issues: Vec<&serde_json::Value> = articles
+                    .iter()
+                    .filter(|a| {
+                        a["issues_detected"].as_array().map(|issues| {
+                            issues.iter().any(|i| {
+                                let s = i.as_str().unwrap_or("");
+                                s.contains("template") || s.contains("duplicate") || s.contains("brand")
+                            })
+                        }).unwrap_or(false)
+                    })
+                    .collect();
+                if !template_issues.is_empty() {
+                    issues.push(format!(
+                        "## CTR Template Issues\n\n{} articles have title/template issues detected by the CTR audit.\n\n### Common patterns\n- Duplicate brand names in titles (`Title | Brand | Brand`)\n- Missing dynamic title fallback\n- Template variables rendered as literal text\n\n### Fix\nReview your site's layout/template file (e.g., `app/layout.tsx`, `_app.js`, or equivalent) to ensure title templates only append the brand once.\n",
+                        template_issues.len()
+                    ));
+                }
+            }
+        }
+    }
+
+    if issues.is_empty() {
+        log::info!("[feature_spec] No developer-actionable issues found — skipping spec generation");
+        return Ok(());
+    }
+
+    let spec = format!(
+        "# SEO Feature Spec\n\nGenerated: {}\nTask: {} ({}))\n\nThis document contains developer-actionable issues identified by the SEO audit. Content-level fixes (rewriting articles, merging cannibalized pages) are handled separately via fix tasks.\n\n---\n\n{}",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"),
+        task.title.as_deref().unwrap_or("untitled"),
+        task.id,
+        issues.join("\n\n---\n\n")
+    );
+
+    let spec_path = automation_dir.join("seo_feature_spec.md");
+    std::fs::create_dir_all(automation_dir).map_err(|e| e.to_string())?;
+    std::fs::write(&spec_path, spec).map_err(|e| e.to_string())?;
+
+    log::info!(
+        "[feature_spec] Wrote {} developer-actionable issues to {}",
+        issues.len(),
+        spec_path.display()
+    );
+    Ok(())
 }
 
 // ─── CTR Outcome Baseline Recording ──────────────────────────────────────────

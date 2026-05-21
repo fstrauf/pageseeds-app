@@ -1,15 +1,18 @@
 use crate::engine::exec::utils::{parse_frontmatter, read_source_file};
+use sha2::{Digest, Sha256};
+
 /// Content audit execution module.
 ///
 /// Covers:
-///   - exec_content_audit   (13-check deterministic article quality audit)
+///   - exec_content_audit   (21-check deterministic article quality audit)
 ///   - audit_one_article    (per-article check logic)
 use crate::engine::project_paths::ProjectPaths;
 
 /// Native Rust replacement for `pageseeds automation seo content-audit`.
 ///
-/// Runs 13 deterministic checks per article (keyword in title/H1/meta, word count,
-/// internal links, etc.), scores each article, and writes content_audit.json to
+/// Runs 17 deterministic checks per article (keyword in title/H1/meta, word count,
+/// internal links, temporal URLs, page bloat, literal template variables, title
+/// token duplication, etc.), scores each article, and writes content_audit.json to
 /// automation/content_audit.json. No LLM or external API needed.
 pub(crate) fn exec_content_audit(
     task: &crate::models::task::Task,
@@ -58,6 +61,10 @@ pub(crate) fn exec_content_audit(
     let link_extract_re = Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
     // Detect malformed links like `[text]/blog/slug` (missing parentheses)
     let malformed_link_re = Regex::new(r"\][ \t]*(/blog/[^)\s]*)").unwrap();
+    // Detect temporal URLs: month names, years, seasonal, relative time patterns
+    let temporal_url_re = Regex::new(
+        r"(?i)(-jan-?|-feb-?|-mar-?|-apr-?|-may-?|-jun-?|-jul-?|-aug-?|-sep-?|-oct-?|-nov-?|-dec-?|-\d{4}-|spring|summer|autumn|fall|winter|today|tomorrow|yesterday|this-week|next-week|last-week|this-month|next-month|last-month|this-year|next-year|last-year|now|current)"
+    ).unwrap();
 
     let mut results: Vec<serde_json::Value> = to_audit
         .iter()
@@ -71,6 +78,7 @@ pub(crate) fn exec_content_audit(
                 &md_syntax_re,
                 &link_extract_re,
                 &malformed_link_re,
+                &temporal_url_re,
             )
         })
         .collect();
@@ -95,11 +103,43 @@ pub(crate) fn exec_content_audit(
         .filter(|r| r["health"].as_str() == Some("poor"))
         .count();
 
+    // Compute exact duplicate groups from md5_body_hash
+    let mut hash_groups: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for (idx, article) in results.iter().enumerate() {
+        if let Some(hash) = article["md5_body_hash"].as_str() {
+            hash_groups.entry(hash.to_string()).or_default().push(idx);
+        }
+    }
+    let duplicate_groups: Vec<serde_json::Value> = hash_groups
+        .values()
+        .filter(|g| g.len() > 1)
+        .map(|g| {
+            let articles: Vec<serde_json::Value> = g
+                .iter()
+                .map(|&idx| {
+                    serde_json::json!({
+                        "id": results[idx]["id"],
+                        "title": results[idx]["title"],
+                        "url_slug": results[idx]["url_slug"],
+                        "file": results[idx]["file"],
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "hash": results[g[0]]["md5_body_hash"],
+                "article_count": g.len(),
+                "articles": articles,
+            })
+        })
+        .collect();
+
     let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let output_doc = serde_json::json!({
         "generated_at": now_iso,
         "total_audited": results.len(),
         "health_summary": { "good": good, "needs_improvement": needs, "poor": poor },
+        "duplicate_groups": duplicate_groups,
+        "duplicate_articles": duplicate_groups.iter().map(|g| g["article_count"].as_u64().unwrap_or(0)).sum::<u64>(),
         "articles": results,
     });
 
@@ -140,6 +180,7 @@ pub(crate) fn audit_one_article(
     md_syntax_re: &regex::Regex,
     link_extract_re: &regex::Regex,
     malformed_link_re: &regex::Regex,
+    temporal_url_re: &regex::Regex,
 ) -> serde_json::Value {
     let keyword = article
         .target_keyword
@@ -162,13 +203,17 @@ pub(crate) fn audit_one_article(
     let meta_description = fm.get("description").map(String::as_str);
     let full_content = format!("# {}\n\n{}", meta_title.unwrap_or(""), body);
 
+    let fallback_keyword = if keyword.is_empty() {
+        // Fall back to a normalized version of the title so quality rater
+        // still has something meaningful to check keyword placement against
+        Some(title.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != ' ', " "))
+    } else {
+        None
+    };
+
     let content_to_analyze = crate::engine::exec::quality_rater::ContentToAnalyze {
         content: &full_content,
-        target_keyword: if keyword.is_empty() {
-            "podcast"
-        } else {
-            &keyword
-        },
+        target_keyword: if let Some(ref fk) = fallback_keyword { fk.as_str() } else { &keyword },
         meta_title,
         meta_description,
     };
@@ -259,6 +304,46 @@ pub(crate) fn audit_one_article(
         malformed_links.push(serde_json::json!({ "href": href, "issue": "missing parentheses around URL" }));
     }
 
+    // ─── NEW CHECKS (must be before checks JSON object) ──────────────────────
+
+    // 1. Temporal URL — detect month/year/seasonal/relative-time patterns in slug
+    let slug_lower = article.url_slug.to_lowercase();
+    let temporal_url = temporal_url_re.is_match(&slug_lower);
+
+    // 2. Page bloat proxy — file size, image/table/code block counts
+    let file_size = source.as_ref().map(|s| s.len()).unwrap_or(0);
+    let image_count = body.matches("![").count();
+    let table_count = body.lines().filter(|l| l.trim_start().starts_with('|')).count();
+    let code_block_count = code_block_re.find_iter(&body).count();
+    let is_bloated = file_size > 500_000 || image_count > 20 || table_count > 30 || code_block_count > 10;
+
+    // 3. Literal template variable — detect unrendered template variables in title
+    let literal_template_variable = title.contains("| Brand |")
+        || title.contains("{Brand}")
+        || title.contains("{{title}}")
+        || title.contains("{{brand}}")
+        || title.contains("| BrandName |")
+        || title.contains("{BrandName}");
+
+    // 4. Title token duplication — any token appears ≥3 times in title
+    let title_tokens: Vec<String> = title
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty() && t.len() > 2)
+        .map(String::from)
+        .collect();
+    let mut token_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for token in &title_tokens {
+        *token_counts.entry(token.clone()).or_insert(0) += 1;
+    }
+    let max_token_count = token_counts.values().copied().max().unwrap_or(0);
+    let title_token_duplication = max_token_count >= 3;
+
+    // Compute body hash for exact duplicate detection
+    let mut hasher = Sha256::new();
+    hasher.update(body.as_bytes());
+    let md5_body_hash = format!("{:x}", hasher.finalize());
+
     // ─── Checks ──────────────────────────────────────────────────────────────
     let check_pass = |pass: Option<bool>, label: &str| -> serde_json::Value {
         serde_json::json!({ "pass": pass, "label": label })
@@ -319,6 +404,11 @@ pub(crate) fn audit_one_article(
         "frontmatter_complete": check_pass(Some(frontmatter_complete), "Frontmatter has title, date, and description"),
         "readability":          check_val(readability.as_ref().map(|_| flesch_score >= 30.0), serde_json::json!(format!("{:.1}", flesch_score)), "Flesch Reading Ease ≥ 30"),
         "passive_voice":        check_val(readability.as_ref().map(|_| passive_voice_pct <= 20.0), serde_json::json!(format!("{:.1}%", passive_voice_pct)), "Passive voice ≤ 20%"),
+        // NEW: SEO audit checks
+        "temporal_url":         check_pass(Some(!temporal_url), "URL does not contain temporal patterns (month, year, seasonal, relative time)"),
+        "page_bloat_proxy":     check_val(Some(!is_bloated), serde_json::json!({ "file_size": file_size, "image_count": image_count, "table_count": table_count, "code_block_count": code_block_count }), "Page is not bloated (file size ≤ 500KB, images ≤ 20, tables ≤ 30, code blocks ≤ 10)"),
+        "literal_template_variable": check_pass(Some(!literal_template_variable), "Title does not contain literal template variables"),
+        "title_token_duplication": check_val(Some(!title_token_duplication), serde_json::json!(max_token_count), "No token appears ≥3 times in title"),
     });
 
     // ─── Scoring ─────────────────────────────────────────────────────────────
@@ -326,20 +416,24 @@ pub(crate) fn audit_one_article(
         ("broken_links", 30i64),
         ("malformed_links", 25),
         ("source_file_found", 20),
+        ("literal_template_variable", 15),
         ("title_keyword", 10),
         ("h1_keyword", 10),
         ("meta_desc_keyword", 10),
+        ("title_token_duplication", 10),
         ("keyword_first_para", 8),
         ("keyword_density", 8),
+        ("readability", 8),
+        ("temporal_url", 8),
         ("meta_desc_present", 7),
         ("frontmatter_complete", 6),
         ("meta_desc_length", 5),
         ("word_count", 5),
+        ("passive_voice", 5),
+        ("page_bloat_proxy", 5),
         ("h2_structure", 3),
         ("internal_links", 3),
         ("gsc_data", 1),
-        ("readability", 8),
-        ("passive_voice", 5),
     ];
     let penalty: i64 = weights
         .iter()
@@ -361,15 +455,22 @@ pub(crate) fn audit_one_article(
         "poor"
     };
 
-    let critical_issues = ["broken_links", "source_file_found", "title_keyword"]
-        .iter()
-        .filter(|k| checks[*k]["pass"].as_bool() == Some(false))
-        .count();
+    let critical_issues = [
+        "broken_links",
+        "source_file_found",
+        "title_keyword",
+        "literal_template_variable",
+    ]
+    .iter()
+    .filter(|k| checks[*k]["pass"].as_bool() == Some(false))
+    .count();
     let high_issues = [
         "meta_desc_keyword",
         "keyword_first_para",
         "keyword_density",
         "h1_keyword",
+        "title_token_duplication",
+        "temporal_url",
     ]
     .iter()
     .filter(|k| checks[*k]["pass"].as_bool() == Some(false))
@@ -408,6 +509,7 @@ pub(crate) fn audit_one_article(
         .filter(|(k, _)| checks[*k]["pass"].as_bool() == Some(false))
         .count();
 
+    // (new checks moved to before the checks JSON object)
     let _ = num_prefix_re; // used by caller for slug normalization
 
     serde_json::json!({
@@ -450,5 +552,18 @@ pub(crate) fn audit_one_article(
             "cliche_count": r.cliche_count,
             "filter_word_percentage": r.filter_word_percentage,
         })),
+        // NEW: SEO audit checks (also in checks object for scoring)
+        "md5_body_hash": md5_body_hash,
+        "temporal_url": temporal_url,
+        "page_bloat_proxy": is_bloated,
+        "literal_template_variable": literal_template_variable,
+        "title_token_duplication": title_token_duplication,
+        "title_token_max_count": max_token_count,
+        "bloat_metrics": {
+            "file_size": file_size,
+            "image_count": image_count,
+            "table_count": table_count,
+            "code_block_count": code_block_count,
+        },
     })
 }

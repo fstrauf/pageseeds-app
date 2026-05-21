@@ -128,6 +128,85 @@ fn detect_template_patterns(
         });
     }
 
+    // ─── NEW: Literal template variable detection ────────────────────────────
+    // Detect pages where rendered_title contains literal template strings
+    // like "| Brand |", "{Brand}", "{{title}}" — indicating unrendered variables
+    let literal_var_pages: Vec<&CtrRenderedPageAudit> = audits
+        .iter()
+        .filter(|a| {
+            let rt = a.rendered_title.to_lowercase();
+            rt.contains("| brand |")
+                || rt.contains("{brand}")
+                || rt.contains("{{title}}")
+                || rt.contains("{{brand}}")
+                || rt.contains("| brandname |")
+                || rt.contains("{brandname}")
+        })
+        .collect();
+
+    if !literal_var_pages.is_empty() {
+        let pages: Vec<CtrTemplatePageDetail> = literal_var_pages
+            .iter()
+            .map(|a| CtrTemplatePageDetail {
+                article_id: a.article_id,
+                url: a.url.clone(),
+                file: a.file.clone(),
+                source_title: a.source_title.clone(),
+                rendered_title: a.rendered_title.clone(),
+            })
+            .collect();
+
+        results.push(CtrTemplateDetectionResult {
+            detected_pattern: "Literal template variable in title: e.g., '| Brand |' or '{Brand}'".to_string(),
+            desired_pattern: "Dynamic title rendering: e.g., 'Article Title | Brand'".to_string(),
+            affected_pages: literal_var_pages.len(),
+            candidate_files: framework_files.clone(),
+            confidence: if literal_var_pages.len() >= 5 { "high" } else { "medium" }.to_string(),
+            requires_manual_review: true,
+            verification_urls: literal_var_pages.iter().take(5).map(|a| a.url.clone()).collect(),
+            pages,
+        });
+    }
+
+    // ─── NEW: Missing dynamic title detection ────────────────────────────────
+    // Detect pages where rendered_title is just the brand name (no dynamic content)
+    // This indicates a fallback bug where the page title wasn't set
+    let brand_only_pages: Vec<&CtrRenderedPageAudit> = audits
+        .iter()
+        .filter(|a| {
+            let rt = a.rendered_title.trim();
+            let st = a.source_title.trim();
+            // Title equals brand name — either source_title is empty/brand-only
+            // or rendered_title is just a short static string with no article content
+            (!st.is_empty() && rt == st && st.len() <= 30)
+                || (rt.len() <= 30 && !rt.contains('|') && !rt.contains('-'))
+        })
+        .collect();
+
+    if !brand_only_pages.is_empty() {
+        let pages: Vec<CtrTemplatePageDetail> = brand_only_pages
+            .iter()
+            .map(|a| CtrTemplatePageDetail {
+                article_id: a.article_id,
+                url: a.url.clone(),
+                file: a.file.clone(),
+                source_title: a.source_title.clone(),
+                rendered_title: a.rendered_title.clone(),
+            })
+            .collect();
+
+        results.push(CtrTemplateDetectionResult {
+            detected_pattern: "Missing dynamic title: page shows only brand/static name".to_string(),
+            desired_pattern: "Each page should have a unique, descriptive title".to_string(),
+            affected_pages: brand_only_pages.len(),
+            candidate_files: framework_files.clone(),
+            confidence: if brand_only_pages.len() >= 5 { "high" } else { "medium" }.to_string(),
+            requires_manual_review: true,
+            verification_urls: brand_only_pages.iter().take(5).map(|a| a.url.clone()).collect(),
+            pages,
+        });
+    }
+
     // Sort by affected page count descending
     results.sort_by(|a, b| b.affected_pages.cmp(&a.affected_pages));
     results

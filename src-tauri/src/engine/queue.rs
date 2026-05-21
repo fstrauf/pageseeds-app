@@ -92,13 +92,13 @@ fn create_run(conn: &Connection) -> Result<QueueRun> {
     let id = format!("run-{}", chrono::Utc::now().timestamp_millis());
     conn.execute(
         "INSERT INTO queue_runs (id, status, pause_on_error, created_at, updated_at)
-         VALUES (?1, 'idle', 1, ?2, ?2)",
+         VALUES (?1, 'idle', 0, ?2, ?2)",
         [&id, &now],
     )?;
     Ok(QueueRun {
         id,
         status: QueueRunStatus::Idle,
-        pause_on_error: true,
+        pause_on_error: false,
         created_at: now.clone(),
         updated_at: now,
         started_at: None,
@@ -423,10 +423,11 @@ pub fn enqueue_tasks(
     let run = get_or_create_active_run(conn)?;
     insert_queue_items(conn, &run.id, items, mode)?;
 
-    // If run was finished/failed, resurrect it as idle so runner can pick it up.
-    // Paused runs stay paused — the user must explicitly resume.
+    // If run was finished/failed/paused, resurrect it as idle so runner can pick it up.
+    // Enqueuing new work is an implicit request to run the queue.
     if run.status == QueueRunStatus::Finished
         || run.status == QueueRunStatus::Failed
+        || run.status == QueueRunStatus::Paused
     {
         update_run_status(conn, &run.id, QueueRunStatus::Idle)?;
     }

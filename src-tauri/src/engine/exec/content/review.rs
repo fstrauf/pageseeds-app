@@ -87,6 +87,8 @@ pub(crate) fn select_priority_articles(
         let health = audit_row["health"].as_str().unwrap_or("").to_lowercase();
         let checks_failed = audit_row["checks_failed"].as_i64().unwrap_or(0);
         let health_score = audit_row["health_score"].as_i64().unwrap_or(0);
+        let quality_score = audit_row["quality_score"].as_i64().unwrap_or(0);
+        let quality_grade = audit_row["quality_grade"].as_str().unwrap_or("");
 
         let failed_checks: Vec<serde_json::Value> = audit_row["checks"]
             .as_object()
@@ -114,12 +116,24 @@ pub(crate) fn select_priority_articles(
         }
         score += checks_failed * 15;
         score += (100 - health_score).max(0);
+
+        // Quality rater integration: low quality scores boost priority
+        if quality_score > 0 && quality_score < 60 {
+            score += 400; // F-grade content is urgent
+        } else if quality_score > 0 && quality_score < 75 {
+            score += 200; // D/C grade still worth reviewing
+        }
+        // Quality grade penalties for already-good content
+        if quality_grade == "A" || quality_grade == "B" {
+            score -= 300;
+        }
+
         if pos >= 1.0 && pos <= 4.0 && ctr >= 0.05 {
             score -= 600;
         }
 
         let has_regression_signal =
-            quick_ctr_opportunity || health == "poor" || checks_failed >= 3 || health_score <= 70;
+            quick_ctr_opportunity || health == "poor" || checks_failed >= 3 || health_score <= 70 || (quality_score > 0 && quality_score < 60);
 
         let has_review_history = review_status == "reviewed" || !last_reviewed_at.is_empty();
 
@@ -324,7 +338,8 @@ pub(crate) async fn exec_content_review_recommend(
         if let Ok(gsc_doc) = serde_json::from_str::<serde_json::Value>(&gsc_raw) {
             if let Some(items) = gsc_doc["items"].as_array() {
                 for item in items {
-                    if item["reason_code"].as_str().unwrap_or("") != "indexed_pass" {
+                    let reason = item["reason_code"].as_str().unwrap_or("");
+                    if reason.starts_with("not_indexed") {
                         if let Some(url) = item["url"].as_str() {
                             let slug = crate::content::slug::extract_slug_from_url(url);
                             // Also index last path segment for flat slug matching

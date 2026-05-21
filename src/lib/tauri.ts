@@ -120,6 +120,21 @@ export const getGscRecoveryStats = (
 ): Promise<RecoveryStats> =>
   invoke('get_gsc_recovery_stats', { projectId })
 
+export const runHealthAudit = (projectId: string): Promise<Task[]> =>
+  invoke('run_health_audit', { projectId })
+
+export const getContentAuditReport = (projectId: string): Promise<unknown> =>
+  invoke('get_content_audit_report', { projectId })
+
+export const getIndexingHealthSummary = (projectId: string): Promise<{
+  total_urls: number
+  indexed: number
+  not_indexed: number
+  issues_by_reason: Array<[string, number]>
+  last_inspected_at: string | null
+}> =>
+  invoke('get_indexing_health_summary', { projectId })
+
 // ─── Articles ─────────────────────────────────────────────────────────────────
 
 export const listArticles = (projectId: string): Promise<Article[]> =>

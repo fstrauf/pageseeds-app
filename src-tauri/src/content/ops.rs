@@ -947,6 +947,233 @@ mod tests {
 
     // ─── Regression: sync_and_validate patches MDX from stale JSON ─────────────
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SSR Fallback / Orphaned Slug Detection
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Detects MDX content files that have no matching route in the framework.
+///
+/// This catches SSR fallback bugs where a page exists as MDX but no route
+/// renders it (would 404 or show a generic error page).
+#[derive(Debug, Clone, Serialize)]
+pub struct OrphanedSlug {
+    pub slug: String,
+    pub file_path: String,
+    pub issue: String,
+}
+
+/// Scan the content directory and framework routes to find orphaned slugs.
+pub fn detect_orphaned_slugs(
+    content_dir: &Path,
+    repo_root: &Path,
+) -> Vec<OrphanedSlug> {
+    let mdx_slugs = collect_mdx_slugs(content_dir);
+    let route_patterns = collect_route_patterns(repo_root);
+
+    mdx_slugs
+        .into_iter()
+        .filter(|(slug, _path)| !route_patterns.iter().any(|p| p.matches(slug)))
+        .map(|(slug, path)| OrphanedSlug {
+            slug,
+            file_path: path.to_string_lossy().to_string(),
+            issue: "No route renders this slug".to_string(),
+        })
+        .collect()
+}
+
+/// Collect all URL slugs from MDX files in the content directory.
+fn collect_mdx_slugs(content_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut slugs = Vec::new();
+    if !content_dir.is_dir() {
+        return slugs;
+    }
+
+    let walker = walkdir::WalkDir::new(content_dir).max_depth(5).follow_links(false);
+    for entry in walker {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("mdx") {
+            continue;
+        }
+        if let Some(file_name) = path.file_stem().and_then(|s| s.to_str()) {
+            let slug = slug_from_filename(file_name);
+            if !slug.is_empty() {
+                slugs.push((slug, path.to_path_buf()));
+            }
+        }
+    }
+    slugs
+}
+
+/// A simple route pattern extracted from framework files.
+struct RoutePattern {
+    /// e.g. "blog", "blog/slug", ""
+    segments: Vec<String>,
+    /// Whether the last segment is a catch-all parameter
+    is_catch_all: bool,
+}
+
+impl RoutePattern {
+    fn matches(&self, slug: &str) -> bool {
+        let slug_parts: Vec<&str> = slug.split('/').filter(|s| !s.is_empty()).collect();
+
+        // Empty pattern (root) matches nothing for our purposes
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        // Simple exact match
+        if !self.is_catch_all && self.segments.len() == slug_parts.len() {
+            return self.segments.iter().enumerate().all(|(i, seg)| {
+                if seg.starts_with('[') && seg.ends_with(']') {
+                    // Parameter segment matches any non-empty value
+                    !slug_parts[i].is_empty()
+                } else {
+                    seg == slug_parts[i]
+                }
+            });
+        }
+
+        // Catch-all match: e.g. app/blog/[...slug]/page.tsx matches blog/anything
+        if self.is_catch_all {
+            let fixed_len = self.segments.len() - 1;
+            if slug_parts.len() >= fixed_len {
+                return self.segments.iter().take(fixed_len).enumerate().all(|(i, seg)| {
+                    if seg.starts_with('[') && seg.ends_with(']') {
+                        !slug_parts[i].is_empty()
+                    } else {
+                        seg == slug_parts[i]
+                    }
+                });
+            }
+        }
+
+        false
+    }
+}
+
+/// Collect route patterns from common framework directories.
+fn collect_route_patterns(repo_root: &Path) -> Vec<RoutePattern> {
+    let mut patterns = Vec::new();
+
+    // Framework route directories
+    let route_dirs: Vec<(PathBuf, bool)> = vec![
+        (repo_root.join("app"), true),      // Next.js 13+ app router
+        (repo_root.join("pages"), true),    // Next.js pages / Nuxt / Astro
+        (repo_root.join("src").join("app"), true),
+        (repo_root.join("src").join("pages"), true),
+        (repo_root.join("src").join("routes"), true), // SvelteKit
+    ];
+
+    for (dir, recurse) in route_dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        let max_depth = if recurse { 5 } else { 1 };
+        let walker = walkdir::WalkDir::new(&dir).max_depth(max_depth).follow_links(false);
+
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            // Next.js app router: page.tsx, layout.tsx, route.tsx
+            // Next.js pages: [slug].tsx, index.tsx
+            // SvelteKit: +page.svelte
+            let is_route_file = matches!(
+                file_name,
+                "page.tsx" | "page.jsx" | "page.js" | "page.astro" | "page.vue"
+                    | "+page.svelte" | "+page.ts" | "+page.js"
+                    | "index.tsx" | "index.jsx" | "index.js" | "index.astro" | "index.vue"
+                    | "[slug].tsx" | "[slug].jsx" | "[slug].js"
+                    | "[id].tsx" | "[id].jsx" | "[id].js"
+                    | "[...slug].tsx" | "[...slug].jsx" | "[...slug].js"
+            );
+
+            if !is_route_file {
+                continue;
+            }
+
+            // Extract route segments from the directory path
+            if let Ok(relative) = path.strip_prefix(&dir) {
+                let parent = relative.parent().unwrap_or(Path::new(""));
+                let mut segments: Vec<String> = parent
+                    .components()
+                    .filter_map(|c| {
+                        if let Some(s) = c.as_os_str().to_str() {
+                            if s != "." { Some(s.to_string()) } else { None }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Handle [...slug] catch-all segments
+                let is_catch_all = parent
+                    .components()
+                    .any(|c| {
+                        c.as_os_str()
+                            .to_str()
+                            .map(|s| s.starts_with("[..."))
+                            .unwrap_or(false)
+                    });
+
+                // Remove parameter brackets from segments for matching
+                segments = segments
+                    .into_iter()
+                    .map(|s| {
+                        if s.starts_with('[') && s.ends_with(']') {
+                            s // keep as parameter marker
+                        } else {
+                            s
+                        }
+                    })
+                    .collect();
+
+                if !segments.is_empty() {
+                    patterns.push(RoutePattern {
+                        segments,
+                        is_catch_all,
+                    });
+                }
+            }
+        }
+    }
+
+    // Also look for explicit route config files
+    let config_files = [
+        repo_root.join("next.config.js"),
+        repo_root.join("next.config.ts"),
+        repo_root.join("next.config.mjs"),
+        repo_root.join("astro.config.mjs"),
+        repo_root.join("astro.config.ts"),
+    ];
+    for config in &config_files {
+        if config.exists() {
+            // Presence of config implies the framework is set up; we already
+            // scanned the route dirs, so this is just a signal that routes exist.
+        }
+    }
+
+    // Deduplicate patterns
+    patterns.sort_by(|a, b| {
+        let a_key = format!("{}|{}", a.segments.join("/"), a.is_catch_all);
+        let b_key = format!("{}|{}", b.segments.join("/"), b.is_catch_all);
+        a_key.cmp(&b_key)
+    });
+    patterns.dedup_by(|a, b| {
+        a.segments == b.segments && a.is_catch_all == b.is_catch_all
+    });
+
+    patterns
+}
+
     #[test]
     fn sync_and_validate_patches_mdx_from_json_not_sqlite() {
         let dir = unique_temp_dir("ps_sync_date");

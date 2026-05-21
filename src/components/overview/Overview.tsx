@@ -5,7 +5,7 @@ import {
   PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
-import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths } from '../../lib/tauri'
+import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, repairArticlePaths, runHealthAudit } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
 import type { Article, LandingPageResearchPending, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '../../lib/utils'
 import { SetupWarnings } from './SetupWarnings'
 import { PublishPanel } from '../articles/PublishPanel'
+import { HealthDashboard } from '../health/HealthDashboard'
 import { useQuery } from '../../hooks/useQuery'
 
 // ─── Quick actions definition ─────────────────────────────────────────────────
@@ -396,6 +397,7 @@ export function Overview({
   const [repairingPaths, setRepairingPaths] = useState(false)
   const [repairResult, setRepairResult] = useState<import('../../lib/types').RepairPathResult | null>(null)
   const [runningCtr, setRunningCtr] = useState(false)
+  const [runningFullAudit, setRunningFullAudit] = useState(false)
 
   const {
     data: liveSitePages = [],
@@ -447,6 +449,20 @@ export function Overview({
       refetchLiveSitePages()
     }
   }, [project, runCompletedTick, load, isLiveSiteProject, refetchCtrHealth, refetchLiveSitePages])
+
+  async function handleRunFullAudit() {
+    if (!project || runningFullAudit) return
+    setRunningFullAudit(true)
+    setQuickActionError(null)
+    try {
+      const tasks = await runHealthAudit(project.id)
+      onRunTasks?.(tasks)
+    } catch (e: unknown) {
+      setQuickActionError(String(e))
+    } finally {
+      setRunningFullAudit(false)
+    }
+  }
 
   async function handleOpenPublish() {
     if (!project || loadingPublish) return
@@ -639,6 +655,31 @@ export function Overview({
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 pb-4">
+              {/* Run Full Audit — creates content_review + indexing_health_campaign */}
+              <button
+                onClick={handleRunFullAudit}
+                disabled={runningFullAudit}
+                className={cn(
+                  'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors group',
+                  'bg-primary hover:bg-primary/90 text-primary-foreground',
+                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                )}
+              >
+                <span className="shrink-0"><HeartPulse size={16} /></span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">Run Full Audit</span>
+                  </div>
+                  <span className="text-xs opacity-90 leading-snug">
+                    Content health + indexing + CTR + cannibalization
+                  </span>
+                </div>
+                {runningFullAudit
+                  ? <RefreshCw size={13} className="shrink-0 animate-spin" />
+                  : <PlayCircle size={13} className="shrink-0 opacity-70 group-hover:opacity-100" />
+                }
+              </button>
+              <div className="h-px bg-border my-2" />
               {quickActionError && (
                 <div className="mb-2 px-2.5 py-2 rounded-md text-xs bg-destructive/10 text-destructive">
                   {quickActionError}
@@ -995,7 +1036,11 @@ export function Overview({
                 ) : (
                   <div className="space-y-0.5">
                     {overview.recent_tasks.map(task => (
-                      <div key={task.id} className="flex items-center gap-2.5 py-1.5 px-1">
+                      <button
+                        key={task.id}
+                        onClick={() => onViewChange('tasks', task.id)}
+                        className="w-full flex items-center gap-2.5 py-1.5 px-1 rounded-sm hover:bg-secondary/60 transition-colors text-left cursor-pointer"
+                      >
                         <span className={cn('shrink-0', STATUS_COLORS[task.status] ?? 'text-muted-foreground')}>
                           {STATUS_ICONS[task.status] ?? <Clock size={13} />}
                         </span>
@@ -1003,7 +1048,7 @@ export function Overview({
                           {task.title ?? task.task_type}
                         </span>
                         <span className="text-xs text-muted-foreground shrink-0">{timeAgo(task.updated_at)}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -1042,6 +1087,11 @@ export function Overview({
 
           </div>
         </div>
+      </div>
+
+      {/* Full Health Dashboard — sits below the 2-column grid */}
+      <div className="mt-6">
+        <HealthDashboard project={project} />
       </div>
     </div>
     {/* Landing Page Research Dialog */}
