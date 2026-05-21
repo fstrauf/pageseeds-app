@@ -640,6 +640,9 @@ pub struct FixSummary {
     pub completed: i64,
     pub failed: i64,
     pub pending: i64,
+    /// Total articles with issues found in the most recent content audit
+    /// (needs_improvement + poor). 0 if no audit exists.
+    pub total_found: i64,
 }
 
 /// A generate_feature_spec task waiting for user confirmation.
@@ -856,13 +859,39 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
             since_clause
         );
 
-        conn.query_row(&sql, [project_id], |row| {
+        let mut summary = conn.query_row(&sql, [project_id], |row| {
             Ok(FixSummary {
                 completed: row.get::<_, Option<i64>>(0)?.unwrap_or(0),
                 failed: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
                 pending: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                total_found: 0,
             })
-        }).unwrap_or(FixSummary { completed: 0, failed: 0, pending: 0 })
+        }).unwrap_or(FixSummary { completed: 0, failed: 0, pending: 0, total_found: 0 });
+
+        // Read content_audit.json to get total articles with issues
+        let project_path: Option<String> = conn
+            .query_row(
+                "SELECT path FROM projects WHERE id = ?1",
+                [project_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(path) = project_path {
+            let audit_path = std::path::Path::new(&path)
+                .join(".github")
+                .join("automation")
+                .join("content_audit.json");
+            if let Ok(content) = std::fs::read_to_string(&audit_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let needs = json["health_summary"]["needs_improvement"].as_i64().unwrap_or(0);
+                    let poor = json["health_summary"]["poor"].as_i64().unwrap_or(0);
+                    summary.total_found = needs + poor;
+                }
+            }
+        }
+
+        summary
     };
 
     Ok(ProjectOverview {

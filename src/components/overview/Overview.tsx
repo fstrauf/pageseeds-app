@@ -785,6 +785,10 @@ export function Overview({
 
                 const fix = overview?.fix_summary
                 const hasFixes = fix && (fix.completed > 0 || fix.failed > 0 || fix.pending > 0)
+                const totalFixTasks = fix ? fix.completed + fix.failed + fix.pending : 0
+                const remainingFromAudit = fix && fix.total_found > 0
+                  ? Math.max(0, fix.total_found - fix.completed)
+                  : 0
 
                 return (
                   <div className="px-3 py-2 rounded-md bg-secondary/40 space-y-1.5">
@@ -795,9 +799,11 @@ export function Overview({
                       ) : auditOverdue ? (
                         <span className="text-[10px] text-amber-600 font-medium">{daysSince}d since last audit</span>
                       ) : fix && fix.pending > 0 ? (
-                        <span className="text-[10px] text-blue-600 font-medium">{fix.pending} fix{fix.pending !== 1 ? 'es' : ''} in progress</span>
+                        <span className="text-[10px] text-blue-600 font-medium">{fix.pending} of {totalFixTasks} fix{totalFixTasks !== 1 ? 'es' : ''} in progress</span>
+                      ) : fix && fix.total_found > 0 && remainingFromAudit > 0 ? (
+                        <span className="text-[10px] text-amber-600 font-medium">{remainingFromAudit} of {fix.total_found} articles still need attention</span>
                       ) : fix && fix.completed > 0 ? (
-                        <span className="text-[10px] text-emerald-600 font-medium">{fix.completed} fix{fix.completed !== 1 ? 'es' : ''} applied</span>
+                        <span className="text-[10px] text-emerald-600 font-medium">{totalFixTasks} fix{totalFixTasks !== 1 ? 'es' : ''} processed ({fix.completed} done{fix.failed > 0 ? `, ${fix.failed} failed` : ''})</span>
                       ) : (
                         <span className="text-[10px] text-emerald-600 font-medium">All clear</span>
                       )}
@@ -815,9 +821,14 @@ export function Overview({
                             {daysSince}d ago
                           </Badge>
                         )}
+                        {fix && fix.total_found > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-slate-50 text-slate-700 border-slate-200">
+                            {fix.total_found} issues found
+                          </Badge>
+                        )}
                         {fix && fix.completed > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-emerald-50 text-emerald-700 border-emerald-200">
-                            {fix.completed} applied
+                            {fix.completed} fixed
                           </Badge>
                         )}
                         {fix && fix.failed > 0 && (
@@ -828,6 +839,11 @@ export function Overview({
                         {fix && fix.pending > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-blue-50 text-blue-700 border-blue-200">
                             {fix.pending} pending
+                          </Badge>
+                        )}
+                        {fix && fix.total_found > 0 && remainingFromAudit > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-amber-50 text-amber-700 border-amber-200">
+                            {remainingFromAudit} remaining
                           </Badge>
                         )}
                         {!hasFixes && (

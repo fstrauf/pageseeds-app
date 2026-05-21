@@ -639,6 +639,7 @@ export interface FixSummary {
   completed: number
   failed: number
   pending: number
+  total_found: number
 }
 
 export interface ProjectOverview {
