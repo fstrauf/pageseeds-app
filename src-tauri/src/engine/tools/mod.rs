@@ -14,7 +14,7 @@ pub use keywords::{
     KeywordToolError, SerpEntry,
 };
 
-mod investigate;
+pub mod investigate;
 pub use investigate::{
     investigation_tools,
     InvestigationContext,
