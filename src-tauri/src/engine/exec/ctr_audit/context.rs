@@ -304,17 +304,22 @@ pub(crate) fn exec_ctr_build_context(
         "top_20_by_clicks_lost": top_20,
     });
 
-    // Write full context to automation dir for reference
-    let out_path = paths.automation_dir.join("ctr_audit_context.json");
     let full_str = serde_json::to_string_pretty(&full_doc).unwrap_or_default() + "\n";
+
+    // Write to database (new primary storage)
+    let _ = crate::db::content_audit::save_audit_artifact(
+        conn,
+        &task.project_id,
+        "ctr_audit_context",
+        &now_iso,
+        &full_str,
+    );
+
+    // Keep JSON write as export during transition
+    let out_path = paths.automation_dir.join("ctr_audit_context.json");
     if let Err(e) = std::fs::write(&out_path, &full_str) {
         log::warn!("[ctr_audit] Failed to write ctr_audit_context.json: {}", e);
     }
-
-    // Return the full document as step output so the post-task spawner can read
-    // the complete articles array (with issues_detected) to decide which ones
-    // need fix_ctr_article tasks. The full document is also written to disk above.
-    let full_str = serde_json::to_string_pretty(&full_doc).unwrap_or_default() + "\n";
 
     let clean_msg = if cleaned_summary.is_empty() {
         String::new()

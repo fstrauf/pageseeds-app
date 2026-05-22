@@ -362,11 +362,24 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         })
         .collect();
 
-    let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
     let clusters_doc = serde_json::json!({
         "generated_at": &now_iso,
         "clusters": &clusters_json,
     });
+
+    // Save to database (new primary storage)
+    if let Some(ref db) = db_conn {
+        let _ = crate::db::content_audit::save_audit_artifact(
+            db,
+            &task.project_id,
+            "cannibalization_clusters",
+            &now_iso,
+            &serde_json::to_string(&clusters_doc).unwrap_or_default(),
+        );
+    }
+
+    // Keep JSON write as export during transition
+    let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
     if let Err(e) = std::fs::write(
         &clusters_path,
         serde_json::to_string_pretty(&clusters_doc).unwrap_or_default() + "\n",
@@ -1373,12 +1386,25 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
         ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let candidates_doc = serde_json::json!({
-        "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "generated_at": &now_iso,
         "candidate_count": candidates.len(),
         "candidates": candidates,
     });
 
+    // Save to database (new primary storage)
+    if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+        let _ = crate::db::content_audit::save_audit_artifact(
+            &db,
+            &_task.project_id,
+            "cannibalization_candidates",
+            &now_iso,
+            &serde_json::to_string(&candidates_doc).unwrap_or_default(),
+        );
+    }
+
+    // Keep JSON write as export during transition
     let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
     if let Err(e) = std::fs::write(
         &candidates_path,

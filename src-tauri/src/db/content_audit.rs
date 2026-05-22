@@ -216,5 +216,77 @@ pub fn delete_project_audit_data(conn: &Connection, project_id: &str) -> Result<
         "DELETE FROM content_audit_runs WHERE project_id = ?1",
         [project_id],
     )?;
+    conn.execute(
+        "DELETE FROM audit_artifacts WHERE project_id = ?1",
+        [project_id],
+    )?;
     Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Generic Audit Artifact Storage (replaces per-type JSON files)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Save an audit artifact JSON to the database.
+pub fn save_audit_artifact(
+    conn: &Connection,
+    project_id: &str,
+    artifact_type: &str,
+    created_at: &str,
+    data_json: &str,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO audit_artifacts (project_id, artifact_type, created_at, data_json)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![project_id, artifact_type, created_at, data_json],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Get the latest audit artifact of a specific type for a project.
+pub fn get_latest_audit_artifact(
+    conn: &Connection,
+    project_id: &str,
+    artifact_type: &str,
+) -> Result<Option<serde_json::Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT data_json FROM audit_artifacts
+         WHERE project_id = ?1 AND artifact_type = ?2
+         ORDER BY created_at DESC
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query([project_id, artifact_type])?;
+    if let Some(row) = rows.next()? {
+        let data: String = row.get(0)?;
+        Ok(serde_json::from_str(&data).ok())
+    } else {
+        Ok(None)
+    }
+}
+
+/// Check if an artifact of the given type exists and is fresher than max_age_hours.
+pub fn is_artifact_fresh(
+    conn: &Connection,
+    project_id: &str,
+    artifact_type: &str,
+    max_age_hours: i64,
+) -> Result<bool> {
+    let row: Option<(String,)> = conn
+        .query_row(
+            "SELECT created_at FROM audit_artifacts
+             WHERE project_id = ?1 AND artifact_type = ?2
+             ORDER BY created_at DESC
+             LIMIT 1",
+            [project_id, artifact_type],
+            |row| Ok((row.get::<_, String>(0)?,)),
+        )
+        .ok();
+
+    if let Some((created_at,)) = row {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&created_at) {
+            let hours_old = chrono::Utc::now().signed_duration_since(dt).num_hours();
+            return Ok(hours_old < max_age_hours);
+        }
+    }
+    Ok(false)
 }

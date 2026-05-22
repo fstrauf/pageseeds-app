@@ -1340,6 +1340,26 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 42 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS audit_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                data_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_artifacts_project_type ON audit_artifacts(project_id, artifact_type);
+            CREATE INDEX IF NOT EXISTS idx_audit_artifacts_project_type_created ON audit_artifacts(project_id, artifact_type, created_at);
+            "
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (42, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 

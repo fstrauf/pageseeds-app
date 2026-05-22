@@ -284,12 +284,21 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
         };
     }
 
-    // 2. Load cannibalization clusters
-    let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
-    let clusters_doc: serde_json::Value = std::fs::read_to_string(&clusters_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({ "clusters": [] }));
+    // 2. Load cannibalization clusters (DB primary, JSON fallback)
+    let clusters_doc: serde_json::Value = {
+        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
+            .ok()
+            .and_then(|conn| {
+                crate::db::content_audit::get_latest_audit_artifact(&conn, &task.project_id, "cannibalization_clusters").ok().flatten()
+            });
+        db_doc.unwrap_or_else(|| {
+            let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
+            std::fs::read_to_string(&clusters_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({ "clusters": [] }))
+        })
+    };
     let clusters = clusters_doc["clusters"].as_array().cloned().unwrap_or_default();
 
     // Build a map from article URL (normalized) → cluster
@@ -773,7 +782,7 @@ fn build_distinctiveness_prompt(skill: &str, target: &IndexingTargetContext) -> 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Read all previous step outputs and produce the final campaign plan.
-pub(crate) fn exec_ihc_reduce_plan(_task: &Task, project_path: &str) -> StepResult {
+pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
     // Load target contexts
@@ -879,6 +888,19 @@ pub(crate) fn exec_ihc_reduce_plan(_task: &Task, project_path: &str) -> StepResu
         }
     };
 
+    // Save to database (new primary storage)
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+        let _ = crate::db::content_audit::save_audit_artifact(
+            &db,
+            &task.project_id,
+            "indexing_campaign_plan",
+            &now_iso,
+            &plan_json,
+        );
+    }
+
+    // Keep JSON write as export during transition
     let plan_path = paths.automation_dir.join("indexing_campaign_plan.json");
     if let Err(e) = std::fs::write(&plan_path, &plan_json) {
         return StepResult {
@@ -954,19 +976,31 @@ pub(crate) fn spawn_campaign_children(
     project_path: &str,
 ) -> Vec<String> {
     let paths = ProjectPaths::from_path(project_path);
-    let plan_path = paths.automation_dir.join("indexing_campaign_plan.json");
 
-    let plan: IndexingCampaignPlan = match std::fs::read_to_string(&plan_path) {
-        Ok(raw) => match serde_json::from_str(&raw) {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("[ihc_post_action] failed to parse campaign plan: {}", e);
-                return vec![];
+    // Load campaign plan from DB (primary) or JSON fallback
+    let plan: IndexingCampaignPlan = {
+        let db_plan = crate::db::content_audit::get_latest_audit_artifact(conn, &parent_task.project_id, "indexing_campaign_plan")
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_value::<IndexingCampaignPlan>(v).ok());
+        match db_plan {
+            Some(p) => p,
+            None => {
+                let plan_path = paths.automation_dir.join("indexing_campaign_plan.json");
+                match std::fs::read_to_string(&plan_path) {
+                    Ok(raw) => match serde_json::from_str(&raw) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::warn!("[ihc_post_action] failed to parse campaign plan: {}", e);
+                            return vec![];
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("[ihc_post_action] plan file not found: {}", e);
+                        return vec![];
+                    }
+                }
             }
-        },
-        Err(e) => {
-            log::warn!("[ihc_post_action] plan file not found: {}", e);
-            return vec![];
         }
     };
 

@@ -42,24 +42,44 @@ pub(crate) fn exec_generate_feature_spec(
         sections.push(format_content_audit_section(&audit));
     }
 
-    if let Some(ctr) = load_json(automation_dir.join("ctr_audit_context.json")) {
-        sections.push(format_ctr_section(&ctr));
+    let ctr_json = crate::db::content_audit::get_latest_audit_artifact(&db, &task.project_id, "ctr_audit_context")
+        .ok()
+        .flatten()
+        .or_else(|| load_json(automation_dir.join("ctr_audit_context.json")));
+    if let Some(ref ctr) = ctr_json {
+        sections.push(format_ctr_section(ctr));
     }
 
-    if let Some(clusters) = load_json(automation_dir.join("cannibalization_clusters.json")) {
-        sections.push(format_cannibalization_section(&clusters));
+    let clusters_json = crate::db::content_audit::get_latest_audit_artifact(&db, &task.project_id, "cannibalization_clusters")
+        .ok()
+        .flatten()
+        .or_else(|| load_json(automation_dir.join("cannibalization_clusters.json")));
+    if let Some(ref clusters) = clusters_json {
+        sections.push(format_cannibalization_section(clusters));
     }
 
-    if let Some(candidates) = load_json(automation_dir.join("cannibalization_candidates.json")) {
-        sections.push(format_candidates_section(&candidates));
+    let candidates_json = crate::db::content_audit::get_latest_audit_artifact(&db, &task.project_id, "cannibalization_candidates")
+        .ok()
+        .flatten()
+        .or_else(|| load_json(automation_dir.join("cannibalization_candidates.json")));
+    if let Some(ref candidates) = candidates_json {
+        sections.push(format_candidates_section(candidates));
     }
 
-    if let Some(plan) = load_json(automation_dir.join("indexing_campaign_plan.json")) {
-        sections.push(format_indexing_section(&plan));
+    let plan_json = crate::db::content_audit::get_latest_audit_artifact(&db, &task.project_id, "indexing_campaign_plan")
+        .ok()
+        .flatten()
+        .or_else(|| load_json(automation_dir.join("indexing_campaign_plan.json")));
+    if let Some(ref plan) = plan_json {
+        sections.push(format_indexing_section(plan));
     }
 
-    if let Some(templates) = load_json(automation_dir.join("ctr_template_detections.json")) {
-        sections.push(format_template_section(&templates));
+    let templates_json = crate::db::content_audit::get_latest_audit_artifact(&db, &task.project_id, "ctr_template_detections")
+        .ok()
+        .flatten()
+        .or_else(|| load_json(automation_dir.join("ctr_template_detections.json")));
+    if let Some(ref templates) = templates_json {
+        sections.push(format_template_section(templates));
     }
 
     if sections.is_empty() {
