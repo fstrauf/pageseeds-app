@@ -1140,16 +1140,26 @@ pub(crate) fn exec_can_exact_keyword_dupes(_task: &Task, project_path: &str) -> 
 /// Reads `cannibalization_clusters.json`, scores clusters, splits giant components
 /// by target keyword, caps pages per candidate at 8, and writes
 /// `cannibalization_candidates.json`.
-pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> StepResult {
+pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
-    let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
 
-    let clusters_doc: serde_json::Value = match crate::engine::exec::common::read_json(
-        &clusters_path,
-        "cannibalization_clusters.json",
-    ) {
-        Ok(v) => v,
-        Err(e) => return e,
+    // Load clusters from DB (primary) or JSON fallback
+    let clusters_doc: serde_json::Value = {
+        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
+            .ok()
+            .and_then(|conn| {
+                crate::db::content_audit::get_latest_audit_artifact(&conn, &task.project_id, "cannibalization_clusters").ok().flatten()
+            });
+        match db_doc {
+            Some(v) => v,
+            None => {
+                let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
+                match crate::engine::exec::common::read_json(&clusters_path, "cannibalization_clusters.json") {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                }
+            }
+        }
     };
 
     let clusters = clusters_doc["clusters"]
@@ -1397,7 +1407,7 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
     if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
         let _ = crate::db::content_audit::save_audit_artifact(
             &db,
-            &_task.project_id,
+            &task.project_id,
             "cannibalization_candidates",
             &now_iso,
             &serde_json::to_string(&candidates_doc).unwrap_or_default(),
@@ -1444,20 +1454,33 @@ pub(crate) fn exec_can_select_candidates(_task: &Task, project_path: &str) -> St
 /// Reads `cannibalization_candidates.json`, calls the agent once per candidate,
 /// and writes `cannibalization_batch_outputs.json`.
 pub(crate) fn exec_can_analyze_candidates(
-    _task: &Task,
+    task: &Task,
     project_path: &str,
     agent_provider: &str,
 ) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
     let repo_root = Path::new(project_path);
 
-    let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
-    let candidates_doc: serde_json::Value = match crate::engine::exec::common::read_json(
-        &candidates_path,
-        "cannibalization_candidates.json",
-    ) {
-        Ok(v) => v,
-        Err(e) => return e,
+    // Load candidates from DB (primary) or JSON fallback
+    let candidates_doc: serde_json::Value = {
+        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
+            .ok()
+            .and_then(|conn| {
+                crate::db::content_audit::get_latest_audit_artifact(&conn, &task.project_id, "cannibalization_candidates").ok().flatten()
+            });
+        match db_doc {
+            Some(v) => v,
+            None => {
+                let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
+                match crate::engine::exec::common::read_json(
+                    &candidates_path,
+                    "cannibalization_candidates.json",
+                ) {
+                    Ok(v) => v,
+                    Err(e) => return e,
+                }
+            }
+        }
     };
 
     let candidates = candidates_doc["candidates"]

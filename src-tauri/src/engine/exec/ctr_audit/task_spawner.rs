@@ -22,7 +22,14 @@ pub(crate) fn create_ctr_fix_tasks(
         .find(|a| a.key == "ctr_build_context")
         .and_then(|a| a.content.clone())
         .or_else(|| {
-            // Fallback: read from automation dir (matches context.rs out_path)
+            // Fallback 1: read from database
+            crate::db::content_audit::get_latest_audit_artifact(conn, &parent_task.project_id, "ctr_audit_context")
+                .ok()
+                .flatten()
+                .and_then(|v| serde_json::to_string(&v).ok())
+        })
+        .or_else(|| {
+            // Fallback 2: read from automation dir (matches context.rs out_path)
             let fallback_path = paths.automation_dir.join("ctr_audit_context.json");
             std::fs::read_to_string(&fallback_path).ok()
         })
