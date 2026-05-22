@@ -378,18 +378,6 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         );
     }
 
-    // Keep JSON write as export during transition
-    let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
-    if let Err(e) = std::fs::write(
-        &clusters_path,
-        serde_json::to_string_pretty(&clusters_doc).unwrap_or_default() + "\n",
-    ) {
-        log::warn!(
-            "[cannibalization_audit] Failed to write cannibalization_clusters.json: {}",
-            e
-        );
-    }
-
     let hub_gaps_path = paths.automation_dir.join("hub_gaps.json");
     let hub_gaps_doc = serde_json::json!({
         "generated_at": &now_iso,
@@ -1411,18 +1399,6 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
             "cannibalization_candidates",
             &now_iso,
             &serde_json::to_string(&candidates_doc).unwrap_or_default(),
-        );
-    }
-
-    // Keep JSON write as export during transition
-    let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
-    if let Err(e) = std::fs::write(
-        &candidates_path,
-        serde_json::to_string_pretty(&candidates_doc).unwrap_or_default() + "\n",
-    ) {
-        log::warn!(
-            "[cannibalization_audit] Failed to write candidates file: {}",
-            e
         );
     }
 

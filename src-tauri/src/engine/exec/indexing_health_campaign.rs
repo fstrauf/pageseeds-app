@@ -900,16 +900,6 @@ pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResul
         );
     }
 
-    // Keep JSON write as export during transition
-    let plan_path = paths.automation_dir.join("indexing_campaign_plan.json");
-    if let Err(e) = std::fs::write(&plan_path, &plan_json) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write campaign plan: {}", e),
-            output: None,
-        };
-    }
-
     StepResult {
         success: true,
         message: summary_msg,

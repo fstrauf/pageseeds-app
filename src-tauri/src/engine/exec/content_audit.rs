@@ -130,14 +130,6 @@ pub fn exec_content_audit(
         .collect();
 
     let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let output_doc = serde_json::json!({
-        "generated_at": now_iso,
-        "total_audited": results.len(),
-        "health_summary": { "good": good, "needs_improvement": needs, "poor": poor },
-        "duplicate_groups": duplicate_groups,
-        "duplicate_articles": duplicate_groups.iter().map(|g| g["article_count"].as_u64().unwrap_or(0)).sum::<u64>(),
-        "articles": &results,
-    });
 
     // ─── Write to database (new primary storage) ──────────────────────────────
     let db_articles: Vec<crate::db::content_audit::ArticleContentAudit> = results
@@ -174,10 +166,6 @@ pub fn exec_content_audit(
         };
     }
 
-    // ─── Keep JSON write as export during transition ──────────────────────────
-    let out_path = paths.automation_dir.join("content_audit.json");
-    let _ = crate::engine::exec::common::write_json(&out_path, &output_doc, "content_audit.json");
-
     // Update content_hash in articles table for each audited article
     for result in &results {
         if let (Some(id), Some(hash)) = (result["id"].as_i64(), result["md5_body_hash"].as_str()) {
@@ -201,7 +189,6 @@ pub fn exec_content_audit(
             serde_json::to_string_pretty(&serde_json::json!({
                 "total": good + needs + poor,
                 "good": good, "needs_improvement": needs, "poor": poor,
-                "output_path": out_path.display().to_string(),
             }))
             .unwrap_or_default(),
         ),

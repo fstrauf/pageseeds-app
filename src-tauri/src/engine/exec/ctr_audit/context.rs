@@ -315,12 +315,6 @@ pub(crate) fn exec_ctr_build_context(
         &full_str,
     );
 
-    // Keep JSON write as export during transition
-    let out_path = paths.automation_dir.join("ctr_audit_context.json");
-    if let Err(e) = std::fs::write(&out_path, &full_str) {
-        log::warn!("[ctr_audit] Failed to write ctr_audit_context.json: {}", e);
-    }
-
     let clean_msg = if cleaned_summary.is_empty() {
         String::new()
     } else {
