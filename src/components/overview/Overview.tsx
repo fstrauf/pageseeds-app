@@ -769,46 +769,40 @@ export function Overview({
                 }
               </button>
 
-              {/* Health snapshot — tells the user when to run the audit */}
+              {/* Health snapshot — shows what's still outstanding */}
               {(() => {
-                const contentReviewActivity = overview?.workflow_activity?.find(
-                  a => a.task_type === 'content_review'
+                const snap = overview?.health_snapshot
+                const hasSnap = snap && (
+                  snap.content_poor > 0 ||
+                  snap.content_needs_improvement > 0 ||
+                  snap.indexing_not_indexed > 0 ||
+                  snap.ctr_issue_count > 0 ||
+                  snap.cannibalization_clusters > 0
                 )
-                const lastAuditDate = contentReviewActivity?.last_run_at
-                  ? new Date(contentReviewActivity.last_run_at)
-                  : null
-                const daysSince = lastAuditDate
-                  ? Math.floor((Date.now() - lastAuditDate.getTime()) / (1000 * 60 * 60 * 24))
-                  : null
-                const auditOverdue = daysSince !== null && daysSince > 14
-                const hasEverRun = !!lastAuditDate
-
-                const fix = overview?.fix_summary
-                const hasFixes = fix && (fix.completed > 0 || fix.failed > 0 || fix.pending > 0)
-                const totalFixTasks = fix ? fix.completed + fix.failed + fix.pending : 0
-                const remainingFromAudit = fix && fix.total_found > 0
-                  ? Math.max(0, fix.total_found - fix.completed)
+                const totalOutstanding = snap
+                  ? snap.content_poor + snap.content_needs_improvement + snap.indexing_not_indexed + snap.ctr_issue_count + snap.cannibalization_clusters
                   : 0
+                const daysSince = snap && snap.last_audit_days >= 0 ? snap.last_audit_days : null
+                const auditOverdue = daysSince !== null && daysSince > 14
+                const hasEverRun = daysSince !== null
 
                 return (
                   <div className="px-3 py-2 rounded-md bg-secondary/40 space-y-1.5">
+                    {/* Primary status: what's outstanding */}
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Status</span>
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Outstanding</span>
                       {!hasEverRun ? (
                         <span className="text-[10px] text-amber-600 font-medium">Never audited</span>
                       ) : auditOverdue ? (
                         <span className="text-[10px] text-amber-600 font-medium">{daysSince}d since last audit</span>
-                      ) : fix && fix.pending > 0 ? (
-                        <span className="text-[10px] text-blue-600 font-medium">{fix.pending} of {totalFixTasks} fix{totalFixTasks !== 1 ? 'es' : ''} in progress</span>
-                      ) : fix && fix.total_found > 0 && remainingFromAudit > 0 ? (
-                        <span className="text-[10px] text-amber-600 font-medium">{remainingFromAudit} of {fix.total_found} articles still need attention</span>
-                      ) : fix && fix.completed > 0 ? (
-                        <span className="text-[10px] text-emerald-600 font-medium">{totalFixTasks} fix{totalFixTasks !== 1 ? 'es' : ''} processed ({fix.completed} done{fix.failed > 0 ? `, ${fix.failed} failed` : ''})</span>
+                      ) : hasSnap ? (
+                        <span className="text-[10px] text-amber-600 font-medium">{totalOutstanding} issue{totalOutstanding !== 1 ? 's' : ''} need attention</span>
                       ) : (
                         <span className="text-[10px] text-emerald-600 font-medium">All clear</span>
                       )}
                     </div>
 
+                    {/* Breakdown badges: what exactly needs work */}
                     {hasEverRun && (
                       <div className="flex flex-wrap gap-1">
                         {daysSince !== null && (
@@ -821,35 +815,51 @@ export function Overview({
                             {daysSince}d ago
                           </Badge>
                         )}
-                        {fix && fix.total_found > 0 && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-slate-50 text-slate-700 border-slate-200">
-                            {fix.total_found} issues found
-                          </Badge>
-                        )}
-                        {fix && fix.completed > 0 && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-emerald-50 text-emerald-700 border-emerald-200">
-                            {fix.completed} fixed
-                          </Badge>
-                        )}
-                        {fix && fix.failed > 0 && (
+                        {snap && snap.content_poor > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-rose-50 text-rose-700 border-rose-200">
-                            {fix.failed} failed
+                            {snap.content_poor} poor
                           </Badge>
                         )}
-                        {fix && fix.pending > 0 && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-blue-50 text-blue-700 border-blue-200">
-                            {fix.pending} pending
-                          </Badge>
-                        )}
-                        {fix && fix.total_found > 0 && remainingFromAudit > 0 && (
+                        {snap && snap.content_needs_improvement > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-amber-50 text-amber-700 border-amber-200">
-                            {remainingFromAudit} remaining
+                            {snap.content_needs_improvement} needs work
                           </Badge>
                         )}
-                        {!hasFixes && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-emerald-50 text-emerald-700 border-emerald-200">
-                            No fixes needed
+                        {snap && snap.indexing_not_indexed > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-slate-50 text-slate-700 border-slate-200">
+                            {snap.indexing_not_indexed} not indexed
                           </Badge>
+                        )}
+                        {snap && snap.ctr_issue_count > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-violet-50 text-violet-700 border-violet-200">
+                            {snap.ctr_issue_count} CTR issues
+                          </Badge>
+                        )}
+                        {snap && snap.cannibalization_clusters > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-pink-50 text-pink-700 border-pink-200">
+                            {snap.cannibalization_clusters} clusters
+                          </Badge>
+                        )}
+                        {!hasSnap && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-emerald-50 text-emerald-700 border-emerald-200">
+                            Nothing outstanding
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Fix progress: secondary, shown only when there's fix activity */}
+                    {snap && (snap.fix_completed > 0 || snap.fix_failed > 0 || snap.fix_pending > 0) && (
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <span className="text-[10px] text-muted-foreground">Fixes:</span>
+                        {snap.fix_completed > 0 && (
+                          <span className="text-[10px] text-emerald-600">{snap.fix_completed} done</span>
+                        )}
+                        {snap.fix_failed > 0 && (
+                          <span className="text-[10px] text-rose-600">{snap.fix_failed} failed</span>
+                        )}
+                        {snap.fix_pending > 0 && (
+                          <span className="text-[10px] text-blue-600">{snap.fix_pending} pending</span>
                         )}
                       </div>
                     )}

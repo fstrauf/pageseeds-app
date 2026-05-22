@@ -210,6 +210,113 @@ pub fn count_unhealthy_articles(conn: &Connection, project_id: &str) -> Result<i
     )
 }
 
+/// Outstanding issue counts across all audit types for a project.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HealthSnapshot {
+    pub content_poor: i64,
+    pub content_needs_improvement: i64,
+    pub content_good: i64,
+    pub indexing_not_indexed: i64,
+    pub ctr_issue_count: i64,
+    pub cannibalization_clusters: i64,
+    pub fix_completed: i64,
+    pub fix_failed: i64,
+    pub fix_pending: i64,
+    pub last_audit_days: i64,
+}
+
+/// Build a comprehensive health snapshot showing what still needs attention.
+pub fn get_health_snapshot(conn: &Connection, project_id: &str) -> Result<HealthSnapshot> {
+    let mut snap = HealthSnapshot::default();
+
+    // Content audit counts from latest run
+    if let Ok(Some(run)) = get_latest_audit_run(conn, project_id) {
+        snap.content_good = run.good_count;
+        snap.content_needs_improvement = run.needs_improvement_count;
+        snap.content_poor = run.poor_count;
+    }
+
+    // Indexing: count not-indexed URLs from latest campaign plan
+    if let Ok(Some(plan_json)) = get_latest_audit_artifact(conn, project_id, "indexing_campaign_plan") {
+        if let Some(targets) = plan_json["targets"].as_array() {
+            snap.indexing_not_indexed = targets
+                .iter()
+                .filter(|t| t["reason_code"].as_str().unwrap_or("").starts_with("not_indexed"))
+                .count() as i64;
+        }
+    }
+
+    // CTR: count articles with issues from latest context
+    if let Ok(Some(ctr_json)) = get_latest_audit_artifact(conn, project_id, "ctr_audit_context") {
+        if let Some(articles) = ctr_json["articles"].as_array() {
+            snap.ctr_issue_count = articles
+                .iter()
+                .filter(|a| {
+                    a["issues_detected"].as_array().map(|issues| !issues.is_empty()).unwrap_or(false)
+                })
+                .count() as i64;
+        }
+    }
+
+    // Cannibalization: count clusters from latest clusters artifact
+    if let Ok(Some(clusters_json)) = get_latest_audit_artifact(conn, project_id, "cannibalization_clusters") {
+        if let Some(clusters) = clusters_json["clusters"].as_array() {
+            snap.cannibalization_clusters = clusters.len() as i64;
+        }
+    }
+
+    // Fix task progress since last audit run
+    let last_audit_at: Option<String> = conn.query_row(
+        "SELECT MAX(tr.finished_at)
+         FROM tasks t
+         JOIN task_runs tr ON t.id = tr.task_id
+         WHERE t.project_id = ?1 AND t.type IN ('content_review', 'indexing_health_campaign', 'ctr_audit') AND tr.success = 1",
+        [project_id],
+        |row| row.get(0),
+    ).ok().flatten();
+
+    let since_clause = match &last_audit_at {
+        Some(ts) => format!("AND updated_at > '{}'", ts),
+        None => String::new(),
+    };
+
+    let sql = format!(
+        "SELECT
+           SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END),
+           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+           SUM(CASE WHEN status IN ('todo', 'queued', 'in_progress') THEN 1 ELSE 0 END)
+         FROM tasks
+         WHERE project_id = ?1 AND type LIKE 'fix_%' {}",
+        since_clause
+    );
+
+    conn.query_row(&sql, [project_id], |row| {
+        snap.fix_completed = row.get::<_, Option<i64>>(0)?.unwrap_or(0);
+        snap.fix_failed = row.get::<_, Option<i64>>(1)?.unwrap_or(0);
+        snap.fix_pending = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
+        Ok(())
+    }).unwrap_or(());
+
+    // Days since last audit
+    snap.last_audit_days = conn.query_row(
+        "SELECT COALESCE(MAX(run_at), '') FROM content_audit_runs WHERE project_id = ?1",
+        [project_id],
+        |row| {
+            let run_at: String = row.get(0)?;
+            if run_at.is_empty() {
+                return Ok(-1i64);
+            }
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&run_at) {
+                Ok(chrono::Utc::now().signed_duration_since(dt).num_days())
+            } else {
+                Ok(-1i64)
+            }
+        },
+    ).unwrap_or(-1);
+
+    Ok(snap)
+}
+
 /// Delete all content audit data for a project (e.g. when project is deleted).
 pub fn delete_project_audit_data(conn: &Connection, project_id: &str) -> Result<()> {
     conn.execute(

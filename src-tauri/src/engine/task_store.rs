@@ -633,6 +633,8 @@ pub struct ProjectOverview {
     pub pending_feature_specs: Vec<PendingFeatureSpec>,
     /// Fix tasks completed / failed since the most recent audit
     pub fix_summary: FixSummary,
+    /// Comprehensive health snapshot: what still needs attention across all audits
+    pub health_snapshot: crate::db::content_audit::HealthSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -644,6 +646,10 @@ pub struct FixSummary {
     /// (needs_improvement + poor). 0 if no audit exists.
     pub total_found: i64,
 }
+
+/// Comprehensive health snapshot showing outstanding issues across all audit types.
+/// Replaces FixSummary as the primary health indicator in Overview.
+pub use crate::db::content_audit::HealthSnapshot;
 
 /// A generate_feature_spec task waiting for user confirmation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -876,6 +882,9 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         summary
     };
 
+    let health_snapshot = crate::db::content_audit::get_health_snapshot(conn, project_id)
+        .unwrap_or_default();
+
     Ok(ProjectOverview {
         tasks: counts,
         recent_tasks,
@@ -885,6 +894,7 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
         pending_landing_page_research,
         pending_feature_specs,
         fix_summary,
+        health_snapshot,
     })
 }
 

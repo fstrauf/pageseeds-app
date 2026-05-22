@@ -642,6 +642,19 @@ export interface FixSummary {
   total_found: number
 }
 
+export interface HealthSnapshot {
+  content_poor: number
+  content_needs_improvement: number
+  content_good: number
+  indexing_not_indexed: number
+  ctr_issue_count: number
+  cannibalization_clusters: number
+  fix_completed: number
+  fix_failed: number
+  fix_pending: number
+  last_audit_days: number
+}
+
 export interface ProjectOverview {
   tasks: TaskStatusCounts
   recent_tasks: RecentTask[]
@@ -651,6 +664,7 @@ export interface ProjectOverview {
   pending_landing_page_research: LandingPageResearchPending[]
   pending_feature_specs: PendingFeatureSpec[]
   fix_summary: FixSummary
+  health_snapshot: HealthSnapshot
 }
 
 export interface QuickAction {
