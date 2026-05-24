@@ -223,6 +223,18 @@ pub struct HealthSnapshot {
     pub fix_failed: i64,
     pub fix_pending: i64,
     pub last_audit_days: i64,
+    /// Estimated new fix tasks the next content_review run would spawn.
+    pub content_next_run_yield: i64,
+    /// Estimated new fix tasks the next indexing_health_campaign run would spawn.
+    pub indexing_next_run_yield: i64,
+    /// Number of articles currently on 30-day cooldown (shared between content & indexing).
+    pub fix_on_cooldown: i64,
+    /// Articles still poor after accounting for fixes applied since the last audit.
+    pub content_poor_outstanding: i64,
+    /// Articles still needs_improvement after accounting for fixes applied since the last audit.
+    pub content_needs_work_outstanding: i64,
+    /// Number of fix_content_article tasks currently in review status (need human attention).
+    pub fix_needs_review: i64,
 }
 
 /// Build a comprehensive health snapshot showing what still needs attention.
@@ -230,10 +242,39 @@ pub fn get_health_snapshot(conn: &Connection, project_id: &str) -> Result<Health
     let mut snap = HealthSnapshot::default();
 
     // Content audit counts from latest run
-    if let Ok(Some(run)) = get_latest_audit_run(conn, project_id) {
+    let latest_run_at: Option<String> = if let Ok(Some(run)) = get_latest_audit_run(conn, project_id) {
         snap.content_good = run.good_count;
         snap.content_needs_improvement = run.needs_improvement_count;
         snap.content_poor = run.poor_count;
+        Some(run.run_at)
+    } else {
+        None
+    };
+
+    // Net outstanding: subtract articles fixed since the last audit.
+    // An article counts as "addressed" if last_edited_at > audit_run_at
+    // (fix_apply.rs updates last_edited_at when a patch is successfully applied).
+    if let Some(ref run_at) = latest_run_at {
+        let outstanding = conn.query_row(
+            "SELECT
+               SUM(CASE WHEN a.health = 'poor' AND (art.last_edited_at IS NULL OR art.last_edited_at <= ?2) THEN 1 ELSE 0 END),
+               SUM(CASE WHEN a.health = 'needs_improvement' AND (art.last_edited_at IS NULL OR art.last_edited_at <= ?2) THEN 1 ELSE 0 END)
+             FROM article_content_audits a
+             JOIN content_audit_runs r ON a.run_id = r.id
+             LEFT JOIN articles art ON art.id = a.article_id AND art.project_id = r.project_id
+             WHERE r.project_id = ?1
+               AND r.run_at = ?2",
+            rusqlite::params![project_id, run_at],
+            |row| {
+                let poor: Option<i64> = row.get(0)?;
+                let needs: Option<i64> = row.get(1)?;
+                Ok((poor.unwrap_or(0), needs.unwrap_or(0)))
+            },
+        );
+        if let Ok((poor, needs)) = outstanding {
+            snap.content_poor_outstanding = poor;
+            snap.content_needs_work_outstanding = needs;
+        }
     }
 
     // Indexing: count not-indexed URLs from latest campaign plan
@@ -296,6 +337,36 @@ pub fn get_health_snapshot(conn: &Connection, project_id: &str) -> Result<Health
         snap.fix_pending = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
         Ok(())
     }).unwrap_or(());
+
+    // Cooldown: count active idempotency keys for this project across all fix types.
+    // fix_content_article keys are shared between content_review and indexing_health_campaign.
+    // ihc-add-links and ihc-rewrite keys are indexing-campaign-specific.
+    let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+    let content_prefix = format!("fix_content_article:{}:", project_id);
+    let add_links_prefix = format!("ihc-add-links:{}:", project_id);
+    let rewrite_prefix = format!("ihc-rewrite:{}:", project_id);
+    snap.fix_on_cooldown = conn.query_row(
+        "SELECT COUNT(*) FROM task_idempotency_keys
+         WHERE (key LIKE ?1 OR key LIKE ?2 OR key LIKE ?3)
+           AND (expires_at IS NULL OR expires_at > ?4)",
+        [&content_prefix, &add_links_prefix, &rewrite_prefix, &now_rfc3339],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0);
+
+    // Next-run yield estimates.
+    // Each run caps at 20 fixes. Cooldowned articles are skipped.
+    const MAX_FIXES_PER_RUN: i64 = 20;
+    let content_unhealthy = snap.content_poor + snap.content_needs_improvement;
+    snap.content_next_run_yield = (content_unhealthy - snap.fix_on_cooldown).max(0).min(MAX_FIXES_PER_RUN);
+    snap.indexing_next_run_yield = (snap.indexing_not_indexed - snap.fix_on_cooldown).max(0).min(MAX_FIXES_PER_RUN);
+
+    // Count fix_content_article tasks currently in review (from failed verify checks)
+    snap.fix_needs_review = conn.query_row(
+        "SELECT COUNT(*) FROM tasks
+         WHERE project_id = ?1 AND type = 'fix_content_article' AND status = 'review'",
+        [project_id],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(0);
 
     // Days since last audit
     snap.last_audit_days = conn.query_row(
@@ -396,4 +467,156 @@ pub fn is_artifact_fresh(
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        // Enable WAL and busy_timeout like real connections
+        conn.pragma_update(None, "journal_mode", "WAL").ok();
+        conn.busy_timeout(std::time::Duration::from_secs(10)).ok();
+        conn
+    }
+
+    fn insert_test_project(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, ?2, ?3, 1, 'workspace')",
+            rusqlite::params![id, "Test Project", "/tmp/test"],
+        )
+        .unwrap();
+    }
+
+    /// Health snapshot correctly reads content audit data from the latest run.
+    #[test]
+    fn health_snapshot_reads_latest_content_audit() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1");
+
+        // Insert first audit run with 2 poor, 3 needs_improvement, 10 good
+        save_audit_run(&conn, "p1", "2026-05-20T00:00:00Z", 15, 10, 3, 2, "[]", vec![
+            ArticleContentAudit { run_id: 0, article_id: 1, article_file: "a.mdx".into(), title: "A".into(), url_slug: "a".into(), health: "poor".into(), health_score: 20, priority_score: 80, data_json: "{}".into() },
+            ArticleContentAudit { run_id: 0, article_id: 2, article_file: "b.mdx".into(), title: "B".into(), url_slug: "b".into(), health: "poor".into(), health_score: 30, priority_score: 70, data_json: "{}".into() },
+            ArticleContentAudit { run_id: 0, article_id: 3, article_file: "c.mdx".into(), title: "C".into(), url_slug: "c".into(), health: "needs_improvement".into(), health_score: 50, priority_score: 50, data_json: "{}".into() },
+            ArticleContentAudit { run_id: 0, article_id: 4, article_file: "d.mdx".into(), title: "D".into(), url_slug: "d".into(), health: "needs_improvement".into(), health_score: 55, priority_score: 45, data_json: "{}".into() },
+            ArticleContentAudit { run_id: 0, article_id: 5, article_file: "e.mdx".into(), title: "E".into(), url_slug: "e".into(), health: "needs_improvement".into(), health_score: 60, priority_score: 40, data_json: "{}".into() },
+            // articles 6-15 are good (10 total)
+            ArticleContentAudit { run_id: 0, article_id: 6, article_file: "f.mdx".into(), title: "F".into(), url_slug: "f".into(), health: "good".into(), health_score: 80, priority_score: 20, data_json: "{}".into() },
+        ]).unwrap();
+
+        // Also need matching articles rows for the "outstanding" subquery JOIN
+        for i in 1..=6 {
+            conn.execute(
+                "INSERT INTO articles (id, project_id, title, url_slug, file, status, word_count, last_edited_at)
+                 VALUES (?1, 'p1', 'T', 'slug', 'file.mdx', 'published', 500, NULL)",
+                rusqlite::params![i],
+            ).ok();
+        }
+
+        let snap = get_health_snapshot(&conn, "p1").unwrap();
+        assert_eq!(snap.content_poor, 2, "poor count from latest run");
+        assert_eq!(snap.content_needs_improvement, 3, "needs_improvement count");
+        assert_eq!(snap.content_good, 10, "good count");
+        assert!(snap.last_audit_days >= 0, "last_audit_days should be set");
+    }
+
+    /// Inserting a second audit run replaces the first in the health snapshot.
+    #[test]
+    fn health_snapshot_reads_second_audit_run() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1");
+
+        // Run 1: 5 poor, 0 needs, 10 good
+        save_audit_run(&conn, "p1", "2026-05-20T00:00:00Z", 15, 10, 0, 5, "[]", vec![]).unwrap();
+        let snap1 = get_health_snapshot(&conn, "p1").unwrap();
+        assert_eq!(snap1.content_poor, 5);
+
+        // Run 2: 0 poor, 0 needs, 20 good (all fixed)
+        save_audit_run(&conn, "p1", "2026-05-21T00:00:00Z", 20, 20, 0, 0, "[]", vec![]).unwrap();
+        let snap2 = get_health_snapshot(&conn, "p1").unwrap();
+        assert_eq!(snap2.content_poor, 0, "second run should replace first, poor=0");
+        assert_eq!(snap2.content_good, 20, "second run should replace first, good=20");
+    }
+
+    /// Health snapshot remains zero/default when no audit has ever run.
+    #[test]
+    fn health_snapshot_returns_zeros_when_no_audit() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1");
+
+        let snap = get_health_snapshot(&conn, "p1").unwrap();
+        assert_eq!(snap.content_poor, 0);
+        assert_eq!(snap.content_needs_improvement, 0);
+        assert_eq!(snap.content_good, 0);
+        assert_eq!(snap.indexing_not_indexed, 0);
+        assert_eq!(snap.ctr_issue_count, 0);
+        assert_eq!(snap.cannibalization_clusters, 0);
+    }
+
+    /// Indexing not_indexed count is read from the latest campaign plan artifact.
+    #[test]
+    fn health_snapshot_reads_indexing_artifact() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1");
+
+        let plan = serde_json::json!({
+            "targets": [
+                {"url": "a", "reason_code": "not_indexed_crawled"},
+                {"url": "b", "reason_code": "not_indexed_discovered"},
+                {"url": "c", "reason_code": "indexed_pass"},
+                {"url": "d", "reason_code": "not_indexed_other"},
+            ]
+        });
+        save_audit_artifact(&conn, "p1", "indexing_campaign_plan", "2026-05-22T00:00:00Z", &plan.to_string()).unwrap();
+
+        let snap = get_health_snapshot(&conn, "p1").unwrap();
+        // "not_indexed_crawled", "not_indexed_discovered", "not_indexed_other" = 3
+        // "indexed_pass" = not counted
+        assert_eq!(snap.indexing_not_indexed, 3);
+    }
+
+    /// CTR issue count is read from ctr_audit_context artifact.
+    #[test]
+    fn health_snapshot_reads_ctr_artifact() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1");
+
+        let ctr = serde_json::json!({
+            "articles": [
+                {"slug": "a", "issues_detected": ["low_ctr"]},
+                {"slug": "b", "issues_detected": []},
+                {"slug": "c", "issues_detected": ["bad_title", "bad_meta"]},
+                {"slug": "d", "issues_detected": []},
+            ]
+        });
+        save_audit_artifact(&conn, "p1", "ctr_audit_context", "2026-05-22T00:00:00Z", &ctr.to_string()).unwrap();
+
+        let snap = get_health_snapshot(&conn, "p1").unwrap();
+        assert_eq!(snap.ctr_issue_count, 2, "articles a and c have issues");
+    }
+
+    /// Cannibalization cluster count from artifact.
+    #[test]
+    fn health_snapshot_reads_cannibalization_artifact() {
+        let conn = in_memory_db();
+        insert_test_project(&conn, "p1");
+
+        let clusters = serde_json::json!({
+            "clusters": [
+                {"name": "cluster1", "size": 3},
+                {"name": "cluster2", "size": 2},
+                {"name": "cluster3", "size": 4},
+            ]
+        });
+        save_audit_artifact(&conn, "p1", "cannibalization_clusters", "2026-05-22T00:00:00Z", &clusters.to_string()).unwrap();
+
+        let snap = get_health_snapshot(&conn, "p1").unwrap();
+        assert_eq!(snap.cannibalization_clusters, 3);
+    }
 }

@@ -203,27 +203,122 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         });
     }
 
-    // Date check
-    if patch.changes.date.is_some() {
-        let date = get_scalar("date");
-        if !date.is_empty() {
-            verified_count += 1;
-            fixes.push(ContentFixVerifiedItem {
-                category: "date".to_string(),
-                status: "verified".to_string(),
-                detail: Some(format!("date = {}", date)),
-                actual: Some(date),
-                expected: None,
-            });
-        } else {
-            failed_count += 1;
-            fixes.push(ContentFixVerifiedItem {
-                category: "date".to_string(),
-                status: "failed".to_string(),
-                detail: Some("date field is empty".to_string()),
-                actual: Some(date),
-                expected: Some("non-empty date".to_string()),
-            });
+    // Keyword placement checks — verify the target keyword actually appears
+    // in the generated text, not just that the formatting is correct.
+    let target_kw = load_target_keyword(task);
+    if !target_kw.is_empty() {
+        let kw_lower = target_kw.to_lowercase();
+        let kw_normalized = kw_lower.trim_matches(|c: char| !c.is_alphanumeric()).trim();
+
+        // H1 keyword check
+        if patch.changes.h1.is_some() {
+            let h1_text = crate::content::frontmatter::split_mdx(&content)
+                .and_then(|(fm, body)| {
+                    body.lines()
+                        .find(|l| l.trim_start().starts_with("# ") && !l.trim_start().starts_with("## "))
+                        .map(|l| l.trim_start_matches("# ").trim().to_lowercase())
+                        // Fall back to frontmatter title if no H1 heading in body
+                        .or_else(|| {
+                            crate::content::frontmatter::top_level_scalars(fm)
+                                .iter()
+                                .find(|f| f.key == "title")
+                                .map(|f| f.raw_value.trim_matches('"').trim_matches('\'').to_lowercase())
+                        })
+                })
+                .unwrap_or_default();
+            if h1_text.contains(&kw_lower) || h1_text.contains(kw_normalized) {
+                verified_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "h1_keyword".to_string(),
+                    status: "verified".to_string(),
+                    detail: Some("Target keyword found in H1".to_string()),
+                    actual: Some(h1_text),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            } else {
+                failed_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "h1_keyword".to_string(),
+                    status: "failed".to_string(),
+                    detail: Some("Target keyword NOT found in H1 after fix".to_string()),
+                    actual: Some(h1_text),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            }
+        }
+
+        // Meta description keyword check
+        if patch.changes.description.is_some() {
+            let meta = get_scalar("description").to_lowercase();
+            if meta.contains(&kw_lower) || meta.contains(kw_normalized) {
+                verified_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "meta_desc_keyword".to_string(),
+                    status: "verified".to_string(),
+                    detail: Some("Target keyword found in meta description".to_string()),
+                    actual: Some(meta),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            } else {
+                failed_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "meta_desc_keyword".to_string(),
+                    status: "failed".to_string(),
+                    detail: Some("Target keyword NOT found in meta description after fix".to_string()),
+                    actual: Some(meta),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            }
+        }
+
+        // Title keyword check
+        if patch.changes.title.is_some() {
+            let title_lower = get_scalar("title").to_lowercase();
+            if title_lower.contains(&kw_lower) || title_lower.contains(kw_normalized) {
+                verified_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "title_keyword".to_string(),
+                    status: "verified".to_string(),
+                    detail: Some("Target keyword found in title".to_string()),
+                    actual: Some(title_lower),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            } else {
+                failed_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "title_keyword".to_string(),
+                    status: "failed".to_string(),
+                    detail: Some("Target keyword NOT found in title after fix".to_string()),
+                    actual: Some(title_lower),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            }
+        }
+
+        // First paragraph keyword check
+        if patch.changes.intro.is_some() {
+            let first_para = crate::content::cleaner::find_first_paragraph_range(body)
+                .map(|(start, end)| body[start..end].trim().to_lowercase())
+                .unwrap_or_default();
+            if first_para.contains(&kw_lower) || first_para.contains(kw_normalized) {
+                verified_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "keyword_first_para".to_string(),
+                    status: "verified".to_string(),
+                    detail: Some("Target keyword found in first paragraph".to_string()),
+                    actual: Some(first_para),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            } else {
+                failed_count += 1;
+                fixes.push(ContentFixVerifiedItem {
+                    category: "keyword_first_para".to_string(),
+                    status: "failed".to_string(),
+                    detail: Some("Target keyword NOT found in first paragraph after fix".to_string()),
+                    actual: Some(first_para),
+                    expected: Some(format!("contains: {}", target_kw)),
+                });
+            }
         }
     }
 
@@ -248,6 +343,17 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         fixes,
     };
 
+    // Keyword check failures are real failures — the fix didn't actually
+    // resolve the SEO issues the audit flagged. Surface them so the task
+    // goes to Review (not Done), making the problem visible.
+    let has_seo_failures = report.fixes.iter().any(|f| {
+        f.status == "failed"
+            && (f.category == "h1_keyword"
+                || f.category == "meta_desc_keyword"
+                || f.category == "title_keyword"
+                || f.category == "keyword_first_para")
+    });
+
     let report_json = match serde_json::to_string_pretty(&report) {
         Ok(s) => s,
         Err(e) => {
@@ -259,11 +365,8 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         }
     };
 
-    // Verification is advisory — the actual fixes were already applied and
-    // validated for structural integrity in the apply step. We report
-    // metric results for visibility but never fail the task here.
     StepResult {
-        success: true,
+        success: !has_seo_failures,
         message: summary,
         output: Some(report_json),
     }
@@ -295,4 +398,15 @@ fn resolve_patch(task: &Task) -> Result<ContentFixPatch, StepResult> {
         message: "No content_fix_patch artifact found. Run the generate step first.".to_string(),
         output: None,
     })
+}
+
+/// Extract the target keyword from the content_fix_context artifact.
+fn load_target_keyword(task: &Task) -> String {
+    task.artifacts
+        .iter()
+        .find(|a| a.key == "content_fix_context")
+        .and_then(|a| a.content.as_deref())
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|v| v["target_keyword"].as_str().map(|s| s.to_string()))
+        .unwrap_or_default()
 }

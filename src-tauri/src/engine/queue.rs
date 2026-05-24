@@ -796,7 +796,14 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
                             Some(&exec_result.message),
                             result_json.as_deref(),
                         )?;
-                        task_store::update_task_status(&tx, &item.task_id, TaskStatus::Failed)?;
+                        task_store::update_task_status(
+                            &tx,
+                            &item.task_id,
+                            crate::engine::executor::completed_task_status(
+                                item.task_type.as_deref().unwrap_or(""),
+                                false,
+                            ),
+                        )?;
                         tx.commit()?;
                         Ok(())
                     })() {

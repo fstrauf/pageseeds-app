@@ -55,6 +55,58 @@ describe('useQuery', () => {
     expect(result.current.data).toBeUndefined()
     expect(fetcher).not.toHaveBeenCalled()
   })
+
+  it('refetch() returns latest data even when cache is not stale', async () => {
+    let value = 'initial'
+    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(value))
+
+    const { result } = renderHook(() =>
+      useQuery('refetch-fresh-key', fetcher, { staleTime: 30_000 })
+    )
+    await waitFor(() => expect(result.current.data).toBe('initial'))
+    expect(fetcher).toHaveBeenCalledTimes(1)
+
+    // Simulate new data available from backend (like after audit completes)
+    value = 'updated'
+    // refetch() should bypass staleTime and fetch fresh data
+    act(() => {
+      result.current.refetch()
+    })
+
+    await waitFor(() => expect(result.current.data).toBe('updated'))
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('refetch() updates data across two hooks sharing the same key', async () => {
+    let value = 'v1'
+    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(value))
+
+    // Hook A — initial fetch
+    const { result: resultA } = renderHook(() =>
+      useQuery('shared-refetch-key', fetcher, { staleTime: 30_000 })
+    )
+    await waitFor(() => expect(resultA.current.data).toBe('v1'))
+    expect(fetcher).toHaveBeenCalledTimes(1)
+
+    // Hook B — reads from cache (no second fetch because not stale)
+    const { result: resultB } = renderHook(() =>
+      useQuery('shared-refetch-key', fetcher, { staleTime: 30_000 })
+    )
+    expect(resultB.current.data).toBe('v1')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+
+    // Backend data changes
+    value = 'v2'
+    // Hook B calls refetch (like the Overview effect does)
+    act(() => {
+      resultB.current.refetch()
+    })
+
+    await waitFor(() => expect(resultB.current.data).toBe('v2'))
+    // Hook A should also see the update because they share the same cache key
+    await waitFor(() => expect(resultA.current.data).toBe('v2'))
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('useMutation', () => {

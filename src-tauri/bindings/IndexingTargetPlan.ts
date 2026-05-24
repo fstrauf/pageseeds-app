@@ -5,4 +5,16 @@ import type { JsonValue } from "./serde_json/JsonValue";
 /**
  * Per-target plan produced by the reduce step.
  */
-export type IndexingTargetPlan = { url: string, reason_code: string, recommended_action: string, context_artifact_key: string | null, distinctiveness_verdict: DistinctivenessVerdict | null, content_audit_summary: JsonValue | null, };
+export type IndexingTargetPlan = { url: string, reason_code: string, recommended_action: string, context_artifact_key: string | null, distinctiveness_verdict: DistinctivenessVerdict | null, content_audit_summary: JsonValue | null, 
+/**
+ * Content audit word count for this URL (0 = not in tracked content)
+ */
+word_count: number | null, 
+/**
+ * Internal incoming links from link scan
+ */
+incoming_links: number | null, 
+/**
+ * Source MDX file path if tracked in content audit; None if only in GSC
+ */
+file: string | null, };

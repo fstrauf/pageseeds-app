@@ -460,6 +460,14 @@ export function Overview({
   const [repairResult, setRepairResult] = useState<import('../../lib/types').RepairPathResult | null>(null)
   const [runningCtr, setRunningCtr] = useState(false)
   const [runningFullAudit, setRunningFullAudit] = useState(false)
+  const [lastRunSummary, setLastRunSummary] = useState<string | null>(null)
+
+  // Live queue snapshot for showing in-progress fix counts
+  const queueSnapshot = useQueueStore(s => s.snapshot)
+  const queueIsRunning = queueSnapshot?.run?.status === 'running'
+
+  // Track previous overview for run-to-run delta
+  const prevOverviewRef = useRef<ProjectOverview | null>(null)
 
   const {
     data: liveSitePages = [],
@@ -511,6 +519,13 @@ export function Overview({
     setLoading(true)
     try {
       const data = await getProjectOverview(project.id)
+      console.log('[Overview] load() received:', {
+        tasks: data.tasks,
+        articles: data.articles,
+        ready: data.ready_task_count,
+        health: data.health_snapshot,
+        fixSummary: data.fix_summary,
+      })
       setOverview(data)
     } catch {
       // ignore
@@ -539,13 +554,37 @@ export function Overview({
     }
   }, [project, runCompletedTick, load, isLiveSiteProject, refetchCtrHealth, refetchIndexingHealth, refetchContentAudit, refetchLiveSitePages])
 
+  // Build last-run summary when queue finishes and overview updates
+  useEffect(() => {
+    const prev = prevOverviewRef.current
+    if (prev && overview && !queueIsRunning) {
+      const prevPoor = prev.health_snapshot?.content_poor ?? 0
+      const newPoor = overview.health_snapshot?.content_poor ?? 0
+      const poorDelta = prevPoor - newPoor
+      const prevFixes = prev.health_snapshot?.fix_completed ?? 0
+      const newFixes = (overview.health_snapshot?.fix_completed ?? 0) - prevFixes
+      if (newFixes > 0 || poorDelta > 0) {
+        setLastRunSummary(
+          `${newFixes} fix${newFixes !== 1 ? 'es' : ''} applied` +
+          (poorDelta > 0 ? ` · ${poorDelta} article${poorDelta !== 1 ? 's' : ''} improved` : '')
+        )
+      }
+    }
+    prevOverviewRef.current = overview
+  }, [overview, queueIsRunning, runCompletedTick])
+
   async function handleRunFullAudit() {
     if (!project || runningFullAudit) return
     setRunningFullAudit(true)
     setQuickActionError(null)
     try {
+      console.log('[Overview] handleRunFullAudit — creating audit tasks')
       const tasks = await runHealthAudit(project.id)
+      console.log('[Overview] handleRunFullAudit — created', tasks.length, 'tasks, enqueuing')
       onRunTasks?.(tasks)
+      console.log('[Overview] handleRunFullAudit — calling load()')
+      await load()
+      console.log('[Overview] handleRunFullAudit — load() complete')
     } catch (e: unknown) {
       setQuickActionError(String(e))
     } finally {
@@ -745,29 +784,48 @@ export function Overview({
             </CardHeader>
             <CardContent className="space-y-1 pb-4">
               {/* Run Full Audit — creates content_review + indexing_health_campaign */}
+              {(() => {
+                const snap = overview?.health_snapshot
+                const perRun = snap ? (snap.content_next_run_yield + snap.indexing_next_run_yield) || 20 : null
+                const total = snap ? (snap.content_poor || 0) + (snap.content_needs_improvement || 0) + (snap.indexing_not_indexed || 0) : 0
+                const runsNeeded = total > 0 && perRun && perRun > 0 ? Math.ceil(total / perRun) : null
+                return (
               <button
                 onClick={handleRunFullAudit}
-                disabled={runningFullAudit}
+                disabled={runningFullAudit || queueIsRunning}
                 className={cn(
                   'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors group',
                   'bg-primary hover:bg-primary/90 text-primary-foreground',
-                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                  'disabled:opacity-70 disabled:cursor-not-allowed',
                 )}
               >
-                <span className="shrink-0"><HeartPulse size={16} /></span>
+                <span className="shrink-0">{queueIsRunning ? <RefreshCw size={16} className="animate-spin" /> : <HeartPulse size={16} />}</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">Run Full Audit</span>
+                    <span className="text-sm font-medium">
+                      {queueIsRunning ? 'Audit Running…' : 'Run Full Audit'}
+                    </span>
+                    {runsNeeded !== null && !queueIsRunning && (
+                      <Badge variant="secondary" className="text-[10px] px-1 py-0 h-auto bg-primary-foreground/15 text-primary-foreground border-0">
+                        ~{runsNeeded} run{runsNeeded !== 1 ? 's' : ''} left
+                      </Badge>
+                    )}
                   </div>
                   <span className="text-xs opacity-90 leading-snug">
-                    Content health + indexing + CTR + cannibalization
+                    {queueIsRunning
+                      ? 'Processing fixes…'
+                      : snap
+                        ? `${total} issues · ~${perRun} fixes per run`
+                        : 'Content health + indexing (CTR & cannibalization run on schedule)'
+                    }
                   </span>
                 </div>
-                {runningFullAudit
-                  ? <RefreshCw size={13} className="shrink-0 animate-spin" />
-                  : <PlayCircle size={13} className="shrink-0 opacity-70 group-hover:opacity-100" />
-                }
+                {!queueIsRunning && (
+                  <PlayCircle size={14} className="shrink-0 opacity-70 group-hover:opacity-100" />
+                )}
               </button>
+              )
+              })()}
 
               {/* Health snapshot — shows what's still outstanding */}
               {(() => {
@@ -779,8 +837,11 @@ export function Overview({
                   snap.ctr_issue_count > 0 ||
                   snap.cannibalization_clusters > 0
                 )
+                // Use net outstanding counts for content (after fixes applied since last audit)
+                const netPoor = snap ? (snap.content_poor_outstanding > 0 ? snap.content_poor_outstanding : snap.content_poor) : 0
+                const netNeedsWork = snap ? (snap.content_needs_work_outstanding > 0 ? snap.content_needs_work_outstanding : snap.content_needs_improvement) : 0
                 const totalOutstanding = snap
-                  ? snap.content_poor + snap.content_needs_improvement + snap.indexing_not_indexed + snap.ctr_issue_count + snap.cannibalization_clusters
+                  ? netPoor + netNeedsWork + snap.indexing_not_indexed + snap.ctr_issue_count + snap.cannibalization_clusters
                   : 0
                 const daysSince = snap && snap.last_audit_days >= 0 ? snap.last_audit_days : null
                 const auditOverdue = daysSince !== null && daysSince > 14
@@ -788,6 +849,25 @@ export function Overview({
 
                 return (
                   <div className="px-3 py-2 rounded-md bg-secondary/40 space-y-1.5">
+                    {/* Runs-estimate indicator */}
+                    {snap && hasEverRun && (() => {
+                      const perRun = (snap.content_next_run_yield + snap.indexing_next_run_yield) || 20
+                      const total = (snap.content_poor || 0) + (snap.content_needs_improvement || 0) + (snap.indexing_not_indexed || 0)
+                      const runsNeeded = total > 0 && perRun > 0 ? Math.ceil(total / perRun) : 0
+                      if (runsNeeded === 0) return null
+                      return (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-muted-foreground">
+                            ~{runsNeeded} more run{runsNeeded !== 1 ? 's' : ''}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">·</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            ~{perRun} fix{perRun !== 1 ? 'es' : ''}/run
+                          </span>
+                        </div>
+                      )
+                    })()}
+
                     {/* Primary status: what's outstanding */}
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Outstanding</span>
@@ -817,12 +897,18 @@ export function Overview({
                         )}
                         {snap && snap.content_poor > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-rose-50 text-rose-700 border-rose-200">
-                            {snap.content_poor} poor
+                            {netPoor} poor
+                            {snap.content_poor_outstanding > 0 && snap.content_poor_outstanding < snap.content_poor && (
+                              <span className="text-rose-400">/{snap.content_poor}</span>
+                            )}
                           </Badge>
                         )}
                         {snap && snap.content_needs_improvement > 0 && (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 h-auto font-normal bg-amber-50 text-amber-700 border-amber-200">
-                            {snap.content_needs_improvement} needs work
+                            {netNeedsWork} needs work
+                            {snap.content_needs_work_outstanding > 0 && snap.content_needs_work_outstanding < snap.content_needs_improvement && (
+                              <span className="text-amber-400">/{snap.content_needs_improvement}</span>
+                            )}
                           </Badge>
                         )}
                         {snap && snap.indexing_not_indexed > 0 && (
@@ -848,12 +934,47 @@ export function Overview({
                       </div>
                     )}
 
+                    {/* Next-run yield estimate */}
+                    {hasEverRun && snap && (snap.content_next_run_yield > 0 || snap.indexing_next_run_yield > 0 || snap.fix_on_cooldown > 0) && (
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pt-0.5">
+                        <span className="text-[10px] text-muted-foreground">Next run:</span>
+                        {snap.content_next_run_yield > 0 || snap.indexing_next_run_yield > 0 ? (
+                          <span className="text-[10px] text-foreground font-medium">
+                            ~{snap.content_next_run_yield + snap.indexing_next_run_yield} new fixes
+                            {(snap.content_next_run_yield > 0 || snap.indexing_next_run_yield > 0) && (
+                              <span className="text-[10px] text-muted-foreground font-normal">
+                                {' '}({[
+                                  snap.content_next_run_yield > 0 && `content: ${snap.content_next_run_yield}`,
+                                  snap.indexing_next_run_yield > 0 && `indexing: ${snap.indexing_next_run_yield}`,
+                                ].filter(Boolean).join(' · ')})
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">0 new fixes</span>
+                        )}
+                        {snap.fix_on_cooldown > 0 && (
+                          <span className="text-[10px] text-muted-foreground">
+                            · {snap.fix_on_cooldown} on 30-day cooldown
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {/* Fix progress: secondary, shown only when there's fix activity */}
-                    {snap && (snap.fix_completed > 0 || snap.fix_failed > 0 || snap.fix_pending > 0) && (
+                    {snap && (snap.fix_completed > 0 || snap.fix_failed > 0 || snap.fix_pending > 0 || snap.fix_needs_review > 0) && (
                       <div className="flex items-center gap-1.5 pt-0.5">
                         <span className="text-[10px] text-muted-foreground">Fixes:</span>
                         {snap.fix_completed > 0 && (
                           <span className="text-[10px] text-emerald-600">{snap.fix_completed} done</span>
+                        )}
+                        {snap.fix_needs_review > 0 && (
+                          <button
+                            onClick={() => onViewChange('tasks')}
+                            className="text-[10px] text-amber-600 font-medium hover:text-amber-700 cursor-pointer bg-amber-50 px-1 py-0.5 rounded"
+                          >
+                            {snap.fix_needs_review} need review
+                          </button>
                         )}
                         {snap.fix_failed > 0 && (
                           <span className="text-[10px] text-rose-600">{snap.fix_failed} failed</span>

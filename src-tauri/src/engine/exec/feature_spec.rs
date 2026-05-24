@@ -96,8 +96,14 @@ pub(crate) fn exec_generate_feature_spec(
     let task_title = task.title.as_deref().unwrap_or("untitled");
     let task_id = &task.id;
 
+    // Detect actual tech stack so the LLM doesn't assume Next.js
+    let tech_stack = crate::content::ops::detect_tech_stack(Path::new(project_path));
+
     let prompt = format!(
         r#"You are a senior SEO technical lead writing a developer feature specification.
+
+DETECTED TECH STACK: {tech_stack}
+You MUST NOT assume a different framework. Do not mention files or patterns that belong to other frameworks (e.g., do not mention `next.config.js` or `getStaticProps` unless the stack is actually Next.js).
 
 Your job: read the audit findings below, identify which issues require **code changes** (framework/template fixes), which require **content changes** (rewrites, merges), and which require **structural changes** (URL migrations, architecture decisions).
 
@@ -112,7 +118,7 @@ Triggered by: {task_title} ({task_id})
 2-3 sentences on the most critical issue and its business impact.
 
 ## P0 — Code Changes Required (Developer)
-Issues that can only be fixed by editing framework/template code (e.g., layout.tsx, _app.js, route handlers).
+Issues that can only be fixed by editing framework/template code (layout files, global components, route handlers, SSR config).
 
 For each issue:
 - **Problem**: one-line description
@@ -154,8 +160,10 @@ CRITICAL RULES:
 - If an issue is clearly a framework/template bug (e.g., generic titles on many pages, duplicate brand names in template), mark it as P0 Code Change.
 - If an issue is a content-level problem (e.g., thin content, missing keywords), mark it as P1 Content Fix.
 - If an issue requires URL changes or redirects, mark it as P2 Structural.
+- A URL with "word_count: 0" and "NOT TRACKED IN CONTENT DIRECTORY" means the page exists in search console but has no corresponding MDX file in the repo — do NOT invent a rendering bug. Flag it as a structural/orphan issue.
 - Your ENTIRE output must be the markdown document. No preamble like "Done" or "Here is the spec". No postamble. No mentions of file paths you "saved" to. No commentary about the generation process.
 "#,
+        tech_stack = tech_stack,
         timestamp = timestamp,
         task_title = task_title,
         task_id = task_id,
@@ -177,8 +185,31 @@ CRITICAL RULES:
         }
     };
 
-    // Strip common meta-preambles/postambles that LLMs sometimes emit
-    let spec_content = strip_meta_commentary(&raw_content);
+    // Strip common meta-preambles/postambles that LLMs sometimes emit and extract
+    // the actual markdown document from the raw agent output.
+    let spec_content = crate::engine::text::extract_markdown_document(
+        &raw_content,
+        Some("# SEO Feature Specification"),
+    )
+    .unwrap_or_default();
+
+    // Validate that we got an actual markdown spec, not LLM commentary
+    let validation = validate_spec_content(&spec_content);
+    if let Err(reason) = validation {
+        // Write the raw output to a debug file for inspection, but fail the step
+        let debug_path = automation_dir.join(format!("seo_feature_spec_{}_raw.md", task.id));
+        let _ = std::fs::create_dir_all(automation_dir);
+        let _ = std::fs::write(&debug_path, &raw_content);
+        return StepResult {
+            success: false,
+            message: format!(
+                "LLM output was not a valid feature spec: {}. Raw output saved to {} for inspection.",
+                reason,
+                debug_path.display()
+            ),
+            output: None,
+        };
+    }
 
     // Use a unique filename per task so multiple specs don't clobber each other
     let spec_filename = format!("seo_feature_spec_{}.md", task.id);
@@ -216,61 +247,40 @@ CRITICAL RULES:
     }
 }
 
-/// Strip common LLM meta-commentary that leaks outside the requested markdown format.
-fn strip_meta_commentary(raw: &str) -> String {
-    let mut cleaned = raw.trim().to_string();
+/// Validate that the cleaned LLM output is an actual feature spec, not commentary.
+fn validate_spec_content(content: &str) -> Result<(), &'static str> {
+    let trimmed = content.trim();
 
-    // Strip common preambles (case-insensitive, anchored to start)
-    let preamble_patterns = [
-        r"(?i)^\s*done\.\s*",
-        r"(?i)^\s*ok\.\s*",
-        r"(?i)^\s*alright\.\s*",
-        r"(?i)^\s*here\s+is\s+(the\s+)?spec(ification)?[:\.]?\s*",
-        r"(?i)^\s*here\s+is\s+(the\s+)?markdown\s+document[:\.]?\s*",
-        r"(?i)^\s*i[''']?ve\s+written\s+(the\s+)?spec[:\.]?\s*",
-        r"(?i)^\s*the\s+spec\s+has\s+been\s+written\s+to[:\.]?\s*",
-        r"(?i)^\s*the\s+specification\s+is\s+below[:\.]?\s*",
-        r"(?i)^\s*below\s+is\s+(the\s+)?spec[:\.]?\s*",
-        r"(?i)^\s*generating\s+(the\s+)?spec[:\.]?\s*",
-        r"(?i)^.*written\s+to\s+`[^`]+`\s*",
-        r"(?i)^.*saved\s+to\s+`[^`]+`\s*",
-    ];
-
-    for pattern in &preamble_patterns {
-        let re = regex::Regex::new(pattern).unwrap();
-        cleaned = re.replace(&cleaned, "").to_string();
+    if trimmed.is_empty() {
+        return Err("output is empty");
     }
 
-    // Strip common postambles (case-insensitive, anchored to end)
-    let postamble_patterns = [
-        r"(?i)\s*let\s+me\s+know\s+if\s+you\s+need\s+anything\s+else[\.!]?\s*$",
-        r"(?i)\s*feel\s+free\s+to\s+ask\s+if\s+you\s+need\s+changes[\.!]?\s*$",
-        r"(?i)\s*this\s+spec\s+is\s+ready\s+for\s+implementation[\.!]?\s*$",
-        r"(?i)\s*the\s+spec\s+has\s+been\s+saved[\.!]?\s*$",
-        r"(?i)\s*saved\s+to\s+`[^`]+`\s*$",
-        r"(?i)\s*written\s+to\s+`[^`]+`\s*$",
-    ];
-
-    for pattern in &postamble_patterns {
-        let re = regex::Regex::new(pattern).unwrap();
-        cleaned = re.replace(&cleaned, "").to_string();
-    }
-
-    // If the cleaned text doesn't start with #, try to find the first markdown heading
-    let trimmed = cleaned.trim();
+    // Must start with a markdown heading
     if !trimmed.starts_with('#') {
-        if let Some(pos) = trimmed.find("# SEO Feature Specification") {
-            cleaned = trimmed[pos..].to_string();
-        } else if let Some(pos) = trimmed.find('\n') {
-            // If first line is not a heading, check if second line starts with #
-            let after_first = &trimmed[pos + 1..].trim_start();
-            if after_first.starts_with('#') {
-                cleaned = after_first.to_string();
-            }
-        }
+        return Err("output does not start with a markdown heading (#)");
     }
 
-    cleaned.trim().to_string()
+    // Must contain the expected top-level heading
+    if !trimmed.contains("# SEO Feature Specification") {
+        return Err("output is missing '# SEO Feature Specification' heading");
+    }
+
+    // Must contain at least one priority section — LLMs that output only commentary
+    // never include these structured sections.
+    let has_priority_section =
+        trimmed.contains("P0") || trimmed.contains("P1") || trimmed.contains("P2");
+    if !has_priority_section {
+        return Err("output is missing priority sections (P0/P1/P2)");
+    }
+
+    // Must be reasonably substantial — a real spec is >200 words. Commentary/summaries
+    // are typically under 100 words.
+    let word_count = crate::content::ops::count_words(trimmed);
+    if word_count < 100 {
+        return Err("output is too short to be a valid feature spec (<100 words)");
+    }
+
+    Ok(())
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -350,10 +360,25 @@ fn format_content_audit_section(audit: &serde_json::Value) -> String {
             if !dup_groups.is_empty() {
                 parts.push(format!("\n### Exact Duplicate Content ({} groups)\n", dup_groups.len()));
                 for g in dup_groups {
-                    let ids = g["article_ids"].as_array().map(|a| {
-                        a.iter().map(|id| id.as_i64().unwrap_or(0).to_string()).collect::<Vec<_>>().join(", ")
-                    }).unwrap_or_default();
-                    parts.push(format!("- Hash `{}` → articles: {}", g["hash"].as_str().unwrap_or(""), ids));
+                    let article_lines: Vec<String> = g["articles"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .map(|art| {
+                                    let id = art["id"].as_i64().unwrap_or(0);
+                                    let title = art["title"].as_str().unwrap_or("");
+                                    let file = art["file"].as_str().unwrap_or("");
+                                    format!("  - [{}] `{}` ({})", id, title, file)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    parts.push(format!(
+                        "- Hash `{}` → {} articles:\n{}",
+                        g["hash"].as_str().unwrap_or(""),
+                        article_lines.len(),
+                        article_lines.join("\n")
+                    ));
                 }
             }
         }
@@ -493,12 +518,21 @@ fn format_indexing_section(plan: &serde_json::Value) -> String {
         ));
 
         for t in targets.iter().filter(|t| t["recommended_action"].as_str() == Some("fix_content")) {
+            let file = t["file"].as_str().filter(|s| !s.is_empty());
+            let wc = t["word_count"].as_u64().unwrap_or(0);
+            let links = t["incoming_links"].as_u64().unwrap_or(0);
+            let tracked_note = if file.is_some() {
+                format!(" | file: `{}`", file.unwrap())
+            } else {
+                " | NOT TRACKED IN CONTENT DIRECTORY".to_string()
+            };
             parts.push(format!(
-                "- `{}` → action: fix_content | reason: `{}` | word_count: {} | incoming_links: {}",
+                "- `{}` → action: fix_content | reason: `{}` | word_count: {} | incoming_links: {}{}",
                 t["url"].as_str().unwrap_or(""),
                 t["reason_code"].as_str().unwrap_or(""),
-                t["word_count"].as_u64().unwrap_or(0),
-                t["incoming_links"].as_u64().unwrap_or(0)
+                wc,
+                links,
+                tracked_note
             ));
         }
     }
@@ -536,4 +570,56 @@ fn format_template_section(templates: &serde_json::Value) -> String {
     }
 
     parts.join("\n")
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_spec_content_valid() {
+        let content = "# SEO Feature Specification\n\nGenerated: 2024-01-01 00:00 UTC\nTriggered by: test (task-id)\n\n## Executive Summary\nThis is a comprehensive summary of the most critical issues and their business impact. We have identified several problems that require immediate attention from the development team.\n\n## P0 — Code Changes Required (Developer)\nIssues that can only be fixed by editing framework or template code.\n\n### Problem: Template rendering failure\n**Evidence**: Multiple pages show generic titles.\n**Root Cause**: Layout component overrides page titles.\n**Fix**: Edit layout.tsx to respect page-level title metadata.\n**Estimated Effort**: small\n\n## P1 — Content Fixes (PageSeeds Can Handle)\nIssues that the content fix pipeline can auto-fix.\n\n### Problem: Thin content\n**Affected Pages**: /blog/post-1, /blog/post-2\n**Fix Action**: Expand articles to minimum 500 words.\n\n## P2 — Structural Changes (Architecture)\nIssues requiring URL migrations or architecture changes.\n\n### Problem: Orphaned pages\n**Affected Pages**: /old-page-1\n**Migration Plan**: Add internal links from related articles.\n\n## Issue Matrix\n| Issue | Priority | Type | Count | Status |\n|-------|----------|------|-------|--------|\n| Template failure | P0 | Code | 5 | Open |\n";
+        assert!(validate_spec_content(content).is_ok());
+    }
+
+    #[test]
+    fn test_validate_spec_content_empty() {
+        assert!(validate_spec_content("").is_err());
+    }
+
+    #[test]
+    fn test_validate_spec_content_no_heading() {
+        assert!(validate_spec_content("Some random text without a heading").is_err());
+    }
+
+    #[test]
+    fn test_validate_spec_content_missing_priority_sections() {
+        let content = "# SEO Feature Specification\n\n## Executive Summary\n\n## Issue Matrix\n";
+        assert!(validate_spec_content(content).is_err());
+    }
+
+    #[test]
+    fn test_validate_spec_content_too_short() {
+        let content = "# SEO Feature Specification\n\n## P0\n\nfix it\n";
+        assert!(validate_spec_content(content).is_err());
+    }
+
+    #[test]
+    fn test_validate_spec_content_meta_commentary_fails() {
+        // This is the exact pattern that was causing the bug — the shared
+        // extract_markdown_document returns None/empty for pure commentary,
+        // which validate_spec_content then rejects.
+        let content = "Done. The spec has been written to:\n\n`docs/SEO_FEATURE_SPEC_indexing_health_campaign.md`\n\nIt contains:\n- **2 P0 code issues**\n- **3 P1 content issues**\n";
+        assert!(validate_spec_content(content).is_err());
+    }
+
+    #[test]
+    fn test_integration_with_shared_extraction() {
+        // Verify that the shared extraction + local validation work together.
+        let raw = "Done. Here is the spec:\n\n# SEO Feature Specification\n\n## Executive Summary\nThis is a comprehensive summary of the most critical issues and their business impact. We have identified several problems that require immediate attention from the development team. The issues span code changes, content fixes, and structural improvements. Each category has been prioritized based on severity and expected business impact. Addressing these will significantly improve search visibility and user experience.\n\n## P0 — Code Changes Required\n### Problem: Template rendering failure\n**Evidence**: Multiple pages show generic titles instead of unique ones.\n**Root Cause**: Layout component overrides page-level title metadata.\n**Fix**: Edit layout.tsx to respect page-level title metadata.\n**Estimated Effort**: small\n\n## P1 — Content Fixes\n### Problem: Thin content\n**Affected Pages**: /blog/post-1, /blog/post-2\n**Fix Action**: Expand articles to minimum 500 words.\n\n## P2 — Structural Changes\n### Problem: Orphaned pages\n**Affected Pages**: /old-page-1\n**Migration Plan**: Add internal links from related articles.\n";
+        let extracted = crate::engine::text::extract_markdown_document(raw, Some("# SEO Feature Specification"))
+            .expect("shared extraction should find the document");
+        assert!(validate_spec_content(&extracted).is_ok());
+    }
 }

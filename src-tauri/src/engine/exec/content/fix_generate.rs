@@ -348,7 +348,13 @@ Validation rules (enforced by Rust):
 - intro: should be 40-80 words if provided
 - faq_questions: must be 3-5 questions if provided and file has no existing frontmatter FAQ
 
-Only include fields that need to change. Do not include title/description/intro changes if those fixes were not requested.
+**CRITICAL — Keyword placement**: The target keyword is "{target_keyword}". When the recommendations request fixes for keyword checks (title_keyword, h1_keyword, meta_desc_keyword, keyword_first_para), you MUST include the **exact target keyword** naturally in the generated text:
+- If generating a new title: the exact keyword must appear in the title
+- If generating a new H1: the exact keyword must appear in the H1
+- If generating a new meta description: the exact keyword must appear in the description
+- If generating a new intro: the exact keyword must appear in the first paragraph
+
+Only include fields that need to change. Do not include title/description/intro/h1 changes if those fixes were not requested.
 "#,
         skill_content = skill_content.trim(),
         file = context.file,

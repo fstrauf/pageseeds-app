@@ -80,8 +80,10 @@ export function useQueueRunner(onCompleted?: () => void) {
       const allDone = itemsRaw.every(
         (i: QueueItem) => i.status === 'completed' || i.status === 'failed' || i.status === 'skipped'
       );
+      console.log('[useQueueRunner] completion check: isRunning=', isRunning, 'itemCount=', itemsRaw.length, 'allDone=', allDone, 'alreadyCompleted=', completedRef.current)
       if (allDone && !completedRef.current) {
         completedRef.current = true;
+        console.log('[useQueueRunner] calling onCompleted()')
         onCompleted?.();
       }
     }

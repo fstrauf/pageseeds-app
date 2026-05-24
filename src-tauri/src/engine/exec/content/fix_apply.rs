@@ -78,7 +78,6 @@ pub(crate) fn exec_fix_content_article_apply(
         faq_questions,
         eeat_signal,
         cta,
-        date,
     } = patch.changes;
 
     let mut new_fm = fm;
@@ -95,13 +94,9 @@ pub(crate) fn exec_fix_content_article_apply(
         applied.push("description".to_string());
     }
 
-    if let Some(new_date) = date {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "date", &new_date);
-        applied.push("date".to_string());
-    }
-
     if let Some(new_h1) = h1 {
-        // Simple H1 replacement: find first line starting with "# " and replace it
+        // Simple H1 replacement: find first line starting with "# " and replace it.
+        // If no H1 exists (template-based themes use frontmatter title), insert at top.
         let lines: Vec<String> = new_body.lines().map(|s| s.to_string()).collect();
         let mut new_lines = Vec::new();
         let mut replaced = false;
@@ -112,6 +107,10 @@ pub(crate) fn exec_fix_content_article_apply(
             } else {
                 new_lines.push(line);
             }
+        }
+        if !replaced {
+            // No H1 found — insert at the beginning of the body
+            new_lines.insert(0, format!("# {}", new_h1));
         }
         new_body = new_lines.join("\n");
         applied.push("h1".to_string());

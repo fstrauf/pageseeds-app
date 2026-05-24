@@ -23,7 +23,16 @@ pub fn exec_content_audit(
     let paths = ProjectPaths::from_path(project_path);
 
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
-        Ok(conn) => conn,
+        Ok(conn) => {
+            if let Err(e) = conn.busy_timeout(std::time::Duration::from_secs(10)) {
+                return crate::engine::workflows::StepResult {
+                    success: false,
+                    message: format!("Failed to set busy timeout: {}", e),
+                    output: None,
+                }
+            }
+            conn
+        }
         Err(e) => {
             return crate::engine::workflows::StepResult {
                 success: false,
@@ -64,6 +73,41 @@ pub fn exec_content_audit(
         r"(?i)(-jan-?|-feb-?|-mar-?|-apr-?|-may-?|-jun-?|-jul-?|-aug-?|-sep-?|-oct-?|-nov-?|-dec-?|-\d{4}-|spring|summer|autumn|fall|winter|today|tomorrow|yesterday|this-week|next-week|last-week|this-month|next-month|last-month|this-year|next-year|last-year|now|current)"
     ).unwrap();
 
+    // Load GSC metrics from ctr_query_metrics table (populated by GscSyncArticles step).
+    // Previously this was read from articles.json sidecar metadata; after the DB refactor
+    // the gsc field was lost. Restored by reading the dedicated metrics table.
+    let gsc_metrics: std::collections::HashMap<i64, serde_json::Value> = {
+        let mut map = std::collections::HashMap::new();
+        if let Ok(mut stmt) = db.prepare(
+            "SELECT article_id, page_url,
+                    CAST(SUM(impressions) AS INTEGER) as total_impressions,
+                    CAST(SUM(clicks) AS INTEGER) as total_clicks,
+                    COUNT(*) as query_count
+             FROM ctr_query_metrics
+             WHERE project_id = ?1
+             GROUP BY article_id",
+        ) {
+            let _ = stmt.query_map([&task.project_id], |row| {
+                let article_id: i64 = row.get(0)?;
+                let page_url: String = row.get(1)?;
+                let impressions: i64 = row.get(2)?;
+                let clicks: i64 = row.get(3)?;
+                let query_count: i64 = row.get(4)?;
+                Ok((article_id, page_url, impressions, clicks, query_count))
+            }).map(|rows| {
+                for row in rows.flatten() {
+                    map.insert(row.0, serde_json::json!({
+                        "page": row.1,
+                        "impressions": row.2,
+                        "clicks": row.3,
+                        "query_count": row.4,
+                    }));
+                }
+            });
+        }
+        map
+    };
+
     let mut results: Vec<serde_json::Value> = to_audit
         .iter()
         .map(|article| {
@@ -75,6 +119,7 @@ pub fn exec_content_audit(
                 &link_extract_re,
                 &malformed_link_re,
                 &temporal_url_re,
+                &gsc_metrics,
             )
         })
         .collect();
@@ -204,6 +249,7 @@ pub fn exec_content_audit(
     link_extract_re: &regex::Regex,
     malformed_link_re: &regex::Regex,
     temporal_url_re: &regex::Regex,
+    gsc_metrics: &std::collections::HashMap<i64, serde_json::Value>,
 ) -> serde_json::Value {
     let keyword = article
         .target_keyword
@@ -211,9 +257,12 @@ pub fn exec_content_audit(
         .unwrap_or("")
         .trim()
         .to_lowercase();
-    let title = article.title.trim().to_string();
+    let db_title = article.title.trim().to_string();
     let file_ref = article.file.trim().to_string();
-    let gsc = serde_json::Value::Null; // TODO: load from sidecar metadata once Phase 2 is implemented
+    let gsc = gsc_metrics
+        .get(&article.id)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let published_date = article.published_date.as_deref().unwrap_or("").to_string();
     let status = article.status.to_lowercase();
 
@@ -221,8 +270,13 @@ pub fn exec_content_audit(
     let source = read_source_file(repo_root, &file_ref);
     let (fm, body) = parse_frontmatter(source.as_deref().unwrap_or(""));
 
+    // Use frontmatter title as the canonical title; fall back to DB title only
+    // if frontmatter is missing. This prevents stale DB data from appearing
+    // in audit results after writers edit frontmatter.
+    let title = fm.get("title").cloned().unwrap_or(db_title);
+
     // NEW: Run comprehensive quality rating
-    let meta_title = fm.get("title").map(String::as_str).or(Some(title.as_str()));
+    let meta_title = Some(title.as_str());
     let meta_description = fm.get("description").map(String::as_str);
     let full_content = format!("# {}\n\n{}", meta_title.unwrap_or(""), body);
 
@@ -267,6 +321,9 @@ pub fn exec_content_audit(
         .lines()
         .find(|l| l.trim_start().starts_with("# ") && !l.trim_start().starts_with("## "))
         .map(|l| l.trim_start_matches('#').trim().to_string())
+        // Fall back to frontmatter title when no H1 heading exists in body
+        // (common with template-based themes that render frontmatter title as H1)
+        .or_else(|| fm.get("title").map(|t| t.to_string()))
         .unwrap_or_default();
     let h2_count = body
         .lines()
@@ -329,9 +386,25 @@ pub fn exec_content_audit(
     // 2. Page bloat proxy — file size, image/table/code block counts
     let file_size = source.as_ref().map(|s| s.len()).unwrap_or(0);
     let image_count = body.matches("![").count();
-    let table_count = body.lines().filter(|l| l.trim_start().starts_with('|')).count();
+    // Count actual table blocks (consecutive lines starting with '|'),
+    // not individual rows. A 10-row table is 1 table, not 10.
+    let table_count = {
+        let mut count = 0usize;
+        let mut in_table = false;
+        for line in body.lines() {
+            if line.trim_start().starts_with('|') {
+                if !in_table {
+                    count += 1;
+                    in_table = true;
+                }
+            } else {
+                in_table = false;
+            }
+        }
+        count
+    };
     let code_block_count = code_block_re.find_iter(&body).count();
-    let is_bloated = file_size > 500_000 || image_count > 20 || table_count > 30 || code_block_count > 10;
+    let is_bloated = file_size > 500_000 || image_count > 20 || table_count > 5 || code_block_count > 10;
 
     // 3. Literal template variable — detect unrendered template variables in title
     let literal_template_variable = title.contains("| Brand |")
@@ -574,12 +647,98 @@ pub fn exec_content_audit(
         "page_bloat_proxy": is_bloated,
         "literal_template_variable": literal_template_variable,
         "title_token_duplication": title_token_duplication,
-        "title_token_max_count": max_token_count,
-        "bloat_metrics": {
-            "file_size": file_size,
-            "image_count": image_count,
-            "table_count": table_count,
-            "code_block_count": code_block_count,
-        },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn make_article(id: i64, title: &str, slug: &str, file: &str, kw: &str) -> crate::models::article::Article {
+        crate::models::article::Article {
+            id,
+            title: title.to_string(),
+            url_slug: slug.to_string(),
+            file: file.to_string(),
+            target_keyword: Some(kw.to_string()),
+            keyword_difficulty: None,
+            target_volume: 0,
+            published_date: Some("2025-01-01".to_string()),
+            word_count: 500,
+            status: "published".to_string(),
+            review_status: None,
+            review_started_at: None,
+            last_reviewed_at: None,
+            review_count: 0,
+            content_gaps_addressed: vec![],
+            estimated_traffic_monthly: None,
+            project_id: "p1".to_string(),
+            quality_score: None,
+            quality_grade: None,
+            quality_rated_at: None,
+            publishing_ready: None,
+            quality_breakdown: None,
+            content_hash: None,
+            last_edited_at: None,
+            page_type: None,
+        }
+    }
+
+    /// GSC metrics HashMap correctly maps article_id to metrics JSON.
+    #[test]
+    fn gsc_metrics_lookup_finds_article_with_data() {
+        let mut map: HashMap<i64, serde_json::Value> = HashMap::new();
+        map.insert(42, serde_json::json!({
+            "page": "/blog/test",
+            "impressions": 500,
+            "clicks": 10,
+            "query_count": 50,
+        }));
+
+        let article = make_article(42, "Test Article", "test", "test.mdx", "test kw");
+
+        let result = audit_one_article(
+            &article,
+            std::path::Path::new("/tmp"),
+            &regex::Regex::new(r"^\d+[_\-]+").unwrap(),
+            &regex::Regex::new(r"(?s)```.*?```").unwrap(),
+            &regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap(),
+            &regex::Regex::new(r"\]").unwrap(),
+            &regex::Regex::new(r"foo").unwrap(),
+            &map,
+        );
+
+        let gsc = &result["gsc"];
+        assert!(!gsc.is_null(), "gsc should not be null when metrics exist");
+        assert_eq!(gsc["impressions"].as_i64().unwrap(), 500);
+        assert_eq!(gsc["clicks"].as_i64().unwrap(), 10);
+
+        let gsc_check = &result["checks"]["gsc_data"];
+        assert_eq!(gsc_check["pass"].as_bool().unwrap(), true, "gsc_data check should pass");
+    }
+
+    /// GSC metrics defaults to null for articles without metrics.
+    #[test]
+    fn gsc_metrics_lookup_defaults_null_when_missing() {
+        let map: HashMap<i64, serde_json::Value> = HashMap::new();
+        let article = make_article(99, "No GSC", "no-gsc", "no.mdx", "kw");
+
+        let result = audit_one_article(
+            &article,
+            std::path::Path::new("/tmp"),
+            &regex::Regex::new(r"^\d+[_\-]+").unwrap(),
+            &regex::Regex::new(r"(?s)```.*?```").unwrap(),
+            &regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap(),
+            &regex::Regex::new(r"\]").unwrap(),
+            &regex::Regex::new(r"foo").unwrap(),
+            &map,
+        );
+
+        let gsc = &result["gsc"];
+        assert!(gsc.is_null(), "gsc should be null when no metrics in map");
+
+        let gsc_check = &result["checks"]["gsc_data"];
+        assert_eq!(gsc_check["pass"].as_bool().unwrap(), false, "gsc_data check should fail without metrics");
+    }
 }

@@ -276,6 +276,11 @@ pub async fn execute_task_with_token(
 
         if !result.success {
             if step.optional {
+                log::warn!(
+                    "[executor] optional step '{}' failed (skipped): {}",
+                    step.name,
+                    result.message
+                );
                 progress[i].status = "skipped".to_string();
             } else {
                 all_ok = false;
@@ -466,9 +471,10 @@ pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus
             TaskStatus::Done
         }
     } else {
-        // Per-article CTR fixes that fail verification land in Review (soft failure,
-        // retryable) rather than Todo, so they don't get blindly re-queued.
-        if task_type == "fix_ctr_article" {
+        // Per-article fix tasks that fail verification land in Review (soft failure,
+        // retryable) rather than Failed, so they don't get blindly re-queued but are
+        // visible as needing attention.
+        if task_type == "fix_ctr_article" || task_type == "fix_content_article" {
             TaskStatus::Review
         } else {
             TaskStatus::Failed

@@ -2,4 +2,4 @@
 import type { ContentFixFaq } from "./ContentFixFaq";
 import type { ContentFixLink } from "./ContentFixLink";
 
-export type ContentFixChanges = { title: string | null, h1: string | null, description: string | null, intro: string | null, internal_links: Array<ContentFixLink> | null, faq_questions: Array<ContentFixFaq> | null, eeat_signal: string | null, cta: string | null, date: string | null, };
+export type ContentFixChanges = { title: string | null, h1: string | null, description: string | null, intro: string | null, internal_links: Array<ContentFixLink> | null, faq_questions: Array<ContentFixFaq> | null, eeat_signal: string | null, cta: string | null, };

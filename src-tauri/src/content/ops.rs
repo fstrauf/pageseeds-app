@@ -825,6 +825,100 @@ pub fn build_ctr_health_summary(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Tech stack detection
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Detect the frontend framework / build tool used in a repository.
+///
+/// Scans for common config files and returns a human-readable description
+/// suitable for injecting into prompts that must not assume a specific stack.
+///
+/// Example returns:
+/// - "Vue 3 + Vite (vite-ssg)"
+/// - "Next.js 14 (App Router)"
+/// - "Astro"
+/// - "Unknown / static site"
+pub fn detect_tech_stack(repo_root: &Path) -> String {
+    use std::fs;
+
+    // Check for framework config files
+    let has = |name: &str| repo_root.join(name).exists();
+
+    let has_vite = has("vite.config.ts") || has("vite.config.js") || has("vite.config.mjs");
+    let has_next = has("next.config.js") || has("next.config.ts") || has("next.config.mjs");
+    let has_astro = has("astro.config.mjs") || has("astro.config.ts");
+    let has_nuxt = has("nuxt.config.ts") || has("nuxt.config.js");
+    let has_svelte = has("svelte.config.js") || has("svelte.config.ts");
+    let has_gatsby = has("gatsby-config.js") || has("gatsby-config.ts");
+    let has_vue = has("vue.config.js");
+
+    // Peek at package.json for dependency hints
+    let pkg = repo_root.join("package.json");
+    let pkg_deps: String = fs::read_to_string(&pkg)
+        .ok()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    let dep = |name: &str| pkg_deps.contains(&format!("\"{name}\""));
+
+    if has_next {
+        let router = if has("app") { "App Router" } else { "Pages Router" };
+        return format!("Next.js ({router})");
+    }
+    if has_nuxt || dep("nuxt") {
+        return "Nuxt (Vue)".to_string();
+    }
+    if has_astro || dep("astro") {
+        return "Astro".to_string();
+    }
+    if has_svelte || dep("@sveltejs/kit") {
+        return "SvelteKit".to_string();
+    }
+    if has_gatsby || dep("gatsby") {
+        return "Gatsby".to_string();
+    }
+    if has_vue || (dep("vue") && !has_vite) {
+        return "Vue CLI".to_string();
+    }
+    if has_vite {
+        if dep("vue") && dep("vite-ssg") {
+            return "Vue 3 + Vite (vite-ssg)".to_string();
+        }
+        if dep("vue") {
+            return "Vue 3 + Vite".to_string();
+        }
+        if dep("react") {
+            return "React + Vite".to_string();
+        }
+        if dep("svelte") {
+            return "Svelte + Vite".to_string();
+        }
+        return "Vite".to_string();
+    }
+    if dep("vue") {
+        return "Vue".to_string();
+    }
+    if dep("react") {
+        return "React".to_string();
+    }
+
+    // Fallback: look for actual framework source files
+    let has_app_vue = repo_root.join("src").join("App.vue").exists()
+        || repo_root.join("App.vue").exists();
+    let has_app_tsx = repo_root.join("src").join("App.tsx").exists()
+        || repo_root.join("App.tsx").exists();
+
+    if has_app_vue {
+        return "Vue".to_string();
+    }
+    if has_app_tsx {
+        return "React".to_string();
+    }
+
+    "Unknown / static site".to_string()
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Regression tests for article-index persistence consolidation (Phase 0)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1173,6 +1267,11 @@ fn collect_route_patterns(repo_root: &Path) -> Vec<RoutePattern> {
     patterns
 }
 
+/// Detect the frontend framework / build tool used in a repository.
+///
+/// Scans for common config files and returns a human-readable description
+/// suitable for injecting into prompts that must not assume a specific stack.
+///
     #[test]
     fn sync_and_validate_patches_mdx_from_json_not_sqlite() {
         let dir = unique_temp_dir("ps_sync_date");

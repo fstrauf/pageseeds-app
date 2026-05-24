@@ -257,11 +257,9 @@ For each article, examine:
 5. Internal links — quantity, relevance
 6. EEAT signals — credibility, authoritativeness
 7. Call-to-action — clarity and placement
-8. Year freshness — compare any year mentioned in the title or H1 against the published_date. If they differ (e.g., title says "2025" but published_date is "2026-03-15"), suggest either:
-   - Update the title/H1 year to match the published date
-   - Update the published_date to match the title year (only if content is genuinely about the older year)
+8. Year freshness — compare any year mentioned in the title or H1 against the published_date. If they differ (e.g., title says "2025" but published_date is "2026-03-15"), suggest updating the title/H1 year to match the published date. NEVER suggest changing the published_date.
 
-For each suggestion, use one of these categories: title, meta_description, intro, h1, internal_links, faq, eeat, cta, date.
+For each suggestion, use one of these categories: title, meta_description, intro, h1, internal_links, faq, eeat, cta.
 
 Requirements:
 - 4-8 actionable suggestions per article.
@@ -288,9 +286,9 @@ Examine:
 5. Internal links — quantity, relevance
 6. EEAT signals — credibility, authoritativeness
 7. Call-to-action — clarity and placement
-8. Year freshness — compare any year mentioned in the title or H1 against the published_date
+8. Year freshness — compare any year mentioned in the title or H1 against the published_date. If they differ, suggest updating the title/H1 year to match the published date. NEVER suggest changing the published_date.
 
-For each suggestion, use one of these categories: title, meta_description, intro, h1, internal_links, faq, eeat, cta, date.
+For each suggestion, use one of these categories: title, meta_description, intro, h1, internal_links, faq, eeat, cta.
 
 Requirements:
 - 4-8 actionable suggestions for THIS article only.

@@ -8,7 +8,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '../../lib/utils'
 import { useQueue } from '../../lib/queue-context'
-import { useQueueStore } from '../../stores/queueStore'
 
 import { createLogger, LogTarget } from '../../lib/logging';
 const logger = createLogger(LogTarget.UI);
@@ -47,8 +46,6 @@ export function TaskRunner({
   const [isPanelExpanded, setIsPanelExpanded] = useState(true)
   const [prevStatusMap, setPrevStatusMap] = useState<Map<string, string>>(new Map())
   const queue = useQueue()
-  const markAutoOpened = useQueueStore((s) => s.markAutoOpened)
-  const hasAutoOpened = useQueueStore((s) => s.hasAutoOpened)
 
   // Derive auto-expand ids from status transitions using previous state map
   const autoExpandIds = useMemo(() => {
@@ -91,24 +88,6 @@ export function TaskRunner({
       return prev
     })
   }, [items])
-
-  // Auto-open review tasks (bounded side effect — only fires on real status changes)
-  useEffect(() => {
-    for (const item of items) {
-      const was = prevStatusMap.get(item.task.id)
-      const now = item.status
-      if (was && was !== now && now === 'done') {
-        const isReviewTask = item.result?.follow_up_tasks?.some(
-          f => f.id === item.task.id && f.status === 'review'
-        )
-        if (isReviewTask && onOpenTask && !hasAutoOpened(item.task.id)) {
-          logger.debug('auto-opening review task', { id: item.task.id })
-          markAutoOpened(item.task.id)
-          onOpenTask(item.task.id)
-        }
-      }
-    }
-  }, [items, onOpenTask, prevStatusMap])
 
   const succeeded = items.filter(it => it.status === 'done').length
   const failed = items.filter(it => it.status === 'failed').length

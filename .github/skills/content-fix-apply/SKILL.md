@@ -25,7 +25,7 @@ Only include fields that need to change. Do not include a field if the fix is al
 - **faq** → Add frontmatter FAQ questions (3-5 questions max). Only if file has no existing FAQ.
 - **eeat** → Add credibility signal (author note, data source, or experience statement).
 - **cta** → Add or strengthen call-to-action.
-- **date** → Update frontmatter `date:` field.
+
 
 ## Validation rules (enforced by Rust)
 
@@ -55,8 +55,7 @@ Return a `ContentFixPatch` JSON with these fields:
       {"question": "Q1?", "answer": "A1"}
     ],
     "eeat_signal": "Added author credential or data source",
-    "cta": "New or improved call-to-action",
-    "date": "2026-05-12"
+    "cta": "New or improved call-to-action"
   }
 }
 ```

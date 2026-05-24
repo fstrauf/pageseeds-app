@@ -25,4 +25,12 @@ quality_breakdown: QualityBreakdown | null,
 /**
  * Page type: "hub", "pillar", "spoke", "landing", etc.
  */
-page_type: string | null, };
+page_type: string | null, 
+/**
+ * Content hash (SHA-256 of body) for change detection
+ */
+content_hash: string | null, 
+/**
+ * When the article content was last modified (file mtime or fix apply)
+ */
+last_edited_at: string | null, };

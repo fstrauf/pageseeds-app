@@ -35,6 +35,15 @@ pub struct IndexingTargetPlan {
     pub distinctiveness_verdict: Option<DistinctivenessVerdict>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_audit_summary: Option<serde_json::Value>,
+    /// Content audit word count for this URL (0 = not in tracked content)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_count: Option<usize>,
+    /// Internal incoming links from link scan
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming_links: Option<usize>,
+    /// Source MDX file path if tracked in content audit; None if only in GSC
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 /// The full campaign plan written by `ihc_reduce_plan`.

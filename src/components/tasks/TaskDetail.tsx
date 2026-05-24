@@ -484,6 +484,38 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
           </Button>
         )}
 
+        {/* Show verification failures for fix_content_article tasks in review */}
+        {task.type === 'fix_content_article' && task.status === 'review' && (() => {
+          const verifyArtifact = task.artifacts.find(a => a.key === 'fix_content_article_verify')
+          if (!verifyArtifact?.content) return null
+          try {
+            const report = JSON.parse(verifyArtifact.content)
+            const failures = report.fixes?.filter((f: { status: string }) => f.status === 'failed') ?? []
+            if (failures.length === 0) return null
+            return (
+              <>
+                <Separator className="bg-border" />
+                <div className="space-y-2">
+                  <div className="text-xs text-amber-600 font-medium">Fix Issues Found</div>
+                  {failures.map((f: { category: string; detail?: string; expected?: string; actual?: string }, i: number) => (
+                    <div key={i} className="px-2.5 py-2 rounded-md bg-amber-50 border border-amber-200 text-xs space-y-1">
+                      <div className="font-medium text-amber-800">{f.category}</div>
+                      {f.detail && <div className="text-amber-700">{f.detail}</div>}
+                      {f.expected && <div className="text-amber-600">Expected: {f.expected}</div>}
+                      {f.actual && <div className="text-amber-600 truncate">Actual: {f.actual}</div>}
+                    </div>
+                  ))}
+                  <div className="text-xs text-muted-foreground">
+                    These issues could not be fixed automatically. Review the article and edit manually, or mark as done to dismiss.
+                  </div>
+                </div>
+              </>
+            )
+          } catch {
+            return null
+          }
+        })()}
+
         {/* Mark as done for tasks in review that need human approval */}
         {task.status === 'review' && (
           <Button

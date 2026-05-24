@@ -862,6 +862,9 @@ pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResul
             )),
             distinctiveness_verdict: verdict.cloned(),
             content_audit_summary: None,
+            word_count: Some(ctx.target.word_count),
+            incoming_links: Some(ctx.target.incoming_links),
+            file: Some(ctx.target.file.clone()).filter(|f| !f.is_empty()),
         });
     }
 
@@ -1247,7 +1250,9 @@ fn build_add_links_spec(
     ctx: Option<&IndexingTargetContext>,
 ) -> TaskSpec {
     let url_slug = crate::content::slug::extract_slug_from_url(&target.url);
-    let idempotency_key = format!("ihc-add-links:{}:{}:{}", parent.project_id, parent.id, target.url);
+    // Use article_id (not parent.id) so dedup works across repeated campaign runs.
+    let article_id = ctx.map(|c| c.target.article_id).unwrap_or(0);
+    let idempotency_key = format!("ihc-add-links:{}:{}", parent.project_id, article_id);
 
     // Build the indexing_link_target artifact that fix_indexing_internal_links expects
     let mut artifacts = vec![];
@@ -1314,7 +1319,9 @@ fn build_rewrite_spec(
     ctx: Option<&IndexingTargetContext>,
 ) -> TaskSpec {
     let url_slug = crate::content::slug::extract_slug_from_url(&target.url);
-    let idempotency_key = format!("ihc-rewrite:{}:{}:{}", parent.project_id, parent.id, target.url);
+    // Use article_id (not parent.id) so dedup works across repeated campaign runs.
+    let article_id = ctx.map(|c| c.target.article_id).unwrap_or(0);
+    let idempotency_key = format!("ihc-rewrite:{}:{}", parent.project_id, article_id);
 
     // Build a richer description that includes cluster context if available
     let mut description = format!(
@@ -1630,6 +1637,9 @@ mod tests {
             context_artifact_key: None,
             distinctiveness_verdict: Some(overlap_verdict("medium")),
             content_audit_summary: None,
+            word_count: Some(800),
+            incoming_links: Some(3),
+            file: Some("content/test-article.mdx".to_string()),
         }
     }
 
@@ -1670,11 +1680,14 @@ mod tests {
     fn build_rewrite_spec_has_idempotency_key() {
         let parent = dummy_task();
         let target = dummy_target_plan("rewrite_title_h1");
-        let spec = build_rewrite_spec(&parent, &target, None);
+        let ctx = dummy_target_ctx("good", 0, true, "not_indexed_other");
+        let spec = build_rewrite_spec(&parent, &target, Some(&ctx));
         let key = spec.idempotency_key.unwrap();
         assert!(key.starts_with("ihc-rewrite:"));
         assert!(key.contains("proj-abc"));
-        assert!(key.contains("task-123"));
+        // Key uses article_id (42), not parent.id, for cross-run dedup
+        assert!(key.contains("42"));
+        assert!(!key.contains("task-123"));
     }
 
     #[test]
@@ -1683,7 +1696,7 @@ mod tests {
         let target = dummy_target_plan("rewrite_title_h1");
         let spec = build_rewrite_spec(&parent, &target, None);
         match spec.dedup_policy {
-            Some(DeduplicationPolicy::Cooldown { days }) => assert_eq!(days, 7),
+            Some(DeduplicationPolicy::Cooldown { days }) => assert_eq!(days, 30),
             other => panic!("Expected Cooldown dedup policy, got {:?}", other),
         }
     }
@@ -1803,6 +1816,9 @@ mod tests {
                     context_artifact_key: None,
                     distinctiveness_verdict: Some(overlap_verdict("medium")),
                     content_audit_summary: None,
+                    word_count: Some(500),
+                    incoming_links: Some(2),
+                    file: Some("content/a.mdx".to_string()),
                 },
             ],
             summary: IndexingCampaignSummary {

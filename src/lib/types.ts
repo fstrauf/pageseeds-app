@@ -653,6 +653,12 @@ export interface HealthSnapshot {
   fix_failed: number
   fix_pending: number
   last_audit_days: number
+  content_next_run_yield: number
+  indexing_next_run_yield: number
+  fix_on_cooldown: number
+  content_poor_outstanding: number
+  content_needs_work_outstanding: number
+  fix_needs_review: number
 }
 
 export interface ProjectOverview {
