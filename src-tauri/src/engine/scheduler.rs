@@ -107,6 +107,41 @@ pub fn upsert_rule(conn: &Connection, rule: &SchedulerRule) -> Result<(), String
     Ok(())
 }
 
+/// Seed default scheduler rules for a project if none exist yet.
+/// Only creates rules that are not already configured.
+pub fn seed_default_rules(conn: &Connection, project_id: &str) -> Result<(), String> {
+    let existing = list_rules(conn, project_id)?;
+    let existing_types: std::collections::HashSet<&str> =
+        existing.iter().map(|r| r.task_type.as_str()).collect();
+
+    let defaults: &[(&str, i64, &str)] = &[
+        ("collect_gsc", 24, "high"),
+        ("ctr_audit", 168, "medium"),
+        ("update_research_shortlist", 168, "medium"),
+    ];
+
+    for &(task_type, interval_hours, priority) in defaults {
+        if existing_types.contains(task_type) {
+            continue;
+        }
+        let rule_id = format!("seed:{project_id}:{task_type}");
+        let rule = SchedulerRule {
+            rule_id,
+            project_id: project_id.to_string(),
+            task_type: task_type.to_string(),
+            action: "create_task".to_string(),
+            interval_hours,
+            priority: priority.to_string(),
+            phase: crate::config::default_phase(task_type).to_string(),
+            enabled: true,
+            last_run_at: None,
+        };
+        upsert_rule(conn, &rule)?;
+    }
+
+    Ok(())
+}
+
 pub fn delete_rule(conn: &Connection, rule_id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM scheduler_rules WHERE rule_id = ?1", [rule_id])
         .map_err(|e| e.to_string())?;

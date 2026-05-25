@@ -571,8 +571,9 @@ impl WorkflowHandler for CannibalizationAuditHandler {
 
     fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
         vec![
-            // Step 1 (deterministic): Sync latest GSC data.
-            WorkflowStep::new("can_gsc_sync", StepKind::GscSyncArticles),
+            // Step 1 (deterministic): Sync latest GSC data. Optional — clustering
+            // works without GSC; articles with zero GSC data are still included.
+            WorkflowStep::new("can_gsc_sync", StepKind::GscSyncArticles).optional(),
             // Step 2 (deterministic): Load articles from articles.json or live-site inventory.
             WorkflowStep::new("can_coverage_load", StepKind::CoverageLoadArticles),
             // Step 3 (deterministic): Compute TF-IDF similarity matrix + write reference artifacts.

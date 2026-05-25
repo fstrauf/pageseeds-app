@@ -99,7 +99,7 @@ pub fn check_article_health(
     let first_lower = first_paragraph.to_lowercase();
     let keyword_lower = target_keyword.to_lowercase();
     let snippet_has_keyword_or_question = keyword_lower.is_empty()
-        || first_lower.contains(&keyword_lower)
+        || keyword_words_in_text(&keyword_lower, &first_lower)
         || first_paragraph.contains('?');
     let snippet_ok = snippet_word_count >= SNIPPET_MIN_WORDS
         && snippet_word_count <= SNIPPET_MAX_WORDS
@@ -134,6 +134,16 @@ pub fn check_article_health(
         snippet_word_count,
         snippet_has_keyword_or_question,
     }
+}
+
+/// Check whether all significant words of the keyword appear in the text.
+/// Splits the keyword into words, filters out noise (single chars, ampersands,
+/// colons), and requires every remaining word to be found.
+fn keyword_words_in_text(keyword: &str, text: &str) -> bool {
+    keyword
+        .split_whitespace()
+        .filter(|w| w.len() > 1 && *w != "&")
+        .all(|w| text.contains(w))
 }
 
 /// Compute a simple content hash for detecting changes.

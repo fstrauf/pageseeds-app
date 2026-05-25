@@ -561,24 +561,22 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         ctx.task.task_type.as_str(),
         "content_review" | "content_audit" | "ctr_audit" | "indexing_health_campaign"
     ) {
-        // Deduplicate by audit type (not by parent task id) so re-running the same
-        // audit type within the cooldown window does not create duplicate specs.
+        // Deduplicate by project + month so only one spec is generated per month
+        // regardless of how many audit types run.
+        let month = chrono::Utc::now().format("%Y%m").to_string();
         let idempotency_key = format!(
             "feature_spec:{}:{}",
             ctx.task.project_id,
-            ctx.task.task_type
+            month
         );
         let spec = crate::engine::spawner::TaskSpec {
             project_id: ctx.task.project_id.clone(),
             task_type: "generate_feature_spec".to_string(),
-            title: Some(format!(
-                "Feature spec from {} audit",
-                ctx.task.task_type
-            )),
-            description: Some(format!(
-                "Agentic synthesis of {} findings into a developer feature specification.",
-                ctx.task.task_type
-            )),
+            title: Some("Feature spec from audit findings".to_string()),
+            description: Some(
+                "Agentic synthesis of SEO audit findings into a developer feature specification."
+                    .to_string(),
+            ),
             priority: crate::models::task::Priority::Medium,
             run_policy: Some(crate::models::task::TaskRunPolicy::AutoEnqueue),
             agent_policy: crate::models::task::AgentPolicy::Required,
@@ -602,7 +600,85 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
+    // Retry blocked indexing_health_campaign tasks when their prerequisites complete.
+    // The IHC step 1 fails when gsc_collection.json / link_scan.json / content_audit.json
+    // are stale, auto-spawns helper tasks, and marks itself failed. After a helper
+    // finishes, re-enqueue any blocked IHC task so it can run to completion.
+    retry_blocked_ihc_tasks(ctx, &mut follow_up_ids);
+
     follow_up_ids
+}
+
+/// When a helper task (collect_gsc, cluster_and_link, content_audit) completes,
+/// find any failed indexing_health_campaign tasks in the same project that were
+/// blocked on prerequisites and re-enqueue them.
+fn retry_blocked_ihc_tasks(ctx: &PostTaskContext<'_>, follow_up_ids: &mut Vec<String>) {
+    // Only trigger retry when one of the known IHC prerequisite task types completes.
+    if !matches!(
+        ctx.task.task_type.as_str(),
+        "collect_gsc" | "cluster_and_link" | "content_audit"
+    ) {
+        return;
+    }
+
+    let tasks = match task_store::list_tasks(ctx.conn, &ctx.task.project_id) {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("[post_actions] IHC retry: failed to list tasks: {}", e);
+            return;
+        }
+    };
+
+    for task in &tasks {
+        if task.task_type != "indexing_health_campaign" {
+            continue;
+        }
+        if task.status != crate::models::task::TaskStatus::Failed {
+            continue;
+        }
+        // Only retry if it failed on the prerequisite check step.
+        let last_error = task.run.last_error.as_deref().unwrap_or("");
+        if !last_error.contains("Waiting for") {
+            continue;
+        }
+
+        log::info!(
+            "[post_actions] Retrying blocked IHC task {} (was waiting for prerequisites)",
+            task.id
+        );
+
+        // Clear the error and re-enqueue.
+        if let Err(e) = task_store::reset_task_error(ctx.conn, &task.id) {
+            log::warn!("[post_actions] IHC retry: failed to clear error for {}: {}", task.id, e);
+            continue;
+        }
+        if let Err(e) = task_store::update_task_status(
+            ctx.conn,
+            &task.id,
+            crate::models::task::TaskStatus::Todo,
+        ) {
+            log::warn!("[post_actions] IHC retry: failed to update status for {}: {}", task.id, e);
+            continue;
+        }
+
+        let item = crate::models::queue::EnqueueItem {
+            task_id: task.id.clone(),
+            project_id: task.project_id.clone(),
+            title: task.title.clone(),
+            task_type: Some(task.task_type.clone()),
+            project_name: None,
+        };
+        if let Err(e) = crate::engine::queue::enqueue_tasks(
+            ctx.conn,
+            vec![item],
+            crate::models::queue::EnqueueMode::Append,
+        ) {
+            log::warn!("[post_actions] IHC retry: failed to enqueue {}: {}", task.id, e);
+            continue;
+        }
+
+        follow_up_ids.push(task.id.clone());
+    }
 }
 
 // ─── CTR Outcome Baseline Recording ──────────────────────────────────────────

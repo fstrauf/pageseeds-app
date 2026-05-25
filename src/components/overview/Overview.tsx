@@ -5,7 +5,7 @@ import {
   PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
-import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, openFeatureSpecInVSCode, repairArticlePaths, runHealthAudit, updateTaskStatus } from '../../lib/tauri'
+import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, openFeatureSpecInVSCode, repairArticlePaths, updateTaskStatus } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
 import type { Article, LandingPageResearchPending, PendingFeatureSpec, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -459,7 +459,6 @@ export function Overview({
   const [repairingPaths, setRepairingPaths] = useState(false)
   const [repairResult, setRepairResult] = useState<import('../../lib/types').RepairPathResult | null>(null)
   const [runningCtr, setRunningCtr] = useState(false)
-  const [runningFullAudit, setRunningFullAudit] = useState(false)
   const [lastRunSummary, setLastRunSummary] = useState<string | null>(null)
 
   // Live queue snapshot for showing in-progress fix counts
@@ -572,25 +571,6 @@ export function Overview({
     }
     prevOverviewRef.current = overview
   }, [overview, queueIsRunning, runCompletedTick])
-
-  async function handleRunFullAudit() {
-    if (!project || runningFullAudit) return
-    setRunningFullAudit(true)
-    setQuickActionError(null)
-    try {
-      console.log('[Overview] handleRunFullAudit — creating audit tasks')
-      const tasks = await runHealthAudit(project.id)
-      console.log('[Overview] handleRunFullAudit — created', tasks.length, 'tasks, enqueuing')
-      onRunTasks?.(tasks)
-      console.log('[Overview] handleRunFullAudit — calling load()')
-      await load()
-      console.log('[Overview] handleRunFullAudit — load() complete')
-    } catch (e: unknown) {
-      setQuickActionError(String(e))
-    } finally {
-      setRunningFullAudit(false)
-    }
-  }
 
   async function handleOpenPublish() {
     if (!project || loadingPublish) return
@@ -783,50 +763,6 @@ export function Overview({
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 pb-4">
-              {/* Run Full Audit — creates content_review + indexing_health_campaign */}
-              {(() => {
-                const snap = overview?.health_snapshot
-                const perRun = snap ? (snap.content_next_run_yield + snap.indexing_next_run_yield) || 20 : null
-                const total = snap ? (snap.content_poor || 0) + (snap.content_needs_improvement || 0) + (snap.indexing_not_indexed || 0) : 0
-                const runsNeeded = total > 0 && perRun && perRun > 0 ? Math.ceil(total / perRun) : null
-                return (
-              <button
-                onClick={handleRunFullAudit}
-                disabled={runningFullAudit || queueIsRunning}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors group',
-                  'bg-primary hover:bg-primary/90 text-primary-foreground',
-                  'disabled:opacity-70 disabled:cursor-not-allowed',
-                )}
-              >
-                <span className="shrink-0">{queueIsRunning ? <RefreshCw size={16} className="animate-spin" /> : <HeartPulse size={16} />}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">
-                      {queueIsRunning ? 'Audit Running…' : 'Run Full Audit'}
-                    </span>
-                    {runsNeeded !== null && !queueIsRunning && (
-                      <Badge variant="secondary" className="text-[10px] px-1 py-0 h-auto bg-primary-foreground/15 text-primary-foreground border-0">
-                        ~{runsNeeded} run{runsNeeded !== 1 ? 's' : ''} left
-                      </Badge>
-                    )}
-                  </div>
-                  <span className="text-xs opacity-90 leading-snug">
-                    {queueIsRunning
-                      ? 'Processing fixes…'
-                      : snap
-                        ? `${total} issues · ~${perRun} fixes per run`
-                        : 'Content health + indexing (CTR & cannibalization run on schedule)'
-                    }
-                  </span>
-                </div>
-                {!queueIsRunning && (
-                  <PlayCircle size={14} className="shrink-0 opacity-70 group-hover:opacity-100" />
-                )}
-              </button>
-              )
-              })()}
-
               {/* Health snapshot — shows what's still outstanding */}
               {(() => {
                 const snap = overview?.health_snapshot

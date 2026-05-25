@@ -1110,7 +1110,7 @@ pub(crate) fn spawn_campaign_children(
         priority(a.recommended_action.as_str()).cmp(&priority(b.recommended_action.as_str()))
     });
 
-    for (target, spec) in spawnable.into_iter().take(MAX_CAMPAIGN_CHILD_TASKS) {
+    for (target, spec) in spawnable {
         match TaskSpawner::spawn(conn, spec) {
             Ok(task) => {
                 log::info!(
@@ -1128,14 +1128,6 @@ pub(crate) fn spawn_campaign_children(
                 );
             }
         }
-    }
-
-    if plan.targets.len() > MAX_CAMPAIGN_CHILD_TASKS {
-        log::info!(
-            "[ihc_post_action] capped child tasks at {} ({} actionable targets in plan)",
-            MAX_CAMPAIGN_CHILD_TASKS,
-            plan.targets.len()
-        );
     }
 
     log::info!(
@@ -1241,8 +1233,6 @@ fn build_fix_content_spec(
         ..Default::default()
     }
 }
-
-const MAX_CAMPAIGN_CHILD_TASKS: usize = 20;
 
 fn build_add_links_spec(
     parent: &Task,

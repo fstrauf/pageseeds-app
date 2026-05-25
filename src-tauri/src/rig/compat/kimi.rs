@@ -249,6 +249,24 @@ where
         response_format: None,
     };
 
+    // The direct backend does not support native tool calls. Skip the
+    // guaranteed-422 round-trip and go straight to JSON mode.
+    if backend == Some("direct") {
+        log::info!(
+            "[kimi::extract_structured] Using JSON mode (direct backend does not support tool calls)."
+        );
+        return extract_structured_json_mode::<T>(
+            base_url,
+            model,
+            prompt,
+            preamble,
+            &schema_value,
+            backend,
+            max_tokens,
+        )
+        .await;
+    }
+
     // Attempt tool-calling first.
     let mut last_error = String::new();
     match send_request(base_url, tool_request.clone(), backend).await {

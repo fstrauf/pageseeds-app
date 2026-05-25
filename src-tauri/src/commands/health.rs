@@ -15,12 +15,12 @@ pub struct IndexingHealthSummary {
     pub last_inspected_at: Option<String>,
 }
 
-/// Run a full health audit by creating the two manual tasks needed:
+/// Run a health audit by creating the two audit tasks:
 ///   1. content_review (includes content_audit step)
 ///   2. indexing_health_campaign
 ///
-/// ctr_audit and cannibalization_audit are auto-enqueued on schedule;
-/// the dashboard shows their latest data automatically.
+/// CTR and cannibalization audits are available as individual Quick Actions
+/// and also run on schedule via default scheduler rules.
 #[tauri::command]
 pub fn run_health_audit(
     state: State<'_, AppState>,
@@ -30,6 +30,8 @@ pub fn run_health_audit(
 
     let mut tasks = Vec::new();
 
+    let today = chrono::Utc::now().format("%Y%m%d").to_string();
+
     // Spawn content_review (includes content_audit with new checks)
     let content_task = TaskSpawner::spawn(
         &conn,
@@ -38,6 +40,7 @@ pub fn run_health_audit(
             task_type: "content_review".to_string(),
             title: Some("Content Health Audit".to_string()),
             priority: Priority::Medium,
+            idempotency_key: Some(format!("audit:content_review:{}:{}", project_id, today)),
             ..Default::default()
         },
     )
@@ -52,6 +55,10 @@ pub fn run_health_audit(
             task_type: "indexing_health_campaign".to_string(),
             title: Some("Indexing Health Audit".to_string()),
             priority: Priority::Medium,
+            idempotency_key: Some(format!(
+                "audit:indexing_health_campaign:{}:{}",
+                project_id, today
+            )),
             ..Default::default()
         },
     )

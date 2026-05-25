@@ -353,12 +353,11 @@ pub fn get_health_snapshot(conn: &Connection, project_id: &str) -> Result<Health
         |row| row.get::<_, i64>(0),
     ).unwrap_or(0);
 
-    // Next-run yield estimates.
-    // Each run caps at 20 fixes. Cooldowned articles are skipped.
-    const MAX_FIXES_PER_RUN: i64 = 20;
+    // Next-run yield estimates. Cooldowned articles are skipped.
+    // No artificial cap — the per-article 30-day cooldown already prevents re-fixing.
     let content_unhealthy = snap.content_poor + snap.content_needs_improvement;
-    snap.content_next_run_yield = (content_unhealthy - snap.fix_on_cooldown).max(0).min(MAX_FIXES_PER_RUN);
-    snap.indexing_next_run_yield = (snap.indexing_not_indexed - snap.fix_on_cooldown).max(0).min(MAX_FIXES_PER_RUN);
+    snap.content_next_run_yield = (content_unhealthy - snap.fix_on_cooldown).max(0);
+    snap.indexing_next_run_yield = (snap.indexing_not_indexed - snap.fix_on_cooldown).max(0);
 
     // Count fix_content_article tasks currently in review (from failed verify checks)
     snap.fix_needs_review = conn.query_row(

@@ -28,7 +28,7 @@ import {
   getIndexingHealthSummary,
   runHealthAudit,
 } from '@/lib/tauri'
-import type { CtrHealthSummary, StrategyWithReviews } from '@/lib/types'
+import type { CtrHealthSummary, StrategyWithReviews, Task } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -326,9 +326,10 @@ function extractPriorityIssues(
 interface Props {
   projectId: string
   onViewChange?: (view: string) => void
+  onRunTasks?: (tasks: Task[]) => void
 }
 
-export function HealthDashboard({ projectId, onViewChange }: Props) {
+export function HealthDashboard({ projectId, onViewChange, onRunTasks }: Props) {
   const handleError = useErrorHandler()
   const [data, setData] = useState<HealthData>({
     contentAudit: null,
@@ -378,15 +379,17 @@ export function HealthDashboard({ projectId, onViewChange }: Props) {
     if (!projectId) return
     setRunningAudit(true)
     try {
-      await runHealthAudit(projectId)
-      // Data will refresh when tasks complete; for now just reload after a delay
+      const tasks = await runHealthAudit(projectId)
+      if (tasks.length > 0 && onRunTasks) {
+        onRunTasks(tasks)
+      }
       setTimeout(() => loadData(), 3000)
     } catch (e: unknown) {
       handleError(e)
     } finally {
       setRunningAudit(false)
     }
-  }, [projectId, loadData, handleError])
+  }, [projectId, loadData, handleError, onRunTasks])
 
   const priorityIssues = useMemo(
     () =>

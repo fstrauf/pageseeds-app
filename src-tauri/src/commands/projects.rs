@@ -90,6 +90,12 @@ pub fn create_project(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     task_store::create_project(&db, &project)?;
 
+    // Seed default scheduler rules so AutoEnqueue tasks (collect_gsc, ctr_audit,
+    // update_research_shortlist) actually run on a schedule.
+    if let Err(e) = crate::engine::scheduler::seed_default_rules(&db, &id) {
+        log::warn!("[create_project] Failed to seed scheduler rules: {}", e);
+    }
+
     if project_mode == ProjectMode::Workspace {
         // Auto-initialize the project workspace with required files.
         let repo_root = std::path::Path::new(&resolved_path);
