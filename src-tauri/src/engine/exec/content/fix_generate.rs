@@ -144,8 +144,9 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     };
 
     // 5. Normalize and validate
+    let target_kw = context.target_keyword.as_deref();
     let repairs = normalize_patch_before_validation(&mut patch, &original_content);
-    let errors = validate_patch_before_write(&patch, &original_content);
+    let errors = validate_patch_before_write(&patch, &original_content, target_kw);
 
     // 6. One repair attempt if needed
     if !errors.is_empty() {
@@ -158,7 +159,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         match repair_content_fix_patch_with_backend(backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
                 let _repair_notes = normalize_patch_before_validation(&mut repaired, &original_content);
-                let repair_errors = validate_patch_before_write(&repaired, &original_content);
+                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw);
 
                 if !repair_errors.is_empty() {
                     return StepResult {
@@ -243,7 +244,9 @@ fn extract_context(task: &Task) -> Result<Option<FixContext>, String> {
         .as_str()
         .unwrap_or("")
         .to_string();
-    let target_keyword = value["target_keyword"].as_str().map(|s| s.to_string());
+    let target_keyword = value["target_keyword"]
+        .as_str()
+        .map(|s| normalize_target_keyword(s, article_id));
 
     let suggestions: Vec<ReviewSuggestion> = value["suggestions"]
         .as_array()
@@ -345,7 +348,7 @@ You must produce a ContentFixPatch JSON that addresses every suggestion listed a
 Validation rules (enforced by Rust):
 - title: must be ≤ {title_max} chars if provided
 - description: must be {meta_min}-{meta_max} chars if provided
-- intro: should be 40-80 words if provided
+- intro: should be 40-60 words if provided
 - faq_questions: must be 3-5 questions if provided and file has no existing frontmatter FAQ
 
 **CRITICAL — Keyword placement**: The target keyword is "{target_keyword}". Whenever you generate a new title, H1, meta description, or intro, you MUST naturally include the target keyword in the text. This applies to ALL changes in those fields, not just keyword-specific recommendations:
@@ -380,6 +383,29 @@ Only include fields that need to change. Do not include title/description/intro/
     );
 
     Ok(prompt)
+}
+
+// ─── Keyword normalization ────────────────────────────────────────────────────
+
+/// Truncate overly long target keywords (full questions, sentences, paragraphs)
+/// that were mistakenly stored as "target_keyword" instead of a short phrase.
+///
+/// A keyword longer than 100 characters is almost certainly not a keyword — it is
+/// a full question or description that snuck in from the content pipeline. Truncate
+/// it so downstream prompts don't feed 50-word "keywords" to the AI.
+pub(crate) fn normalize_target_keyword(kw: &str, article_id: i64) -> String {
+    const MAX_KEYWORD_CHARS: usize = 100;
+    if kw.len() <= MAX_KEYWORD_CHARS {
+        return kw.trim().to_string();
+    }
+    log::warn!(
+        "[fix_generate] target_keyword for article {} is {} chars (max {}). Truncating.",
+        article_id,
+        kw.len(),
+        MAX_KEYWORD_CHARS
+    );
+    let truncated: String = kw.chars().take(MAX_KEYWORD_CHARS).collect();
+    format!("{}…", truncated.trim_end())
 }
 
 // ─── Patch normalization ─────────────────────────────────────────────────────
@@ -520,12 +546,41 @@ fn shorten_meta_description(value: &str, min_chars: usize, max_chars: usize) -> 
 
 // ─── Patch validation ────────────────────────────────────────────────────────
 
-fn validate_patch_before_write(patch: &ContentFixPatch, original_content: &str) -> Vec<String> {
+fn validate_patch_before_write(
+    patch: &ContentFixPatch,
+    original_content: &str,
+    target_keyword: Option<&str>,
+) -> Vec<String> {
     let mut errors = Vec::new();
     let title_max = crate::engine::exec::audit_health::TITLE_MAX_LEN;
     let meta_min = crate::engine::exec::audit_health::META_MIN_LEN;
     let meta_max = crate::engine::exec::audit_health::META_MAX_LEN;
+    let intro_min = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
+    let intro_max = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
     let has_faq = crate::engine::exec::audit_health::has_frontmatter_faq(original_content);
+
+    // If the target keyword is excessively long (>10 significant tokens), it is
+    // likely a full question or description mistakenly stored as a keyword. Skip
+    // keyword placement checks — requiring fifty words in a 55-char title is
+    // impossible. The upstream content_review pipeline should be fixed for this.
+    let kw_for_check: Option<String> = target_keyword.and_then(|kw| {
+        let significant_count = kw
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+            .filter(|w| crate::engine::exec::content::fix_verify::is_significant_keyword_token(w))
+            .count();
+        if significant_count > 10 {
+            log::warn!(
+                "[fix_content_generate] Skipping keyword validation: keyword '{}' has {} significant tokens (>10). \
+                 This is likely a full question or description, not a keyword. The content_review pipeline \
+                 should be updated to extract shorter target keywords.",
+                kw, significant_count
+            );
+            None
+        } else {
+            Some(kw.to_lowercase())
+        }
+    });
 
     if let Some(ref t) = patch.changes.title {
         if t.chars().count() > title_max {
@@ -534,6 +589,17 @@ fn validate_patch_before_write(patch: &ContentFixPatch, original_content: &str) 
                 t.chars().count(),
                 title_max
             ));
+        }
+        if let Some(ref kw) = kw_for_check {
+            if !crate::engine::exec::content::fix_verify::keyword_words_present(
+                kw,
+                &t.to_lowercase(),
+            ) {
+                errors.push(format!(
+                    "title does not contain target keyword '{}'",
+                    kw
+                ));
+            }
         }
     }
 
@@ -544,6 +610,38 @@ fn validate_patch_before_write(patch: &ContentFixPatch, original_content: &str) 
                 "description is {} chars (expected {}-{})",
                 len, meta_min, meta_max
             ));
+        }
+        if let Some(ref kw) = kw_for_check {
+            if !crate::engine::exec::content::fix_verify::keyword_words_present(
+                kw,
+                &d.to_lowercase(),
+            ) {
+                errors.push(format!(
+                    "description does not contain target keyword '{}'",
+                    kw
+                ));
+            }
+        }
+    }
+
+    if let Some(ref intro) = patch.changes.intro {
+        let word_count = crate::content::ops::count_words(intro);
+        if word_count < intro_min || word_count > intro_max {
+            errors.push(format!(
+                "intro is {} words (expected {}-{})",
+                word_count, intro_min, intro_max
+            ));
+        }
+        if let Some(ref kw) = kw_for_check {
+            if !crate::engine::exec::content::fix_verify::keyword_words_present(
+                kw,
+                &intro.to_lowercase(),
+            ) {
+                errors.push(format!(
+                    "intro does not contain target keyword '{}'",
+                    kw
+                ));
+            }
         }
     }
 

@@ -39,6 +39,13 @@ pub(crate) fn exec_generate_feature_spec(
         sections.push(format_content_audit_section(audit));
     } else if let Some(audit) = load_json(automation_dir.join("content_audit.json")) {
         // Fallback to legacy JSON file during transition
+        let sv = audit["schema_version"].as_u64().unwrap_or(0);
+        if sv < 2 {
+            sections.push(format!(
+                "> **Note:** The content audit data was generated with schema v{} (current: v2). Some extended checks (temporal_url, page_bloat_proxy, literal_template_variable, title_token_duplication) are not available. Baseline check data will be used instead.",
+                sv
+            ));
+        }
         sections.push(format_content_audit_section(&audit));
     }
 
@@ -303,55 +310,72 @@ fn format_content_audit_section(audit: &serde_json::Value) -> String {
             total, poor, needs
         ));
 
+        // Detect which check keys are present in the audit data so we don't silently
+        // produce empty sections when the audit was run with an older version that
+        // doesn't include extended checks (temporal_url, page_bloat_proxy, etc.).
+        let available_checks: std::collections::HashSet<&str> = articles
+            .first()
+            .and_then(|a| a["checks"].as_object())
+            .map(|o| o.keys().map(|k| k.as_str()).collect())
+            .unwrap_or_default();
+
+        let has_check = |key: &str| available_checks.contains(key);
+
         // Literal template variables
-        let literal_vars: Vec<&serde_json::Value> = articles
-            .iter()
-            .filter(|a| a["checks"]["literal_template_variable"]["pass"].as_bool() == Some(false))
-            .collect();
-        if !literal_vars.is_empty() {
-            parts.push(format!(
-                "\n### Literal Template Variables ({} articles)\n",
-                literal_vars.len()
-            ));
-            for a in &literal_vars {
+        if has_check("literal_template_variable") {
+            let literal_vars: Vec<&serde_json::Value> = articles
+                .iter()
+                .filter(|a| a["checks"]["literal_template_variable"]["pass"].as_bool() == Some(false))
+                .collect();
+            if !literal_vars.is_empty() {
                 parts.push(format!(
-                    "- `{}` → title: `{}`",
-                    a["file"].as_str().unwrap_or("unknown"),
-                    a["title"].as_str().unwrap_or("")
+                    "\n### Literal Template Variables ({} articles)\n",
+                    literal_vars.len()
                 ));
+                for a in &literal_vars {
+                    parts.push(format!(
+                        "- `{}` → title: `{}`",
+                        a["file"].as_str().unwrap_or("unknown"),
+                        a["title"].as_str().unwrap_or("")
+                    ));
+                }
             }
         }
 
         // Temporal URLs
-        let temporal: Vec<&serde_json::Value> = articles
-            .iter()
-            .filter(|a| a["checks"]["temporal_url"]["pass"].as_bool() == Some(false))
-            .collect();
-        if !temporal.is_empty() {
-            parts.push(format!("\n### Temporal URLs ({} articles)\n", temporal.len()));
-            for a in &temporal {
-                parts.push(format!(
-                    "- `{}` → `{}`",
-                    a["url_slug"].as_str().unwrap_or(""),
-                    a["file"].as_str().unwrap_or("unknown")
-                ));
+        if has_check("temporal_url") {
+            let temporal: Vec<&serde_json::Value> = articles
+                .iter()
+                .filter(|a| a["checks"]["temporal_url"]["pass"].as_bool() == Some(false))
+                .collect();
+            if !temporal.is_empty() {
+                parts.push(format!("\n### Temporal URLs ({} articles)\n", temporal.len()));
+                for a in &temporal {
+                    parts.push(format!(
+                        "- `{}` → `{}`",
+                        a["url_slug"].as_str().unwrap_or(""),
+                        a["file"].as_str().unwrap_or("unknown")
+                    ));
+                }
             }
         }
 
         // Title token duplication
-        let dup_titles: Vec<&serde_json::Value> = articles
-            .iter()
-            .filter(|a| a["checks"]["title_token_duplication"]["pass"].as_bool() == Some(false))
-            .collect();
-        if !dup_titles.is_empty() {
-            parts.push(format!("\n### Title Token Duplication ({} articles)\n", dup_titles.len()));
-            for a in &dup_titles {
-                parts.push(format!(
-                    "- `{}` → title: `{}` (max token count: {})",
-                    a["file"].as_str().unwrap_or("unknown"),
-                    a["title"].as_str().unwrap_or(""),
-                    a["title_token_max_count"].as_i64().unwrap_or(0)
-                ));
+        if has_check("title_token_duplication") {
+            let dup_titles: Vec<&serde_json::Value> = articles
+                .iter()
+                .filter(|a| a["checks"]["title_token_duplication"]["pass"].as_bool() == Some(false))
+                .collect();
+            if !dup_titles.is_empty() {
+                parts.push(format!("\n### Title Token Duplication ({} articles)\n", dup_titles.len()));
+                for a in &dup_titles {
+                    parts.push(format!(
+                        "- `{}` → title: `{}` (max token count: {})",
+                        a["file"].as_str().unwrap_or("unknown"),
+                        a["title"].as_str().unwrap_or(""),
+                        a["title_token_max_count"].as_i64().unwrap_or(0)
+                    ));
+                }
             }
         }
 
@@ -384,22 +408,203 @@ fn format_content_audit_section(audit: &serde_json::Value) -> String {
         }
 
         // Page bloat
-        let bloated: Vec<&serde_json::Value> = articles
-            .iter()
-            .filter(|a| a["checks"]["page_bloat_proxy"]["pass"].as_bool() == Some(false))
-            .collect();
-        if !bloated.is_empty() {
-            parts.push(format!("\n### Page Bloat ({} articles)\n", bloated.len()));
-            for a in &bloated {
-                parts.push(format!(
-                    "- `{}` → file_size: {} bytes, images: {}, tables: {}, code_blocks: {}",
-                    a["file"].as_str().unwrap_or("unknown"),
-                    a["bloat_metrics"]["file_size"].as_u64().unwrap_or(0),
-                    a["bloat_metrics"]["image_count"].as_u64().unwrap_or(0),
-                    a["bloat_metrics"]["table_count"].as_u64().unwrap_or(0),
-                    a["bloat_metrics"]["code_block_count"].as_u64().unwrap_or(0)
-                ));
+        if has_check("page_bloat_proxy") {
+            let bloated: Vec<&serde_json::Value> = articles
+                .iter()
+                .filter(|a| a["checks"]["page_bloat_proxy"]["pass"].as_bool() == Some(false))
+                .collect();
+            if !bloated.is_empty() {
+                parts.push(format!("\n### Page Bloat ({} articles)\n", bloated.len()));
+                for a in &bloated {
+                    parts.push(format!(
+                        "- `{}` → file_size: {} bytes, images: {}, tables: {}, code_blocks: {}",
+                        a["file"].as_str().unwrap_or("unknown"),
+                        a["bloat_metrics"]["file_size"].as_u64().unwrap_or(0),
+                        a["bloat_metrics"]["image_count"].as_u64().unwrap_or(0),
+                        a["bloat_metrics"]["table_count"].as_u64().unwrap_or(0),
+                        a["bloat_metrics"]["code_block_count"].as_u64().unwrap_or(0)
+                    ));
+                }
             }
+        }
+
+        // Fallback: when the extended check keys are absent (audit was run with an
+        // older version), extract actionable baseline check failures so the LLM has
+        // real data to work with instead of hallucinating categories.
+        let has_extended_checks = has_check("temporal_url")
+            && has_check("page_bloat_proxy")
+            && has_check("literal_template_variable")
+            && has_check("title_token_duplication");
+        if !has_extended_checks && (poor > 0 || needs > 0) {
+            parts.push(format_baseline_audit_failures(articles));
+        }
+    }
+
+    parts.join("\n")
+}
+
+/// Extract actionable failure categories from baseline content audit checks
+/// (broken_links, word_count, keyword_density, etc.) when extended checks
+/// (temporal_url, page_bloat_proxy, etc.) are not available.
+fn format_baseline_audit_failures(articles: &[serde_json::Value]) -> String {
+    let mut parts = vec!["\n### Content Issues (baseline checks)\n".to_string()];
+
+    // P0-like: broken links, malformed links, missing source files
+    let broken_links: Vec<_> = articles
+        .iter()
+        .filter(|a| a["checks"]["broken_links"]["pass"].as_bool() == Some(false))
+        .collect();
+    if !broken_links.is_empty() {
+        parts.push(format!(
+            "#### Broken/Placeholder Links ({} articles)\n",
+            broken_links.len()
+        ));
+        for a in broken_links.iter().take(15) {
+            parts.push(format!(
+                "- `{}` → {} broken links",
+                a["file"].as_str().unwrap_or("unknown"),
+                a["checks"]["broken_links"]["value"].as_u64().unwrap_or(0)
+            ));
+        }
+    }
+
+    let malformed: Vec<_> = articles
+        .iter()
+        .filter(|a| a["checks"]["malformed_links"]["pass"].as_bool() == Some(false))
+        .collect();
+    if !malformed.is_empty() {
+        parts.push(format!(
+            "\n#### Malformed Markdown Links ({} articles)\n",
+            malformed.len()
+        ));
+        for a in malformed.iter().take(15) {
+            parts.push(format!(
+                "- `{}` | title: `{}`",
+                a["file"].as_str().unwrap_or("unknown"),
+                a["title"].as_str().unwrap_or("")
+            ));
+        }
+    }
+
+    // P1-like: thin content, keyword issues, missing metadata
+    let thin: Vec<_> = articles
+        .iter()
+        .filter(|a| a["checks"]["word_count"]["pass"].as_bool() == Some(false))
+        .collect();
+    if !thin.is_empty() {
+        parts.push(format!(
+            "\n#### Thin Content — Below 800 Words ({} articles)\n",
+            thin.len()
+        ));
+        for a in thin.iter().take(15) {
+            parts.push(format!(
+                "- `{}` → {} words | title: `{}`",
+                a["file"].as_str().unwrap_or("unknown"),
+                a["checks"]["word_count"]["value"].as_u64().unwrap_or(0),
+                a["title"].as_str().unwrap_or("")
+            ));
+        }
+    }
+
+    let missing_keywords: Vec<_> = articles
+        .iter()
+        .filter(|a| {
+            a["checks"]["title_keyword"]["pass"].as_bool() == Some(false)
+                || a["checks"]["h1_keyword"]["pass"].as_bool() == Some(false)
+        })
+        .collect();
+    if !missing_keywords.is_empty() {
+        parts.push(format!(
+            "\n#### Keyword Missing from Title or H1 ({} articles)\n",
+            missing_keywords.len()
+        ));
+        for a in missing_keywords.iter().take(15) {
+            let kw = a["target_keyword"].as_str().unwrap_or("?");
+            let title_ok = a["checks"]["title_keyword"]["pass"].as_bool() == Some(true);
+            let h1_ok = a["checks"]["h1_keyword"]["pass"].as_bool() == Some(true);
+            let missing = if !title_ok && !h1_ok {
+                "title and H1"
+            } else if !title_ok {
+                "title"
+            } else {
+                "H1"
+            };
+            parts.push(format!(
+                "- `{}` → keyword `{}` missing from {}",
+                a["file"].as_str().unwrap_or("unknown"),
+                kw,
+                missing
+            ));
+        }
+    }
+
+    let missing_meta: Vec<_> = articles
+        .iter()
+        .filter(|a| {
+            a["checks"]["meta_desc_present"]["pass"].as_bool() == Some(false)
+                || a["checks"]["meta_desc_length"]["pass"].as_bool() == Some(false)
+        })
+        .collect();
+    if !missing_meta.is_empty() {
+        parts.push(format!(
+            "\n#### Missing or Invalid Meta Description ({} articles)\n",
+            missing_meta.len()
+        ));
+        for a in missing_meta.iter().take(10) {
+            let absent = a["checks"]["meta_desc_present"]["pass"].as_bool() == Some(false);
+            parts.push(format!(
+                "- `{}` → {}",
+                a["file"].as_str().unwrap_or("unknown"),
+                if absent {
+                    "no meta description"
+                } else {
+                    "meta description wrong length"
+                }
+            ));
+        }
+    }
+
+    // P2-like: insufficient internal links
+    let low_links: Vec<_> = articles
+        .iter()
+        .filter(|a| a["checks"]["internal_links"]["pass"].as_bool() == Some(false))
+        .collect();
+    if !low_links.is_empty() {
+        parts.push(format!(
+            "\n#### Insufficient Internal Links — Less Than 3 ({} articles)\n",
+            low_links.len()
+        ));
+        for a in low_links.iter().take(15) {
+            parts.push(format!(
+                "- `{}` → {} internal links | title: `{}`",
+                a["file"].as_str().unwrap_or("unknown"),
+                a["checks"]["internal_links"]["value"].as_u64().unwrap_or(0),
+                a["title"].as_str().unwrap_or("")
+            ));
+        }
+    }
+
+    // Top offenders summary
+    let poor_articles: Vec<_> = articles
+        .iter()
+        .filter(|a| a["health"].as_str() == Some("poor"))
+        .take(10)
+        .collect();
+    if !poor_articles.is_empty() {
+        parts.push(format!(
+            "\n#### Top Priority Articles (poor health, highest priority)\n"
+        ));
+        for a in &poor_articles {
+            let failed = a["checks_failed"].as_u64().unwrap_or(0);
+            let total_checks = a["checks_total"].as_u64().unwrap_or(0);
+            parts.push(format!(
+                "- `{}` → priority_score: {}, health: poor, failed {}/{} checks | title: `{}`",
+                a["file"].as_str().unwrap_or("unknown"),
+                a["priority_score"].as_i64().unwrap_or(0),
+                failed,
+                total_checks,
+                a["title"].as_str().unwrap_or("")
+            ));
         }
     }
 

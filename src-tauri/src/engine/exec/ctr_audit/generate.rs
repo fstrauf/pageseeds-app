@@ -518,6 +518,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
 
         let mock_server = MockServer::start().await;
 
+        let patch_json = r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"This is a very good meta description that is definitely longer than one hundred and thirty characters so it passes the strict health check.","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -530,19 +531,9 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": null,
-                            "tool_calls": [
-                                {
-                                    "id": "call_abc123",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "submit",
-                                        "arguments": r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"This is a very good meta description that is definitely longer than one hundred and thirty characters so it passes the strict health check.","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#
-                                    }
-                                }
-                            ]
+                            "content": patch_json
                         },
-                        "finish_reason": "tool_calls"
+                        "finish_reason": "stop"
                     }
                 ],
                 "usage": {
@@ -658,6 +649,7 @@ More content here.
         let mock_server = MockServer::start().await;
 
         // First response: invalid patch (description too short — normalization cannot fix this)
+        let bad_patch_json = r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"Too short","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -670,19 +662,9 @@ More content here.
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": null,
-                            "tool_calls": [
-                                {
-                                    "id": "call_abc123",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "submit",
-                                        "arguments": r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"Too short","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#
-                                    }
-                                }
-                            ]
+                            "content": bad_patch_json
                         },
-                        "finish_reason": "tool_calls"
+                        "finish_reason": "stop"
                     }
                 ],
                 "usage": {
@@ -696,6 +678,7 @@ More content here.
             .await;
 
         // Second response: valid repair
+        let good_patch_json = r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"This is a very good meta description that is definitely longer than one hundred and thirty characters so it passes the strict health check.","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -708,19 +691,9 @@ More content here.
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": null,
-                            "tool_calls": [
-                                {
-                                    "id": "call_abc456",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "submit",
-                                        "arguments": r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"This is a very good meta description that is definitely longer than one hundred and thirty characters so it passes the strict health check.","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#
-                                    }
-                                }
-                            ]
+                            "content": good_patch_json
                         },
-                        "finish_reason": "tool_calls"
+                        "finish_reason": "stop"
                     }
                 ],
                 "usage": {
@@ -845,6 +818,7 @@ More content here.
         let mock_server = MockServer::start().await;
 
         // First response: invalid patch (description too short)
+        let bad_patch_json_1 = r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"Too short","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -857,19 +831,9 @@ More content here.
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": null,
-                            "tool_calls": [
-                                {
-                                    "id": "call_abc123",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "submit",
-                                        "arguments": r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"Too short","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#
-                                    }
-                                }
-                            ]
+                            "content": bad_patch_json_1
                         },
-                        "finish_reason": "tool_calls"
+                        "finish_reason": "stop"
                     }
                 ],
                 "usage": {
@@ -883,6 +847,7 @@ More content here.
             .await;
 
         // Second response: STILL invalid (description still too short)
+        let bad_patch_json_2 = r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"Still bad","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -895,19 +860,9 @@ More content here.
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": null,
-                            "tool_calls": [
-                                {
-                                    "id": "call_abc456",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "submit",
-                                        "arguments": r#"{"article_id":1,"file":"content/001_test_article.mdx","changes":{"title":"Good Title","description":"Still bad","first_paragraph":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty thirtyone thirtytwo thirtythree thirtyfour thirtyfive thirtysix thirtyseven thirtyeight thirtynine forty test article."}}"#
-                                    }
-                                }
-                            ]
+                            "content": bad_patch_json_2
                         },
-                        "finish_reason": "tool_calls"
+                        "finish_reason": "stop"
                     }
                 ],
                 "usage": {

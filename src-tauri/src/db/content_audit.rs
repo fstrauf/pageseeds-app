@@ -184,6 +184,7 @@ pub fn get_audit_report_as_json(
         serde_json::from_str(&run.duplicate_groups_json).unwrap_or_else(|_| serde_json::json!([]));
 
     Ok(Some(serde_json::json!({
+        "schema_version": 2,
         "generated_at": run.run_at,
         "total_audited": run.total_audited,
         "health_summary": {

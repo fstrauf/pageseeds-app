@@ -207,8 +207,20 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
     // in the generated text. Using word-level matching so a keyword like
     // "Butterfly Spread Options: Complete DTE & Strike Guide" succeeds if all
     // individual words appear, rather than requiring the full string verbatim.
+    //
+    // Skip keyword validation when the keyword is excessively long (>10
+    // significant tokens). A fifty-word question is not a keyword, it is a
+    // misclassified full question from the content_review pipeline.
     let target_kw = load_target_keyword(task);
-    if !target_kw.is_empty() {
+    let kw_is_viable = !target_kw.is_empty()
+        && target_kw
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+            .filter(|w| is_significant_keyword_token(w))
+            .count()
+            <= 10;
+
+    if !target_kw.is_empty() && kw_is_viable {
         let kw_lower = target_kw.to_lowercase();
 
         // H1 keyword check
@@ -414,12 +426,85 @@ fn load_target_keyword(task: &Task) -> String {
 
 /// Check whether all significant words of the keyword appear in the target text.
 /// Splits the keyword into words, strips punctuation, filters out noise
-/// (single chars, ampersands), and requires every remaining word to be
+/// (single chars, conjunctions), and requires every remaining word to be
 /// found in the target.
-fn keyword_words_present(keyword: &str, text: &str) -> bool {
+pub(crate) fn keyword_words_present(keyword: &str, text: &str) -> bool {
     keyword
         .split_whitespace()
         .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-        .filter(|w| w.len() > 1 && *w != "&")
+        .filter(|w| is_significant_keyword_token(w))
         .all(|w| text.contains(w))
+}
+
+/// Return true when a token is a significant keyword word, not a
+/// conjunction, stopword, or single character.
+pub(crate) fn is_significant_keyword_token(w: &str) -> bool {
+    if w.len() <= 1 {
+        return false;
+    }
+    match w {
+        "vs" | "and" | "or" | "the" | "a" | "an" | "in" | "of" | "to" | "for" | "&" => false,
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyword_words_present_with_quoted_vs_keyword() {
+        // "vs" is a conjunction, not a contentful keyword word.
+        // The check should succeed when all CONTENT words are present
+        // even if the intro uses "are two strategies" instead of "vs".
+        let kw = r#""cash-secured put" vs "naked put""#;
+        let kw_lower = kw.to_lowercase();
+
+        let first_para = "naked puts and cash-secured puts are two popular options strategies, but they differ dramatically in capital requirements and risk. a cash-secured put requires holding the full assignment amount in cash, limiting risk to the strike price minus premium. a naked put uses margin instead, requiring only a fraction of the capital but exposing you to margin calls and amplified losses if the stock drops sharply.";
+
+        assert!(keyword_words_present(&kw_lower, first_para));
+    }
+
+    #[test]
+    fn test_keyword_words_present_with_conjunction_keywords() {
+        // "and" / "or" should also be treated as conjunctions
+        assert!(is_significant_keyword_token("coffee"));
+        assert!(!is_significant_keyword_token("vs"));
+        assert!(!is_significant_keyword_token("and"));
+        assert!(!is_significant_keyword_token("or"));
+        assert!(!is_significant_keyword_token("the"));
+        assert!(!is_significant_keyword_token("a"));
+        assert!(!is_significant_keyword_token("of"));
+        assert!(!is_significant_keyword_token("&"));
+        assert!(!is_significant_keyword_token("x")); // single char
+    }
+
+    #[test]
+    fn test_find_first_paragraph_range_returns_full_para() {
+        let body = "\
+naked puts and cash-secured puts are two popular options strategies, but they differ dramatically in capital requirements and risk. a cash-secured put requires holding the full assignment amount in cash, limiting risk to the strike price minus premium. a naked put uses margin instead, requiring only a fraction of the capital but exposing you to margin calls and amplified losses if the stock drops sharply.
+
+## Next heading
+more text here.";
+
+        let range = crate::content::cleaner::find_first_paragraph_range(body)
+            .expect("should find first paragraph");
+        let para = &body[range.0..range.1];
+        let para_lower = para.trim().to_lowercase();
+
+        let kw = r#""cash-secured put" vs "naked put""#;
+        let kw_lower = kw.to_lowercase();
+
+        assert!(
+            para_lower.contains("cash-secured"),
+            "first_para should contain 'cash-secured', got: '{}'", para
+        );
+        assert!(
+            para_lower.contains("naked"),
+            "first_para should contain 'naked', got: '{}'", para
+        );
+
+        let result = keyword_words_present(&kw_lower, &para_lower);
+        assert!(result, "keyword_words_present should return true for the full paragraph from find_first_paragraph_range. para='{}'", para);
+    }
 }

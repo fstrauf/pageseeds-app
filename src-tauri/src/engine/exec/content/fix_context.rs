@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
+use super::fix_generate::normalize_target_keyword;
 
 pub(crate) fn exec_fix_content_article_context(
     task: &Task,
@@ -78,7 +79,9 @@ pub(crate) fn exec_fix_content_article_context(
         .as_str()
         .unwrap_or("")
         .to_string();
-    let target_keyword = article_rec["target_keyword"].as_str().map(|s| s.to_string());
+    let target_keyword = article_rec["target_keyword"]
+        .as_str()
+        .map(|s| normalize_target_keyword(s, article_id));
     let suggestions = article_rec["suggestions"].clone();
 
     // Read current file content
