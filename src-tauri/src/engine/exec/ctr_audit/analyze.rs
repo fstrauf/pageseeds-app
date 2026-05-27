@@ -52,15 +52,14 @@ pub(crate) fn exec_ctr_analyze(
 
     let repo_root = Path::new(project_path);
 
+    // The ctr-optimization skill file already contains the canonical Output Contract.
+    // Passing a hardcoded contract here duplicates it and is the #1 source of schema drift.
     let output = match crate::engine::agent::run_agent_with_skill(
         "ctr-optimization",
         repo_root,
         &context_json,
         agent_provider,
-        // Domain-specific output contract — CtrAgentOutput schema
-        "{\"recommendations\":[{\"article_id\":0,\"article_title\":\"\",\"target_keyword\":\"\",\
-         \"fixes\":[{\"fix_type\":\"title_bait|meta_description|snippet_bait|faq_schema\",\
-         \"reason\":\"\",\"current_text\":\"\"}],\"priority\":0,\"clicks_lost\":0.0}]}",
+        None,
     ) {
         Ok(o) => o,
         Err(e) => {

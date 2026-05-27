@@ -157,12 +157,13 @@ pub(crate) fn exec_gsc_investigate(
     );
 
     let repo_root = Path::new(project_path);
+    // The gsc-investigate skill file already contains the canonical Output Contract.
     match crate::engine::agent::run_agent_with_skill(
         "gsc-investigate",
         repo_root,
         &context,
         agent_provider,
-        "{\"summary\":\"...\",\"issues_found\":[{\"reason_code\":\"...\",\"url_count\":0,\"root_cause\":\"...\",\"recommendation\":\"...\",\"priority\":\"high|medium|low\"}]}",
+        None,
     ) {
         Ok(output) => StepResult {
             success: true,

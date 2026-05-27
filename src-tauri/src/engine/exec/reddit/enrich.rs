@@ -359,12 +359,13 @@ pub fn exec_reddit_enrich(
     );
 
     let repo_root = Path::new(project_path);
+    // The reddit-enrich skill file already contains the canonical Output Contract.
     let output = match crate::engine::agent::run_agent_with_skill(
         "reddit-enrich",
         repo_root,
         &context,
         agent_provider,
-        &format!("[{{\"post_id\":\"...\",\"relevance_score\":0,\"why_relevant\":\"...\",\"key_pain_points\":[],\"website_fit\":\"...\",\"reply_text\":\"...\"}}] — exactly {} objects", rows.len()),
+        None,
     ) {
         Ok(o) => o,
         Err(e) => {

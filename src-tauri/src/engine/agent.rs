@@ -96,18 +96,20 @@ pub fn run_agent(provider: &str, prompt: &str, project_path: &Path) -> Result<St
 ///
 /// Standardizes the pattern repeated across 13 exec modules:
 /// 1. Load skill from project repo or app defaults
-/// 2. Build prompt from skill content + context + output contract
+/// 2. Build prompt from skill content + context + optional output contract
 /// 3. Call the agent
 /// 4. Return raw output (caller handles JSON extraction and domain logic)
 ///
-/// `output_contract` is appended as a "## Output Contract" section instructing
-/// the agent to return JSON matching a specific schema.
+/// `output_contract` is an **optional** override appended as a "## Output Contract"
+/// section.  When `None`, the skill file itself is the single source of truth for
+/// the expected schema.  Passing `Some(...)` duplicates what the skill already
+/// documents and is the most common source of schema-drift bugs — avoid it.
 pub fn run_agent_with_skill(
     skill_name: &str,
     repo_root: &Path,
     context: &str,
     agent_provider: &str,
-    output_contract: &str,
+    output_contract: Option<&str>,
 ) -> Result<String, String> {
     let skill = crate::engine::skills::load_skill(repo_root, skill_name).ok_or_else(|| {
         format!(
@@ -116,15 +118,23 @@ pub fn run_agent_with_skill(
         )
     })?;
 
-    let prompt = format!(
-        "{}\n\n---\n\n## Context\n\n{}\n\n## Output Contract\n\n{}\n\n\
-         CRITICAL: Return ONLY a single JSON object matching the Output Contract above. \
-         Do not include markdown prose, summaries, tables, or explanations outside the JSON. \
-         Do not write files. Output the JSON directly in your response.",
-        skill.content,
-        context,
-        output_contract,
-    );
+    let prompt = if let Some(contract) = output_contract {
+        format!(
+            "{}\n\n---\n\n## Context\n\n{}\n\n## Output Contract\n\n{}\n\n\
+             CRITICAL: Return ONLY a single JSON object matching the Output Contract above. \
+             Do not include markdown prose, summaries, tables, or explanations outside the JSON. \
+             Do not write files. Output the JSON directly in your response.",
+            skill.content, context, contract,
+        )
+    } else {
+        format!(
+            "{}\n\n---\n\n## Context\n\n{}\n\n\
+             CRITICAL: Return ONLY structured output matching the Output Contract in the skill instructions above. \
+             Do not include markdown prose, summaries, tables, or explanations outside the structured output. \
+             Do not write files. Output the structured data directly in your response.",
+            skill.content, context,
+        )
+    };
 
     run_agent(agent_provider, &prompt, repo_root)
 }

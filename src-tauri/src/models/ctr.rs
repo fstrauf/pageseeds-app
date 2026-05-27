@@ -360,3 +360,46 @@ pub struct CtrOutcome {
     pub deployed_at: Option<String>,
     pub reviewed_at: Option<String>,
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify the embedded `ctr-optimization` skill file's example JSON deserializes
+    /// into the canonical Rust model.  This catches schema drift between the skill
+    /// file (agent-facing contract) and the Rust parser (downstream consumer).
+    #[test]
+    fn ctr_optimization_skill_example_deserializes() {
+        let skill_md = include_str!("../../skills/ctr-optimization/SKILL.md");
+
+        // Extract the first ```json block after "## Output Contract"
+        let contract_start = skill_md.find("## Output Contract").expect("missing Output Contract section");
+        let after_contract = &skill_md[contract_start..];
+        let json_start = after_contract.find("```json").expect("missing ```json block");
+        let after_block = &after_contract[json_start + 7..];
+        let json_end = after_block.find("```").expect("unclosed ```json block");
+        let json_str = after_block[..json_end].trim();
+
+        let output: CtrAgentOutput = serde_json::from_str(json_str)
+            .unwrap_or_else(|e| panic!("Skill file example JSON does not match CtrAgentOutput: {}", e));
+
+        assert_eq!(output.recommendations.len(), 1, "expected one recommendation in example");
+        let rec = &output.recommendations[0];
+        assert_eq!(rec.article_id, 42);
+        assert_eq!(rec.url_slug, "best-stocks-csp");
+        assert_eq!(rec.fixes.len(), 4, "expected four fixes in example");
+
+        // Verify each fix type parses correctly
+        let expected_types = vec![
+            CtrFixType::TitleRewrite,
+            CtrFixType::MetaDescription,
+            CtrFixType::FaqSchema,
+            CtrFixType::SnippetBait,
+        ];
+        for (fix, expected) in rec.fixes.iter().zip(expected_types.iter()) {
+            assert_eq!(&fix.fix_type, expected, "fix type mismatch");
+        }
+    }
+}

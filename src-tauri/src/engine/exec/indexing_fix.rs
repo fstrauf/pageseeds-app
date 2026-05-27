@@ -201,23 +201,27 @@ pub(crate) fn exec_indexing_fix_apply(
          - Issue: {}\n\
          - Suggested Action: {}\n\
          - Repo: {}\n\
-         {}{}",
+         {}\n\
+         {}\n\
+         {}",
         task.id,
         url,
         reason,
         action,
         project_path,
+        file_instruction,
         context_block,
         cluster_context_block,
     );
 
     let repo_root = Path::new(project_path);
+    // The indexing-fix skill file already contains the canonical Output Contract.
     match crate::engine::agent::run_agent_with_skill(
         "indexing-fix",
         repo_root,
         &context,
         agent_provider,
-        &format!("{}", file_instruction),
+        None,
     ) {
         Ok(output) => StepResult {
             success: true,
