@@ -20,11 +20,10 @@ A **Tauri 2 desktop app** for SEO content workflows. Self-contained binary — n
 ## Quick Navigation
 
 ### Understanding the Domain
-- **[Business Processes](./docs/BUSINESS_PROCESSES.md)** — What the app does: keyword research, content review, publishing, GSC workflows, Reddit marketing
+- **[Business Processes](./docs/BUSINESS_PROCESSES.md)** — What the app does: keyword research, content creation, optimization, publishing, GSC monitoring, CTR optimization, cannibalization detection, Reddit marketing, social media, agentic investigation
 
 ### Understanding the Architecture
 - **[Workflow Engine](./docs/WORKFLOW_ENGINE.md)** — How tasks are planned and executed (handlers, steps, deterministic vs agentic)
-- **[Task Queue](./docs/TASK_QUEUE.md)** — The single execution path for all tasks
 - **[Data Persistence](./docs/DATA_PERSISTENCE.md)** — SQLite runtime state + JSON committed content
 - **[Agent Integration](./docs/AGENT_INTEGRATION.md)** — How LLM agents are invoked and responses normalized
 
@@ -120,11 +119,14 @@ src/
     ├── ui/              # shadcn/ui primitives ONLY
     ├── tasks/           # TaskBoard, TaskDetail, TaskRunner
     ├── articles/        # ArticleTable, ContentHealth, PublishPanel
-    ├── reddit/          # OpportunityFeed, ReplyDraft
-    ├── gsc/             # GSCDashboard, IndexingReport
-    ├── seo/             # KeywordResearch, BacklinkView
+    ├── reddit/          # OpportunityFeed, ReplyDraft, RedditStats
+    ├── gsc/             # GSCDashboard, IndexingReport, CoverageView
+    ├── seo/             # KeywordResearch, BacklinkView, TrafficOverview
+    ├── social/          # SocialDashboard, CampaignList, PostEditor, TemplateList
+    ├── health/          # HealthDashboard, InvestigationPanel
+    ├── cannibalization/ # CannibalizationReview
     ├── projects/        # ProjectSwitcher, ProjectSettings
-    └── settings/        # SecretsManager
+    └── settings/        # SecretsManager, SchedulerConfig
 ```
 
 ---
@@ -161,7 +163,7 @@ src/
 ```
 "todo" | "in_progress" | "review" | "done" | "cancelled"
 ```
-- Only `research_keywords` and `custom_keyword_research` finish with `"review"`
+- `research_keywords`, `custom_keyword_research`, `research_landing_pages`, `reddit_opportunity_search` finish with `"review"
 - All others: `in_progress → done` on success
 
 ### Execution Modes
@@ -259,7 +261,7 @@ pnpm build            # Production build
 |----------|------|
 | What workflows exist? | [Business Processes](./docs/BUSINESS_PROCESSES.md) |
 | How does task execution work? | [Workflow Engine](./docs/WORKFLOW_ENGINE.md) |
-| How is the queue managed? | [Task Queue](./docs/TASK_QUEUE.md) |
+| How is the queue managed? | [AGENTS.md](./AGENTS.md) |
 | Where is data stored? | [Data Persistence](./docs/DATA_PERSISTENCE.md) |
 | How do LLM agents work? | [Agent Integration](./docs/AGENT_INTEGRATION.md) |
 | What are the runtime invariants? | [CONTRACTS.md](./CONTRACTS.md) |

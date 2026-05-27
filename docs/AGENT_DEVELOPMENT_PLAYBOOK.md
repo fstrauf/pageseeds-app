@@ -384,5 +384,5 @@ pnpm exec tsc -b
 
 - [`AGENTS.md`](../AGENTS.md) — Full architecture reference, directory map, deep rules, pre-change checklist
 - [`WORKFLOW_ENGINE.md`](./WORKFLOW_ENGINE.md) — How handlers, steps, and the executor interact
-- [`TASK_QUEUE.md`](./TASK_QUEUE.md) — Queue semantics and event flow
+- [`AGENTS.md`](../AGENTS.md) — Queue semantics and event flow
 - [`CONTRACTS.md`](../CONTRACTS.md) — Runtime invariants and hidden rules

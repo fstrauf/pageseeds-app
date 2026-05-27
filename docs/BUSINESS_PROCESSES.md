@@ -2,7 +2,7 @@
 
 This document maps the **why** — the core workflows PageSeeds enables for SEO content operations.
 
-Each process represents a user-facing capability with a defined input, transformation, and output.
+Each process represents a user-facing capability with a defined input, transformation, and output. The unifying principle: **close the loop between data and action**. PageSeeds doesn't just show you SEO data — it executes the work that data implies.
 
 ---
 
@@ -17,18 +17,18 @@ Each process represents a user-facing capability with a defined input, transform
 │  │  DISCOVER        │───▶│  CREATE          │───▶│  OPTIMIZE        │      │
 │  │  (Keywords)      │    │  (Content)       │    │  (Existing)      │      │
 │  └──────────────────┘    └──────────────────┘    └──────────────────┘      │
+│          │                       │                      │                   │
+│          ▼                       ▼                      ▼                   │
+│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐      │
+│  │  INVESTIGATE     │    │  PUBLISH         │    │  FIX             │      │
+│  │  (Ask AI)        │    │  (Deploy)        │    │  (Apply)         │      │
+│  └──────────────────┘    └──────────────────┘    └──────────────────┘      │
 │          │                                               │                  │
 │          ▼                                               ▼                  │
 │  ┌──────────────────┐                           ┌──────────────────┐       │
-│  │  MONITOR         │◀──────────────────────────│  PUBLISH         │       │
-│  │  (GSC/Analytics) │                           │  (Deploy)        │       │
+│  │  MONITOR         │◀──────────────────────────│  PROMOTE         │       │
+│  │  (GSC/Health)    │                           │  (Social/Reddit) │       │
 │  └──────────────────┘                           └──────────────────┘       │
-│          │                                                                  │
-│          ▼                                                                  │
-│  ┌──────────────────┐                                                       │
-│  │  PROMOTE         │                                                       │
-│  │  (Reddit/Social) │                                                       │
-│  └──────────────────┘                                                       │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -37,67 +37,63 @@ Each process represents a user-facing capability with a defined input, transform
 
 ## 1. Keyword & Landing Page Research Process
 
-**Purpose:** Find new content opportunities (blog articles or landing pages) with search volume and manageable difficulty.
+**Purpose:** Find new content opportunities with search volume and manageable difficulty.
+
+**Business value:** Eliminates guesswork in content planning. Instead of "what should we write about?", you get a validated shortlist of keywords your domain can realistically rank for.
 
 ### Two Research Modes
 
-| Mode | Task Type | Intent | Output Format |
-|------|-----------|--------|---------------|
-| **Informational** | `research_keywords` | Blog articles (how-to, guides, tutorials) | `{"difficulty": {"results": [...]}}` |
-| **Commercial** | `research_landing_pages` | Landing pages (best, vs, alternative, software) | `{"landing_page_candidates": [...]}` |
+| Mode | Task Type | Intent | Output |
+|------|-----------|--------|--------|
+| **Informational** | `research_keywords` | Blog articles (how-to, guides, tutorials) | Curated keyword shortlist |
+| **Commercial** | `research_landing_pages` | Landing pages (best, vs, alternative, software) | Landing page candidates |
+| **Custom** | `custom_keyword_research` | User-provided themes | Validated keyword list |
 
-### Inputs
-- Project context from `seo_content_brief.md` (for seed extraction)
-- Existing `articles.json` (to deduplicate against current content)
-
-### Process Flow (3-Step Agentic)
+### Process Flow
 
 ```
-Task: research_keywords OR research_landing_pages
+Task: research_keywords / research_landing_pages / custom_keyword_research
   ↓
 Handler: ResearchHandler
   ↓
-Step 1: research_seed_extraction (agentic)
+Step 1: research_theme_selection_agent (agentic) — IF no explicit themes
   ├─ Reads project brief and context
-  ├─ Agent extracts 3-4 themes to research
-  └─ Output: {"themes": ["theme1", "theme2", ...]}
+  ├─ Extracts 3-4 focused themes to research
+  └─ Output: {"themes": [...]}
   ↓
-Step 2: research_keyword_discovery (agentic)
-  ├─ Agent uses Ahrefs API tools:
-  │   ├─ keyword_generator → get keyword ideas from themes
-  │   └─ keyword_difficulty → get KD for top candidates
-  ├─ Iterates until 10+ qualified keywords found (max 25 API calls)
-  └─ Output: {"keywords": [...]} OR {"landing_page_keywords": [...]}
+Step 2: research_autocomplete (deterministic)
+  ├─ Gathers search suggestions per theme
+  └─ Output: Autocomplete suggestions
   ↓
-Step 3: research_final_selection (agentic)
-  ├─ Filters by volume (>500), KD (<40), intent
-  ├─ Deduplicates (no cannibalization)
+Step 3: research_seed_validation (agentic)
+  ├─ Filters suggestions for domain relevance
+  └─ Output: Validated seeds
+  ↓
+Step 4: keyword_research_native (deterministic)
+  ├─ Ahrefs API: keyword ideas + difficulty scores
+  ├─ Iterates until 10+ qualified keywords found
+  └─ Output: {"difficulty": {"results": [...]}}
+  ↓
+Step 5: research_final_selection (deterministic)
+  ├─ Filters by volume, KD, intent
+  ├─ Deduplicates against existing content
   └─ Output: Final selection JSON
   ↓
 Status: review (user must select keywords)
   ↓
-User selects keywords → create_article_tasks_from_keywords command
+User selects → create_article_tasks_from_keywords command
   ↓
 Creates: write_article tasks for each selected keyword
 ```
 
 ### Key Files
-- `engine/workflows/handlers.rs` — 3-step workflow definition
-- `engine/tool_agent/http_client.rs` — Tool calling agent
-- `engine/tools/keywords.rs` — Ahrefs API integration
-- `prompts/keyword_discovery.md` — Informational discovery prompt
-- `prompts/landing_page_discovery.md` — Commercial discovery prompt
+- `engine/workflows/handlers.rs` — workflow definition
+- `engine/exec/keywords.rs` — research execution
+- `seo/keywords.rs` — Ahrefs API integration
 - `components/tasks/KeywordPicker.tsx` — selection UI
 
-### Output Artifacts
-- `research_seed_extraction` — Extracted themes
-- `research_keyword_discovery` — Keywords with volume/KD data
-- `research_final_selection` — Final filtered selection
-
 ### Tools Required
-- `keyword_generator` — Generate keyword ideas from Ahrefs
-- `keyword_difficulty` — Get KD scores from Ahrefs
-- **Requires:** `CAPSOLVER_API_KEY` in Settings → Secrets
+- `CAPSOLVER_API_KEY` + Ahrefs credentials in Settings → Secrets
 
 ---
 
@@ -105,12 +101,21 @@ Creates: write_article tasks for each selected keyword
 
 **Purpose:** Write new SEO-optimized articles from keyword targets.
 
-### Inputs
-- Selected keyword from research
-- SKILL.md from project automation directory
-- Optional: content brief, style guidelines
+**Business value:** Transforms keyword research directly into publishable content. No brief handoffs, no writer bottlenecks, no copy-paste from ChatGPT. Articles are written in your brand voice, saved to your repo, and tracked in your inventory.
+
+### Supported Content Types
+
+| Task Type | What It Creates |
+|-----------|----------------|
+| `write_article` | Standard blog article from keyword |
+| `optimize_article` | Rewrite/improvement of existing article |
+| `create_landing_page` | Commercial landing page |
+| `create_content` | Generic content piece |
+| `optimize_content` | Content optimization without full rewrite |
+| `create_hub_page` | Hub/spoke pillar page (legacy — use skill-based approach) |
 
 ### Process Flow
+
 ```
 Task: write_article
   ↓
@@ -139,31 +144,35 @@ Auto-spawns: cluster_and_link task (if successful)
 
 **Purpose:** Identify and apply improvements to existing content based on performance data.
 
-### Why This Exists
-Content drifts — GSC positions drop, competitors improve, information becomes stale. This process finds high-impact articles and recommends specific fixes.
+**Business value:** Content decays — competitors improve, information becomes stale, rankings drop. This process continuously finds the highest-impact articles to improve and applies specific, measurable fixes.
 
-### Inputs
-- `articles.json` with GSC analytics
-- Content audit results (13-rule health check)
-- Scoring formula: GSC position × impressions × CTR gaps × health × staleness
+### Two Audit Types
 
-### Process Flow
+| Audit | Scope | Trigger |
+|-------|-------|---------|
+| `content_audit` | 21-rule deterministic health check | Manual or scheduled |
+| `content_review` | Health check + AI prioritization + recommendations | Manual or scheduled |
+| `ctr_audit` | CTR-focused analysis (titles, meta, snippets) | Manual or scheduled |
+
+### Process Flow (Content Review)
+
 ```
-Task: content_review (or content_audit)
+Task: content_review
   ↓
 Handler: ContentReviewHandler
   ↓
 Step 1: content_sync (deterministic)
   └─ Validate articles.json ↔ MDX files
   ↓
-Step 2: gsc_sync_articles (deterministic) 
+Step 2: gsc_sync_articles (deterministic)
   └─ Pull latest GSC metrics into articles.json
   ↓
 Step 3: content_audit (deterministic)
-  └─ 13-rule health check → content_audit.json
+  └─ 21-rule health check → content_audit.json
   ↓
 Step 4: content_review_recommend (agentic)
-  ├─ Select priority articles (top 5-10 by score)
+  ├─ Score articles: GSC position × impressions × CTR gaps × health × staleness
+  ├─ Select priority articles (top 5-10)
   ├─ Build context: GSC snapshot + failing checks + source excerpt
   ├─ Single agent call with structured prompt
   └─ Output: recommendations.json artifact
@@ -172,18 +181,44 @@ Status: done
   ↓
 Auto-spawns: fix_content_article tasks (one per recommended article)
   ↓
-System runs fix_content_article → agent applies fixes to MDX files
+Each fix_content_article runs 4-step pipeline:
+  1. Context (deterministic) — load recommendations + file content
+  2. Generate (agentic) — structured ContentFixPatch extraction
+  3. Apply (deterministic) — apply patch with snapshot/restore
+  4. Verify (deterministic) — re-run health checks
+```
+
+### Process Flow (CTR Audit)
+
+```
+Task: ctr_audit
+  ↓
+Handler: CtrAuditHandler
+  ↓
+Step 1: ctr_analyze (deterministic)
+  └─ Score articles by CTR potential
+  ↓
+Step 2: ctr_fix_generate (agentic)
+  └─ Generate structured CTR fix patches
+  ↓
+Step 3: ctr_fix_apply (deterministic)
+  └─ Apply title/meta/snippet fixes
+  ↓
+Step 4: ctr_verify_fix (deterministic)
+  └─ Re-run CTR health checks
 ```
 
 ### Key Files
-- `engine/exec/content.rs` — review orchestration
-- `engine/exec/content_audit.rs` — audit logic
+- `engine/exec/content/` — review orchestration + fix pipeline
+- `engine/exec/content_audit.rs` — 21-rule audit
+- `engine/exec/ctr_audit/` — CTR optimization pipeline
 - `content/dates.rs` — date analysis
 - `content/cleaner.rs` — structure validation
 
 ### Artifacts
 - `content_audit.json` — health scores per article
 - `recommendations.json` — suggested improvements
+- `ctr_audit.json` — CTR analysis results
 
 ---
 
@@ -191,12 +226,10 @@ System runs fix_content_article → agent applies fixes to MDX files
 
 **Purpose:** Transition articles from `ready_to_publish`/`draft` to `published` with proper date handling.
 
-### Problem This Solves
-- Multiple articles can't share the same publish date
-- Future dates are invalid
-- Titles may reference years that don't match publish dates
+**Business value:** Prevents publishing errors that hurt SEO: duplicate dates, future-dated posts, year mismatches between titles and publication dates. Handles bulk publishing with intelligent date redistribution.
 
 ### Process Flow
+
 ```
 User selects articles in UI → clicks Publish
   ↓
@@ -222,33 +255,37 @@ User confirms → Apply publish:
 - `content/dates.rs` — date calculation
 - `components/articles/PublishPanel.tsx` — UI
 
-### Deterministic vs Agentic Split
-| Step | Type | Reason |
-|------|------|--------|
-| Structural scan | Deterministic | Rule-based |
-| Date analysis/redistribution | Deterministic | Arithmetic |
-| Year mismatch resolution | Agentic | Requires editorial judgment |
-
 ---
 
 ## 5. GSC Collection & Investigation Process
 
 **Purpose:** Diagnose indexing issues and spawn actionable fix tasks.
 
+**Business value:** Catches technical SEO problems before they crater traffic. Indexing issues, coverage errors, and crawl problems are detected automatically and routed to the right fix workflow.
+
 ### Two Separate Operations
 
-**Operation A: URL Inspection (collect_gsc)**
+**Operation A: URL Inspection (`collect_gsc`)**
 - Fetch sitemap URLs
 - Call GSC URL Inspection API for each
 - Classify: robots_blocked, noindex, fetch_error, canonical_mismatch, etc.
 - Spawn fix tasks based on reason codes
 
-**Operation B: Analytics Sync (gsc_sync_articles)**
+**Operation B: Analytics Sync (`gsc_sync_articles`)**
 - Fetch Search Analytics (clicks, impressions, CTR)
 - Match URLs to articles
 - Update articles.json with GSC block
 
+**Operation C: Performance Analysis (`analyze_gsc_performance`)**
+- Deep-dive into GSC performance data
+- Identify movers, trends, and opportunities
+
+**Operation D: Indexing Recovery (`gsc_indexing_recovery`)**
+- Systematic recovery workflow for not-indexed pages
+- Internal link fixes, content improvements, re-submission
+
 ### Process Flow (URL Inspection)
+
 ```
 Task: collect_gsc
   ↓
@@ -268,21 +305,6 @@ Auto-spawns fix tasks (up to 20):
   └─ All indexed → investigate_gsc (one task)
 ```
 
-### Process Flow (Investigation)
-```
-Task: investigate_gsc
-  ↓
-Handler: InvestigationHandler
-  ↓
-Step: gsc_summarise (deterministic)
-  └─ Group gsc_collection.json by reason_code
-  ↓
-Step: gsc_investigate_agentic (agentic)
-  ├─ Load gsc_summary.json
-  ├─ Agent interprets patterns
-  └─ Output: investigation recommendations
-```
-
 ### Key Files
 - `engine/exec/gsc.rs` — GSC task execution
 - `gsc/indexing.rs` — URL Inspection API
@@ -295,85 +317,127 @@ Step: gsc_investigate_agentic (agentic)
 
 ---
 
-## 6. Social Media Marketing Process
+## 6. CTR Optimization Process
 
-**Purpose:** Transform content (articles, screenshots, specs) into platform-native social media posts with AI-generated image prompts.
+**Purpose:** Improve click-through rates from search results.
 
-### Inputs
-- Content sources: articles, screenshots, spec files
-- Content templates defining tone and format per platform
-- Target platforms (TikTok, Instagram Feed/Reels/Stories)
+**Business value:** Higher CTR = more traffic without ranking improvements. A page ranking #5 with a compelling title can out-click a bland #4 result. This process systematically identifies and fixes underperforming snippets.
 
 ### Process Flow
+
 ```
-Task: social_generate_campaign
+Task: ctr_audit
   ↓
-Handler: SocialHandler
+Handler: CtrAuditHandler
   ↓
-Step 1: social_collect_sources (deterministic)
-  ├─ Discover articles from content directory
-  ├─ Find screenshots from assets folder
-  └─ Build source manifest
+Step 1: ctr_analyze (deterministic)
+  ├─ Read GSC data + article frontmatter
+  ├─ Score by: title length, meta quality, snippet optimization, FAQ presence
+  └─ Output: ctr_audit.json
   ↓
-Step 2: social_load_templates (deterministic)
-  └─ Load platform-specific templates (TikTok hooks, IG carousels)
+Step 2: ctr_fix_generate (agentic)
+  ├─ Load skill → call extraction with structured schema
+  └─ Output: CtrFixPatch JSON artifact
   ↓
-Step 3: social_generate_posts (agentic)
-  ├─ For each source × template × platform combination:
-  ├─ Agent generates: hook, caption, hashtags, CTA
-  ├─ Agent generates: visual_description, overlay_text
-  └─ Agent generates: image_generation_prompt (for Midjourney/DALL-E)
+Step 3: ctr_fix_apply (deterministic)
+  ├─ Snapshot → apply patch → validate → restore on corruption
+  └─ Modified MDX files
   ↓
-Step 4: social_build_visuals (deterministic)
-  ├─ Copy existing source images OR generate branded fallback
-  └─ Prepare assets for text overlay
+Step 4: ctr_verify_fix (deterministic)
+  └─ Re-run CTR health checks → report pass/fail
   ↓
-Step 5: social_save_campaign (deterministic)
-  └─ Persist posts to SQLite with image_generation_prompt
-  ↓
-Status: done
+Auto-spawns: fix_ctr_article tasks for site-wide template issues
 ```
-
-### Image Generation Workflow
-Since the app cannot generate images directly, the agent creates a detailed `image_generation_prompt` that users can:
-
-1. **Copy** from the post editor UI
-2. **Paste** into Midjourney, DALL-E, Leonardo, or any AI image generator
-3. **Download** the generated image
-4. **Upload** back to the post (manual or future automation)
-
-The prompt includes:
-- Visual style description (minimalist, professional, on-brand colors)
-- Composition guidance (aspect ratio matching the platform)
-- Mood and subject matter aligned with the post content
-- "No text in image" directive (since text will be overlaid separately)
 
 ### Key Files
-- `engine/exec/social.rs` — Campaign execution logic
-- `social/prompts.rs` — Agent prompts for post generation
-- `social/generator.rs` — Simple article-to-post generator
-- `social/db.rs` — Post persistence with image_generation_prompt
-- `components/social/PostEditor.tsx` — UI with image prompt copy button
-
-### Data Model
-- `social_campaigns` table — Campaign configuration
-- `social_posts` table — Individual posts with:
-  - `hook`, `caption`, `hashtags`, `cta` — Text content
-  - `visual_assets` — Image/video paths
-  - `image_generation_prompt` — AI image prompt for external generation
-  - `overlay_text` — Text to render on the image
+- `engine/exec/ctr_audit/` — 4-step fix pipeline
+- `components/health/HealthDashboard.tsx` — CTR health display
 
 ---
 
-## 7. Reddit Opportunity Process
+## 7. Cannibalization Detection & Consolidation Process
+
+**Purpose:** Find and resolve keyword cannibalization — multiple pages competing for the same query.
+
+**Business value:** Cannibalization dilutes ranking signals and confuses search engines. Consolidating overlapping content into authoritative pages typically results in stronger rankings and cleaner site architecture.
+
+### Process Flow
+
+```
+Task: cannibalization_audit
+  ↓
+Handler: CannibalizationHandler
+  ↓
+Step 1: Load GSC data + article inventory
+  ↓
+Step 2: Cluster articles by overlapping keywords/target queries
+  ↓
+Step 3: Score cannibalization severity per cluster
+  ↓
+Step 4: Generate merge/consolidation recommendations
+  ↓
+Status: review
+  ↓
+User approves → consolidate_cluster tasks created
+  ↓
+Task: consolidate_cluster
+  ├─ Merge selected articles into authoritative page
+  ├─ Create redirects from deprecated URLs
+  └─ Update internal links
+```
+
+### Key Files
+- `engine/exec/cannibalization_audit.rs` — detection logic
+- `engine/exec/consolidate_cluster.rs` — consolidation execution
+- `components/cannibalization/CannibalizationReview.tsx` — review UI
+
+---
+
+## 8. Internal Linking & Content Clustering
+
+**Purpose:** Strengthen site architecture by connecting related articles.
+
+**Business value:** Internal links distribute PageRank (or "link equity"), help search engines discover content, and keep users engaged longer. This process autonomously builds "Related Articles" sections and hub/spoke clusters.
+
+### Process Flow
+
+```
+Task: cluster_and_link
+  ↓
+Handler: ClusterLinkHandler
+  ↓
+Step 1: cluster_link_scan (deterministic)
+  ├─ Build link graph from all MDX files
+  ├─ Identify orphaned articles
+  ├─ Find semantic clusters
+  └─ Output: link_graph.json
+  ↓
+Step 2: cluster_link_generate (agentic)
+  ├─ Generate "Related Articles" sections
+  └─ Suggest hub/spoke relationships
+  ↓
+Step 3: cluster_link_apply (deterministic)
+  └─ Append related sections to MDX files
+```
+
+### Key Files
+- `engine/exec/content/cluster_link.rs` — link graph + application
+- `content/linking.rs` — link scanning
+
+---
+
+## 9. Reddit Opportunity Process
 
 **Purpose:** Find Reddit posts relevant to your content and engage authentically.
+
+**Business value:** Reddit is high-intent traffic with strong community trust. Done well, Reddit engagement drives qualified visitors and builds brand authority. Done poorly, it gets you banned. This process finds the right conversations and drafts value-first replies.
 
 ### Inputs
 - `reddit_config.md` in project automation directory
 - Config defines: keywords, topics, subreddits, excluded subreddits
 
 ### Process Flow
+
 ```
 Task: reddit_opportunity_search
   ↓
@@ -395,7 +459,7 @@ Inline enrichment loop (after search succeeds):
   ├─ Content match suggestions
   └─ Reply draft generation
   ↓
-Status: done
+Status: review
 ```
 
 ### Key Files
@@ -410,36 +474,173 @@ Status: done
 
 ---
 
-## 7. Fix Implementation Process
+## 10. Social Media Marketing Process
+
+**Purpose:** Transform content into platform-native social media posts with AI-generated image prompts.
+
+**Business value:** Every article you publish should be promoted across channels. This process generates ready-to-post content for TikTok, Instagram Feed/Reels/Stories, and other platforms — complete with hooks, captions, hashtags, and visual direction.
+
+### Supported Workflows
+
+| Task Type | Purpose |
+|-----------|---------|
+| `social_generate_campaign` | Full campaign from content sources |
+| `social_regenerate_campaign` | Regenerate existing campaign |
+| `social_generate_from_article` | Single post from one article |
+| `social_regenerate_post` | Regenerate a single post |
+| `social_design_template` | Create platform template |
+| `social_save_template` | Save template to library |
+| `social_create_template` | Create from existing post |
+
+### Process Flow
+
+```
+Task: social_generate_campaign
+  ↓
+Handler: SocialHandler
+  ↓
+Step 1: social_collect_sources (deterministic)
+  ├─ Discover articles from content directory
+  ├─ Find screenshots from assets folder
+  └─ Build source manifest
+  ↓
+Step 2: social_load_templates (deterministic)
+  └─ Load platform-specific templates
+  ↓
+Step 3: social_generate_posts (agentic)
+  ├─ For each source × template × platform:
+  ├─ Generate: hook, caption, hashtags, CTA
+  ├─ Generate: visual_description, overlay_text
+  └─ Generate: image_generation_prompt
+  ↓
+Step 4: social_build_visuals (deterministic)
+  └─ Copy source images / prepare assets
+  ↓
+Step 5: social_save_campaign (deterministic)
+  └─ Persist posts to SQLite
+  ↓
+Status: done
+```
+
+### Image Generation Workflow
+The app cannot generate images directly. Instead, it produces detailed `image_generation_prompt` fields that users copy into Midjourney, DALL-E, Leonardo, etc. The prompt includes visual style, composition guidance, mood, and "no text in image" directives.
+
+### Key Files
+- `engine/exec/social.rs` — Campaign execution
+- `social/prompts.rs` — Agent prompts
+- `social/db.rs` — Post persistence
+- `components/social/` — Campaign UI
+
+---
+
+## 11. Agentic Investigation Process
+
+**Purpose:** Answer open-ended questions about your site's performance with evidence-backed insights.
+
+**Business value:** Pre-defined audits catch known issues. Investigation discovers unknown issues — the template bug hiding in your layout file, the duplicate content you didn't know existed, the CTR pattern that only shows up when you look across data sources.
+
+### How It Works
+
+```
+User: "Why am I plateauing at 10K impressions?"
+  ↓
+Investigation loads tool catalog → builds Rig agent with data tools
+  ↓
+Agent explores freely (up to 20 tool calls):
+  ├─ get_gsc_performance() → impressions flat
+  ├─ scan_article_titles() → brand duplicated
+  ├─ hash_article_bodies() → 6 exact dupes
+  └─ read_framework_files() → template bug
+  ↓
+Synthesizes findings → structured InvestigationResult
+  ↓
+Saved to: .github/automation/investigations/{id}/
+```
+
+### Available Tools
+- `gsc_performance` — GSC page/query data
+- `article_list` / `article_frontmatter` / `article_body_hash` / `article_title_scan` — Content inventory
+- `content_audit_report` — Full health check data
+- `cannibalization_clusters` — Cannibalization data
+- `indexing_status` — GSC indexing status
+- `ctr_health` — CTR health summary
+- `framework_files` — Next.js config, sitemap, robots.txt
+- `article_link_graph` — Internal linking structure
+- `run_content_audit` — Trigger fresh audit
+- `create_task` — Create fix tasks from findings
+
+### Key Files
+- `engine/exec/investigate.rs` — Investigation execution
+- `engine/tools/` — Rig tool implementations
+- `components/health/InvestigationPanel.tsx` — Ask AI UI
+
+---
+
+## 12. Fix Implementation Process
 
 **Purpose:** Address specific issues identified by collection workflows.
 
-### Spawned by
-- `collect_gsc` → fix_technical, fix_indexing, fix_gsc_access
-- `content_review` → fix_content_article
-- Manual creation → fix_404s, fix_redirects, etc.
+**Business value:** The output of every audit and collection process is a set of fix tasks. This process applies those fixes autonomously, with deterministic validation and rollback on failure.
 
-### Handler Routing
-The `ImplementationHandler` catches all task types starting with `fix_`:
-```rust
-// handlers.rs
-pub struct ImplementationHandler;
-impl WorkflowHandler for ImplementationHandler {
-    fn can_handle(&self, task: &Task) -> bool {
-        task.task_type.starts_with("fix_") 
-            || matches!(task.task_type.as_str(), 
-                "optimize_article" | ...)
-    }
-    
-    fn plan(&self, task: &Task, ctx: &HandlerContext) -> Vec<WorkflowStep> {
-        vec![WorkflowStep::new("apply_fix", StepKind::Agentic)
-            .with_param("skill", "apply_fix")]
-    }
-}
-```
+### Spawned By
+- `collect_gsc` → `fix_technical`, `fix_indexing`, `fix_gsc_access`
+- `content_review` / `content_audit` → `fix_content_article`
+- `ctr_audit` → `fix_ctr_article`, `fix_ctr_site_template`
+- `cannibalization_audit` → `consolidate_cluster`
+- Manual creation → `fix_404s`, `fix_redirects`, `technical_seo`, etc.
+
+### The 4-Step Fix Pipeline (Canonical Pattern)
+
+Every per-article fix follows the same reliable structure:
+
+| Step | Type | Responsibility |
+|------|------|----------------|
+| 1. Context | Deterministic | Load audit data + read target file → structured JSON |
+| 2. Generate | Agentic | Load skill → call `extract_with_backend::<PatchType>()` → validate |
+| 3. Apply | Deterministic | Snapshot → apply patch → validate MDX → restore on corruption |
+| 4. Verify | Deterministic | Re-run health checks → report pass/fail |
 
 ### Key Files
 - `engine/workflows/handlers.rs` — ImplementationHandler
+- `engine/exec/content/fix_*.rs` — Content fix pipeline
+- `engine/exec/ctr_audit/` — CTR fix pipeline
+
+---
+
+## 13. Territory Research & Strategy Process
+
+**Purpose:** Research and plan content territory (topic domain) expansion.
+
+**Business value:** Before committing to a new content vertical, understand the competitive landscape, keyword opportunities, and required investment. This process produces a strategy artifact that feeds into your editorial calendar.
+
+### Process Flow
+
+```
+Task: territory_research
+  ↓
+Handler: TerritoryResearchHandler
+  ↓
+Step 1: Gather competitive landscape data
+  ↓
+Step 2: Identify keyword whitespace
+  ↓
+Step 3: Assess content gaps vs competitors
+  ↓
+Step 4: Generate territory strategy artifact
+  ↓
+Status: review
+```
+
+---
+
+## 14. Calculator/Tool Rollout Process
+
+**Purpose:** Plan and execute interactive tool (calculator, generator) content.
+
+**Business value:** Interactive tools attract backlinks, rank for high-intent queries, and convert visitors. This process helps plan the content surrounding a tool launch.
+
+### Task Type
+- `calculator_rollout` — End-to-end calculator content strategy
 
 ---
 
@@ -455,6 +656,12 @@ content_review ◀────────────── content_audit ◀�
        │
        └──▶ fix_content_article ──▶ (updates MDX files)
 
+ctr_audit ────▶ fix_ctr_article ──▶ (title/meta fixes)
+       │
+       └──▶ fix_ctr_site_template ──▶ (global template fixes)
+
+cannibalization_audit ──approved──▶ consolidate_cluster ──▶ (merge + redirect)
+
 collect_gsc ──issues found──▶ fix_* tasks ──▶ (manual resolution)
        │
        └──▶ investigate_gsc (if all indexed)
@@ -465,9 +672,11 @@ write_article ──published──▶ social_generate_campaign ──▶ Social
        │                                                           │
        │                                                           ▼
        └───────────────────── Image Gen Prompt (manual workflow) ─┘
-```
 
-**Social Media Workflow Note:** Since the app cannot generate images directly, the social process produces `image_generation_prompt` fields that users copy into external AI image generators (Midjourney, DALL-E, etc.). The generated images are then manually uploaded back to complete the post.
+gsc_performance ──▶ analyze_gsc_performance ──▶ (insights + recommendations)
+
+investigate (agentic) ──findings──▶ create_task ──▶ fix_* tasks
+```
 
 ---
 
@@ -478,19 +687,21 @@ write_article ──published──▶ social_generate_campaign ──▶ Social
 | Keyword Research | todo | **review** (user selects) | todo |
 | Content Creation | todo | done | todo |
 | Content Review | todo | done (+ spawns apply) | todo |
+| CTR Audit | todo | done (+ spawns fixes) | todo |
+| Cannibalization Audit | todo | **review** (user approves) | todo |
 | GSC Collection | todo | done (+ spawns fixes) | todo |
-| Reddit Search | todo | done | todo |
-| Social Campaign | todo | done (posts in `draft`) | todo |
+| Reddit Search | todo | **review** (user selects) | todo |
+| Social Campaign | todo | done | todo |
+| Investigation | todo | done | todo |
 | Fix Tasks | todo | done | todo |
 
-**Critical:** Only keyword research tasks finish with `review` status. All others go to `done` or reset to `todo` on failure.
-
-**Social Post Status Flow:** `draft` → `review` → `approved` → `scheduled` → `posted`
+**Critical:** Tasks finishing with `review` status require user action before follow-ups are created. All others go to `done` or reset to `todo` on failure.
 
 ---
 
 ## See Also
 
 - [Workflow Engine](./WORKFLOW_ENGINE.md) — How processes are executed
-- [Task Queue](./TASK_QUEUE.md) — How processes are scheduled and run
+- [Workflow Engine](./WORKFLOW_ENGINE.md) — How processes are scheduled and run
 - [Data Persistence](./DATA_PERSISTENCE.md) — Where process state lives
+- [Agent Integration](./AGENT_INTEGRATION.md) — How AI agents power the agentic steps

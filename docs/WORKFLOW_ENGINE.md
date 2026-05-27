@@ -333,6 +333,6 @@ The frontend `useQueueRunner` hook consumes these to drive the TaskRunner UI.
 
 ## See Also
 
-- [Task Queue](./TASK_QUEUE.md) — How tasks are scheduled and executed
+- [AGENTS.md](../AGENTS.md) — Queue semantics and event flow
 - [Data Persistence](./DATA_PERSISTENCE.md) — Where workflow state lives
 - [CONTRACTS.md](../CONTRACTS.md) — Runtime invariants and hidden rules

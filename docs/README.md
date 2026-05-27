@@ -8,7 +8,7 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 
 **Old approach:** 15+ separate spec and process documents, many overlapping, some stale.
 
-**New approach:** 4 core business process docs + consolidated references. Code is the truth — documentation explains **why** and **how it fits together**.
+**New approach:** Core business process docs + consolidated references. Code is the truth — documentation explains **why** and **how it fits together**.
 
 ---
 
@@ -18,11 +18,12 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 
 | What you want to know | Read this |
 |-----------------------|-----------|
-| What the app does | [Business Processes](./BUSINESS_PROCESSES.md) |
+| What the app does (business perspective) | [Business Processes](./BUSINESS_PROCESSES.md) |
+| What the app does (technical overview) | [README.md](../README.md) |
 | How tasks are executed | [Workflow Engine](./WORKFLOW_ENGINE.md) |
-| How the queue works | [Task Queue](./TASK_QUEUE.md) |
 | Where data lives | [Data Persistence](./DATA_PERSISTENCE.md) |
 | How AI agents work | [Agent Integration](./AGENT_INTEGRATION.md) |
+| How to build features | [Agent Development Playbook](./AGENT_DEVELOPMENT_PLAYBOOK.md) |
 | The critical rules | [CONTRACTS.md](../CONTRACTS.md) |
 | How to add features | [AGENTS.md](../AGENTS.md) |
 | Quick orientation | [AI_QUICK_START.md](../AI_QUICK_START.md) |
@@ -31,44 +32,54 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 
 ## Documentation Map
 
-### Core Documentation (New)
+### Core Documentation
 
 ```
 docs/
 ├── README.md                       # This file
-├── BUSINESS_PROCESSES.md           # What the app does
+├── BUSINESS_PROCESSES.md           # What the app does — 14 business workflows
 │   ├── Keyword Research
 │   ├── Content Creation
 │   ├── Content Review & Optimization
 │   ├── Publishing
 │   ├── GSC Collection & Investigation
+│   ├── CTR Optimization
+│   ├── Cannibalization Detection
+│   ├── Internal Linking & Clustering
 │   ├── Reddit Opportunity
-│   └── Fix Implementation
+│   ├── Social Media Marketing
+│   ├── Agentic Investigation
+│   ├── Fix Implementation
+│   ├── Territory Research
+│   └── Calculator Rollout
 ├── WORKFLOW_ENGINE.md              # How tasks are planned and executed
 │   ├── Handlers
 │   ├── Workflow Steps
 │   ├── Executor
 │   ├── Deterministic vs Agentic
 │   └── Adding Workflows
-├── TASK_QUEUE.md                   # Single execution path
-│   ├── Queue Semantics
-│   ├── Events
-│   ├── Task Spawner
-│   └── Debugging
 ├── DATA_PERSISTENCE.md             # Data architecture
 │   ├── SQLite (runtime)
 │   ├── JSON files (committed)
 │   └── Data Flow
-└── AGENT_INTEGRATION.md            # LLM integration
-    ├── Agent Providers
-    ├── Prompt Assembly
-    ├── Normalizers
-    └── Safety
+├── AGENT_INTEGRATION.md            # LLM integration
+│   ├── Agent Providers
+│   ├── Prompt Assembly
+│   ├── Normalizers
+│   └── Safety
+├── AGENT_DEVELOPMENT_PLAYBOOK.md   # Scenario-based development guide
+│   ├── Changing a Skill
+│   ├── Adding Content-Writing Behavior
+│   ├── Attaching Tasks to Queue
+│   ├── Building Per-Article Fix Pipelines
+│   └── Adding Frontend UI
+└── AGENTIC_INVESTIGATION_SPEC.md   # Investigation feature specification
 ```
 
 ### Root Documentation
 
 ```
+├── README.md                       # App overview, business objective, quick start
 ├── AI_QUICK_START.md               # Entry point for AI agents
 ├── AGENTS.md                       # Comprehensive agent guide
 ├── CONTRACTS.md                    # Runtime invariants (critical)
@@ -76,18 +87,11 @@ docs/
 └── QUEUE_DEBUG.md                  # Debugging guide
 ```
 
-### Historical Reference (Old)
-
-These documents are kept for historical context but may be stale:
+### Other Reference
 
 | Document | Purpose |
 |----------|---------|
-| `agent-dx-improvement-plan.md` | Agent experience improvements (mostly complete) |
-| `gsc-collection-gap-analysis.md` | Gap analysis for GSC workflows |
-| `keyword-research-fix-plan.md` | Keyword research fixes |
-| `keyword-research-gap-analysis.md` | Keyword research gap analysis |
-| `release-pipeline-spec.md` | Release/build pipeline specification |
-| `task-queue-v2-spec.md` | Detailed task queue v2 specification |
+| `docs/seo_action_plan.md` | SEO action plan (project-specific) |
 
 ---
 
@@ -105,12 +109,12 @@ These documents are kept for historical context but may be stale:
 ### Always Update
 - [BUSINESS_PROCESSES.md](./BUSINESS_PROCESSES.md) — When adding/modifying user-facing workflows
 - [WORKFLOW_ENGINE.md](./WORKFLOW_ENGINE.md) — When changing handler patterns or step kinds
-- [TASK_QUEUE.md](./TASK_QUEUE.md) — When changing queue semantics or events
 - [DATA_PERSISTENCE.md](./DATA_PERSISTENCE.md) — When adding SQLite tables or JSON formats
 - [AGENT_INTEGRATION.md](./AGENT_INTEGRATION.md) — When changing agent invocation patterns
 - [CONTRACTS.md](../CONTRACTS.md) — When adding status values, execution modes, or auto-spawned tasks
 
 ### Update If Relevant
+- [README.md](../README.md) — When app capabilities or business positioning changes
 - [AI_QUICK_START.md](../AI_QUICK_START.md) — When directory structure changes
 - [AGENTS.md](../AGENTS.md) — When adding new patterns or changing conventions
 
