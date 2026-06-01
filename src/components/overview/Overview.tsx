@@ -102,6 +102,16 @@ const QUICK_ACTIONS: ActionDef[] = [
     nextView: 'tasks',
     nextLabel: 'See campaign results',
   },
+  {
+    task_type: 'generate_feature_spec',
+    label: 'Generate Feature Spec',
+    description: 'Agentic investigation of the project to produce a prioritized developer feature specification',
+    icon: <BookOpen size={16} />,
+    phase: 'investigation',
+    frequency: 'as needed',
+    nextView: 'overview',
+    nextLabel: 'Review generated spec',
+  },
   // ── Implementation (as needed) ─────────────────────────────────────────────
   {
     task_type: 'content_cleanup',
@@ -149,6 +159,7 @@ const WORKFLOW_ICONS: Record<string, React.ReactNode> = {
   ctr_audit:                <BarChart2 size={13} />,
   sanitize_content:         <Wrench size={13} />,
   indexing_health_campaign: <HeartPulse size={13} />,
+  generate_feature_spec:    <BookOpen size={13} />,
 }
 
 function relativeDate(iso: string): string {

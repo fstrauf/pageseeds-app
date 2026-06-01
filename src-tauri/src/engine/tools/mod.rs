@@ -21,6 +21,17 @@ pub use investigate::{
     InvestigationToolError,
 };
 
+pub mod feature_spec;
+pub use feature_spec::{
+    feature_spec_tools,
+    ArticleIndexTool,
+    ReadArticleTool,
+    GscNotIndexedTool,
+    AnalyzeTitleTool,
+    CheckTemporalUrlTool,
+    LinkGraphSummaryTool,
+};
+
 pub mod plateau_analysis;
 pub use plateau_analysis::{
     analyze_plateau,

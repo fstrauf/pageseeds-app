@@ -2,6 +2,7 @@ pub mod article;
 pub mod cannibalization;
 pub mod content_review;
 pub mod ctr;
+pub mod feature_spec;
 pub mod gsc;
 pub mod indexing_health;
 pub mod live_site;

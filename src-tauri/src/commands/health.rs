@@ -198,11 +198,8 @@ pub fn open_feature_spec_in_vscode(
         ));
     }
 
-    // 3. Open in VS Code, ensuring the repo window is focused first.
-    //    Strategy: open the repo folder with -r (reuse / focus window), then open the file.
-    //    This guarantees the file opens in the repo's VS Code: window, not the last active one.
+    // 3. Open the spec in a NEW VS Code: window so we never repurpose an existing one.
     let path_str = path_to_open.to_string_lossy().to_string();
-    let repo_str = repo_root.to_string_lossy().to_string();
 
     let result = if cfg!(target_os = "macos") {
         // On macOS the `code` CLI may not be in PATH for GUI apps.
@@ -221,37 +218,22 @@ pub fn open_feature_spec_in_vscode(
         }
 
         if let Some(code) = code_bin {
-            // Step 1: focus / open the repo folder window
-            let _ = std::process::Command::new(code)
-                .args(["-r", &repo_str])
-                .spawn();
-            // Small delay to let VS Code: focus the window (non-blocking is fine)
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            // Step 2: open the spec file in the focused window
             std::process::Command::new(code)
-                .args(["-r", &path_str])
+                .args(["-n", &path_str])
                 .spawn()
         } else {
-            // Fallback: open via bundle ID (cannot guarantee window selection)
+            // Fallback: open via bundle ID
             std::process::Command::new("open")
                 .args(["-b", "com.microsoft.VSCode", &path_str])
                 .spawn()
         }
     } else if cfg!(target_os = "windows") {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "code", "-r", &repo_str])
-            .spawn();
-        std::thread::sleep(std::time::Duration::from_millis(300));
         std::process::Command::new("cmd")
-            .args(["/c", "code", "-r", &path_str])
+            .args(["/c", "code", "-n", &path_str])
             .spawn()
     } else {
-        let _ = std::process::Command::new("code")
-            .args(["-r", &repo_str])
-            .spawn();
-        std::thread::sleep(std::time::Duration::from_millis(300));
         std::process::Command::new("code")
-            .args(["-r", &path_str])
+            .args(["-n", &path_str])
             .spawn()
     };
 
