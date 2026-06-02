@@ -1,31 +1,35 @@
-//! Agentic feature specification generator.
+//! Infrastructure-only feature specification generator.
 //!
-//! Phase 1: Deterministic intelligence collector aggregates all known audit/data.
-//! Phase 2: Agent analyzes the structured report and identifies systemic issues.
-//! Phase 3: Verified findings are rendered into markdown by a template engine.
+//! Scope: Developer-facing SEO infrastructure issues ONLY.
+//! - Template/component bugs that break meta tag rendering
+//! - Build system gaps (missing sitemap, no prerendering)
+//! - URL architecture problems (temporal URLs, trailing slashes)
+//! - Performance issues (no lazy loading, unoptimized images)
 //!
-//! Design principle: the system already knows the ground truth. The agent's job
-//! is pattern recognition — spotting systemic implementation issues that raw
-//! data doesn't scream about. No per-article tool exploration.
+//! OUT OF SCOPE (PageSeeds handles these):
+//! - Content quality (thin content, readability)
+//! - Missing frontmatter fields
+//! - Stale articles
+//! - Internal linking gaps
 
 pub mod intelligence;
 
 use std::path::Path;
 
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::exec::feature_spec::intelligence::collect_project_intelligence;
+use crate::engine::exec::feature_spec::intelligence::collect_infrastructure_audit;
 use crate::engine::workflows::StepResult;
 use crate::models::feature_spec::{FeatureSpecAgentOutput, FeatureSpecFinding, VerifiedEvidence, VerifiedFinding};
 use crate::models::task::Task;
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
 
-/// Agentic step: generate a comprehensive developer feature spec.
+/// Agentic step: generate a developer feature spec for SEO infrastructure.
 ///
-/// 1. Collects pre-computed project intelligence from all audit sources.
-/// 2. Feeds the structured report to an agent for systemic issue analysis.
-/// 3. Verifies findings against the DB.
-/// 4. Renders verified findings into markdown.
+/// 1. Collects infrastructure audit data (templates, build output, URLs, performance).
+/// 2. Feeds structured report to agent for code-level issue identification.
+/// 3. Verifies findings against actual source files.
+/// 4. Renders verified findings into markdown developer spec.
 /// 5. Writes to `.github/automation/seo_feature_spec_{task_id}.md`.
 pub async fn exec_generate_feature_spec(
     task: &Task,
@@ -51,7 +55,7 @@ pub async fn exec_generate_feature_spec(
     if agent_output.findings.is_empty() {
         return StepResult {
             success: true,
-            message: "Agent found no actionable issues — spec not generated".to_string(),
+            message: "Agent found no actionable infrastructure issues — spec not generated".to_string(),
             output: None,
         };
     }
@@ -72,7 +76,7 @@ pub async fn exec_generate_feature_spec(
     if verified.is_empty() {
         return StepResult {
             success: true,
-            message: "All agent findings were rejected by verification — spec not generated".to_string(),
+            message: "All agent findings were rejected by source verification — spec not generated".to_string(),
             output: None,
         };
     }
@@ -137,19 +141,18 @@ async fn run_feature_spec_agent(
     project_path: &str,
     agent_provider: &str,
 ) -> Result<FeatureSpecAgentOutput, String> {
-    // ── Phase 1a: Deterministic intelligence collection ───────────────────────
+    // ── Phase 1a: Deterministic infrastructure collection ─────────────────────
     let db_path = crate::db::default_db_path();
     let conn = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("DB open: {e}"))?;
 
-    let report = collect_project_intelligence(&conn, &task.project_id, project_path)
-        .map_err(|e| format!("Intelligence collection failed: {e}"))?;
+    let report = collect_infrastructure_audit(&conn, &task.project_id, project_path)
+        .map_err(|e| format!("Infrastructure audit failed: {e}"))?;
     drop(conn);
 
     let report_json = serde_json::to_string(&report)
         .map_err(|e| format!("JSON serialize: {e}"))?;
-    // Hard cap: 15KB keeps total prompt under bridge 100KB limit and
-    // ensures model processing stays well under 300s ACP timeout.
+    // Hard cap: 15KB keeps total prompt under bridge 100KB limit
     let report_json = if report_json.len() > 15000 {
         format!("{}...[truncated {} chars]", &report_json[..15000], report_json.len() - 15000)
     } else {
@@ -159,18 +162,25 @@ async fn run_feature_spec_agent(
     // ── Phase 1b: Agentic analysis (single turn, no tools) ────────────────────
 
     let prompt = format!(
-        "You are an SEO technical lead writing a feature specification for WEBSITE DEVELOPERS.\n\n\
-        RULES (violations = hallucinations):\n\
-        1. Cross-check ALL template/SEO claims against code_verification section — it is ground truth from actual source files.\n\
-        2. CTR data is UNVERIFIED — only report if code_verification shows broken HTML output.\n\
-        3. Temporal URLs = ONLY year SUFFIXES like '-2025' at END of slug. Date prefixes '2025-01-18-xxx' are STRIPPED by parser — ignore them.\n\
-        4. If last_modified_supported=true, do NOT claim 'missing lastUpdated' — the feature exists.\n\
-        5. Duplicate titles use ACTUAL frontmatter titles (verified from MDX files).\n\
-        6. Every finding needs REPRODUCIBLE EVIDENCE: file paths, line numbers, or exact data samples.\n\n\
-        NEVER mention PageSeeds, automation, or tasks.\n\n\
+        "You are a senior SEO engineer auditing a website's CODE INFRASTRUCTURE. \
+        Your output is a developer feature specification — the dev team will read it and implement the fixes.\n\n\
+        SCOPE: Report ONLY code/template/build issues that prevent good SEO. \
+        Do NOT report content-quality issues (thin articles, missing descriptions, stale content). \
+        Those are handled by the content team.\n\n\
+        RULES:\n\
+        1. Every finding MUST cite specific files, line numbers, or exact code snippets from the report.\n\
+        2. Use template_audit.gaps_detected and build_output_audit.sampled_pages as primary evidence.\n\
+        3. Temporal URLs (url_architecture.temporal_url_count) are a developer issue ONLY if the report shows they exist.\n\
+        4. If template_audit shows a capability exists (e.g. 'canonical'), do NOT claim it's missing.\n\
+        5. If build_output_audit.has_sitemap=true, do NOT claim sitemap is missing.\n\
+        6. Performance gaps only matter if they affect SEO (e.g. Core Web Vitals, image loading).\n\
+        7. NEVER mention PageSeeds, automation, or tasks.\n\n\
+        PRIORITY DEFINITIONS:\n\
+        - P0: Code bug breaking SEO (missing canonical, broken JSON-LD, no prerendering)\n\
+        - P2: Structural change requiring migration (URL architecture, build config)\n\n\
         Return ONLY valid JSON:\n\
-        {{\"executive_summary\":\"2-3 sentences\",\"findings\":[{{\"priority\":\"P0|P1|P2\",\"issue_type\":\"template_bug|missing_seo|content_structure|url_issue|meta_config\",\"description\":\"...\",\"affected_slugs\":[\"slug\"],\"evidence_tool_calls\":[\"file:line or exact sample\"],\"suggested_fix\":\"...\",\"confidence\":0.0-1.0}}]}}\n\n\
-        --- REPORT ---\n{}",
+        {{\"executive_summary\":\"2 sentences on the most critical infrastructure gap\",\"findings\":[{{\"priority\":\"P0|P2\",\"issue_type\":\"template_bug|missing_meta|url_architecture|build_config|performance\",\"description\":\"What the code issue is\",\"affected_slugs\":[\"slug\"],\"evidence_tool_calls\":[\"src/file.vue line 23: missing canonical\",\"dist/blog/page.html lacks og:image\"],\"suggested_fix\":\"Exact code change\",\"confidence\":0.0-1.0}}]}}\n\n\
+        --- INFRASTRUCTURE AUDIT REPORT ---\n{}",
         report_json
     );
 
@@ -179,9 +189,6 @@ async fn run_feature_spec_agent(
 
     let response = match &backend {
         crate::rig::provider::LlmBackend::KimiBridge { base_url, model } => {
-            // Use ACP mode (300s timeout) — single-turn with no tools.
-            // Direct mode has a 200s hard timeout which is too tight for
-            // large intelligence reports. ACP gives 50% more headroom.
             let client = rig::providers::openai::Client::builder()
                 .base_url(base_url)
                 .api_key("dummy")
@@ -250,8 +257,9 @@ async fn run_feature_spec_agent(
 async fn verify_findings(
     findings: &[FeatureSpecFinding],
     task: &Task,
-    _project_path: &str,
+    project_path: &str,
 ) -> Result<Vec<VerifiedFinding>, String> {
+    let root = std::path::Path::new(project_path);
     let db = rusqlite::Connection::open(crate::db::default_db_path())
         .map_err(|e| format!("DB: {e}"))?;
 
@@ -268,38 +276,48 @@ async fn verify_findings(
         let mut evidence = Vec::new();
         let mut valid = true;
 
-        // Systemic issues without slugs are valid by default
-        // (they describe architectural / implementation problems)
-        if finding.affected_slugs.is_empty() {
-            evidence.push(VerifiedEvidence {
-                slug: "-".to_string(),
-                metric: "systemic".to_string(),
-                value: "no slugs — implementation-level issue".to_string(),
-            });
-            verified.push(VerifiedFinding {
-                priority: finding.priority.clone(),
-                issue_type: finding.issue_type.clone(),
-                description: finding.description.clone(),
-                affected_slugs: vec![],
-                evidence,
-                suggested_fix: finding.suggested_fix.clone(),
-            });
-            continue;
-        }
-
         // For findings with slugs, verify each slug exists in the project
-        for slug in &finding.affected_slugs {
-            if all_slugs.contains(slug) {
-                evidence.push(VerifiedEvidence {
-                    slug: slug.clone(),
-                    metric: "exists".to_string(),
-                    value: "true".to_string(),
-                });
-            } else {
-                valid = false;
-                break;
+        if !finding.affected_slugs.is_empty() {
+            for slug in &finding.affected_slugs {
+                if all_slugs.contains(slug) {
+                    evidence.push(VerifiedEvidence {
+                        slug: slug.clone(),
+                        metric: "exists".to_string(),
+                        value: "true".to_string(),
+                    });
+                } else {
+                    valid = false;
+                    break;
+                }
             }
         }
+
+        // Verify evidence quality: must reference source files, build output,
+        // config files, or specific audit report fields.
+        let has_concrete_evidence = finding.evidence_tool_calls.iter().any(|e| {
+            e.contains("src/")
+                || e.contains("dist/")
+                || e.contains("public/")
+                || e.contains(".vue")
+                || e.contains(".ts")
+                || e.contains(".js")
+                || e.contains(".json")
+                || e.contains("vite.config")
+                || e.contains("next.config")
+                || e.contains("build_output_audit")
+                || e.contains("template_audit")
+                || e.contains("performance_signals")
+                || e.contains("url_architecture")
+                || e.contains("has_404")
+                || e.contains("has_sitemap")
+                || e.contains("has_robots")
+                || e.contains("has_lazy")
+                || e.contains("temporal_url")
+        });
+        if !has_concrete_evidence {
+            valid = false;
+        }
+
         if valid {
             verified.push(VerifiedFinding {
                 priority: finding.priority.clone(),
@@ -307,6 +325,7 @@ async fn verify_findings(
                 description: finding.description.clone(),
                 affected_slugs: finding.affected_slugs.clone(),
                 evidence,
+                evidence_tool_calls: finding.evidence_tool_calls.clone(),
                 suggested_fix: finding.suggested_fix.clone(),
             });
         }
@@ -329,7 +348,6 @@ fn render_spec(
     let task_title = task.title.as_deref().unwrap_or("untitled");
 
     let p0: Vec<_> = verified.iter().filter(|f| f.priority == "P0").collect();
-    let p1: Vec<_> = verified.iter().filter(|f| f.priority == "P1").collect();
     let p2: Vec<_> = verified.iter().filter(|f| f.priority == "P2").collect();
 
     let mut lines = vec![
@@ -345,17 +363,19 @@ fn render_spec(
 
     if !p0.is_empty() {
         lines.push(String::new());
-        lines.push("## P0 — Code Changes Required (Developer)".to_string());
+        lines.push("## P0 — Code Changes Required".to_string());
         for (i, finding) in p0.iter().enumerate() {
             lines.push(String::new());
             lines.push(format!("### P0.{}: {}", i + 1, finding.issue_type.replace('_', " ")));
             lines.push(format!("- **Problem**: {}", finding.description));
             lines.push("- **Evidence**:".to_string());
-            for slug in &finding.affected_slugs {
-                lines.push(format!("  - `{}`", slug));
+            // Show agent evidence (file paths, line numbers, exact data)
+            for ev_call in &finding.evidence_tool_calls {
+                lines.push(format!("  - {}", ev_call));
             }
-            if !finding.evidence.is_empty() {
-                lines.push("- **Verified metrics**:".to_string());
+            // Only show verified DB evidence for slug-based findings
+            let is_systemic = finding.affected_slugs.is_empty();
+            if !is_systemic {
                 for ev in &finding.evidence {
                     lines.push(format!("  - `{}`: {} = {}", ev.slug, ev.metric, ev.value));
                 }
@@ -365,31 +385,22 @@ fn render_spec(
         }
     }
 
-    if !p1.is_empty() {
-        lines.push(String::new());
-        lines.push("## P1 — Content Fixes (PageSeeds Can Handle)".to_string());
-        for (i, finding) in p1.iter().enumerate() {
-            lines.push(String::new());
-            lines.push(format!("### P1.{}: {}", i + 1, finding.issue_type.replace('_', " ")));
-            lines.push(format!("- **Problem**: {}", finding.description));
-            lines.push("- **Affected Pages**:".to_string());
-            for slug in &finding.affected_slugs {
-                lines.push(format!("  - `{}`", slug));
-            }
-            lines.push(format!("- **Fix Action**: {}", finding.suggested_fix));
-        }
-    }
-
     if !p2.is_empty() {
         lines.push(String::new());
-        lines.push("## P2 — Structural Changes (Architecture)".to_string());
+        lines.push("## P2 — Structural Changes".to_string());
         for (i, finding) in p2.iter().enumerate() {
             lines.push(String::new());
             lines.push(format!("### P2.{}: {}", i + 1, finding.issue_type.replace('_', " ")));
             lines.push(format!("- **Problem**: {}", finding.description));
-            lines.push("- **Affected Pages**:".to_string());
-            for slug in &finding.affected_slugs {
-                lines.push(format!("  - `{}`", slug));
+            lines.push("- **Evidence**:".to_string());
+            for ev_call in &finding.evidence_tool_calls {
+                lines.push(format!("  - {}", ev_call));
+            }
+            let is_systemic = finding.affected_slugs.is_empty();
+            if !is_systemic {
+                for ev in &finding.evidence {
+                    lines.push(format!("  - `{}`: {} = {}", ev.slug, ev.metric, ev.value));
+                }
             }
             lines.push(format!("- **Migration Plan**: {}", finding.suggested_fix));
         }
@@ -403,16 +414,16 @@ fn render_spec(
 
     let mut all_issues: Vec<_> = Vec::new();
     all_issues.extend(p0.iter().map(|f| ("P0", &f.issue_type, f.affected_slugs.len())));
-    all_issues.extend(p1.iter().map(|f| ("P1", &f.issue_type, f.affected_slugs.len())));
     all_issues.extend(p2.iter().map(|f| ("P2", &f.issue_type, f.affected_slugs.len())));
 
     for (priority, issue_type, count) in all_issues {
+        let count_str = if count == 0 { "N/A".to_string() } else { count.to_string() };
         lines.push(format!(
             "| {} | {} | {} | {} | open |",
             issue_type.replace('_', " "),
             priority,
-            if priority == "P0" { "Code" } else if priority == "P1" { "Content" } else { "Structural" },
-            count
+            if priority == "P0" { "Code" } else { "Structural" },
+            count_str
         ));
     }
 
@@ -440,9 +451,9 @@ fn validate_spec_content(content: &str) -> Result<(), &'static str> {
     }
 
     let has_priority_section =
-        trimmed.contains("P0") || trimmed.contains("P1") || trimmed.contains("P2");
+        trimmed.contains("P0") || trimmed.contains("P2");
     if !has_priority_section {
-        return Err("output is missing priority sections (P0/P1/P2)");
+        return Err("output is missing priority sections (P0/P2)");
     }
 
     let word_count = crate::content::ops::count_words(trimmed);
@@ -459,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_validate_spec_content_valid() {
-        let content = "# SEO Feature Specification\n\nGenerated: 2024-01-01 00:00 UTC\nTriggered by: test (task-id)\n\n## Executive Summary\nThis is a comprehensive summary of the most critical issues and their business impact. We have identified several problems that require immediate attention from the development team.\n\n## P0 — Code Changes Required (Developer)\n\n### Problem: Template rendering failure\n**Evidence**: Multiple pages show generic titles.\n**Root Cause**: Layout component overrides page titles.\n**Fix**: Edit layout.tsx to respect page-level title metadata.\n**Estimated Effort**: small\n\n## P1 — Content Fixes (PageSeeds Can Handle)\n\n### Problem: Thin content\n**Affected Pages**: /blog/post-1, /blog/post-2\n**Fix Action**: Expand articles to minimum 500 words.\n\n## P2 — Structural Changes (Architecture)\n\n### Problem: Orphaned pages\n**Affected Pages**: /old-page-1\n**Migration Plan**: Add internal links from related articles.\n\n## Issue Matrix\n| Issue | Priority | Type | Count | Status |\n|-------|----------|------|-------|--------|\n| Template failure | P0 | Code | 5 | Open |\n";
+        let content = "# SEO Feature Specification\n\nGenerated: 2024-01-01 00:00 UTC\nTriggered by: test (task-id)\n\n## Executive Summary\nThis is a comprehensive summary of the most critical issues and their business impact. We have identified several problems that require immediate attention from the development team.\n\n## P0 — Code Changes Required\n\n### Problem: Template rendering failure\n**Evidence**: Multiple pages show generic titles.\n**Root Cause**: Layout component overrides page titles.\n**Fix**: Edit layout.tsx to respect page-level title metadata.\n**Estimated Effort**: small\n\n## P2 — Structural Changes\n\n### Problem: Orphaned pages\n**Evidence**: /old-page-1\n**Migration Plan**: Add internal links from related articles.\n\n## Issue Matrix\n| Issue | Priority | Type | Count | Status |\n|-------|----------|------|-------|--------|\n| Template failure | P0 | Code | 5 | Open |\n";
         assert!(validate_spec_content(content).is_ok());
     }
 
@@ -494,6 +505,7 @@ mod tests {
                 description: "URLs contain years".to_string(),
                 affected_slugs: vec!["slug-a".to_string()],
                 evidence: vec![],
+                evidence_tool_calls: vec![],
                 suggested_fix: "Migrate to evergreen".to_string(),
             },
             VerifiedFinding {
@@ -506,6 +518,7 @@ mod tests {
                     metric: "actual_path".to_string(),
                     value: "src/blog/posts/slug-b.mdx".to_string(),
                 }],
+                evidence_tool_calls: vec!["src/blog/posts/slug-b.mdx not found".to_string()],
                 suggested_fix: "Update DB path".to_string(),
             },
         ];
@@ -526,262 +539,5 @@ mod tests {
         // Evidence should be rendered
         assert!(rendered.contains("actual_path = src/blog/posts/slug-b.mdx"));
         assert!(rendered.contains("Summary here."));
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Live smoke test — requires Kimi bridge running in ACP mode
-// ═══════════════════════════════════════════════════════════════════════════════
-
-#[cfg(test)]
-mod live_tests {
-    use super::*;
-    use crate::engine::tools::{feature_spec_tools, InvestigationContext};
-
-    /// Full end-to-end prototype: create a temp project with known SEO issues,
-    /// populate the DB, and run the feature-spec agent with real tools.
-    /// Uses a simplified prompt to avoid model confusion with long histories.
-    #[ignore = "requires live Kimi bridge at localhost:8080"]
-    #[tokio::test]
-    async fn test_feature_spec_prototype_e2e() {
-        // ── 1. Set up temp project ─────────────────────────────────────────────
-        let tmp = std::env::temp_dir().join("pageseeds-test-prototype");
-        let content_dir = tmp.join("content");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&content_dir).unwrap();
-
-        // Create MDX files with deliberate issues for the agent to discover
-        std::fs::write(
-            content_dir.join("001_about_us.mdx"),
-            "---\ntitle: \"About Us\"\ndescription: \"Learn about our coffee roastery\"\npublished_date: \"2024-01-15\"\n---\n\nWe are a specialty coffee roastery based in Auckland, New Zealand.\n",
-        ).unwrap();
-        std::fs::write(
-            content_dir.join("002_coffee_beans.mdx"),
-            "---\ntitle: \"Coffee Beans\"\ndescription: \"Our selection of premium coffee beans\"\npublished_date: \"2024-01-20\"\n---\n\nWe source the finest arabica beans from Ethiopia, Colombia, and Brazil.\n",
-        ).unwrap();
-        std::fs::write(
-            content_dir.join("003_brewing_guides.mdx"),
-            "---\ntitle: \"Brewing Guides\"\ndescription: \"How to brew the perfect cup\"\npublished_date: \"2024-01-25\"\n---\n\nLearn how to brew pour over, espresso, and french press coffee at home.\n",
-        ).unwrap();
-        // Empty body → orphan / low-word-count issue
-        std::fs::write(
-            content_dir.join("004_empty_file.mdx"),
-            "---\ntitle: \"Empty File\"\ndescription: \"This file has no body content\"\npublished_date: \"2024-02-01\"\n---\n",
-        ).unwrap();
-        // Temporal URL pattern
-        std::fs::write(
-            content_dir.join("005_best_coffee_2024.mdx"),
-            "---\ntitle: \"Best Coffee 2024\"\ndescription: \"Top coffee picks for 2024\"\npublished_date: \"2024-02-10\"\n---\n\nHere are our top coffee picks for the year 2024.\n",
-        ).unwrap();
-
-        // ── 2. Set up temp DB ──────────────────────────────────────────────────
-        let db_path = tmp.join("test.db");
-        std::env::set_var("PAGESEEDS_DB_PATH", &db_path);
-        let conn = crate::db::init(&db_path).expect("Failed to init DB");
-
-        let project_id = "proj-test-e2e";
-        conn.execute(
-            "INSERT INTO projects (id, name, path, content_dir, active) VALUES (?1, ?2, ?3, ?4, 1)",
-            rusqlite::params![project_id, "Test Project", tmp.to_str().unwrap(), content_dir.to_str().unwrap()],
-        ).unwrap();
-
-        let articles = vec![
-            (1, "About Us", "about_us", "001_about_us.mdx", 50, "2024-01-15"),
-            (2, "Coffee Beans", "coffee_beans", "002_coffee_beans.mdx", 55, "2024-01-20"),
-            (3, "Brewing Guides", "brewing_guides", "003_brewing_guides.mdx", 60, "2024-01-25"),
-            (4, "Empty File", "empty_file", "004_empty_file.mdx", 0, "2024-02-01"),
-            (5, "Best Coffee 2024", "best_coffee_2024", "005_best_coffee_2024.mdx", 45, "2024-02-10"),
-        ];
-        for (id, title, slug, file, wc, date) in articles {
-            conn.execute(
-                "INSERT INTO articles (id, title, url_slug, file, word_count, published_date, status, project_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'published', ?7)",
-                rusqlite::params![id, title, slug, file, wc, date, project_id],
-            ).unwrap();
-        }
-        conn.execute(
-            "INSERT INTO articles_meta (project_id, next_article_id) VALUES (?1, 6)",
-            [project_id],
-        ).unwrap();
-        drop(conn);
-
-        // ── 3. Run the agent with a simplified prompt ──────────────────────────
-        let ctx = InvestigationContext {
-            project_id: project_id.to_string(),
-            project_path: tmp.to_string_lossy().to_string(),
-            db_path: db_path.to_string_lossy().to_string(),
-        };
-
-        let preamble = "You are an SEO auditor. Use the available tools to investigate the project, \
-            then return a JSON object with an executive_summary and a list of findings. \
-            Each finding must have priority (P0/P1/P2), issue_type, description, \
-            affected_slugs, evidence_tool_calls, suggested_fix, and confidence (0-1). \
-            Only report issues you can verify with tool evidence.";
-
-        let prompt = format!(
-            "Investigate this coffee blog project and report SEO issues. \
-            Project has 5 articles in {}. \
-            Call article_index first to see all articles, then read suspicious ones. \
-            Look for: empty files, temporal URLs (with years), very short articles. \
-            Return findings as JSON.",
-            content_dir.display()
-        );
-
-        println!("\n🚀 Starting simplified feature-spec prototype...");
-        println!("   Project: {}", tmp.display());
-        println!("   DB:      {}", db_path.display());
-
-        let backend = crate::rig::provider::resolve_backend("kimi", None, None, Some("bridge"))
-            .await
-            .expect("Failed to resolve backend");
-
-        let response = match &backend {
-            crate::rig::provider::LlmBackend::KimiBridge { base_url, model } => {
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.insert(
-                    reqwest::header::HeaderName::from_static("x-kimi-backend"),
-                    reqwest::header::HeaderValue::from_static("acp"),
-                );
-                let client = rig::providers::openai::Client::builder()
-                    .base_url(base_url)
-                    .api_key("dummy")
-                    .http_headers(headers)
-                    .build()
-                    .expect("Failed to build client");
-
-                let agent = client
-                    .completions_api()
-                    .agent(model)
-                    .preamble(preamble)
-                    .tools(feature_spec_tools(ctx))
-                    .default_max_turns(5)
-                    .build();
-
-                agent.prompt(&prompt).await
-                    .expect("Agent prompt failed")
-            }
-            other => panic!("Expected KimiBridge, got: {:?}", other),
-        };
-
-        println!("\n📄 Raw agent response (first 2000 chars):\n{}\n", &response[..response.len().min(2000)]);
-
-        let json_str = crate::engine::text::extract_json_string(&response)
-            .unwrap_or_else(|| response.clone());
-
-        let parsed: FeatureSpecAgentOutput = serde_json::from_str(&json_str)
-            .expect(&format!("Failed to parse JSON: {}", &json_str[..json_str.len().min(500)]));
-
-        println!("\n✅ Parsed {} findings:\n", parsed.findings.len());
-        println!("Executive Summary: {}\n", parsed.executive_summary);
-        for f in &parsed.findings {
-            println!(
-                "  [{}] {} — {} (confidence: {:.0}%)",
-                f.priority, f.issue_type, f.description, f.confidence * 100.0
-            );
-        }
-
-        assert!(!parsed.findings.is_empty(), "Agent should find at least one issue");
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-}
-
-#[cfg(test)]
-mod bridge_smoke_tests {
-    use rig::client::CompletionClient;
-    use rig::completion::Prompt;
-    use rig::tool::Tool;
-    use schemars::JsonSchema;
-    use serde::{Deserialize, Serialize};
-
-    /// Minimal tool to verify the bridge can execute tool calls.
-    #[derive(Debug, Clone)]
-    struct EchoTool;
-
-    #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-    struct EchoArgs {
-        message: String,
-    }
-
-    #[derive(Debug, Serialize, JsonSchema)]
-    struct EchoOutput {
-        echo: String,
-    }
-
-    impl Tool for EchoTool {
-        const NAME: &'static str = "echo";
-        type Error = std::convert::Infallible;
-        type Args = EchoArgs;
-        type Output = EchoOutput;
-
-        async fn definition(&self, _prompt: String) -> rig::completion::ToolDefinition {
-            rig::completion::ToolDefinition {
-                name: Self::NAME.to_string(),
-                description: "Echoes the input message back. Use this to verify tool calling works.".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "message": { "type": "string" }
-                    },
-                    "required": ["message"]
-                }),
-            }
-        }
-
-        async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-            Ok(EchoOutput {
-                echo: format!("Echo: {}", args.message),
-            })
-        }
-    }
-
-    /// Live smoke test: verify Kimi bridge in ACP mode can execute tool calls.
-    #[ignore = "requires live Kimi bridge at localhost:8080 in ACP mode"]
-    #[tokio::test]
-    async fn test_kimi_acp_tool_call() {
-        let backend = crate::rig::provider::resolve_backend("kimi", None, None, Some("bridge"))
-            .await
-            .expect("Failed to resolve backend");
-
-        let response = match &backend {
-            crate::rig::provider::LlmBackend::KimiBridge { base_url, model } => {
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.insert(
-                    reqwest::header::HeaderName::from_static("x-kimi-backend"),
-                    reqwest::header::HeaderValue::from_static("acp"),
-                );
-                let client = rig::providers::openai::Client::builder()
-                    .base_url(base_url)
-                    .api_key("dummy")
-                    .http_headers(headers)
-                    .build()
-                    .expect("Failed to build client");
-
-                let tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![Box::new(EchoTool)];
-                let agent = client
-                    .completions_api()
-                    .agent(model)
-                    .preamble(
-                        "You have access to tools. When a tool result is already present \
-                         in the conversation, answer the user directly using that result. \
-                         Do NOT call the same tool again.",
-                    )
-                    .tools(tools)
-                    .default_max_turns(5)
-                    .build();
-
-                agent.prompt("Call the echo tool with message 'hello from acp' and tell me what it returned.").await
-                    .expect("Agent prompt failed")
-            }
-            other => panic!("Expected KimiBridge, got: {:?}", other),
-        };
-
-        println!("Agent response: {}", response);
-        assert!(
-            response.to_lowercase().contains("echo") || response.to_lowercase().contains("hello"),
-            "Response should mention the echo result: {}",
-            response
-        );
     }
 }

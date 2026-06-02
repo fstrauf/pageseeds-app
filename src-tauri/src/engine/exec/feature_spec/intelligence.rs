@@ -1,33 +1,28 @@
-//! Deterministic project intelligence collector for the feature spec generator.
+//! Deterministic infrastructure audit collector for the feature spec generator.
 //!
-//! Gathers pre-computed data from all system audits and sources into a single
-//! structured report. The agent receives this report as prompt context.
+//! Gathers ONLY repo-level infrastructure signals:
+//! - Template/component SEO implementation
+//! - Build output quality (prerendering, sitemap, robots)
+//! - URL architecture (temporal URLs, trailing slashes)
+//! - Performance signals (lazy loading, image optimization)
+//! - Source verification (ground truth from reading actual files)
 //!
-//! CRITICAL: This report is consumed by WEBSITE DEVELOPERS, not PageSeeds
-//! maintainers. Every metric must be actionable from the target repo.
-//! Do NOT include PageSeeds-internal state (task failures, automation health,
-//! recovery attempts) — developers cannot fix our bugs.
+//! CRITICAL: This report is for WEBSITE DEVELOPERS only.
+//! NO content-quality metrics (word counts, readability, keyword gaps).
+//! NO PageSeeds-internal state.
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-/// Website-level intelligence report. No PageSeeds internals.
+/// Infrastructure audit report. Developer-facing only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectIntelligenceReport {
+pub struct InfrastructureAuditReport {
     pub project: ProjectSummary,
-    pub content_health: ContentHealthSummary,
-    pub indexing: IndexingSummary,
-    /// CTR data from audit — treat as UNVERIFIED. Cross-check with code_verification before reporting.
-    pub ctr: CtrSummary,
-    pub cannibalization: CannibalizationSummary,
-    pub links: LinkSummary,
-    pub content_distribution: ContentDistribution,
-    pub technical_seo: TechnicalSeoSummary,
-    /// Ground-truth verification from reading actual source/build files
-    pub code_verification: CodeVerification,
-    /// Human-readable notes on what was verified vs. estimated
-    pub verification_notes: String,
+    pub template_audit: TemplateAudit,
+    pub build_output_audit: BuildOutputAudit,
+    pub url_architecture: UrlArchitecture,
+    pub performance_signals: PerformanceSignals,
+    pub source_verification: SourceVerification,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,145 +31,88 @@ pub struct ProjectSummary {
     pub project_path: String,
     pub tech_stack: String,
     pub article_count: i64,
-    pub total_word_count: i64,
-    pub avg_word_count: i64,
+}
+
+/// Deep inspection of SEO template components.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateAudit {
+    /// Whether the SEO head component exists
+    pub seo_head_exists: bool,
+    /// Whether the SEO head component path
+    pub seo_head_path: Option<String>,
+    /// Capabilities detected from reading source
+    pub capabilities_detected: Vec<String>,
+    /// Missing capabilities that SHOULD be present
+    pub gaps_detected: Vec<String>,
+    /// Raw source summary (first 500 chars of key functions)
+    pub source_summary: String,
+}
+
+/// Inspection of build output (dist/ directory).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildOutputAudit {
+    /// Whether dist/ exists and has HTML files
+    pub has_built_output: bool,
+    /// Whether sitemap.xml exists in dist/
+    pub has_sitemap: bool,
+    /// Whether robots.txt exists in dist/
+    pub has_robots_txt: bool,
+    /// Whether a 404.html exists
+    pub has_404_page: bool,
+    /// Number of HTML files in dist/
+    pub html_file_count: i64,
+    /// Sampled built pages and their meta tag coverage
+    pub sampled_pages: Vec<BuiltPageSample>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContentHealthSummary {
-    pub latest_audit_date: Option<String>,
-    pub total_audited: i64,
-    pub good: i64,
-    pub needs_improvement: i64,
-    pub poor: i64,
-    /// Top issue categories (e.g. {"thin_content": 12})
-    pub top_issues: HashMap<String, i64>,
-    /// Worst articles with their actual problems
-    pub worst_articles: Vec<ArticleHealthBrief>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArticleHealthBrief {
+pub struct BuiltPageSample {
     pub slug: String,
-    pub title: String,
-    pub health: String,
-    pub health_score: i64,
-    pub word_count: i64,
-    pub top_issues: Vec<String>,
+    pub has_title: bool,
+    pub has_meta_description: bool,
+    pub has_canonical: bool,
+    pub has_og_tags: bool,
+    pub has_json_ld: bool,
+    pub has_viewport: bool,
+    pub title_text: String,
+    pub description_text: String,
 }
 
+/// URL architecture issues requiring developer intervention.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexingSummary {
-    pub not_indexed_count: i64,
-    pub indexed_count: i64,
-    pub unknown_count: i64,
-    /// Why pages aren't indexed
-    pub reason_breakdown: HashMap<String, i64>,
-    /// Sample of non-indexed URLs (first 10)
-    pub sample_not_indexed: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CtrSummary {
-    pub articles_with_issues: i64,
-    pub issue_breakdown: HashMap<String, i64>,
-    /// Sample articles with CTR issues
-    pub sample_articles: Vec<ArticleCtrBrief>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArticleCtrBrief {
-    pub slug: String,
-    pub title: String,
-    pub issues: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CannibalizationSummary {
-    pub cluster_count: i64,
-    pub merge_candidates: i64,
-    pub hub_gaps: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LinkSummary {
-    pub orphan_count: i64,
-    pub zero_incoming_count: i64,
-    pub total_internal_links: i64,
-    pub avg_links_per_article: f64,
-    /// Sample orphan slugs
-    pub sample_orphans: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContentDistribution {
-    pub status_breakdown: HashMap<String, i64>,
-    pub word_count_histogram: HashMap<String, i64>,
+pub struct UrlArchitecture {
+    /// Count of slugs with year suffixes (e.g. "-2025")
     pub temporal_url_count: i64,
+    /// Sample temporal URLs
     pub sample_temporal_urls: Vec<String>,
-    /// Articles with < 100 words
-    pub very_thin_count: i64,
-    /// Articles with 100-300 words
-    pub thin_count: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TechnicalSeoSummary {
-    /// Articles missing description in frontmatter
-    pub missing_description_count: i64,
-    /// Articles missing target_keyword in frontmatter
-    pub missing_keyword_count: i64,
-    /// Duplicate titles found (from actual frontmatter)
-    pub duplicate_title_count: i64,
-    /// Sample duplicate titles
-    pub duplicate_title_samples: Vec<DuplicateTitle>,
-    /// Articles with published_date > 1 year old (NOT a missing feature — content is just old)
-    pub content_older_than_1_year_count: i64,
-    /// Sample old article slugs
-    pub content_older_than_1_year_samples: Vec<String>,
-    /// Whether lastModified/lastmod is present in frontmatter and handled by templates
-    pub last_modified_supported: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DuplicateTitle {
-    pub title: String,
-    pub slugs: Vec<String>,
-}
-
-/// Results from actually reading source files and build output.
-/// This is ground truth — not inferred from audit data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodeVerification {
-    /// What the SEO head component actually does (from reading source)
-    pub seo_head_summary: String,
+    /// Whether trailing slashes are consistent across the site
+    pub trailing_slash_consistent: Option<bool>,
     /// How the blog parser derives slugs from filenames
     pub slug_derivation_logic: String,
-    /// Sampled built HTML verification results
-    pub sampled_html_check: HtmlSampleCheck,
-    /// Sampled MDX frontmatter verification results
-    pub sampled_frontmatter_check: FrontmatterSampleCheck,
+}
+
+/// Performance and optimization signals from source inspection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceSignals {
+    /// Whether images use lazy loading
+    pub has_lazy_loading: bool,
+    /// Whether WebP or AVIF images are used
+    pub has_modern_image_formats: bool,
+    /// Whether scripts use async/defer
+    pub has_script_optimization: bool,
+    /// Whether a performance budget or bundle analyzer exists
+    pub has_bundle_analysis: bool,
+    /// Key performance-related config found
+    pub config_notes: Vec<String>,
+}
+
+/// Ground-truth verification from reading actual source/build files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceVerification {
     /// Key source files found and their purposes
     pub key_source_files: Vec<SourceFileNote>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HtmlSampleCheck {
-    pub files_checked: i64,
-    pub all_have_unique_title: bool,
-    pub all_have_unique_description: bool,
-    pub total_title_samples: Vec<String>,
-    pub total_description_samples: Vec<String>,
-    pub malformed_files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FrontmatterSampleCheck {
-    pub files_checked: i64,
-    pub all_have_description: bool,
-    pub all_have_title: bool,
-    pub last_modified_present_count: i64,
-    pub malformed_frontmatter_files: Vec<String>,
+    /// Frontmatter sample check from MDX files
+    pub frontmatter_sample: FrontmatterSampleCheck,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,22 +121,26 @@ pub struct SourceFileNote {
     pub purpose: String,
 }
 
-pub fn collect_project_intelligence(
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrontmatterSampleCheck {
+    pub files_checked: i64,
+    pub all_have_title: bool,
+    pub all_have_description: bool,
+    pub malformed_count: i64,
+}
+
+pub fn collect_infrastructure_audit(
     conn: &Connection,
     project_id: &str,
     project_path: &str,
-) -> Result<ProjectIntelligenceReport, String> {
-    Ok(ProjectIntelligenceReport {
+) -> Result<InfrastructureAuditReport, String> {
+    Ok(InfrastructureAuditReport {
         project: collect_project_summary(conn, project_id, project_path)?,
-        content_health: collect_content_health(conn, project_id)?,
-        indexing: collect_indexing(conn, project_id)?,
-        ctr: collect_ctr(conn, project_id)?,
-        cannibalization: collect_cannibalization(conn, project_id)?,
-        links: collect_links(conn, project_id, project_path)?,
-        content_distribution: collect_content_distribution(conn, project_id)?,
-        technical_seo: collect_technical_seo(conn, project_id, project_path)?,
-        code_verification: collect_code_verification(project_path)?,
-        verification_notes: build_verification_notes(),
+        template_audit: collect_template_audit(project_path)?,
+        build_output_audit: collect_build_output_audit(project_path)?,
+        url_architecture: collect_url_architecture(conn, project_id, project_path)?,
+        performance_signals: collect_performance_signals(project_path)?,
+        source_verification: collect_source_verification(project_path)?,
     })
 }
 
@@ -211,290 +153,257 @@ fn collect_project_summary(
         .map_err(|e| format!("list_articles: {e}"))?;
 
     let tech_stack = crate::content::ops::detect_tech_stack(std::path::Path::new(project_path));
-    let total_words: i64 = articles.iter().map(|a| a.word_count).sum();
-    let avg_words = if articles.is_empty() { 0 } else { total_words / articles.len() as i64 };
 
     Ok(ProjectSummary {
         project_id: project_id.to_string(),
         project_path: project_path.to_string(),
         tech_stack,
         article_count: articles.len() as i64,
-        total_word_count: total_words,
-        avg_word_count: avg_words,
     })
 }
 
-fn collect_content_health(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<ContentHealthSummary, String> {
-    let run = crate::db::content_audit::get_latest_audit_run(conn, project_id)
-        .map_err(|e| format!("get_latest_audit_run: {e}"))?;
+fn collect_template_audit(project_path: &str) -> Result<TemplateAudit, String> {
+    let root = std::path::Path::new(project_path);
 
-    let mut summary = ContentHealthSummary {
-        latest_audit_date: None,
-        total_audited: 0,
-        good: 0,
-        needs_improvement: 0,
-        poor: 0,
-        top_issues: HashMap::new(),
-        worst_articles: Vec::new(),
-    };
+    // Find SEO head component
+    let seo_head_paths = [
+        "src/components/SEOHead.vue",
+        "src/components/SeoHead.vue",
+        "src/components/SEO.tsx",
+        "src/components/SEO.jsx",
+        "src/components/Head.tsx",
+        "app/components/SEOHead.vue",
+        "components/SEOHead.vue",
+    ];
 
-    let Some(run) = run else { return Ok(summary); };
-
-    summary.latest_audit_date = Some(run.run_at.clone());
-    summary.total_audited = run.total_audited;
-    summary.good = run.good_count;
-    summary.needs_improvement = run.needs_improvement_count;
-    summary.poor = run.poor_count;
-
-    let articles = crate::db::content_audit::get_articles_for_run(conn, run.id)
-        .map_err(|e| format!("get_articles_for_run: {e}"))?;
-
-    let mut issue_counts: HashMap<String, i64> = HashMap::new();
-    let mut worst: Vec<ArticleHealthBrief> = Vec::new();
-
-    for a in &articles {
-        let top_issues = if let Ok(data) = serde_json::from_str::<serde_json::Value>(&a.data_json) {
-            extract_issue_names(&data)
-        } else {
-            Vec::new()
-        };
-
-        for issue in &top_issues {
-            *issue_counts.entry(issue.clone()).or_insert(0) += 1;
+    let mut seo_head_path = None;
+    for path in &seo_head_paths {
+        if root.join(path).exists() {
+            seo_head_path = Some(path.to_string());
+            break;
         }
+    }
 
-        if a.health == "poor" || a.health == "needs_improvement" {
-            let word_count = crate::engine::task_store::list_articles(conn, project_id)
-                .ok()
-                .and_then(|all| all.into_iter().find(|art| art.id == a.article_id))
-                .map(|art| art.word_count)
-                .unwrap_or(0);
+    let mut capabilities = Vec::new();
+    let mut gaps = Vec::new();
+    let mut source_summary = String::new();
 
-            worst.push(ArticleHealthBrief {
-                slug: a.url_slug.clone(),
-                title: a.title.clone(),
-                health: a.health.clone(),
-                health_score: a.health_score,
-                word_count,
-                top_issues: top_issues.clone(),
+    if let Some(ref path) = seo_head_path {
+        let content = std::fs::read_to_string(root.join(path)).unwrap_or_default();
+        source_summary = summarize_source(&content, 800);
+
+        // Detect capabilities
+        if content.contains("useHead") || content.contains("useSeoMeta") || content.contains("@unhead/vue") || content.contains("next/head") {
+            capabilities.push("head_injection_library".to_string());
+        }
+        if content.contains("title") {
+            capabilities.push("title".to_string());
+        } else {
+            gaps.push("missing_title_handling".to_string());
+        }
+        if content.contains("description") || content.contains("meta") {
+            capabilities.push("meta_description".to_string());
+        } else {
+            gaps.push("missing_meta_description".to_string());
+        }
+        if content.contains("canonical") || content.contains("rel: 'canonical'") {
+            capabilities.push("canonical".to_string());
+        } else {
+            gaps.push("missing_canonical".to_string());
+        }
+        if content.contains("og:") || content.contains("openGraph") || content.contains("ogImage") || content.contains("og:image") {
+            capabilities.push("open_graph".to_string());
+        } else {
+            gaps.push("missing_open_graph".to_string());
+        }
+        if content.contains("twitter:") || content.contains("twitterImage") {
+            capabilities.push("twitter_cards".to_string());
+        }
+        if content.contains("json") || content.contains("ld+json") || content.contains("schema") || content.contains("structuredData") {
+            capabilities.push("json_ld".to_string());
+        } else {
+            gaps.push("missing_json_ld".to_string());
+        }
+        if content.contains("lastModified") || content.contains("last-modified") || content.contains("modified_time") || content.contains("dateModified") {
+            capabilities.push("last_modified".to_string());
+        }
+        if content.contains("hreflang") || content.contains("alternate") {
+            capabilities.push("hreflang".to_string());
+        }
+        if content.contains("viewport") || content.contains("width=device-width") {
+            capabilities.push("viewport".to_string());
+        } else {
+            gaps.push("missing_viewport".to_string());
+        }
+        if content.contains("robots") || content.contains("noindex") {
+            capabilities.push("robots_meta".to_string());
+        }
+        if content.contains("Article") || content.contains("BlogPosting") {
+            capabilities.push("article_schema".to_string());
+        }
+    } else {
+        gaps.push("missing_seo_head_component".to_string());
+    }
+
+    // Also check index.html and App.vue for viewport if not in SEOHead
+    if !capabilities.contains(&"viewport".to_string()) {
+        for alt_path in ["src/App.vue", "index.html", "public/index.html"] {
+            let alt = root.join(alt_path);
+            if alt.exists() {
+                let content = std::fs::read_to_string(&alt).unwrap_or_default();
+                if content.contains("viewport") || content.contains("width=device-width") {
+                    capabilities.push("viewport".to_string());
+                    gaps.retain(|g| g != "missing_viewport");
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(TemplateAudit {
+        seo_head_exists: seo_head_path.is_some(),
+        seo_head_path,
+        capabilities_detected: capabilities,
+        gaps_detected: gaps,
+        source_summary,
+    })
+}
+
+fn collect_build_output_audit(project_path: &str) -> Result<BuildOutputAudit, String> {
+    let root = std::path::Path::new(project_path);
+    let dist = root.join("dist");
+
+    if !dist.exists() {
+        return Ok(BuildOutputAudit {
+            has_built_output: false,
+            has_sitemap: false,
+            has_robots_txt: false,
+            has_404_page: false,
+            html_file_count: 0,
+            sampled_pages: Vec::new(),
+        });
+    }
+
+    // Check for sitemap, robots, 404
+    let has_sitemap = dist.join("sitemap.xml").exists()
+        || dist.join("sitemap-index.xml").exists()
+        || root.join("public/sitemap.xml").exists();
+    let has_robots_txt = dist.join("robots.txt").exists()
+        || root.join("public/robots.txt").exists();
+    let has_404 = dist.join("404.html").exists()
+        || dist.join("404/index.html").exists();
+
+    // Count HTML files
+    let mut html_count = 0i64;
+    fn count_html(dir: &std::path::Path, count: &mut i64) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    count_html(&path, count);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("html") {
+                    *count += 1;
+                }
+            }
+        }
+    }
+    count_html(&dist, &mut html_count);
+
+    // Sample built pages for meta coverage
+    let sampled = sample_built_pages(root, &dist);
+
+    Ok(BuildOutputAudit {
+        has_built_output: html_count > 0,
+        has_sitemap,
+        has_robots_txt,
+        has_404_page: has_404,
+        html_file_count: html_count,
+        sampled_pages: sampled,
+    })
+}
+
+fn sample_built_pages(root: &std::path::Path, dist: &std::path::Path) -> Vec<BuiltPageSample> {
+    let mut samples = Vec::new();
+    let blog_dir = dist.join("blog");
+
+    let target_dir = if blog_dir.exists() { &blog_dir } else { dist };
+    if !target_dir.exists() {
+        return samples;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(target_dir) {
+        for entry in entries.flatten() {
+            if samples.len() >= 3 {
+                break;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("html") {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let slug = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+
+            let title_re = regex::Regex::new(r"<title>(.*?)</title>").unwrap();
+            let has_title = title_re.is_match(&content);
+            let title_text = title_re.captures(&content)
+                .and_then(|c| c.get(1))
+                .map(|m| char_limit(m.as_str(), 80).to_string())
+                .unwrap_or_default();
+
+            let desc_re = regex::Regex::new(r#"<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>"#).unwrap();
+            let has_desc = desc_re.is_match(&content);
+            let desc_text = desc_re.captures(&content)
+                .and_then(|c| c.get(1))
+                .map(|m| char_limit(m.as_str(), 80).to_string())
+                .unwrap_or_default();
+
+            let canonical_re = regex::Regex::new(r#"<link[^>]*rel=["']canonical["'][^>]*>"#).unwrap();
+            let has_canonical = canonical_re.is_match(&content);
+
+            let og_re = regex::Regex::new(r#"<meta[^>]*property=["']og:"#).unwrap();
+            let has_og = og_re.is_match(&content);
+
+            let jsonld_re = regex::Regex::new(r#"<script[^>]*type=["']application/ld\+json["']"#).unwrap();
+            let has_jsonld = jsonld_re.is_match(&content);
+
+            let viewport_re = regex::Regex::new(r#"<meta[^>]*name=["']viewport["']"#).unwrap();
+            let has_viewport = viewport_re.is_match(&content);
+
+            samples.push(BuiltPageSample {
+                slug,
+                has_title,
+                has_meta_description: has_desc,
+                has_canonical,
+                has_og_tags: has_og,
+                has_json_ld: has_jsonld,
+                has_viewport,
+                title_text,
+                description_text: desc_text,
             });
         }
     }
 
-    worst.sort_by(|a, b| {
-        let a_bad = if a.health == "poor" { 0 } else { 1 };
-        let b_bad = if b.health == "poor" { 0 } else { 1 };
-        a_bad.cmp(&b_bad).then_with(|| a.health_score.cmp(&b.health_score))
-    });
-    worst.truncate(3);
-
-    let mut issue_vec: Vec<(String, i64)> = issue_counts.into_iter().collect();
-    issue_vec.sort_by(|a, b| b.1.cmp(&a.1));
-    issue_vec.truncate(5);
-    summary.top_issues = issue_vec.into_iter().collect();
-    summary.worst_articles = worst;
-
-    Ok(summary)
+    samples
 }
 
-fn collect_indexing(conn: &Connection, project_id: &str) -> Result<IndexingSummary, String> {
-    let statuses = crate::gsc::db::list_by_project(conn, project_id)
-        .map_err(|e| format!("list_by_project: {e}"))?;
-
-    let mut not_indexed = 0i64;
-    let mut indexed = 0i64;
-    let mut unknown = 0i64;
-    let mut reasons: HashMap<String, i64> = HashMap::new();
-    let mut sample_not_indexed: Vec<String> = Vec::new();
-
-    for s in &statuses {
-        match s.last_verdict.as_deref().unwrap_or("") {
-            "PASS" => indexed += 1,
-            "FAIL" => {
-                not_indexed += 1;
-                let reason = s.last_reason_code.clone().unwrap_or_else(|| "unknown".to_string());
-                *reasons.entry(reason).or_insert(0) += 1;
-                // Extract slug from URL for sample
-                if sample_not_indexed.len() < 3 {
-                    let slug = s.url.rsplit('/').next().unwrap_or("").to_string();
-                    if !slug.is_empty() && !sample_not_indexed.contains(&slug) {
-                        sample_not_indexed.push(slug);
-                    }
-                }
-            }
-            _ => {
-                unknown += 1;
-                if sample_not_indexed.len() < 3 {
-                    let slug = s.url.rsplit('/').next().unwrap_or("").to_string();
-                    if !slug.is_empty() && !sample_not_indexed.contains(&slug) {
-                        sample_not_indexed.push(slug);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(IndexingSummary {
-        not_indexed_count: not_indexed,
-        indexed_count: indexed,
-        unknown_count: unknown,
-        reason_breakdown: reasons,
-        sample_not_indexed,
-    })
-}
-
-fn collect_ctr(conn: &Connection, project_id: &str) -> Result<CtrSummary, String> {
-    let mut stmt = conn.prepare(
-        "SELECT a.url_slug, a.title, i.issue_type
-         FROM article_ctr_issues i
-         JOIN articles a ON a.id = i.article_id
-         WHERE a.project_id = ?1"
-    ).map_err(|e| format!("prepare ctr: {e}"))?;
-
-    let rows = stmt.query_map([project_id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    }).map_err(|e| format!("query ctr: {e}"))?;
-
-    let mut issue_counts: HashMap<String, i64> = HashMap::new();
-    let mut article_issues: HashMap<String, (String, Vec<String>)> = HashMap::new();
-
-    for row in rows {
-        let (slug, title, issue_type) = row.map_err(|e| format!("row: {e}"))?;
-        *issue_counts.entry(issue_type.clone()).or_insert(0) += 1;
-        let entry = article_issues.entry(slug.clone()).or_insert_with(|| (title, Vec::new()));
-        entry.1.push(issue_type);
-    }
-
-    let mut sample: Vec<ArticleCtrBrief> = article_issues
-        .into_iter()
-        .map(|(slug, (title, issues))| ArticleCtrBrief { slug, title, issues })
-        .collect();
-    sample.sort_by(|a, b| b.issues.len().cmp(&a.issues.len()));
-    sample.truncate(3);
-
-    Ok(CtrSummary {
-        articles_with_issues: sample.len() as i64,
-        issue_breakdown: issue_counts,
-        sample_articles: sample,
-    })
-}
-
-fn collect_cannibalization(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<CannibalizationSummary, String> {
-    let mut cluster_count = 0i64;
-    let mut merge_candidates = 0i64;
-    let mut hub_gaps = 0i64;
-
-    if let Ok(Some(clusters_json)) =
-        crate::db::content_audit::get_latest_audit_artifact(conn, project_id, "cannibalization_clusters")
-    {
-        if let Some(clusters) = clusters_json["clusters"].as_array() {
-            cluster_count = clusters.len() as i64;
-            for c in clusters {
-                if c["recommendation"].as_str() == Some("merge") {
-                    merge_candidates += 1;
-                }
-            }
-        }
-        if let Some(gaps) = clusters_json["hub_gaps"].as_array() {
-            hub_gaps = gaps.len() as i64;
-        }
-    }
-
-    Ok(CannibalizationSummary {
-        cluster_count,
-        merge_candidates,
-        hub_gaps,
-    })
-}
-
-fn collect_links(
+fn collect_url_architecture(
     conn: &Connection,
     project_id: &str,
     project_path: &str,
-) -> Result<LinkSummary, String> {
+) -> Result<UrlArchitecture, String> {
     let articles = crate::engine::task_store::list_articles(conn, project_id)
         .map_err(|e| format!("list_articles: {e}"))?;
 
-    let content_dirs = crate::content::article_resolver::discover_content_dirs(std::path::Path::new(project_path));
-    let content_dir = content_dirs.first().map(|s| s.as_str()).unwrap_or("src/content");
+    // Temporal URL detection: only year suffixes at END of slug
+    let temporal_re = regex::Regex::new(r"-\d{4}$").unwrap();
+    let prefix_re = regex::Regex::new(r"^\d+-").unwrap();
 
-    let scan = crate::content::linking::scan_links(
-        std::path::Path::new(project_path).join(content_dir).as_path(),
-        &articles,
-    )
-    .map_err(|e| format!("scan_links: {e}"))?;
-
-    let orphan_count = scan.orphan_ids.len() as i64;
-    let zero_incoming = scan.zero_incoming_ids.len() as i64;
-    let total_links = scan.total_internal_links as i64;
-    let avg_links = if articles.is_empty() { 0.0 } else { total_links as f64 / articles.len() as f64 };
-
-    // Map orphan IDs back to slugs
-    let id_to_slug: std::collections::HashMap<i64, String> = articles
-        .iter()
-        .map(|a| (a.id, a.url_slug.clone()))
-        .collect();
-    let sample_orphans: Vec<String> = scan.orphan_ids
-        .iter()
-        .filter_map(|id| id_to_slug.get(id).cloned())
-        .take(3)
-        .collect();
-
-    Ok(LinkSummary {
-        orphan_count,
-        zero_incoming_count: zero_incoming,
-        total_internal_links: total_links,
-        avg_links_per_article: avg_links,
-        sample_orphans,
-    })
-}
-
-fn collect_content_distribution(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<ContentDistribution, String> {
-    let articles = crate::engine::task_store::list_articles(conn, project_id)
-        .map_err(|e| format!("list_articles: {e}"))?;
-
-    let mut status_breakdown: HashMap<String, i64> = HashMap::new();
-    let mut word_hist: HashMap<String, i64> = HashMap::new();
     let mut temporal_count = 0i64;
     let mut sample_temporal: Vec<String> = Vec::new();
-    let mut very_thin = 0i64;
-    let mut thin = 0i64;
-
-    // Only match year suffixes at the END of the slug (e.g. "-2025", "-2026").
-    // Date prefixes like "2025-01-18-xxx" are stripped by the blog parser and
-    // do NOT create year-based URLs. Do NOT match years in the middle of slugs.
-    let temporal_re = regex::Regex::new(r"-\d{4}$").unwrap();
 
     for a in &articles {
-        *status_breakdown.entry(a.status.clone()).or_insert(0) += 1;
-
-        let bucket = match a.word_count {
-            0..=99 => { very_thin += 1; "0-99" }
-            100..=299 => { thin += 1; "100-299" }
-            300..=499 => "300-499",
-            500..=999 => "500-999",
-            1000..=1999 => "1000-1999",
-            _ => "2000+",
-        };
-        *word_hist.entry(bucket.to_string()).or_insert(0) += 1;
-
-        // Strip numeric prefix (e.g. "49-") before checking for temporal suffix,
-        // since the blog parser strips these. Then check for year suffix at end.
-        let slug_no_prefix = regex::Regex::new(r"^\d+-").unwrap()
-            .replace(&a.url_slug, "");
+        let slug_no_prefix = prefix_re.replace(&a.url_slug, "");
         if temporal_re.is_match(&slug_no_prefix) {
             temporal_count += 1;
             if sample_temporal.len() < 3 {
@@ -503,183 +412,103 @@ fn collect_content_distribution(
         }
     }
 
-    Ok(ContentDistribution {
-        status_breakdown,
-        word_count_histogram: word_hist,
+    // Check blog parser slug logic
+    let slug_logic = check_blog_parser(project_path);
+
+    Ok(UrlArchitecture {
         temporal_url_count: temporal_count,
         sample_temporal_urls: sample_temporal,
-        very_thin_count: very_thin,
-        thin_count: thin,
+        trailing_slash_consistent: None, // Would need router config analysis
+        slug_derivation_logic: slug_logic,
     })
 }
 
-fn collect_technical_seo(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &str,
-) -> Result<TechnicalSeoSummary, String> {
-    let articles = crate::engine::task_store::list_articles(conn, project_id)
-        .map_err(|e| format!("list_articles: {e}"))?;
+fn collect_performance_signals(project_path: &str) -> Result<PerformanceSignals, String> {
+    let root = std::path::Path::new(project_path);
+    let mut config_notes = Vec::new();
 
-    let mut missing_desc = 0i64;
-    let mut missing_keyword = 0i64;
-    let mut title_counts: HashMap<String, Vec<String>> = HashMap::new();
-    let mut stale_count = 0i64;
-    let one_year_ago = chrono::Utc::now() - chrono::Duration::days(365);
+    // Check for lazy loading in components
+    let mut has_lazy = false;
+    let mut has_modern_images = false;
+    let mut has_script_opt = false;
+    let mut has_bundle = false;
 
-    let content_dirs = crate::content::article_resolver::discover_content_dirs(std::path::Path::new(project_path));
-    let content_dirs_refs: Vec<&str> = content_dirs.iter().map(|s| s.as_str()).collect();
-    let repo_root = std::path::Path::new(project_path);
-
-    let mut stale_samples: Vec<String> = Vec::new();
-
-    for a in &articles {
-        // Check frontmatter for description, keyword, and ACTUAL title
-        let resolved = crate::content::article_resolver::resolve_article_file(
-            repo_root, &a.file, &content_dirs_refs,
-        );
-        if resolved.found {
-            if let Ok(content) = std::fs::read_to_string(&resolved._absolute_path) {
-                if let Ok(frontmatter) = crate::content::frontmatter::parse(&content) {
-                    let parsed = &frontmatter.parsed;
-                    let has_desc = parsed.get("description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| !s.is_empty())
-                        .unwrap_or(false);
-                    if !has_desc {
-                        missing_desc += 1;
-                    }
-                    let has_kw = parsed.get("target_keyword")
-                        .and_then(|v| v.as_str())
-                        .map(|s| !s.is_empty())
-                        .unwrap_or(false);
-                    if !has_kw {
-                        missing_keyword += 1;
-                    }
-                    // Track ACTUAL frontmatter title for duplicate detection
-                    if let Some(fm_title) = parsed.get("title").and_then(|v| v.as_str()) {
-                        let title_lower = fm_title.to_lowercase().trim().to_string();
-                        if !title_lower.is_empty() {
-                            title_counts.entry(title_lower).or_default().push(a.url_slug.clone());
-                        }
-                    }
+    // Scan src/ for lazy loading patterns
+    let entries = walkdir::WalkDir::new(root.join("src"))
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy();
+            name.ends_with(".vue") || name.ends_with(".tsx") || name.ends_with(".jsx") || name.ends_with(".ts")
+        })
+        .take(50);
+    for entry in entries {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                if content.contains("loading=\"lazy\"") || content.contains("loading=\"lazy\"") {
+                    has_lazy = true;
+                }
+                if content.contains(".webp") || content.contains(".avif") || content.contains("format=webp") {
+                    has_modern_images = true;
+                }
+                if content.contains("async") || content.contains("defer") {
+                    has_script_opt = true;
                 }
             }
         }
 
-        // Check stale content
-        if let Some(ref date_str) = a.published_date {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                let date: chrono::DateTime<chrono::Utc> = chrono::DateTime::from_naive_utc_and_offset(
-                    date.and_hms_opt(0, 0, 0).unwrap(),
-                    chrono::Utc,
-                );
-                if date < one_year_ago {
-                    stale_count += 1;
-                    if stale_samples.len() < 3 {
-                        stale_samples.push(a.url_slug.clone());
-                    }
-                }
+    // Check vite config for bundle analysis
+    let vite_config = root.join("vite.config.ts");
+    if vite_config.exists() {
+        if let Ok(content) = std::fs::read_to_string(&vite_config) {
+            if content.contains("visualizer") || content.contains("bundle") || content.contains("analyzer") {
+                has_bundle = true;
+                config_notes.push("vite.config.ts has bundle analyzer plugin".to_string());
+            }
+            if content.contains("compress") || content.contains("gzip") || content.contains("brotli") {
+                config_notes.push("vite.config.ts has compression config".to_string());
             }
         }
     }
 
-    // Find duplicates (titles used by more than one article)
-    let mut duplicate_samples: Vec<DuplicateTitle> = Vec::new();
-    for (title, slugs) in &title_counts {
-        if slugs.len() > 1 {
-            duplicate_samples.push(DuplicateTitle {
-                title: title.clone(),
-                slugs: slugs.clone(),
-            });
+    // Check next config
+    let next_config = root.join("next.config.js");
+    if next_config.exists() {
+        config_notes.push("Next.js config found — check for image optimization settings".to_string());
+    }
+
+    // Check for image optimization libraries
+    let package_json = root.join("package.json");
+    if package_json.exists() {
+        if let Ok(content) = std::fs::read_to_string(&package_json) {
+            if content.contains("@nuxt/image") || content.contains("next/image") || content.contains("vite-imagetools") {
+                has_modern_images = true;
+                config_notes.push("Image optimization library in dependencies".to_string());
+            }
         }
     }
-    duplicate_samples.sort_by(|a, b| b.slugs.len().cmp(&a.slugs.len()));
-    duplicate_samples.truncate(3);
-    let duplicate_count = duplicate_samples.len() as i64;
 
-    // Check if lastModified is supported by sampling frontmatter
-    let last_modified_supported = check_last_modified_support(project_path);
-
-    Ok(TechnicalSeoSummary {
-        missing_description_count: missing_desc,
-        missing_keyword_count: missing_keyword,
-        duplicate_title_count: duplicate_count,
-        duplicate_title_samples: duplicate_samples,
-        content_older_than_1_year_count: stale_count,
-        content_older_than_1_year_samples: stale_samples,
-        last_modified_supported,
+    Ok(PerformanceSignals {
+        has_lazy_loading: has_lazy,
+        has_modern_image_formats: has_modern_images,
+        has_script_optimization: has_script_opt,
+        has_bundle_analysis: has_bundle,
+        config_notes,
     })
 }
 
-fn extract_issue_names(data: &serde_json::Value) -> Vec<String> {
-    let mut issues = Vec::new();
-
-    if let Some(checks) = data.get("checks").and_then(|c| c.as_object()) {
-        for (key, val) in checks {
-            if let Some(passed) = val.get("passed").and_then(|v| v.as_bool()) {
-                if !passed {
-                    issues.push(key.replace('_', " "));
-                }
-            }
-        }
-    }
-
-    if let Some(detected) = data.get("issues_detected").and_then(|v| v.as_array()) {
-        for issue in detected {
-            if let Some(name) = issue.as_str() {
-                if !issues.contains(&name.to_string()) {
-                    issues.push(name.to_string());
-                }
-            }
-        }
-    }
-
-    for section in ["quality", "readability", "seo"] {
-        if let Some(obj) = data.get(section).and_then(|v| v.as_object()) {
-            for (key, val) in obj {
-                if let Some(passed) = val.get("passed").and_then(|v| v.as_bool()) {
-                    if !passed {
-                        let name = format!("{section}: {key}");
-                        if !issues.contains(&name) {
-                            issues.push(name);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    issues.truncate(5);
-    issues
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Code verification — read actual source files and build output
-// ═══════════════════════════════════════════════════════════════════════════════
-
-fn collect_code_verification(project_path: &str) -> Result<CodeVerification, String> {
+fn collect_source_verification(project_path: &str) -> Result<SourceVerification, String> {
     let root = std::path::Path::new(project_path);
 
-    // 1. Check SEO head component
-    let seo_head_summary = check_seo_head_component(root);
-
-    // 2. Check blog parser slug logic
-    let slug_logic = check_blog_parser(root);
-
-    // 3. Sample built HTML
-    let html_check = sample_built_html(root);
-
-    // 4. Sample MDX frontmatter
-    let fm_check = sample_frontmatter(root);
-
-    // 5. Key source files
+    // Key source files
     let mut key_files = Vec::new();
     for (path, purpose) in [
         ("src/components/SEOHead.vue", "Injects meta tags, titles, JSON-LD"),
         ("src/views/BlogPostPage.vue", "Renders blog posts, passes SEO data"),
         ("src/blog/index.ts", "Parses MDX, derives slugs"),
         ("src/App.vue", "Root layout"),
+        ("vite.config.ts", "Build configuration"),
+        ("src/router/index.ts", "URL routing rules"),
     ] {
         if root.join(path).exists() {
             key_files.push(SourceFileNote {
@@ -689,224 +518,108 @@ fn collect_code_verification(project_path: &str) -> Result<CodeVerification, Str
         }
     }
 
-    Ok(CodeVerification {
-        seo_head_summary,
-        slug_derivation_logic: slug_logic,
-        sampled_html_check: html_check,
-        sampled_frontmatter_check: fm_check,
+    // Sample frontmatter
+    let fm_check = sample_frontmatter(root);
+
+    Ok(SourceVerification {
         key_source_files: key_files,
+        frontmatter_sample: fm_check,
     })
 }
 
-fn check_seo_head_component(root: &std::path::Path) -> String {
-    let seo_head = root.join("src/components/SEOHead.vue");
-    if !seo_head.exists() {
-        return "SEOHead.vue not found".to_string();
-    }
-    let content = std::fs::read_to_string(&seo_head).unwrap_or_default();
-    let mut findings = Vec::new();
+fn sample_frontmatter(root: &std::path::Path) -> FrontmatterSampleCheck {
+    let mut checked = 0i64;
+    let mut malformed = 0i64;
+    let mut all_have_title = true;
+    let mut all_have_desc = true;
 
-    if content.contains("useHead") || content.contains("useSeoMeta") || content.contains("@unhead/vue") {
-        findings.push("uses head injection library");
-    }
-    if content.contains("title") {
-        findings.push("handles title");
-    }
-    if content.contains("description") || content.contains("meta") {
-        findings.push("handles meta description");
-    }
-    if content.contains("og:") || content.contains("openGraph") || content.contains("ogImage") {
-        findings.push("handles Open Graph");
-    }
-    if content.contains("json") || content.contains("ld+json") || content.contains("schema") {
-        findings.push("handles JSON-LD");
-    }
-    if content.contains("faq") || content.contains("FAQPage") {
-        findings.push("handles FAQ schema");
-    }
-    if content.contains("lastModified") || content.contains("last-modified") || content.contains("modified_time") {
-        findings.push("handles lastModified / article:modified_time");
+    // Try common content directories
+    let content_dirs = [
+        root.join("src/blog/posts"),
+        root.join("content"),
+        root.join("src/content"),
+        root.join("src/posts"),
+    ];
+
+    for content_dir in &content_dirs {
+        if !content_dir.exists() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(content_dir) {
+            for entry in entries.flatten() {
+                if checked >= 3 {
+                    break;
+                }
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("mdx") {
+                    continue;
+                }
+                checked += 1;
+                let content = std::fs::read_to_string(&path).unwrap_or_default();
+                match crate::content::frontmatter::split_mdx(&content) {
+                    Some((fm_raw, _)) => match crate::content::frontmatter::parse(fm_raw) {
+                        Ok(fm) => {
+                            let parsed = &fm.parsed;
+                            let has_title = parsed.get("title").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                            let has_desc = parsed.get("description").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+                            if !has_title {
+                                all_have_title = false;
+                            }
+                            if !has_desc {
+                                all_have_desc = false;
+                            }
+                        }
+                        Err(_) => {
+                            malformed += 1;
+                        }
+                    },
+                    None => {
+                        malformed += 1;
+                    }
+                }
+            }
+        }
+        if checked > 0 {
+            break; // Stop after first valid content dir
+        }
     }
 
-    if findings.is_empty() {
-        "Found SEOHead.vue but could not determine capabilities from source".to_string()
-    } else {
-        format!("SEOHead.vue: {}", findings.join(", "))
+    FrontmatterSampleCheck {
+        files_checked: checked,
+        all_have_title,
+        all_have_description: all_have_desc,
+        malformed_count: malformed,
     }
 }
 
-fn check_blog_parser(root: &std::path::Path) -> String {
+fn check_blog_parser(project_path: &str) -> String {
+    let root = std::path::Path::new(project_path);
     let parser = root.join("src/blog/index.ts");
     if !parser.exists() {
-        // Try other common locations
         let alt = root.join("src/content/blog.ts");
         if alt.exists() {
-            return "Blog parser found at src/content/blog.ts (check for slug logic)".to_string();
+            return "Blog parser found at src/content/blog.ts".to_string();
         }
         return "Blog parser not found at expected location".to_string();
     }
     let content = std::fs::read_to_string(&parser).unwrap_or_default();
 
     if content.contains("replace") && content.contains("YYYY") {
-        return "Blog parser strips date prefixes from filenames when deriving slugs".to_string();
+        return "Strips date prefixes from filenames when deriving slugs".to_string();
     }
     if content.contains("slug") && content.contains("replace") {
-        return "Blog parser applies transformations when deriving slugs from filenames".to_string();
+        return "Applies transformations when deriving slugs from filenames".to_string();
     }
     if content.contains("slug") {
-        return "Blog parser has custom slug derivation logic".to_string();
+        return "Has custom slug derivation logic".to_string();
     }
-    "Blog parser found but slug logic could not be determined".to_string()
+    "Found but slug logic could not be determined".to_string()
 }
 
-fn sample_built_html(root: &std::path::Path) -> HtmlSampleCheck {
-    let dist_blog = root.join("dist/blog");
-    let mut checked = 0i64;
-    let mut titles = Vec::new();
-    let mut descriptions = Vec::new();
-    let mut malformed = Vec::new();
-    let mut all_unique_title = true;
-    let mut all_unique_desc = true;
-
-    if !dist_blog.exists() {
-        return HtmlSampleCheck {
-            files_checked: 0,
-            all_have_unique_title: false,
-            all_have_unique_description: false,
-            total_title_samples: Vec::new(),
-            total_description_samples: Vec::new(),
-            malformed_files: Vec::new(),
-        };
-    }
-
-    let mut seen_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut seen_descs: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    if let Ok(entries) = std::fs::read_dir(&dist_blog) {
-        for entry in entries.flatten() {
-            if checked >= 3 {
-                break;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("html") {
-                continue;
-            }
-            checked += 1;
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-
-            // Extract title
-            let title_re = regex::Regex::new(r"<title>(.*?)</title>").unwrap();
-            let title = title_re.captures(&content).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
-
-            // Extract meta description
-            let desc_re = regex::Regex::new(r#"<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>"#).unwrap();
-            let desc = desc_re.captures(&content).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
-
-            match (&title, &desc) {
-                (Some(t), Some(d)) => {
-                    titles.push(char_limit(t, 80).to_string());
-                    descriptions.push(char_limit(d, 80).to_string());
-                    if !seen_titles.insert(t.clone()) {
-                        all_unique_title = false;
-                    }
-                    if !seen_descs.insert(d.clone()) {
-                        all_unique_desc = false;
-                    }
-                }
-                _ => {
-                    malformed.push(path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string());
-                }
-            }
-        }
-    }
-
-    HtmlSampleCheck {
-        files_checked: checked,
-        all_have_unique_title: all_unique_title && !titles.is_empty(),
-        all_have_unique_description: all_unique_desc && !descriptions.is_empty(),
-        total_title_samples: titles,
-        total_description_samples: descriptions,
-        malformed_files: malformed,
-    }
-}
-
-fn sample_frontmatter(root: &std::path::Path) -> FrontmatterSampleCheck {
-    let mut checked = 0i64;
-    let mut malformed = Vec::new();
-    let mut all_have_desc = true;
-    let mut all_have_title = true;
-    let mut lastmod_count = 0i64;
-
-    let content_dir = root.join("src/blog/posts");
-    if !content_dir.exists() {
-        return FrontmatterSampleCheck {
-            files_checked: 0,
-            all_have_description: false,
-            all_have_title: false,
-            last_modified_present_count: 0,
-            malformed_frontmatter_files: Vec::new(),
-        };
-    }
-
-    if let Ok(entries) = std::fs::read_dir(&content_dir) {
-        for entry in entries.flatten() {
-            if checked >= 3 {
-                break;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("mdx") {
-                continue;
-            }
-            checked += 1;
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            match crate::content::frontmatter::parse(&content) {
-                Ok(fm) => {
-                    let parsed = &fm.parsed;
-                    let has_title = parsed.get("title").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-                    let has_desc = parsed.get("description").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-                    let has_lastmod = parsed.get("lastModified").or_else(|| parsed.get("lastmod"))
-                        .and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-                    if !has_title {
-                        all_have_title = false;
-                    }
-                    if !has_desc {
-                        all_have_desc = false;
-                    }
-                    if has_lastmod {
-                        lastmod_count += 1;
-                    }
-                }
-                Err(_) => {
-                    malformed.push(path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string());
-                }
-            }
-        }
-    }
-
-    FrontmatterSampleCheck {
-        files_checked: checked,
-        all_have_description: all_have_desc,
-        all_have_title: all_have_title,
-        last_modified_present_count: lastmod_count,
-        malformed_frontmatter_files: malformed,
-    }
-}
-
-fn check_last_modified_support(project_path: &str) -> bool {
-    let root = std::path::Path::new(project_path);
-    let seo_head = root.join("src/components/SEOHead.vue");
-    let blog_page = root.join("src/views/BlogPostPage.vue");
-
-    let seo_head_has_it = seo_head.exists() && {
-        let c = std::fs::read_to_string(&seo_head).unwrap_or_default();
-        c.contains("lastModified") || c.contains("last-modified") || c.contains("modified_time")
-    };
-    let blog_page_has_it = blog_page.exists() && {
-        let c = std::fs::read_to_string(&blog_page).unwrap_or_default();
-        c.contains("lastModified") || c.contains("lastmod") || c.contains("dateModified")
-    };
-
-    seo_head_has_it && blog_page_has_it
+fn summarize_source(content: &str, max_chars: usize) -> String {
+    let limited = char_limit(content, max_chars);
+    // Remove excessive whitespace
+    limited.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn char_limit(s: &str, max_chars: usize) -> &str {
@@ -915,15 +628,4 @@ fn char_limit(s: &str, max_chars: usize) -> &str {
     } else {
         s
     }
-}
-
-fn build_verification_notes() -> String {
-    "VERIFIED: code_verification section reads actual source files and built HTML. \
-UNVERIFIED: ctr data comes from article_ctr_issues table and may be stale — cross-check with code_verification before reporting. \
-UNVERIFIED: indexing data comes from GSC and may be outdated. \
-NOTE: temporal_url detection matches ONLY explicit year suffixes like '-2025' at the END of slugs. \
-      Date prefixes like '2025-01-18-' are stripped by the blog parser and do NOT create year-based URLs. \
-NOTE: duplicate titles detected from actual frontmatter (not DB titles). \
-NOTE: content_older_than_1_year is just old published_date — lastModified support is verified separately."
-        .to_string()
 }

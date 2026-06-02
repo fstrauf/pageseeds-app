@@ -51,6 +51,8 @@ pub struct VerifiedFinding {
     pub description: String,
     pub affected_slugs: Vec<String>,
     pub evidence: Vec<VerifiedEvidence>,
+    /// Original agent evidence (file paths, line numbers, exact samples)
+    pub evidence_tool_calls: Vec<String>,
     pub suggested_fix: String,
 }
 
