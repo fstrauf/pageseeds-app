@@ -21,6 +21,8 @@ pub struct InfrastructureAuditReport {
     pub template_audit: TemplateAudit,
     pub build_output_audit: BuildOutputAudit,
     pub url_architecture: UrlArchitecture,
+    pub title_quality: TitleQualityAudit,
+    pub og_image_audit: OgImageAudit,
     pub performance_signals: PerformanceSignals,
     pub source_verification: SourceVerification,
 }
@@ -106,6 +108,47 @@ pub struct PerformanceSignals {
     pub config_notes: Vec<String>,
 }
 
+/// Title quality issues that affect rendered HTML output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TitleQualityAudit {
+    /// Number of articles with truncated titles (cut off mid-sentence)
+    pub truncated_title_count: i64,
+    /// Sample truncated titles with their slugs
+    pub truncated_samples: Vec<TitleIssue>,
+    /// Number of duplicate titles (same title used by multiple articles)
+    pub duplicate_title_count: i64,
+    /// Sample duplicate titles
+    pub duplicate_samples: Vec<DuplicateTitle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TitleIssue {
+    pub slug: String,
+    pub title: String,
+    pub issue: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateTitle {
+    pub title: String,
+    pub slugs: Vec<String>,
+}
+
+/// OG image URL audit — checks for relative OG:image URLs in built HTML.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OgImageAudit {
+    /// Articles with relative OG image URLs
+    pub relative_og_image_count: i64,
+    /// Sample slugs with relative OG images
+    pub sample_relative_og_images: Vec<OgImageIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OgImageIssue {
+    pub slug: String,
+    pub og_image_url: String,
+}
+
 /// Ground-truth verification from reading actual source/build files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceVerification {
@@ -139,6 +182,8 @@ pub fn collect_infrastructure_audit(
         template_audit: collect_template_audit(project_path)?,
         build_output_audit: collect_build_output_audit(project_path)?,
         url_architecture: collect_url_architecture(conn, project_id, project_path)?,
+        title_quality: collect_title_quality(conn, project_id, project_path)?,
+        og_image_audit: collect_og_image_audit(project_path)?,
         performance_signals: collect_performance_signals(project_path)?,
         source_verification: collect_source_verification(project_path)?,
     })
@@ -395,8 +440,10 @@ fn collect_url_architecture(
     let articles = crate::engine::task_store::list_articles(conn, project_id)
         .map_err(|e| format!("list_articles: {e}"))?;
 
-    // Temporal URL detection: only year suffixes at END of slug
-    let temporal_re = regex::Regex::new(r"-\d{4}$").unwrap();
+    // Temporal URL detection: match year tokens ANYWHERE in the slug.
+    // Year suffixes (-2025 at end) are the most critical — they force annual
+    // URL migration. Year tokens in the middle are still dated but less urgent.
+    let temporal_re = regex::Regex::new(r"-\d{4}").unwrap();
     let prefix_re = regex::Regex::new(r"^\d+-").unwrap();
 
     let mut temporal_count = 0i64;
@@ -420,6 +467,135 @@ fn collect_url_architecture(
         sample_temporal_urls: sample_temporal,
         trailing_slash_consistent: None, // Would need router config analysis
         slug_derivation_logic: slug_logic,
+    })
+}
+
+fn collect_title_quality(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &str,
+) -> Result<TitleQualityAudit, String> {
+    let articles = crate::engine::task_store::list_articles(conn, project_id)
+        .map_err(|e| format!("list_articles: {e}"))?;
+
+    let content_dirs = crate::content::article_resolver::discover_content_dirs(std::path::Path::new(project_path));
+    let content_dirs_refs: Vec<&str> = content_dirs.iter().map(|s| s.as_str()).collect();
+    let repo_root = std::path::Path::new(project_path);
+
+    let mut truncated: Vec<TitleIssue> = Vec::new();
+    let mut title_counts: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    // Truncation indicators: titles ending mid-word with these patterns
+    let truncation_patterns = [
+        ":", " vs", " and", " or", " -", "—", "–", " with", " for", " by",
+    ];
+
+    for a in &articles {
+        let resolved = crate::content::article_resolver::resolve_article_file(
+            repo_root, &a.file, &content_dirs_refs,
+        );
+        if !resolved.found {
+            continue;
+        }
+        let content = std::fs::read_to_string(&resolved._absolute_path).unwrap_or_default();
+        let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(&content) else {
+            continue;
+        };
+        let Ok(fm) = crate::content::frontmatter::parse(fm_raw) else {
+            continue;
+        };
+
+        if let Some(title) = fm.parsed.get("title").and_then(|v| v.as_str()) {
+            let trimmed = title.trim();
+
+            // Check for truncation: ends with a pattern that suggests mid-sentence cutoff
+            let is_truncated = truncation_patterns.iter().any(|pat| trimmed.ends_with(pat));
+            if is_truncated && truncated.len() < 5 {
+                truncated.push(TitleIssue {
+                    slug: a.url_slug.clone(),
+                    title: trimmed.to_string(),
+                    issue: "title appears truncated (ends mid-sentence)".to_string(),
+                });
+            }
+
+            // Track for duplicate detection
+            let lower = trimmed.to_lowercase();
+            if !lower.is_empty() {
+                title_counts.entry(lower).or_default().push(a.url_slug.clone());
+            }
+        }
+    }
+
+    // Find duplicates
+    let mut duplicate_samples: Vec<DuplicateTitle> = Vec::new();
+    for (title, slugs) in &title_counts {
+        if slugs.len() > 1 {
+            duplicate_samples.push(DuplicateTitle {
+                title: title.clone(),
+                slugs: slugs.clone(),
+            });
+        }
+    }
+    duplicate_samples.sort_by(|a, b| b.slugs.len().cmp(&a.slugs.len()));
+    duplicate_samples.truncate(3);
+
+    Ok(TitleQualityAudit {
+        truncated_title_count: truncated.len() as i64,
+        truncated_samples: truncated,
+        duplicate_title_count: duplicate_samples.len() as i64,
+        duplicate_samples,
+    })
+}
+
+fn collect_og_image_audit(project_path: &str) -> Result<OgImageAudit, String> {
+    let root = std::path::Path::new(project_path);
+    let dist_blog = root.join("dist/blog");
+
+    let mut relative_count = 0i64;
+    let mut samples: Vec<OgImageIssue> = Vec::new();
+
+    if !dist_blog.exists() {
+        return Ok(OgImageAudit {
+            relative_og_image_count: 0,
+            sample_relative_og_images: Vec::new(),
+        });
+    }
+
+    let og_re = regex::Regex::new(r#"<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["']"#).unwrap();
+
+    if let Ok(entries) = std::fs::read_dir(&dist_blog) {
+        for entry in entries.flatten() {
+            if samples.len() >= 5 {
+                break;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("html") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+
+            if let Some(cap) = og_re.captures(&content) {
+                let url = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                // Relative URL: starts with / but not //, or is just a path
+                let is_relative = !url.is_empty()
+                    && !url.starts_with("http://")
+                    && !url.starts_with("https://")
+                    && !url.starts_with("//");
+                if is_relative {
+                    relative_count += 1;
+                    let slug = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
+                    samples.push(OgImageIssue {
+                        slug,
+                        og_image_url: url.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(OgImageAudit {
+        relative_og_image_count: relative_count,
+        sample_relative_og_images: samples,
     })
 }
 

@@ -162,24 +162,32 @@ async fn run_feature_spec_agent(
     // ── Phase 1b: Agentic analysis (single turn, no tools) ────────────────────
 
     let prompt = format!(
-        "You are a senior SEO engineer auditing a website's CODE INFRASTRUCTURE. \
-        Your output is a developer feature specification — the dev team will read it and implement the fixes.\n\n\
-        SCOPE: Report ONLY code/template/build issues that prevent good SEO. \
-        Do NOT report content-quality issues (thin articles, missing descriptions, stale content). \
-        Those are handled by the content team.\n\n\
+        "You are a senior SEO engineer writing a developer feature specification. \
+        The dev team will read this and implement the fixes. Be thorough — every real issue should become a ticket.\n\n\
+        SCOPE: Report code/template/build issues that affect SEO. This includes:\n\
+        - Template gaps (missing meta tags, broken structured data)\n\
+        - Build system issues (missing 404 page, sitemap, prerendering)\n\
+        - URL architecture (temporal URLs, redirect needs)\n\
+        - Template-level validation gaps (truncated titles flowing into <title>, duplicate <title> tags, relative OG images)\n\
+        - Performance (missing lazy loading, unoptimized images affecting Core Web Vitals)\n\n\
+        DO NOT report:\n\
+        - Content quality (thin articles, missing descriptions, stale content)\n\
+        - Keyword gaps or readability issues\n\n\
         RULES:\n\
-        1. Every finding MUST cite specific files, line numbers, or exact code snippets from the report.\n\
-        2. Use template_audit.gaps_detected and build_output_audit.sampled_pages as primary evidence.\n\
-        3. Temporal URLs (url_architecture.temporal_url_count) are a developer issue ONLY if the report shows they exist.\n\
-        4. If template_audit shows a capability exists (e.g. 'canonical'), do NOT claim it's missing.\n\
-        5. If build_output_audit.has_sitemap=true, do NOT claim sitemap is missing.\n\
-        6. Performance gaps only matter if they affect SEO (e.g. Core Web Vitals, image loading).\n\
-        7. NEVER mention PageSeeds, automation, or tasks.\n\n\
+        1. Every finding MUST cite specific evidence from the report (file paths, audit fields, exact values).\n\
+        2. Truncated titles (title_quality.truncated_samples) ARE developer issues — the template should validate title length before rendering.\n\
+        3. Duplicate titles (title_quality.duplicate_samples) ARE developer issues — they create duplicate <title> tags in HTML output.\n\
+        4. Relative OG images (og_image_audit.relative_og_image_count) ARE developer issues — the template should output absolute URLs.\n\
+        5. Temporal URLs: the fix MUST address BOTH filename-derived slugs AND frontmatter slug: overrides. Do not propose filename-only fixes.\n\
+        6. Missing 404.html is a UX/branding issue, NOT a \"soft-404 crisis\". The hosting platform handles 404 status codes. Frame it as custom 404 page missing.\n\
+        7. Performance gaps (lazy loading, image formats) ARE SEO issues because they affect Core Web Vitals and rankings. Always ticket them.\n\
+        8. If template_audit shows a capability exists, do NOT claim it's missing.\n\
+        9. NEVER mention PageSeeds, automation, or tasks.\n\n\
         PRIORITY DEFINITIONS:\n\
-        - P0: Code bug breaking SEO (missing canonical, broken JSON-LD, no prerendering)\n\
-        - P2: Structural change requiring migration (URL architecture, build config)\n\n\
+        - P0: Code bug producing broken SEO output (truncated titles, relative OG images, missing canonical)\n\
+        - P2: Structural change requiring migration (URL architecture, build config, performance pipeline)\n\n\
         Return ONLY valid JSON:\n\
-        {{\"executive_summary\":\"2 sentences on the most critical infrastructure gap\",\"findings\":[{{\"priority\":\"P0|P2\",\"issue_type\":\"template_bug|missing_meta|url_architecture|build_config|performance\",\"description\":\"What the code issue is\",\"affected_slugs\":[\"slug\"],\"evidence_tool_calls\":[\"src/file.vue line 23: missing canonical\",\"dist/blog/page.html lacks og:image\"],\"suggested_fix\":\"Exact code change\",\"confidence\":0.0-1.0}}]}}\n\n\
+        {{\"executive_summary\":\"2-3 sentences covering all critical gaps\",\"findings\":[{{\"priority\":\"P0|P2\",\"issue_type\":\"template_bug|missing_meta|url_architecture|build_config|performance\",\"description\":\"What the code issue is\",\"affected_slugs\":[\"slug\"],\"evidence_tool_calls\":[\"title_quality.truncated_samples: 'Coffee Freshness by Origin: Ethiopian vs Colombian vs'\",\"og_image_audit.sample_relative_og_images: /images/photo.jpg\"],\"suggested_fix\":\"Exact code change\",\"confidence\":0.0-1.0}}]}}\n\n\
         --- INFRASTRUCTURE AUDIT REPORT ---\n{}",
         report_json
     );
@@ -308,11 +316,16 @@ async fn verify_findings(
                 || e.contains("template_audit")
                 || e.contains("performance_signals")
                 || e.contains("url_architecture")
+                || e.contains("title_quality")
+                || e.contains("og_image_audit")
                 || e.contains("has_404")
                 || e.contains("has_sitemap")
                 || e.contains("has_robots")
                 || e.contains("has_lazy")
                 || e.contains("temporal_url")
+                || e.contains("truncated")
+                || e.contains("duplicate")
+                || e.contains("og:image")
         });
         if !has_concrete_evidence {
             valid = false;
