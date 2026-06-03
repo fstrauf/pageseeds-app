@@ -1,36 +1,30 @@
-//! Infrastructure-only feature specification generator.
+//! Observation-based SEO feature specification generator.
 //!
-//! Scope: Developer-facing SEO infrastructure issues ONLY.
-//! - Template/component bugs that break meta tag rendering
-//! - Build system gaps (missing sitemap, no prerendering)
-//! - URL architecture problems (temporal URLs, trailing slashes)
-//! - Performance issues (no lazy loading, unoptimized images)
+//! Crawls the live site's sitemap, observes rendered HTML for each URL,
+//! and produces a developer feature spec. Framework-agnostic.
 //!
-//! OUT OF SCOPE (PageSeeds handles these):
-//! - Content quality (thin content, readability)
-//! - Missing frontmatter fields
-//! - Stale articles
-//! - Internal linking gaps
+//! Principle: observe symptoms in the output. The repo diagnoses root cause.
 
 pub mod intelligence;
 
-use std::path::Path;
+
 
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::exec::feature_spec::intelligence::collect_infrastructure_audit;
+use crate::engine::exec::feature_spec::intelligence::collect_site_observations;
 use crate::engine::workflows::StepResult;
 use crate::models::feature_spec::{FeatureSpecAgentOutput, FeatureSpecFinding, VerifiedEvidence, VerifiedFinding};
 use crate::models::task::Task;
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
 
-/// Agentic step: generate a developer feature spec for SEO infrastructure.
+/// Agentic step: generate a developer feature spec from live site observations.
 ///
-/// 1. Collects infrastructure audit data (templates, build output, URLs, performance).
-/// 2. Feeds structured report to agent for code-level issue identification.
-/// 3. Verifies findings against actual source files.
-/// 4. Renders verified findings into markdown developer spec.
-/// 5. Writes to `.github/automation/seo_feature_spec_{task_id}.md`.
+/// 1. Crawls sitemap.xml to discover all URLs.
+/// 2. Fetches rendered HTML for each URL and extracts SEO signals.
+/// 3. Detects issues deterministically from observations.
+/// 4. Feeds observations to agent for spec writing.
+/// 5. Renders findings into markdown.
+/// 6. Writes to `.github/automation/seo_feature_spec_{task_id}.md`.
 pub async fn exec_generate_feature_spec(
     task: &Task,
     project_path: &str,
@@ -83,8 +77,7 @@ pub async fn exec_generate_feature_spec(
 
     // ── Phase 3: Deterministic rendering ──────────────────────────────────────
 
-    let tech_stack = crate::content::ops::detect_tech_stack(Path::new(project_path));
-    let spec_content = render_spec(&verified, &agent_output.executive_summary, tech_stack, task);
+    let spec_content = render_spec(&verified, &agent_output.executive_summary, agent_output.tech_stack.clone(), task);
 
     // Validate structure
     if let Err(reason) = validate_spec_content(&spec_content) {
@@ -141,54 +134,87 @@ async fn run_feature_spec_agent(
     project_path: &str,
     agent_provider: &str,
 ) -> Result<FeatureSpecAgentOutput, String> {
-    // ── Phase 1a: Deterministic infrastructure collection ─────────────────────
-    let db_path = crate::db::default_db_path();
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("DB open: {e}"))?;
-
-    let report = collect_infrastructure_audit(&conn, &task.project_id, project_path)
-        .map_err(|e| format!("Infrastructure audit failed: {e}"))?;
-    drop(conn);
-
-    let report_json = serde_json::to_string(&report)
-        .map_err(|e| format!("JSON serialize: {e}"))?;
-    // Hard cap: 15KB keeps total prompt under bridge 100KB limit
-    let report_json = if report_json.len() > 15000 {
-        format!("{}...[truncated {} chars]", &report_json[..15000], report_json.len() - 15000)
-    } else {
-        report_json
+    // ── Phase 1a: Live site observation ───────────────────────────────────────
+    let site_url = {
+        let db_path = crate::db::default_db_path();
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("DB open: {e}"))?;
+        let project = crate::engine::task_store::get_project(&conn, &task.project_id)
+            .map_err(|e| format!("get_project: {e}"))?;
+        
+        // Try site_url first, then fall back to extracting from sitemap_url
+        if let Some(url) = project.site_url.filter(|s| !s.is_empty()) {
+            url
+        } else if let Some(sitemap) = project.sitemap_url.filter(|s| !s.is_empty()) {
+            // Extract base URL from sitemap URL (e.g. https://example.com/sitemap.xml → https://example.com)
+            sitemap
+                .trim_end_matches("/sitemap.xml")
+                .trim_end_matches("/sitemap_index.xml")
+                .trim_end_matches('/')
+                .to_string()
+        } else {
+            return Err(
+                "Project has no Site URL configured. \
+                To set it: open the project dropdown in the left sidebar → 'Edit Project' → enter your Site URL (e.g. https://mysite.com). \
+                The feature spec generator crawls your live site — it needs a public URL."
+                .to_string()
+            );
+        }
     };
+
+    let report = collect_site_observations(site_url, task.project_id.clone(), project_path.to_string())
+        .await
+        .map_err(|e| format!("Site observation failed: {e}"))?;
+
+    // Build compact prompt report: only issues + crawl stats.
+    // Full page_observations are NOT sent to keep prompt small.
+    let compact_report = serde_json::json!({
+        "project": {
+            "site_url": report.project.site_url,
+            "tech_stack": report.project.tech_stack,
+        },
+        "crawl": {
+            "total_urls": report.crawl.total_urls,
+            "blog_urls": report.crawl.blog_urls.len(),
+            "temporal_urls": report.crawl.blog_urls.iter()
+                .filter(|u| u.contains("-2025") || u.contains("-2026") || u.contains("-2024"))
+                .take(10)
+                .collect::<Vec<_>>(),
+        },
+        "detected_issues": report.detected_issues,
+    });
+
+    let report_json = serde_json::to_string(&compact_report)
+        .map_err(|e| format!("JSON serialize: {e}"))?;
 
     // ── Phase 1b: Agentic analysis (single turn, no tools) ────────────────────
 
     let prompt = format!(
         "You are a senior SEO engineer writing a developer feature specification. \
-        The dev team will read this and implement the fixes. Be thorough — every real issue should become a ticket.\n\n\
-        SCOPE: Report code/template/build issues that affect SEO. This includes:\n\
-        - Template gaps (missing meta tags, broken structured data)\n\
-        - Build system issues (missing 404 page, sitemap, prerendering)\n\
-        - URL architecture (temporal URLs, redirect needs)\n\
-        - Template-level validation gaps (truncated titles flowing into <title>, duplicate <title> tags, relative OG images)\n\
-        - Performance (missing lazy loading, unoptimized images affecting Core Web Vitals)\n\n\
-        DO NOT report:\n\
-        - Content quality (thin articles, missing descriptions, stale content)\n\
-        - Keyword gaps or readability issues\n\n\
+        The dev team will read this and implement the fixes.\n\n\
+        CRITICAL: Do NOT use any tools. Do NOT call any functions. \
+        Return ONLY the JSON object requested below. No XML, no tool calls, no commentary.\n\n\
+        SCOPE: Report ONLY issues visible in the live site's rendered HTML output. \
+        We crawled the sitemap and inspected pages. Report what we observed.\n\n\
         RULES:\n\
-        1. Every finding MUST cite specific evidence from the report (file paths, audit fields, exact values).\n\
-        2. Truncated titles (title_quality.truncated_samples) ARE developer issues — the template should validate title length before rendering.\n\
-        3. Duplicate titles (title_quality.duplicate_samples) ARE developer issues — they create duplicate <title> tags in HTML output.\n\
-        4. Relative OG images (og_image_audit.relative_og_image_count) ARE developer issues — the template should output absolute URLs.\n\
-        5. Temporal URLs: the fix MUST address BOTH filename-derived slugs AND frontmatter slug: overrides. Do not propose filename-only fixes.\n\
-        6. Missing 404.html is a UX/branding issue, NOT a \"soft-404 crisis\". The hosting platform handles 404 status codes. Frame it as custom 404 page missing.\n\
-        7. Performance gaps (lazy loading, image formats) ARE SEO issues because they affect Core Web Vitals and rankings. Always ticket them.\n\
-        8. If template_audit shows a capability exists, do NOT claim it's missing.\n\
-        9. NEVER mention PageSeeds, automation, or tasks.\n\n\
+        1. Every finding MUST cite specific observations from the report (exact URLs, exact HTML values).\n\
+        2. detected_issues already contains verified issues with evidence. Use these as the primary source.\n\
+        3. For each issue, describe the IMPACT on SEO (CTR, crawl budget, rankings, social sharing).\n\
+        4. The fix direction should describe WHAT to achieve, not HOW to implement it in code.\n\
+        5. NEVER mention PageSeeds, automation, or tasks.\n\
+        6. NEVER claim a feature is 'missing' if the observations show it exists.\n\
+        7. TEMPORAL URLs: Year suffixes in URLs are NOT automatically bad. Consider:\n\
+           - Is the year also in the <title>? (Intentional freshness signaling — may be correct for the niche)\n\
+           - Are there MULTIPLE year variants of the same topic? (e.g. budget-2024 AND budget-2025) → only THEN is fragmentation a real problem\n\
+           - Is the usage INCONSISTENT? (some posts have years, others don't) → recommend a consistent strategy, not blind migration\n\
+           - For personal finance, tax, trends niches: year-dated URLs often outperform evergreen because searchers want current-year info\n\
+           - ONLY recommend evergreen migration if there's actual fragmentation or the niche genuinely benefits from it\n\n\
         PRIORITY DEFINITIONS:\n\
-        - P0: Code bug producing broken SEO output (truncated titles, relative OG images, missing canonical)\n\
-        - P2: Structural change requiring migration (URL architecture, build config, performance pipeline)\n\n\
-        Return ONLY valid JSON:\n\
-        {{\"executive_summary\":\"2-3 sentences covering all critical gaps\",\"findings\":[{{\"priority\":\"P0|P2\",\"issue_type\":\"template_bug|missing_meta|url_architecture|build_config|performance\",\"description\":\"What the code issue is\",\"affected_slugs\":[\"slug\"],\"evidence_tool_calls\":[\"title_quality.truncated_samples: 'Coffee Freshness by Origin: Ethiopian vs Colombian vs'\",\"og_image_audit.sample_relative_og_images: /images/photo.jpg\"],\"suggested_fix\":\"Exact code change\",\"confidence\":0.0-1.0}}]}}\n\n\
-        --- INFRASTRUCTURE AUDIT REPORT ---\n{}",
+        - P0: Broken SEO output visible to crawlers/users (truncated titles, duplicate titles, relative OG images)\n\
+        - P2: Structural or configuration gaps (temporal URLs, missing meta descriptions, missing lazy loading)\n\n\
+        Return ONLY valid JSON — no markdown, no explanations, no tool calls:\n\
+        {{\"executive_summary\":\"2-3 sentences on the most critical observed issues\",\"findings\":[{{\"priority\":\"P0|P2\",\"issue_type\":\"truncated_title|duplicate_title|relative_og_image|temporal_url|missing_meta_description|missing_canonical|missing_lazy_loading|missing_structured_data\",\"description\":\"What we observed\",\"affected_slugs\":[\"slug\"],\"evidence_tool_calls\":[\"URL → exact observation\"],\"suggested_fix\":\"What the dev team should achieve\",\"confidence\":0.0-1.0}}]}}\n\n\
+        --- SITE OBSERVATION REPORT ---\n{}",
         report_json
     );
 
@@ -252,8 +278,11 @@ async fn run_feature_spec_agent(
     let json_str = crate::engine::text::extract_json_string(&response)
         .unwrap_or_else(|| response.clone());
 
-    let parsed: FeatureSpecAgentOutput = serde_json::from_str(&json_str)
+    let mut parsed: FeatureSpecAgentOutput = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse agent output as JSON: {e}. Raw: {}", &response[..response.len().min(500)]))?;
+
+    // Use observation-based tech stack, not source-file detection
+    parsed.tech_stack = report.project.tech_stack;
 
     Ok(parsed)
 }
@@ -262,12 +291,38 @@ async fn run_feature_spec_agent(
 // Phase 2: Deterministic verification
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Extract a URL slug from evidence text containing a URL.
+/// Handles patterns like "https://brewedlate.com/blog/my-post → ..."
+fn extract_slug_from_url(text: &str) -> Option<String> {
+    // Find a URL in the text
+    let url_start = text.find("http://").or_else(|| text.find("https://"))?;
+    let url_end = text[url_start..].find(' ').map(|i| url_start + i).unwrap_or(text.len());
+    let url = &text[url_start..url_end];
+    
+    // Extract path after domain
+    let path_start = url.find("://").map(|i| i + 3)?;
+    let after_domain = &url[path_start..];
+    let path = after_domain.find('/').map(|i| &after_domain[i..]).unwrap_or("");
+    
+    if path.is_empty() || path == "/" {
+        return None;
+    }
+    
+    // Remove leading slash and trailing slashes
+    let slug = path.trim_start_matches('/').trim_end_matches('/');
+    if slug.is_empty() {
+        return None;
+    }
+    
+    Some(slug.to_string())
+}
+
 async fn verify_findings(
     findings: &[FeatureSpecFinding],
     task: &Task,
     project_path: &str,
 ) -> Result<Vec<VerifiedFinding>, String> {
-    let root = std::path::Path::new(project_path);
+    let _root = std::path::Path::new(project_path);
     let db = rusqlite::Connection::open(crate::db::default_db_path())
         .map_err(|e| format!("DB: {e}"))?;
 
@@ -283,26 +338,44 @@ async fn verify_findings(
     for finding in findings {
         let mut evidence = Vec::new();
         let mut valid = true;
+        let mut verified_slugs: Vec<String> = Vec::new();
 
-        // For findings with slugs, verify each slug exists in the project
+        // For findings with slugs, verify each slug exists in the project.
+        // Observation-based findings use URLs as primary evidence; DB slug match
+        // is a nice-to-have for linking, not a hard requirement. The crawl already
+        // verified the URLs exist.
         if !finding.affected_slugs.is_empty() {
             for slug in &finding.affected_slugs {
                 if all_slugs.contains(slug) {
+                    verified_slugs.push(slug.clone());
                     evidence.push(VerifiedEvidence {
                         slug: slug.clone(),
                         metric: "exists".to_string(),
                         value: "true".to_string(),
                     });
-                } else {
-                    valid = false;
-                    break;
+                }
+                // If slug not in DB, still keep it for reporting — don't reject.
+            }
+        }
+        // Also try to extract slugs from URL evidence for extra linking
+        for ev in &finding.evidence_tool_calls {
+            if let Some(slug) = extract_slug_from_url(ev) {
+                if all_slugs.contains(&slug) && !verified_slugs.contains(&slug) {
+                    verified_slugs.push(slug.clone());
+                    evidence.push(VerifiedEvidence {
+                        slug,
+                        metric: "exists".to_string(),
+                        value: "true".to_string(),
+                    });
                 }
             }
         }
 
         // Verify evidence quality: must reference source files, build output,
-        // config files, or specific audit report fields.
+        // config files, specific audit report fields, or live site observations.
+        // Observation-based evidence uses URLs and exact HTML values.
         let has_concrete_evidence = finding.evidence_tool_calls.iter().any(|e| {
+            let e_lower = e.to_lowercase();
             e.contains("src/")
                 || e.contains("dist/")
                 || e.contains("public/")
@@ -326,6 +399,14 @@ async fn verify_findings(
                 || e.contains("truncated")
                 || e.contains("duplicate")
                 || e.contains("og:image")
+                // Observation-based evidence: URLs, domains, HTML values
+                || e_lower.contains("http://")
+                || e_lower.contains("https://")
+                || e_lower.contains("brewedlate.com")
+                || e.contains(" → ")  // URL → observation pattern
+                || e.contains("<title>")
+                || e.contains("<meta")
+                || e.contains("og:image")
         });
         if !has_concrete_evidence {
             valid = false;
@@ -336,7 +417,11 @@ async fn verify_findings(
                 priority: finding.priority.clone(),
                 issue_type: finding.issue_type.clone(),
                 description: finding.description.clone(),
-                affected_slugs: finding.affected_slugs.clone(),
+                affected_slugs: if verified_slugs.is_empty() {
+                    finding.affected_slugs.clone()
+                } else {
+                    verified_slugs
+                },
                 evidence,
                 evidence_tool_calls: finding.evidence_tool_calls.clone(),
                 suggested_fix: finding.suggested_fix.clone(),

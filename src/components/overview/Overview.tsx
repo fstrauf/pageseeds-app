@@ -442,6 +442,7 @@ interface OverviewProps {
   onViewChange: (view: import('../../lib/types').View, taskId?: string) => void
   onRunTasks?: (tasks: Task[]) => void
   runCompletedTick?: number
+  onEditProject?: () => void
 }
 
 export function Overview({
@@ -449,6 +450,7 @@ export function Overview({
   onViewChange,
   onRunTasks,
   runCompletedTick = 0,
+  onEditProject,
 }: OverviewProps) {
   const isLiveSiteProject = project?.project_mode === 'live_site'
   const [overview, setOverview] = useState<ProjectOverview | null>(null)
@@ -606,6 +608,18 @@ export function Overview({
       return
     }
     
+    // Feature spec requires a live site URL to crawl
+    if (action.task_type === 'generate_feature_spec') {
+      const hasUrl = project.site_url || project.sitemap_url
+      if (!hasUrl) {
+        setQuickActionError(
+          'Feature Spec requires a Site URL or Sitemap URL. \
+          Set it in Project Settings first.'
+        )
+        return
+      }
+    }
+    
     setRunningActionLabel(action.label)
     setQuickActionError(null)
     try {
@@ -683,6 +697,27 @@ export function Overview({
 
         {!isLiveSiteProject && (
           <SetupWarnings projectId={project.id} onViewChange={onViewChange} />
+        )}
+
+        {/* Site URL required for live crawling features */}
+        {!project.site_url && !project.sitemap_url && (
+          <div className="flex items-start gap-3 rounded-md border px-3 py-2.5 text-sm bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-100">
+            <span className="mt-0.5 shrink-0 font-semibold">⚠</span>
+            <div className="flex-1 min-w-0">
+              <span className="font-medium">Site URL not configured</span>
+              <span className="ml-2 opacity-75">
+                Features like Feature Spec and GSC require a public URL to crawl.
+              </span>
+            </div>
+            {onEditProject && (
+              <button
+                onClick={onEditProject}
+                className="shrink-0 text-xs font-medium underline opacity-80 hover:opacity-100"
+              >
+                Edit Project
+              </button>
+            )}
+          </div>
         )}
 
         {/* Stat cards row */}

@@ -234,6 +234,7 @@ export default function App() {
             onViewChange={handleViewChange}
             onRunTasks={handleRunTasks}
             runCompletedTick={runCompletedTick}
+            onEditProject={activeProject ? () => setModalProject(activeProject) : undefined}
           />
         )}
         {activeView === 'tasks' && (

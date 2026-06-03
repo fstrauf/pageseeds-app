@@ -485,7 +485,7 @@ const DEFINITIONS: &[TaskDefinition] = &[
         task_type: "generate_feature_spec",
         phase: "investigation",
         run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::ArtifactReview,
+        review_surface: TaskReviewSurface::None,
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },

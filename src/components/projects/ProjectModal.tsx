@@ -25,6 +25,12 @@ function deriveDefaultSitemapUrl(rawSiteUrl: string) {
   const trimmed = rawSiteUrl.trim()
   if (!trimmed) return ''
 
+  // If the user already entered a sitemap URL, don't mutate it
+  const lower = trimmed.toLowerCase()
+  if (lower.endsWith('sitemap.xml') || lower.endsWith('sitemap_index.xml') || lower.endsWith('sitemap-index.xml')) {
+    return trimmed
+  }
+
   try {
     const url = new URL(trimmed)
     url.pathname = '/sitemap.xml'

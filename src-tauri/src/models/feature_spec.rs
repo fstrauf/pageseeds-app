@@ -41,6 +41,11 @@ pub struct FeatureSpecAgentOutput {
 
     /// Discovered findings
     pub findings: Vec<FeatureSpecFinding>,
+
+    /// Tech stack detected from observations (not source files).
+    /// Not returned by agent — set deterministically after parsing.
+    #[serde(default)]
+    pub tech_stack: String,
 }
 
 /// A verified finding that has passed deterministic cross-checks.

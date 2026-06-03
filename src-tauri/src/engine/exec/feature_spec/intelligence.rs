@@ -1,30 +1,22 @@
-//! Deterministic infrastructure audit collector for the feature spec generator.
+//! Observation-based SEO audit collector.
 //!
-//! Gathers ONLY repo-level infrastructure signals:
-//! - Template/component SEO implementation
-//! - Build output quality (prerendering, sitemap, robots)
-//! - URL architecture (temporal URLs, trailing slashes)
-//! - Performance signals (lazy loading, image optimization)
-//! - Source verification (ground truth from reading actual files)
+//! Crawls the live site's sitemap, fetches rendered HTML for each URL,
+//! and extracts SEO signals. Framework-agnostic — works with Next.js,
+//! Vue, Astro, or plain HTML. No source-code scanning.
 //!
-//! CRITICAL: This report is for WEBSITE DEVELOPERS only.
-//! NO content-quality metrics (word counts, readability, keyword gaps).
-//! NO PageSeeds-internal state.
+//! Principle: observe symptoms in the output. The repo diagnoses root cause.
 
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-/// Infrastructure audit report. Developer-facing only.
+/// Complete observation report from crawling the live site.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InfrastructureAuditReport {
+pub struct SiteObservationReport {
     pub project: ProjectSummary,
-    pub template_audit: TemplateAudit,
-    pub build_output_audit: BuildOutputAudit,
-    pub url_architecture: UrlArchitecture,
-    pub title_quality: TitleQualityAudit,
-    pub og_image_audit: OgImageAudit,
-    pub performance_signals: PerformanceSignals,
-    pub source_verification: SourceVerification,
+    pub crawl: SitemapCrawl,
+    pub page_observations: Vec<PageObservation>,
+    pub detected_issues: Vec<DetectedIssue>,
+    /// Subset of observations with notable issues (for agent context)
+    pub notable_observations: Vec<PageObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,776 +24,705 @@ pub struct ProjectSummary {
     pub project_id: String,
     pub project_path: String,
     pub tech_stack: String,
-    pub article_count: i64,
-}
-
-/// Deep inspection of SEO template components.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateAudit {
-    /// Whether the SEO head component exists
-    pub seo_head_exists: bool,
-    /// Whether the SEO head component path
-    pub seo_head_path: Option<String>,
-    /// Capabilities detected from reading source
-    pub capabilities_detected: Vec<String>,
-    /// Missing capabilities that SHOULD be present
-    pub gaps_detected: Vec<String>,
-    /// Raw source summary (first 500 chars of key functions)
-    pub source_summary: String,
-}
-
-/// Inspection of build output (dist/ directory).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuildOutputAudit {
-    /// Whether dist/ exists and has HTML files
-    pub has_built_output: bool,
-    /// Whether sitemap.xml exists in dist/
-    pub has_sitemap: bool,
-    /// Whether robots.txt exists in dist/
-    pub has_robots_txt: bool,
-    /// Whether a 404.html exists
-    pub has_404_page: bool,
-    /// Number of HTML files in dist/
-    pub html_file_count: i64,
-    /// Sampled built pages and their meta tag coverage
-    pub sampled_pages: Vec<BuiltPageSample>,
+    pub site_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuiltPageSample {
+pub struct SitemapCrawl {
+    pub site_url: String,
+    pub total_urls: usize,
+    pub blog_urls: Vec<String>,
+    pub other_urls: Vec<String>,
+    pub crawl_errors: Vec<String>,
+}
+
+/// Observed SEO signals from a single page's rendered HTML.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageObservation {
+    pub url: String,
     pub slug: String,
-    pub has_title: bool,
-    pub has_meta_description: bool,
-    pub has_canonical: bool,
-    pub has_og_tags: bool,
+    pub is_blog: bool,
+    pub title: Option<String>,
+    pub title_length: usize,
+    pub meta_description: Option<String>,
+    pub meta_description_length: usize,
+    pub canonical: Option<String>,
+    pub og_title: Option<String>,
+    pub og_description: Option<String>,
+    pub og_image: Option<String>,
+    pub og_image_is_absolute: bool,
+    pub twitter_image: Option<String>,
     pub has_json_ld: bool,
-    pub has_viewport: bool,
-    pub title_text: String,
-    pub description_text: String,
-}
-
-/// URL architecture issues requiring developer intervention.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UrlArchitecture {
-    /// Count of slugs with year suffixes (e.g. "-2025")
-    pub temporal_url_count: i64,
-    /// Sample temporal URLs
-    pub sample_temporal_urls: Vec<String>,
-    /// Whether trailing slashes are consistent across the site
-    pub trailing_slash_consistent: Option<bool>,
-    /// How the blog parser derives slugs from filenames
-    pub slug_derivation_logic: String,
-}
-
-/// Performance and optimization signals from source inspection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PerformanceSignals {
-    /// Whether images use lazy loading
-    pub has_lazy_loading: bool,
-    /// Whether WebP or AVIF images are used
-    pub has_modern_image_formats: bool,
-    /// Whether scripts use async/defer
-    pub has_script_optimization: bool,
-    /// Whether a performance budget or bundle analyzer exists
-    pub has_bundle_analysis: bool,
-    /// Key performance-related config found
-    pub config_notes: Vec<String>,
-}
-
-/// Title quality issues that affect rendered HTML output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TitleQualityAudit {
-    /// Number of articles with truncated titles (cut off mid-sentence)
-    pub truncated_title_count: i64,
-    /// Sample truncated titles with their slugs
-    pub truncated_samples: Vec<TitleIssue>,
-    /// Number of duplicate titles (same title used by multiple articles)
-    pub duplicate_title_count: i64,
-    /// Sample duplicate titles
-    pub duplicate_samples: Vec<DuplicateTitle>,
+    pub json_ld_types: Vec<String>,
+    pub h1_count: usize,
+    pub h2_count: usize,
+    pub images: Vec<ImageObservation>,
+    pub internal_link_count: usize,
+    pub fetch_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TitleIssue {
-    pub slug: String,
-    pub title: String,
-    pub issue: String,
+pub struct ImageObservation {
+    pub src: String,
+    pub alt: Option<String>,
+    pub loading: Option<String>,
+    pub width: Option<String>,
+    pub height: Option<String>,
 }
 
+/// A detected issue with specific evidence from observations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DuplicateTitle {
-    pub title: String,
-    pub slugs: Vec<String>,
+pub struct DetectedIssue {
+    pub issue_type: String,
+    pub severity: String,
+    pub description: String,
+    pub affected_urls: Vec<String>,
+    pub evidence: Vec<String>,
 }
 
-/// OG image URL audit — checks for relative OG:image URLs in built HTML.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OgImageAudit {
-    /// Articles with relative OG image URLs
-    pub relative_og_image_count: i64,
-    /// Sample slugs with relative OG images
-    pub sample_relative_og_images: Vec<OgImageIssue>,
-}
+pub async fn collect_site_observations(
+    site_url: String,
+    project_id: String,
+    project_path: String,
+) -> Result<SiteObservationReport, String> {
+    // ── Phase 1: Crawl sitemap ──────────────────────────────────────────────
+    let crawl = crawl_sitemap(&site_url).await?;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OgImageIssue {
-    pub slug: String,
-    pub og_image_url: String,
-}
+    // ── Phase 2: Inspect pages ──────────────────────────────────────────────
+    let observations = inspect_pages(&crawl.blog_urls, &crawl.other_urls).await;
 
-/// Ground-truth verification from reading actual source/build files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceVerification {
-    /// Key source files found and their purposes
-    pub key_source_files: Vec<SourceFileNote>,
-    /// Frontmatter sample check from MDX files
-    pub frontmatter_sample: FrontmatterSampleCheck,
-}
+    // ── Phase 3: Detect issues ──────────────────────────────────────────────
+    let detected_issues = detect_issues(&observations);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceFileNote {
-    pub path: String,
-    pub purpose: String,
-}
+    // ── Tech stack: observation-based only ───────────────────────────────────
+    // We do NOT inspect source files (package.json, config files) because that
+    // misidentifies frameworks. Detect from rendered HTML signatures if present.
+    let tech_stack = detect_tech_stack_from_observations(&observations);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FrontmatterSampleCheck {
-    pub files_checked: i64,
-    pub all_have_title: bool,
-    pub all_have_description: bool,
-    pub malformed_count: i64,
-}
-
-pub fn collect_infrastructure_audit(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &str,
-) -> Result<InfrastructureAuditReport, String> {
-    Ok(InfrastructureAuditReport {
-        project: collect_project_summary(conn, project_id, project_path)?,
-        template_audit: collect_template_audit(project_path)?,
-        build_output_audit: collect_build_output_audit(project_path)?,
-        url_architecture: collect_url_architecture(conn, project_id, project_path)?,
-        title_quality: collect_title_quality(conn, project_id, project_path)?,
-        og_image_audit: collect_og_image_audit(project_path)?,
-        performance_signals: collect_performance_signals(project_path)?,
-        source_verification: collect_source_verification(project_path)?,
+    // Build compact agent report: only issues + minimal metadata.
+    // NEVER send full page_observations to the agent — they bloat the prompt.
+    Ok(SiteObservationReport {
+        project: ProjectSummary {
+            project_id,
+            project_path,
+            tech_stack,
+            site_url: Some(site_url),
+        },
+        crawl,
+        page_observations: observations,
+        detected_issues,
+        notable_observations: Vec::new(), // not used in prompt
     })
 }
 
-fn collect_project_summary(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &str,
-) -> Result<ProjectSummary, String> {
-    let articles = crate::engine::task_store::list_articles(conn, project_id)
-        .map_err(|e| format!("list_articles: {e}"))?;
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 1: Sitemap Crawler
+// ═══════════════════════════════════════════════════════════════════════════════
 
-    let tech_stack = crate::content::ops::detect_tech_stack(std::path::Path::new(project_path));
+async fn crawl_sitemap(site_url: &str) -> Result<SitemapCrawl, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
-    Ok(ProjectSummary {
-        project_id: project_id.to_string(),
-        project_path: project_path.to_string(),
-        tech_stack,
-        article_count: articles.len() as i64,
-    })
-}
-
-fn collect_template_audit(project_path: &str) -> Result<TemplateAudit, String> {
-    let root = std::path::Path::new(project_path);
-
-    // Find SEO head component
-    let seo_head_paths = [
-        "src/components/SEOHead.vue",
-        "src/components/SeoHead.vue",
-        "src/components/SEO.tsx",
-        "src/components/SEO.jsx",
-        "src/components/Head.tsx",
-        "app/components/SEOHead.vue",
-        "components/SEOHead.vue",
-    ];
-
-    let mut seo_head_path = None;
-    for path in &seo_head_paths {
-        if root.join(path).exists() {
-            seo_head_path = Some(path.to_string());
-            break;
-        }
-    }
-
-    let mut capabilities = Vec::new();
-    let mut gaps = Vec::new();
-    let mut source_summary = String::new();
-
-    if let Some(ref path) = seo_head_path {
-        let content = std::fs::read_to_string(root.join(path)).unwrap_or_default();
-        source_summary = summarize_source(&content, 800);
-
-        // Detect capabilities
-        if content.contains("useHead") || content.contains("useSeoMeta") || content.contains("@unhead/vue") || content.contains("next/head") {
-            capabilities.push("head_injection_library".to_string());
-        }
-        if content.contains("title") {
-            capabilities.push("title".to_string());
-        } else {
-            gaps.push("missing_title_handling".to_string());
-        }
-        if content.contains("description") || content.contains("meta") {
-            capabilities.push("meta_description".to_string());
-        } else {
-            gaps.push("missing_meta_description".to_string());
-        }
-        if content.contains("canonical") || content.contains("rel: 'canonical'") {
-            capabilities.push("canonical".to_string());
-        } else {
-            gaps.push("missing_canonical".to_string());
-        }
-        if content.contains("og:") || content.contains("openGraph") || content.contains("ogImage") || content.contains("og:image") {
-            capabilities.push("open_graph".to_string());
-        } else {
-            gaps.push("missing_open_graph".to_string());
-        }
-        if content.contains("twitter:") || content.contains("twitterImage") {
-            capabilities.push("twitter_cards".to_string());
-        }
-        if content.contains("json") || content.contains("ld+json") || content.contains("schema") || content.contains("structuredData") {
-            capabilities.push("json_ld".to_string());
-        } else {
-            gaps.push("missing_json_ld".to_string());
-        }
-        if content.contains("lastModified") || content.contains("last-modified") || content.contains("modified_time") || content.contains("dateModified") {
-            capabilities.push("last_modified".to_string());
-        }
-        if content.contains("hreflang") || content.contains("alternate") {
-            capabilities.push("hreflang".to_string());
-        }
-        if content.contains("viewport") || content.contains("width=device-width") {
-            capabilities.push("viewport".to_string());
-        } else {
-            gaps.push("missing_viewport".to_string());
-        }
-        if content.contains("robots") || content.contains("noindex") {
-            capabilities.push("robots_meta".to_string());
-        }
-        if content.contains("Article") || content.contains("BlogPosting") {
-            capabilities.push("article_schema".to_string());
-        }
+    // Determine sitemap URLs to try.
+    // If the user already provided a sitemap URL (ends with sitemap.xml etc),
+    // use it directly. Otherwise try common locations under the base URL.
+    let trimmed = site_url.trim_end_matches('/');
+    let sitemap_urls: Vec<String> = if trimmed.ends_with("sitemap.xml")
+        || trimmed.ends_with("sitemap_index.xml")
+        || trimmed.ends_with("sitemap-index.xml")
+    {
+        vec![trimmed.to_string()]
     } else {
-        gaps.push("missing_seo_head_component".to_string());
-    }
+        vec![
+            format!("{}/sitemap.xml", trimmed),
+            format!("{}/sitemap_index.xml", trimmed),
+            format!("{}/sitemap-index.xml", trimmed),
+        ]
+    };
 
-    // Also check index.html and App.vue for viewport if not in SEOHead
-    if !capabilities.contains(&"viewport".to_string()) {
-        for alt_path in ["src/App.vue", "index.html", "public/index.html"] {
-            let alt = root.join(alt_path);
-            if alt.exists() {
-                let content = std::fs::read_to_string(&alt).unwrap_or_default();
-                if content.contains("viewport") || content.contains("width=device-width") {
-                    capabilities.push("viewport".to_string());
-                    gaps.retain(|g| g != "missing_viewport");
-                    break;
-                }
+    let mut sitemap_xml = String::new();
+    let mut sitemap_errors = Vec::new();
+
+    for url in &sitemap_urls {
+        match client.get(url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                sitemap_xml = resp.text().await
+                    .map_err(|e| format!("Failed to read sitemap body: {e}"))?;
+                break;
+            }
+            Ok(resp) => {
+                sitemap_errors.push(format!("{} returned {}", url, resp.status()));
+            }
+            Err(e) => {
+                sitemap_errors.push(format!("{} fetch error: {}", url, e));
             }
         }
     }
 
-    Ok(TemplateAudit {
-        seo_head_exists: seo_head_path.is_some(),
-        seo_head_path,
-        capabilities_detected: capabilities,
-        gaps_detected: gaps,
-        source_summary,
+    if sitemap_xml.is_empty() {
+        return Err(format!(
+            "No sitemap found. Tried: {:?}. Errors: {:?}",
+            sitemap_urls, sitemap_errors
+        ));
+    }
+
+    // Extract URLs from sitemap XML using regex
+    let loc_re = regex::Regex::new(r"<loc>([^<]+)</loc>").unwrap();
+    let mut all_urls: Vec<String> = loc_re.captures_iter(&sitemap_xml)
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        .collect();
+
+    // Deduplicate
+    all_urls.sort();
+    all_urls.dedup();
+
+    // Limit total URLs to prevent timeouts
+    const MAX_URLS: usize = 150;
+    let was_truncated = all_urls.len() > MAX_URLS;
+    if was_truncated {
+        all_urls.truncate(MAX_URLS);
+    }
+
+    // Categorize URLs
+    let mut blog_urls = Vec::new();
+    let mut other_urls = Vec::new();
+
+    for url in &all_urls {
+        let is_blog = url.contains("/blog/") || url.contains("/posts/") || url.contains("/article/");
+        if is_blog {
+            blog_urls.push(url.clone());
+        } else {
+            other_urls.push(url.clone());
+        }
+    }
+
+    // Prioritize blog URLs — if we hit the limit, keep all blogs and sample others
+    let total_urls = all_urls.len();
+
+    Ok(SitemapCrawl {
+        site_url: site_url.to_string(),
+        total_urls,
+        blog_urls,
+        other_urls,
+        crawl_errors: if was_truncated {
+            vec![format!("Sitemap had >{} URLs; truncated to {}", MAX_URLS, total_urls)]
+        } else {
+            Vec::new()
+        },
     })
 }
 
-fn collect_build_output_audit(project_path: &str) -> Result<BuildOutputAudit, String> {
-    let root = std::path::Path::new(project_path);
-    let dist = root.join("dist");
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 2: HTML Inspector
+// ═══════════════════════════════════════════════════════════════════════════════
 
-    if !dist.exists() {
-        return Ok(BuildOutputAudit {
-            has_built_output: false,
-            has_sitemap: false,
-            has_robots_txt: false,
-            has_404_page: false,
-            html_file_count: 0,
-            sampled_pages: Vec::new(),
+async fn inspect_pages(blog_urls: &[String], other_urls: &[String]) -> Vec<PageObservation> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("Failed to build HTTP client");
+
+    // Sample blog URLs to keep crawl fast
+    const MAX_BLOG_SAMPLES: usize = 25;
+    let blog_sample: Vec<(String, bool)> = blog_urls.iter()
+        .take(MAX_BLOG_SAMPLES)
+        .map(|u| (u.clone(), true))
+        .collect();
+
+    // Limit non-blog pages
+    let other_sample: Vec<(String, bool)> = other_urls.iter()
+        .take(5)
+        .map(|u| (u.clone(), false))
+        .collect();
+
+    let urls_to_fetch: Vec<(String, bool)> = blog_sample.into_iter()
+        .chain(other_sample.into_iter())
+        .collect();
+
+    // Concurrent fetching with semaphore
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for (url, is_blog) in urls_to_fetch {
+        let permit = semaphore.clone().acquire_owned().await.expect("semaphore");
+        let client = client.clone();
+        let slug = url.rsplit('/').next().unwrap_or("").to_string();
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            inspect_single_page(&url, &slug, is_blog, &client).await
         });
     }
 
-    // Check for sitemap, robots, 404
-    let has_sitemap = dist.join("sitemap.xml").exists()
-        || dist.join("sitemap-index.xml").exists()
-        || root.join("public/sitemap.xml").exists();
-    let has_robots_txt = dist.join("robots.txt").exists()
-        || root.join("public/robots.txt").exists();
-    let has_404 = dist.join("404.html").exists()
-        || dist.join("404/index.html").exists();
-
-    // Count HTML files
-    let mut html_count = 0i64;
-    fn count_html(dir: &std::path::Path, count: &mut i64) {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    count_html(&path, count);
-                } else if path.extension().and_then(|e| e.to_str()) == Some("html") {
-                    *count += 1;
-                }
-            }
+    let mut results = Vec::new();
+    while let Some(res) = join_set.join_next().await {
+        if let Ok(obs) = res {
+            results.push(obs);
         }
     }
-    count_html(&dist, &mut html_count);
 
-    // Sample built pages for meta coverage
-    let sampled = sample_built_pages(root, &dist);
-
-    Ok(BuildOutputAudit {
-        has_built_output: html_count > 0,
-        has_sitemap,
-        has_robots_txt,
-        has_404_page: has_404,
-        html_file_count: html_count,
-        sampled_pages: sampled,
-    })
+    results
 }
 
-fn sample_built_pages(root: &std::path::Path, dist: &std::path::Path) -> Vec<BuiltPageSample> {
-    let mut samples = Vec::new();
-    let blog_dir = dist.join("blog");
+async fn inspect_single_page(
+    url: &str,
+    slug: &str,
+    is_blog: bool,
+    client: &reqwest::Client,
+) -> PageObservation {
+    let fetch_result = client.get(url).send().await;
 
-    let target_dir = if blog_dir.exists() { &blog_dir } else { dist };
-    if !target_dir.exists() {
-        return samples;
-    }
-
-    if let Ok(entries) = std::fs::read_dir(target_dir) {
-        for entry in entries.flatten() {
-            if samples.len() >= 3 {
-                break;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("html") {
-                continue;
-            }
-
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            let slug = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
-
-            let title_re = regex::Regex::new(r"<title>(.*?)</title>").unwrap();
-            let has_title = title_re.is_match(&content);
-            let title_text = title_re.captures(&content)
-                .and_then(|c| c.get(1))
-                .map(|m| char_limit(m.as_str(), 80).to_string())
-                .unwrap_or_default();
-
-            let desc_re = regex::Regex::new(r#"<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>"#).unwrap();
-            let has_desc = desc_re.is_match(&content);
-            let desc_text = desc_re.captures(&content)
-                .and_then(|c| c.get(1))
-                .map(|m| char_limit(m.as_str(), 80).to_string())
-                .unwrap_or_default();
-
-            let canonical_re = regex::Regex::new(r#"<link[^>]*rel=["']canonical["'][^>]*>"#).unwrap();
-            let has_canonical = canonical_re.is_match(&content);
-
-            let og_re = regex::Regex::new(r#"<meta[^>]*property=["']og:"#).unwrap();
-            let has_og = og_re.is_match(&content);
-
-            let jsonld_re = regex::Regex::new(r#"<script[^>]*type=["']application/ld\+json["']"#).unwrap();
-            let has_jsonld = jsonld_re.is_match(&content);
-
-            let viewport_re = regex::Regex::new(r#"<meta[^>]*name=["']viewport["']"#).unwrap();
-            let has_viewport = viewport_re.is_match(&content);
-
-            samples.push(BuiltPageSample {
-                slug,
-                has_title,
-                has_meta_description: has_desc,
-                has_canonical,
-                has_og_tags: has_og,
-                has_json_ld: has_jsonld,
-                has_viewport,
-                title_text,
-                description_text: desc_text,
-            });
-        }
-    }
-
-    samples
-}
-
-fn collect_url_architecture(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &str,
-) -> Result<UrlArchitecture, String> {
-    let articles = crate::engine::task_store::list_articles(conn, project_id)
-        .map_err(|e| format!("list_articles: {e}"))?;
-
-    // Temporal URL detection: match year tokens ANYWHERE in the slug.
-    // Year suffixes (-2025 at end) are the most critical — they force annual
-    // URL migration. Year tokens in the middle are still dated but less urgent.
-    let temporal_re = regex::Regex::new(r"-\d{4}").unwrap();
-    let prefix_re = regex::Regex::new(r"^\d+-").unwrap();
-
-    let mut temporal_count = 0i64;
-    let mut sample_temporal: Vec<String> = Vec::new();
-
-    for a in &articles {
-        let slug_no_prefix = prefix_re.replace(&a.url_slug, "");
-        if temporal_re.is_match(&slug_no_prefix) {
-            temporal_count += 1;
-            if sample_temporal.len() < 3 {
-                sample_temporal.push(a.url_slug.clone());
+    let (html, fetch_error) = match fetch_result {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.text().await {
+                Ok(text) => (text, None),
+                Err(e) => (String::new(), Some(format!("body read error: {e}"))),
             }
         }
-    }
-
-    // Check blog parser slug logic
-    let slug_logic = check_blog_parser(project_path);
-
-    Ok(UrlArchitecture {
-        temporal_url_count: temporal_count,
-        sample_temporal_urls: sample_temporal,
-        trailing_slash_consistent: None, // Would need router config analysis
-        slug_derivation_logic: slug_logic,
-    })
-}
-
-fn collect_title_quality(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &str,
-) -> Result<TitleQualityAudit, String> {
-    let articles = crate::engine::task_store::list_articles(conn, project_id)
-        .map_err(|e| format!("list_articles: {e}"))?;
-
-    let content_dirs = crate::content::article_resolver::discover_content_dirs(std::path::Path::new(project_path));
-    let content_dirs_refs: Vec<&str> = content_dirs.iter().map(|s| s.as_str()).collect();
-    let repo_root = std::path::Path::new(project_path);
-
-    let mut truncated: Vec<TitleIssue> = Vec::new();
-    let mut title_counts: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-
-    // Truncation indicators: titles ending mid-word with these patterns
-    let truncation_patterns = [
-        ":", " vs", " and", " or", " -", "—", "–", " with", " for", " by",
-    ];
-
-    for a in &articles {
-        let resolved = crate::content::article_resolver::resolve_article_file(
-            repo_root, &a.file, &content_dirs_refs,
-        );
-        if !resolved.found {
-            continue;
+        Ok(resp) => {
+            (String::new(), Some(format!("HTTP {}", resp.status())))
         }
-        let content = std::fs::read_to_string(&resolved._absolute_path).unwrap_or_default();
-        let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(&content) else {
-            continue;
+        Err(e) => {
+            (String::new(), Some(format!("fetch error: {e}")))
+        }
+    };
+
+    if let Some(ref err) = fetch_error {
+        return PageObservation {
+            url: url.to_string(),
+            slug: slug.to_string(),
+            is_blog,
+            title: None,
+            title_length: 0,
+            meta_description: None,
+            meta_description_length: 0,
+            canonical: None,
+            og_title: None,
+            og_description: None,
+            og_image: None,
+            og_image_is_absolute: false,
+            twitter_image: None,
+            has_json_ld: false,
+            json_ld_types: Vec::new(),
+            h1_count: 0,
+            h2_count: 0,
+            images: Vec::new(),
+            internal_link_count: 0,
+            fetch_error: Some(err.clone()),
         };
-        let Ok(fm) = crate::content::frontmatter::parse(fm_raw) else {
-            continue;
-        };
+    }
 
-        if let Some(title) = fm.parsed.get("title").and_then(|v| v.as_str()) {
-            let trimmed = title.trim();
+    let document = scraper::Html::parse_document(&html);
 
-            // Check for truncation: ends with a pattern that suggests mid-sentence cutoff
-            let is_truncated = truncation_patterns.iter().any(|pat| trimmed.ends_with(pat));
-            if is_truncated && truncated.len() < 5 {
-                truncated.push(TitleIssue {
-                    slug: a.url_slug.clone(),
-                    title: trimmed.to_string(),
-                    issue: "title appears truncated (ends mid-sentence)".to_string(),
-                });
-            }
+    // Title
+    let title = document.select(&scraper::Selector::parse("title").unwrap())
+        .next()
+        .map(|e| e.text().collect::<String>().trim().to_string());
+    let title_length = title.as_ref().map(|t| t.len()).unwrap_or(0);
 
-            // Track for duplicate detection
-            let lower = trimmed.to_lowercase();
-            if !lower.is_empty() {
-                title_counts.entry(lower).or_default().push(a.url_slug.clone());
+    // Meta description
+    let meta_desc_sel = scraper::Selector::parse(r#"meta[name="description"]"#).unwrap();
+    let meta_description = document.select(&meta_desc_sel)
+        .next()
+        .and_then(|e| e.value().attr("content"))
+        .map(|s| s.to_string());
+    let meta_description_length = meta_description.as_ref().map(|d| d.len()).unwrap_or(0);
+
+    // Canonical
+    let canonical_sel = scraper::Selector::parse(r#"link[rel="canonical"]"#).unwrap();
+    let canonical = document.select(&canonical_sel)
+        .next()
+        .and_then(|e| e.value().attr("href"))
+        .map(|s| s.to_string());
+
+    // OG tags
+    let og_title_sel = scraper::Selector::parse(r#"meta[property="og:title"]"#).unwrap();
+    let og_title = document.select(&og_title_sel)
+        .next()
+        .and_then(|e| e.value().attr("content"))
+        .map(|s| s.to_string());
+
+    let og_desc_sel = scraper::Selector::parse(r#"meta[property="og:description"]"#).unwrap();
+    let og_description = document.select(&og_desc_sel)
+        .next()
+        .and_then(|e| e.value().attr("content"))
+        .map(|s| s.to_string());
+
+    let og_image_sel = scraper::Selector::parse(r#"meta[property="og:image"]"#).unwrap();
+    let og_image = document.select(&og_image_sel)
+        .next()
+        .and_then(|e| e.value().attr("content"))
+        .map(|s| s.to_string());
+    let og_image_is_absolute = og_image.as_ref()
+        .map(|url| url.starts_with("http://") || url.starts_with("https://") || url.starts_with("//"))
+        .unwrap_or(true); // if no og:image, consider it "not a problem"
+
+    // Twitter image
+    let tw_image_sel = scraper::Selector::parse(r#"meta[name="twitter:image"], meta[property="twitter:image"]"#).unwrap();
+    let twitter_image = document.select(&tw_image_sel)
+        .next()
+        .and_then(|e| e.value().attr("content"))
+        .map(|s| s.to_string());
+
+    // JSON-LD
+    let jsonld_sel = scraper::Selector::parse(r#"script[type="application/ld+json"]"#).unwrap();
+    let mut json_ld_types = Vec::new();
+    for el in document.select(&jsonld_sel) {
+        let text = el.text().collect::<String>();
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(ty) = val.get("@type").and_then(|t| t.as_str()) {
+                json_ld_types.push(ty.to_string());
             }
         }
     }
+    let has_json_ld = !json_ld_types.is_empty();
 
-    // Find duplicates
-    let mut duplicate_samples: Vec<DuplicateTitle> = Vec::new();
-    for (title, slugs) in &title_counts {
-        if slugs.len() > 1 {
-            duplicate_samples.push(DuplicateTitle {
-                title: title.clone(),
-                slugs: slugs.clone(),
-            });
-        }
-    }
-    duplicate_samples.sort_by(|a, b| b.slugs.len().cmp(&a.slugs.len()));
-    duplicate_samples.truncate(3);
+    // Headings
+    let h1_sel = scraper::Selector::parse("h1").unwrap();
+    let h1_count = document.select(&h1_sel).count();
 
-    Ok(TitleQualityAudit {
-        truncated_title_count: truncated.len() as i64,
-        truncated_samples: truncated,
-        duplicate_title_count: duplicate_samples.len() as i64,
-        duplicate_samples,
-    })
-}
+    let h2_sel = scraper::Selector::parse("h2").unwrap();
+    let h2_count = document.select(&h2_sel).count();
 
-fn collect_og_image_audit(project_path: &str) -> Result<OgImageAudit, String> {
-    let root = std::path::Path::new(project_path);
-    let dist_blog = root.join("dist/blog");
-
-    let mut relative_count = 0i64;
-    let mut samples: Vec<OgImageIssue> = Vec::new();
-
-    if !dist_blog.exists() {
-        return Ok(OgImageAudit {
-            relative_og_image_count: 0,
-            sample_relative_og_images: Vec::new(),
+    // Images
+    let img_sel = scraper::Selector::parse("img").unwrap();
+    let mut images = Vec::new();
+    for img in document.select(&img_sel) {
+        let src = img.value().attr("src").unwrap_or("").to_string();
+        if src.is_empty() { continue; }
+        images.push(ImageObservation {
+            src,
+            alt: img.value().attr("alt").map(|s| s.to_string()),
+            loading: img.value().attr("loading").map(|s| s.to_string()),
+            width: img.value().attr("width").map(|s| s.to_string()),
+            height: img.value().attr("height").map(|s| s.to_string()),
         });
     }
 
-    let og_re = regex::Regex::new(r#"<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']*)["']"#).unwrap();
+    // Internal links (simple heuristic: same domain)
+    let a_sel = scraper::Selector::parse("a[href]").unwrap();
+    let internal_link_count = document.select(&a_sel)
+        .filter_map(|a| a.value().attr("href"))
+        .filter(|href| href.starts_with('/') || href.starts_with(url))
+        .count();
 
-    if let Ok(entries) = std::fs::read_dir(&dist_blog) {
-        for entry in entries.flatten() {
-            if samples.len() >= 5 {
-                break;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("html") {
-                continue;
-            }
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-
-            if let Some(cap) = og_re.captures(&content) {
-                let url = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-                // Relative URL: starts with / but not //, or is just a path
-                let is_relative = !url.is_empty()
-                    && !url.starts_with("http://")
-                    && !url.starts_with("https://")
-                    && !url.starts_with("//");
-                if is_relative {
-                    relative_count += 1;
-                    let slug = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
-                    samples.push(OgImageIssue {
-                        slug,
-                        og_image_url: url.to_string(),
-                    });
-                }
-            }
-        }
+    PageObservation {
+        url: url.to_string(),
+        slug: slug.to_string(),
+        is_blog,
+        title,
+        title_length,
+        meta_description,
+        meta_description_length,
+        canonical,
+        og_title,
+        og_description,
+        og_image,
+        og_image_is_absolute,
+        twitter_image,
+        has_json_ld,
+        json_ld_types,
+        h1_count,
+        h2_count,
+        images,
+        internal_link_count,
+        fetch_error: None,
     }
-
-    Ok(OgImageAudit {
-        relative_og_image_count: relative_count,
-        sample_relative_og_images: samples,
-    })
 }
 
-fn collect_performance_signals(project_path: &str) -> Result<PerformanceSignals, String> {
-    let root = std::path::Path::new(project_path);
-    let mut config_notes = Vec::new();
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 3: Issue Detector
+// ═══════════════════════════════════════════════════════════════════════════════
 
-    // Check for lazy loading in components
-    let mut has_lazy = false;
-    let mut has_modern_images = false;
-    let mut has_script_opt = false;
-    let mut has_bundle = false;
+fn detect_issues(observations: &[PageObservation]) -> Vec<DetectedIssue> {
+    let mut issues: Vec<DetectedIssue> = Vec::new();
 
-    // Scan src/ for lazy loading patterns
-    let entries = walkdir::WalkDir::new(root.join("src"))
-        .max_depth(3)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy();
-            name.ends_with(".vue") || name.ends_with(".tsx") || name.ends_with(".jsx") || name.ends_with(".ts")
+    // 1. Truncated titles
+    let truncation_patterns = [":", " vs", " and", " or", " for", " with", " -", "—", "–"];
+    let truncated: Vec<&PageObservation> = observations.iter()
+        .filter(|o| o.is_blog)
+        .filter(|o| {
+            o.title.as_ref().map(|t| {
+                let trimmed = t.trim();
+                truncation_patterns.iter().any(|pat| trimmed.ends_with(pat))
+            }).unwrap_or(false)
         })
-        .take(50);
-    for entry in entries {
-            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                if content.contains("loading=\"lazy\"") || content.contains("loading=\"lazy\"") {
-                    has_lazy = true;
-                }
-                if content.contains(".webp") || content.contains(".avif") || content.contains("format=webp") {
-                    has_modern_images = true;
-                }
-                if content.contains("async") || content.contains("defer") {
-                    has_script_opt = true;
-                }
-            }
-        }
+        .collect();
 
-    // Check vite config for bundle analysis
-    let vite_config = root.join("vite.config.ts");
-    if vite_config.exists() {
-        if let Ok(content) = std::fs::read_to_string(&vite_config) {
-            if content.contains("visualizer") || content.contains("bundle") || content.contains("analyzer") {
-                has_bundle = true;
-                config_notes.push("vite.config.ts has bundle analyzer plugin".to_string());
-            }
-            if content.contains("compress") || content.contains("gzip") || content.contains("brotli") {
-                config_notes.push("vite.config.ts has compression config".to_string());
-            }
-        }
+    if !truncated.is_empty() {
+        let affected: Vec<String> = truncated.iter().map(|o| o.url.clone()).collect();
+        let evidence: Vec<String> = truncated.iter()
+            .take(3)
+            .map(|o| format!("{} → title: '{}'", o.url, o.title.as_ref().unwrap()))
+            .collect();
+        issues.push(DetectedIssue {
+            issue_type: "truncated_title".to_string(),
+            severity: "P0".to_string(),
+            description: format!(
+                "{} blog posts have <title> tags truncated mid-sentence, producing broken SEO output.",
+                truncated.len()
+            ),
+            affected_urls: affected,
+            evidence,
+        });
     }
 
-    // Check next config
-    let next_config = root.join("next.config.js");
-    if next_config.exists() {
-        config_notes.push("Next.js config found — check for image optimization settings".to_string());
-    }
-
-    // Check for image optimization libraries
-    let package_json = root.join("package.json");
-    if package_json.exists() {
-        if let Ok(content) = std::fs::read_to_string(&package_json) {
-            if content.contains("@nuxt/image") || content.contains("next/image") || content.contains("vite-imagetools") {
-                has_modern_images = true;
-                config_notes.push("Image optimization library in dependencies".to_string());
+    // 2. Duplicate titles
+    let mut title_map: std::collections::HashMap<String, Vec<&PageObservation>> = std::collections::HashMap::new();
+    for o in observations.iter().filter(|o| o.is_blog) {
+        if let Some(ref title) = o.title {
+            let key = title.trim().to_lowercase();
+            if !key.is_empty() {
+                title_map.entry(key).or_default().push(o);
             }
         }
     }
+    let duplicates: Vec<(String, Vec<&PageObservation>)> = title_map.into_iter()
+        .filter(|(_, v)| v.len() > 1)
+        .map(|(k, v)| (k, v))
+        .collect();
 
-    Ok(PerformanceSignals {
-        has_lazy_loading: has_lazy,
-        has_modern_image_formats: has_modern_images,
-        has_script_optimization: has_script_opt,
-        has_bundle_analysis: has_bundle,
-        config_notes,
-    })
-}
-
-fn collect_source_verification(project_path: &str) -> Result<SourceVerification, String> {
-    let root = std::path::Path::new(project_path);
-
-    // Key source files
-    let mut key_files = Vec::new();
-    for (path, purpose) in [
-        ("src/components/SEOHead.vue", "Injects meta tags, titles, JSON-LD"),
-        ("src/views/BlogPostPage.vue", "Renders blog posts, passes SEO data"),
-        ("src/blog/index.ts", "Parses MDX, derives slugs"),
-        ("src/App.vue", "Root layout"),
-        ("vite.config.ts", "Build configuration"),
-        ("src/router/index.ts", "URL routing rules"),
-    ] {
-        if root.join(path).exists() {
-            key_files.push(SourceFileNote {
-                path: path.to_string(),
-                purpose: purpose.to_string(),
-            });
+    if !duplicates.is_empty() {
+        let mut affected = Vec::new();
+        let mut evidence = Vec::new();
+        for (title, pages) in &duplicates {
+            for p in pages {
+                affected.push(p.url.clone());
+            }
+            evidence.push(format!(
+                "Title '{}' used by {} pages: {}",
+                title,
+                pages.len(),
+                pages.iter().map(|p| p.slug.clone()).collect::<Vec<_>>().join(", ")
+            ));
         }
+        issues.push(DetectedIssue {
+            issue_type: "duplicate_title".to_string(),
+            severity: "P0".to_string(),
+            description: format!(
+                "{} duplicate <title> strings detected across blog posts.",
+                duplicates.len()
+            ),
+            affected_urls: affected,
+            evidence,
+        });
     }
 
-    // Sample frontmatter
-    let fm_check = sample_frontmatter(root);
+    // 3. Relative OG images
+    let relative_og: Vec<&PageObservation> = observations.iter()
+        .filter(|o| o.is_blog)
+        .filter(|o| o.og_image.is_some() && !o.og_image_is_absolute)
+        .collect();
 
-    Ok(SourceVerification {
-        key_source_files: key_files,
-        frontmatter_sample: fm_check,
-    })
-}
+    if !relative_og.is_empty() {
+        let affected: Vec<String> = relative_og.iter().map(|o| o.url.clone()).collect();
+        let evidence: Vec<String> = relative_og.iter()
+            .take(5)
+            .map(|o| format!("{} → og:image: '{}'", o.url, o.og_image.as_ref().unwrap()))
+            .collect();
+        issues.push(DetectedIssue {
+            issue_type: "relative_og_image".to_string(),
+            severity: "P0".to_string(),
+            description: format!(
+                "{} blog posts use relative URLs for og:image, breaking social sharing.",
+                relative_og.len()
+            ),
+            affected_urls: affected,
+            evidence,
+        });
+    }
 
-fn sample_frontmatter(root: &std::path::Path) -> FrontmatterSampleCheck {
-    let mut checked = 0i64;
-    let mut malformed = 0i64;
-    let mut all_have_title = true;
-    let mut all_have_desc = true;
+    // 4. Temporal URLs — nuanced detection
+    let temporal_re = regex::Regex::new(r"-(\d{4})").unwrap();
+    let temporal: Vec<&PageObservation> = observations.iter()
+        .filter(|o| o.is_blog)
+        .filter(|o| temporal_re.is_match(&o.slug))
+        .collect();
 
-    // Try common content directories
-    let content_dirs = [
-        root.join("src/blog/posts"),
-        root.join("content"),
-        root.join("src/content"),
-        root.join("src/posts"),
-    ];
+    if !temporal.is_empty() {
+        let affected: Vec<String> = temporal.iter().map(|o| o.url.clone()).collect();
 
-    for content_dir in &content_dirs {
-        if !content_dir.exists() {
-            continue;
-        }
-        if let Ok(entries) = std::fs::read_dir(content_dir) {
-            for entry in entries.flatten() {
-                if checked >= 3 {
-                    break;
-                }
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("mdx") {
-                    continue;
-                }
-                checked += 1;
-                let content = std::fs::read_to_string(&path).unwrap_or_default();
-                match crate::content::frontmatter::split_mdx(&content) {
-                    Some((fm_raw, _)) => match crate::content::frontmatter::parse(fm_raw) {
-                        Ok(fm) => {
-                            let parsed = &fm.parsed;
-                            let has_title = parsed.get("title").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-                            let has_desc = parsed.get("description").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-                            if !has_title {
-                                all_have_title = false;
-                            }
-                            if !has_desc {
-                                all_have_desc = false;
-                            }
-                        }
-                        Err(_) => {
-                            malformed += 1;
-                        }
-                    },
-                    None => {
-                        malformed += 1;
-                    }
-                }
+        // Check for actual multi-year fragmentation (e.g. budget-2024 AND budget-2025)
+        let mut slug_bases: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for o in &temporal {
+            if let Some(cap) = temporal_re.captures(&o.slug) {
+                let year = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                let base = temporal_re.replace(&o.slug, "").to_string();
+                slug_bases.entry(base).or_default().push(year.to_string());
             }
         }
-        if checked > 0 {
-            break; // Stop after first valid content dir
+        let fragmented: Vec<(String, Vec<String>)> = slug_bases.into_iter()
+            .filter(|(_, years)| years.len() > 1)
+            .collect();
+
+        // Check if year also appears in <title> (intentional freshness signaling)
+        let year_in_title_count = temporal.iter()
+            .filter(|o| {
+                o.title.as_ref().map(|t| {
+                    temporal_re.is_match(t) || t.contains("2025") || t.contains("2026")
+                }).unwrap_or(false)
+            })
+            .count();
+
+        // Check inconsistency: what % of blog posts have year suffixes?
+        let blog_count = observations.iter().filter(|o| o.is_blog).count();
+        let temporal_ratio = if blog_count > 0 {
+            temporal.len() as f32 / blog_count as f32
+        } else { 0.0 };
+
+        let mut evidence: Vec<String> = temporal.iter()
+            .take(3)
+            .map(|o| format!("{} → slug: '{}'", o.url, o.slug))
+            .collect();
+
+        if !fragmented.is_empty() {
+            evidence.push(format!(
+                "FRAGMENTED: {} topic(s) have multiple year variants (e.g. {})",
+                fragmented.len(),
+                fragmented.first().map(|(base, years)| format!("{} → {:?}", base, years)).unwrap_or_default()
+            ));
         }
+        evidence.push(format!(
+            "YEAR_IN_TITLE: {}/{} posts also have year in <title> (intentional freshness signaling)",
+            year_in_title_count, temporal.len()
+        ));
+        evidence.push(format!(
+            "CONSISTENCY: {}/{} blog posts ({:.0}%) have year suffixes",
+            temporal.len(), blog_count, temporal_ratio * 100.0
+        ));
+
+        let severity = if fragmented.is_empty() && temporal_ratio < 0.5 {
+            "P2" // Low concern: no fragmentation, minority of posts
+        } else if !fragmented.is_empty() {
+            "P0" // High concern: actual equity fragmentation
+        } else {
+            "P2" // Medium: inconsistency or majority temporal
+        };
+
+        issues.push(DetectedIssue {
+            issue_type: "temporal_url".to_string(),
+            severity: severity.to_string(),
+            description: format!(
+                "{} blog post URLs contain year tokens. {} fragmented topic(s). {} posts have year in <title>.",
+                temporal.len(), fragmented.len(), year_in_title_count
+            ),
+            affected_urls: affected,
+            evidence,
+        });
     }
 
-    FrontmatterSampleCheck {
-        files_checked: checked,
-        all_have_title,
-        all_have_description: all_have_desc,
-        malformed_count: malformed,
+    // 5. Missing meta descriptions
+    let missing_desc: Vec<&PageObservation> = observations.iter()
+        .filter(|o| o.is_blog)
+        .filter(|o| o.meta_description.is_none())
+        .collect();
+
+    if !missing_desc.is_empty() {
+        let affected: Vec<String> = missing_desc.iter().map(|o| o.url.clone()).collect();
+        let evidence = format!("Affected: {}", affected.iter().take(3).cloned().collect::<Vec<_>>().join(", "));
+        issues.push(DetectedIssue {
+            issue_type: "missing_meta_description".to_string(),
+            severity: "P2".to_string(),
+            description: format!(
+                "{} blog posts lack <meta name=\"description\"> tags.",
+                missing_desc.len()
+            ),
+            affected_urls: affected,
+            evidence: vec![evidence],
+        });
     }
+
+    // 6. Missing canonical tags
+    let missing_canonical: Vec<&PageObservation> = observations.iter()
+        .filter(|o| o.is_blog)
+        .filter(|o| o.canonical.is_none())
+        .collect();
+
+    if !missing_canonical.is_empty() {
+        let affected: Vec<String> = missing_canonical.iter().map(|o| o.url.clone()).collect();
+        let evidence = format!("Affected: {}", affected.iter().take(3).cloned().collect::<Vec<_>>().join(", "));
+        issues.push(DetectedIssue {
+            issue_type: "missing_canonical".to_string(),
+            severity: "P2".to_string(),
+            description: format!(
+                "{} blog posts lack <link rel=\"canonical\"> tags.",
+                missing_canonical.len()
+            ),
+            affected_urls: affected,
+            evidence: vec![evidence],
+        });
+    }
+
+    // 7. Images without lazy loading (for non-first images)
+    let images_without_lazy: Vec<(String, String)> = observations.iter()
+        .filter(|o| o.is_blog)
+        .flat_map(|o| {
+            o.images.iter().enumerate()
+                .filter(|(i, img)| *i > 0 && img.loading.as_deref() != Some("lazy"))
+                .map(|(_, img)| (o.url.clone(), img.src.clone()))
+        })
+        .collect();
+
+    if !images_without_lazy.is_empty() {
+        let affected_pages: std::collections::HashSet<String> = images_without_lazy.iter()
+            .map(|(url, _)| url.clone())
+            .collect();
+        let evidence: Vec<String> = images_without_lazy.iter()
+            .take(5)
+            .map(|(url, src)| format!("{} → img: '{}' lacks loading='lazy'", url, src))
+            .collect();
+        issues.push(DetectedIssue {
+            issue_type: "missing_lazy_loading".to_string(),
+            severity: "P2".to_string(),
+            description: format!(
+                "{} images across {} blog posts lack loading='lazy', inflating initial payload.",
+                images_without_lazy.len(),
+                affected_pages.len()
+            ),
+            affected_urls: affected_pages.into_iter().collect(),
+            evidence,
+        });
+    }
+
+    // 8. Missing JSON-LD structured data
+    let missing_jsonld: Vec<&PageObservation> = observations.iter()
+        .filter(|o| o.is_blog)
+        .filter(|o| !o.has_json_ld)
+        .collect();
+
+    if !missing_jsonld.is_empty() {
+        let affected: Vec<String> = missing_jsonld.iter().map(|o| o.url.clone()).collect();
+        let evidence = format!("Affected: {}", affected.iter().take(3).cloned().collect::<Vec<_>>().join(", "));
+        issues.push(DetectedIssue {
+            issue_type: "missing_structured_data".to_string(),
+            severity: "P2".to_string(),
+            description: format!(
+                "{} blog posts lack JSON-LD structured data (Article, FAQ, or Breadcrumb schema).",
+                missing_jsonld.len()
+            ),
+            affected_urls: affected,
+            evidence: vec![evidence],
+        });
+    }
+
+    // Sort by severity: P0 first, then P2
+    issues.sort_by(|a, b| {
+        let a_score = if a.severity == "P0" { 0 } else { 1 };
+        let b_score = if b.severity == "P0" { 0 } else { 1 };
+        a_score.cmp(&b_score)
+    });
+
+    issues
 }
 
-fn check_blog_parser(project_path: &str) -> String {
-    let root = std::path::Path::new(project_path);
-    let parser = root.join("src/blog/index.ts");
-    if !parser.exists() {
-        let alt = root.join("src/content/blog.ts");
-        if alt.exists() {
-            return "Blog parser found at src/content/blog.ts".to_string();
-        }
-        return "Blog parser not found at expected location".to_string();
-    }
-    let content = std::fs::read_to_string(&parser).unwrap_or_default();
-
-    if content.contains("replace") && content.contains("YYYY") {
-        return "Strips date prefixes from filenames when deriving slugs".to_string();
-    }
-    if content.contains("slug") && content.contains("replace") {
-        return "Applies transformations when deriving slugs from filenames".to_string();
-    }
-    if content.contains("slug") {
-        return "Has custom slug derivation logic".to_string();
-    }
-    "Found but slug logic could not be determined".to_string()
-}
-
-fn summarize_source(content: &str, max_chars: usize) -> String {
-    let limited = char_limit(content, max_chars);
-    // Remove excessive whitespace
-    limited.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn char_limit(s: &str, max_chars: usize) -> &str {
-    if let Some((idx, _)) = s.char_indices().nth(max_chars) {
-        &s[..idx]
-    } else {
-        s
-    }
+/// Detect tech stack from rendered HTML observations only.
+/// Never inspects source files — framework-agnostic approach.
+fn detect_tech_stack_from_observations(_observations: &[PageObservation]) -> String {
+    // Observation-based audit does not inspect source files (package.json,
+    // config files) because that misidentifies frameworks. We also don't
+    // store raw HTML in PageObservation, so we can't detect from rendered
+    // signatures either. Return unknown rather than guess.
+    "Unknown (not detectable from rendered output)".to_string()
 }

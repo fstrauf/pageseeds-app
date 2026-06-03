@@ -99,6 +99,15 @@ async fn main() {
     task_store::create_task(&conn, &task).expect("create_task failed");
     println!("✓ Task created: {}\n", task_id);
 
+    // Ensure site_url is set for live crawling
+    let mut project = project;
+    if project.site_url.is_none() || project.site_url.as_ref().unwrap().is_empty() {
+        println!("! Project has no site_url. Setting to https://brewedlate.com for testing...");
+        project.site_url = Some("https://brewedlate.com".to_string());
+        let _ = task_store::update_project(&conn, &project);
+        println!("✓ site_url set to: {}", project.site_url.as_deref().unwrap_or("(none)"));
+    }
+
     // ── Execute ───────────────────────────────────────────────────────────────
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("  Executing generate_feature_spec...");
