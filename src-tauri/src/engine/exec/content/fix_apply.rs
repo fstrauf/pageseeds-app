@@ -124,10 +124,8 @@ pub(crate) fn exec_fix_content_article_apply(
     if let Some(links) = internal_links {
         let link_count = links.len();
         for link in links {
-            let anchor = format!(
-                "[{}](/blog/{})",
-                link.anchor_text, link.target_slug
-            );
+            let blog_link = crate::content::slug::format_blog_link(&link.target_slug);
+            let anchor = format!("[{}]({})", link.anchor_text, blog_link);
             // Simple append-at-end strategy for now; could be smarter
             new_body.push_str(&format!("\n\n{}", anchor));
         }

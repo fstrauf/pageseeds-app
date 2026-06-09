@@ -878,7 +878,14 @@ async fn run_queue(db_path: PathBuf, app_handle: AppHandle, gsc_token: Option<St
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Task-type-specific cooldown to avoid rate-limiting external APIs.
+        // Reddit reply tasks are aggressively rate-limited; add a 90s gap.
+        let sleep_ms = if item.task_type.as_deref() == Some("reddit_reply") {
+            90_000
+        } else {
+            100
+        };
+        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
     }
 
     log::info!("[queue_runner] BACKEND QUEUE RUNNER FINISHED");

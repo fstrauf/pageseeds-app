@@ -492,6 +492,27 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
     Ok(articles)
 }
 
+/// Load all article url_slugs for a project as a lowercased HashSet.
+///
+/// This is the single source of truth for "does this slug exist in the project?"
+/// checks. Use it instead of re-implementing the list_articles → collect pattern
+/// in every module that validates internal link targets.
+///
+/// # Example
+/// ```
+/// use pageseeds_lib::engine::task_store::load_project_slug_set;
+///
+/// let slugs = load_project_slug_set(&conn, "proj-1").unwrap();
+/// assert!(slugs.contains("my-post"));
+/// ```
+pub fn load_project_slug_set(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let articles = list_articles(conn, project_id)?;
+    Ok(articles.into_iter().map(|a| a.url_slug.to_lowercase()).collect())
+}
+
 // ─── Artifact helpers (used by executor) ─────────────────────────────────────
 
 use crate::models::task::TaskArtifact;

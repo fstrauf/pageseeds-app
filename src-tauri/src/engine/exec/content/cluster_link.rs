@@ -522,7 +522,7 @@ Requirements:
 /// source article, and appends a `## Related Articles` section to each MDX
 /// file that does not already have one.
 pub(crate) fn exec_cluster_link_apply(
-    _task: &Task,
+    task: &Task,
     project_path: &str,
 ) -> crate::engine::workflows::StepResult {
     use std::collections::HashMap;
@@ -583,6 +583,15 @@ pub(crate) fn exec_cluster_link_apply(
         }
     };
 
+    // Build set of valid slugs from the article database
+    let valid_slugs: std::collections::HashSet<String> =
+        if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+            crate::engine::task_store::load_project_slug_set(&db, &task.project_id)
+                .unwrap_or_default()
+        } else {
+            std::collections::HashSet::new()
+        };
+
     // Group links by source_file basename: source_file → vec[(title, slug)]
     let mut by_source: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for link in links_to_add {
@@ -597,10 +606,18 @@ pub(crate) fn exec_cluster_link_apply(
         if source_file.is_empty() || target_slug.is_empty() {
             continue;
         }
+        let normalized = crate::content::slug::normalize_url_slug(&target_slug);
+        if !valid_slugs.contains(&normalized.to_lowercase()) {
+            log::warn!(
+                "[cluster_link_apply] skipping link to non-existent slug '{}' (normalized: '{}')",
+                target_slug, normalized
+            );
+            continue;
+        }
         by_source
             .entry(source_file)
             .or_default()
-            .push((target_title, target_slug));
+            .push((target_title, normalized));
     }
 
     // Build basename → full path map from content dir
@@ -774,7 +791,7 @@ pub(crate) fn exec_cluster_link_apply(
         let mut zero_incoming = 0i32;
         if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
             if let Ok(articles) =
-                crate::content::article_index::list_articles(&db, &_task.project_id)
+                crate::content::article_index::list_articles(&db, &task.project_id)
             {
                 let articles: Vec<_> = articles
                     .into_iter()

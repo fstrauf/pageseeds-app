@@ -146,7 +146,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     // 5. Normalize and validate
     let target_kw = context.target_keyword.as_deref();
     let repairs = normalize_patch_before_validation(&mut patch, &original_content);
-    let errors = validate_patch_before_write(&patch, &original_content, target_kw);
+    let errors = validate_patch_before_write(&patch, &original_content, target_kw, &task.project_id);
 
     // 6. One repair attempt if needed
     if !errors.is_empty() {
@@ -159,7 +159,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         match repair_content_fix_patch_with_backend(backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
                 let _repair_notes = normalize_patch_before_validation(&mut repaired, &original_content);
-                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw);
+                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id);
 
                 if !repair_errors.is_empty() {
                     return StepResult {
@@ -357,6 +357,13 @@ Validation rules (enforced by Rust):
 - If generating a new meta description: the target keyword must appear in the description
 - If generating a new intro: the target keyword must appear in the first paragraph
 
+**CRITICAL — Internal links format**:
+- If you include `internal_links`, each entry must use the bare slug as `target_slug` (e.g., `"my-post"`), NEVER `/blog/my-post` or `blog/my-post`.
+- The Rust code automatically wraps it as `/blog/<slug>` when writing the file.
+- Only link to articles that actually exist in this project. If you are unsure whether a target exists, do NOT include it.
+- Example CORRECT: `{{"anchor_text": "learn more", "target_slug": "options-trading-basics"}}`
+- Example WRONG: `{{"anchor_text": "learn more", "target_slug": "/blog/options-trading-basics"}}`
+
 Only include fields that need to change. Do not include title/description/intro/h1 changes if those fixes were not requested.
 "#,
         skill_content = skill_content.trim(),
@@ -484,6 +491,20 @@ fn normalize_patch_before_validation(patch: &mut ContentFixPatch, _original_cont
         }
     }
 
+    // Normalize internal_links slugs — strip any /blog/ prefix the agent may have included
+    if let Some(ref mut links) = patch.changes.internal_links {
+        for link in links {
+            let normalized = crate::content::slug::normalize_url_slug(&link.target_slug);
+            if normalized != link.target_slug {
+                notes.push(format!(
+                    "internal_links slug normalized: '{}' -> '{}'",
+                    link.target_slug, normalized
+                ));
+                link.target_slug = normalized;
+            }
+        }
+    }
+
     notes
 }
 
@@ -550,6 +571,7 @@ fn validate_patch_before_write(
     patch: &ContentFixPatch,
     original_content: &str,
     target_keyword: Option<&str>,
+    project_id: &str,
 ) -> Vec<String> {
     let mut errors = Vec::new();
     let title_max = crate::engine::exec::audit_health::TITLE_MAX_LEN;
@@ -659,6 +681,30 @@ fn validate_patch_before_write(
             }
             if q.answer.trim().is_empty() {
                 errors.push(format!("faq_questions[{}].answer is empty", i));
+            }
+        }
+    }
+
+    // Validate internal_links: target slugs must exist in the project
+    if let Some(ref links) = patch.changes.internal_links {
+        let valid_slugs: std::collections::HashSet<String> =
+            if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+                crate::engine::task_store::load_project_slug_set(&db, project_id)
+                    .unwrap_or_default()
+            } else {
+                std::collections::HashSet::new()
+            };
+
+        for (i, link) in links.iter().enumerate() {
+            if link.target_slug.is_empty() {
+                errors.push(format!("internal_links[{}].target_slug is empty", i));
+            } else if link.anchor_text.trim().is_empty() {
+                errors.push(format!("internal_links[{}].anchor_text is empty", i));
+            } else if !valid_slugs.contains(&link.target_slug.to_lowercase()) {
+                errors.push(format!(
+                    "internal_links[{}].target_slug '{}' does not match any article in this project",
+                    i, link.target_slug
+                ));
             }
         }
     }
