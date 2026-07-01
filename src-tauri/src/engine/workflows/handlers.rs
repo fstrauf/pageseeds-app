@@ -1284,6 +1284,8 @@ pub async fn exec_agentic(
              - Include an H1 matching the hub title.\n\
              - Link to every spoke article using `/blog/{slug}` format.\n\
              - Total word count MUST be 1500+ words.\n\
+             - The frontmatter `title:` and the body H1 must be complete, grammatically correct phrases. They must NOT end mid-sentence or with dangling words such as `a`, `an`, `the`, `and`, `or`, `to`, `for`, `of`, `in`, `on`, `with`, `by`, `from`, `as`, `is`, `are`, `what`, `how`, `when`, `where`, `why`, `which`, `complete`, `guide`, `income`, `without`, `track`, `close`, `compared`, or trailing punctuation (`:`, `,`, `-`). Rewrite rather than truncate.\n\
+             - The first body paragraph must begin with a complete sentence; do not drop leading characters from the opening sentence.\n\
              - Return ONLY the complete MDX content. No explanations outside the MDX.\n",
         );
     }

@@ -17,8 +17,8 @@ Only include fields that need to change. Do not include a field if the fix is al
 
 ## Categories and rules
 
-- **title** → Update frontmatter `title:` field. Must be ≤ 60 chars.
-- **h1** → Update the first H1 heading in the body. Must match title or be optimized for SEO.
+- **title** → Update frontmatter `title:` field. Must be ≤ 60 chars and a complete, grammatically correct phrase. It must NOT end mid-sentence or with dangling words (`a`, `an`, `the`, `and`, `or`, `to`, `for`, `of`, `in`, `on`, `with`, `by`, `from`, `as`, `is`, `are`, `what`, `how`, `when`, `where`, `why`, `which`, `complete`, `guide`, `income`, `without`, `track`, `close`, `compared`) or trailing punctuation (`:`, `,`, `-`). Rewrite rather than truncate.
+- **h1** → Update the first H1 heading in the body. Must match title or be optimized for SEO, and must also be complete.
 - **description** → Update frontmatter `description:` field. Must be 120-155 chars.
 - **intro** → Rewrite the opening paragraph(s). Must be 40-80 words.
 - **internal_links** → Add suggested links at appropriate places in the body.

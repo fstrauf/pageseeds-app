@@ -43,12 +43,46 @@ fn extract_frontmatter_value<'a>(frontmatter: &'a str, key: &str) -> Option<&'a 
     None
 }
 
+/// Words that strongly suggest a title was cut off mid-phrase.
+const DANGLING_WORDS: &[&str] = &[
+    "to", "a", "an", "the", "and", "or", "for", "of", "in", "on", "at", "with", "by", "from",
+    "as", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "could", "should", "may", "might", "must", "can", "this", "that",
+    "these", "those", "your", "my", "how", "what", "why", "when", "where", "who", "which",
+    "while", "vs", "versus",
+];
+
+const DANGLING_PUNCT: &[char] = &[':', ',', ';', '-', '—'];
+
+/// Returns true if the title looks like it was truncated mid-phrase.
+fn is_title_truncated(title: &str) -> bool {
+    let t = title.trim().trim_matches('"').trim_matches('\'');
+    if t.is_empty() {
+        return true;
+    }
+    if t.ends_with(DANGLING_PUNCT) {
+        return true;
+    }
+    let last_word = t.split_whitespace().last().unwrap_or("").to_lowercase();
+    let last_word = last_word.trim_matches('"').trim_matches('\'');
+    if DANGLING_WORDS.contains(&last_word) {
+        return true;
+    }
+    // Unmatched double quote
+    if t.chars().filter(|&c| c == '"').count() % 2 != 0 {
+        return true;
+    }
+    false
+}
+
 /// Scan a single MDX file for cleaning issues. Optionally apply fixes.
 ///
 /// Issues detected:
 /// - missing_frontmatter: no `---` block
 /// - duplicate_title: body starts with `# <title>` matching the frontmatter title
 /// - blank_line_after_frontmatter: no blank line between closing `---` and first body line
+/// - truncated_title: frontmatter title ends with a dangling word or punctuation
+/// - lowercase_intro: first body paragraph starts with a lowercase letter
 fn check_file(path: &Path, dry_run: bool) -> Result<Vec<CleaningIssue>> {
     let content = std::fs::read_to_string(path)?;
     let file_name = path
@@ -115,11 +149,44 @@ fn check_file(path: &Path, dry_run: bool) -> Result<Vec<CleaningIssue>> {
             false
         };
         issues.push(CleaningIssue {
-            file: file_name,
+            file: file_name.clone(),
             issue_type: "missing_blank_line".into(),
             description: "No blank line between frontmatter close and body".into(),
             fixed,
         });
+    }
+
+    // Detect truncated / incomplete frontmatter title.
+    if let Some(title_val) = title {
+        if is_title_truncated(title_val) {
+            issues.push(CleaningIssue {
+                file: file_name.clone(),
+                issue_type: "truncated_title".into(),
+                description: format!("Frontmatter title appears truncated: {title_val}"),
+                fixed: false,
+            });
+        }
+    }
+
+    // Detect first body paragraph starting with a lowercase letter.
+    if let Some((_, body)) = parse_frontmatter(&content) {
+        let first_non_empty = body.lines().map(str::trim).find(|l| !l.is_empty());
+        if let Some(first_line) = first_non_empty {
+            // Strip leading `# ` in case the body starts with an explicit H1.
+            let prose_start = first_line.strip_prefix("# ").unwrap_or(first_line);
+            if let Some(first_char) = prose_start.chars().next() {
+                if first_char.is_lowercase() {
+                    issues.push(CleaningIssue {
+                        file: file_name,
+                        issue_type: "lowercase_intro".into(),
+                        description: format!(
+                            "First body paragraph starts with lowercase letter: {prose_start}"
+                        ),
+                        fixed: false,
+                    });
+                }
+            }
+        }
     }
 
     Ok(issues)
@@ -589,5 +656,40 @@ Second paragraph."#;
     fn validate_mdx_structure_missing_close() {
         let content = "---\ntitle: test\n\nBody here.\n";
         assert!(validate_mdx_structure(content).is_err());
+    }
+
+    #[test]
+    fn is_title_truncated_detects_dangling_words_and_punct() {
+        assert!(is_title_truncated("A Beginner's Guide to"));
+        assert!(is_title_truncated("What Are the Greeks in Options: "));
+        assert!(is_title_truncated("Cash Secured Puts: The Complete Income"));
+        assert!(!is_title_truncated("Cash Secured Puts: The Complete Income Guide"));
+        assert!(!is_title_truncated("Options Greeks Cheat Sheet (2026)"));
+    }
+
+    #[test]
+    fn check_file_flags_truncated_title_and_lowercase_intro() {
+        let dir = std::env::temp_dir().join(format!(
+            "ps_cleaner_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.mdx");
+        std::fs::write(
+            &path,
+            "---\ntitle: \"A Beginner's Guide to\"\n---\n\nash secured puts are great.\n",
+        )
+        .unwrap();
+
+        let issues = check_file(&path, true).unwrap();
+        let types: Vec<_> = issues.iter().map(|i| i.issue_type.as_str()).collect();
+        assert!(types.contains(&"truncated_title"), "issues: {:?}", types);
+        assert!(types.contains(&"lowercase_intro"), "issues: {:?}", types);
+
+        // cleanup
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

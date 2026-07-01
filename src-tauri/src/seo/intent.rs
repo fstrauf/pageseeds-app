@@ -86,6 +86,22 @@ pub fn classify_by_pattern(keyword: &str) -> IntentClassification {
         "rated",
         "rating",
         "pros and cons",
+        // SaaS / product-intent modifiers common in keyword research
+        "software",
+        "tool",
+        "tools",
+        "app",
+        "platform",
+        "tracker",
+        "trackers",
+        "screener",
+        "screeners",
+        "calculator",
+        "calculators",
+        "dashboard",
+        "dashboards",
+        "scanner",
+        "scanners",
     ];
 
     // Navigational patterns (brand names, login, specific sites)
@@ -221,6 +237,11 @@ mod tests {
             ("top 10 smartphones", "commercial"),
             ("iphone vs samsung review", "commercial"),
             ("alternative to photoshop", "commercial"),
+            // SaaS product-intent keywords
+            ("covered call tracker", "commercial"),
+            ("options screener software", "commercial"),
+            ("portfolio dashboard app", "commercial"),
+            ("options calculator", "commercial"),
         ];
 
         for (keyword, expected) in cases {

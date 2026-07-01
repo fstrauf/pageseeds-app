@@ -33,4 +33,6 @@ A complete MDX string with:
 - Use `type: hub` and `hub_topic: "{topic}"` in frontmatter.
 - The date should be today's date in ISO format.
 - The description should be 1-2 sentences summarizing the hub.
+- **Title MUST be complete.** The frontmatter `title:` and the body H1 must be full, grammatically complete phrases. They must NOT end mid-sentence or with dangling words such as `a`, `an`, `the`, `and`, `or`, `to`, `for`, `of`, `in`, `on`, `with`, `by`, `from`, `as`, `is`, `are`, `what`, `how`, `when`, `where`, `why`, `which`, `complete`, `guide`, `income`, `without`, `track`, `close`, `compared`, or trailing punctuation (`:`, `,`, `-`). If a long title does not fit, rewrite it as a complete shorter title — never truncate it.
+- **Opening sentence MUST be intact.** The first paragraph after the frontmatter must begin with a complete sentence. Do not drop or strip the first letter(s) of the first word.
 - Return ONLY the MDX content. No markdown wrappers, no explanations.

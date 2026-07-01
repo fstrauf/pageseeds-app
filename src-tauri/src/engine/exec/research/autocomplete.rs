@@ -132,11 +132,17 @@ pub struct DifficultyWrapper {
 
 /// Deterministic final selection of keywords from pipeline output.
 ///
-/// This replaces the agentic step with pure Rust logic:
-/// - Filters to keywords with data and KD <= target (default 10)
-/// - Sorts by volume (desc), then difficulty (asc)
-/// - Takes top N (default 10)
-/// - Generates recommended titles based on keyword
+/// This replaces the agentic step with pure Rust logic, but remains
+/// workflow-aware: `research_keywords` surfaces informational content ideas,
+/// while `research_landing_pages` surfaces commercial/transactional ones.
+///
+/// Selection logic:
+/// - Filter to keywords with data, acceptable KD, non-navigational intent, and
+///   intent aligned with the workflow (informational for blog, commercial for
+///   landing pages).
+/// - Sort by volume (desc), then difficulty (asc).
+/// - Take top N (default 10).
+/// - Generate recommended titles based on keyword type.
 pub fn select_keywords_deterministic(
     pipeline_json: &str,
     is_landing_page: bool,
@@ -149,15 +155,15 @@ pub fn select_keywords_deterministic(
     let max_results = 10usize;
     let total_candidates = pipeline.keywords.len();
 
-    // Filter to keywords with data, acceptable KD, and non-navigational intent
+    // Primary filter: data + KD + non-navigational + workflow-aligned intent.
     let mut candidates: Vec<_> = pipeline
         .keywords
         .clone()
         .into_iter()
+        .filter(|k| matches_workflow_intent(k, is_landing_page))
         .filter(|k| {
             let has_data = k.has_data.unwrap_or(false);
             let kd_ok = k.kd.map(|d| d as i64 <= target_kd).unwrap_or(false);
-            // Reject navigational intent (brand searches like "nike air force 1")
             let intent_ok = k
                 .intent
                 .as_deref()
@@ -169,11 +175,12 @@ pub fn select_keywords_deterministic(
 
     let mut used_fallback = false;
 
-    // Fallback: if strict filtering drops everything (e.g., API unavailable),
+    // Fallback: if API data is sparse or strict filtering drops everything,
     // return the best available keywords so the user can still review/select.
+    // Keeps non-navigational filter only.
     if candidates.is_empty() && !pipeline.keywords.is_empty() {
         log::warn!(
-            "[select_keywords_deterministic] Strict filter yielded 0 results ({} candidates, {} with data). Using fallback.",
+            "[select_keywords_deterministic] Intent-aware filter yielded 0 results ({} candidates, {} with data). Using broad fallback.",
             total_candidates,
             pipeline.with_data_count
         );
@@ -224,7 +231,7 @@ pub fn select_keywords_deterministic(
                         k.kd.map(|d| d as i64).unwrap_or(0),
                         k.volume.unwrap_or(0)
                     ),
-                    proposed_title: generate_title(&k.keyword),
+                    proposed_title: generate_title(&k.keyword, true),
                 })
                 .collect(),
             difficulty: None,
@@ -240,11 +247,11 @@ pub fn select_keywords_deterministic(
                 difficulty: k.kd.unwrap_or(0.0) as i64,
                 traffic: k.traffic.map(|t| t as i64),
                 selection_reason: format!(
-                    "Low difficulty (KD {}) with {} monthly searches",
+                    "KD {} with {} monthly searches",
                     k.kd.map(|d| d as i64).unwrap_or(0),
                     k.volume.unwrap_or(0)
                 ),
-                recommended_title: generate_title(&k.keyword),
+                recommended_title: generate_title(&k.keyword, false),
             })
             .collect();
 
@@ -262,6 +269,26 @@ pub fn select_keywords_deterministic(
     }
 }
 
+/// Returns true when a keyword's intent matches the workflow goal.
+///
+/// Blog research wants informational/educational keywords. Landing page
+/// research wants commercial/transactional keywords. Unknown intent is allowed
+/// because pattern matching is conservative (especially for SaaS keywords that
+/// default to informational despite being commercial).
+fn matches_workflow_intent(k: &crate::models::research::ScoredKeyword, is_landing_page: bool) -> bool {
+    let intent = k.intent.as_deref().map(|i| i.to_lowercase());
+    match intent.as_deref() {
+        None | Some("unknown") => true,
+        Some("navigational") => false,
+        Some(i) if is_landing_page => {
+            matches!(i, "commercial" | "transactional")
+        }
+        Some(i) => {
+            matches!(i, "informational")
+        }
+    }
+}
+
 /// Infer landing page type from keyword patterns
 fn infer_landing_page_type(keyword: &str) -> String {
     let lower = keyword.to_lowercase();
@@ -271,15 +298,26 @@ fn infer_landing_page_type(keyword: &str) -> String {
         "category".to_string()
     } else if lower.contains("how to") || lower.contains("guide") || lower.contains("tutorial") {
         "use_case".to_string()
-    } else if lower.contains("software") || lower.contains("tool") || lower.contains("app") {
+    } else if lower.contains("software")
+        || lower.contains("tool")
+        || lower.contains("app")
+        || lower.contains("tracker")
+        || lower.contains("screener")
+        || lower.contains("calculator")
+        || lower.contains("dashboard")
+        || lower.contains("scanner")
+        || lower.contains("platform")
+    {
         "feature".to_string()
     } else {
         "category".to_string()
     }
 }
 
-/// Generate a readable title from a keyword
-fn generate_title(keyword: &str) -> String {
+/// Generate a readable title from a keyword.
+///
+/// Landing page titles are conversion-focused; blog titles are guide-focused.
+fn generate_title(keyword: &str, is_landing_page: bool) -> String {
     // Capitalize first letter of each word
     let words: Vec<String> = keyword
         .split_whitespace()
@@ -294,17 +332,42 @@ fn generate_title(keyword: &str) -> String {
         .collect();
 
     let title = words.join(" ");
-
-    // Add suffix based on keyword type
     let lower = keyword.to_lowercase();
-    if lower.contains("how to") {
-        format!("{}: A Step-by-Step Guide", title)
-    } else if lower.contains("best") || lower.contains("top") {
-        format!("{} for 2025", title)
-    } else if lower.contains("vs") {
-        format!("{}: Which is Right for You?", title)
+
+    if is_landing_page {
+        if lower.contains("vs") {
+            format!("{}: Which is Right for You?", title)
+        } else if lower.contains("best") || lower.contains("top") {
+            format!("{} for 2025", title)
+        } else if lower.contains("alternative") || lower.contains("alternatives") {
+            format!("The Best {} Alternative", title)
+        } else if lower.contains("software")
+            || lower.contains("tool")
+            || lower.contains("app")
+            || lower.contains("tracker")
+            || lower.contains("screener")
+            || lower.contains("calculator")
+            || lower.contains("dashboard")
+            || lower.contains("platform")
+        {
+            format!("{} for Options Traders", title)
+        } else {
+            format!("{} — DaysToExpiry", title)
+        }
     } else {
-        format!("{}: Complete Guide", title)
+        if lower.contains("how to") {
+            format!("{}: A Step-by-Step Guide", title)
+        } else if lower.contains("what is") || lower.contains("what are") {
+            format!("{} Explained", title)
+        } else if lower.contains("best") || lower.contains("top") {
+            format!("{} for 2025", title)
+        } else if lower.contains("vs") {
+            format!("{}: Which is Right for You?", title)
+        } else if lower.contains("tips") {
+            format!("{} That Actually Work", title)
+        } else {
+            format!("{}: Complete Guide", title)
+        }
     }
 }
 
@@ -323,6 +386,8 @@ fn is_stop_word(word: &str) -> bool {
             | "for"
             | "of"
             | "with"
+            | "vs"
+            | "versus"
     )
 }
 
@@ -410,5 +475,109 @@ pub fn exec_research_final_selection(
             message: format!("Keyword selection failed: {}", e),
             output: None,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::research::ScoredKeyword;
+
+    fn kw(
+        keyword: &str,
+        volume: i64,
+        kd: f64,
+        intent: &str,
+    ) -> ScoredKeyword {
+        ScoredKeyword {
+            keyword: keyword.to_string(),
+            volume: Some(volume),
+            kd: Some(kd),
+            intent: Some(intent.to_string()),
+            traffic: None,
+            has_data: Some(true),
+            intent_confidence: None,
+        }
+    }
+
+    fn build_pipeline(keywords: Vec<ScoredKeyword>) -> KeywordPipelineOutput {
+        KeywordPipelineOutput {
+            keywords,
+            themes: vec!["covered calls".to_string()],
+            competitors: vec![],
+            competitor_insights: vec![],
+            total_candidates: 0,
+            with_data_count: 0,
+        }
+    }
+
+    #[test]
+    fn blog_selection_prefers_informational_intent() {
+        let pipeline = build_pipeline(vec![
+            kw("how to sell covered calls", 1200, 25.0, "informational"),
+            kw("covered call tracker", 800, 25.0, "commercial"),
+            kw("what is a covered call", 3000, 20.0, "informational"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, false).unwrap();
+        let results = output.difficulty.unwrap().results;
+        assert!(
+            results.iter().any(|r| r.keyword == "how to sell covered calls"),
+            "informational keyword should be selected for blog"
+        );
+        assert!(
+            !results.iter().any(|r| r.keyword == "covered call tracker"),
+            "commercial keyword should not be selected for blog"
+        );
+    }
+
+    #[test]
+    fn landing_page_selection_prefers_commercial_intent() {
+        let pipeline = build_pipeline(vec![
+            kw("how to sell covered calls", 1200, 25.0, "informational"),
+            kw("covered call tracker", 800, 25.0, "commercial"),
+            kw("best covered call screener", 600, 30.0, "commercial"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, true).unwrap();
+        let candidates = output.landing_page_candidates;
+        assert!(
+            candidates.iter().any(|c| c.keyword == "covered call tracker"),
+            "commercial keyword should be selected for landing page"
+        );
+        assert!(
+            !candidates.iter().any(|c| c.keyword == "how to sell covered calls"),
+            "informational keyword should not be selected for landing page"
+        );
+    }
+
+    #[test]
+    fn selection_uses_broad_fallback_when_nothing_matches_filters() {
+        // All keywords exceed KD 30, so the broad fallback (no KD filter) should run.
+        let pipeline = build_pipeline(vec![
+            kw("how to sell covered calls", 1200, 55.0, "informational"),
+            kw("covered call strike selection", 400, 50.0, "informational"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, used_fallback) = select_keywords_deterministic(&json, false).unwrap();
+        assert!(used_fallback, "should have used fallback when KD <= 30 yields nothing");
+        let results = output.difficulty.unwrap().results;
+        assert_eq!(results.len(), 2, "fallback should include high-KD keywords for review");
+    }
+
+    #[test]
+    fn title_generation_matches_workflow() {
+        assert_eq!(
+            generate_title("how to sell covered calls", false),
+            "How to Sell Covered Calls: A Step-by-Step Guide"
+        );
+        assert_eq!(
+            generate_title("covered call tracker", true),
+            "Covered Call Tracker for Options Traders"
+        );
+        assert_eq!(
+            generate_title("optionstrat vs tastytrade", true),
+            "Optionstrat vs Tastytrade: Which is Right for You?"
+        );
     }
 }

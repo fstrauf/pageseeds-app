@@ -2,8 +2,14 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::models::task::Task;
 
 /// Build a deterministic text summary from keyword_coverage.json for the seed
-/// extraction prompt.  Groups clusters by article count so the LLM can avoid
-/// over-covered topics and prioritise thin gaps.
+/// extraction prompt.
+///
+/// Critical SEO nuance: a high article count does NOT mean a topic is exhausted.
+/// "Covered calls" with 16 articles still has thousands of long-tail variations
+/// (rolldowns, assignment tax, strike selection, dividend capture, etc.). We
+/// therefore reframe strong clusters as "expand into new angles, do not repeat
+/// primers" rather than "skip these". Thin/moderate clusters remain priority
+/// gaps, but the agent must not ignore the site's proven authority clusters.
 fn build_coverage_summary(coverage: &serde_json::Value) -> String {
     let empty_clusters: Vec<serde_json::Value> = vec![];
     let clusters = coverage
@@ -11,9 +17,9 @@ fn build_coverage_summary(coverage: &serde_json::Value) -> String {
         .and_then(|c| c.as_array())
         .unwrap_or(&empty_clusters);
 
-    let mut strong: Vec<(String, i64)> = vec![];
-    let mut moderate: Vec<(String, i64)> = vec![];
-    let mut thin: Vec<(String, i64)> = vec![];
+    let mut strong: Vec<(String, i64, Vec<String>)> = vec![];
+    let mut moderate: Vec<(String, i64, Vec<String>)> = vec![];
+    let mut thin: Vec<(String, i64, Vec<String>)> = vec![];
 
     for c in clusters {
         let name = c
@@ -22,19 +28,42 @@ fn build_coverage_summary(coverage: &serde_json::Value) -> String {
             .unwrap_or("Unknown")
             .to_string();
         let count = c.get("article_count").and_then(|n| n.as_i64()).unwrap_or(0);
+        let primary: Vec<String> = c
+            .get("primary_keywords")
+            .and_then(|p| p.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
         match count {
-            0..=2 => thin.push((name, count)),
-            3..=5 => moderate.push((name, count)),
-            _ => strong.push((name, count)),
+            0..=2 => thin.push((name, count, primary)),
+            3..=5 => moderate.push((name, count, primary)),
+            _ => strong.push((name, count, primary)),
         }
     }
 
-    let mut lines: Vec<String> = vec![];
+    let mut lines: Vec<String> = vec![
+        "Coverage signal: article count shows topical authority, not completion. \
+         Strong clusters are where the site already has credibility — the right move \
+         is to find new sub-angles, not to avoid the topic entirely."
+            .to_string(),
+        String::new(),
+    ];
 
     if !strong.is_empty() {
-        lines.push("Strong coverage (skip these):".to_string());
-        for (name, count) in strong {
-            lines.push(format!("- {} ({} articles)", name, count));
+        lines.push(
+            "Strong coverage — find NEW angles only; do NOT write another 'what is X' primer:"
+                .to_string(),
+        );
+        for (name, count, primary) in strong {
+            let primary_hint = if primary.is_empty() {
+                String::new()
+            } else {
+                format!(" (known angles: {})", primary.join(", "))
+            };
+            lines.push(format!("- {} ({} articles){}", name, count, primary_hint));
         }
     }
 
@@ -42,9 +71,14 @@ fn build_coverage_summary(coverage: &serde_json::Value) -> String {
         if !lines.is_empty() {
             lines.push(String::new());
         }
-        lines.push("Moderate coverage (ok to supplement):".to_string());
-        for (name, count) in moderate {
-            lines.push(format!("- {} ({} articles)", name, count));
+        lines.push("Moderate coverage — ok to supplement with adjacent angles:".to_string());
+        for (name, count, primary) in moderate {
+            let primary_hint = if primary.is_empty() {
+                String::new()
+            } else {
+                format!(" (known angles: {})", primary.join(", "))
+            };
+            lines.push(format!("- {} ({} articles){}", name, count, primary_hint));
         }
     }
 
@@ -52,13 +86,18 @@ fn build_coverage_summary(coverage: &serde_json::Value) -> String {
         if !lines.is_empty() {
             lines.push(String::new());
         }
-        lines.push("Thin coverage (good candidates to deepen):".to_string());
-        for (name, count) in thin {
-            lines.push(format!("- {} ({} articles)", name, count));
+        lines.push("Thin coverage — good candidates to deepen:".to_string());
+        for (name, count, primary) in thin {
+            let primary_hint = if primary.is_empty() {
+                String::new()
+            } else {
+                format!(" (known angles: {})", primary.join(", "))
+            };
+            lines.push(format!("- {} ({} articles){}", name, count, primary_hint));
         }
     }
 
-    if lines.is_empty() {
+    if lines.len() <= 2 {
         "No existing content coverage found.".to_string()
     } else {
         lines.join("\n")

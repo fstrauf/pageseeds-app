@@ -11,8 +11,8 @@ Read the full project context and extract:
 ## Coverage Awareness
 
 You will receive a summary of existing content coverage below. Use it to:
-- AVOID themes where coverage is already strong (6+ articles)
 - PREFER themes where coverage is thin (1-2 articles) or nonexistent
+- For strong-coverage clusters (6+ articles), do NOT propose another generic "what is X" primer. Instead, find specific sub-angles, edge cases, mechanics, tax implications, broker workflows, roll/assignment scenarios, or advanced versions that are NOT already covered.
 - Do NOT repeat exact keywords already targeted — find adjacent angles instead
 
 ## Seed Requirements
