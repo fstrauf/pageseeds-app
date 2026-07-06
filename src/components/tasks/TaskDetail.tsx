@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Trash2, Ban, ArrowRight, Play, ChevronDown, X, Check } from 'lucide-react'
+import { Trash2, Ban, ArrowRight, Play, X, Check } from 'lucide-react'
 import { useErrorHandler } from '../../lib/toast-context'
 import { updateTask, deleteTask, cancelTask, listTasks, getTask, updateTaskStatus } from '../../lib/tauri'
 import { useQueue } from '../../lib/queue-context'
-import type { Task } from '../../lib/types'
+import type { Project, Task } from '../../lib/types'
 import { canEnqueue } from '../../lib/taskCapabilities'
 import { cn, formatDate } from '../../lib/utils'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,7 @@ import {
 import { KeywordPicker } from './KeywordPicker'
 import { RedditOpportunityPicker } from './RedditOpportunityPicker'
 import { CannibalizationPicker } from './CannibalizationPicker'
+import { ClarityFindingReview } from './ClarityFindingReview'
 import { ErrorExplainer } from './error-explainer'
 
 const STATUS_BADGE: Record<string, string> = {
@@ -46,11 +47,12 @@ interface TaskDetailProps {
   onUpdated: (task: Task) => void
   onDeleted: (id: string) => void
   projectName?: string
+  project?: Project
   /** Called when keywords are selected and write_article tasks have been created. */
   onArticleTasksCreated?: (tasks: Task[]) => void
 }
 
-export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasksCreated, projectName }: TaskDetailProps) {
+export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasksCreated, projectName, project }: TaskDetailProps) {
   const { enqueue } = useQueue()
   const [editTitle, setEditTitle] = useState(task.title ?? '')
   const [editDesc, setEditDesc] = useState(task.description ?? '')
@@ -407,6 +409,25 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
             </>
           )}
 
+          {/* Clarity findings — shown when investigate_clarity is in review status */}
+          {task.type === 'investigate_clarity' && task.status === 'review' && (
+            <>
+              <Separator className="bg-border" />
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground font-medium">Clarity Findings</div>
+                <ClarityFindingReview
+                  task={task}
+                  project={project}
+                  onTasksCreated={newTasks => {
+                    onArticleTasksCreated?.(newTasks)
+                    onClose()
+                    getTask(task.id).then(refreshed => onUpdated(refreshed)).catch(() => {})
+                  }}
+                />
+              </div>
+            </>
+          )}
+
           {/* Follow-up tasks for review_surface = FollowUpTasks */}
           {task.review_surface === 'follow_up_tasks' && task.status === 'review' && (
             <>
@@ -566,81 +587,4 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
   )
 }
 
-// ── RecommendationsPreview ────────────────────────────────────────────────────
 
-interface RecArticle {
-  article_id: number
-  article_title: string
-  article_file: string
-  failed_checks: Array<{ check_id: string; label: string }>
-  suggestions: Array<{ category: string; current: string; proposed: string; reason: string }>
-}
-
-function RecommendationsPreview({ articles }: { articles: RecArticle[] }) {
-  const [open, setOpen] = useState<Set<number>>(new Set([articles[0]?.article_id]))
-
-  function toggle(id: number) {
-    setOpen(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }
-
-  return (
-    <>
-      <Separator className="bg-border" />
-      <div className="space-y-2">
-        <div className="text-xs text-muted-foreground font-medium">
-          Recommendations — {articles.length} article{articles.length !== 1 ? 's' : ''}
-        </div>
-        <div className="space-y-1.5">
-          {articles.map(a => (
-            <div key={a.article_id} className="rounded-md border border-border overflow-hidden">
-              {/* Article header row */}
-              <button
-                onClick={() => toggle(a.article_id)}
-                className="w-full flex items-center justify-between gap-2 px-2.5 py-2 bg-secondary/40 hover:bg-secondary/70 text-left transition-colors"
-              >
-                <span className="text-xs font-medium text-foreground truncate">{a.article_title}</span>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
-                    {a.suggestions.length} fix{a.suggestions.length !== 1 ? 'es' : ''}
-                  </Badge>
-                  <ChevronDown
-                    size={12}
-                    className={cn('text-muted-foreground transition-transform', open.has(a.article_id) && 'rotate-180')}
-                  />
-                </div>
-              </button>
-
-              {/* Suggestions */}
-              {open.has(a.article_id) && (
-                <div className="divide-y divide-border">
-                  {a.suggestions.map((s, i) => (
-                    <div key={i} className="px-2.5 py-2 space-y-1 text-xs">
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant="outline" className="text-[9px] font-mono border-border text-muted-foreground shrink-0">
-                          {s.category}
-                        </Badge>
-                      </div>
-                      {s.current && s.current !== '(missing)' && (
-                        <div className="text-muted-foreground line-through opacity-60 leading-relaxed">{s.current}</div>
-                      )}
-                      <div className="text-foreground leading-relaxed">{s.proposed}</div>
-                      <div className="text-muted-foreground italic leading-relaxed opacity-80">{s.reason}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </>
-  )
-}

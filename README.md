@@ -78,7 +78,7 @@ Ask natural-language questions about your site's performance and get evidence-ba
 | [Agent Integration](./docs/AGENT_INTEGRATION.md) | How LLM agents are invoked and responses normalized |
 | [Agent Development Playbook](./docs/AGENT_DEVELOPMENT_PLAYBOOK.md) | Scenario-based guide for common development tasks |
 | [CONTRACTS.md](./CONTRACTS.md) | Runtime invariants and hidden rules |
-| [AGENTS.md](./AGENTS.md) | Comprehensive agent guide with directory map and coding rules |
+| [AGENTS.md](./AGENTS.md) | Agent orientation, core rules, DRY catalog, and pre-change checklist |
 | [AI Quick Start](./AI_QUICK_START.md) | TL;DR orientation for AI agents working in this repo |
 
 ---

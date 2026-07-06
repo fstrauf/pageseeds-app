@@ -132,6 +132,7 @@ This is another article with different content.
             active: true,
             agent_provider: None,
             seo_provider: Some("ahrefs".to_string()),
+            clarity_project_id: None,
         };
         crate::engine::task_store::create_project(conn, &project).unwrap();
     }
@@ -1187,6 +1188,7 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             active: true,
             agent_provider: None,
             seo_provider: Some("ahrefs".to_string()),
+            clarity_project_id: None,
         };
         crate::engine::task_store::create_project(&conn, &project).unwrap();
         crate::engine::task_store::create_task(&conn, &parent_task).unwrap();
@@ -1520,6 +1522,7 @@ A: This is a test.
             active: true,
             agent_provider: None,
             seo_provider: Some("ahrefs".to_string()),
+            clarity_project_id: None,
         };
         crate::engine::task_store::create_project(&conn, &project).unwrap();
         crate::engine::task_store::create_task(&conn, &parent_task).unwrap();

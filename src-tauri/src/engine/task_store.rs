@@ -346,7 +346,7 @@ use crate::models::project::Project;
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, path, content_dir, site_url, site_id, sitemap_url, project_mode, active, agent_provider, seo_provider FROM projects ORDER BY name ASC",
+        "SELECT id, name, path, content_dir, site_url, site_id, sitemap_url, project_mode, active, agent_provider, seo_provider, clarity_project_id FROM projects ORDER BY name ASC",
     )?;
     let projects: Vec<Project> = stmt
         .query_map([], |row| {
@@ -362,6 +362,7 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
                 active: row.get::<_, i64>(8)? != 0,
                 agent_provider: row.get(9)?,
                 seo_provider: row.get(10)?,
+                clarity_project_id: row.get(11)?,
             })
         })?
         .filter_map(|r| r.ok())
@@ -371,7 +372,7 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
 
 pub fn get_project(conn: &Connection, id: &str) -> Result<Project> {
     conn.query_row(
-        "SELECT id, name, path, content_dir, site_url, site_id, sitemap_url, project_mode, active, agent_provider, seo_provider FROM projects WHERE id = ?1",
+        "SELECT id, name, path, content_dir, site_url, site_id, sitemap_url, project_mode, active, agent_provider, seo_provider, clarity_project_id FROM projects WHERE id = ?1",
         [id],
         |row| {
             Ok(Project {
@@ -386,6 +387,7 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Project> {
                 active: row.get::<_, i64>(8)? != 0,
                 agent_provider: row.get(9)?,
                 seo_provider: row.get(10)?,
+                clarity_project_id: row.get(11)?,
             })
         },
     )
@@ -394,8 +396,8 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Project> {
 
 pub fn create_project(conn: &Connection, project: &Project) -> Result<Project> {
     conn.execute(
-        "INSERT INTO projects (id, name, path, content_dir, site_url, site_id, sitemap_url, project_mode, active, agent_provider, seo_provider)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO projects (id, name, path, content_dir, site_url, site_id, sitemap_url, project_mode, active, agent_provider, seo_provider, clarity_project_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         rusqlite::params![
             project.id,
             project.name,
@@ -408,6 +410,7 @@ pub fn create_project(conn: &Connection, project: &Project) -> Result<Project> {
             project.active as i64,
             project.agent_provider,
             project.seo_provider,
+            project.clarity_project_id,
         ],
     )?;
     get_project(conn, &project.id)
@@ -415,8 +418,8 @@ pub fn create_project(conn: &Connection, project: &Project) -> Result<Project> {
 
 pub fn update_project(conn: &Connection, project: &Project) -> Result<Project> {
     let rows = conn.execute(
-        "UPDATE projects SET name = ?1, path = ?2, content_dir = ?3, site_url = ?4, site_id = ?5, sitemap_url = ?6, project_mode = ?7, active = ?8, agent_provider = ?9, seo_provider = ?10
-         WHERE id = ?11",
+        "UPDATE projects SET name = ?1, path = ?2, content_dir = ?3, site_url = ?4, site_id = ?5, sitemap_url = ?6, project_mode = ?7, active = ?8, agent_provider = ?9, seo_provider = ?10, clarity_project_id = ?11
+         WHERE id = ?12",
         rusqlite::params![
             project.name,
             project.path,
@@ -428,6 +431,7 @@ pub fn update_project(conn: &Connection, project: &Project) -> Result<Project> {
             project.active as i64,
             project.agent_provider,
             project.seo_provider,
+            project.clarity_project_id,
             project.id,
         ],
     )?;

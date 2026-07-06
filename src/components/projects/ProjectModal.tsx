@@ -56,6 +56,7 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
   const [siteUrl, setSiteUrl] = useState(project?.site_url ?? '')
   const [siteId, setSiteId] = useState(project?.site_id ?? '')
   const [sitemapUrl, setSitemapUrl] = useState(project?.sitemap_url ?? '')
+  const [clarityProjectId, setClarityProjectId] = useState(project?.clarity_project_id ?? '')
   const [projectMode, setProjectMode] = useState<ProjectMode>(project?.project_mode ?? 'workspace')
   const [loading, setLoading] = useState(false)
   const { showError } = useErrorHandler()
@@ -69,6 +70,7 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
       setSiteUrl(project.site_url ?? '')
       setSiteId(project.site_id ?? '')
       setSitemapUrl(project.sitemap_url ?? '')
+      setClarityProjectId(project.clarity_project_id ?? '')
       setProjectMode(project.project_mode)
     }
   }, [project])
@@ -106,6 +108,7 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
           site_url: siteUrl.trim() || null,
           site_id: siteId.trim() || null,
           sitemap_url: sitemapUrl.trim() || null,
+          clarity_project_id: clarityProjectId.trim() || null,
           project_mode: project.project_mode,
         })
       } else {
@@ -116,6 +119,7 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
           site_url: siteUrl.trim() || undefined,
           site_id: siteId.trim() || undefined,
           sitemap_url: sitemapUrl.trim() || undefined,
+          clarity_project_id: clarityProjectId.trim() || undefined,
           project_mode: projectMode,
         })
       }
@@ -261,6 +265,20 @@ export function ProjectModal({ project, onClose, onSaved }: ProjectModalProps) {
               </p>
             </div>
           )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="proj-clarity">Clarity Project ID</Label>
+            <Input
+              id="proj-clarity"
+              value={clarityProjectId}
+              onChange={e => setClarityProjectId(e.target.value)}
+              placeholder="e.g. w6k9cmvgx3"
+              className="bg-secondary border-input"
+            />
+            <p className="text-xs text-muted-foreground">
+              Optional. Find this in your Microsoft Clarity project settings under Setup → How to install.
+            </p>
+          </div>
         </div>
 
         <DialogFooter>

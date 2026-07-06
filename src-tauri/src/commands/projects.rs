@@ -30,6 +30,7 @@ pub fn create_project(
     site_id: Option<String>,
     sitemap_url: Option<String>,
     project_mode: Option<ProjectMode>,
+    clarity_project_id: Option<String>,
 ) -> Result<Project, String> {
     let id = name
         .to_lowercase()
@@ -85,6 +86,7 @@ pub fn create_project(
         active: true,
         agent_provider: None,
         seo_provider: Some("ahrefs".to_string()),
+        clarity_project_id,
     };
 
     let db = state.db.lock().map_err(|e| e.to_string())?;

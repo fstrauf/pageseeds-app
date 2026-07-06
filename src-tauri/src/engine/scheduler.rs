@@ -116,6 +116,7 @@ pub fn seed_default_rules(conn: &Connection, project_id: &str) -> Result<(), Str
 
     let defaults: &[(&str, i64, &str)] = &[
         ("collect_gsc", 24, "high"),
+        ("collect_clarity", 24, "high"),
         ("ctr_audit", 168, "medium"),
         ("update_research_shortlist", 168, "medium"),
     ];

@@ -10,10 +10,10 @@ use crate::engine::project_paths::ProjectPaths;
 
 /// Native Rust replacement for `pageseeds automation seo content-audit`.
 ///
-/// Runs 17 deterministic checks per article (keyword in title/H1/meta, word count,
+/// Runs 21 deterministic checks per article (keyword in title/H1/meta, word count,
 /// internal links, temporal URLs, page bloat, literal template variables, title
-/// token duplication, etc.), scores each article, and writes content_audit.json to
-/// automation/content_audit.json. No LLM or external API needed.
+/// token duplication, readability, passive voice, etc.), scores each article, and
+/// writes content_audit.json to automation/content_audit.json. No LLM or external API needed.
 pub fn exec_content_audit(
     task: &crate::models::task::Task,
     project_path: &str,

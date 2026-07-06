@@ -58,6 +58,13 @@ export type {
   RecoveryStats,
   ResubmitCandidate,
   
+  // Clarity Models
+  ClarityConnectionStatus,
+  ClarityExportRowPayload,
+  ClarityFindingPayload,
+  ClarityPageScorePayload,
+  ClaritySummaryPayload,
+  
   // Reddit Models
   MigrationResult,
   RedditOpportunity,
@@ -803,6 +810,7 @@ export type View =
   | 'articles'
   | 'reddit'
   | 'gsc'
+  | 'clarity'
   | 'seo'
   | 'social'
   | 'cannibalization'

@@ -5,7 +5,7 @@ import {
   PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
-import { createTask, getContentAuditReport, getCtrHealthSummary, getIndexingHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, openFeatureSpecInVSCode, repairArticlePaths, updateTaskStatus } from '../../lib/tauri'
+import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, openFeatureSpecInVSCode, repairArticlePaths, updateTaskStatus } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
 import type { Article, LandingPageResearchPending, PendingFeatureSpec, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -103,6 +103,16 @@ const QUICK_ACTIONS: ActionDef[] = [
     nextLabel: 'See campaign results',
   },
   {
+    task_type: 'clarity_analytics',
+    label: 'Clarity Analytics',
+    description: 'Collect Microsoft Clarity behavioral data, score pages for UX anomalies, and surface ranked findings',
+    icon: <Activity size={16} />,
+    phase: 'investigation',
+    frequency: 'weekly',
+    nextView: 'tasks',
+    nextLabel: 'Review findings',
+  },
+  {
     task_type: 'generate_feature_spec',
     label: 'Generate Feature Spec',
     description: 'Agentic investigation of the project to produce a prioritized developer feature specification',
@@ -149,19 +159,6 @@ function timeAgo(iso: string): string {
   return `${days}d ago`
 }
 
-// ─── Workflow activity helpers ───────────────────────────────────────────────
-
-const WORKFLOW_ICONS: Record<string, React.ReactNode> = {
-  research_keywords:        <Search size={13} />,
-  content_review:           <TrendingUp size={13} />,
-  reddit_opportunity_search:<Users size={13} />,
-  collect_gsc:              <Globe size={13} />,
-  ctr_audit:                <BarChart2 size={13} />,
-  sanitize_content:         <Wrench size={13} />,
-  indexing_health_campaign: <HeartPulse size={13} />,
-  generate_feature_spec:    <BookOpen size={13} />,
-}
-
 function relativeDate(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime()
   if (diffMs < 0) return 'just now'
@@ -169,67 +166,6 @@ function relativeDate(iso: string): string {
   if (days === 0) return 'today'
   if (days === 1) return '1d ago'
   return `${days}d ago`
-}
-
-function nextDueLabel(iso: string): { text: string; overdue: boolean } {
-  const diffMs = new Date(iso).getTime() - Date.now()
-  if (diffMs <= 0) return { text: 'overdue', overdue: true }
-  const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
-  if (days === 0) return { text: 'due today', overdue: true }
-  if (days === 1) return { text: 'in 1d', overdue: false }
-  return { text: `in ${days}d`, overdue: false }
-}
-
-function WorkflowActivityCard({ items, lastPublishedDate }: { items: WorkflowActivity[]; lastPublishedDate?: string }) {
-  if ((!items || items.length === 0) && !lastPublishedDate) return null
-  return (
-    <Card className="bg-card border-border">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-          <Clock size={13} className="text-muted-foreground" />
-          Workflow Activity
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pb-3">
-        <div className="space-y-0">
-          {lastPublishedDate && (
-            <div className="flex items-center gap-2.5 py-1.5 px-1">
-              <span className="shrink-0 text-muted-foreground"><FileText size={13} /></span>
-              <span className="flex-1 min-w-0 text-xs text-foreground">Last article published</span>
-              <span className="text-xs text-muted-foreground shrink-0">
-                {relativeDate(lastPublishedDate + 'T12:00:00Z')}
-              </span>
-              <span className="text-xs text-muted-foreground shrink-0">{lastPublishedDate}</span>
-            </div>
-          )}
-          {items.map(item => (
-            <div key={item.task_type} className="flex items-center gap-2.5 py-1.5 px-1">
-              <span className="shrink-0 text-muted-foreground">
-                {WORKFLOW_ICONS[item.task_type] ?? <Clock size={13} />}
-              </span>
-              <span className="flex-1 min-w-0 text-xs text-foreground">{item.label}</span>
-              <span className="text-xs text-muted-foreground shrink-0">
-                {item.last_run_at ? relativeDate(item.last_run_at) : 'never'}
-              </span>
-              {item.next_due_at && (() => {
-                const due = nextDueLabel(item.next_due_at)
-                return (
-                  <span className={cn(
-                    'text-xs shrink-0 px-1.5 py-0.5 rounded',
-                    due.overdue
-                      ? 'bg-amber-100 text-amber-700'
-                      : 'bg-secondary text-muted-foreground',
-                  )}>
-                    {due.text}
-                  </span>
-                )
-              })()}
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  )
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -412,7 +348,7 @@ function PendingFeatureSpecCard({
               onClick={async () => {
                 try {
                   await openFeatureSpecInVSCode(item.id)
-                } catch (e: unknown) {
+                } catch {
                   // ignore — user will see if VS Code doesn't open
                 }
               }}
@@ -472,14 +408,6 @@ export function Overview({
   const [repairingPaths, setRepairingPaths] = useState(false)
   const [repairResult, setRepairResult] = useState<import('../../lib/types').RepairPathResult | null>(null)
   const [runningCtr, setRunningCtr] = useState(false)
-  const [lastRunSummary, setLastRunSummary] = useState<string | null>(null)
-
-  // Live queue snapshot for showing in-progress fix counts
-  const queueSnapshot = useQueueStore(s => s.snapshot)
-  const queueIsRunning = queueSnapshot?.run?.status === 'running'
-
-  // Track previous overview for run-to-run delta
-  const prevOverviewRef = useRef<ProjectOverview | null>(null)
 
   const {
     data: liveSitePages = [],
@@ -498,31 +426,6 @@ export function Overview({
   } = useQuery(
     `overview-ctr-health-${project?.id ?? 'none'}`,
     () => getCtrHealthSummary(project?.id ?? ''),
-    { enabled: !!project?.id && !isLiveSiteProject, staleTime: 30_000 },
-  )
-
-  const {
-    data: indexingHealth,
-    isLoading: loadingIndexingHealth,
-    refetch: refetchIndexingHealth,
-  } = useQuery(
-    `overview-indexing-health-${project?.id ?? 'none'}`,
-    () => getIndexingHealthSummary(project?.id ?? ''),
-    { enabled: !!project?.id && !isLiveSiteProject, staleTime: 30_000 },
-  )
-
-  const {
-    data: contentAuditReport,
-    isLoading: loadingContentAudit,
-    refetch: refetchContentAudit,
-  } = useQuery(
-    `overview-content-audit-${project?.id ?? 'none'}`,
-    () => getContentAuditReport(project?.id ?? '') as Promise<{
-      generated_at: string | null
-      total_audited: number
-      health_summary: { good: number; needs_improvement: number; poor: number }
-      articles: unknown[]
-    }>,
     { enabled: !!project?.id && !isLiveSiteProject, staleTime: 30_000 },
   )
 
@@ -559,31 +462,10 @@ export function Overview({
     load()
     if (!isLiveSiteProject) {
       refetchCtrHealth()
-      refetchIndexingHealth()
-      refetchContentAudit()
     } else {
       refetchLiveSitePages()
     }
-  }, [project, runCompletedTick, load, isLiveSiteProject, refetchCtrHealth, refetchIndexingHealth, refetchContentAudit, refetchLiveSitePages])
-
-  // Build last-run summary when queue finishes and overview updates
-  useEffect(() => {
-    const prev = prevOverviewRef.current
-    if (prev && overview && !queueIsRunning) {
-      const prevPoor = prev.health_snapshot?.content_poor ?? 0
-      const newPoor = overview.health_snapshot?.content_poor ?? 0
-      const poorDelta = prevPoor - newPoor
-      const prevFixes = prev.health_snapshot?.fix_completed ?? 0
-      const newFixes = (overview.health_snapshot?.fix_completed ?? 0) - prevFixes
-      if (newFixes > 0 || poorDelta > 0) {
-        setLastRunSummary(
-          `${newFixes} fix${newFixes !== 1 ? 'es' : ''} applied` +
-          (poorDelta > 0 ? ` · ${poorDelta} article${poorDelta !== 1 ? 's' : ''} improved` : '')
-        )
-      }
-    }
-    prevOverviewRef.current = overview
-  }, [overview, queueIsRunning, runCompletedTick])
+  }, [project, runCompletedTick, load, isLiveSiteProject, refetchCtrHealth, refetchLiveSitePages])
 
   async function handleOpenPublish() {
     if (!project || loadingPublish) return
@@ -615,6 +497,17 @@ export function Overview({
         setQuickActionError(
           'Feature Spec requires a Site URL or Sitemap URL. \
           Set it in Project Settings first.'
+        )
+        return
+      }
+    }
+
+    // Clarity analytics requires a Clarity project ID
+    if (action.task_type === 'clarity_analytics') {
+      const clarityId = project.clarity_project_id?.trim()
+      if (!clarityId) {
+        setQuickActionError(
+          'Clarity Analytics requires a Clarity Project ID. Set it in Project Settings or Clarity → Settings first.'
         )
         return
       }
@@ -1140,7 +1033,7 @@ export function Overview({
               }}
             />
 
-            {/* CTR Health Summary -->
+            {/* CTR Health Summary */}
             {!isLiveSiteProject && (
               <Card className="bg-card border-border">
                 <CardHeader className="pb-2">

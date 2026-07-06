@@ -150,6 +150,14 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Collection,
     },
+    TaskDefinition {
+        task_type: "collect_clarity",
+        phase: "collection",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Collection,
+    },
     // Investigation
     TaskDefinition {
         task_type: "investigate_gsc",
@@ -164,6 +172,22 @@ const DEFINITIONS: &[TaskDefinition] = &[
         phase: "investigation",
         run_policy: TaskRunPolicy::UserEnqueue,
         review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Investigation,
+    },
+    TaskDefinition {
+        task_type: "investigate_clarity",
+        phase: "investigation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Investigation,
+    },
+    TaskDefinition {
+        task_type: "clarity_analytics",
+        phase: "investigation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Investigation,
     },

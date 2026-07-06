@@ -1,5 +1,6 @@
 pub mod article;
 pub mod cannibalization;
+pub mod clarity;
 pub mod content_review;
 pub mod ctr;
 pub mod feature_spec;

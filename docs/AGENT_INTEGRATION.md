@@ -1,6 +1,8 @@
 # Agent Integration
 
-PageSeeds uses LLM agents (Kimi, Copilot) for judgment-heavy tasks. This document covers how agents are invoked, how prompts are structured, and how responses are normalized.
+PageSeeds uses LLM agents for judgment-heavy tasks. This document covers how agents are invoked, how prompts are structured, and how responses are normalized.
+
+For the rules that govern when to use agents vs. deterministic code, see [`AGENTS.md`](../AGENTS.md) → **Choose Execution Mode Deliberately** and **RIG / LLM Integration**.
 
 ---
 
@@ -12,13 +14,19 @@ PageSeeds uses LLM agents (Kimi, Copilot) for judgment-heavy tasks. This documen
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │   ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐         │
-│   │   Handler    │───▶│   Agent      │───▶│   Artifact       │         │
-│   │   (planner)  │    │   (LLM call) │    │   (JSON)         │         │
+│   │   Handler    │───▶│   Rig        │───▶│   Artifact       │         │
+│   │   (planner)  │      │  Provider  │      │   (JSON)         │         │
 │   └──────────────┘    └──────────────┘    └──────────────────┘         │
+│         │                              │                                │
+│         │                              ▼                                │
+│         │                        ┌──────────────┐                       │
+│         │                        │ Rig Tools    │                       │
+│         │                        │ (optional)   │                       │
+│         │                        └──────────────┘                       │
 │         │                                                               │
 │         ▼                                                               │
 │   ┌──────────────────────────────────────────────────────────────┐     │
-│   │  SKILL.md (loaded from project automation dir)               │     │
+│   │  SKILL.md (loaded from project automation dir or app defaults)│    │
 │   │  - reddit_config.md                                          │     │
 │   │  - content optimization instructions                         │     │
 │   │  - apply_fix skill                                           │     │
@@ -27,37 +35,44 @@ PageSeeds uses LLM agents (Kimi, Copilot) for judgment-heavy tasks. This documen
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+The canonical flow:
+
+1. A workflow handler declares an `Agentic` step and names a `skill`.
+2. The executor loads the skill, assembles context, and calls `engine::agent::run_agent_with_skill`.
+3. `engine::agent` tries a **Rig-backed provider first** and falls back to the legacy CLI wrapper only if Rig signals fallback.
+4. Raw output is returned to the executor or a typed `Extractor<T>` is used for structured output.
+
 ---
 
 ## Agent Providers
 
-Currently supported:
-- **Kimi** (`kimi` binary) — Primary, local CLI
-- **Copilot** (`copilot` binary) — GitHub Copilot CLI
+The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds/rig) providers in `src-tauri/src/rig/`.
 
-Future:
-- Claude API
-- OpenAI API
+### Current Providers
+
+- **Kimi Bridge** — HTTP bridge to Kimi (preferred for complex tasks)
+- **Direct providers** — OpenAI, Claude, etc. via Rig
+- **Legacy CLI fallback** — `kimi` / `copilot` binaries via `agent-wrapper` (kept for compatibility)
 
 ### Provider Selection
 
-```rust
-// engine/agent.rs
-pub enum AgentProvider {
-    Kimi,
-    Copilot,
-}
-```
+Provider is resolved from:
 
-Set via task's `agent_policy` field or default in settings.
+1. Task's `agent_policy` field
+2. Project setting
+3. Global setting (`agent_provider` in `global_settings` table, default `"kimi"`)
+
+The resolved provider string is passed to `engine::agent::run_agent`.
+
+For Kimi specifically, the global `kimi_backend_mode` setting controls whether the bridge or direct CLI is used.
 
 ---
 
 ## Step Types
 
-### 1. Agentic Step
+### Agentic Step
 
-Calls the LLM with a prompt, stores raw output.
+Calls the LLM with a prompt assembled from a skill.
 
 ```rust
 WorkflowStep::new("analyze_content", StepKind::Agentic)
@@ -65,11 +80,13 @@ WorkflowStep::new("analyze_content", StepKind::Agentic)
 ```
 
 **Executor behavior:**
-1. Load SKILL.md from `{automation_dir}/SKILL.md` (or named skill)
+1. Load SKILL.md from project `.github/skills/{skill}/SKILL.md` or app defaults (`src-tauri/src/skills/`)
 2. Assemble context (task details, prior artifacts)
-3. Call agent provider
+3. Call `run_agent_with_skill`
 4. Store raw output in `latest_raw_output`
-5. Return StepResult
+5. Return `StepResult`
+
+For structured output, use `Extractor<T>` in the exec function rather than parsing `latest_raw_output` manually.
 
 ---
 
@@ -77,41 +94,40 @@ WorkflowStep::new("analyze_content", StepKind::Agentic)
 
 ### SKILL.md Loading
 
-Skills are loaded from the project's automation directory:
+Skills are loaded by `engine::skills::load_skill`:
 
 ```rust
-// engine/skills.rs
-pub fn load_skill(project_path: &Path, skill_name: &str) -> Result<String>;
+pub fn load_skill(project_path: &Path, skill_name: &str) -> Result<Skill, Error>;
 ```
 
-- Default: `SKILL.md`
-- Named: `{skill_name}.md`
+- Project skills override embedded defaults
+- A skill file is markdown instructions, not the final prompt
 
 ### Context Assembly
 
+The standard entry point is `engine::agent::run_agent_with_skill`:
+
 ```rust
-// engine/prompts.rs
-pub fn assemble_agent_prompt(
-    skill: &str,
-    task: &Task,
-    artifacts: &[TaskArtifact],
-    output_contract: &str,
-) -> String;
+pub fn run_agent_with_skill(
+    skill_name: &str,
+    repo_root: &Path,
+    context: &str,
+    agent_provider: &str,
+    output_contract: Option<&str>,
+) -> Result<String, String>;
 ```
 
-The prompt includes:
+It builds a prompt containing:
 1. **SKILL.md content** — domain instructions
-2. **Task context** — title, description, type
-3. **Prior artifacts** — structured data from previous steps
-4. **Output contract** — expected JSON schema
+2. **Task context** — title, description, type, structured artifacts
+3. **Output contract** (optional override)
 
 ### Output Contract
 
-Every agentic step MUST document its expected output:
+Every agentic step MUST document its expected output. Prefer putting the contract in the skill file itself. Only pass an explicit `output_contract` when the same skill needs different schemas in different workflows.
 
 ```rust
-// Example output contract
-const RECOMMENDATIONS_CONTRACT: &str = r#"
+// Example output contract (usually lives in SKILL.md)
 Return ONLY valid JSON matching this schema:
 {
   "generated_at": "<ISO timestamp>",
@@ -129,117 +145,92 @@ Return ONLY valid JSON matching this schema:
     }
   ]
 }
-"#;
 ```
 
 ---
 
-## JSON Extraction
+## Structured Extraction
 
-Agent output often contains markdown fences or explanatory text. The shared helper in `engine/text.rs` handles this:
-
-```rust
-// engine/text.rs
-
-pub fn extract_json(text: &str) -> Option<Value> {
-    // 1. Whole text is JSON
-    // 2. Fenced code block (```json ... ```)
-    // 3. Bare JSON object/array
-}
-```
-
-For typed extraction, use:
+For typed agent output, use the Rig extraction wrapper:
 
 ```rust
-pub fn extract_json_as<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
-    extract_json(text)?.as_object()?. ...
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ContentFixPatch {
+    pub title: Option<String>,
+    pub meta_description: Option<String>,
+    pub changes: Vec<ContentChange>,
 }
+
+let patch = crate::rig::extraction::extract_with_backend::<ContentFixPatch>(
+    agent_provider,
+    &prompt,
+    Some("direct"),
+).await?;
 ```
 
-### Extraction Strategies
+This enforces the JSON schema and typically includes an automatic repair retry.
 
-1. **Clean JSON** — Direct parse
-2. **Markdown fences** — Extract from ```json ... ```
-3. **Brace matching** — Find first `{` to last `}`
+### Legacy JSON Extraction
+
+For unstructured legacy steps, `engine::text::extract_json` handles common output formats:
+
+```rust
+pub fn extract_json(text: &str) -> Option<Value>;
+```
+
+Strategies:
+1. Whole text is JSON
+2. Fenced code block (```json ... ```)
+3. Bare JSON object/array via brace matching
 
 ---
 
-## Reddy-Specific Agent Flow
+## Rig Tools
 
-Reddit has the most complex agent integration:
-
-```
-1. Config Parse (Agentic)
-   Input: reddit_config.md (free-form markdown)
-   Output: Structured RedditConfig JSON
-   
-2. Search (Deterministic)
-   Input: RedditConfig
-   Output: Raw posts from Reddit API
-   
-3. Enrichment (Agentic, batched)
-   Input: Batch of posts
-   Output: Scored opportunities with reply drafts
-```
-
-### Config Parsing Example
+For agentic investigation or multi-tool workflows, expose deterministic capabilities as Rig tools in `src-tauri/src/engine/tools/`:
 
 ```rust
-// engine/exec/reddit.rs
+use rig::tool::{Tool, ToolDefinition};
+use schemars::JsonSchema;
+use serde::Deserialize;
 
-pub fn extract_reddit_config(raw: &str) -> Result<RedditConfig> {
-    let prompt = format!(
-        "Extract structured Reddit search config from this markdown:\n\n{}\n\n{}",
-        raw,
-        REDDIT_CONFIG_CONTRACT
-    );
-    
-    let response = call_agent(&prompt)?;
-    normalize_reddit_config(&response)
+#[derive(Deserialize, JsonSchema)]
+pub struct GscPerformanceArgs {
+    keyword_filter: Option<String>,
+    limit: Option<usize>,
+}
+
+pub struct GscPerformanceTool;
+
+impl Tool for GscPerformanceTool {
+    const NAME: &'static str = "gsc_performance";
+    type Args = GscPerformanceArgs;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition { ... }
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, rig::tool::ToolError> { ... }
 }
 ```
 
-### Batched Enrichment
-
-```rust
-// After reddit_search step, executor runs inline enrichment loop
-
-loop {
-    let pending = reddit::db::get_pending_opportunities(conn, project_id)?;
-    if pending.is_empty() { break; }
-    
-    // Batch process 5-10 at a time
-    let batch: Vec<_> = pending.into_iter().take(10).collect();
-    exec_reddit_enrich(conn, project_id, project_path, &batch, agent_provider)?;
-}
-```
+Tools should be thin wrappers around existing domain functions — no new business logic.
 
 ---
 
 ## Safety & Constraints
 
-### Permission Flags
-
-Agent calls use restricted permissions:
-
-```bash
-# Kimi
-copilot -p "$PROMPT" --allow-all-tools --deny-tool='shell(git:*)'
-
-# Copilot
-(similar restrictions)
-```
-
 ### No Shell Escapes
 
 Agents must NOT:
 - Execute arbitrary shell commands
-- Access files outside project directory
-- Make network requests (use deterministic steps for APIs)
+- Access files outside the project directory
+- Make network requests directly (use deterministic steps/tools for APIs)
 
 ### Timeout Handling
 
-Agent calls have default timeouts:
+Agent calls have default timeouts controlled by the provider/backend:
 - Standard: 60 seconds
 - Complex analysis: 120 seconds
 - Batch operations: 30 seconds per item
@@ -262,23 +253,23 @@ fn test_json_extraction_from_kimi_output() {
     ```
     Hope this helps!
     "#;
-    
-    let result = normalize_json_output(raw).unwrap();
+
+    let result = engine::text::extract_json(raw).unwrap();
     assert_eq!(result["score"], 85);
 }
 ```
 
 ### Integration Tests
 
-Test with real agent calls (marked `#[ignore]` for CI):
+Tests that require real provider credentials, local machine paths, or external APIs must be `#[ignore]`:
 
 ```rust
 #[test]
-#[ignore] // Requires Kimi CLI
+#[ignore] // Requires Kimi bridge credentials
 fn test_reddit_config_parsing_with_real_kimi() {
     let config_md = fs::read_to_string("test_config.md").unwrap();
     let config = extract_reddit_config(&config_md).unwrap();
-    
+
     assert!(!config.trigger_keywords.is_empty());
     assert!(!config.seed_subreddits.is_empty());
 }
@@ -292,16 +283,14 @@ fn test_reddit_config_parsing_with_real_kimi() {
 
 **Wrong:**
 ```rust
-// Don't do this
 let prompt = fs::read_to_string("SKILL.md").unwrap();
 ```
 
 **Right:**
 ```rust
-// SKILL.md is instructions, not the prompt
 let skill = load_skill(project_path, "content_analysis")?;
 let context = build_context(task, artifacts)?;
-let prompt = assemble_agent_prompt(&skill, &context, &output_contract)?;
+let raw = run_agent_with_skill("content_analysis", project_path, &context, agent_provider, None)?;
 ```
 
 ### 2. Not Validating Output
@@ -309,25 +298,23 @@ let prompt = assemble_agent_prompt(&skill, &context, &output_contract)?;
 Always normalize and validate agent output before using it:
 
 ```rust
-let raw = call_agent(&prompt).await?;
-let parsed = normalize_json_output(&raw)?;
-// Validate against expected schema
+let raw = run_agent_with_skill(...)?;
+let parsed = extract_json(&raw).ok_or("invalid json")?;
 validate_recommendations(&parsed)?;
 ```
 
 ### 3. Missing Output Contracts
 
-Every agentic step must document expected output:
+Every agentic step must document expected output, either in the skill or in the handler comment:
 
 ```rust
-// In handler or step definition:
 // Output: JSON with { themes[], total_candidates, new_keywords[] }
 ```
 
 ### 4. Calling Agents for Deterministic Work
 
 **Don't use agents for:**
-- API calls (use `reqwest` directly)
+- API calls (use `reqwest` directly or a Rig tool)
 - Sorting/filtering (use Rust iterators)
 - Date arithmetic (use `chrono`)
 
@@ -344,11 +331,12 @@ Every agentic step must document expected output:
 | Component | Path |
 |-----------|------|
 | Agent invocation | `src-tauri/src/engine/agent.rs` |
+| Rig provider layer | `src-tauri/src/rig/provider.rs` |
+| Rig extraction | `src-tauri/src/rig/extraction.rs` |
 | Prompt assembly | `src-tauri/src/engine/prompts.rs` |
 | JSON extraction | `src-tauri/src/engine/text.rs` |
 | Skill loading | `src-tauri/src/engine/skills.rs` |
-| Reddit execution | `src-tauri/src/engine/exec/reddit.rs` |
-| Content execution | `src-tauri/src/engine/exec/content.rs` |
+| Rig tools | `src-tauri/src/engine/tools/` |
 
 ---
 
@@ -356,3 +344,4 @@ Every agentic step must document expected output:
 
 - [Workflow Engine](./WORKFLOW_ENGINE.md) — How agentic steps fit into workflows
 - [Business Processes](./BUSINESS_PROCESSES.md) — Which processes use agents
+- [AGENTS.md](../AGENTS.md) — Rules for deterministic vs agentic work

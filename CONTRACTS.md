@@ -79,7 +79,7 @@ Steps are defined by handlers in `engine/workflows/handlers.rs` and executed by 
 | `"keyword_research_cli"` | Deterministic: Ahrefs keyword API calls + dedup + ranking | Keyword JSON artifact | Optional theme artifact |
 | `"content_review_recommend"` | Hybrid: deterministic article scoring + single agentic recommendation call | `recommendations.json` | `content_audit.json`, articles.json |
 | `"content_sync"` | Deterministic: validate articles.json ↔ content files | Validation report | Nothing |
-| `"content_audit"` | Deterministic: 13-rule article check + health scoring | `content_audit.json` | articles.json |
+| `"content_audit"` | Deterministic: 21-check article audit + health scoring | `content_audit.json` | articles.json |
 
 **The `reddit_enrich` step requires database access and is handled inline in the executor outer loop** (not inside `run_step`). The same pattern applies to `reddit_search` data persistence. These steps return a placeholder `StepResult` from `run_step`; the real work runs in the outer loop keyed on `step.kind`.
 

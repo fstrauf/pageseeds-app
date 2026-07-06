@@ -149,7 +149,7 @@ engine/exec/
 │   ├── mod.rs                    # Content review/apply
 │   ├── cluster_link.rs           # Internal link graph
 │   └── hub_page.rs               # Legacy hub creation (deprecated)
-├── content_audit.rs              # 13-rule audit
+├── content_audit.rs              # 21-check deterministic audit
 ├── reddit.rs                     # Search + enrichment
 ├── gsc.rs                        # GSC collection + sync
 ├── social/                       # Social media campaign steps
@@ -302,8 +302,7 @@ The frontend `useQueueRunner` hook consumes these to drive the TaskRunner UI.
                WorkflowStep::new("collect_data", StepKind::Deterministic),
                WorkflowStep::new("analyze", StepKind::Agentic)
                    .with_param("skill", "analyze_data"),
-               WorkflowStep::new("normalize", StepKind::Normalizer)
-                   .with_param("normalizer_id", "my_normalizer")
+               WorkflowStep::new("persist", StepKind::Deterministic)
                    .with_param("artifact_name", "my_result"),
            ]
        }
@@ -333,6 +332,6 @@ The frontend `useQueueRunner` hook consumes these to drive the TaskRunner UI.
 
 ## See Also
 
-- [AGENTS.md](../AGENTS.md) — Queue semantics and event flow
+- [AGENTS.md](../AGENTS.md) — Task lifecycle contract and core rules
 - [Data Persistence](./DATA_PERSISTENCE.md) — Where workflow state lives
 - [CONTRACTS.md](../CONTRACTS.md) — Runtime invariants and hidden rules

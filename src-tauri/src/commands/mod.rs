@@ -17,6 +17,7 @@ pub struct SeoState {
 
 pub mod articles;
 pub mod cannibalization;
+pub mod clarity;
 pub mod content;
 pub mod engine;
 pub mod executor;
@@ -35,6 +36,7 @@ pub mod tasks;
 
 pub use articles::*;
 pub use cannibalization::*;
+pub use clarity::*;
 pub use content::*;
 pub use engine::*;
 pub use executor::*;

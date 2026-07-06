@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog'
 import type {
   Article,
+  ClarityConnectionStatus,
+  ClaritySummaryPayload,
   ContentHealthResult,
   EmbeddingStatus,
   FormatFixResult,
@@ -45,6 +47,7 @@ export const createProject = (args: {
   site_id?: string
   sitemap_url?: string
   project_mode?: ProjectMode
+  clarity_project_id?: string
 }): Promise<Project> =>
   invoke('create_project', {
     name: args.name,
@@ -54,6 +57,7 @@ export const createProject = (args: {
     siteId: args.site_id,
     sitemapUrl: args.sitemap_url,
     projectMode: args.project_mode,
+    clarityProjectId: args.clarity_project_id,
   })
 
 export const updateProject = (project: Project): Promise<Project> =>
@@ -425,6 +429,17 @@ export const gscParseRedirectCsv = (csvContent: string): Promise<RedirectRecord[
 
 export const gscComputeDrift = (projectId: string): Promise<GscDriftReport> =>
   invoke('gsc_compute_drift', { projectId })
+
+// ─── Microsoft Clarity ────────────────────────────────────────────────────────
+
+export const clarityGetStatus = (project: Project): Promise<ClarityConnectionStatus> =>
+  invoke('clarity_get_status', { project })
+
+export const clarityTestConnection = (project: Project): Promise<ClarityConnectionStatus> =>
+  invoke('clarity_test_connection', { project })
+
+export const clarityGetSummary = (project: Project): Promise<ClaritySummaryPayload | null> =>
+  invoke('clarity_get_summary', { project })
 
 // ─── SEO / Ahrefs ─────────────────────────────────────────────────────────────
 

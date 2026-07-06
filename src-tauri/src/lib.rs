@@ -9,6 +9,7 @@ pub mod gsc;
 mod live_site;
 pub mod logging;
 pub mod models;
+mod clarity;
 mod reddit;
 mod rig;
 mod seo;
@@ -179,6 +180,9 @@ pub fn run() {
             commands::gsc_compute_drift,
             commands::create_gsc_indexing_recovery_task,
             commands::get_gsc_recovery_stats,
+            commands::clarity_get_status,
+            commands::clarity_test_connection,
+            commands::clarity_get_summary,
             commands::run_health_audit,
             commands::get_content_audit_report,
             commands::get_indexing_health_summary,

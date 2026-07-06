@@ -28,7 +28,10 @@ pub struct CollectionHandler;
 
 impl WorkflowHandler for CollectionHandler {
     fn supports(&self, task: &Task) -> bool {
-        matches!(task_type(task), "collect_gsc" | "collect_posthog")
+        matches!(
+            task_type(task),
+            "collect_gsc" | "collect_posthog" | "collect_clarity"
+        )
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
@@ -36,6 +39,10 @@ impl WorkflowHandler for CollectionHandler {
             "collect_gsc" => vec![WorkflowStep::new(
                 "collect_gsc_inspect",
                 StepKind::CollectGscInspect,
+            )],
+            "collect_clarity" => vec![WorkflowStep::new(
+                "collect_clarity_export",
+                StepKind::CollectClarity,
             )],
             // collect_posthog has no CLI implementation yet — fall back to agent.
             _ => vec![WorkflowStep::new("collect_agent_stage", StepKind::Agentic)],
@@ -49,7 +56,10 @@ pub struct InvestigationHandler;
 
 impl WorkflowHandler for InvestigationHandler {
     fn supports(&self, task: &Task) -> bool {
-        matches!(task_type(task), "investigate_gsc" | "investigate_posthog")
+        matches!(
+            task_type(task),
+            "investigate_gsc" | "investigate_posthog" | "investigate_clarity" | "clarity_analytics"
+        )
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
@@ -62,6 +72,30 @@ impl WorkflowHandler for InvestigationHandler {
                 // corrective actions. Cannot be deterministic: interpreting *why* a cluster of
                 // pages is not indexed and what to do about it requires intent-level judgment.
                 WorkflowStep::new("investigate_gsc_agent", StepKind::GscInvestigateAgentic),
+            ],
+            "investigate_clarity" => vec![
+                // Step 1 (deterministic): aggregate per-page behavioral metrics and compute
+                // anomaly scores. Writes clarity_summary.json.
+                WorkflowStep::new("clarity_summarise", StepKind::ClaritySummarise),
+                // Step 2 (agentic): interpret the scores, group issues, and produce ranked
+                // findings with dashboard links. Requires judgment about UX/SEO significance.
+                WorkflowStep::new(
+                    "clarity_investigate_agent",
+                    StepKind::ClarityInvestigateAgentic,
+                ),
+            ],
+            "clarity_analytics" => vec![
+                // Step 1 (deterministic): fetch the latest Clarity Export API data.
+                // Stores flattened rows in SQLite and writes clarity_collection.json.
+                WorkflowStep::new("collect_clarity_export", StepKind::CollectClarity),
+                // Step 2 (deterministic): aggregate per-page behavioral metrics and compute
+                // anomaly scores. Writes clarity_summary.json.
+                WorkflowStep::new("clarity_summarise", StepKind::ClaritySummarise),
+                // Step 3 (agentic): interpret the scores and produce ranked findings.
+                WorkflowStep::new(
+                    "clarity_investigate_agent",
+                    StepKind::ClarityInvestigateAgentic,
+                ),
             ],
             // investigate_posthog has no CLI implementation yet — fall back to agent.
             _ => vec![WorkflowStep::new(

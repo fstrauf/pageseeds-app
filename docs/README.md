@@ -25,7 +25,7 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 | How AI agents work | [Agent Integration](./AGENT_INTEGRATION.md) |
 | How to build features | [Agent Development Playbook](./AGENT_DEVELOPMENT_PLAYBOOK.md) |
 | The critical rules | [CONTRACTS.md](../CONTRACTS.md) |
-| How to add features | [AGENTS.md](../AGENTS.md) |
+| Agent rules and orientation | [AGENTS.md](../AGENTS.md) |
 | Quick orientation | [AI_QUICK_START.md](../AI_QUICK_START.md) |
 
 ---
@@ -81,7 +81,7 @@ docs/
 ```
 ├── README.md                       # App overview, business objective, quick start
 ├── AI_QUICK_START.md               # Entry point for AI agents
-├── AGENTS.md                       # Comprehensive agent guide
+├── AGENTS.md                       # Agent orientation, core rules, DRY catalog, pre-change checklist
 ├── CONTRACTS.md                    # Runtime invariants (critical)
 ├── STYLE_GUIDE.md                  # Design system
 └── QUEUE_DEBUG.md                  # Debugging guide

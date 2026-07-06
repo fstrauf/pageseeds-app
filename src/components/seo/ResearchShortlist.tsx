@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Trash2,
   Plus,
@@ -6,7 +6,6 @@ import {
   Loader2,
   CheckSquare,
   Square,
-  Sparkles,
   RotateCcw,
 } from 'lucide-react'
 import { useErrorHandler } from '../../lib/toast-context'
@@ -75,11 +74,7 @@ export function ResearchShortlist({ projectId }: Props) {
     return entries.filter((e) => e.status === statusFilter)
   }, [entries, statusFilter])
 
-  useEffect(() => {
-    loadEntries()
-  }, [projectId, statusFilter])
-
-  async function loadEntries() {
+  const loadEntries = useCallback(async () => {
     setLoading(true)
     try {
       const data = await listResearchShortlist(
@@ -93,7 +88,11 @@ export function ResearchShortlist({ projectId }: Props) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId, statusFilter, showError])
+
+  useEffect(() => {
+    loadEntries()
+  }, [loadEntries])
 
   function toggleSelect(id: bigint) {
     setSelected((prev) => {

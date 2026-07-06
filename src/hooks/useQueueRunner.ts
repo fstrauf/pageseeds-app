@@ -164,7 +164,29 @@ export function useQueueRunner(onCompleted?: () => void) {
         clearCompletedStore();
         logger.exit('clearCompleted');
       },
+
+      restartFailed: () => {
+        logger.entry('restartFailed');
+        const failedItems = itemsRaw.filter(
+          (i: QueueItem) => i.status === 'failed' || i.status === 'skipped'
+        );
+        if (failedItems.length === 0) {
+          logger.info('restartFailed - no failed items');
+          logger.exit('restartFailed');
+          return;
+        }
+        const enqueueItems = failedItems.map((i) => ({
+          task_id: i.task_id,
+          project_id: i.project_id,
+          title: i.title ?? null,
+          task_type: i.task_type ?? null,
+          project_name: i.project_name ?? null,
+        }));
+        enqueueStore(enqueueItems as EnqueueItem[], 'append');
+        logger.info('restartFailed - enqueued', { count: enqueueItems.length });
+        logger.exit('restartFailed');
+      },
     }),
-    [items, isRunning, isPaused, isVisible, isStarting, enqueueStore, removeItemStore, pauseStore, resumeStore, closeStore, clearCompletedStore]
+    [items, isRunning, isPaused, isVisible, isStarting, itemsRaw, enqueueStore, removeItemStore, pauseStore, resumeStore, closeStore, clearCompletedStore]
   );
 }

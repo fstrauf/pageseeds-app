@@ -11,7 +11,7 @@ interface Props {
   onRunTasks?: (tasks: Task[]) => void
 }
 
-export function SEO({ projectId, project, onRunTasks }: Props) {
+export function SEO({ projectId }: Props) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <Tabs defaultValue="keywords" className="flex flex-col h-full">

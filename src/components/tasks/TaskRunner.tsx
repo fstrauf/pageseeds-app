@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, XCircle, Clock, Loader2, ChevronDown, ChevronRight, ChevronUp, Pause, Play, X, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react'
 import type { FollowUpTask, RunnerItem, StepProgress } from '../../lib/types'
 import { canEnqueue, getReviewLabel } from '../../lib/taskCapabilities'
@@ -26,6 +26,7 @@ interface Props {
   onClose: () => void
   onClearCompleted?: () => void
   onOpenTask?: (taskId: string) => void
+  onRestartAll?: () => void
 }
 
 export function TaskRunner({
@@ -39,6 +40,7 @@ export function TaskRunner({
   onClose,
   onClearCompleted,
   onOpenTask,
+  onRestartAll,
 }: Props) {
   logger.entry('TaskRunner', { itemCount: items.length, isRunning, isPaused });
   
@@ -166,6 +168,17 @@ export function TaskRunner({
                 <><ChevronUp size={12} className="mr-1" />Expand</>
               )}
             </Button>
+            {!isRunning && !isPaused && failed > 0 && onRestartAll && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={onRestartAll}
+                className="text-xs text-muted-foreground"
+              >
+                <RefreshCw size={12} className="mr-1" />
+                Restart all
+              </Button>
+            )}
             {!isRunning && completed > 0 && onClearCompleted && (
               <Button
                 variant="ghost"

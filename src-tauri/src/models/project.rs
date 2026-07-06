@@ -68,6 +68,8 @@ pub struct Project {
     pub agent_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seo_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarity_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -82,4 +84,6 @@ pub struct ProjectCreate {
     pub sitemap_url: Option<String>,
     #[serde(default)]
     pub project_mode: ProjectMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clarity_project_id: Option<String>,
 }

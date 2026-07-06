@@ -382,7 +382,8 @@ pnpm exec tsc -b
 
 ## See Also
 
-- [`AGENTS.md`](../AGENTS.md) — Full architecture reference, directory map, deep rules, pre-change checklist
+- [`AGENTS.md`](../AGENTS.md) — Agent orientation, core rules, DRY catalog, pre-change checklist
 - [`WORKFLOW_ENGINE.md`](./WORKFLOW_ENGINE.md) — How handlers, steps, and the executor interact
-- [`AGENTS.md`](../AGENTS.md) — Queue semantics and event flow
+- [`DATA_PERSISTENCE.md`](./DATA_PERSISTENCE.md) — SQLite and JSON repo data architecture
+- [`AGENT_INTEGRATION.md`](./AGENT_INTEGRATION.md) — LLM integration with Rig
 - [`CONTRACTS.md`](../CONTRACTS.md) — Runtime invariants and hidden rules

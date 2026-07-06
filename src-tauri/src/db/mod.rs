@@ -1360,6 +1360,39 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 43 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS clarity_export_rows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                exported_at TEXT NOT NULL,
+                clarity_date TEXT NOT NULL,
+                dimension_set TEXT NOT NULL,
+                metric_name TEXT NOT NULL,
+                dimension_json TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_clarity_rows_project_date ON clarity_export_rows(project_id, clarity_date);
+            CREATE INDEX IF NOT EXISTS idx_clarity_rows_metric ON clarity_export_rows(project_id, metric_name, clarity_date);
+            "
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (43, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 44 {
+        let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN clarity_project_id TEXT;");
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (44, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 

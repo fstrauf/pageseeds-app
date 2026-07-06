@@ -3,7 +3,7 @@ import { RefreshCw, Upload, Download, Plus, Play, Trash2, X, AlertCircle } from 
 import { useRef } from 'react'
 import { cn, formatDate } from '../../lib/utils'
 import { listTasks, getTask, importFromRepo, exportToRepo, analyzeArticleDatePolicy, deleteTask } from '../../lib/tauri'
-import type { Task } from '../../lib/types'
+import type { Project, Task } from '../../lib/types'
 import { canEnqueue } from '../../lib/taskCapabilities'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -83,6 +83,7 @@ const EMPTY_TASKS: Task[] = []
 interface TaskBoardProps {
   projectId?: string
   projectName?: string
+  project?: Project
   /** If set, auto-open this task as soon as the task list loads. */
   initialTaskId?: string
   /** Called once the task has been opened so the caller can clear the pending id. */
@@ -96,6 +97,7 @@ interface TaskBoardProps {
 export function TaskBoard({
   projectId,
   projectName,
+  project,
   initialTaskId,
   onTaskOpened,
   onRunTasks,
@@ -636,6 +638,7 @@ export function TaskBoard({
             <TaskDetail
               task={selectedTask}
               projectName={projectName}
+              project={project}
               onClose={() => {
                 setSelectedTask(null)
                 onTaskOpened?.()

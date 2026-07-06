@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Copy,
-  ExternalLink,
   FileText,
   GitMerge,
   Globe,
@@ -17,7 +16,6 @@ import {
   RefreshCw,
   ShieldAlert,
   Type,
-  Wrench,
   XCircle,
 } from 'lucide-react'
 import { useErrorHandler } from '@/lib/toast-context'
@@ -330,7 +328,7 @@ interface Props {
 }
 
 export function HealthDashboard({ projectId, onViewChange, onRunTasks }: Props) {
-  const handleError = useErrorHandler()
+  const { showError } = useErrorHandler()
   const [data, setData] = useState<HealthData>({
     contentAudit: null,
     ctrHealth: null,
@@ -385,11 +383,11 @@ export function HealthDashboard({ projectId, onViewChange, onRunTasks }: Props) 
       }
       setTimeout(() => loadData(), 3000)
     } catch (e: unknown) {
-      handleError(e)
+      showError(String(e))
     } finally {
       setRunningAudit(false)
     }
-  }, [projectId, loadData, handleError, onRunTasks])
+  }, [projectId, loadData, showError, onRunTasks])
 
   const priorityIssues = useMemo(
     () =>
@@ -842,9 +840,9 @@ function CannibalizationSection({
             key={rec.cluster_id}
             className="text-xs py-1.5 px-2 rounded bg-secondary/50 mb-1"
           >
-            <span className="font-medium">{rec.cluster_name}</span>
+            <span className="font-medium">{rec.keep_url}</span>
             <span className="text-muted-foreground ml-2">
-              {rec.articles?.length || 0} pages
+              {(rec.redirect_urls?.length ?? 0) + 1} pages
             </span>
           </div>
         ))}

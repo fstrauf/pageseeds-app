@@ -11,6 +11,7 @@ import { LinkingMap } from './components/articles/LinkingMap'
 import { CannibalizationReview } from './components/cannibalization/CannibalizationReview'
 import { Reddit } from './components/reddit/Reddit'
 import { GSC } from './components/gsc/GSC'
+import { Clarity } from './components/clarity/Clarity'
 import { SEO } from './components/seo/SEO'
 import { SocialDashboard } from './components/social'
 import { ProjectModal } from './components/projects/ProjectModal'
@@ -241,6 +242,7 @@ export default function App() {
           <TaskBoard
             projectId={activeProject?.id}
             projectName={activeProject?.name}
+            project={activeProject ?? undefined}
             initialTaskId={pendingTaskId}
             onTaskOpened={handleTaskOpened}
             onRunTasks={handleRunTasks}
@@ -330,6 +332,12 @@ export default function App() {
             project={activeProject ?? undefined}
           />
         )}
+        {activeView === 'clarity' && (
+          <Clarity
+            projectId={activeProject?.id ?? ''}
+            project={activeProject ?? undefined}
+          />
+        )}
         {activeView === 'seo' && (
           <SEO
             projectId={activeProject?.id ?? ''}
@@ -361,6 +369,7 @@ export default function App() {
           onClose={queue.close}
           onClearCompleted={queue.clearCompleted}
           onOpenTask={handleOpenTask}
+          onRestartAll={queue.restartFailed}
         />
       )}
 

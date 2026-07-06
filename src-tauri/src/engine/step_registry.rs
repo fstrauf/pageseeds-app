@@ -540,6 +540,28 @@ impl StepRegistry {
             step
         );
 
+        register_blocking!(
+            handlers,
+            StepKind::CollectClarity,
+            crate::engine::exec::clarity::exec_collect_clarity,
+            db_conn
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::ClaritySummarise,
+            crate::engine::exec::clarity::exec_clarity_summarise,
+            db_conn
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::ClarityInvestigateAgentic,
+            crate::engine::exec::clarity::exec_clarity_investigate,
+            agent_provider,
+            step
+        );
+
         handlers.insert(
             StepKind::SocialCollectSources,
             Box::new(|_step, ctx| {
