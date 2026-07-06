@@ -137,6 +137,33 @@ Before adding or changing anything that creates, queues, reviews, or spawns task
 
 ---
 
+## Overview Tool Catalog
+
+The capabilities surfaced on the Overview screen are **task types**, not function calls — enqueue them via the queue; never execute directly. Full per-tool reference: [`docs/TOOL_CATALOG.md`](./docs/TOOL_CATALOG.md).
+
+**When to use which (quick guide):**
+
+| Situation | Tool (task type) |
+|---|---|
+| Need new blog/informational topics | `research_keywords` |
+| Need new conversion/landing pages | `research_landing_pages` |
+| "Something is underperforming" (unknown cause) | `content_review` (umbrella) |
+| Low click-through rate from search | `ctr_audit` |
+| Your own pages compete for the same query | `cannibalization_audit` |
+| Pages exist but Google hasn't indexed them | `indexing_health_campaign` |
+| Want UX/behavioral signals (Clarity) | `clarity_analytics` |
+| Weekly Reddit audience engagement | `reddit_opportunity_search` |
+| Broken MDX structure (headings, frontmatter) | `content_cleanup` |
+| Rename frontmatter fields (`metaDescription` → `description`) | `sanitize_content` |
+| Plan a feature for this app | `generate_feature_spec` |
+
+Rules:
+- **Start with the umbrella.** Reach for the specific audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped to that domain; otherwise `content_review`.
+- **Collection tasks (`collect_gsc`, `collect_posthog`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually.
+- **Lifecycle metadata is owned by `config/task_definitions.rs`.** When the Overview UI and Rust disagree, the Rust file wins. Update both together.
+
+---
+
 ## Choose Execution Mode Deliberately
 
 Every new workflow step requires an explicit decision. Use these tests:
