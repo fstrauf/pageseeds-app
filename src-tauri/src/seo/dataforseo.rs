@@ -1,6 +1,9 @@
 use crate::error::{Error, Result};
 use crate::seo::intent::{classify_batch_by_pattern, IntentClassification};
-use crate::seo::keywords::{KeywordDifficultyResult, KeywordIdea, KeywordIdeasResult, SerpEntry};
+use crate::seo::keywords::{
+    KeywordDifficultyResult, KeywordIdea, KeywordIdeasResult, SerpEntry, SerpFeaturesResult,
+    SerpOrganicResult,
+};
 use crate::seo::provider::SeoDataProvider;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -671,6 +674,146 @@ impl SeoDataProvider for DataForSeoProvider {
 
         // For now, use pattern matching as fallback
         Ok(classify_batch_by_pattern(keywords))
+    }
+
+    async fn serp_features(&self, keyword: &str, country: &str) -> Result<SerpFeaturesResult> {
+        let location_code: i64 = match country.to_lowercase().as_str() {
+            "us" | "usa" => 2840,
+            "uk" | "gb" => 2826,
+            "ca" => 2124,
+            "au" => 2036,
+            "de" => 2276,
+            "fr" => 2250,
+            _ => 2840,
+        };
+
+        let payload = serde_json::json!([{
+            "keyword": keyword,
+            "location_code": location_code,
+            "language_code": "en",
+            "device": "desktop"
+        }]);
+
+        let resp = self
+            .client
+            .post(self.api_url("/v3/serp/google/organic/live/advanced/"))
+            .header("Authorization", self.auth_header())
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(Error::Http)?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Error::Other(format!(
+                "DataForSEO SERP API returned status {}: {}",
+                status, body
+            )));
+        }
+
+        let data: Value = resp.json().await.map_err(Error::Http)?;
+
+        if let Some(status_code) = data.get("status_code").and_then(|v| v.as_i64()) {
+            if status_code != 20000 {
+                let status_msg = data
+                    .get("status_message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error");
+                return Err(Error::Other(format!(
+                    "DataForSEO SERP API error {}: {}",
+                    status_code, status_msg
+                )));
+            }
+        }
+
+        // Parse SERP items: tasks[].result[].items[] each with a "type" field.
+        let mut result = SerpFeaturesResult {
+            keyword: keyword.to_string(),
+            ai_overview_present: false,
+            featured_snippet_present: false,
+            people_also_ask_present: false,
+            organic_results: vec![],
+        };
+
+        let empty = vec![];
+        let tasks = data.get("tasks").and_then(|t| t.as_array()).unwrap_or(&empty);
+        for task in tasks {
+            let task_result = task
+                .get("result")
+                .and_then(|r| r.as_array())
+                .unwrap_or(&empty);
+            for res in task_result {
+                let items = res
+                    .get("items")
+                    .and_then(|i| i.as_array())
+                    .unwrap_or(&empty);
+                for item in items {
+                    let item_type = item
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+
+                    // Detect SERP features by item type.
+                    // DataForSEO uses these type names in the advanced endpoint.
+                    if item_type.contains("ai_overview")
+                        || item_type.contains("ai_summary")
+                        || item_type == "ai_mode_link"
+                    {
+                        result.ai_overview_present = true;
+                    }
+                    if item_type == "featured_snippet" {
+                        result.featured_snippet_present = true;
+                    }
+                    if item_type.contains("people_also_ask") {
+                        result.people_also_ask_present = true;
+                    }
+
+                    // Collect organic results for competitor analysis.
+                    if item_type == "organic" {
+                        let domain = item
+                            .get("domain")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let url = item
+                            .get("url")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let title = item
+                            .get("title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let position = item
+                            .get("rank_absolute")
+                            .and_then(|p| p.as_i64())
+                            .unwrap_or(0);
+                        if !domain.is_empty() {
+                            result.organic_results.push(SerpOrganicResult {
+                                domain,
+                                url,
+                                title,
+                                position,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        log::info!(
+            "[dataforseo] SERP features for '{}': aio={}, snippet={}, paa={}, organic_count={}",
+            keyword,
+            result.ai_overview_present,
+            result.featured_snippet_present,
+            result.people_also_ask_present,
+            result.organic_results.len()
+        );
+
+        Ok(result)
     }
 
     fn name(&self) -> &'static str {

@@ -85,7 +85,7 @@ pub fn create_project(
         project_mode: project_mode.clone(),
         active: true,
         agent_provider: None,
-        seo_provider: Some("ahrefs".to_string()),
+        seo_provider: Some("dataforseo".to_string()),
         clarity_project_id,
     };
 

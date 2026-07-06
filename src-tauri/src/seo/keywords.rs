@@ -62,6 +62,34 @@ pub struct KeywordDifficultyResult {
     pub serp: Vec<SerpEntry>,
 }
 
+// ─── SERP Feature Analysis ───────────────────────────────────────────────────
+
+/// A single organic result from a SERP feature analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerpOrganicResult {
+    pub domain: String,
+    pub url: String,
+    pub title: String,
+    /// 1-based rank position on the SERP.
+    pub position: i64,
+}
+
+/// SERP feature analysis for a keyword — detects AI Overviews,
+/// featured snippets, PAA boxes, and collects competitor domains
+/// for winnability scoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerpFeaturesResult {
+    pub keyword: String,
+    /// True if Google shows an AI Overview for this keyword.
+    pub ai_overview_present: bool,
+    /// True if a featured snippet occupies position 0.
+    pub featured_snippet_present: bool,
+    /// True if a People Also Ask box appears.
+    pub people_also_ask_present: bool,
+    /// Top organic results (domain + position) for competitor analysis.
+    pub organic_results: Vec<SerpOrganicResult>,
+}
+
 // ─── Ahrefs Option-style JSON unwrapping ─────────────────────────────────────
 
 /// Recursively unwrap Ahrefs Option-style arrays like ["Some", {...}] or ["Ok", {...}].

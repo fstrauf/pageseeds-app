@@ -18,7 +18,7 @@ async fn resolve_provider_for_project(
         let provider = project
             .seo_provider
             .clone()
-            .unwrap_or_else(|| "ahrefs".to_string());
+            .unwrap_or_else(|| "dataforseo".to_string());
         (project.path, provider)
     };
 
@@ -118,7 +118,7 @@ pub async fn get_seo_provider(
 ) -> Result<String, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
-    Ok(project.seo_provider.unwrap_or_else(|| "ahrefs".to_string()))
+    Ok(project.seo_provider.unwrap_or_else(|| "dataforseo".to_string()))
 }
 
 #[tauri::command]
@@ -136,10 +136,11 @@ pub async fn set_seo_provider(
     let mut db = state.db.lock().map_err(|e| e.to_string())?;
     let mut project = task_store::get_project(&db, &project_id).map_err(|e| e.to_string())?;
 
-    // Validate provider name
+    // Validate provider name — DataForSEO is the default.
+    // Ahrefs (the CapSolver scraper) is accepted for backwards compat.
     let valid_provider = match provider.to_lowercase().as_str() {
-        "dataforseo" => "dataforseo",
-        _ => "ahrefs",
+        "ahrefs" => "ahrefs",
+        _ => "dataforseo",
     };
 
     project.seo_provider = Some(valid_provider.to_string());

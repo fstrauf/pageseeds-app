@@ -7,6 +7,7 @@ pub mod keywords;
 pub mod provider;
 pub mod scoring;
 pub mod traffic;
+pub mod winnability;
 
 use crate::config::env_resolver::EnvResolver;
 use crate::error::Result;
@@ -119,12 +120,22 @@ pub async fn solve_ahrefs_captcha(api_key: &str, site_url: &str) -> Result<Strin
 }
 
 /// Build the active SeoDataProvider based on project settings.
+///
+/// DataForSEO is the default and recommended provider. Ahrefs (the CapSolver
+/// scraper) is supported for backwards compatibility but cannot provide SERP
+/// feature analysis — the winnability classifier requires DataForSEO.
 pub fn resolve_provider(
     provider_name: &str,
     env: &EnvResolver,
 ) -> Result<Box<dyn SeoDataProvider>> {
     match provider_name.to_lowercase().as_str() {
-        "dataforseo" => {
+        "ahrefs" => {
+            let (capsolver_key, _) = env.resolve("CAPSOLVER_API_KEY").ok_or_else(|| {
+                crate::error::Error::Other("CAPSOLVER_API_KEY not configured".to_string())
+            })?;
+            Ok(Box::new(AhrefsProvider::new(capsolver_key)))
+        }
+        _ => {
             let (login, _) = env.resolve("DATAFORSEO_LOGIN").ok_or_else(|| {
                 crate::error::Error::Other("DATAFORSEO_LOGIN not configured".to_string())
             })?;
@@ -132,12 +143,6 @@ pub fn resolve_provider(
                 crate::error::Error::Other("DATAFORSEO_PASSWORD not configured".to_string())
             })?;
             Ok(Box::new(DataForSeoProvider::new(login, password)))
-        }
-        _ => {
-            let (capsolver_key, _) = env.resolve("CAPSOLVER_API_KEY").ok_or_else(|| {
-                crate::error::Error::Other("CAPSOLVER_API_KEY not configured".to_string())
-            })?;
-            Ok(Box::new(AhrefsProvider::new(capsolver_key)))
         }
     }
 }

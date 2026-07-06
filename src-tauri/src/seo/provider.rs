@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::seo::intent::IntentClassification;
-use crate::seo::keywords::{KeywordDifficultyResult, KeywordIdeasResult};
+use crate::seo::keywords::{KeywordDifficultyResult, KeywordIdeasResult, SerpFeaturesResult};
 use async_trait::async_trait;
 
 /// Unified interface for SEO data backends.
@@ -30,6 +30,11 @@ pub trait SeoDataProvider: Send + Sync {
 
     /// Classify search intent for keywords.
     async fn search_intent(&self, keywords: &[String]) -> Result<Vec<IntentClassification>>;
+
+    /// Get SERP features (AI Overview, featured snippets, PAA, competitor domains)
+    /// for a keyword. Used by the winnability classifier to assess whether a
+    /// keyword is worth targeting.
+    async fn serp_features(&self, keyword: &str, country: &str) -> Result<SerpFeaturesResult>;
 
     /// Provider name for display ("ahrefs" | "dataforseo").
     fn name(&self) -> &'static str;

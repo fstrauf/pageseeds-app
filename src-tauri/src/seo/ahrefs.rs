@@ -2,6 +2,7 @@ use crate::error::Result;
 use crate::seo::intent::{classify_batch_by_pattern, IntentClassification};
 use crate::seo::keywords::{
     get_keyword_difficulty, get_keyword_ideas, KeywordDifficultyResult, KeywordIdeasResult,
+    SerpFeaturesResult,
 };
 use crate::seo::provider::SeoDataProvider;
 use async_trait::async_trait;
@@ -68,6 +69,16 @@ impl SeoDataProvider for AhrefsProvider {
     async fn search_intent(&self, keywords: &[String]) -> Result<Vec<IntentClassification>> {
         // Ahrefs doesn't have an intent API, so we use pattern matching
         Ok(classify_batch_by_pattern(keywords))
+    }
+
+    async fn serp_features(&self, _keyword: &str, _country: &str) -> Result<SerpFeaturesResult> {
+        // SERP feature analysis requires DataForSEO. The Ahrefs scraper path
+        // only returns organic results and discards SERP features.
+        Err(crate::error::Error::Other(
+            "SERP feature analysis requires the DataForSEO provider. \
+             Switch the project's seo_provider setting to 'dataforseo'."
+                .to_string(),
+        ))
     }
 
     fn name(&self) -> &'static str {

@@ -116,7 +116,7 @@ pub async fn execute_task_with_token(
             project
                 .seo_provider
                 .clone()
-                .unwrap_or_else(|| "ahrefs".to_string()),
+                .unwrap_or_else(|| "dataforseo".to_string()),
         )
     };
 

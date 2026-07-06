@@ -173,29 +173,21 @@ pub fn select_keywords_deterministic(
         })
         .collect();
 
-    let mut used_fallback = false;
-
-    // Fallback: if API data is sparse or strict filtering drops everything,
-    // return the best available keywords so the user can still review/select.
-    // Keeps non-navigational filter only.
-    if candidates.is_empty() && !pipeline.keywords.is_empty() {
-        log::warn!(
-            "[select_keywords_deterministic] Intent-aware filter yielded 0 results ({} candidates, {} with data). Using broad fallback.",
-            total_candidates,
-            pipeline.with_data_count
-        );
-        candidates = pipeline
-            .keywords
-            .into_iter()
-            .filter(|k| {
-                k.intent
-                    .as_deref()
-                    .map(|i| !i.eq_ignore_ascii_case("navigational"))
-                    .unwrap_or(true)
-            })
-            .collect();
-        used_fallback = true;
+    // No fallback. If strict filtering yields nothing, the task fails with an
+    // actionable message rather than silently relaxing the quality bar. The
+    // user iterates on seed keywords rather than accepting low-quality
+    // candidates that would become dead-weight articles.
+    if candidates.is_empty() {
+        return Err(format!(
+            "No keywords met the quality bar after filtering {} candidates. \
+             Criteria: KD ≤ {}, non-navigational intent, with verified search data. \
+             Try different seed keywords, broaden the territory, or lower the \
+             difficulty expectation for this workflow.",
+            total_candidates, target_kd
+        ));
     }
+
+    let used_fallback = false;
 
     // Sort by volume desc, then KD asc
     candidates.sort_by(|a, b| {
@@ -552,17 +544,25 @@ mod tests {
     }
 
     #[test]
-    fn selection_uses_broad_fallback_when_nothing_matches_filters() {
-        // All keywords exceed KD 30, so the broad fallback (no KD filter) should run.
+    fn selection_fails_when_nothing_matches_filters() {
+        // All keywords exceed KD 30 — no fallback, the function should fail
+        // with an actionable error rather than silently relaxing the bar.
         let pipeline = build_pipeline(vec![
             kw("how to sell covered calls", 1200, 55.0, "informational"),
             kw("covered call strike selection", 400, 50.0, "informational"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, used_fallback) = select_keywords_deterministic(&json, false).unwrap();
-        assert!(used_fallback, "should have used fallback when KD <= 30 yields nothing");
-        let results = output.difficulty.unwrap().results;
-        assert_eq!(results.len(), 2, "fallback should include high-KD keywords for review");
+        let result = select_keywords_deterministic(&json, false);
+        assert!(
+            result.is_err(),
+            "should fail (not fallback) when no keywords meet the KD bar"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("No keywords met the quality bar"),
+            "error should explain the failure: {}",
+            err
+        );
     }
 
     #[test]
