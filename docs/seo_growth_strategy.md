@@ -1,8 +1,82 @@
 # SEO Growth Strategy — Days to Expiry (daystoexpiry.com)
 
-> Living document. Captures the data-driven diagnosis and the open questions we're iterating on.
-> Supersedes the static `seo_action_plan.md` (2026-05-28) with current GSC data.
-> Last updated: 2026-07-06
+> Last updated: 2026-07-07 — 5 workstreams, 2 complete, 3 ready to execute.
+
+---
+
+## Status at 2026-07-07 (handoff)
+
+### Completed (code written, verified, committed)
+
+**WS1 — `write_article` skill + agentic file operations** ✅
+- New `skills/content-write/SKILL.md` — differentiation directive, E-E-A-T, tone, structure
+- `ContentHandler::plan` loads it for all non-hub articles (was: no skill at all)
+- Bridge fs support (`kimi-acp-openai-bridge`): `initialize` capabilities fix, `fs/read_text_file` + `fs/write_text_file` handlers, `X-Kimi-Workdir` header
+- Workdir threading (PageSeeds): `project_path` flows through 7-function chain to the bridge
+- `write_article_smoke` binary for prompt iteration without the app
+- **Acceptance test passed**: agent read 4 existing articles, wrote a 2,149-word differentiated gamma-scalping article with real internal links
+
+**WS2 — DataForSEO-only + SERP API + winnability classifier** ✅
+- `serp_features()` on `SeoDataProvider` trait → DataForSEO `/v3/serp/google/organic/live/advanced/` (AIO, snippets, PAA, competitor domains)
+- DataForSEO as sole default provider (factory + new projects + all fallbacks). Ahrefs accepted for backwards compat but `serp_features()` returns error on Ahrefs.
+- `seo/winnability.rs`: scores keywords Target / Differentiate / Avoid (6 unit tests)
+- No-fallback selection: hard fail if no keywords meet the quality bar
+- Pipeline integration: `enrich_with_winnability()` wires into `exec_research_final_selection` (non-fatal — keywords without scores pass through unchanged)
+
+### Ready to execute (needs your action — app rebuild)
+
+**WS3 — Cannibalization merges** ⏳
+- Slug fix committed to main (`9dcc866`). Fresh audit 2026-07-06: 16 clusters, 14/16 correct, zero non-canonical URLs.
+- **To do**: rebuild the PageSeeds app, restart the kimi-acp-bridge, process the `consolidate_cluster` review queue in the UI. Cancel the 35 stale May–Jun tasks.
+
+**WS4 — Dead-weight remediation** ⏳
+- 56 zero-impression articles categorized: ~15 Avoid, ~20 Differentiate, ~21 Target
+- **Decision**: don't noindex yet. Rebuild first, run `research_keywords` (which now auto-scores winnability via WS2), then let the scores decide.
+
+**WS5 — Striking-distance push** ⏳
+- 18 articles at positions 7-13 identified with priorities (see §WS5 below)
+- Top 5 by impact: `theta-decay-dte-guide` (3,758), `best-stocks-wheel-strategy` (3,005), `naked-puts-vs-csp` (1,975), `covered-call-tax-rules` (1,727), `interactive-brokers-flex-query` (1,362)
+
+### How to pick this up
+
+**Branches:**
+| Repo | Branch | Status |
+|---|---|---|
+| `pageseeds-app` | `feat/seo-growth-strategy` | 4 commits ahead of main — ready to merge |
+| `kimi-acp-openai-bridge` | `main` | 1 commit with fs handlers — already on main |
+
+**Rebuild steps:**
+```bash
+# 1. PageSeeds app
+cd pageseeds-app
+git checkout feat/seo-growth-strategy
+cargo build --manifest-path src-tauri/Cargo.toml  # or npm run tauri dev
+
+# 2. Restart the bridge (to pick up fs handlers)
+kill $(lsof -ti:8080)
+nohup kimi-acp-bridge > /tmp/kimi-bridge.log 2>&1 &
+
+# 3. In the app UI, go to Overview → Cannibalization → process review queue
+# 4. Run research_keywords (now produces winnability scores)
+# 5. Compare the generated article quality using write_article_smoke
+```
+
+### Key files changed
+
+- `src-tauri/skills/content-write/SKILL.md` — new content strategy skill
+- `src-tauri/src/seo/winnability.rs` — new winnability classifier
+- `src-tauri/src/bin/write_article_smoke.rs` — new isolated test tool
+- `src-tauri/src/seo/provider.rs` — `serp_features()` on the trait
+- `src-tauri/src/seo/dataforseo.rs` — DataForSEO SERP API implementation
+- `src-tauri/src/seo/mod.rs` — factory defaults to DataForSEO
+- `src-tauri/src/engine/exec/research/autocomplete.rs` — enrichment + fallback removal
+- `src-tauri/src/engine/agent.rs` — workdir threading
+- `src-tauri/src/rig/compat/kimi.rs` — `X-Kimi-Workdir` header
+- `kimi-acp-openai-bridge/src/kimi_acp_bridge/acp_client.py` — fs handlers + capabilities fix
+- `kimi-acp-openai-bridge/src/kimi_acp_bridge/server.py` — workdir header extraction
+
+### The number to watch
+**Weighted average position** — currently 11.6. Climbing toward 6-7 = death spiral reversing. Stuck at 11+ = WS4/5 must lead before new publishing.
 
 ---
 
