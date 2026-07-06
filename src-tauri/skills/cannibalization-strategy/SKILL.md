@@ -43,17 +43,19 @@ For true cannibalization, recommend which article to **KEEP** and which to **red
 
 ## Output Contract
 
-You are analyzing **ONE candidate cluster**. Return **ONE JSON object** with exactly these fields:
+You are analyzing **ONE candidate cluster**. Return **ONE JSON object** with exactly these fields.
+
+**You identify pages by their `id` (the integer from each page's `id` field) — never by URL string.** The workflow resolves your id selection to canonical URLs deterministically. This is mandatory: returning a URL you typed by hand will be rejected.
 
 ```json
 {
   "cluster_id": "cash_secured_puts_best_stocks",
   "cluster_theme": "cash-secured-puts",
-  "keep_url": "/blog/best-stocks-csp",
-  "redirect_urls": ["/blog/cash-secured-puts-strategy-explained", "/blog/cash-secured-puts-playbook"],
+  "keep_id": 17,
+  "redirect_ids": [42, 88],
   "merge_before_redirect": true,
   "merge_instructions": [
-    "Move the risk-management table from /blog/cash-secured-puts-playbook into the keeper.",
+    "Move the risk-management table from the cash-secured-puts-playbook page into the keeper.",
     "Preserve the brokerage-specific example as a subsection."
   ],
   "reason": "Keeper has highest impressions, cleanest URL, strongest internal link count, and best position.",
@@ -65,10 +67,10 @@ You are analyzing **ONE candidate cluster**. Return **ONE JSON object** with exa
 **Field descriptions:**
 - `cluster_id`: Copy the `candidate_id` from the input.
 - `cluster_theme`: Copy the `theme` from the input.
-- `keep_url`: The URL of the single best article to keep.
-- `redirect_urls`: Array of URLs to 301-redirect to the keeper.
+- `keep_id`: The `id` of the single best article to keep. Must be one of the `id`s in the provided `pages`.
+- `redirect_ids`: Array of `id`s to 301-redirect to the keeper. Each must be one of the `id`s in the provided `pages`.
 - `merge_before_redirect`: `true` if unique content from redirect targets should be merged into the keeper first.
-- `merge_instructions`: Array of specific instructions for what content to preserve during the merge.
+- `merge_instructions`: Array of specific instructions for what content to preserve during the merge. Reference pages by title or `target_keyword`, not by URL.
 - `reason`: One-sentence justification for the keeper choice.
 - `no_action`: `true` ONLY if the pages clearly serve different search intents and do not cannibalize each other. `false` for all true cannibalization cases.
 - `confidence`: `"high"`, `"medium"`, or `"low"`.
@@ -76,6 +78,7 @@ You are analyzing **ONE candidate cluster**. Return **ONE JSON object** with exa
 **CRITICAL:**
 - Return ONLY a single JSON object. Do NOT wrap it in arrays or return multiple recommendations.
 - Do NOT return `no_action: true` for exact keyword duplicates (`candidate_type: "exact_keyword_dupe"`).
-- Every merge recommendation must name a keeper URL and at least one redirect URL.
-- Every keeper and redirect URL must exist in the provided candidate pages.
-- Every redirect URL must be different from the keeper.
+- Every merge recommendation must name a keeper `id` and at least one redirect `id`.
+- Every `keep_id` and `redirect_id` must be one of the `id`s present in the provided candidate `pages`. An id not in the page set cannot be resolved and the recommendation will be discarded.
+- `keep_id` must not appear in `redirect_ids`.
+- Do NOT output `keep_url`, `redirect_urls`, or any URL string. Output ids only.

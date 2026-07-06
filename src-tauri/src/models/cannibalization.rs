@@ -120,15 +120,24 @@ pub struct MergeRecommendation {
 
 /// Raw agent output for a single merge candidate analysis.
 /// Used by `extract_structured` in the cannibalization audit pipeline.
+///
+/// **The agent selects pages by stable article `id` only — it never emits URL
+/// strings.** URL materialization is a deterministic step in the workflow
+/// (`exec_can_analyze_candidates` resolves these ids to canonical
+/// `/blog/<slug>` paths via `slug::format_blog_link`). This prevents the agent
+/// from introducing malformed or non-resolvable slugs (e.g. underscores) into
+/// merge plans that feed 301 redirects.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CandidateAnalysisOutput {
     #[serde(default)]
     pub cluster_id: String,
+    /// The `id` of the page to keep (must exist in the candidate's `pages`).
     #[serde(default)]
-    pub keep_url: String,
+    pub keep_id: i64,
+    /// The `id`s of the pages to 301-redirect into the keeper.
     #[serde(default)]
-    pub redirect_urls: Vec<String>,
+    pub redirect_ids: Vec<i64>,
     #[serde(default)]
     pub merge_before_redirect: bool,
     #[serde(default)]

@@ -1578,12 +1578,57 @@ pub(crate) fn exec_can_analyze_candidates(
                 if rec.confidence.is_empty() {
                     rec.confidence = "medium".to_string();
                 }
-                if rec.keep_url.is_empty() && !rec.no_action {
-                    rec.no_action = true;
-                    rec.reason =
-                        "Model did not provide a keep_url or explicit no_action".to_string();
+                // ── Deterministic URL resolution ──────────────────────────────
+                // The agent selects pages by stable `id`; we resolve those ids
+                // to canonical `/blog/<slug>` URLs here. The agent never owns URL
+                // strings, so it cannot introduce malformed (e.g. underscored)
+                // slugs into the merge plan. Any id that does not resolve to a
+                // page in the candidate set is treated as no_action with a reason.
+                let page_url_by_id: std::collections::HashMap<i64, String> = candidate["pages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| {
+                        let id = p["id"].as_i64()?;
+                        let url = crate::content::slug::format_blog_link(
+                            p["url"].as_str().unwrap_or(p["url_slug"].as_str().unwrap_or("")),
+                        );
+                        Some((id, url))
+                    })
+                    .collect();
+
+                let keep_url: Option<String> = (rec.keep_id > 0)
+                    .then(|| page_url_by_id.get(&rec.keep_id).cloned())
+                    .flatten();
+                let missing_redirect_ids: Vec<i64> = rec
+                    .redirect_ids
+                    .iter()
+                    .filter(|id| !page_url_by_id.contains_key(id))
+                    .copied()
+                    .collect();
+                let redirect_urls: Vec<String> = rec
+                    .redirect_ids
+                    .iter()
+                    .filter_map(|id| page_url_by_id.get(id).cloned())
+                    .collect();
+
+                if !rec.no_action {
+                    if keep_url.is_none() {
+                        rec.no_action = true;
+                        rec.reason = format!(
+                            "Model returned keep_id={} which is not in the candidate page set; cannot resolve a canonical keeper URL.",
+                            rec.keep_id
+                        );
+                    } else if !missing_redirect_ids.is_empty() {
+                        rec.no_action = true;
+                        rec.reason = format!(
+                            "Model returned redirect_ids not present in the candidate page set: {:?}",
+                            missing_redirect_ids
+                        );
+                    }
                 }
-                let rec_json = match serde_json::to_value(&rec) {
+
+                let mut rec_json = match serde_json::to_value(&rec) {
                     Ok(v) => v,
                     Err(e) => {
                         log::warn!(
@@ -1601,6 +1646,23 @@ pub(crate) fn exec_can_analyze_candidates(
                         continue;
                     }
                 };
+                // Inject the deterministically-resolved canonical URLs so the
+                // batch output (and downstream reducer) carries both the agent's
+                // id selection and the resolved `/blog/<slug>` strings.
+                if let Some(obj) = rec_json.as_object_mut() {
+                    if let Some(ku) = keep_url {
+                        obj.insert("keep_url".to_string(), serde_json::Value::String(ku));
+                    }
+                    obj.insert(
+                        "redirect_urls".to_string(),
+                        serde_json::Value::Array(
+                            redirect_urls
+                                .into_iter()
+                                .map(serde_json::Value::String)
+                                .collect(),
+                        ),
+                    );
+                }
                 batch_outputs.push(serde_json::json!({
                     "candidate_id": candidate_id,
                     "success": true,
@@ -1753,8 +1815,15 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
                     continue;
                 }
 
-                let keep_url = rec.get("keep_url").and_then(|v| v.as_str()).unwrap_or("");
-                if keep_url.is_empty() {
+                // Deterministic slug normalization: merge URLs must be canonical
+                // `/blog/<hyphenated-slug>` paths. The analyze step resolves them
+                // from agent-selected ids, but we normalize defensively here too so
+                // hand-edited or legacy batch outputs can never emit a non-resolvable
+                // (e.g. underscored) URL into the strategy artifact or downstream
+                // 301 redirects.
+                let keep_url_raw = rec.get("keep_url").and_then(|v| v.as_str()).unwrap_or("");
+                let keep_url = crate::content::slug::format_blog_link(keep_url_raw);
+                if keep_url_raw.trim().is_empty() || keep_url == "/blog/" {
                     risks.push(format!(
                         "Missing keep_url for candidate {}",
                         output["candidate_id"].as_str().unwrap_or("?")
@@ -1767,7 +1836,7 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .filter_map(|v| v.as_str().map(crate::content::slug::format_blog_link))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -1781,6 +1850,22 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
                 }
 
                 let mut rec = rec.clone();
+                // Overwrite with canonical URLs so the artifact and downstream
+                // consolidate_cluster executor never see raw agent strings.
+                rec.insert(
+                    "keep_url".to_string(),
+                    serde_json::Value::String(keep_url.clone()),
+                );
+                rec.insert(
+                    "redirect_urls".to_string(),
+                    serde_json::Value::Array(
+                        redirect_urls
+                            .iter()
+                            .cloned()
+                            .map(serde_json::Value::String)
+                            .collect(),
+                    ),
+                );
                 if !rec.contains_key("confidence") {
                     rec.insert(
                         "confidence".to_string(),
@@ -2629,6 +2714,97 @@ Some content here.
         // Should record the failed candidate as a risk
         let risks = strategy["risks"].as_array().unwrap();
         assert!(risks.iter().any(|r| r.as_str().unwrap().contains("test_2")));
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_can_reduce_strategy_normalizes_non_canonical_urls() {
+        // The reducer must canonicalize merge URLs even when a legacy or
+        // hand-edited batch output carries non-resolvable slugs (underscores,
+        // mixed case, blog/ prefix, trailing slash). Downstream 301 redirects
+        // and GSC joins require canonical /blog/<hyphenated-slug> paths, and the
+        // agent must never be able to introduce a malformed URL into the artifact.
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        let batch_doc = serde_json::json!({
+            "batch_outputs": [{
+                "candidate_id": "test_0",
+                "success": true,
+                "message": "ok",
+                "merge_recommendation": {
+                    "cluster_theme": "covered calls",
+                    "keep_url": "/blog/best_stocks_csp",
+                    "redirect_urls": ["/blog/Cash_Secured_Puts_Strategy", "blog/rolling_covered_calls/"],
+                    "reason": "Higher impressions",
+                    "confidence": "high"
+                }
+            }]
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_batch_outputs.json"),
+            serde_json::to_string_pretty(&batch_doc).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            auto_dir.join("hub_gaps.json"),
+            serde_json::json!({ "hub_gaps": [] }).to_string(),
+        )
+        .unwrap();
+
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "cannibalization_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_can_reduce_strategy(&task, &path);
+        assert!(result.success, "{}", result.message);
+
+        let strategy: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(auto_dir.join("cannibalization_strategy.json")).unwrap(),
+        )
+        .unwrap();
+        let merges = strategy["merge_recommendations"].as_array().unwrap();
+        assert_eq!(merges.len(), 1);
+        // Underscored + mixed-case keeper → canonical hyphenated.
+        assert_eq!(
+            merges[0]["keep_url"].as_str().unwrap(),
+            "/blog/best-stocks-csp"
+        );
+        // Each redirect normalized: underscores→hyphens, lowercased,
+        // blog/ prefix and trailing slash handled.
+        let redirs: Vec<&str> = merges[0]["redirect_urls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            redirs,
+            vec![
+                "/blog/cash-secured-puts-strategy",
+                "/blog/rolling-covered-calls"
+            ]
+        );
 
         cleanup(&path);
     }
