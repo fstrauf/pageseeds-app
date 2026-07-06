@@ -235,32 +235,63 @@ Prioritized workstreams. Each has a clear acceptance test.
 
 **Deferred to WS2**: threading winnability bucket/competitor data through the provenance artifact (the data doesn't exist yet).
 
-### WS2 — DataForSEO-only + SERP feature API + winnability classifier  `[NEXT]`
-The systematic root-cause fix. Replaces the fragile Ahrefs scraper + removes the fallback.
+### WS2 — DataForSEO-only + SERP feature API + winnability classifier  `[DONE]`
+**Completed 2026-07-07.** The systematic root-cause fix for the dead-weight article problem. What shipped:
 
-- **Add `serp_features()` to `SeoDataProvider` trait** → call DataForSEO `/v3/serp/google/organic/live/advanced/`. Returns AIO presence, featured snippets, PAA, + organic results with competitor domains.
-- **Make DataForSEO the sole provider**: change `projects.seo_provider` default to `'dataforseo'`; remove/deprecate the Ahrefs CapSolver scraper path (`seo/ahrefs.rs`, `seo/keywords.rs:680` organic-only filter, `seo/mod.rs:36-119` captcha solver). This also kills the SERP-feature-discard bug at the source.
-- **Implement winnability classifier** (Q3): score each keyword Target / Differentiate / Avoid using AIO risk + competitor authority + intent + authority gap.
-- **Remove the silent fallback** (`autocomplete.rs:181-198`): fail hard with a clear message if no keywords meet the bar. Iterate on seeds, don't fabricate.
-- **Acceptance test**: a `research_keywords` run returns only Target/Differentiate keywords with AIO scores; no Avoid keywords leak through; no silent fallback fires; zero dependency on CapSolver.
-- **Effort**: ~3-4 days. **Status**: design ready (this doc); WS1 unblocked.
+- **`serp_features()` on `SeoDataProvider` trait** → DataForSEO calls `/v3/serp/google/organic/live/advanced/`. Detects AI Overviews, featured snippets, PAA, collects competitor domains.
+- **DataForSEO as sole default** → factory + new projects + all fallbacks default to `dataforseo`. Ahrefs accepted for backwards compat but `serp_features()` returns an error on Ahrefs.
+- **Winnability classifier** (`seo/winnability.rs`): scores keywords Target / Differentiate / Avoid based on AIO risk, authority competitor count, KD, intent. 6 unit tests.
+- **No-fallback selection** → hard fail if no keywords meet the quality bar. Iterate on seeds, don't fabricate.
+- **Pipeline integration** → `enrich_with_winnability()` calls `serp_features()` for each selected keyword, scores via `assess()`, attaches bucket + reason to the picker output. Non-fatal: keywords without scores pass through unchanged.
 
-### WS3 — Cannibalization merges  `[priority: high, ready]`
-- Slug fix is committed to main. Rebuild the app → apply the 14/16 correct merges via the review queue.
-- The fresh audit (2026-07-06) produced canonical URLs and 14/16 correct keeper decisions.
+### WS3 — Cannibalization merges  `[READY — needs app rebuild]`
+- Slug fix is committed to main (`9dcc866`). Fresh audit ran 2026-07-06: 16 merge clusters, 14/16 keeper decisions correct, zero non-canonical URLs.
+- **To apply**: rebuild the PageSeeds app (`npm run tauri build` or dev run), restart the kimi-acp-bridge (the fs handlers need the updated binary), then process the `consolidate_cluster` review queue in the UI.
+- The 35 stale consolidate_cluster tasks from May–Jun should be cancelled/replaced by the fresh audit output.
 - **Acceptance**: merges produce canonical URLs; consolidated clusters track position recovery over 4-6 weeks.
-- **Effort**: rebuild + ~1 day to process queue.
 
-### WS4 — Dead-weight remediation  `[priority: medium, after WS2]`
-- Run the winnability classifier (WS2) retroactively over the 56 zero-impression articles.
-- Disposition per score: **Avoid** → noindex; **Differentiate** → rewrite with proprietary angle (now possible with the content-write skill); **Target** (but underperforming) → internal-link boost, not removal.
-- **Do NOT blanket-noindex before WS2.** The score decides, not "zero impressions" alone.
-- **Acceptance**: every zero-impression article has a documented disposition + action.
-- **Effort**: ~1 day after WS2 ships.
+### WS4 — Dead-weight remediation  `[READY — needs app rebuild for SERP scoring]`
 
-### WS5 — Striking-distance push  `[priority: medium, parallel]`
-- Internal-link boost + depth expansion on the 18 articles at positions 7-13 (~17,000 combined impressions).
-- **Acceptance**: weighted avg position moves 11.6 → toward 8-9 within 4-6 weeks.
+The 56 zero-impression articles fall into three likely categories (rough categorization without SERP data — the winnability classifier gives precise scores once the app is rebuilt):
+
+**Likely Avoid (~15 articles):** Informational queries Investopedia / AIO-dominated. `what-are-greeks-options`, `what-are-greeks-faq`, `options-trading-for-dummies`, `protective-put-option`, `dividend-income-strategy`, `how-to-make-money-with-stocks-beginner`, `sell-covered-calls-guide`, `selling-puts-for-income`, `income-from-idle-cash`, etc.
+
+**Likely Differentiate (~20 articles):** Calculator/tool pages that need the actual tool embedded. `covered-call-screener-*` (5 variants from the Apr 2026 sprint), `options-calculator`, `option-price-calculator`, `options-profit-calculator`, `cboe-options-calculator`, `long-call-option-calculator`, `portfolio-visualizer`, `covered-call-portfolio-tracking`. These are the right strategy (proprietary tools) but have zero impressions — likely because they're thin pages without the actual calculator embedded, OR they're cannibalizing each other.
+
+**Likely Target (~21 articles):** Strategy-specific articles that should rank but don't. `0dte-options-strategy`, `bear-call-spread-strategy`, `call-spreads-vs-put-spreads`, `straddle-vs-strangle`, `leaps-options-strategy`, `wheel-options-trading-strategy-pdf`, etc. These likely need internal-link boost + cannibalization resolution (WS3) to gain visibility, not removal.
+
+**Decision:** Do NOT noindex yet. Rebuild the app, run a `research_keywords` run (which now scores winnability via WS2), and apply the classifier retroactively to these 56. Then noindex the Avoid bucket, rewrite the Differentiate bucket with the content-write skill, and boost the Target bucket via internal links.
+
+### WS5 — Striking-distance push  `[READY — can run in the app]`
+
+The 18 articles at positions 7-13 with >200 impressions. Total combined: ~17,000 impressions. These are the highest-leverage targets for a ranking push:
+
+| Article | Impr | Pos | CTR% | Type | Priority |
+|---|---|---|---|---|---|
+| theta-decay-dte-guide | 3,758 | 7.1 | 0.03 | CTR fix (AIO?) | Highest |
+| best-stocks-wheel-strategy | 3,005 | 9.5 | 0.27 | Internal links | High |
+| naked-puts-vs-csp | 1,975 | 7.5 | 0.05 | CTR fix | High |
+| covered-call-tax-rules | 1,727 | 10.0 | 0.06 | CTR fix | High |
+| spx-section-1256-tax | 1,414 | 9.7 | 0.14 | CTR + links | High |
+| interactive-brokers-flex-query | 1,362 | 8.0 | **0.51** | Replicate this pattern! | Medium |
+| best-brokers-options-trading | 993 | 13.0 | 0.0 | Needs attention | Medium |
+| best-stocks-to-sell-put-options-june-202 | 726 | 10.6 | 0.0 | Stale (june) — refresh or redirect | Low |
+| best-stocks-iron-condors | 656 | 11.3 | 0.76 | Healthy, just needs push | Medium |
+| best-stocks-to-sell-put-options-screener | 616 | 10.9 | 0.97 | Healthy, just needs push | Medium |
+| best-stocks-pmcc-leaps | 577 | 8.1 | 0.17 | CTR + links | Medium |
+| credit-spread-width-dte | 543 | 9.5 | 0.0 | CTR fix | Medium |
+| wheel-strategy-guide | 486 | 8.2 | 0.41 | Internal links | Medium |
+| how-to-sell-csp-ib | 483 | 9.8 | 0.41 | Platform-specific — extend | Medium |
+| interactive-brokers-portfolio-analysis | 340 | 9.8 | 0.0 | Needs attention | Medium |
+| covered-call-screener-tools | 335 | 12.5 | **1.49** | Replicate this pattern! | Medium |
+| best-stocks-to-sell-put-options-may-202 | 328 | 12.6 | 0.0 | Stale (may) — refresh or redirect | Low |
+| wheel-options-trading-strategy-review | 245 | 10.0 | 0.0 | CTR fix | Low |
+
+**Top 5 by impact:** theta-decay-dte-guide (3,758), best-stocks-wheel-strategy (3,005), naked-puts-vs-csp (1,975), covered-call-tax-rules (1,727), interactive-brokers-flex-query (1,362).
+
+**Pattern observation:** The highest-CTR articles at page-1-bottom are `covered-call-screener-tools` (1.49%) and `interactive-brokers-flex-query` (0.51%) — both are TOOL/PLATFORM-specific content. The lowest-CTR articles are informational (`theta-decay-dte-guide` 0.03%, `covered-call-tax-rules` 0.06%). This directly validates the Lever 5 strategy: tool/platform content captures clicks that informational content loses to AIOs.
+
+**Action:** Run `indexing_health_campaign` + `cluster_and_link` on the top 10 by impact. Refresh the stale monthly stock-pick articles (june/may) or consolidate them into a single evergreen list.
 
 ---
 
@@ -270,11 +301,11 @@ The systematic root-cause fix. Replaces the fragile Ahrefs scraper + removes the
 ### Sequencing
 ```
 WS1 (write_article skill)  ✅ DONE
+WS2 (winnability + DataForSEO SERP) ──▶ ✅ DONE ──▶ WS4 (dead-weight remediation, now unblocked)
 WS3 (merges, rebuild)      ──▶ ready, needs app rebuild
-WS2 (winnability + DataForSEO SERP) ──▶ NEXT ──▶ WS4 (dead-weight remediation)
 WS5 (striking-distance push) ──────────────────────────────────────────▶ (parallel, ongoing)
 ```
-WS1 is complete. WS2 is next — it's the root-cause fix that prevents future dead-weight articles. WS3 (merges) can proceed in parallel once the app is rebuilt. WS4 follows WS2. WS5 runs throughout.
+WS1 and WS2 are complete. WS4 is now unblocked — the winnability classifier can be run retroactively over the 56 zero-impression articles. WS3 needs the app rebuilt for the cannibalization merges. WS5 runs in parallel.
 
 ---
 
