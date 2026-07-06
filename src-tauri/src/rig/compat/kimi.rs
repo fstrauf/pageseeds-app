@@ -811,6 +811,7 @@ mod tests {
             "Say hello",
             Some("You are a helpful assistant."),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -845,6 +846,7 @@ mod tests {
             &format!("{}/v1", mock_server.uri()),
             "test-model",
             "Test prompt",
+            None,
             None,
             None,
         )

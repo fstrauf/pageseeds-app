@@ -122,6 +122,12 @@ pub struct SelectedKeyword {
     pub selection_reason: String,
     /// Recommended article title
     pub recommended_title: String,
+    /// Winnability bucket: "target" | "differentiate" | "avoid"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winnability: Option<String>,
+    /// Human-readable reason for the winnability score
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winnability_reason: Option<String>,
 }
 
 /// A landing page candidate (for commercial research)

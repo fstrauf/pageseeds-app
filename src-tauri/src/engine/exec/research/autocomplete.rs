@@ -244,6 +244,9 @@ pub fn select_keywords_deterministic(
                     k.volume.unwrap_or(0)
                 ),
                 recommended_title: generate_title(&k.keyword, false),
+                // Populated by enrich_with_winnability() after selection.
+                winnability: None,
+                winnability_reason: None,
             })
             .collect();
 
@@ -422,7 +425,11 @@ pub fn exec_research_final_selection(
     );
 
     match select_keywords_deterministic(pipeline_json, is_landing_page) {
-        Ok((output, used_fallback)) => {
+        Ok((mut output, used_fallback)) => {
+            // Enrich the selected keywords with winnability scores (AIO risk,
+            // competitor authority, KD) before writing the artifact.
+            enrich_with_winnability(&mut output, &task.project_id);
+
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
                 Err(e) => {
@@ -468,6 +475,98 @@ pub fn exec_research_final_selection(
             output: None,
         },
     }
+}
+
+/// Enrich selected keywords with winnability scores using SERP feature data.
+///
+/// Calls the DataForSEO SERP API for each keyword and scores it using the
+/// winnability classifier (Target / Differentiate / Avoid). Non-fatal: if the
+/// provider is unavailable or a SERP lookup fails, the keyword keeps its
+/// existing fields without a winnability score.
+fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
+    let keywords = match &mut output.difficulty {
+        Some(d) => &mut d.results,
+        None => return,
+    };
+    if keywords.is_empty() {
+        return;
+    }
+
+    // SERP feature enrichment requires an async runtime (HTTP calls to
+    // DataForSEO). Run it in a dedicated runtime like the cannibalization
+    // batch step does.
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[winnability] Failed to create runtime: {}", e);
+            return;
+        }
+    };
+
+    rt.block_on(async {
+        let conn = match rusqlite::Connection::open(crate::db::default_db_path()) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[winnability] DB error: {}", e);
+                return;
+            }
+        };
+        let project = match crate::engine::task_store::get_project(&conn, project_id) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("[winnability] Project error: {}", e);
+                return;
+            }
+        };
+        let provider_name = project.seo_provider.as_deref().unwrap_or("dataforseo");
+        let env = crate::config::env_resolver::EnvResolver::new(&project.path);
+        let provider = match crate::seo::resolve_provider(provider_name, &env) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!(
+                    "[winnability] Could not resolve SEO provider '{}': {}. \
+                     Keywords will lack winnability scores.",
+                    provider_name,
+                    e
+                );
+                return;
+            }
+        };
+
+        log::info!(
+            "[winnability] Enriching {} keywords with SERP features via {}",
+            keywords.len(),
+            provider_name
+        );
+
+        for kw in keywords.iter_mut() {
+            match provider.serp_features(&kw.keyword, "us").await {
+                Ok(serp) => {
+                    let assessment = crate::seo::winnability::assess(
+                        &kw.keyword,
+                        &serp,
+                        Some(kw.difficulty as f64),
+                        Some("informational"),
+                    );
+                    log::info!(
+                        "[winnability] '{}' → {} (risk={})",
+                        kw.keyword,
+                        assessment.bucket,
+                        assessment.risk_score
+                    );
+                    kw.winnability = Some(assessment.bucket.as_str().to_string());
+                    kw.winnability_reason = Some(assessment.reason);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[winnability] SERP lookup failed for '{}': {}",
+                        kw.keyword,
+                        e
+                    );
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
