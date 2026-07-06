@@ -221,15 +221,21 @@ Regular articles fall through to a generic boilerplate prompt (`handlers.rs:1194
 
 Prioritized workstreams. Each has a clear acceptance test.
 
-### WS1 — `write_article` skill + competitive context  `[priority: highest]`
-The article writer currently loads **no skill** and sees only `keyword + KD + volume`. Fix the prompts and the data plumbing.
+### WS1 — `write_article` skill + competitive context  `[DONE]`
+~~The article writer currently loads **no skill** and sees only `keyword + KD + volume`.~~
 
-- **Create `skills/content-write/SKILL.md`** — tone (authoritative, first-person where applicable), differentiation directive ("do not duplicate Investopedia; for 'Differentiate' keywords lead with proprietary data / real examples / platform angles"), content-type guidance (educational vs data-driven vs tool), E-E-A-T requirements, structural quality (comparison tables, FAQ hooks, original data points).
-- **Thread context through the pipeline**: `build_keyword_provenance_artifact` (`keyword_selection.rs:578`) currently passes only `{"keyword":"X"}` — carry winnability bucket, competitor landscape, recommended angle, intent. `ContentHandler::plan()` (`handlers.rs:220`) loads the skill for all articles, not just hubs.
-- **Acceptance test**: run `write_article` once on a striking-distance keyword (e.g. `theta decay dte`). Compare the output to the existing article. Does it differentiate? Use proprietary angles? Avoid generic educational prose? If yes → ship.
-- **Effort**: ~1-2 days. **Status**: ready to start.
+**Completed 2026-07-07.** What shipped:
+- **`skills/content-write/SKILL.md`** — tone, differentiation directive, E-E-A-T, content-type guidance, structural quality
+- **`ContentHandler::plan`** loads `content-write` for all non-hub articles (was: no skill at all)
+- **Bridge fs support** (kimi-acp-openai-bridge): fixed `initialize` capabilities (`clientCapabilities.fs`), implemented `fs/read_text_file` + `fs/write_text_file` handlers with path safety, extract `X-Kimi-Workdir` header for session cwd
+- **Workdir threading** (PageSeeds): `project_path` flows through the 7-function chain to the `X-Kimi-Workdir` header
+- **`write_article_smoke` binary** — isolated CLI tool for testing the full pipeline without the app
 
-### WS2 — DataForSEO-only + SERP feature API + winnability classifier  `[priority: high]`
+**Acceptance test result**: agent read 4 existing articles for context, wrote a 2,149-word differentiated gamma-scalping article with real internal links, worked examples, comparison tables, and honest E-E-A-T risk assessment. Dramatically better than the old generic output.
+
+**Deferred to WS2**: threading winnability bucket/competitor data through the provenance artifact (the data doesn't exist yet).
+
+### WS2 — DataForSEO-only + SERP feature API + winnability classifier  `[NEXT]`
 The systematic root-cause fix. Replaces the fragile Ahrefs scraper + removes the fallback.
 
 - **Add `serp_features()` to `SeoDataProvider` trait** → call DataForSEO `/v3/serp/google/organic/live/advanced/`. Returns AIO presence, featured snippets, PAA, + organic results with competitor domains.
@@ -237,17 +243,18 @@ The systematic root-cause fix. Replaces the fragile Ahrefs scraper + removes the
 - **Implement winnability classifier** (Q3): score each keyword Target / Differentiate / Avoid using AIO risk + competitor authority + intent + authority gap.
 - **Remove the silent fallback** (`autocomplete.rs:181-198`): fail hard with a clear message if no keywords meet the bar. Iterate on seeds, don't fabricate.
 - **Acceptance test**: a `research_keywords` run returns only Target/Differentiate keywords with AIO scores; no Avoid keywords leak through; no silent fallback fires; zero dependency on CapSolver.
-- **Effort**: ~3-4 days. **Status**: design ready (this doc); blocked on WS1 for the writer-side consumption of the new data.
+- **Effort**: ~3-4 days. **Status**: design ready (this doc); WS1 unblocked.
 
-### WS3 — Cannibalization merges  `[priority: high, in progress]`
-- Rebuild app (slug fix committed but not yet in running binary) → apply the 14/16 correct merges via the review queue.
+### WS3 — Cannibalization merges  `[priority: high, ready]`
+- Slug fix is committed to main. Rebuild the app → apply the 14/16 correct merges via the review queue.
+- The fresh audit (2026-07-06) produced canonical URLs and 14/16 correct keeper decisions.
 - **Acceptance**: merges produce canonical URLs; consolidated clusters track position recovery over 4-6 weeks.
 - **Effort**: rebuild + ~1 day to process queue.
 
 ### WS4 — Dead-weight remediation  `[priority: medium, after WS2]`
 - Run the winnability classifier (WS2) retroactively over the 56 zero-impression articles.
-- Disposition per score: **Avoid** → noindex; **Differentiate** → rewrite with proprietary angle; **Target** (but underperforming) → internal-link boost, not removal.
-- **Do NOT blanket-noindex before WS2.** The score decides, not "zero impressions" alone — some articles may just need linking/refresh.
+- Disposition per score: **Avoid** → noindex; **Differentiate** → rewrite with proprietary angle (now possible with the content-write skill); **Target** (but underperforming) → internal-link boost, not removal.
+- **Do NOT blanket-noindex before WS2.** The score decides, not "zero impressions" alone.
 - **Acceptance**: every zero-impression article has a documented disposition + action.
 - **Effort**: ~1 day after WS2 ships.
 
@@ -262,13 +269,12 @@ The systematic root-cause fix. Replaces the fragile Ahrefs scraper + removes the
 
 ### Sequencing
 ```
-WS1 (write_article skill)  ──┐
-                             ├──▶ WS2 (winnability + DataForSEO SERP) ──▶ WS4 (dead-weight remediation)
-WS3 (merges, rebuild)      ──┘                                          ║
-                                                                       ║
+WS1 (write_article skill)  ✅ DONE
+WS3 (merges, rebuild)      ──▶ ready, needs app rebuild
+WS2 (winnability + DataForSEO SERP) ──▶ NEXT ──▶ WS4 (dead-weight remediation)
 WS5 (striking-distance push) ──────────────────────────────────────────▶ (parallel, ongoing)
 ```
-Start WS1 and WS3 now (independent). WS2 is the root-cause build — start once WS1's data-plumbing shape is settled (they share the `keyword_selection.rs` → `write_article` pipeline). WS4 follows WS2. WS5 runs in parallel throughout.
+WS1 is complete. WS2 is next — it's the root-cause fix that prevents future dead-weight articles. WS3 (merges) can proceed in parallel once the app is rebuilt. WS4 follows WS2. WS5 runs throughout.
 
 ---
 

@@ -29,6 +29,7 @@ pub struct Skill {
 const EMBEDDED_SKILL_NAMES: &[&str] = &[
     "cannibalization-strategy",
     "clarity-investigate",
+    "content-write",
     "ctr-fix-apply",
     "ctr-optimization",
     "ctr-schema-renderer",
@@ -48,6 +49,7 @@ fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
             include_str!("../../skills/cannibalization-strategy/SKILL.md")
         }
         "clarity-investigate" => include_str!("../../skills/clarity-investigate/SKILL.md"),
+        "content-write" => include_str!("../../skills/content-write/SKILL.md"),
         "ctr-fix-apply" => include_str!("../../skills/ctr-fix-apply/SKILL.md"),
         "ctr-optimization" => include_str!("../../skills/ctr-optimization/SKILL.md"),
         "ctr-schema-renderer" => include_str!("../../skills/ctr-schema-renderer/SKILL.md"),

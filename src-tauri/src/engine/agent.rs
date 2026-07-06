@@ -153,8 +153,11 @@ pub fn run_agent_with_backend(
     project_path: &Path,
     backend_preference: Option<&str>,
 ) -> Result<String, String> {
+    // Pass the project path as the ACP session workdir so the agent can
+    // read/write files in the correct project repository.
+    let workdir = project_path.to_str();
     // Attempt to use a rig backend first.
-    match try_rig_backend_with_preference(provider, prompt, backend_preference) {
+    match try_rig_backend_with_preference(provider, prompt, backend_preference, workdir) {
         Ok(content) => return Ok(content),
         Err(RigError::FallbackToCli) => {
             // Fall through to direct CLI below.
@@ -186,6 +189,7 @@ fn try_rig_backend_with_preference(
     provider: &str,
     prompt: &str,
     backend_preference: Option<&str>,
+    workdir: Option<&str>,
 ) -> Result<String, RigError> {
     // Spawn a dedicated thread with its own runtime to avoid all block_on issues:
     // - called from an async task on a worker thread
@@ -194,6 +198,7 @@ fn try_rig_backend_with_preference(
     let provider = provider.to_string();
     let prompt = prompt.to_string();
     let backend_preference = backend_preference.map(|s| s.to_string());
+    let workdir = workdir.map(|s| s.to_string());
 
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -204,7 +209,8 @@ fn try_rig_backend_with_preference(
             }
         };
         let pref = backend_preference.as_deref();
-        rt.block_on(run_rig_prompt(&provider, &prompt, pref))
+        let wd = workdir.as_deref();
+        rt.block_on(run_rig_prompt(&provider, &prompt, pref, wd))
     })
     .join()
     .unwrap_or_else(|e| {
@@ -223,6 +229,7 @@ async fn run_rig_prompt(
     provider: &str,
     prompt: &str,
     backend_preference: Option<&str>,
+    workdir: Option<&str>,
 ) -> Result<String, RigError> {
     // Read kimi_backend_mode from global settings (fallback to "auto" if DB unreachable).
     let kimi_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
@@ -254,6 +261,7 @@ async fn run_rig_prompt(
                 prompt,
                 None,
                 backend_preference,
+                workdir,
             )
             .await
             .map_err(|e| RigError::Other(e))?;
@@ -271,7 +279,7 @@ async fn run_rig_prompt(
         _ => {
             // Non-Kimi providers — backend_preference is irrelevant.
             let response =
-                crate::rig::provider::run_agent_with_backend(&backend, prompt, None, None)
+                crate::rig::provider::run_agent_with_backend(&backend, prompt, None, None, None)
                     .await
                     .map_err(|e| RigError::Other(e))?;
             if let (Some(pt), Some(ct)) = (response.prompt_tokens, response.completion_tokens) {

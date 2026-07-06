@@ -218,11 +218,12 @@ impl WorkflowHandler for ContentHandler {
         let is_hub =
             has_hub_brief || matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
         let step = WorkflowStep::new("content_write_stage", StepKind::Agentic);
-        if is_hub {
-            vec![step.with_param(step_params::SKILL, "hub-write")]
-        } else {
-            vec![step]
-        }
+        // Hub pages use the dedicated hub-write skill; all other content tasks
+        // use content-write, which carries tone, differentiation, and E-E-A-T
+        // directives. Previously regular articles loaded no skill at all and
+        // fell through to a generic boilerplate prompt with no content strategy.
+        let skill = if is_hub { "hub-write" } else { "content-write" };
+        vec![step.with_param(step_params::SKILL, skill)]
     }
 }
 

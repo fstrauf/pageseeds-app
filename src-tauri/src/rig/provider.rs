@@ -70,10 +70,11 @@ pub async fn run_agent_with_backend(
     prompt: &str,
     preamble: Option<&str>,
     backend_preference: Option<&str>,
+    workdir: Option<&str>,
 ) -> Result<AgentResponse, String> {
     match backend {
         LlmBackend::KimiBridge { base_url, model } => {
-            run_kimi_bridge(base_url, model, prompt, preamble, backend_preference).await
+            run_kimi_bridge(base_url, model, prompt, preamble, backend_preference, workdir).await
         }
         LlmBackend::KimiDirect => run_kimi_direct(prompt, preamble),
         LlmBackend::Claude { api_key, model } => run_claude(api_key, model, prompt, preamble).await,
@@ -196,9 +197,10 @@ async fn run_kimi_bridge(
     prompt: &str,
     preamble: Option<&str>,
     backend_preference: Option<&str>,
+    workdir: Option<&str>,
 ) -> Result<AgentResponse, String> {
     let result =
-        crate::rig::compat::kimi::run_prompt(base_url, model, prompt, preamble, backend_preference)
+        crate::rig::compat::kimi::run_prompt(base_url, model, prompt, preamble, backend_preference, workdir)
             .await
             .map_err(|e| format!("Kimi bridge prompt failed: {}", e))?;
 
@@ -427,7 +429,7 @@ mod tests {
             model: "test-model".to_string(),
         };
 
-        let result = run_agent_with_backend(&backend, "Say hello", None, None)
+        let result = run_agent_with_backend(&backend, "Say hello", None, None, None)
             .await
             .unwrap();
         assert_eq!(result.content, "Hello from mock bridge!");
