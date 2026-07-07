@@ -9,12 +9,16 @@
 ///   5. Merge into the standard output schema so KeywordPicker shows both volume and KD.
 mod auto_spawn;
 mod coverage_filter;
+mod metrics;
+mod parsing;
 mod research_pipeline;
 mod territory_analysis;
 mod tests;
 mod theme_extraction;
 
 pub(crate) use coverage_filter::*;
+pub(crate) use metrics::*;
+pub(crate) use parsing::*;
 pub(crate) use research_pipeline::*;
 pub(crate) use territory_analysis::*;
 pub(crate) use theme_extraction::*;
