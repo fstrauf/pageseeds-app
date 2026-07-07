@@ -1,21 +1,137 @@
-//! Step execution helpers used by the executor for agentic and deterministic steps.
+//! Step execution helpers used by the executor for agentic steps.
 //!
-//! Extracted verbatim from `engine/workflows/handlers.rs` as part of Stage A of
-//! the structural-debt cleanup (issue #4). No behavior changes — only relocated
-//! across module boundaries. Stage C will refactor `exec_agentic`'s boolean
-//! lattice; until then this file intentionally preserves the existing shape.
+//! Stage C of issue #4 refactored `exec_agentic`'s boolean lattice into
+//! discrete prompt-section builders. Each task-type-specific concern is
+//! a self-contained function that checks its own applicability.
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::{step_params, StepResult, WorkflowStep};
 use crate::models::task::Task;
 
-// Helpers relocated to `content/naming.rs` (Stage A.1). Imported by name so the
-// call sites inside `exec_agentic` remain byte-for-byte identical to the
-// pre-move source.
+// Helpers relocated to `content/naming.rs` (Stage A.1).
 use crate::content::naming::{
     detect_numbered_mdx_style, rename_new_files_to_numbered_mdx, rename_new_or_modified_md_to_mdx,
     snapshot_markdown_mtime,
 };
+
+// ─── Task-type classification helpers ─────────────────────────────────────────
+
+fn is_content_task(task: &Task) -> bool {
+    matches!(
+        task.task_type.as_str(),
+        "write_article"
+            | "optimize_article"
+            | "create_content"
+            | "optimize_content"
+            | "create_hub_page"
+            | "refresh_hub_page"
+            | "fix_content_article"
+    )
+}
+
+fn is_new_article(task: &Task) -> bool {
+    matches!(
+        task.task_type.as_str(),
+        "write_article" | "create_content" | "create_hub_page" | "refresh_hub_page"
+    )
+}
+
+fn is_hub_task(step: &WorkflowStep) -> bool {
+    step.params.get(step_params::SKILL).map(|s| s.as_str()) == Some("hub-write")
+}
+
+fn is_research_step(step: &WorkflowStep) -> bool {
+    matches!(
+        step.name.as_str(),
+        "research_seed_extraction" | "research_keyword_discovery" | "research_seed_validation"
+    )
+}
+
+// ─── Content-task prompt sections ─────────────────────────────────────────────
+
+/// Build the publish-date, file-format, link-format, and filename-convention
+/// directive sections for content tasks. Returns `None` for non-content tasks.
+fn content_directives(
+    task: &Task,
+    content_context: &Option<(
+        std::path::PathBuf,
+        std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+        Option<crate::content::naming::NumberedMdxStyle>,
+    )>,
+    next_publish_date: &Option<String>,
+) -> Option<String> {
+    if !is_content_task(task) {
+        return None;
+    }
+
+    let mut sections = String::new();
+
+    if let Some(date) = next_publish_date {
+        if is_new_article(task) {
+            sections.push_str(&format!(
+                "\n\n## Publish Date (Required)\n\
+                 - The frontmatter `date:` field MUST be exactly: `{date}`\n\
+                 - Do not use today's date or any other value — use the date above."
+            ));
+        } else {
+            sections.push_str(&format!(
+                "\n\n## Publish Date (Preserve)\n\
+                 - Preserve the existing `date:` field in the frontmatter.\n\
+                 - Do NOT change it to today's date, a future date, or a date already used by another article.\n\
+                 - If the article has no date, use exactly: `{date}`"
+            ));
+        }
+    }
+
+    sections.push_str(
+        "\n\n## Content File Format (Required)\n\
+         - New articles must be written as `.mdx` files (never `.md`).\n\
+         - If you propose a filename, it must end in `.mdx`.\n\
+         - Preserve valid frontmatter and markdown/MDX syntax.",
+    );
+
+    sections.push_str(
+        "\n\n## Internal Link Format (Required)\n\
+         - All internal links MUST use standard markdown syntax: `[anchor text](/blog/slug)`\n\
+         - The URL path must be wrapped in parentheses `()` immediately after the closing bracket `]`.\n\
+         - WRONG: `[anchor text]/blog/slug` or `[anchor text] /blog/slug`\n\
+         - CORRECT: `[anchor text](/blog/slug)`\n\
+         - If you include a 'Related Articles' section, use the same `[title](/blog/slug)` format for every bullet.",
+    );
+
+    if let Some((_, _, Some(style))) = content_context {
+        sections.push_str(&format!(
+            "\n\n## Content Filename Convention (Required)\n\
+             - Follow this naming format: `{{id}}_topic_slug.mdx`\n\
+             - Use lowercase with underscores in the slug.\n\
+             - Continue numbering from approximately {}.",
+            style.next_id
+        ));
+    }
+
+    Some(sections)
+}
+
+// ─── Hub-task prompt sections ─────────────────────────────────────────────────
+
+const HUB_PAGE_REQUIREMENTS: &str = "\n\n## Hub Page Requirements\n\
+     - Write a comprehensive pillar / hub page MDX document.\n\
+     - YAML frontmatter MUST include `type: hub` and `hub_topic`.\n\
+     - Include an H1 matching the hub title.\n\
+     - Link to every spoke article using `/blog/{slug}` format.\n\
+     - Total word count MUST be 1500+ words.\n\
+     - The frontmatter `title:` and the body H1 must be complete, grammatically correct phrases. They must NOT end mid-sentence or with dangling words such as `a`, `an`, `the`, `and`, `or`, `to`, `for`, `of`, `in`, `on`, `with`, `by`, `from`, `as`, `is`, `are`, `what`, `how`, `when`, `where`, `why`, `which`, `complete`, `guide`, `income`, `without`, `track`, `close`, `compared`, or trailing punctuation (`:`, `,`, `-`). Rewrite rather than truncate.\n\
+     - The first body paragraph must begin with a complete sentence; do not drop leading characters from the opening sentence.\n\
+     - Return ONLY the complete MDX content. No explanations outside the MDX.\n";
+
+/// Build the hub-specific directive sections (spoke context + requirements).
+/// Returns `None` for non-hub tasks.
+fn hub_directives(task: &Task, project_path: &str) -> Option<String> {
+    let mut sections = String::new();
+    sections.push_str(&hub_spoke_context(task, project_path));
+    sections.push_str(HUB_PAGE_REQUIREMENTS);
+    Some(sections)
+}
 
 /// Execute an agentic step — invokes the configured agent CLI with a built prompt.
 ///
@@ -248,23 +364,7 @@ pub async fn exec_agentic(
     let repo_root = Path::new(project_path);
     let paths = ProjectPaths::from_path(project_path);
 
-    let is_content_task = matches!(
-        task.task_type.as_str(),
-        "write_article"
-            | "optimize_article"
-            | "create_content"
-            | "optimize_content"
-            | "create_hub_page"
-            | "refresh_hub_page"
-            | "fix_content_article"
-    );
-    let is_new_article_task = matches!(
-        task.task_type.as_str(),
-        "write_article" | "create_content" | "create_hub_page" | "refresh_hub_page"
-    );
-    let is_hub_task = step.params.get(step_params::SKILL).map(|s| s.as_str()) == Some("hub-write");
-
-    let content_context = if is_content_task {
+    let content_context = if is_content_task(task) {
         let resolved = crate::content::locator::resolve(repo_root, None);
         resolved.selected.as_ref().map(|dir| {
             (
@@ -347,6 +447,7 @@ pub async fn exec_agentic(
 
     // Include embedded task artifacts so follow-up fix tasks receive parent context
     // (e.g. ctr_recommendations, cannibalization_strategy attached by create_*_fix_tasks).
+    let hub = is_hub_task(step);
     let task_artifacts: Vec<String> = task
         .artifacts
         .iter()
@@ -354,7 +455,7 @@ pub async fn exec_agentic(
             // Hub tasks get focused hub context via hub_spoke_context(); inlining the
             // full cannibalization_strategy here duplicates data and blows the prompt
             // budget (it can be 20-90KB). Skip it for hub tasks.
-            !(is_hub_task && a.key == "cannibalization_strategy")
+            !(hub && a.key == "cannibalization_strategy")
         })
         .filter_map(|a| {
             a.content.as_ref().map(|c| {
@@ -376,55 +477,9 @@ pub async fn exec_agentic(
         prompt.push_str(&task_artifacts.join("\n"));
     }
 
-    if is_content_task {
-        // Pre-compute the next safe publish date and inject it into the prompt.
-        // Without this, the agent defaults to today's date which conflicts with
-        // articles already in the database and breaks the date distribution.
-        // We read from SQLite (canonical source of truth) rather than articles.json
-        // so queued tasks see the most current state after orphan ingestion.
-        if let Some(ref date) = next_publish_date {
-            if is_new_article_task {
-                prompt.push_str(&format!(
-                    "\n\n## Publish Date (Required)\n\
-                             - The frontmatter `date:` field MUST be exactly: `{date}`\n\
-                             - Do not use today's date or any other value — use the date above."
-                ));
-            } else {
-                // Modification tasks: preserve existing date, avoid collisions
-                prompt.push_str(&format!(
-                    "\n\n## Publish Date (Preserve)\n\
-                             - Preserve the existing `date:` field in the frontmatter.\n\
-                             - Do NOT change it to today's date, a future date, or a date already used by another article.\n\
-                             - If the article has no date, use exactly: `{date}`"
-                ));
-            }
-        }
-
-        prompt.push_str(
-            "\n\n## Content File Format (Required)\n\
-                     - New articles must be written as `.mdx` files (never `.md`).\n\
-                     - If you propose a filename, it must end in `.mdx`.\n\
-                     - Preserve valid frontmatter and markdown/MDX syntax.",
-        );
-
-        prompt.push_str(
-            "\n\n## Internal Link Format (Required)\n\
-                     - All internal links MUST use standard markdown syntax: `[anchor text](/blog/slug)`\n\
-                     - The URL path must be wrapped in parentheses `()` immediately after the closing bracket `]`.\n\
-                     - WRONG: `[anchor text]/blog/slug` or `[anchor text] /blog/slug`\n\
-                     - CORRECT: `[anchor text](/blog/slug)`\n\
-                     - If you include a 'Related Articles' section, use the same `[title](/blog/slug)` format for every bullet.",
-        );
-
-        if let Some((_dir, _before, Some(style))) = &content_context {
-            prompt.push_str(&format!(
-                "\n\n## Content Filename Convention (Required)\n\
-                         - Follow this naming format: `{{id}}_topic_slug.mdx`\n\
-                         - Use lowercase with underscores in the slug.\n\
-                         - Continue numbering from approximately {}.",
-                style.next_id
-            ));
-        }
+    // Append task-type-specific prompt sections
+    if let Some(dirs) = content_directives(task, &content_context, &next_publish_date) {
+        prompt.push_str(&dirs);
     }
 
     log::info!(
@@ -434,29 +489,12 @@ pub async fn exec_agentic(
         step.params.get(step_params::SKILL)
     );
 
-    if is_hub_task {
-        prompt.push_str(&hub_spoke_context(task, project_path));
-        prompt.push_str(
-            "\n\n## Hub Page Requirements\n\
-             - Write a comprehensive pillar / hub page MDX document.\n\
-             - YAML frontmatter MUST include `type: hub` and `hub_topic`.\n\
-             - Include an H1 matching the hub title.\n\
-             - Link to every spoke article using `/blog/{slug}` format.\n\
-             - Total word count MUST be 1500+ words.\n\
-             - The frontmatter `title:` and the body H1 must be complete, grammatically correct phrases. They must NOT end mid-sentence or with dangling words such as `a`, `an`, `the`, `and`, `or`, `to`, `for`, `of`, `in`, `on`, `with`, `by`, `from`, `as`, `is`, `are`, `what`, `how`, `when`, `where`, `why`, `which`, `complete`, `guide`, `income`, `without`, `track`, `close`, `compared`, or trailing punctuation (`:`, `,`, `-`). Rewrite rather than truncate.\n\
-             - The first body paragraph must begin with a complete sentence; do not drop leading characters from the opening sentence.\n\
-             - Return ONLY the complete MDX content. No explanations outside the MDX.\n",
-        );
+    if hub {
+        prompt.push_str(&hub_directives(task, project_path).unwrap_or_default());
     }
 
-    // Check if this is a research workflow step that uses ToolCallingAgent
-    // Note: research_final_selection is now deterministic, not agentic
-    let is_research_step = matches!(
-        step.name.as_str(),
-        "research_seed_extraction" | "research_keyword_discovery" | "research_seed_validation"
-    );
-
-    if is_research_step {
+    // Research steps use a separate workflow path
+    if is_research_step(step) {
         // Research steps use the same CLI agent path as all other agentic steps
         return crate::engine::exec::research::exec_research_workflow_step(
             step,
