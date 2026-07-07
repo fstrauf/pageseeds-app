@@ -402,7 +402,6 @@ async fn verify_findings(
                 // Observation-based evidence: URLs, domains, HTML values
                 || e_lower.contains("http://")
                 || e_lower.contains("https://")
-                || e_lower.contains("brewedlate.com")
                 || e.contains(" → ")  // URL → observation pattern
                 || e.contains("<title>")
                 || e.contains("<meta")

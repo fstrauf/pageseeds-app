@@ -528,13 +528,6 @@ pub async fn exec_agentic(
         step.params.get(step_params::SKILL)
     );
 
-    log::info!(
-        "[executor] agentic step '{}' with provider '{}' (skill: {:?})",
-        step.name,
-        agent_provider,
-        step.params.get(step_params::SKILL)
-    );
-
     if is_hub_task {
         prompt.push_str(&hub_spoke_context(task, project_path));
         prompt.push_str(
