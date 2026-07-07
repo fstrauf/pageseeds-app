@@ -532,6 +532,7 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
                 reason_code,
                 title,
                 h1,
+                target_keyword,
                 word_count,
                 incoming_links,
                 content_audit_health: health,
@@ -1202,7 +1203,7 @@ fn build_fix_content_spec(
                 "article_id": article_id,
                 "article_file": &ctx.target.file,
                 "article_title": &ctx.target.title,
-                "target_keyword": &ctx.target.title,
+                "target_keyword": &ctx.target.target_keyword,
                 "suggestions": suggestions
             });
             artifacts.push(crate::models::task::TaskArtifact {
@@ -1270,7 +1271,7 @@ fn build_add_links_spec(
                 "file": &ctx.target.file,
                 "reason_code": &ctx.target.reason_code,
                 "incoming_link_count_before": ctx.target.incoming_links,
-                "target_keyword": &ctx.target.title,
+                "target_keyword": &ctx.target.target_keyword,
                 "source_candidates": source_candidates_json,
             }
         });
@@ -1406,6 +1407,7 @@ mod tests {
                 reason_code: reason.to_string(),
                 title: "Test Article".to_string(),
                 h1: "Test H1".to_string(),
+                target_keyword: "test keyword".to_string(),
                 word_count: 800,
                 incoming_links: links,
                 content_audit_health: health.to_string(),

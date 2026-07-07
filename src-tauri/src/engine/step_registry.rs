@@ -336,38 +336,6 @@ impl StepRegistry {
             optional_context
         );
 
-        handlers.insert(StepKind::KeywordResearchToolAgent, Box::new(|step, ctx| {
-            let task = ctx.task.clone();
-            let project_path = ctx.project_path.to_string();
-            let agent_provider = ctx.agent_provider.to_string();
-            let step_name = step.name.clone();
-            Box::pin(async move {
-                let paths = crate::engine::project_paths::ProjectPaths::from_path(&project_path);
-                let (system, user) = match crate::engine::exec::research::build_research_prompts(
-                    &step_name,
-                    &task,
-                    &project_path,
-                    &paths,
-                    None,
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return crate::engine::workflows::StepResult {
-                            success: false,
-                            message: format!("Failed to build prompts: {}", e),
-                            output: None,
-                        };
-                    }
-                };
-                let prompt = format!("{}\n\n---\n\n{}", system, user);
-                crate::engine::exec::research::exec_keyword_research_with_tools(
-                    &agent_provider,
-                    &prompt,
-                    &system,
-                ).await
-            })
-        }));
-
         register_blocking!(
             handlers,
             StepKind::LandingPageSpecWrite,

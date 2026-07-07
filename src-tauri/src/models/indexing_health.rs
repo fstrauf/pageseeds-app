@@ -115,6 +115,7 @@ pub struct TargetArticleSummary {
     pub reason_code: String,
     pub title: String,
     pub h1: String,
+    pub target_keyword: String,
     pub word_count: usize,
     pub incoming_links: usize,
     pub content_audit_health: String,

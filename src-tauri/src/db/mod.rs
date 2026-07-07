@@ -1048,6 +1048,25 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 37 {
+        // Switch all installs to the native Kimi CLI provider (kimi --print via
+        // tokio::process). This removes the dependency on the Python HTTP bridge.
+        // Users can manually switch back to "bridge" or "auto" in settings if needed.
+        conn.execute(
+            "UPDATE global_settings SET value = 'cli', updated_at = ?1 WHERE key = 'kimi_backend_mode'",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+        // Also set the default for installs that don't have the key yet.
+        conn.execute(
+            "INSERT OR IGNORE INTO global_settings (key, value, updated_at) VALUES ('kimi_backend_mode', 'cli', ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (37, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     // Repair: ensure page_type column exists even if V36 was skipped
     {
         let has_col: bool = conn

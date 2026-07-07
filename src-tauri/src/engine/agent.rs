@@ -254,6 +254,30 @@ async fn run_rig_prompt(
             // Signal to the caller that we need CLI fallback.
             Err(RigError::FallbackToCli)
         }
+        crate::rig::provider::LlmBackend::KimiCli { .. } => {
+            // Native CLI provider — runs `kimi --print` via tokio::process.
+            // backend_preference ("acp" / "direct") controls the timeout, not
+            // the transport. "acp" → 300s for content tasks, "direct" → 180s.
+            let response = crate::rig::provider::run_agent_with_backend(
+                &backend,
+                prompt,
+                None,
+                backend_preference,
+                workdir,
+            )
+            .await
+            .map_err(|e| RigError::Other(e))?;
+            if let (Some(pt), Some(ct)) = (response.prompt_tokens, response.completion_tokens) {
+                log::info!(
+                    "[agent] tokens — prompt={}, completion={}, total={}",
+                    pt,
+                    ct,
+                    pt + ct
+                );
+                set_last_tokens(Some(pt), Some(ct));
+            }
+            Ok(response.content)
+        }
         crate::rig::provider::LlmBackend::KimiBridge { .. } => {
             // Pass backend_preference as the X-Kimi-Backend header.
             let response = crate::rig::provider::run_agent_with_backend(

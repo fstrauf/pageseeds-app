@@ -12,7 +12,7 @@ pub mod models;
 mod clarity;
 mod reddit;
 mod rig;
-mod seo;
+pub mod seo;
 mod social;
 
 use commands::{AppState, GscState, SeoState};

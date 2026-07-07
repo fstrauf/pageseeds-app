@@ -124,7 +124,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
              Return only a valid ContentFixPatch by calling the submit tool. \
              Every requested fix must be represented in the patch unless the current file already satisfies the requirement.",
         ),
-        Some("direct"),
+        Some("acp"),
         None,
     )
     .await
@@ -753,10 +753,10 @@ Fix the patch so it passes all validation rules. Return only the corrected Conte
         backend,
         &repair_prompt,
         Some(
-            "You are correcting a previously invalid ContentFixPatch. \
-             Return only the corrected ContentFixPatch by calling the submit tool.",
+         "You are correcting a previously invalid ContentFixPatch. \
+              Return only the corrected ContentFixPatch by calling the submit tool.",
         ),
-        Some("direct"),
+        Some("acp"),
         None,
     )
     .await

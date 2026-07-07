@@ -93,6 +93,22 @@ where
         Fill out every field and do not omit any required information.";
 
     match backend {
+        LlmBackend::KimiCli { work_dir } => {
+            // Native CLI provider uses JSON-mode extraction: schema is injected
+            // into the prompt, the model responds with raw JSON, and we parse it.
+            // No tool-calling round-trip (print mode emits text, not tool_calls).
+            let schema = schemars::schema_for!(T);
+            let schema_value = serde_json::to_value(&schema)
+                .map_err(|e| format!("Failed to serialize JSON schema: {}", e))?;
+
+            crate::rig::kimi_cli::extract_structured::<T>(
+                prompt,
+                preamble,
+                &schema_value,
+                work_dir,
+            )
+            .await
+        }
         LlmBackend::KimiBridge { base_url, model } => {
             // `backend_preference` is passed as the X-Kimi-Backend header.
             // - "direct": 120s timeout, fast, stateless. Falls back to JSON mode

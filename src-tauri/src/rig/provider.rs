@@ -1,14 +1,14 @@
 //! Provider abstraction — maps PageSeeds provider names to rig-core clients.
 //!
 //! Supported backends:
-//! - `kimi`    → tries bridge (localhost:8080), falls back to direct CLI
+//! - `kimi`    → three modes controlled by `kimi_backend_mode`:
+//!   - `"cli"`    → native `tokio::process` calling `kimi --print` directly (no HTTP, no Python)
+//!   - `"bridge"` → OpenAI-compatible bridge at localhost:8080 (Python/FastAPI)
+//!   - `"auto"`   → health check bridge; fall back to direct CLI
+//!   - `"direct"` → legacy agent-wrapper subprocess
 //! - `claude`  → Anthropic API via rig native provider
 //! - `openai`  → OpenAI API via rig native provider
 //! - `ollama`  → local Ollama via rig native provider
-//!
-//! The bridge path uses `rig::providers::openai` with a custom base URL because
-//! the kimi-acp-openai-bridge exposes an OpenAI-compatible `/v1/chat/completions`
-//! endpoint. The direct CLI path keeps the existing `agent-wrapper` subprocess.
 
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
@@ -16,6 +16,13 @@ use rig::completion::Prompt;
 /// How to reach a given LLM.
 #[derive(Debug, Clone)]
 pub enum LlmBackend {
+    /// Kimi via the native CLI provider — spawns `kimi --print` directly.
+    /// No Python bridge, no HTTP layer. Drop-in replacement for `KimiBridge`.
+    KimiCli {
+        /// Working directory for the Kimi session (the project repo root).
+        /// Passed as `--work-dir` so the agent's file tools operate in-scope.
+        work_dir: String,
+    },
     /// Kimi via the local ACP bridge (OpenAI-compatible endpoint).
     /// Uses `rig::providers::openai` with custom base URL.
     KimiBridge { base_url: String, model: String },
@@ -73,6 +80,12 @@ pub async fn run_agent_with_backend(
     workdir: Option<&str>,
 ) -> Result<AgentResponse, String> {
     match backend {
+        LlmBackend::KimiCli { work_dir } => {
+            // Prefer the caller's workdir (from the executor, = project repo root)
+            // over the variant's placeholder (set at resolution time).
+            let effective_workdir = workdir.unwrap_or(work_dir.as_str());
+            run_kimi_cli(prompt, preamble, backend_preference, effective_workdir).await
+        }
         LlmBackend::KimiBridge { base_url, model } => {
             run_kimi_bridge(base_url, model, prompt, preamble, backend_preference, workdir).await
         }
@@ -102,9 +115,15 @@ pub async fn check_bridge_health(base_url: &str) -> bool {
 /// Resolve a provider string + settings into a concrete backend.
 ///
 /// For `"kimi"` the behaviour depends on `kimi_backend_mode`:
-/// - `"auto"`  → health check bridge; if healthy → `KimiBridge`, otherwise fall back to `KimiDirect`
+/// - `"cli"`   → native `kimi --print` subprocess (no bridge, no HTTP)
 /// - `"bridge"`→ always use bridge (no health check)
-/// - `"direct"`→ always use direct CLI
+/// - `"direct"`→ always use direct CLI (legacy agent-wrapper)
+/// - `"auto"`  → health check bridge; if healthy → `KimiBridge`, otherwise fall back to `KimiDirect`
+///
+/// When `kimi_backend_mode` is `None`, the setting is read from the
+/// `global_settings` SQLite table (the canonical source). This ensures all
+/// callers — including direct `resolve_backend` users that don't go through
+/// `engine::agent` — respect the user's configured backend mode.
 pub async fn resolve_backend(
     provider: &str,
     bridge_url: Option<&str>,
@@ -112,7 +131,26 @@ pub async fn resolve_backend(
     kimi_backend_mode: Option<&str>,
 ) -> Result<LlmBackend, String> {
     let model = default_model_for_provider(provider);
-    let mode = kimi_backend_mode.unwrap_or("auto");
+
+    // Read kimi_backend_mode from global settings if caller didn't specify.
+    let owned_mode: String;
+    let mode = match kimi_backend_mode {
+        Some(m) => m,
+        None => {
+            owned_mode = match rusqlite::Connection::open(crate::db::default_db_path()) {
+                Ok(conn) => crate::db::global_settings::get_kimi_backend_mode(&conn),
+                Err(e) => {
+                    log::warn!(
+                        "[provider] Failed to open DB for kimi_backend_mode: {}. Using default ({}).",
+                        e,
+                        crate::db::global_settings::DEFAULT_KIMI_BACKEND_MODE,
+                    );
+                    crate::db::global_settings::DEFAULT_KIMI_BACKEND_MODE.to_string()
+                }
+            };
+            &owned_mode
+        }
+    };
 
     match provider {
         "kimi" => {
@@ -122,6 +160,26 @@ pub async fn resolve_backend(
                 .unwrap_or_else(|| "http://localhost:8080/v1".to_string());
             let bridge_url = bridge_url.as_str();
             match mode {
+                "cli" => {
+                    // Native CLI provider. The work_dir is resolved per-call by
+                    // run_agent_with_backend (from the workdir parameter); here
+                    // we use a placeholder that will be overridden.
+                    if crate::rig::kimi_cli::is_kimi_available() {
+                        log::info!(
+                            "[provider] Kimi CLI available — using KimiCli (native subprocess)"
+                        );
+                        Ok(LlmBackend::KimiCli {
+                            work_dir: std::env::current_dir()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|_| ".".to_string()),
+                        })
+                    } else {
+                        Err(
+                            "Kimi CLI binary 'kimi' not found on PATH. Install kimi or switch kimi_backend_mode to 'bridge' or 'auto'."
+                                .to_string(),
+                        )
+                    }
+                }
                 "bridge" => Ok(LlmBackend::KimiBridge {
                     base_url: bridge_url.to_string(),
                     model,
@@ -190,6 +248,24 @@ pub fn default_model_for_provider(provider: &str) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 // Backend implementations
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Run a prompt via the native Kimi CLI provider (`kimi -p`).
+///
+/// The `backend_preference` parameter is historical from the bridge era and
+/// is now ignored — all Kimi CLI calls use the same 600s timeout. Kept in the
+/// signature for API compatibility with `run_agent_with_backend`.
+async fn run_kimi_cli(
+    prompt: &str,
+    preamble: Option<&str>,
+    _backend_preference: Option<&str>,
+    fallback_work_dir: &str,
+) -> Result<AgentResponse, String> {
+    let work_dir = if fallback_work_dir.is_empty() { "." } else { fallback_work_dir };
+
+    crate::rig::kimi_cli::run_prompt(prompt, preamble, work_dir)
+        .await
+        .map_err(|e| format!("Kimi CLI prompt failed: {}", e))
+}
 
 async fn run_kimi_bridge(
     base_url: &str,

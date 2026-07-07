@@ -569,10 +569,12 @@ async fn send_request(
 ) -> Result<ChatResponse, String> {
     // Per-backend timeouts per the Kimi bridge provider spec:
     // - direct: 180s (fast, stateless)
-    // - acp / none: 300s (project-aware, may queue behind concurrency limit)
+    // - acp / none: 600s (project-aware, may queue behind concurrency limit;
+    //   matches the bridge's acp_total_timeout so PageSeeds does not abort
+    //   before the bridge does)
     let timeout_secs: u64 = match backend {
         Some("direct") => 180,
-        _ => 300,
+        _ => 600,
     };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))

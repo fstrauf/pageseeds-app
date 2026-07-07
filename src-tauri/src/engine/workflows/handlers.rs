@@ -1063,17 +1063,19 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
 // Kimi backend routing helper
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Return the `X-Kimi-Backend` header value for a given task/step.
+/// Return the backend preference for a given task/step.
 ///
-/// Content-writing tasks use ACP because generation reliably takes 160–170s,
-/// which exceeds the bridge's direct-mode hard timeout (120s). ACP has a
-/// 300s timeout and can handle long-running completions.
+/// In CLI mode, this controls the timeout: `"acp"` → 600s (content tasks),
+/// `"direct"` → 300s (stateless analysis). The names are historical from the
+/// bridge era; they now mean "long timeout" and "short timeout" respectively.
 ///
-/// Non-writing tasks use direct mode: it is stateless, fast, and reliable.
+/// Content-writing and content-fixing tasks get the long timeout because they
+/// involve heavy generation (reading articles, producing structured patches).
 fn kimi_backend_preference_for_step(task: &Task, _step: &WorkflowStep) -> Option<&'static str> {
     match task.task_type.as_str() {
         "write_article" | "optimize_article" | "create_content" | "optimize_content"
-        | "create_hub_page" | "refresh_hub_page" => Some("acp"),
+        | "create_hub_page" | "refresh_hub_page"
+        | "fix_content_article" | "fix_ctr_article" => Some("acp"),
         _ => Some("direct"),
     }
 }

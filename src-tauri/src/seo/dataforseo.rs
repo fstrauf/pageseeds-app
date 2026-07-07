@@ -696,7 +696,7 @@ impl SeoDataProvider for DataForSeoProvider {
 
         let resp = self
             .client
-            .post(self.api_url("/v3/serp/google/organic/live/advanced/"))
+            .post(self.api_url("/v3/serp/google/organic/live/advanced"))
             .header("Authorization", self.auth_header())
             .header("Content-Type", "application/json")
             .json(&payload)

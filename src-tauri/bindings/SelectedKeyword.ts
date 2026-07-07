@@ -27,4 +27,12 @@ selection_reason: string,
 /**
  * Recommended article title
  */
-recommended_title: string, };
+recommended_title: string, 
+/**
+ * Winnability bucket: "target" | "differentiate" | "avoid"
+ */
+winnability: string | null, 
+/**
+ * Human-readable reason for the winnability score
+ */
+winnability_reason: string | null, };

@@ -8,5 +8,6 @@ pub mod compat;
 pub mod embeddings;
 pub mod extraction;
 pub mod kimi_bridge;
+pub mod kimi_cli;
 pub mod provider;
 pub mod tools;

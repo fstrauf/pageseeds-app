@@ -8,8 +8,10 @@ use rusqlite::{Connection, OptionalExtension};
 /// Default agent provider if none is set globally.
 pub const DEFAULT_AGENT_PROVIDER: &str = "kimi";
 
-/// Default Kimi backend mode: "auto" tries bridge then falls back to direct CLI.
-pub const DEFAULT_KIMI_BACKEND_MODE: &str = "auto";
+/// Default Kimi backend mode: "cli" spawns `kimi --print` directly via tokio
+/// (no Python bridge, no HTTP layer). Switch to "bridge" or "auto" to fall
+/// back to the HTTP bridge.
+pub const DEFAULT_KIMI_BACKEND_MODE: &str = "cli";
 
 /// Get a global setting value by key.
 /// Returns None if the key doesn't exist.
@@ -99,7 +101,7 @@ pub fn get_kimi_backend_mode(conn: &Connection) -> String {
 }
 
 /// Set the global Kimi backend mode setting.
-/// Valid values: "auto", "bridge", "direct".
+/// Valid values: "auto", "bridge", "cli", "direct".
 pub fn set_kimi_backend_mode(conn: &Connection, mode: &str) -> Result<()> {
     log::info!("[global_settings] Setting kimi_backend_mode to '{}'", mode);
     set(conn, "kimi_backend_mode", mode)?;
