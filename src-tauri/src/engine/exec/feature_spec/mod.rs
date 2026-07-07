@@ -221,58 +221,16 @@ async fn run_feature_spec_agent(
     let backend = crate::rig::provider::resolve_backend(agent_provider, None, None, None).await
         .map_err(|e| format!("Provider error: {e}"))?;
 
-    let response = match &backend {
-        crate::rig::provider::LlmBackend::KimiBridge { base_url, model } => {
-            let client = rig::providers::openai::Client::builder()
-                .base_url(base_url)
-                .api_key("dummy")
-                .build()
-                .map_err(|e| format!("Failed to build bridge client: {e}"))?;
-            let agent = client
-                .completions_api()
-                .agent(model)
-                .build();
-            agent.prompt(&prompt).await
-                .map_err(|e| format!("Agent error: {e}"))?
-        }
-        crate::rig::provider::LlmBackend::Claude { api_key, model } => {
-            let client = rig::providers::anthropic::Client::new(api_key)
-                .map_err(|e| format!("Failed to build Claude client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .build();
-            agent.prompt(&prompt).await
-                .map_err(|e| format!("Agent error: {e}"))?
-        }
-        crate::rig::provider::LlmBackend::OpenAi { api_key, model } => {
-            let client = rig::providers::openai::Client::new(api_key)
-                .map_err(|e| format!("Failed to build OpenAI client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .build();
-            agent.prompt(&prompt).await
-                .map_err(|e| format!("Agent error: {e}"))?
-        }
-        crate::rig::provider::LlmBackend::Ollama { base_url, model } => {
-            use rig::client::Nothing;
-            let client = rig::providers::ollama::Client::builder()
-                .api_key(Nothing)
-                .base_url(base_url)
-                .build()
-                .map_err(|e| format!("Failed to build Ollama client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .build();
-            agent.prompt(&prompt).await
-                .map_err(|e| format!("Agent error: {e}"))?
-        }
-        _ => {
-            return Err(format!(
-                "Backend '{}' not supported for feature spec generation.",
-                agent_provider
-            ));
-        }
-    };
+    let response = crate::rig::provider::run_agent_with_backend(
+        &backend,
+        &prompt,
+        None,
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| format!("Agent error: {e}"))?
+    .content;
 
     // Extract JSON from agent response
     let json_str = crate::engine::text::extract_json_string(&response)
