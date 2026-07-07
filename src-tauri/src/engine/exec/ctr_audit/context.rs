@@ -99,7 +99,6 @@ pub(crate) fn exec_ctr_build_context(
     conn: &rusqlite::Connection,
 ) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
-    let articles_path = paths.automation_dir.join("articles.json");
 
     // ── Step 0: Clean stale entries from articles.json ───────────────────────
     // The filesystem is the source of truth. Remove entries whose files no longer exist.
@@ -124,20 +123,14 @@ pub(crate) fn exec_ctr_build_context(
         }
     }
 
-    let doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-    let empty = vec![];
-    let articles = doc["articles"].as_array().unwrap_or(&empty);
+    let project_articles = crate::engine::exec::common::load_project_articles(&paths);
+    let articles = project_articles.articles;
 
     let mut article_records: Vec<serde_json::Value> = Vec::new();
     let mut skipped_healthy = 0usize;
     let mut skipped_unchanged = 0usize;
 
-    for article in articles.iter() {
+    for article in &articles {
         let id = article["id"].as_i64().unwrap_or(0);
         let url_slug = article["url_slug"].as_str().unwrap_or("").to_string();
         let target_keyword = article["target_keyword"].as_str().unwrap_or("").to_string();

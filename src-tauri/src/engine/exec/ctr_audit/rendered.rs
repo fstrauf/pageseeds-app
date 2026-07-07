@@ -38,20 +38,13 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
     let base_url = normalize_base_url(&site_url);
 
     // Read articles.json
-    let articles_path = paths.automation_dir.join("articles.json");
-    let doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-    let empty = vec![];
-    let articles = doc["articles"].as_array().unwrap_or(&empty);
+    let project_articles = crate::engine::exec::common::load_project_articles(&paths);
+    let articles = project_articles.articles;
 
     let mut audited = 0usize;
     let mut failed = 0usize;
 
-    for article in articles.iter() {
+    for article in &articles {
         let id = article["id"].as_i64().unwrap_or(0);
         let url_slug = article["url_slug"].as_str().unwrap_or("");
         let file_ref = article["file"].as_str().unwrap_or("");
@@ -177,13 +170,8 @@ pub fn compare_rendered_titles(project_path: &str, max_pages: usize) -> Result<s
         .ok_or_else(|| "No site_url in manifest.json".to_string())?;
     let base_url = normalize_base_url(&site_url);
 
-    let articles_path = paths.automation_dir.join("articles.json");
-    let doc: serde_json::Value = std::fs::read_to_string(&articles_path)
-        .map_err(|e| format!("Failed to read articles.json: {e}"))?
-        .parse()
-        .map_err(|e| format!("Invalid articles.json: {e}"))?;
-
-    let articles = doc["articles"].as_array().cloned().unwrap_or_default();
+    let project_articles = crate::engine::exec::common::load_project_articles(&paths);
+    let articles = project_articles.articles;
     let mut results: Vec<serde_json::Value> = Vec::new();
     let mut mismatches = 0usize;
     let mut errors = 0usize;

@@ -339,26 +339,13 @@ pub(crate) async fn exec_content_review_recommend(
         }
     };
 
-    let articles_path = paths.automation_dir.join("articles.json");
-    let articles_doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-    let empty_vec: Vec<serde_json::Value> = Vec::new();
-    let raw_articles_ref = if articles_doc.is_array() {
-        articles_doc.as_array().unwrap_or(&empty_vec)
-    } else {
-        articles_doc
-            .get("articles")
-            .and_then(|v| v.as_array())
-            .unwrap_or(&empty_vec)
-    };
+    let mut raw_articles: Vec<serde_json::Value> =
+        crate::engine::exec::common::load_project_articles(&paths).articles;
     let audit_articles = audit
         .get("articles")
         .and_then(|v| v.as_array())
-        .unwrap_or(&empty_vec);
+        .map(|a| a.to_vec())
+        .unwrap_or_default();
 
     // ── Filter out articles that Google cannot see (not indexed) ──────────────
     // Load gsc_collection.json to cross-reference indexing status.
@@ -387,23 +374,19 @@ pub(crate) async fn exec_content_review_recommend(
         }
     }
 
-    let raw_articles: Vec<serde_json::Value> = raw_articles_ref
-        .iter()
-        .filter(|article| {
-            let slug = article["url_slug"].as_str().unwrap_or("");
-            if non_indexed_slugs.contains(slug) {
-                log::info!(
-                    "[content_review_recommend] skipping non-indexed article: {}",
-                    slug
-                );
-                return false;
-            }
-            true
-        })
-        .cloned()
-        .collect();
+    raw_articles.retain(|article| {
+        let slug = article["url_slug"].as_str().unwrap_or("");
+        if non_indexed_slugs.contains(slug) {
+            log::info!(
+                "[content_review_recommend] skipping non-indexed article: {}",
+                slug
+            );
+            return false;
+        }
+        true
+    });
 
-    let selected = select_priority_articles(&raw_articles, audit_articles, 20);
+    let selected = select_priority_articles(&raw_articles, &audit_articles, 20);
     log::info!(
         "[content_review_recommend] {} priority articles selected (project={})",
         selected.len(),
