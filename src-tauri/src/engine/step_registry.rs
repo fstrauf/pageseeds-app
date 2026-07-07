@@ -1140,19 +1140,19 @@ impl StepRegistry {
         register_blocking!(
             handlers,
             StepKind::IhcCheckPrerequisites,
-            crate::engine::exec::indexing_health_campaign::exec_ihc_check_prerequisites
+            crate::engine::exec::indexing_health::exec_ihc_check_prerequisites
         );
 
         register_blocking!(
             handlers,
             StepKind::IhcBuildTargetContext,
-            crate::engine::exec::indexing_health_campaign::exec_ihc_build_target_context
+            crate::engine::exec::indexing_health::exec_ihc_build_target_context
         );
 
         register_blocking!(
             handlers,
             StepKind::IhcDistinctivenessReview,
-            crate::engine::exec::indexing_health_campaign::exec_ihc_distinctiveness_review,
+            crate::engine::exec::indexing_health::exec_ihc_distinctiveness_review,
             agent_provider,
             optional_context
         );
@@ -1160,7 +1160,7 @@ impl StepRegistry {
         register_blocking!(
             handlers,
             StepKind::IhcReducePlan,
-            crate::engine::exec::indexing_health_campaign::exec_ihc_reduce_plan
+            crate::engine::exec::indexing_health::exec_ihc_reduce_plan
         );
 
         handlers.insert(

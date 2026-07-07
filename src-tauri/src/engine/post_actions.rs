@@ -295,7 +295,7 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
 
     // Indexing health campaign → spawn child fix tasks from campaign plan
     if ctx.task.task_type == "indexing_health_campaign" {
-        let spawned = crate::engine::exec::indexing_health_campaign::spawn_campaign_children(
+        let spawned = crate::engine::exec::indexing_health::spawn_campaign_children(
             ctx.conn,
             ctx.task,
             ctx.project_path,

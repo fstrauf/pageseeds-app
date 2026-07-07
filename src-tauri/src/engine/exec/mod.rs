@@ -14,7 +14,7 @@ pub mod ctr_audit;
 pub mod gsc;
 pub mod gsc_diagnostics;
 pub mod indexing_fix;
-pub mod indexing_health_campaign;
+pub mod indexing_health;
 pub mod intent_classifier;
 pub mod keywords;
 pub mod quality_rater;
