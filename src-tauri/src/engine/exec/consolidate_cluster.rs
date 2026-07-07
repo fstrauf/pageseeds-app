@@ -446,7 +446,7 @@ pub(crate) fn exec_merge_draft_patch(
     let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "merge-content") {
         Ok(s) => s,
         Err(msg) => {
-            return StepResult { success: false, message: msg, output: None };
+            return StepResult::fail(msg);
         }
     };
 

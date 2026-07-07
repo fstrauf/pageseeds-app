@@ -76,7 +76,7 @@ pub(crate) fn exec_can_analyze_candidates(
     let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "cannibalization-strategy") {
         Ok(s) => s,
         Err(msg) => {
-            return StepResult { success: false, message: msg, output: None };
+            return StepResult::fail(msg);
         }
     };
 
