@@ -170,6 +170,32 @@ pub(crate) fn spawn_campaign_children(
     created_ids
 }
 
+/// Common TaskSpec skeleton for all campaign-spawned fix tasks.
+/// Each variant provides its unique task_type, title, description, idempotency_key, and artifacts.
+fn fix_task_spec(
+    parent: &Task,
+    task_type: &str,
+    title: String,
+    description: String,
+    idempotency_key: String,
+    artifacts: Vec<crate::models::task::TaskArtifact>,
+) -> TaskSpec {
+    TaskSpec {
+        project_id: parent.project_id.clone(),
+        task_type: task_type.to_string(),
+        title: Some(title),
+        description: Some(description),
+        run_policy: Some(TaskRunPolicy::AutoEnqueue),
+        priority: Priority::Medium,
+        agent_policy: AgentPolicy::Required,
+        idempotency_key: Some(idempotency_key),
+        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 30 }),
+        depends_on: vec![parent.id.clone()],
+        artifacts,
+        ..Default::default()
+    }
+}
+
 pub(crate) fn build_fix_content_spec(
     parent: &Task,
     target: &IndexingTargetPlan,
@@ -248,23 +274,17 @@ pub(crate) fn build_fix_content_spec(
         }
     }
 
-    TaskSpec {
-        project_id: parent.project_id.clone(),
-        task_type: "fix_content_article".to_string(),
-        title: Some(format!("Fix content: {}", url_slug)),
-        description: Some(format!(
+    fix_task_spec(
+        parent,
+        "fix_content_article",
+        format!("Fix content: {}", url_slug),
+        format!(
             "URL: {}\nRecommended action: fix_content (content audit health = poor)\nParent campaign: {}",
             target.url, parent.id
-        )),
-        run_policy: Some(TaskRunPolicy::AutoEnqueue),
-        priority: Priority::Medium,
-        agent_policy: AgentPolicy::Required,
-        idempotency_key: Some(idempotency_key),
-        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 30 }),
-        depends_on: vec![parent.id.clone()],
+        ),
+        idempotency_key,
         artifacts,
-        ..Default::default()
-    }
+    )
 }
 
 pub(crate) fn build_add_links_spec(
@@ -317,23 +337,17 @@ pub(crate) fn build_add_links_spec(
         });
     }
 
-    TaskSpec {
-        project_id: parent.project_id.clone(),
-        task_type: "fix_indexing_internal_links".to_string(),
-        title: Some(format!("Add links: {}", url_slug)),
-        description: Some(format!(
+    fix_task_spec(
+        parent,
+        "fix_indexing_internal_links",
+        format!("Add links: {}", url_slug),
+        format!(
             "URL: {}\nRecommended action: add_links (zero incoming internal links)\nParent campaign: {}",
             target.url, parent.id
-        )),
-        run_policy: Some(TaskRunPolicy::AutoEnqueue),
-        priority: Priority::Medium,
-        agent_policy: AgentPolicy::Required,
-        idempotency_key: Some(idempotency_key),
-        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 30 }),
-        depends_on: vec![parent.id.clone()],
+        ),
+        idempotency_key,
         artifacts,
-        ..Default::default()
-    }
+    )
 }
 
 pub(crate) fn build_rewrite_spec(
@@ -381,19 +395,13 @@ pub(crate) fn build_rewrite_spec(
         }
     }
 
-    TaskSpec {
-        project_id: parent.project_id.clone(),
-        task_type: "fix_indexing".to_string(),
-        title: Some(format!("Rewrite title/H1: {}", url_slug)),
-        description: Some(description),
-        run_policy: Some(TaskRunPolicy::AutoEnqueue),
-        priority: Priority::Medium,
-        agent_policy: AgentPolicy::Required,
-        idempotency_key: Some(idempotency_key),
-        dedup_policy: Some(DeduplicationPolicy::Cooldown { days: 30 }),
-        depends_on: vec![parent.id.clone()],
+    fix_task_spec(
+        parent,
+        "fix_indexing",
+        format!("Rewrite title/H1: {}", url_slug),
+        description,
+        idempotency_key,
         artifacts,
-        ..Default::default()
-    }
+    )
 }
 
