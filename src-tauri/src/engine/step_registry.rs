@@ -226,18 +226,6 @@ impl StepRegistry {
         let mut handlers: HashMap<StepKind, HandlerFn> = HashMap::new();
 
         handlers.insert(
-            StepKind::Deterministic,
-            Box::new(|step, ctx| {
-                let task = ctx.task;
-                let project_path = ctx.project_path;
-                let seo_provider = ctx.seo_provider;
-                Box::pin(async move {
-                    crate::engine::exec::agentic::exec_deterministic(step, task, project_path, seo_provider).await
-                })
-            }),
-        );
-
-        handlers.insert(
             StepKind::Agentic,
             Box::new(|step, ctx| {
                 let task = ctx.task;

@@ -5,7 +5,6 @@ use std::str::FromStr;
 /// All known workflow step kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StepKind {
-    Deterministic,
     Agentic,
     Manual,
     ClusterLinkScan,
@@ -167,7 +166,6 @@ pub enum StepKind {
 impl StepKind {
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Deterministic => "deterministic",
             Self::Agentic => "agentic",
             Self::Manual => "manual",
             Self::ClusterLinkScan => "cluster_link_scan",
@@ -284,7 +282,6 @@ impl FromStr for StepKind {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "deterministic" => Ok(Self::Deterministic),
             "agentic" => Ok(Self::Agentic),
             "manual" => Ok(Self::Manual),
             "cluster_link_scan" => Ok(Self::ClusterLinkScan),
@@ -411,7 +408,6 @@ mod tests {
     #[test]
     fn all_variants_round_trip_through_as_str_and_from_str() {
         let variants = [
-            StepKind::Deterministic,
             StepKind::Agentic,
             StepKind::Manual,
             StepKind::ClusterLinkScan,
@@ -537,7 +533,6 @@ mod tests {
 
     #[test]
     fn display_matches_as_str() {
-        assert_eq!(format!("{}", StepKind::Deterministic), "deterministic");
         assert_eq!(
             format!("{}", StepKind::CtrBuildContext),
             "ctr_build_context"
