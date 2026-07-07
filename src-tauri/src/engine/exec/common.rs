@@ -136,20 +136,22 @@ pub fn read_json<T: DeserializeOwned>(path: &Path, context: &str) -> Result<T, S
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            return Err(StepResult {
-                success: false,
-                message: format!("{}: failed to read {}: {}", context, path.display(), e),
-                output: None,
-            });
+            return Err(StepResult::fail(format!(
+                "{}: failed to read {}: {}",
+                context,
+                path.display(),
+                e
+            )));
         }
     };
     match serde_json::from_str(&content) {
         Ok(v) => Ok(v),
-        Err(e) => Err(StepResult {
-            success: false,
-            message: format!("{}: invalid JSON in {}: {}", context, path.display(), e),
-            output: None,
-        }),
+        Err(e) => Err(StepResult::fail(format!(
+            "{}: invalid JSON in {}: {}",
+            context,
+            path.display(),
+            e
+        ))),
     }
 }
 
@@ -161,19 +163,19 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T, context: &str) -> Result
     let json = match serde_json::to_string_pretty(value) {
         Ok(j) => j,
         Err(e) => {
-            return Err(StepResult {
-                success: false,
-                message: format!("{}: failed to serialize: {}", context, e),
-                output: None,
-            });
+            return Err(StepResult::fail(format!(
+                "{}: failed to serialize: {}",
+                context, e
+            )));
         }
     };
     match std::fs::write(path, json) {
         Ok(()) => Ok(()),
-        Err(e) => Err(StepResult {
-            success: false,
-            message: format!("{}: failed to write {}: {}", context, path.display(), e),
-            output: None,
-        }),
+        Err(e) => Err(StepResult::fail(format!(
+            "{}: failed to write {}: {}",
+            context,
+            path.display(),
+            e
+        ))),
     }
 }

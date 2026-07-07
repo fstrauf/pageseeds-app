@@ -92,3 +92,32 @@ pub struct StepResult {
     /// Raw stdout/stderr captured from CLI invocations.
     pub output: Option<String>,
 }
+
+impl StepResult {
+    /// Create a failure result with no output.
+    pub fn fail(message: impl Into<String>) -> Self {
+        StepResult {
+            success: false,
+            message: message.into(),
+            output: None,
+        }
+    }
+
+    /// Create a success result with no output.
+    pub fn ok(message: impl Into<String>) -> Self {
+        StepResult {
+            success: true,
+            message: message.into(),
+            output: None,
+        }
+    }
+
+    /// Create a success result with output.
+    pub fn ok_with_output(message: impl Into<String>, output: impl Into<String>) -> Self {
+        StepResult {
+            success: true,
+            message: message.into(),
+            output: Some(output.into()),
+        }
+    }
+}
