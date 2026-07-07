@@ -146,6 +146,8 @@ mod tests {
                 content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
                 estimated_traffic_monthly TEXT,
                 page_type TEXT,
+                content_hash TEXT,
+                last_edited_at TEXT,
                 project_id TEXT NOT NULL,
                 PRIMARY KEY (id, project_id)
             );

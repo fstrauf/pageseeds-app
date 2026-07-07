@@ -310,16 +310,48 @@ pub fn find_first_paragraph_range(body: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Replace first paragraph with new text.
-pub fn replace_first_paragraph(body: &str, new_text: &str) -> String {
+/// Ensure the body has a first paragraph containing `new_text`.
+///
+/// If a first paragraph already exists (after the H1 or at the top of the body),
+/// it is replaced. If no paragraph exists — for example, the H1 is immediately
+/// followed by an H2 heading — the new text is inserted after the first H1.
+/// If there is no H1, the text is inserted at the start of the body.
+pub fn ensure_first_paragraph(body: &str, new_text: &str) -> String {
     match find_first_paragraph_range(body) {
         Some((start, end)) => {
             let before = &body[..start];
             let after = &body[end..];
             format!("{before}{new_text}{after}")
         }
-        None => body.to_string(),
+        None => insert_after_first_h1(body, new_text),
     }
+}
+
+/// Insert `new_text` after the first H1 line, or at the top of the body if no H1 exists.
+fn insert_after_first_h1(body: &str, new_text: &str) -> String {
+    let h1_pattern = Regex::new(r"(?m)^# .+$").unwrap();
+    if let Some(m) = h1_pattern.find(body) {
+        let insert_pos = m.end();
+        let before = &body[..insert_pos];
+        let after = &body[insert_pos..];
+        return format!("{before}\n\n{new_text}{after}");
+    }
+
+    // No H1: prepend the paragraph to the body.
+    if body.trim().is_empty() {
+        new_text.to_string()
+    } else {
+        format!("{new_text}\n\n{body}")
+    }
+}
+
+/// Replace first paragraph with new text.
+///
+/// Deprecated: this is a thin wrapper around `ensure_first_paragraph` so that
+/// callers get insertion behavior when no paragraph exists. Prefer calling
+/// `ensure_first_paragraph` directly for clarity.
+pub fn replace_first_paragraph(body: &str, new_text: &str) -> String {
+    ensure_first_paragraph(body, new_text)
 }
 
 /// Insert JSON-LD FAQPage schema before last `---` separator or at end of body.
@@ -625,6 +657,38 @@ Second paragraph."#;
         assert!(result.contains("Replaced first paragraph."));
         assert!(!result.contains("First paragraph here."));
         assert!(result.contains("Second paragraph."));
+    }
+
+    #[test]
+    fn ensure_first_paragraph_inserts_after_h1_when_missing() {
+        // Regression case: H1 is immediately followed by H2 with no intro paragraph.
+        let body = "# SPX Options Tax Treatment\n## SPX Options 60/40 Tax Treatment Explained\n\nBody content.";
+        let result = ensure_first_paragraph(body, "SPX options 60/40 tax treatment gives index traders a major edge.");
+        assert!(
+            result.contains("# SPX Options Tax Treatment\n\nSPX options 60/40 tax treatment gives index traders a major edge."),
+            "intro should be inserted between H1 and H2, got:\n{}",
+            result
+        );
+        assert!(result.contains("## SPX Options 60/40 Tax Treatment Explained"));
+        assert!(result.contains("Body content."));
+    }
+
+    #[test]
+    fn ensure_first_paragraph_replaces_existing_paragraph() {
+        let body = "# Heading\n\nOld paragraph.\n\n## Next\nBody.";
+        let result = ensure_first_paragraph(body, "New paragraph text.");
+        assert!(result.contains("New paragraph text."));
+        assert!(!result.contains("Old paragraph."));
+        assert!(result.contains("## Next"));
+    }
+
+    #[test]
+    fn ensure_first_paragraph_inserts_at_top_when_no_h1_and_no_paragraph() {
+        // No H1 and no prose paragraph exists (only headings / separators).
+        let body = "## First H2\n\n---\n";
+        let result = ensure_first_paragraph(body, "Intro paragraph.");
+        assert!(result.starts_with("Intro paragraph.\n\n## First H2"));
+        assert!(result.contains("---"));
     }
 
     #[test]

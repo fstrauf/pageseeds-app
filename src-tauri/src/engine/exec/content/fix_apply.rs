@@ -117,8 +117,16 @@ pub(crate) fn exec_fix_content_article_apply(
     }
 
     if let Some(new_intro) = intro {
-        new_body = crate::content::cleaner::replace_first_paragraph(&new_body, &new_intro);
-        applied.push("intro".to_string());
+        let body_before = new_body.clone();
+        new_body = crate::content::cleaner::ensure_first_paragraph(&new_body, &new_intro);
+        if new_body != body_before {
+            applied.push("intro".to_string());
+        } else {
+            log::warn!(
+                "[fix_content_article_apply] intro patch did not change body for {}",
+                patch.file
+            );
+        }
     }
 
     if let Some(links) = internal_links {
