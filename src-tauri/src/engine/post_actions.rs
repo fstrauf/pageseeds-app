@@ -284,7 +284,7 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
     if ctx.task.task_type == "cannibalization_audit" {
         if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
             follow_up_ids.extend(
-                crate::engine::exec::cannibalization_audit::create_can_fix_tasks(
+                crate::engine::exec::cannibalization::create_can_fix_tasks(
                     ctx.conn,
                     &reloaded,
                     ctx.project_path,

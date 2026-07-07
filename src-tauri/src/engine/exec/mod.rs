@@ -3,7 +3,7 @@
 
 pub mod agentic;
 pub mod audit_health;
-pub mod cannibalization_audit;
+pub mod cannibalization;
 pub mod clarity;
 pub mod common;
 pub mod consolidate_cluster;

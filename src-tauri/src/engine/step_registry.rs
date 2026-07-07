@@ -742,32 +742,32 @@ impl StepRegistry {
         register_blocking!(
             handlers,
             StepKind::CanBuildContext,
-            crate::engine::exec::cannibalization_audit::exec_can_build_context
+            crate::engine::exec::cannibalization::exec_can_build_context
         );
 
         register_blocking!(
             handlers,
             StepKind::CanExactKeywordDupes,
-            crate::engine::exec::cannibalization_audit::exec_can_exact_keyword_dupes
+            crate::engine::exec::cannibalization::exec_can_exact_keyword_dupes
         );
 
         register_blocking!(
             handlers,
             StepKind::CanSelectCandidates,
-            crate::engine::exec::cannibalization_audit::exec_can_select_candidates
+            crate::engine::exec::cannibalization::exec_can_select_candidates
         );
 
         register_blocking!(
             handlers,
             StepKind::CanAnalyzeCandidates,
-            crate::engine::exec::cannibalization_audit::exec_can_analyze_candidates,
+            crate::engine::exec::cannibalization::exec_can_analyze_candidates,
             agent_provider
         );
 
         register_blocking!(
             handlers,
             StepKind::CanReduceStrategy,
-            crate::engine::exec::cannibalization_audit::exec_can_reduce_strategy
+            crate::engine::exec::cannibalization::exec_can_reduce_strategy
         );
 
         handlers.insert(
