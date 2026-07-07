@@ -67,42 +67,12 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
         }
     }
 
-    // 3. Load content audit (DB primary, JSON fallback)
-    let audit_doc: serde_json::Value = {
-        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
-            .ok()
-            .and_then(|conn| {
-                crate::db::content_audit::get_audit_report_as_json(&conn, &task.project_id).ok().flatten()
-            });
-        db_doc.unwrap_or_else(|| {
-            let audit_path = paths.automation_dir.join("content_audit.json");
-            std::fs::read_to_string(&audit_path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_else(|| serde_json::json!({ "articles": [] }))
-        })
-    };
-    let audit_articles = audit_doc["articles"].as_array().cloned().unwrap_or_default();
-    let mut audit_by_slug: HashMap<String, &serde_json::Value> = HashMap::new();
-    for article in &audit_articles {
-        if let Some(slug) = article["url_slug"].as_str() {
-            audit_by_slug.insert(slug.to_string(), article);
-        }
-    }
+    // 3. Load content audit + articles via canonical helpers (Stage B)
+    let audit = crate::engine::exec::common::load_audit_snapshot(&task.project_id, &paths);
+    let audit_by_slug = &audit.by_slug;
 
-    // 3b. Load articles.json for article_id / file lookups
-    let articles_path = paths.automation_dir.join("articles.json");
-    let articles_doc: serde_json::Value = std::fs::read_to_string(&articles_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({ "articles": [] }));
-    let all_articles = articles_doc["articles"].as_array().cloned().unwrap_or_default();
-    let mut article_by_slug: HashMap<String, &serde_json::Value> = HashMap::new();
-    for article in &all_articles {
-        if let Some(slug) = article["url_slug"].as_str() {
-            article_by_slug.insert(slug.to_string(), article);
-        }
-    }
+    let project_articles = crate::engine::exec::common::load_project_articles(&paths);
+    let article_by_slug = &project_articles.by_slug;
 
     // 3c. Load link_scan.json for outgoing-link checks when building source candidates
     let link_scan_path = paths.automation_dir.join("link_scan.json");
@@ -237,7 +207,7 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
             Vec::new();
         if incoming_links == 0 && article_id > 0 {
             let target_outgoing = outgoing_by_id.get(&article_id);
-            for (src_slug, src_art) in &article_by_slug {
+            for (src_slug, src_art) in article_by_slug {
                 if src_slug == &slug {
                     continue;
                 }

@@ -67,32 +67,10 @@ pub(crate) fn spawn_campaign_children(
         })
         .collect();
 
-    // Load content audit so fix_content specs get actual failed checks (DB primary, JSON fallback)
-    let audit_doc: serde_json::Value = {
-        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
-            .ok()
-            .and_then(|conn| {
-                crate::db::content_audit::get_audit_report_as_json(&conn, &parent_task.project_id).ok().flatten()
-            });
-        db_doc.unwrap_or_else(|| {
-            let audit_path = paths.automation_dir.join("content_audit.json");
-            std::fs::read_to_string(&audit_path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_else(|| serde_json::json!({"articles": []}))
-        })
-    };
-    let audit_articles = audit_doc["articles"].as_array().cloned().unwrap_or_default();
-    let mut audit_by_file: HashMap<String, &serde_json::Value> = HashMap::new();
-    let mut audit_by_slug: HashMap<String, &serde_json::Value> = HashMap::new();
-    for a in &audit_articles {
-        if let Some(f) = a["file"].as_str() {
-            if !f.is_empty() { audit_by_file.insert(f.to_string(), a); }
-        }
-        if let Some(s) = a["url_slug"].as_str() {
-            if !s.is_empty() { audit_by_slug.insert(s.to_string(), a); }
-        }
-    }
+    // Load content audit so fix_content specs get actual failed checks (Stage B)
+    let audit = crate::engine::exec::common::load_audit_snapshot(&parent_task.project_id, &paths);
+    let audit_by_file = &audit.by_file;
+    let audit_by_slug = &audit.by_slug;
 
     let mut created_ids: Vec<String> = Vec::new();
 
@@ -131,7 +109,6 @@ pub(crate) fn spawn_campaign_children(
         let audit_row = ctx.and_then(|c| {
             audit_by_file.get(&c.target.file)
                 .or_else(|| audit_by_slug.get(&c.target.slug))
-                .copied()
         });
 
         let spec = match target.recommended_action.as_str() {

@@ -28,16 +28,8 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     if db_conn.is_none() {
         log::warn!("[cannibalization_audit] Could not open DB at {:?} — using target_keyword proxy for query overlap", db_path);
     }
-    let articles_path = paths.automation_dir.join("articles.json");
-
-    let doc: serde_json::Value =
-        match crate::engine::exec::common::read_json(&articles_path, "articles.json") {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-    let empty = vec![];
-    let articles = doc["articles"].as_array().unwrap_or(&empty);
+    let project_articles = crate::engine::exec::common::load_project_articles(&paths);
+    let articles = &project_articles.articles;
 
     if articles.is_empty() {
         return StepResult {
