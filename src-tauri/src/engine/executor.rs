@@ -1206,7 +1206,7 @@ mod tests {
     // compute_next_publish_date returns yesterday when no articles exist.
     #[test]
     fn compute_next_publish_date_no_existing_articles() {
-        use crate::engine::workflows::handlers::compute_next_publish_date;
+        use crate::engine::exec::agentic::compute_next_publish_date;
         use chrono::{Duration, Utc};
 
         let conn = in_memory_db();
@@ -1223,7 +1223,7 @@ mod tests {
     // compute_next_publish_date skips occupied dates and returns first free past date.
     #[test]
     fn compute_next_publish_date_skips_occupied_slots() {
-        use crate::engine::workflows::handlers::compute_next_publish_date;
+        use crate::engine::exec::agentic::compute_next_publish_date;
         use chrono::{Duration, Utc};
 
         let conn = in_memory_db();
@@ -1254,7 +1254,7 @@ mod tests {
     // compute_next_publish_date returns None when project has no articles table entries.
     #[test]
     fn compute_next_publish_date_missing_project_returns_none() {
-        use crate::engine::workflows::handlers::compute_next_publish_date;
+        use crate::engine::exec::agentic::compute_next_publish_date;
 
         let conn = in_memory_db();
         // No project inserted — function must gracefully return None, not panic.

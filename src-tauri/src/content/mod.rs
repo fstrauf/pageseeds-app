@@ -8,6 +8,7 @@ pub mod frontmatter;
 pub mod keyword_density;
 pub mod linking;
 pub mod locator;
+pub mod naming;
 pub mod ops;
 pub mod publish;
 pub mod readability;

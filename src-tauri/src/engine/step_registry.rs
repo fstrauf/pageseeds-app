@@ -4,7 +4,7 @@ use std::pin::Pin;
 
 use rusqlite::Connection;
 
-use crate::engine::workflows::{handlers, StepKind, StepResult, WorkflowStep};
+use crate::engine::workflows::{StepKind, StepResult, WorkflowStep};
 use crate::models::task::Task;
 
 /// Register a synchronous handler that runs inside `tokio::task::spawn_blocking`.
@@ -232,7 +232,7 @@ impl StepRegistry {
                 let project_path = ctx.project_path;
                 let seo_provider = ctx.seo_provider;
                 Box::pin(async move {
-                    handlers::exec_deterministic(step, task, project_path, seo_provider).await
+                    crate::engine::exec::agentic::exec_deterministic(step, task, project_path, seo_provider).await
                 })
             }),
         );
@@ -246,9 +246,9 @@ impl StepRegistry {
                 let agent_provider = ctx.agent_provider;
                 let latest_raw = ctx.latest_raw;
                 let next_publish_date =
-                    handlers::compute_next_publish_date(ctx.conn, &task.project_id);
+                    crate::engine::exec::agentic::compute_next_publish_date(ctx.conn, &task.project_id);
                 Box::pin(async move {
-                    handlers::exec_agentic(
+                    crate::engine::exec::agentic::exec_agentic(
                         step,
                         task,
                         project_path,
