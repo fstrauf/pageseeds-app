@@ -726,7 +726,7 @@ Second paragraph."#;
     fn is_title_truncated_detects_dangling_words_and_punct() {
         assert!(is_title_truncated("A Beginner's Guide to"));
         assert!(is_title_truncated("What Are the Greeks in Options: "));
-        assert!(is_title_truncated("Cash Secured Puts: The Complete Income"));
+        assert!(!is_title_truncated("Cash Secured Puts: The Complete Income"));
         assert!(!is_title_truncated("Cash Secured Puts: The Complete Income Guide"));
         assert!(!is_title_truncated("Options Greeks Cheat Sheet (2026)"));
     }

@@ -864,6 +864,7 @@ mod tests {
                 .await;
 
             // Step 1 (seed extraction) — matches system prompt content
+            // Research uses the direct backend, so the response is plain JSON content.
             Mock::given(method("POST"))
                 .and(path("/v1/chat/completions"))
                 .and(body_string_contains("Seed Extraction Contract"))
@@ -877,19 +878,9 @@ mod tests {
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": null,
-                                "tool_calls": [
-                                    {
-                                        "id": "call_extraction",
-                                        "type": "function",
-                                        "function": {
-                                            "name": "submit",
-                                            "arguments": "{\"themes\":[\"risk management\",\"portfolio hedging\"],\"competitors\":[]}"
-                                        }
-                                    }
-                                ]
+                                "content": "{\"themes\":[\"risk management\",\"portfolio hedging\"],\"competitors\":[]}"
                             },
-                            "finish_reason": "tool_calls"
+                            "finish_reason": "stop"
                         }
                     ]
                 })))
@@ -897,6 +888,7 @@ mod tests {
                 .await;
 
             // Step 3 (seed validation) — matches system prompt content
+            // Research uses the direct backend, so the response is plain JSON content.
             Mock::given(method("POST"))
                 .and(path("/v1/chat/completions"))
                 .and(body_string_contains("Seed Validation Contract"))
@@ -910,19 +902,9 @@ mod tests {
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": null,
-                                "tool_calls": [
-                                    {
-                                        "id": "call_validation",
-                                        "type": "function",
-                                        "function": {
-                                            "name": "submit",
-                                            "arguments": "{\"validated_seeds\":[{\"theme\":\"risk management\",\"seeds\":[\"risk management strategy\"]},{\"theme\":\"portfolio hedging\",\"seeds\":[\"portfolio hedging options\"]}]}"
-                                        }
-                                    }
-                                ]
+                                "content": "{\"validated_seeds\":[{\"theme\":\"risk management\",\"seeds\":[\"risk management strategy\"]},{\"theme\":\"portfolio hedging\",\"seeds\":[\"portfolio hedging options\"]}]}"
                             },
-                            "finish_reason": "tool_calls"
+                            "finish_reason": "stop"
                         }
                     ]
                 })))
@@ -1031,6 +1013,11 @@ mod tests {
                 seo_provider TEXT,
                 clarity_project_id TEXT
              );
+             CREATE TABLE IF NOT EXISTS global_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+             );
+             INSERT OR IGNORE INTO global_settings (key, value) VALUES ('kimi_backend_mode', 'bridge');
              CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',

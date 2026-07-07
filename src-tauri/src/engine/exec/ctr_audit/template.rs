@@ -134,6 +134,9 @@ fn detect_template_patterns(
     let literal_var_pages: Vec<&CtrRenderedPageAudit> = audits
         .iter()
         .filter(|a| {
+            if a.title_issue_source != "site_template" {
+                return false;
+            }
             let rt = a.rendered_title.to_lowercase();
             rt.contains("| brand |")
                 || rt.contains("{brand}")
@@ -957,10 +960,18 @@ mod tests {
         ];
 
         let results = detect_template_patterns("/tmp", &audits);
-        assert_eq!(results.len(), 1, "Should detect exactly 1 template pattern");
-        assert_eq!(results[0].affected_pages, 2);
-        assert_eq!(results[0].detected_pattern, "{title} | Brand | Brand");
-        assert_eq!(results[0].desired_pattern, "{title} | Brand");
+        assert_eq!(results.len(), 2, "Should detect suffix group + literal variable pattern");
+        let suffix_result = results
+            .iter()
+            .find(|r| r.detected_pattern == "{title} | Brand | Brand")
+            .expect("Should find suffix group result");
+        assert_eq!(suffix_result.affected_pages, 2);
+        assert_eq!(suffix_result.desired_pattern, "{title} | Brand");
+        let literal_result = results
+            .iter()
+            .find(|r| r.detected_pattern.contains("Literal template variable"))
+            .expect("Should find literal variable result");
+        assert_eq!(literal_result.affected_pages, 2);
     }
 
     #[test]

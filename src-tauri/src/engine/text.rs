@@ -182,6 +182,8 @@ pub fn strip_agent_markdown_preambles(raw: &str) -> String {
 ///
 /// Example:
 /// ```
+/// use pageseeds_lib::engine::text::extract_markdown_document;
+///
 /// let raw = "Done. Here is the spec:\n\n# SEO Feature Specification\n...";
 /// let doc = extract_markdown_document(raw, Some("# SEO Feature Specification"));
 /// assert!(doc.unwrap().starts_with("# SEO Feature Specification"));

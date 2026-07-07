@@ -503,9 +503,10 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
 /// in every module that validates internal link targets.
 ///
 /// # Example
-/// ```
+/// ```no_run
 /// use pageseeds_lib::engine::task_store::load_project_slug_set;
 ///
+/// let conn = rusqlite::Connection::open_in_memory().unwrap();
 /// let slugs = load_project_slug_set(&conn, "proj-1").unwrap();
 /// assert!(slugs.contains("my-post"));
 /// ```

@@ -1069,8 +1069,8 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             .unwrap();
         assert_eq!(meta_check.status, "fail");
         assert!(
-            meta_check.detail.as_ref().unwrap().contains("130"),
-            "Should mention 130 char minimum: {:?}",
+            meta_check.detail.as_ref().unwrap().contains("120–155"),
+            "Should mention 120–155 char range: {:?}",
             meta_check.detail
         );
 
