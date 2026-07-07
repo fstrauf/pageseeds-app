@@ -466,94 +466,59 @@ pub(crate) async fn exec_content_review_recommend(
         };
     }
 
-    // Process articles individually with concurrency limit 2 (matches bridge limit)
+    // Process articles with bounded concurrency (limit 2 to match provider limits)
     let preamble = "You are an expert SEO content reviewer. Analyze the single article below and generate structured recommendations using the submit tool.";
     let mut all_articles: Vec<crate::models::content_review::ReviewArticleRecommendation> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
 
-    async fn extract_one(
-        agent_provider: &str,
-        ctx: &serde_json::Value,
-        preamble: &str,
-    ) -> Result<crate::models::content_review::SingleArticleRecommendations, String> {
-        let prompt = build_single_article_prompt(ctx);
-        log::info!(
-            "[content_review_recommend] extracting article {} ({} chars prompt)",
-            ctx["article_id"].as_i64().unwrap_or(0),
-            prompt.len()
-        );
-        crate::rig::extraction::extract_structured::<
-            crate::models::content_review::SingleArticleRecommendations,
-        >(agent_provider, &prompt, Some(preamble), Some("direct"), None)
-        .await
-    }
-
-    for chunk in contexts.chunks(2) {
-        match chunk.len() {
-            1 => {
-                let ctx = &chunk[0];
+    let results: Vec<(serde_json::Value, Result<crate::models::content_review::SingleArticleRecommendations, String>)> = {
+        use futures::StreamExt;
+        futures::stream::iter(contexts.iter().cloned())
+            .map(|ctx| async {
                 let article_id = ctx["article_id"].as_i64().unwrap_or(0);
-                match extract_one(agent_provider, ctx, preamble).await {
-                    Ok(single) => {
-                        let article_rec = crate::models::content_review::ReviewArticleRecommendation {
-                            article_id,
-                            article_title: ctx["article_title"].as_str().unwrap_or("").to_string(),
-                            article_file: ctx["article_file"].as_str().unwrap_or("").to_string(),
-                            url_slug: ctx["url_slug"].as_str().unwrap_or("").to_string(),
-                            target_keyword: ctx["target_keyword"].as_str().map(|s| s.to_string()),
-                            suggestions: single.suggestions,
-                        };
-                        all_articles.push(article_rec);
-                        log::info!(
-                            "[content_review_recommend] article {} extracted successfully",
-                            article_id
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[content_review_recommend] article {} failed: {}",
-                            article_id,
-                            e
-                        );
-                        failed.push(format!("article {}: {}", article_id, e));
-                    }
-                }
-            }
-            2 => {
-                let (r1, r2) = tokio::join!(
-                    extract_one(agent_provider, &chunk[0], preamble),
-                    extract_one(agent_provider, &chunk[1], preamble),
+                let prompt = build_single_article_prompt(&ctx);
+                log::info!(
+                    "[content_review_recommend] extracting article {} ({} chars prompt)",
+                    article_id,
+                    prompt.len()
                 );
-                for (ctx, result) in chunk.iter().zip([r1, r2].into_iter()) {
-                    let article_id = ctx["article_id"].as_i64().unwrap_or(0);
-                    match result {
-                        Ok(single) => {
-                            let article_rec = crate::models::content_review::ReviewArticleRecommendation {
-                                article_id,
-                                article_title: ctx["article_title"].as_str().unwrap_or("").to_string(),
-                                article_file: ctx["article_file"].as_str().unwrap_or("").to_string(),
-                                url_slug: ctx["url_slug"].as_str().unwrap_or("").to_string(),
-                                target_keyword: ctx["target_keyword"].as_str().map(|s| s.to_string()),
-                                suggestions: single.suggestions,
-                            };
-                            all_articles.push(article_rec);
-                            log::info!(
-                                "[content_review_recommend] article {} extracted successfully",
-                                article_id
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "[content_review_recommend] article {} failed: {}",
-                                article_id,
-                                e
-                            );
-                            failed.push(format!("article {}: {}", article_id, e));
-                        }
-                    }
-                }
+                let result = crate::rig::extraction::extract_structured::<
+                    crate::models::content_review::SingleArticleRecommendations,
+                >(agent_provider, &prompt, Some(preamble), Some("direct"), None)
+                .await;
+                (ctx, result)
+            })
+            .buffer_unordered(2)
+            .collect()
+            .await
+    };
+
+    for (ctx, result) in results {
+        let article_id = ctx["article_id"].as_i64().unwrap_or(0);
+        match result {
+            Ok(single) => {
+                let article_rec = crate::models::content_review::ReviewArticleRecommendation {
+                    article_id,
+                    article_title: ctx["article_title"].as_str().unwrap_or("").to_string(),
+                    article_file: ctx["article_file"].as_str().unwrap_or("").to_string(),
+                    url_slug: ctx["url_slug"].as_str().unwrap_or("").to_string(),
+                    target_keyword: ctx["target_keyword"].as_str().map(|s| s.to_string()),
+                    suggestions: single.suggestions,
+                };
+                all_articles.push(article_rec);
+                log::info!(
+                    "[content_review_recommend] article {} extracted successfully",
+                    article_id
+                );
             }
-            _ => unreachable!(),
+            Err(e) => {
+                log::warn!(
+                    "[content_review_recommend] article {} failed: {}",
+                    article_id,
+                    e
+                );
+                failed.push(format!("article {}: {}", article_id, e));
+            }
         }
     }
 
