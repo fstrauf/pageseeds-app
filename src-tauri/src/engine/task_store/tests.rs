@@ -65,6 +65,41 @@
         assert_eq!(after.tasks.done, 3, "done should remain 3");
     }
 
+    /// load_project_slug_set normalizes prefixed/uppercase/raw url_slugs to a
+    /// canonical lowercased form so callers can match without re-implementing
+    /// slug cleanup.
+    #[test]
+    fn load_project_slug_set_normalizes_url_slugs() {
+        let conn = in_memory_db();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('p1', 'Test', '/tmp/test', 1, 'workspace')",
+            [],
+        ).unwrap();
+
+        for (id, slug) in [
+            (1, "hub-coffee"),
+            (2, "/blog/Best-Home-Coffee-Roaster/"),
+            (3, "blog/ethiopia-coffee-regions"),
+            (4, "001_my_post"),
+        ] {
+            conn.execute(
+                "INSERT INTO articles (
+                    id, project_id, title, url_slug, file, status,
+                    content_gaps_addressed, target_volume, word_count, review_count
+                 ) VALUES (?1, 'p1', ?2, ?3, 'article.mdx', 'draft', '[]', 0, 0, 0)",
+                rusqlite::params![id, format!("Article {}", id), slug],
+            ).unwrap();
+        }
+
+        let slugs = load_project_slug_set(&conn, "p1").unwrap();
+        assert!(slugs.contains("hub-coffee"));
+        assert!(slugs.contains("best-home-coffee-roaster"));
+        assert!(slugs.contains("ethiopia-coffee-regions"));
+        assert!(slugs.contains("my-post"));
+        assert!(!slugs.contains("/blog/hub-coffee"));
+    }
+
     /// Completing the new audit tasks increases done and reduces todo.
     #[test]
     fn project_overview_reflects_completed_tasks() {

@@ -36,6 +36,7 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
     };
 
     let base_url = normalize_base_url(&site_url);
+    let content_path_prefix = normalize_path_prefix(&resolve_content_path_prefix(&paths.automation_dir));
 
     // Read articles.json
     let project_articles = crate::engine::exec::common::load_project_articles(&paths);
@@ -59,7 +60,7 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
             continue;
         }
 
-        let page_url = format!("{}{}", base_url, url_slug);
+        let page_url = format!("{}{}{}", base_url.trim_end_matches('/'), content_path_prefix, url_slug);
 
         // Fetch and audit in a blocking thread with local tokio runtime
         let page_url_clone = page_url.clone();
@@ -169,6 +170,7 @@ pub fn compare_rendered_titles(project_path: &str, max_pages: usize) -> Result<s
     let site_url = resolve_site_url(&paths.automation_dir)
         .ok_or_else(|| "No site_url in manifest.json".to_string())?;
     let base_url = normalize_base_url(&site_url);
+    let content_path_prefix = normalize_path_prefix(&resolve_content_path_prefix(&paths.automation_dir));
 
     let project_articles = crate::engine::exec::common::load_project_articles(&paths);
     let articles = project_articles.articles;
@@ -181,10 +183,11 @@ pub fn compare_rendered_titles(project_path: &str, max_pages: usize) -> Result<s
         let source_title = article["title"].as_str().unwrap_or("").to_string();
         if slug.is_empty() { continue; }
 
-        let page_url = format!("{}{}", base_url, slug);
+        let page_url = format!("{}{}{}", base_url.trim_end_matches('/'), content_path_prefix, slug);
         match fetch_rendered_title(&page_url) {
             Ok(rendered_title) => {
-                let matches = source_title.trim().to_lowercase() == rendered_title.trim().to_lowercase();
+                let normalized_rendered = strip_brand_suffix(&rendered_title);
+                let matches = source_title.trim().to_lowercase() == normalized_rendered.trim().to_lowercase();
                 if !matches { mismatches += 1; }
                 let issue = if matches { "none" } else { classify_title_issue(&source_title, &rendered_title) };
                 results.push(serde_json::json!({
@@ -243,6 +246,15 @@ fn resolve_site_url(automation_dir: &std::path::Path) -> Option<String> {
         })
 }
 
+fn resolve_content_path_prefix(automation_dir: &std::path::Path) -> String {
+    let manifest_path = automation_dir.join("manifest.json");
+    std::fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("content_path_prefix").and_then(|u| u.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
 fn normalize_base_url(site_url: &str) -> String {
     let mut url = if site_url.starts_with("sc-domain:") {
         format!("https://{}/", &site_url["sc-domain:".len()..])
@@ -256,6 +268,17 @@ fn normalize_base_url(site_url: &str) -> String {
         url.push('/');
     }
     url
+}
+
+fn normalize_path_prefix(prefix: &str) -> String {
+    let mut normalized = prefix.trim().to_string();
+    if !normalized.starts_with('/') && !normalized.is_empty() {
+        normalized.insert(0, '/');
+    }
+    if !normalized.ends_with('/') && !normalized.is_empty() {
+        normalized.push('/');
+    }
+    normalized
 }
 
 async fn fetch_and_audit_page(
@@ -469,6 +492,19 @@ fn classify_title_issue(source_title: &str, rendered_title: &str) -> &'static st
         return "content_file";
     }
     "content_file"
+}
+
+/// Strip a trailing brand/site suffix such as " | BrewedLate Coffee" or " - Site Name"
+/// so that rendered titles can be compared against source titles.
+fn strip_brand_suffix(title: &str) -> String {
+    let trimmed = title.trim();
+    if let Some(idx) = trimmed.rfind(" | ") {
+        return trimmed[..idx].trim().to_string();
+    }
+    if let Some(idx) = trimmed.rfind(" - ") {
+        return trimmed[..idx].trim().to_string();
+    }
+    trimmed.to_string()
 }
 
 fn is_brand_duplicated(title: &str) -> bool {

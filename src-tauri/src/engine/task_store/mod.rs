@@ -496,11 +496,16 @@ pub fn list_articles(conn: &Connection, project_id: &str) -> Result<Vec<Article>
     Ok(articles)
 }
 
-/// Load all article url_slugs for a project as a lowercased HashSet.
+/// Load all article url_slugs for a project as a normalized, lowercased HashSet.
 ///
 /// This is the single source of truth for "does this slug exist in the project?"
 /// checks. Use it instead of re-implementing the list_articles → collect pattern
 /// in every module that validates internal link targets.
+///
+/// Slugs are normalized via [`crate::content::slug::normalize_url_slug`] so that
+/// callers can match against canonical values regardless of whether the database
+/// stores raw slugs (`hub-coffee`), prefixed slugs (`blog/hub-coffee`), or slugs
+/// with leading/trailing slashes.
 ///
 /// # Example
 /// ```no_run
@@ -515,7 +520,10 @@ pub fn load_project_slug_set(
     project_id: &str,
 ) -> Result<std::collections::HashSet<String>> {
     let articles = list_articles(conn, project_id)?;
-    Ok(articles.into_iter().map(|a| a.url_slug.to_lowercase()).collect())
+    Ok(articles
+        .into_iter()
+        .map(|a| crate::content::slug::normalize_url_slug(&a.url_slug))
+        .collect())
 }
 
 // ─── Artifact helpers (used by executor) ─────────────────────────────────────
