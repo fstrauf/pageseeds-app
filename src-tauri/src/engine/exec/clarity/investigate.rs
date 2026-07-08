@@ -44,6 +44,14 @@ fn dimension_value(dimensions: &HashMap<String, serde_json::Value>, key: &str) -
     })
 }
 
+/// Extract the page URL from a Clarity row.
+/// The Clarity Export API returns the URL in values as "Url" rather than in dimensions as "URL".
+fn row_url(row: &crate::clarity::models::ClarityExportRow) -> Option<String> {
+    dimension_value(&row.dimensions, "URL")
+        .or_else(|| row.values.get("Url").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter(|u| !u.is_empty() && u != "null")
+}
+
 /// Deterministic aggregation of Clarity rows into per-page scores.
 pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
@@ -96,7 +104,7 @@ pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection
     // Aggregate per URL.
     let mut by_url: HashMap<String, PageAccumulator> = HashMap::new();
     for row in rows {
-        let url = match dimension_value(&row.dimensions, "URL") {
+        let url = match row_url(&row) {
             Some(u) => u,
             None => continue,
         };
@@ -109,33 +117,33 @@ pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection
                 acc.total_sessions += parse_value(&row.values, "totalSessionCount");
             }
             crate::clarity::models::ClarityMetric::RageClickCount => {
-                acc.rage_click_count += parse_value(&row.values, "rageClickCount");
+                acc.rage_click_count += parse_value(&row.values, "subTotal");
             }
             crate::clarity::models::ClarityMetric::DeadClickCount => {
-                acc.dead_click_count += parse_value(&row.values, "deadClickCount");
+                acc.dead_click_count += parse_value(&row.values, "subTotal");
             }
             crate::clarity::models::ClarityMetric::QuickbackClick => {
-                acc.quickback_count += parse_value(&row.values, "quickbackClickCount");
+                acc.quickback_count += parse_value(&row.values, "subTotal");
             }
             crate::clarity::models::ClarityMetric::ExcessiveScroll => {
-                acc.excessive_scroll_count += parse_value(&row.values, "excessiveScrollCount");
+                acc.excessive_scroll_count += parse_value(&row.values, "subTotal");
             }
             crate::clarity::models::ClarityMetric::ErrorClickCount => {
-                acc.error_click_count += parse_value(&row.values, "errorClickCount");
+                acc.error_click_count += parse_value(&row.values, "subTotal");
             }
             crate::clarity::models::ClarityMetric::ScriptErrorCount => {
-                acc.script_error_count += parse_value(&row.values, "scriptErrorCount");
+                acc.script_error_count += parse_value(&row.values, "subTotal");
             }
             crate::clarity::models::ClarityMetric::EngagementTime => {
-                let sessions = parse_value(&row.values, "totalSessionCount").max(1.0);
-                let total_seconds = parse_value(&row.values, "engagementTimeInSeconds");
+                let sessions = parse_value(&row.values, "sessionsCount").max(1.0);
+                let total_seconds = parse_value(&row.values, "totalTime");
                 // Average across dimension sets; simple weighted average by sessions.
                 acc.engagement_time_sum += total_seconds;
                 acc.engagement_time_sessions += sessions;
             }
             crate::clarity::models::ClarityMetric::ScrollDepth => {
-                let sessions = parse_value(&row.values, "totalSessionCount").max(1.0);
-                let depth = parse_value(&row.values, "scrollDepth");
+                let sessions = parse_value(&row.values, "sessionsCount").max(1.0);
+                let depth = parse_value(&row.values, "averageScrollDepth");
                 acc.scroll_depth_sum += depth * sessions;
                 acc.scroll_depth_sessions += sessions;
             }

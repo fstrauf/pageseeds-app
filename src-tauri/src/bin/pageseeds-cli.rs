@@ -45,6 +45,7 @@ fn main() {
         "cancel-tasks" => cancel_tasks(&db.to_string_lossy(), &project_id, &args),
         "create-task" => create_task(&project_id, &db.to_string_lossy(), &args),
         "execute-task" => execute_task(&db.to_string_lossy(), &args),
+        "create-reddit-replies" => create_reddit_replies(&db.to_string_lossy(), &args),
 
         // ── Cannibalization strategy workflow ──
         "cannibalization-strategy" => cannibalization_strategy(&db.to_string_lossy(), &project_id),
@@ -190,6 +191,20 @@ fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, Str
         "message": result.message,
         "steps": result.steps,
         "follow_up_tasks": result.follow_up_tasks,
+    }))
+}
+
+fn create_reddit_replies(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let post_ids = flag(args, "--post-ids", "-P")
+        .map(|s| s.split(',').map(|p| p.trim().to_string()).collect::<Vec<_>>())
+        .unwrap_or_else(|| exit("--post-ids required (comma-separated)"));
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let tasks = pageseeds_lib::reddit::spawner::create_reply_tasks_from_opportunities(&conn, &task_id, &post_ids)?;
+    Ok(serde_json::json!({
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
     }))
 }
 
