@@ -981,6 +981,28 @@ impl StepRegistry {
             }),
         );
 
+        // ─── SEO Discovery ────────────────────────────────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::RankOpportunities,
+            crate::engine::exec::seo_discovery::exec_rank_opportunities,
+            db_conn
+        );
+
+        handlers.insert(
+            StepKind::OpportunityReviewAgent,
+            Box::new(|_step, _ctx| {
+                Box::pin(async move {
+                    StepResult {
+                        success: true,
+                        message: "Opportunity review agent placeholder — Phase 2".to_string(),
+                        output: None,
+                    }
+                })
+            }),
+        );
+
         Self { handlers }
     }
 

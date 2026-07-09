@@ -756,6 +756,41 @@ impl WorkflowHandler for TerritoryResearchHandler {
     }
 }
 
+// ─── SEO Discovery ────────────────────────────────────────────────────────────
+
+pub struct SeoDiscoveryHandler;
+
+impl WorkflowHandler for SeoDiscoveryHandler {
+    fn supports(&self, task: &Task) -> bool {
+        task_type(task) == "seo_health_scan"
+    }
+
+    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+        vec![
+            // Step 1 (deterministic, optional): refresh GSC page + query metrics.
+            WorkflowStep::new("seo_gsc_sync", StepKind::GscSyncArticles).optional(),
+            // Step 2 (deterministic, optional): run the 21-check content quality audit.
+            WorkflowStep::new("seo_content_audit", StepKind::ContentAudit).optional(),
+            // Step 3 (deterministic): build CTR context (clicks_lost, query intent).
+            WorkflowStep::new("seo_ctr_context", StepKind::CtrBuildContext)
+                .with_latest_raw_policy(
+                    crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                ),
+            // Step 4 (deterministic, optional): build cannibalization clusters + hub gaps.
+            WorkflowStep::new("seo_can_context", StepKind::CanBuildContext)
+                .with_latest_raw_policy(crate::engine::workflows::LatestRawPolicy::Clear)
+                .optional(),
+            // Step 5 (deterministic, optional): build not-indexed target contexts.
+            WorkflowStep::new("seo_ihc_context", StepKind::IhcBuildTargetContext).optional(),
+            // Step 6 (deterministic, optional): summarize Clarity UX anomalies.
+            WorkflowStep::new("seo_clarity_summarise", StepKind::ClaritySummarise).optional(),
+            // Step 7 (deterministic): fuse all signals and rank opportunities.
+            WorkflowStep::new("seo_rank_opportunities", StepKind::RankOpportunities)
+                .with_param(step_params::ARTIFACT_NAME, "seo_opportunities"),
+        ]
+    }
+}
+
 pub struct ManualFallbackHandler;
 
 impl WorkflowHandler for ManualFallbackHandler {
@@ -788,6 +823,7 @@ pub fn default_handlers() -> Vec<Box<dyn WorkflowHandler>> {
         Box::new(CannibalizationAuditHandler),
         Box::new(ConsolidateClusterHandler),
         Box::new(TerritoryResearchHandler),
+        Box::new(SeoDiscoveryHandler),
         Box::new(ImplementationHandler),
         Box::new(ManualFallbackHandler),
     ]

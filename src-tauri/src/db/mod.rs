@@ -7,6 +7,7 @@ pub mod content_audit;
 pub mod export;
 pub mod global_settings;
 pub mod research_shortlist;
+pub mod seo_discovery;
 
 /// Get the default database path based on platform conventions.
 /// Used when we need to access the DB without having the AppState.
@@ -1412,8 +1413,39 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 45 {
+        conn.execute_batch(MIGRATION_V45)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (45, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
+
+static MIGRATION_V45: &str = r#"
+-- Unified SEO discovery opportunity backlog
+CREATE TABLE IF NOT EXISTS seo_opportunities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    article_id INTEGER NOT NULL,
+    url_slug TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    opportunity_score INTEGER NOT NULL,
+    effort TEXT NOT NULL,
+    recommended_action TEXT NOT NULL,
+    signals_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'open',
+    accepted_at TEXT,
+    resulting_task_id TEXT,
+    UNIQUE(project_id, article_id, generated_at),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_seo_opportunities_project_score ON seo_opportunities(project_id, status, opportunity_score DESC);
+CREATE INDEX IF NOT EXISTS idx_seo_opportunities_project_generated ON seo_opportunities(project_id, generated_at);
+"#;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Article Audit State CRUD

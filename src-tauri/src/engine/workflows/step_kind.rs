@@ -159,6 +159,12 @@ pub enum StepKind {
     IhcReducePlan,
     /// Agentic: synthesize audit findings into a prioritized developer feature spec.
     GenerateFeatureSpec,
+    /// Deterministic: fuse content audit, CTR, indexing, cannibalization, and UX
+    /// signals into a ranked seo_opportunities.json artifact.
+    RankOpportunities,
+    /// Agentic: write a one-paragraph explanation per top opportunity.
+    /// Reserved for Phase 2; not used in Phase 1.
+    OpportunityReviewAgent,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -261,6 +267,8 @@ impl StepKind {
             Self::IhcDistinctivenessReview => "ihc_distinctiveness_review",
             Self::IhcReducePlan => "ihc_reduce_plan",
             Self::GenerateFeatureSpec => "generate_feature_spec",
+            Self::RankOpportunities => "rank_opportunities",
+            Self::OpportunityReviewAgent => "opportunity_review_agent",
             Self::Unknown => "unknown",
         }
     }
@@ -377,6 +385,8 @@ impl FromStr for StepKind {
             "ihc_distinctiveness_review" => Ok(Self::IhcDistinctivenessReview),
             "ihc_reduce_plan" => Ok(Self::IhcReducePlan),
             "generate_feature_spec" => Ok(Self::GenerateFeatureSpec),
+            "rank_opportunities" => Ok(Self::RankOpportunities),
+            "opportunity_review_agent" => Ok(Self::OpportunityReviewAgent),
             _ => Err(()),
         }
     }
@@ -503,6 +513,8 @@ mod tests {
             StepKind::IhcDistinctivenessReview,
             StepKind::IhcReducePlan,
             StepKind::GenerateFeatureSpec,
+            StepKind::RankOpportunities,
+            StepKind::OpportunityReviewAgent,
         ];
 
         for variant in &variants {
