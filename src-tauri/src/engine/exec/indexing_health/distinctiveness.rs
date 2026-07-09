@@ -61,7 +61,7 @@ pub(crate) fn exec_ihc_distinctiveness_review(
     let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "indexing-distinctiveness") {
         Ok(s) => s.content,
         Err(msg) => {
-            return StepResult { success: false, message: msg, output: None }
+            return StepResult::fail(msg);
         }
     };
 

@@ -366,6 +366,38 @@ pub(crate) fn exec_cluster_link_strategy(
             output: Some(r#"{"generated_at":"","links_to_add":[]}"#.to_string()),
         };
     }
+
+    // Set of article IDs that are in the index we sent to the agent. Used both
+    // to scope the "existing links" prompt section and to filter recommendations
+    // that reference targets outside the visible index.
+    let index_ids: std::collections::HashSet<i64> = index_entries
+        .iter()
+        .filter_map(|e| e["id"].as_i64())
+        .collect();
+
+    // Build the set of existing source → target links so the agent does not
+    // recommend links that are already present. This is derived from the scan
+    // profiles (outgoing_ids) and is also used as a deterministic post-filter.
+    // The prompt section is scoped to articles in the visible index to keep the
+    // prompt compact, while the post-filter HashSet covers the full graph.
+    let mut existing_links: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
+    let mut existing_links_prompt_map = serde_json::Map::new();
+    for p in profiles_arr {
+        let Some(id) = p["id"].as_i64() else { continue };
+        let Some(outgoing) = p["outgoing_ids"].as_array() else { continue };
+        for target in outgoing.iter().filter_map(|v| v.as_i64()) {
+            existing_links.insert((id, target));
+        }
+        if index_ids.contains(&id) && !outgoing.is_empty() {
+            existing_links_prompt_map.insert(
+                id.to_string(),
+                serde_json::Value::Array(outgoing.clone()),
+            );
+        }
+    }
+    let existing_links_json =
+        serde_json::to_string(&existing_links_prompt_map).unwrap_or_default();
+
     let orphan_list_json = serde_json::to_string(&orphan_ids).unwrap_or_default();
     let zero_incoming_list_json = serde_json::to_string(&zero_incoming_ids).unwrap_or_default();
 
@@ -386,6 +418,12 @@ pub(crate) fn exec_cluster_link_strategy(
 ## Under-connected articles (fewer than 2 incoming links — needs more links pointing TO them)
 
 {under_json}
+
+## Existing internal links (DO NOT recommend these again)
+
+Each entry shows an article ID and the IDs of articles it already links TO.
+
+{existing_links_json}
 
 ## Task
 
@@ -416,6 +454,9 @@ Requirements:
 - Each entry adds a link IN the source article TO the target article at URL /blog/<target_slug>.
 - Use exact slugs and titles from the article index above.
 - You do NOT need to include `source_file`; the apply step resolves the article ID to the file automatically.
+- NEVER recommend a link that already appears in "Existing internal links" above.
+- Do not recommend a link from an article to itself (source_article_id != target_article_id).
+- Only use article IDs and slugs that appear in the "Article index" above.
 "#,
     );
 
@@ -435,13 +476,20 @@ Requirements:
     }
 
     // Detailed component-size logging so we can debug prompt bloat precisely.
+    let template_len = prompt.len()
+        - index_json.len()
+        - under_json.len()
+        - orphan_list_json.len()
+        - zero_incoming_list_json.len()
+        - existing_links_json.len();
     log::info!(
-        "[cluster_link_strategy] prompt components: index={} bytes, profiles={} bytes, orphans={} bytes, zero_incoming={} bytes, template={} bytes, total={} bytes",
+        "[cluster_link_strategy] prompt components: index={} bytes, profiles={} bytes, existing_links={} bytes, orphans={} bytes, zero_incoming={} bytes, template={} bytes, total={} bytes",
         index_json.len(),
         under_json.len(),
+        existing_links_json.len(),
         orphan_list_json.len(),
         zero_incoming_list_json.len(),
-        prompt.len() - index_json.len() - under_json.len() - orphan_list_json.len() - zero_incoming_list_json.len(),
+        template_len,
         prompt.len()
     );
 
@@ -484,12 +532,47 @@ Requirements:
         }
     };
 
-    let links_json = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
+    let mut links_json = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
         serde_json::json!({
             "generated_at": chrono::Utc::now().to_rfc3339(),
             "links_to_add": [],
         })
     });
+
+    // Deterministic post-filter: drop recommendations that are already present,
+    // self-referential, or reference targets outside the index we sent.
+    let mut filtered_out_existing = 0usize;
+    let mut filtered_out_self = 0usize;
+    let mut filtered_out_unknown_target = 0usize;
+    if let Some(links_arr) = links_json["links_to_add"].as_array() {
+        let filtered: Vec<serde_json::Value> = links_arr
+            .iter()
+            .filter(|link| {
+                let source_id = link["source_article_id"].as_i64();
+                let target_id = link["target_article_id"].as_i64();
+                if source_id == target_id {
+                    filtered_out_self += 1;
+                    return false;
+                }
+                if let (Some(s), Some(t)) = (source_id, target_id) {
+                    if existing_links.contains(&(s, t)) {
+                        filtered_out_existing += 1;
+                        return false;
+                    }
+                    if !index_ids.contains(&t) {
+                        filtered_out_unknown_target += 1;
+                        return false;
+                    }
+                    true
+                } else {
+                    filtered_out_unknown_target += 1;
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+        links_json["links_to_add"] = filtered.into();
+    }
 
     // Persist to links_to_add.json for the apply step
     let links_path = paths.automation_dir.join("links_to_add.json");
@@ -505,11 +588,24 @@ Requirements:
         .as_array()
         .map(|a| a.len())
         .unwrap_or(0);
+    let raw_count = crate::engine::text::extract_json(&raw_output)
+        .and_then(|j| j["links_to_add"].as_array().map(|a| a.len()))
+        .unwrap_or(0);
+    log::info!(
+        "[cluster_link_strategy] filtered {} raw recommendations down to {} (existing={}, self={}, unknown_target={})",
+        raw_count,
+        link_count,
+        filtered_out_existing,
+        filtered_out_self,
+        filtered_out_unknown_target
+    );
     crate::engine::workflows::StepResult {
         success: true,
         message: format!(
-            "Link strategy complete: {} links recommended across {} articles",
-            link_count, total
+            "Link strategy complete: {} links recommended across {} articles ({} filtered)",
+            link_count,
+            total,
+            raw_count.saturating_sub(link_count)
         ),
         output: Some(serde_json::to_string_pretty(&links_json).unwrap_or_default()),
     }
@@ -594,6 +690,9 @@ pub(crate) fn exec_cluster_link_apply(
 
     // Group links by source_file basename: source_file → vec[(title, slug)]
     let mut by_source: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut skipped_missing_source = 0usize;
+    let mut skipped_missing_target = 0usize;
+    let mut skipped_unknown_slug = 0usize;
     for link in links_to_add {
         let source_file = if let Some(id) = link["source_article_id"].as_i64() {
             id_to_file.get(&id).cloned().unwrap_or_default()
@@ -603,15 +702,29 @@ pub(crate) fn exec_cluster_link_apply(
         };
         let target_title = link["target_title"].as_str().unwrap_or("").to_string();
         let target_slug = link["target_slug"].as_str().unwrap_or("").to_string();
-        if source_file.is_empty() || target_slug.is_empty() {
+        if source_file.is_empty() {
+            log::warn!(
+                "[cluster_link_apply] skipping recommendation — missing source_article_id mapping: {:?}",
+                link
+            );
+            skipped_missing_source += 1;
+            continue;
+        }
+        if target_slug.is_empty() {
+            log::warn!(
+                "[cluster_link_apply] skipping recommendation — missing target_slug: {:?}",
+                link
+            );
+            skipped_missing_target += 1;
             continue;
         }
         let normalized = crate::content::slug::normalize_url_slug(&target_slug);
-        if !valid_slugs.contains(&normalized.to_lowercase()) {
+        if !valid_slugs.contains(&normalized) {
             log::warn!(
-                "[cluster_link_apply] skipping link to non-existent slug '{}' (normalized: '{}')",
-                target_slug, normalized
+                "[cluster_link_apply] skipping link to non-existent slug '{}' (normalized: '{}'); valid slug count={}",
+                target_slug, normalized, valid_slugs.len()
             );
+            skipped_unknown_slug += 1;
             continue;
         }
         by_source
@@ -634,6 +747,9 @@ pub(crate) fn exec_cluster_link_apply(
     let mut files_modified = 0usize;
     let mut links_added = 0usize;
     let mut change_log: Vec<serde_json::Value> = Vec::new();
+    let mut skipped_source_not_found = 0usize;
+    let mut skipped_read_error = 0usize;
+    let mut skipped_already_linked = 0usize;
 
     for (source_basename, new_links) in &by_source {
         let Some(file_path) = file_map.get(source_basename) else {
@@ -641,6 +757,7 @@ pub(crate) fn exec_cluster_link_apply(
                 "[cluster_link_apply] source file not found in content dir: {}",
                 source_basename
             );
+            skipped_source_not_found += 1;
             continue;
         };
 
@@ -652,6 +769,7 @@ pub(crate) fn exec_cluster_link_apply(
                     file_path.display(),
                     e
                 );
+                skipped_read_error += 1;
                 continue;
             }
         };
@@ -672,6 +790,7 @@ pub(crate) fn exec_cluster_link_apply(
                     source_basename,
                     blog_link
                 );
+                skipped_already_linked += 1;
                 continue;
             }
             new_link_lines.push(format!("- [{}]({})\n", title, blog_link));
@@ -727,6 +846,7 @@ pub(crate) fn exec_cluster_link_apply(
                             source_basename,
                             crate::content::slug::format_blog_link(slug)
                         );
+                        skipped_already_linked += 1;
                         continue;
                     }
                 }
@@ -841,10 +961,20 @@ pub(crate) fn exec_cluster_link_apply(
         "changes": change_log,
         "orphans_remaining": orphans_remaining,
         "zero_incoming_remaining": zero_incoming_remaining,
+        "skipped": {
+            "missing_source_mapping": skipped_missing_source,
+            "missing_target_slug": skipped_missing_target,
+            "unknown_target_slug": skipped_unknown_slug,
+            "source_file_not_found": skipped_source_not_found,
+            "source_file_read_error": skipped_read_error,
+            "link_already_exists": skipped_already_linked,
+        },
+        "recommendations_count": links_to_add.len(),
     });
     crate::engine::workflows::StepResult {
         success: true,
-        message: format!("Applied {} links to {} files", links_added, files_modified),
+        message: format!("Applied {} links to {} files ({} recommendations, {} skipped)", links_added, files_modified, links_to_add.len(),
+            skipped_missing_source + skipped_missing_target + skipped_unknown_slug + skipped_source_not_found + skipped_read_error + skipped_already_linked),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
     }
 }

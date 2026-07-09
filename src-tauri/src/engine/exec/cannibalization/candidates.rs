@@ -294,6 +294,18 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
         );
     }
 
+    // Also write candidates artifact to disk for downstream consumers
+    let candidates_path = paths.automation_dir.join("cannibalization_candidates.json");
+    if let Err(e) = std::fs::write(
+        &candidates_path,
+        serde_json::to_string_pretty(&candidates_doc).unwrap_or_default() + "\n",
+    ) {
+        log::warn!(
+            "[cannibalization_audit] Failed to write cannibalization_candidates.json: {}",
+            e
+        );
+    }
+
     StepResult {
         success: true,
         message: format!(

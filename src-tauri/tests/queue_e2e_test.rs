@@ -98,6 +98,7 @@ fn create_test_project_in_db(conn: &rusqlite::Connection, path: &str) -> String 
         active: true,
         agent_provider: Some("kimi".to_string()),
         seo_provider: Some("ahrefs".to_string()),
+        clarity_project_id: None,
     };
 
     task_store::create_project(conn, &project).expect("Failed to create project");

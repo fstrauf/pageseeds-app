@@ -70,15 +70,15 @@ impl ClarityMetric {
     pub fn from_api_name(name: &str) -> Self {
         match name {
             "Traffic" => Self::Traffic,
-            "Scroll Depth" => Self::ScrollDepth,
-            "Engagement Time" => Self::EngagementTime,
-            "Popular Pages" => Self::PopularPages,
-            "Dead Click Count" => Self::DeadClickCount,
-            "Excessive Scroll" => Self::ExcessiveScroll,
-            "Rage Click Count" => Self::RageClickCount,
-            "Quickback Click" => Self::QuickbackClick,
-            "Script Error Count" => Self::ScriptErrorCount,
-            "Error Click Count" => Self::ErrorClickCount,
+            "Scroll Depth" | "ScrollDepth" => Self::ScrollDepth,
+            "Engagement Time" | "EngagementTime" => Self::EngagementTime,
+            "Popular Pages" | "PopularPages" => Self::PopularPages,
+            "Dead Click Count" | "DeadClickCount" => Self::DeadClickCount,
+            "Excessive Scroll" | "ExcessiveScroll" => Self::ExcessiveScroll,
+            "Rage Click Count" | "RageClickCount" => Self::RageClickCount,
+            "Quickback Click" | "QuickbackClick" => Self::QuickbackClick,
+            "Script Error Count" | "ScriptErrorCount" => Self::ScriptErrorCount,
+            "Error Click Count" | "ErrorClickCount" => Self::ErrorClickCount,
             _ => Self::Other,
         }
     }

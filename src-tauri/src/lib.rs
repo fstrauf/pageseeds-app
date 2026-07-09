@@ -10,7 +10,7 @@ mod live_site;
 pub mod logging;
 pub mod models;
 mod clarity;
-mod reddit;
+pub mod reddit;
 mod rig;
 pub mod seo;
 mod social;

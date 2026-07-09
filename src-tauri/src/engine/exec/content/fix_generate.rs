@@ -700,7 +700,9 @@ fn validate_patch_before_write(
                 errors.push(format!("internal_links[{}].target_slug is empty", i));
             } else if link.anchor_text.trim().is_empty() {
                 errors.push(format!("internal_links[{}].anchor_text is empty", i));
-            } else if !valid_slugs.contains(&link.target_slug.to_lowercase()) {
+            } else if !valid_slugs
+                .contains(&crate::content::slug::normalize_url_slug(&link.target_slug))
+            {
                 errors.push(format!(
                     "internal_links[{}].target_slug '{}' does not match any article in this project",
                     i, link.target_slug

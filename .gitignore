@@ -35,3 +35,4 @@ latest.json
 smoke_*.db
 smoke_*.db-shm
 smoke_*.db-wal
+src-tauri/data.sqlite

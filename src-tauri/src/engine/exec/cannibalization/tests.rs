@@ -296,13 +296,13 @@ Some content here.
 
         let output: serde_json::Value =
             serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
-        // Articles without GSC data are filtered out from clustering
-        assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 0);
+        // Articles without GSC data are included in clustering but contribute zero impressions.
+        assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 2);
         assert_eq!(
             output["summary"]["total_impressions"].as_f64().unwrap(),
             0.0
         );
-        assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 0);
+        assert_eq!(output["summary"]["candidate_clusters"].as_i64().unwrap(), 1);
 
         cleanup(&path);
     }

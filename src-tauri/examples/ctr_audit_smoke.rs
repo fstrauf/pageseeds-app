@@ -54,6 +54,7 @@ fn main() {
         active: true,
         agent_provider: Some(AGENT_PROVIDER.to_string()),
         seo_provider: Some("ahrefs".to_string()),
+        clarity_project_id: None,
     };
     task_store::create_project(&conn, &project).expect("create_project failed");
     println!(

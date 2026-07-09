@@ -222,7 +222,7 @@ pub(crate) async fn exec_territory_strategy(
     let skill = match crate::engine::skills::load_skill_or_fail(repo_root, "territory-strategy") {
         Ok(s) => s,
         Err(msg) => {
-            return StepResult { success: false, message: msg, output: None };
+            return StepResult::fail(msg);
         }
     };
 
@@ -691,6 +691,8 @@ mod tests {
                 review_count INTEGER NOT NULL DEFAULT 0,
                 content_gaps_addressed TEXT NOT NULL DEFAULT '[]',
                 estimated_traffic_monthly TEXT,
+                content_hash TEXT,
+                last_edited_at TEXT,
                 project_id TEXT NOT NULL,
                 PRIMARY KEY (id, project_id)
             );",
