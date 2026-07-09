@@ -30,6 +30,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 │
 ├─ Existing content underperforming — need a diagnosis
 │  ├─→ content_review               (general: syncs GSC, recommends fixes per article)
+│  ├─→ seo_health_scan              (unified: fuses all signals into a ranked opportunity backlog)
 │  ├─→ ctr_audit                    (specific: titles/meta/snippets — low CTR)
 │  ├─→ cannibalization_audit        (specific: overlapping pages competing)
 │  ├─→ indexing_health_campaign     (specific: pages not indexed by Google)
@@ -48,6 +49,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 
 **Disambiguation rules:**
 - `content_review` is the **umbrella** investigation. Reach for the specific audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped to that domain.
+- `seo_health_scan` is the **unified backlog** investigation: it fuses content audit, CTR, indexing, cannibalization, and Clarity signals into a single ranked opportunity list. Use it when you want a prioritized TODO list across all SEO levers rather than a deep dive into one area.
 - `content_cleanup` = broken/structural file problems. `sanitize_content` = rename frontmatter fields (`metaDescription` → `description`). Don't use them for prose or strategy fixes.
 - `research_keywords` vs `research_landing_pages`: same picker UX, different intent model. Landing pages are conversion-focused and carry strategic context.
 
@@ -74,6 +76,12 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 | **Does** | Syncs GSC data and generates recommendations for the highest-priority article. |
 | **When** | The umbrella content diagnostic. Start here when "something is underperforming" and the cause is unknown. |
 | **After completion** | `FollowUpTasks` → spawns concrete fix tasks automatically (`BackendAuto`). |
+
+| Field | `seo_health_scan` |
+|---|---|
+| **Does** | Runs content audit, CTR context, cannibalization clusters, indexing contexts, and Clarity summary; scores each article; and writes a ranked `seo_opportunities.json` backlog. |
+| **When** | You want a single prioritized list of the biggest SEO opportunities across all levers. |
+| **After completion** | `ArtifactReview` (Phase 1), followed by user-selected fix tasks (`UserSelection`). |
 
 | Field | `ctr_audit` |
 |---|---|
@@ -136,6 +144,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 | `research_keywords` | UserEnqueue | KeywordPicker | UserSelection |
 | `research_landing_pages` | UserEnqueue | KeywordPicker | UserSelection |
 | `content_review` | UserEnqueue | FollowUpTasks | BackendAuto |
+| `seo_health_scan` | UserEnqueue | ArtifactReview | UserSelection |
 | `ctr_audit` | AutoEnqueue | None | BackendAuto |
 | `cannibalization_audit` | AutoEnqueue | CannibalizationPicker | UserSelection |
 | `indexing_health_campaign` | UserEnqueue | ArtifactReview | BackendAuto |

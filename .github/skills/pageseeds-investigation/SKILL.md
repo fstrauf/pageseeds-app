@@ -62,6 +62,7 @@ sqlite3 ~/Library/Application\ Support/com.pageseeds.app/pageseeds.db \
 | `run-content-audit` | (none) | Runs fresh audit, writes JSON |
 | `cannibalization-clusters` | (none) | Cannibalization clusters + merge recs |
 | `ctr-health` | (none) | Per-article CTR health summary |
+| `create-task` | `-t seo_health_scan -T TITLE -r REASON --auto-enqueue` | Runs the unified SEO health scan |
 
 ### Site Structure
 

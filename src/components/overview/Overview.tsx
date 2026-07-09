@@ -103,6 +103,16 @@ const QUICK_ACTIONS: ActionDef[] = [
     nextLabel: 'See campaign results',
   },
   {
+    task_type: 'seo_health_scan',
+    label: 'SEO Health Scan',
+    description: 'Fuses content audit, CTR, indexing, cannibalization, and Clarity signals into a ranked opportunity backlog',
+    icon: <Globe size={16} />,
+    phase: 'investigation',
+    frequency: 'monthly',
+    nextView: 'tasks',
+    nextLabel: 'Review opportunities',
+  },
+  {
     task_type: 'clarity_analytics',
     label: 'Clarity Analytics',
     description: 'Collect Microsoft Clarity behavioral data, score pages for UX anomalies, and surface ranked findings',

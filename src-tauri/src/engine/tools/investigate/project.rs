@@ -191,14 +191,14 @@ impl Tool for CreateTaskTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a fix task in the PageSeeds task system. \
+            description: "Create a task in the PageSeeds task system. \
                 Valid types: fix_content_article, consolidate_cluster, content_cleanup, \
-                interlinking. DO NOT call this without first explaining what the task \
-                will do and why. Max 3 tasks per investigation.".to_string(),
+                interlinking, seo_health_scan. DO NOT call this without first explaining \
+                what the task will do and why. Max 3 tasks per investigation.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "task_type": { "type": "string", "description": "Task type: fix_content_article, consolidate_cluster, content_cleanup, interlinking" },
+                    "task_type": { "type": "string", "description": "Task type: fix_content_article, consolidate_cluster, content_cleanup, interlinking, seo_health_scan" },
                     "title": { "type": "string", "description": "Human-readable task title" },
                     "reason": { "type": "string", "description": "Why this task is needed — appears in the task description" }
                 },
@@ -208,7 +208,7 @@ impl Tool for CreateTaskTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let valid_types = ["fix_content_article", "consolidate_cluster", "content_cleanup", "interlinking"];
+        let valid_types = ["fix_content_article", "consolidate_cluster", "content_cleanup", "interlinking", "seo_health_scan"];
         if !valid_types.contains(&args.task_type.as_str()) {
             return Err(InvestigationToolError::Execution(
                 format!("Invalid task_type '{}'. Valid types: {:?}", args.task_type, valid_types)
