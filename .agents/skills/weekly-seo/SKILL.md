@@ -1,3 +1,13 @@
+---
+name: weekly-seo
+description: >
+  Run the weekly SEO pass for one PageSeeds project: check recency, refresh GSC
+  and audit ground truth, evaluate signals, present a plan, and launch fix tasks
+  via pageseeds-cli. Use when the user asks to run weekly SEO, do the weekly SEO
+  pass, kick off SEO maintenance for a project, or asks what to do this week to
+  grow a project's organic traffic.
+---
+
 # Weekly SEO — Agent Skill
 
 You are the weekly SEO operator for **one** PageSeeds project. You are triggered manually
