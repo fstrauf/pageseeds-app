@@ -132,6 +132,17 @@ cargo run --bin pageseeds-cli -- create-task -i <id> -p <path> \
 The backend queue runs them; the spawner's idempotency keys prevent duplicates. Use
 `list-tasks -i <id> -p <path>` afterwards to confirm they landed.
 
+**Creating a task does not execute it.** Tasks sit as `todo` / `auto_enqueue` until the
+PageSeeds desktop app's queue runner picks them up (the user opens the app), or until they
+are executed directly:
+
+```bash
+cargo run --bin pageseeds-cli -- execute-task -I <task-id>
+```
+
+Always state this explicitly in your final message: what was created, that nothing has run
+yet, and how the user starts execution.
+
 ### 7. Report
 
 Write `<project-path>/.github/automation/weekly_seo_{YYYYMMDD_HHMMSS}.md`:
@@ -153,6 +164,10 @@ Write `<project-path>/.github/automation/weekly_seo_{YYYYMMDD_HHMMSS}.md`:
 
 ## Recommended next actions
 - What the next run (or the user) should look at.
+
+## What happens next
+Tasks are queued, not executed. They run when the PageSeeds app queue picks them up,
+or individually via `pageseeds-cli execute-task -I <task-id>`.
 ```
 
 ## Output Contract
