@@ -24,6 +24,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 | If you need to... | Use this path | Do NOT |
 |---|---|---|
 | **Adjust how an AI writes/reviews content** | Edit or add a skill in `.github/skills/{skill}/SKILL.md` (or embedded defaults in `src-tauri/src/skills/`). Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
+| **Run the weekly SEO pass on a project** | Trigger the `weekly-seo` skill (`.github/skills/weekly-seo/SKILL.md`) — it drives `pageseeds-cli` tools to check recency, evaluate signals, and launch tasks. The skill is the workflow; judgment lives in the agent. | Build a Rust orchestrator, scheduler, or cross-project runner |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
 | **Add or change task lifecycle behavior** | Follow the [Task Lifecycle Contract](#task-lifecycle-contract), then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
 | **Attach tasks to execution** | Use backend queue commands through `tauri.ts` (`enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`). | Call `executeTask` directly from components |

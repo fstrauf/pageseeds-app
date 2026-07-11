@@ -5,7 +5,7 @@ import {
   PlayCircle, TrendingUp, Users, ArrowRight, Send, Target,
   Activity, Wrench, HeartPulse,
 } from 'lucide-react'
-import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, openFeatureSpecInVSCode, repairArticlePaths, runSeoOrchestrator, updateTaskStatus } from '../../lib/tauri'
+import { createTask, getCtrHealthSummary, getProjectOverview, importLiveSite, listArticles, listLiveSitePages, openFeatureSpecInVSCode, repairArticlePaths, updateTaskStatus } from '../../lib/tauri'
 import { useQueueStore } from '@/stores/queueStore'
 import type { Article, LandingPageResearchPending, PendingFeatureSpec, Project, ProjectOverview, Task, WorkflowActivity } from '../../lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -418,8 +418,6 @@ export function Overview({
   const [repairingPaths, setRepairingPaths] = useState(false)
   const [repairResult, setRepairResult] = useState<import('../../lib/types').RepairPathResult | null>(null)
   const [runningCtr, setRunningCtr] = useState(false)
-  const [runningOrchestrator, setRunningOrchestrator] = useState(false)
-  const [orchestratorMsg, setOrchestratorMsg] = useState<string | null>(null)
 
   const {
     data: liveSitePages = [],
@@ -564,26 +562,6 @@ export function Overview({
     }
   }
 
-  async function handleRunSeoOrchestrator() {
-    if (!project || runningOrchestrator) return
-
-    setRunningOrchestrator(true)
-    setQuickActionError(null)
-    setOrchestratorMsg(null)
-    try {
-      const result = await runSeoOrchestrator(project.id)
-      const taskCount = (result.findings as unknown[])?.length ?? 0
-      setOrchestratorMsg(
-        `Orchestrator launched ${taskCount} task${taskCount !== 1 ? 's' : ''}. ${result.summary}`,
-      )
-      await load()
-    } catch (e: unknown) {
-      setQuickActionError(String(e))
-    } finally {
-      setRunningOrchestrator(false)
-    }
-  }
-
   if (!project) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -616,32 +594,11 @@ export function Overview({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRunSeoOrchestrator}
-              disabled={runningOrchestrator}
-              className="text-xs"
-            >
-              {runningOrchestrator ? (
-                <RefreshCw size={13} className="mr-1.5 animate-spin" />
-              ) : (
-                <Cpu size={13} className="mr-1.5" />
-              )}
-              Run SEO Orchestrator
-            </Button>
             <Button variant="ghost" size="icon-sm" onClick={load} disabled={loading} className="text-muted-foreground">
               <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
             </Button>
           </div>
         </div>
-
-        {orchestratorMsg && (
-          <div className="flex items-start gap-3 rounded-md border px-3 py-2.5 text-sm bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-100">
-            <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">{orchestratorMsg}</div>
-          </div>
-        )}
 
         {!isLiveSiteProject && (
           <SetupWarnings projectId={project.id} onViewChange={onViewChange} />

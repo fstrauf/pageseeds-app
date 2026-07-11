@@ -188,7 +188,6 @@ pub fn run() {
             commands::get_indexing_health_summary,
             commands::open_feature_spec_in_vscode,
             commands::investigate,
-            commands::run_seo_orchestrator,
             commands::seo_get_keyword_ideas,
             commands::seo_get_keyword_difficulty,
             commands::seo_batch_keyword_difficulty,
