@@ -3,12 +3,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { CannibalizationPicker } from './CannibalizationPicker'
 import type { Task } from '../../lib/types'
 
-const mockEnqueueNext = vi.fn()
+const mockEnqueue = vi.fn()
 const mockShowError = vi.fn()
 const mockCreateTasks = vi.fn()
 
 vi.mock('../../lib/queue-context', () => ({
-  useQueue: () => ({ enqueueNext: mockEnqueueNext }),
+  useQueue: () => ({ enqueue: mockEnqueue }),
 }))
 
 vi.mock('../../lib/toast-context', () => ({
@@ -109,7 +109,7 @@ describe('CannibalizationPicker', () => {
     mockCreateTasks.mockResolvedValueOnce([
       {
         id: 'child-1',
-        task_type: 'consolidate_cluster',
+        type: 'consolidate_cluster',
         project_id: 'proj-1',
         title: 'Merge cluster: cluster-a',
         status: 'todo',
@@ -146,7 +146,15 @@ describe('CannibalizationPicker', () => {
     })
 
     expect(onTasksCreated).toHaveBeenCalled()
-    expect(mockEnqueueNext).toHaveBeenCalled()
+    expect(mockEnqueue).toHaveBeenCalledWith([
+      {
+        taskId: 'child-1',
+        projectId: 'proj-1',
+        title: 'Merge cluster: cluster-a',
+        taskType: 'consolidate_cluster',
+        projectName: undefined,
+      },
+    ])
   })
 
   it('disables create button when nothing is selected', () => {
