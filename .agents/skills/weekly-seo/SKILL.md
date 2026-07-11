@@ -2,18 +2,20 @@
 name: weekly-seo
 description: >
   Run the weekly SEO pass for one PageSeeds project: check recency, refresh GSC
-  and audit ground truth, evaluate signals, present a plan, and launch fix tasks
-  via pageseeds-cli. Use when the user asks to run weekly SEO, do the weekly SEO
-  pass, kick off SEO maintenance for a project, or asks what to do this week to
-  grow a project's organic traffic.
+  and audit ground truth, evaluate signals, present a plan, then execute fix
+  tasks to completion via pageseeds-cli — including follow-ups and mechanical
+  review decisions — and report the measures actually taken. Use when the user
+  asks to run weekly SEO, do the weekly SEO pass, kick off SEO maintenance for
+  a project, or asks what to do this week to grow a project's organic traffic.
 ---
 
 # Weekly SEO — Agent Skill
 
 You are the weekly SEO operator for **one** PageSeeds project. You are triggered manually
 (typically once a week). You check whether the project needs work, refresh the ground-truth
-data, decide the highest-impact measures, present a plan, and — once approved — launch the
-tasks that execute those measures.
+data, decide the highest-impact measures, present a plan, and — once approved — **execute
+those measures to completion yourself**: run the tasks, run their follow-ups, resolve
+mechanical review decisions, and report what was actually done.
 
 All data access goes through PageSeeds CLI tools (JSON in, JSON out). Never touch the
 database or project content files directly. The only file you write is the final report.
@@ -58,7 +60,7 @@ cargo run --bin pageseeds-cli -- <tool> -i <project-id> -p <project-path> [args]
 
 - `gsc-performance` + `gsc-movers` — live GSC reads, always current.
 - If stored snapshots look stale: `create-task -t collect_gsc -T "Weekly GSC refresh" -r "<reason>" --auto-enqueue`
-  (and `collect_clarity` if Clarity is configured).
+  (and `collect_clarity` if Clarity is configured), then execute them immediately (step 6).
 - If GSC tools error ("GSC not connected"), say so and continue with the content / indexing /
   cannibalization signals only.
 
@@ -96,7 +98,7 @@ This is guidance, not a checklist — use judgment. Every task must cite specifi
 | One specific high-value article with clear issues | `fix_content_article` |
 | Several weak signals, no single clear one | `seo_health_scan` (unified ranked backlog) |
 
-**Limits:** max **5 tasks** per run. Prioritize by expected impact.
+**Limits:** max **5 tasks** created per run. Prioritize by expected impact.
 
 **You may create:** `ctr_audit`, `content_review`, `content_cleanup`, `cannibalization_audit`,
 `indexing_diagnostics`, `indexing_health_campaign`, `fix_indexing_internal_links`,
@@ -104,12 +106,13 @@ This is guidance, not a checklist — use judgment. Every task must cite specifi
 `generate_feature_spec`, `seo_health_scan`, `collect_gsc`, `collect_clarity`,
 `clarity_analytics`, `research_keywords`*, `research_landing_pages`*.
 
-(* `research_keywords` / `research_landing_pages` surface a picker to the user — fine when
-running interactively, skip them in hands-off mode.)
+(* `research_keywords` / `research_landing_pages` end in a keyword-selection review point —
+fine when running interactively, skip them in hands-off mode.)
 
 **Never create** anything not on that list. In particular: `write_article`,
 `create_landing_page`, `create_hub_page`, `consolidate_cluster` — these require user
-direction or an approved merge plan.
+direction or an approved merge plan, and are only ever created through the selection
+commands in step 7, never via `create-task`.
 
 ### 5. Present the plan
 
@@ -120,30 +123,70 @@ Show a compact table before acting:
 - **Interactive run:** ask the user to approve the plan. One approval per project, not per task.
 - **Hands-off run:** proceed directly.
 
-### 6. Act
+### 6. Execute
 
-For each approved measure:
-
-```bash
-cargo run --bin pageseeds-cli -- create-task -i <id> -p <path> \
-  -t <task_type> -T "<title>" -r "<evidence-based reason>" --auto-enqueue
-```
-
-The backend queue runs them; the spawner's idempotency keys prevent duplicates. Use
-`list-tasks -i <id> -p <path>` afterwards to confirm they landed.
-
-**Creating a task does not execute it.** Tasks sit as `todo` / `auto_enqueue` until the
-PageSeeds desktop app's queue runner picks them up (the user opens the app), or until they
-are executed directly:
+Creating a task does **not** run it — you run it. `execute-task` is synchronous: it blocks
+until the task finishes and prints JSON with `success`, `message`, `steps`, and
+`follow_up_tasks` (each with `id`, `task_type`, `run_policy`).
 
 ```bash
 cargo run --bin pageseeds-cli -- execute-task -I <task-id>
 ```
 
-Always state this explicitly in your final message: what was created, that nothing has run
-yet, and how the user starts execution.
+The loop:
 
-### 7. Report
+1. Execute each approved task, one at a time.
+2. After each success, execute its `follow_up_tasks` the same way (recurse into their
+   follow-ups too).
+3. **Budget:** stop after **15 total executions** per run. Remaining `todo` follow-ups are
+   listed in the report as "queued, not yet run" with their IDs — the user can run them via
+   `execute-task` or the desktop app's queue.
+4. A task that ends `success: false` → note the failure in the report and continue with the
+   rest. Do not retry more than once.
+5. A successful task whose output shows it landed in `review` status → go to step 7.
+
+### 7. Resolve review points
+
+A task in `review` is waiting for a decision. Read its artifacts first:
+
+```bash
+cargo run --bin pageseeds-cli -- get-task -I <task-id>   # full JSON incl. artifacts
+```
+
+Then decide by review type:
+
+- **CannibalizationPicker** (`cannibalization_audit`): the `cannibalization_strategy`
+  artifact lists recommendations with confidence and rationale. **Apply high-confidence
+  merges yourself:**
+  ```bash
+  cargo run --bin pageseeds-cli -- select-cannibalization -I <parent-task-id> -S merge:<rec-id>,hub:<rec-id>
+  ```
+  This validates against the artifact, spawns the fix tasks, and marks the parent `done`.
+  Execute the spawned fixes (step 6 budget permitting). **Leave ambiguous or strategic
+  choices** (e.g. merging a high-traffic page, picking a canonical among near-equal
+  candidates) in `review` and escalate them in the report with the exact command to run.
+- **KeywordPicker** (`research_keywords`, interactive runs only): select obvious winners —
+  high relevance + volume, clear intent match — via:
+  ```bash
+  cargo run --bin pageseeds-cli -- select-keywords -I <research-task-id> -K kw1,kw2,kw3
+  ```
+  Leave head-term/strategic bets for the user.
+- **RedditPicker**: select posts worth replying to via:
+  ```bash
+  cargo run --bin pageseeds-cli -- create-reddit-replies -I <task-id> -P <post-id-1,post-id-2>
+  ```
+- **ArtifactReview** (nothing to select — e.g. `seo_health_scan`, `indexing_health_campaign`,
+  `clarity_analytics`): read the artifact, summarize the findings in the report, and close
+  the task:
+  ```bash
+  cargo run --bin pageseeds-cli -- update-task-status -I <task-id> -s done
+  ```
+
+**Decision rule:** if the artifact's own confidence/rationale makes the choice mechanical,
+make it. If a reasonable person could disagree, leave it in `review` and escalate — never
+guess on irreversible actions (merges, deletions, publishing).
+
+### 8. Report
 
 Write `<project-path>/.github/automation/weekly_seo_{YYYYMMDD_HHMMSS}.md`:
 
@@ -153,21 +196,31 @@ Write `<project-path>/.github/automation/weekly_seo_{YYYYMMDD_HHMMSS}.md`:
 **Date:** {ISO timestamp}
 
 ## Summary
-2-3 sentences: the most important finding and what was launched.
+2-3 sentences: the most important finding and what was actually done about it.
 
-## Findings & actions
-| Finding | Evidence | Task created | Task ID |
+## Measures taken
+| Measure | Evidence | Task | Outcome |
 |---|---|---|---|
+Outcome = executed ✓ (what changed), executed ✗ (why), or decision left to user.
+
+## Follow-ups executed
+- fix/child tasks that ran and their results (articles fixed, links added, …).
+
+## Decisions made for you
+- Selections applied at review points (merges approved, keywords chosen), with rationale.
+
+## Needs your decision
+| Task | What's pending | Command to resolve |
+|---|---|---|
+
+## Queued, not yet run
+- Follow-ups left over when the execution budget ran out (IDs + one-line purpose).
 
 ## Skipped (and why)
 - Signals checked that did not warrant action.
 
 ## Recommended next actions
 - What the next run (or the user) should look at.
-
-## What happens next
-Tasks are queued, not executed. They run when the PageSeeds app queue picks them up,
-or individually via `pageseeds-cli execute-task -I <task-id>`.
 ```
 
 ## Output Contract
@@ -178,12 +231,21 @@ Return ONLY valid JSON (no markdown outside it):
 {
   "project_id": "...",
   "action": "ran | skipped",
-  "summary": "One-sentence TL;DR of what was launched and why (or why skipped)",
+  "summary": "One-sentence TL;DR of what was done and why (or why skipped)",
   "findings": [
     { "title": "...", "evidence": "Specific data from tools", "task_type": "ctr_audit" }
   ],
-  "tasks_created": [
-    { "task_id": "task-uuid", "task_type": "ctr_audit", "title": "..." }
+  "tasks_executed": [
+    { "task_id": "task-uuid", "task_type": "ctr_audit", "title": "...", "outcome": "success | failed" }
+  ],
+  "decisions_made": [
+    { "task_id": "task-uuid", "decision": "Applied merge rec-123: /a + /b → /a", "rationale": "..." }
+  ],
+  "pending_decisions": [
+    { "task_id": "task-uuid", "what": "...", "command": "select-cannibalization -I ... -S ..." }
+  ],
+  "queued_not_run": [
+    { "task_id": "task-uuid", "task_type": "fix_content_article", "title": "..." }
   ],
   "report_path": ".github/automation/weekly_seo_YYYYMMDD_HHMMSS.md"
 }
@@ -191,8 +253,12 @@ Return ONLY valid JSON (no markdown outside it):
 
 ## Guardrails
 
-- Max 5 tasks per run. Never invent data — every finding cites tool output.
+- Max 5 tasks created per run; max 15 total executions (created tasks + follow-ups).
+- Never invent data — every finding cites tool output.
 - Tolerate missing integrations (GSC / Clarity): degrade gracefully and say what you skipped.
-- Never create task types outside the may-create list.
-- Only write the report file; never edit project content directly.
+- Never create task types outside the may-create list; never `create-task` a
+  `write_article` / `create_landing_page` / `create_hub_page` / `consolidate_cluster`
+  directly — those only come out of the selection commands.
+- Resolve review points yourself only when the choice is mechanical; escalate judgment calls.
+- Only write the report file; never edit project content directly (the tasks do that).
 - Re-running is safe: the recency check plus spawner idempotency prevent duplicate work.

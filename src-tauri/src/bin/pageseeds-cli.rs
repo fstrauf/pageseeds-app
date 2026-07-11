@@ -45,6 +45,10 @@ fn main() {
         "cancel-tasks" => cancel_tasks(&db.to_string_lossy(), &project_id, &args),
         "create-task" => create_task(&project_id, &db.to_string_lossy(), &args),
         "execute-task" => execute_task(&db.to_string_lossy(), &args),
+        "get-task" => get_task(&db.to_string_lossy(), &args),
+        "update-task-status" => update_task_status_cmd(&db.to_string_lossy(), &args),
+        "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
+        "select-cannibalization" => select_cannibalization(&db.to_string_lossy(), &args),
         "create-reddit-replies" => create_reddit_replies(&db.to_string_lossy(), &args),
 
         // ── Cannibalization strategy workflow ──
@@ -191,6 +195,110 @@ fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, Str
         "message": result.message,
         "steps": result.steps,
         "follow_up_tasks": result.follow_up_tasks,
+    }))
+}
+
+fn get_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let task = pageseeds_lib::engine::task_store::get_task(&conn, &task_id)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&task).map_err(|e| e.to_string())
+}
+
+fn update_task_status_cmd(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let status_str = flag(args, "--status", "-s").unwrap_or_else(|| exit("--status required"));
+    let status = match status_str.as_str() {
+        "done" => TaskStatus::Done,
+        "cancelled" => TaskStatus::Cancelled,
+        other => {
+            return Err(format!(
+                "unsupported status '{other}': only 'done' and 'cancelled' are allowed"
+            ));
+        }
+    };
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let task = pageseeds_lib::engine::task_store::update_task_status(&conn, &task_id, status)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&task).map_err(|e| e.to_string())
+}
+
+/// Mirror of the `create_article_tasks_from_keywords` Tauri command:
+/// build content tasks from selected keywords, persist them, mark the
+/// research task done. project_id is derived from the research task row.
+fn select_keywords(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let research_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let keywords: Vec<String> = flag(args, "--keywords", "-K")
+        .map(|s| s.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect())
+        .unwrap_or_else(|| exit("--keywords required (comma-separated)"));
+
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let research_task = pageseeds_lib::engine::task_store::get_task(&conn, &research_task_id)
+        .map_err(|e| e.to_string())?;
+    let project_id = research_task.project_id.clone();
+
+    let tasks = pageseeds_lib::engine::keyword_selection::build_content_tasks_from_keywords(
+        keywords,
+        &research_task,
+        &research_task_id,
+        &project_id,
+    )?;
+
+    for task in &tasks {
+        pageseeds_lib::engine::task_store::create_task(&conn, task).map_err(|e| e.to_string())?;
+    }
+
+    let parent = pageseeds_lib::engine::task_store::update_task_status(
+        &conn,
+        &research_task_id,
+        TaskStatus::Done,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "parent_task_id": research_task_id,
+        "parent_status": parent.status,
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
+    }))
+}
+
+/// Mirror of the `create_cannibalization_tasks_from_selection` Tauri command.
+/// Selections are parsed from `-S merge:rec-123,hub:rec-456`.
+fn select_cannibalization(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let parent_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let raw = flag(args, "--selections", "-S")
+        .unwrap_or_else(|| exit("--selections required (comma-separated type:id pairs)"));
+
+    let mut selections = Vec::new();
+    for pair in raw.split(',').map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        let (rec_type, rec_id) = pair.split_once(':').ok_or_else(|| {
+            format!("invalid selection '{pair}': expected 'type:id'")
+        })?;
+        if rec_type.is_empty() || rec_id.is_empty() {
+            return Err(format!("invalid selection '{pair}': expected 'type:id'"));
+        }
+        selections.push(pageseeds_lib::models::cannibalization::CannibalizationSelection {
+            recommendation_type: rec_type.to_string(),
+            recommendation_id: rec_id.to_string(),
+        });
+    }
+
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let tasks = pageseeds_lib::cannibalization::spawn_tasks_from_selection(
+        &conn,
+        &parent_task_id,
+        &selections,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "parent_task_id": parent_task_id,
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
     }))
 }
 
@@ -570,6 +678,10 @@ Task / queue orchestration:
   cancel-tasks            -i <id> -p <path> -t type [-s status] [--yes]
   create-task             -i <id> -p <path> -t type [-T title] [-r reason] [-a] [-P high|medium|low]
   execute-task            -I <task-id>
+  get-task                -I <task-id>                          Full task JSON incl. artifacts
+  update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks
+  select-keywords         -I <research-task-id> -K <kw,kw,...>  Create content tasks, mark research done
+  select-cannibalization  -I <parent-task-id> -S <type:id,...>  Spawn cannibalization fixes, mark parent done
 
 Cannibalization workflow:
   cannibalization-strategy -i <id> -p <path>
