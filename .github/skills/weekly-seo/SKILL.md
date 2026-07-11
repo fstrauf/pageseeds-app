@@ -25,9 +25,12 @@ sqlite3 ~/Library/Application\ Support/com.pageseeds.app/pageseeds.db \
   "SELECT id, name, path FROM projects"
 ```
 
-Every tool follows the same pattern and prints JSON to stdout:
+Every tool follows the same pattern and prints JSON to stdout. Run them from the
+PageSeeds app crate directory (`src-tauri/` of the pageseeds-app repo) — the CLI
+binary is built from that crate:
 
 ```bash
+cd <pageseeds-app-repo>/src-tauri
 cargo run --bin pageseeds-cli -- <tool> -i <project-id> -p <project-path> [args]
 ```
 
