@@ -108,7 +108,7 @@ pub fn run() {
             log::info!(
                 "[startup] Registered {} workflow handlers, {} Tauri commands",
                 handlers.len(),
-                85 // Approximate count; hard-coded because tauri::generate_handler! is macro-generated
+                86 // Approximate count; hard-coded because tauri::generate_handler! is macro-generated
             );
             app.manage(AppState {
                 db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
@@ -188,6 +188,7 @@ pub fn run() {
             commands::get_indexing_health_summary,
             commands::open_feature_spec_in_vscode,
             commands::investigate,
+            commands::run_seo_orchestrator,
             commands::seo_get_keyword_ideas,
             commands::seo_get_keyword_difficulty,
             commands::seo_batch_keyword_difficulty,

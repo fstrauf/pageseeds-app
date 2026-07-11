@@ -206,6 +206,124 @@ pub async fn exec_investigate(
     Ok(parsed)
 }
 
+/// Run the autonomous SEO orchestrator.
+///
+/// Loads the `seo-orchestrator` skill, builds a prompt with project context,
+/// attaches all investigation tools, and lets the agent decide which tasks to
+/// create and enqueue. Returns the orchestrator's structured JSON output.
+pub async fn exec_seo_orchestrator(
+    project_id: &str,
+    project_path: &str,
+    db_path: &str,
+    agent_provider: &str,
+) -> Result<serde_json::Value, String> {
+    use rig::client::CompletionClient;
+
+    let ctx = InvestigationContext {
+        project_id: project_id.to_string(),
+        project_path: project_path.to_string(),
+        db_path: db_path.to_string(),
+    };
+
+    let skill = crate::engine::skills::load_skill_or_fail(
+        std::path::Path::new(project_path),
+        "seo-orchestrator",
+    )
+    .map_err(|e| format!("Failed to load seo-orchestrator skill: {e}"))?;
+
+    let article_count = match ctx.open_db() {
+        Ok(db) => {
+            match crate::engine::task_store::list_articles(&db, &ctx.project_id) {
+                Ok(articles) => articles.len(),
+                Err(_) => 0,
+            }
+        }
+        Err(_) => 0,
+    };
+
+    let skill_content = skill.content.clone();
+
+    let prompt = format!(
+        "{skill_content}\n\n---\n\n## Project Context\n\n\
+        - Project ID: {project_id}\n\
+        - Project path: {project_path}\n\
+        - Articles: {article_count} total\n\n\
+        ## Instructions\n\n\
+        Run the autonomous SEO orchestrator for this project. \
+        Use the available tools to inspect the project, decide what to launch, \
+        and create/enqueue tasks. Limit yourself to at most 40 tool calls total. \
+        Write the markdown report and return ONLY the JSON Output Contract from the skill."
+    );
+
+    let backend = crate::rig::provider::resolve_backend(agent_provider, None, None, None).await
+        .map_err(|e| format!("Provider error: {e}"))?;
+
+    let response = match &backend {
+        crate::rig::provider::LlmBackend::KimiBridge { base_url, model } => {
+            let client = rig::providers::openai::Client::builder()
+                .base_url(base_url)
+                .api_key("dummy")
+                .build()
+                .map_err(|e| format!("Failed to build bridge client: {e}"))?;
+            let agent = client
+                .completions_api()
+                .agent(model)
+                .tools(investigation_tools(ctx))
+                .build();
+            run_tool_agent(agent, &prompt).await?
+        }
+        crate::rig::provider::LlmBackend::Claude { api_key, model } => {
+            let client = rig::providers::anthropic::Client::new(api_key)
+                .map_err(|e| format!("Failed to build Claude client: {e}"))?;
+            let agent = client
+                .agent(model)
+                .preamble(&skill.content)
+                .tools(investigation_tools(ctx))
+                .build();
+            run_tool_agent(agent, &prompt).await?
+        }
+        crate::rig::provider::LlmBackend::OpenAi { api_key, model } => {
+            let client = rig::providers::openai::Client::new(api_key)
+                .map_err(|e| format!("Failed to build OpenAI client: {e}"))?;
+            let agent = client
+                .agent(model)
+                .preamble(&skill.content)
+                .tools(investigation_tools(ctx))
+                .build();
+            run_tool_agent(agent, &prompt).await?
+        }
+        crate::rig::provider::LlmBackend::Ollama { base_url, model } => {
+            use rig::client::Nothing;
+            let client = rig::providers::ollama::Client::builder()
+                .api_key(Nothing)
+                .base_url(base_url)
+                .build()
+                .map_err(|e| format!("Failed to build Ollama client: {e}"))?;
+            let agent = client
+                .agent(model)
+                .preamble(&skill.content)
+                .tools(investigation_tools(ctx))
+                .build();
+            run_tool_agent(agent, &prompt).await?
+        }
+        _ => {
+            return Err(format!(
+                "Backend does not support tool calling. Use Kimi bridge, Claude, OpenAI, or Ollama."
+            ));
+        }
+    };
+
+    let parsed: serde_json::Value = serde_json::from_str(&response)
+        .unwrap_or_else(|_| serde_json::json!({
+            "summary": "Orchestrator returned prose; no structured output extracted.",
+            "findings": [],
+            "tasks_created": [],
+            "report_path": null
+        }));
+
+    Ok(parsed)
+}
+
 /// Build the investigation preamble from the tool catalog.
 /// Uses the bundled tool_catalog.toml embedded at compile time.
 async fn build_investigation_preamble(ctx: &InvestigationContext) -> String {

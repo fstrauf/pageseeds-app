@@ -149,6 +149,12 @@ export const investigate = (
 ): Promise<InvestigationResult> =>
   invoke('investigate', { projectId, question })
 
+/** Run the autonomous SEO orchestrator for a project. */
+export const runSeoOrchestrator = (
+  projectId: string,
+): Promise<InvestigationResult> =>
+  invoke('run_seo_orchestrator', { projectId })
+
 // ─── Articles ─────────────────────────────────────────────────────────────────
 
 export const listArticles = (projectId: string): Promise<Article[]> =>

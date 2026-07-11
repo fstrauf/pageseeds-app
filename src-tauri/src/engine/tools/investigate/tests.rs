@@ -34,7 +34,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let tools = investigation_tools(ctx);
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 18);
 
         // Verify each tool's definition compiles
         for tool in &tools {
