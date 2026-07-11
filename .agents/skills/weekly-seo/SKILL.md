@@ -223,33 +223,34 @@ Outcome = executed ✓ (what changed), executed ✗ (why), or decision left to u
 - What the next run (or the user) should look at.
 ```
 
-## Output Contract
+## Final Message
 
-Return ONLY valid JSON (no markdown outside it):
+End with a compact, human-readable summary — **no JSON blobs**. Keep it scannable; the
+full detail lives in the report file. Format:
 
-```json
-{
-  "project_id": "...",
-  "action": "ran | skipped",
-  "summary": "One-sentence TL;DR of what was done and why (or why skipped)",
-  "findings": [
-    { "title": "...", "evidence": "Specific data from tools", "task_type": "ctr_audit" }
-  ],
-  "tasks_executed": [
-    { "task_id": "task-uuid", "task_type": "ctr_audit", "title": "...", "outcome": "success | failed" }
-  ],
-  "decisions_made": [
-    { "task_id": "task-uuid", "decision": "Applied merge rec-123: /a + /b → /a", "rationale": "..." }
-  ],
-  "pending_decisions": [
-    { "task_id": "task-uuid", "what": "...", "command": "select-cannibalization -I ... -S ..." }
-  ],
-  "queued_not_run": [
-    { "task_id": "task-uuid", "task_type": "fix_content_article", "title": "..." }
-  ],
-  "report_path": ".github/automation/weekly_seo_YYYYMMDD_HHMMSS.md"
-}
 ```
+## Weekly SEO — {project name} ({date})
+
+**TL;DR:** One or two sentences: the biggest finding and what was done about it.
+
+**Done**
+- {task type}: {what it achieved, with numbers} ✓
+- …
+
+**Decisions I made for you**
+- {decision} — {one-line rationale}
+
+**Needs your decision**
+- {what's pending} → `{exact command to resolve}`
+
+**Queued, not yet run** ({n} tasks)
+- {one line per task or per group, with task IDs}
+
+**Report:** {report_path}
+```
+
+Rules: short bullets, bold section labels, checkmarks/crosses for outcomes, no raw task
+JSON, no artifact dumps. If the run was skipped (recency gate), just say why in two lines.
 
 ## Guardrails
 
