@@ -78,6 +78,10 @@ Start broad, then narrow:
 | `article-title-scan` | Title bugs: dup tokens, literal template vars, truncation |
 | `framework-files` | Layouts, sitemap, robots.txt — only when title-scan/indexing suggests template-level bugs |
 
+**These tools only measure content that already exists.** None of them looks at the keyword
+universe *outside* the site, so "no gap signal" from this step is absence of evidence, not
+evidence of absence. Gap evidence must be generated — see the research cadence rule in step 4.
+
 ### 4. Decide what to launch
 
 This is guidance, not a checklist — use judgment. Every task must cite specific evidence
@@ -98,6 +102,24 @@ This is guidance, not a checklist — use judgment. Every task must cite specifi
 | One specific high-value article with clear issues | `fix_content_article` |
 | Several weak signals, no single clear one | `seo_health_scan` (unified ranked backlog) |
 | Standing weekly item: audience engagement (skip if Reddit isn't configured for this project) | `reddit_opportunity_search` |
+
+**Research cadence rule (gap analysis).** `research_keywords` is the project's gap detector:
+it pulls candidate demand from the SEO provider, subtracts existing coverage
+(`coverage_filter` scores candidates 0–100: exact duplicate → dropped, thin cluster → 80,
+new topic → 100), and lands in a KeywordPicker review (step 7). It is *generative*, not
+evaluative — the only way to know whether content gaps exist is to run it.
+
+- Check when it last ran: `list-tasks` → most recent `research_keywords` task.
+- **Run it this week** if the last run was **≥ 30 days ago or never**, OR `gsc-movers` shows
+  a declining territory with no obvious on-page cause, OR the evaluative signals are quiet
+  (healthy CTR, indexed, no clusters — growth can only come from new coverage).
+- **Skipping is allowed** when the week's fix backlog (CTR/indexing/cannibalization) clearly
+  dominates the ROI — but that is a judgment call, not a measurement. Say so in the report's
+  Skipped section and include the date of the last research run; never write "no gaps found"
+  when research didn't run.
+- Cheap proxy when unsure: `gsc-queries` cross-referenced against `article-list` surfaces
+  queries the site gets impressions for without a dedicated page ("striking distance" gaps).
+  Impressions for uncovered queries are concrete evidence that justifies running research.
 
 **Limits:** max **5 tasks** created per run. Prioritize by expected impact.
 
@@ -232,6 +254,8 @@ Outcome = executed ✓ (what changed), executed ✗ (why), or decision left to u
 
 ## Skipped (and why)
 - Signals checked that did not warrant action.
+- If `research_keywords` was skipped: state it as a judgment call with the date of the last
+  research run — never "no gaps found" when research didn't run.
 
 ## Recommended next actions
 - What the next run (or the user) should look at.
