@@ -233,16 +233,8 @@ fn resolve_site_config(
                     .and_then(|v| v.as_str())
                     .map(String::from)
                     .unwrap_or_else(|| {
-                        let base = if site_url.starts_with("sc-domain:") {
-                            format!("https://{}", &site_url["sc-domain:".len()..])
-                        } else if !site_url.starts_with("http://")
-                            && !site_url.starts_with("https://")
-                        {
-                            format!("https://{}", site_url)
-                        } else {
-                            site_url.clone()
-                        };
-                        format!("{}/sitemap.xml", base.trim_end_matches('/'))
+                        let base = crate::models::project::site_base_url(&site_url);
+                        format!("{}/sitemap.xml", base)
                     });
                 return Ok((site_url, sitemap_url));
             }
@@ -262,7 +254,13 @@ fn resolve_site_config(
     let sitemap_url = project
         .sitemap_url
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("{}/sitemap.xml", site_url.trim_end_matches('/')));
+        .unwrap_or_else(|| {
+            // `site_url` may be a GSC property ID (sc-domain:…) — convert for fetching.
+            format!(
+                "{}/sitemap.xml",
+                crate::models::project::site_base_url(&site_url)
+            )
+        });
 
     Ok((site_url, sitemap_url))
 }

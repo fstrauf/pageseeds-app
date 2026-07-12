@@ -43,6 +43,12 @@ pub fn create_project(
         id
     };
 
+    // Fail fast on un-fetchable site_url values — every downstream consumer
+    // assumes it is either a GSC property ID (sc-domain:<host>) or a URL.
+    if let Some(value) = site_url.as_deref() {
+        crate::models::project::validate_site_url(value)?;
+    }
+
     // Clone name before moving it into project
     let name_for_init = name.clone();
     let project_mode = project_mode.unwrap_or_default();
@@ -119,6 +125,10 @@ pub fn create_project(
 
 #[tauri::command]
 pub fn update_project(state: State<'_, AppState>, project: Project) -> Result<Project, String> {
+    // Fail fast on un-fetchable site_url values (same contract as create_project).
+    if let Some(value) = project.site_url.as_deref() {
+        crate::models::project::validate_site_url(value)?;
+    }
     let db = state.db.lock().map_err(|e| e.to_string())?;
     Ok(task_store::update_project(&db, &project)?)
 }

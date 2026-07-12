@@ -218,6 +218,13 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `apply_publish()` | `content/publish.rs` | Any publish/status-change workflow |
 | `content_health_check()` | `content/ops.rs` | One-off file existence checks in UI code |
 
+### Project / Site URL (`models/project.rs`)
+
+| Function | File | Use instead of writing... |
+|---|---|---|
+| `site_base_url()` | `models/project.rs` | Any inline `sc-domain:` → `https://` conversion or `format!("{}/sitemap.xml", site_url)` — `site_url` stores the GSC property ID and is **not** always a fetchable URL. GSC API calls are the only exception (they need the raw property ID) |
+| `validate_site_url()` | `models/project.rs` | Ad-hoc site_url validation at write boundaries |
+
 ### Database / Export (`db/`)
 
 | Function | File | Use instead of writing... |

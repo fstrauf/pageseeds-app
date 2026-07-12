@@ -658,7 +658,10 @@ async fn fetch_page_snapshot(
 }
 
 fn normalize_site_url(site_url: &str) -> Result<Url> {
-    let mut url = Url::parse(site_url)
+    // `site_url` may be a GSC property ID (sc-domain:…), which Url::parse would
+    // misinterpret as a scheme — convert to a fetchable base URL first.
+    let base = crate::models::project::site_base_url(site_url);
+    let mut url = Url::parse(&base)
         .map_err(|e| Error::Other(format!("Invalid site URL '{}': {}", site_url, e)))?;
     url.set_fragment(None);
     url.set_query(None);

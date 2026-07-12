@@ -51,10 +51,9 @@ pub(crate) fn normalize_url_for_comparison(url: &str) -> String {
 /// - `https://www.example.com/` → `https://example.com`
 /// - `http://example.com` → `https://example.com`
 pub(crate) fn normalize_site_for_url_match(site_url: &str) -> String {
-    // Strip sc-domain: prefix if present
-    let without_prefix = site_url.strip_prefix("sc-domain:").unwrap_or(site_url);
-
-    // Use shared normalization for scheme/www stripping, then reconstruct as https://
-    let normalized = normalize_url_for_comparison(without_prefix);
+    // Fetchable base URL first (handles sc-domain: and scheme-less hosts),
+    // then strip scheme/www for comparison purposes.
+    let base = crate::models::project::site_base_url(site_url);
+    let normalized = normalize_url_for_comparison(&base);
     format!("https://{}", normalized.trim_start_matches('/'))
 }
