@@ -167,14 +167,24 @@ Then decide by review type:
   Execute the spawned fixes (step 6 budget permitting). **Leave ambiguous or strategic
   choices** (e.g. merging a high-traffic page, picking a canonical among near-equal
   candidates) in `review` and escalate them in the report with the exact command to run.
-- **KeywordPicker** (`research_keywords`, `research_landing_pages`): select obvious winners —
-  high relevance + volume, clear intent match — via:
+- **KeywordPicker** (`research_keywords`, `research_landing_pages`): the artifact's
+  suggestions come from keyword data (volume, difficulty, intent). **Do not rubber-stamp
+  them.** Investigate each candidate under one goal — *does ranking for this measurably
+  improve this site's SEO?* — before selecting:
+  - **Demand vs. difficulty:** real search volume at a difficulty this site's authority can
+    plausibly win. Reject vanity head terms and zero-volume long tails alike.
+  - **No self-competition:** check `article-list` and `gsc-queries` — if the site already
+    ranks for or covers the term, a new article would cannibalize; reject it (a CTR/content
+    fix on the existing page is the right move instead).
+  - **Intent fit:** the query's intent must match what the site offers and convert on.
+  Then select only the clear winners:
   ```bash
   cargo run --bin pageseeds-cli -- select-keywords -I <research-task-id> -K kw1,kw2,kw3
   ```
   This creates the `write_article` / `create_landing_page` tasks and marks the research task
-  `done`. Execute the spawned writing tasks (step 6 budget permitting). Leave
-  head-term/strategic bets for the user.
+  `done`. Execute the spawned writing tasks (step 6 budget permitting). **Cap: 3 new articles
+  per run — fewer is better.** If fewer than 3 candidates pass the bar, select fewer; if none
+  do, select none and say why in the report. Three articles that rank beat ten that don't.
 - **RedditPicker**: select posts worth replying to via:
   ```bash
   cargo run --bin pageseeds-cli -- create-reddit-replies -I <task-id> -P <post-id-1,post-id-2>
@@ -258,7 +268,8 @@ JSON, no artifact dumps. If the run was skipped (recency gate), just say why in 
 
 ## Guardrails
 
-- Max 5 tasks created per run; max 15 total executions (created tasks + follow-ups).
+- Max 5 tasks created per run; max 15 total executions (created tasks + follow-ups);
+  max 3 new articles per run — every selected keyword must pass the SEO-impact bar in step 7.
 - Never invent data — every finding cites tool output.
 - Tolerate missing integrations (GSC / Clarity): degrade gracefully and say what you skipped.
 - Never create task types outside the may-create list; never `create-task` a
