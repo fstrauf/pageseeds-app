@@ -93,10 +93,11 @@ This is guidance, not a checklist — use judgment. Every task must cite specifi
 | `article-link-graph`: >5 orphans / zero-incoming pages | `cluster_and_link` |
 | `content-audit-report`: >5 articles with structural/frontmatter failures | `content_cleanup` |
 | Many articles need improvement + GSC shows opportunity | `content_review` |
-| Content gaps or declining territories | `update_research_shortlist` (or `research_keywords` when interactive) |
+| Content gaps or declining territories | `research_keywords` (new article ideas — pick winners at the review point) or `update_research_shortlist` |
 | Template-level bugs (dup title tokens, literal vars, missing canonicals) | `generate_feature_spec` |
 | One specific high-value article with clear issues | `fix_content_article` |
 | Several weak signals, no single clear one | `seo_health_scan` (unified ranked backlog) |
+| Standing weekly item: audience engagement (skip if Reddit isn't configured for this project) | `reddit_opportunity_search` |
 
 **Limits:** max **5 tasks** created per run. Prioritize by expected impact.
 
@@ -104,10 +105,11 @@ This is guidance, not a checklist — use judgment. Every task must cite specifi
 `indexing_diagnostics`, `indexing_health_campaign`, `fix_indexing_internal_links`,
 `cluster_and_link`, `interlinking`, `fix_content_article`, `update_research_shortlist`,
 `generate_feature_spec`, `seo_health_scan`, `collect_gsc`, `collect_clarity`,
-`clarity_analytics`, `research_keywords`*, `research_landing_pages`*.
+`clarity_analytics`, `research_keywords`, `research_landing_pages`,
+`reddit_opportunity_search`.
 
-(* `research_keywords` / `research_landing_pages` end in a keyword-selection review point —
-fine when running interactively, skip them in hands-off mode.)
+(Research and Reddit tasks end in picker review points — resolve them in step 7, in both
+interactive and hands-off mode.)
 
 **Never create** anything not on that list. In particular: `write_article`,
 `create_landing_page`, `create_hub_page`, `consolidate_cluster` — these require user
@@ -165,12 +167,14 @@ Then decide by review type:
   Execute the spawned fixes (step 6 budget permitting). **Leave ambiguous or strategic
   choices** (e.g. merging a high-traffic page, picking a canonical among near-equal
   candidates) in `review` and escalate them in the report with the exact command to run.
-- **KeywordPicker** (`research_keywords`, interactive runs only): select obvious winners —
+- **KeywordPicker** (`research_keywords`, `research_landing_pages`): select obvious winners —
   high relevance + volume, clear intent match — via:
   ```bash
   cargo run --bin pageseeds-cli -- select-keywords -I <research-task-id> -K kw1,kw2,kw3
   ```
-  Leave head-term/strategic bets for the user.
+  This creates the `write_article` / `create_landing_page` tasks and marks the research task
+  `done`. Execute the spawned writing tasks (step 6 budget permitting). Leave
+  head-term/strategic bets for the user.
 - **RedditPicker**: select posts worth replying to via:
   ```bash
   cargo run --bin pageseeds-cli -- create-reddit-replies -I <task-id> -P <post-id-1,post-id-2>
