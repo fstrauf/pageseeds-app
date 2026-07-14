@@ -78,6 +78,10 @@ pub enum StepKind {
     CtrVerifyFix,
     /// Deterministic rendered SERP audit — fetch live HTML, compare with source.
     CtrRenderedSerpAudit,
+    /// Deterministic: load a freshly written MDX file and build quality review context.
+    ContentQualityContext,
+    /// Agentic: score an article against usefulness, visual, SEO, and cluster-fit criteria.
+    ContentQualityReview,
     /// Deterministic detection of repeated site-wide title template patterns.
     CtrTemplateDetect,
     /// Agentic/manual step: plan framework-aware title template fix.
@@ -229,6 +233,8 @@ impl StepKind {
             Self::CtrFixApply => "ctr_fix_apply",
             Self::CtrVerifyFix => "ctr_verify_fix",
             Self::CtrRenderedSerpAudit => "ctr_rendered_serp_audit",
+            Self::ContentQualityContext => "content_quality_context",
+            Self::ContentQualityReview => "content_quality_review",
             Self::CtrTemplateDetect => "ctr_template_detect",
             Self::CtrTemplatePlan => "ctr_template_plan",
             Self::CtrTemplateVerifyRender => "ctr_template_verify_render",
@@ -347,6 +353,8 @@ impl FromStr for StepKind {
             "ctr_fix_apply" => Ok(Self::CtrFixApply),
             "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
             "ctr_rendered_serp_audit" => Ok(Self::CtrRenderedSerpAudit),
+            "content_quality_context" => Ok(Self::ContentQualityContext),
+            "content_quality_review" => Ok(Self::ContentQualityReview),
             "ctr_template_detect" => Ok(Self::CtrTemplateDetect),
             "ctr_template_plan" => Ok(Self::CtrTemplatePlan),
             "ctr_template_verify_render" => Ok(Self::CtrTemplateVerifyRender),
@@ -476,6 +484,8 @@ mod tests {
             StepKind::CtrFixApply,
             StepKind::CtrVerifyFix,
             StepKind::CtrRenderedSerpAudit,
+            StepKind::ContentQualityContext,
+            StepKind::ContentQualityReview,
             StepKind::CtrTemplateDetect,
             StepKind::CtrTemplatePlan,
             StepKind::CtrTemplateVerifyRender,

@@ -208,10 +208,19 @@ impl WorkflowHandler for ContentHandler {
                 | "optimize_content"
                 | "create_hub_page"
                 | "refresh_hub_page"
+                | "review_article_quality"
         )
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
+        if task_type(task) == "review_article_quality" {
+            // Structured quality gate: load the written MDX, then score it.
+            return vec![
+                WorkflowStep::new("content_quality_context", StepKind::ContentQualityContext),
+                WorkflowStep::new("content_quality_review", StepKind::ContentQualityReview),
+            ];
+        }
+
         // Agentic: the agent reads the article spec and writes the MDX file.
         let has_hub_brief = task.artifacts.iter().any(|a| a.key == "hub_brief");
         let is_hub =

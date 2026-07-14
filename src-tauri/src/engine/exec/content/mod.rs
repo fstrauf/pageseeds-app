@@ -22,6 +22,7 @@ mod fix_apply;
 mod fix_context;
 mod fix_generate;
 mod fix_verify;
+mod quality_review;
 mod review;
 mod sync;
 mod task_spawner;
@@ -32,6 +33,7 @@ pub(crate) use fix_context::*;
 pub(crate) use fix_generate::*;
 pub(crate) use fix_verify::*;
 pub(crate) use indexing_link::*;
+pub(crate) use quality_review::*;
 pub(crate) use review::*;
 #[cfg(test)]
 use rusqlite::Connection;

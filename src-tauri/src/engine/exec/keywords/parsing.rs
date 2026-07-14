@@ -154,8 +154,14 @@ pub(crate) fn read_pending_shortlist(task: &Task) -> Vec<crate::db::research_sho
             return Vec::new();
         }
     };
-    match crate::db::research_shortlist::list_entries(&conn, &task.project_id, Some("pending")) {
-        Ok(entries) => entries,
+    match crate::db::research_shortlist::list_pending_excluding_depleted(&conn, &task.project_id) {
+        Ok(entries) => {
+            log::info!(
+                "[keyword_research_native] loaded {} pending shortlist entries (depleted themes filtered)",
+                entries.len()
+            );
+            entries
+        }
         Err(e) => {
             log::warn!("[keyword_research_native] Failed to read shortlist: {}", e);
             Vec::new()

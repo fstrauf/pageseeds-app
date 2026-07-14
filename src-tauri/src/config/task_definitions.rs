@@ -91,6 +91,15 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
+    // Quality gate: structured review of a freshly written article before clustering/linking.
+    TaskDefinition {
+        task_type: "review_article_quality",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
+        handler_family: HandlerFamily::Content,
+    },
     // Content Review
     TaskDefinition {
         task_type: "content_review",

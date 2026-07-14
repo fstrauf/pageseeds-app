@@ -281,6 +281,36 @@ impl StepRegistry {
             crate::engine::exec::content_audit::exec_content_audit
         );
 
+        handlers.insert(
+            StepKind::ContentQualityContext,
+            Box::new(|_step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                Box::pin(async move {
+                    crate::engine::exec::content::exec_content_quality_context(&task, &project_path)
+                })
+            }),
+        );
+
+        handlers.insert(
+            StepKind::ContentQualityReview,
+            Box::new(|step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                let agent_provider = ctx.agent_provider.to_string();
+                let step = step.clone();
+                Box::pin(async move {
+                    crate::engine::exec::content::exec_content_quality_review(
+                        &step,
+                        &task,
+                        &project_path,
+                        &agent_provider,
+                    )
+                    .await
+                })
+            }),
+        );
+
         register_blocking!(
             handlers,
             StepKind::CollectGscInspect,
