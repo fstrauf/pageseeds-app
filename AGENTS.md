@@ -206,6 +206,8 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `frontmatter::extract_frontmatter_string()` | `content/frontmatter.rs` | Inline frontmatter field extraction |
 | `slug::normalize_url_slug()` | `content/slug.rs` | Custom `slugify()` |
 | `slug::strip_numeric_prefix()` | `content/slug.rs` | Inline regex `^\d+_` |
+| `slug::resolve_slug()` | `content/slug.rs` | Bare `set.contains(&normalize_url_slug(...))` — exact match first, normalized fallback |
+| `redirects::load_redirect_source_slugs()` | `content/redirects.rs` | Ad-hoc `redirects.csv` parsing |
 | `date_policy::find_first_free_past_date()` | `content/date_policy.rs` | Backward-cursor date loops |
 | `date_policy::suggest_next_safe_date()` | `content/date_policy.rs` | Reading dates and walking backward manually |
 | `ingest_orphan_files()` | `content/ops.rs` | A new "save article to DB + disk" function |
@@ -225,6 +227,7 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `export::export_articles()` | `db/export.rs` | Manual SQL → JSON serialization |
 | `export::merge_unknown_fields()` | `db/export.rs` | Naive JSON overwrite that drops extra fields |
 | `task_store::list_articles()` | `engine/task_store.rs` | Raw SQL `SELECT * FROM articles` |
+| `task_store::load_valid_link_targets()` | `engine/task_store.rs` | Raw `load_project_slug_set()` for link-target checks — redirected slugs are not valid targets |
 
 ### Article Writing / Workflow (`engine/`)
 
@@ -242,6 +245,8 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 |---|---|---|
 | `append_related_section()` | `engine/exec/content/cluster_link.rs` | Inline string manipulation for link sections |
 | `exec_cluster_link_scan()` | `engine/exec/content/cluster_link.rs` | Custom file traversal for internal links |
+| `extract_blog_link_hrefs()` | `content/linking.rs` | Any new `/blog/` link regex — canonical + malformed patterns are shared here |
+| `repair_blog_link_hrefs()` | `content/linking.rs` | Inline string replacement of link hrefs |
 
 ### Per-Article Fix Pipeline (`engine/exec/content/`, `engine/exec/ctr_audit/`)
 

@@ -255,3 +255,17 @@ All secrets must be resolved through `config::env_resolver::EnvResolver`. The pr
 - New columns or tables always get a new `MIGRATION_VN` constant and are applied after all prior migrations.
 - All migrations must be idempotent (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
 - The migration version is tracked implicitly by the order of `execute_batch()` calls in `db::init()`.
+
+---
+
+## 13. Internal Link Integrity
+
+**Invariant:** a `/blog/<slug>` link committed to a project repo must resolve to a live project article at write time. A slug that appears in `.github/automation/redirects.csv` as a redirect **source** is NOT a valid link target, even though its article row and file still exist.
+
+Enforcement points (do not bypass or re-implement):
+
+- **Valid target set is computed in exactly one place:** `engine/task_store.rs::load_valid_link_targets()` = `load_project_slug_set()` minus redirect sources (`content/redirects.rs::load_redirect_source_slugs()`). Any code that validates a link target must use it — never the raw slug set.
+- **Slug resolution is exact-match-first:** `content/slug.rs::resolve_slug()` checks the slug as written before falling back to `normalize_url_slug()`. A verbatim-existing slug with a leading number (e.g. `5-best-coffees`) must never be "normalized" into a different URL.
+- **Link detection patterns live in `content/linking.rs`** (canonical + malformed regexes, `extract_blog_link_hrefs()`, `repair_blog_link_hrefs()`). Do not add new `/blog/` link regexes elsewhere.
+- **Every agentic content write** (`write_article`, `create_hub_page`, `refresh_hub_page`, `optimize_*`, `create_content`) ends with the deterministic `content_link_verify` step: resolvable filename-form hrefs are auto-repaired; an unresolvable link fails the step and the file is left untouched (all-or-nothing).
+- **`consolidate_cluster` must rewrite inbound links** to every redirected slug (`merge_rewrite_inbound_links`) before `merge_validate_output` asserts none remain.

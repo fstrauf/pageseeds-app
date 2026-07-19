@@ -1,13 +1,14 @@
 /// Consolidate cluster execution module.
 ///
 /// Covers:
-///   - merge_load_plan          (deterministic)
-///   - merge_preflight          (deterministic)
-///   - merge_extract_sections   (deterministic)
-///   - merge_draft_patch        (agentic with merge-content skill)
-///   - merge_apply_patch        (deterministic)
-///   - merge_generate_redirects (deterministic)
-///   - merge_validate_output    (deterministic)
+///   - merge_load_plan              (deterministic)
+///   - merge_preflight              (deterministic)
+///   - merge_extract_sections       (deterministic)
+///   - merge_draft_patch            (agentic with merge-content skill)
+///   - merge_apply_patch            (deterministic)
+///   - merge_generate_redirects     (deterministic)
+///   - merge_rewrite_inbound_links  (deterministic)
+///   - merge_validate_output        (deterministic)
 use std::path::{Path, PathBuf};
 
 use crate::engine::project_paths::ProjectPaths;
@@ -25,6 +26,7 @@ mod extract_sections;
 mod draft_patch;
 mod apply_patch;
 mod generate_redirects;
+mod rewrite_inbound_links;
 mod validate_output;
 mod sync_articles;
 mod helpers;
@@ -36,6 +38,7 @@ pub(crate) use extract_sections::exec_merge_extract_sections;
 pub(crate) use draft_patch::exec_merge_draft_patch;
 pub(crate) use apply_patch::exec_merge_apply_patch;
 pub(crate) use generate_redirects::exec_merge_generate_redirects;
+pub(crate) use rewrite_inbound_links::exec_merge_rewrite_inbound_links;
 pub(crate) use validate_output::exec_merge_validate_output;
 pub(crate) use sync_articles::*;
 pub(crate) use helpers::*;

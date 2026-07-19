@@ -222,7 +222,15 @@ impl WorkflowHandler for ContentHandler {
         // directives. Previously regular articles loaded no skill at all and
         // fell through to a generic boilerplate prompt with no content strategy.
         let skill = if is_hub { "hub-write" } else { "content-write" };
-        vec![step.with_param(step_params::SKILL, skill)]
+        vec![
+            step.with_param(step_params::SKILL, skill),
+            // Step 2 (deterministic): verify every /blog/ link the agent wrote
+            // resolves to a project article. Auto-repairs filename-form hrefs
+            // (e.g. /blog/248_roast_profile_management) and fails the task with
+            // a per-link report when a link target does not exist — broken
+            // internal links must not reach the repo unrepaired.
+            WorkflowStep::new("content_link_verify", StepKind::LinkIntegrityVerify),
+        ]
     }
 }
 
@@ -707,9 +715,15 @@ impl WorkflowHandler for ConsolidateClusterHandler {
             WorkflowStep::new("merge_apply_patch", StepKind::MergeApplyPatch),
             // Step 6 (deterministic): Generate redirect rules as generic CSV.
             WorkflowStep::new("merge_generate_redirects", StepKind::MergeGenerateRedirects),
-            // Step 7 (deterministic): Validate merged keeper and redirect map.
+            // Step 7 (deterministic): Rewrite inbound links to redirected slugs
+            // across all MDX files so nothing links to a redirected URL.
+            WorkflowStep::new(
+                "merge_rewrite_inbound_links",
+                StepKind::MergeRewriteInboundLinks,
+            ),
+            // Step 8 (deterministic): Validate merged keeper and redirect map.
             WorkflowStep::new("merge_validate_output", StepKind::MergeValidateOutput),
-            // Step 8 (deterministic): Sync merged articles back to SQLite and articles.json.
+            // Step 9 (deterministic): Sync merged articles back to SQLite and articles.json.
             WorkflowStep::new("merge_sync_articles", StepKind::MergeSyncArticles),
         ]
     }

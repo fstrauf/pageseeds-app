@@ -18,10 +18,12 @@ mod indexing_link;
 ///   - exec_fix_content_article_generate  (agentic: structured extraction of ContentFixPatch)
 ///   - exec_fix_content_article_apply     (deterministic: apply patch to MDX)
 ///   - exec_fix_content_article_verify    (deterministic: verify fixes meet thresholds)
+///   - exec_link_integrity_verify         (deterministic: verify/repair /blog/ links after agentic writes)
 mod fix_apply;
 mod fix_context;
 mod fix_generate;
 mod fix_verify;
+mod link_verify;
 mod review;
 mod sync;
 mod task_spawner;
@@ -32,6 +34,7 @@ pub(crate) use fix_context::*;
 pub(crate) use fix_generate::*;
 pub(crate) use fix_verify::*;
 pub(crate) use indexing_link::*;
+pub(crate) use link_verify::*;
 pub(crate) use review::*;
 #[cfg(test)]
 use rusqlite::Connection;

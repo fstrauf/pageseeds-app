@@ -622,6 +622,12 @@ impl StepRegistry {
             crate::engine::exec::content::exec_fix_content_article_context
         );
 
+        register_blocking!(
+            handlers,
+            StepKind::LinkIntegrityVerify,
+            crate::engine::exec::content::exec_link_integrity_verify
+        );
+
         handlers.insert(
             StepKind::FixContentArticleGenerate,
             Box::new(|step, ctx| {
@@ -794,6 +800,12 @@ impl StepRegistry {
             handlers,
             StepKind::MergeGenerateRedirects,
             crate::engine::exec::consolidate_cluster::exec_merge_generate_redirects
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::MergeRewriteInboundLinks,
+            crate::engine::exec::consolidate_cluster::exec_merge_rewrite_inbound_links
         );
 
         register_blocking!(
