@@ -118,11 +118,26 @@ pub(crate) fn exec_cluster_link_scan(
             crate::engine::workflows::StepResult {
                 success: true,
                 message: format!(
-                    "Link scan complete: {} articles, {} internal links, {} orphans, {} zero-incoming",
+                    "Link scan complete: {} articles, {} internal links, {} orphans, {} zero-incoming; {} unresolved links{}",
                     result.total_articles,
                     result.total_internal_links,
                     result.orphan_ids.len(),
-                    result.zero_incoming_ids.len()
+                    result.zero_incoming_ids.len(),
+                    result.unresolved_links.len(),
+                    if result.unresolved_links.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " [{}]",
+                            result
+                                .unresolved_links
+                                .iter()
+                                .take(10)
+                                .map(|u| format!("{} → {}", u.file, u.target))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
                 ),
                 output: Some(json),
             }
@@ -679,10 +694,11 @@ pub(crate) fn exec_cluster_link_apply(
         }
     };
 
-    // Build set of valid slugs from the article database
+    // Build set of valid link targets from the article database, excluding
+    // slugs redirected away by a consolidation.
     let valid_slugs: std::collections::HashSet<String> =
         if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
-            crate::engine::task_store::load_project_slug_set(&db, &task.project_id)
+            crate::engine::task_store::load_valid_link_targets(&db, &task.project_id, project_path)
                 .unwrap_or_default()
         } else {
             std::collections::HashSet::new()
@@ -718,19 +734,26 @@ pub(crate) fn exec_cluster_link_apply(
             skipped_missing_target += 1;
             continue;
         }
-        let normalized = crate::content::slug::normalize_url_slug(&target_slug);
-        if !valid_slugs.contains(&normalized) {
-            log::warn!(
-                "[cluster_link_apply] skipping link to non-existent slug '{}' (normalized: '{}'); valid slug count={}",
-                target_slug, normalized, valid_slugs.len()
-            );
-            skipped_unknown_slug += 1;
-            continue;
+        // Exact match first, normalized fallback — a verbatim-existing slug
+        // (e.g. with a leading number) is never rewritten, and redirected
+        // slugs are not valid targets.
+        match crate::content::slug::resolve_slug(&target_slug, &valid_slugs) {
+            Some(resolved) => {
+                by_source
+                    .entry(source_file)
+                    .or_default()
+                    .push((target_title, resolved));
+            }
+            None => {
+                log::warn!(
+                    "[cluster_link_apply] skipping link to non-existent or redirected slug '{}'; valid slug count={}",
+                    target_slug,
+                    valid_slugs.len()
+                );
+                skipped_unknown_slug += 1;
+                continue;
+            }
         }
-        by_source
-            .entry(source_file)
-            .or_default()
-            .push((target_title, normalized));
     }
 
     // Build basename → full path map from content dir

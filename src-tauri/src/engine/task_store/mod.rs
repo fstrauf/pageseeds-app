@@ -526,6 +526,29 @@ pub fn load_project_slug_set(
         .collect())
 }
 
+/// Load the set of slugs that are valid internal link targets for a project.
+///
+/// This is [`load_project_slug_set`] minus the slugs that have been redirected
+/// away by a consolidation (sources in `.github/automation/redirects.csv`):
+/// a redirected slug may still have a row in SQLite and a file on disk, but it
+/// no longer resolves to a live article, so nothing may link to it.
+///
+/// This is the single place the "valid link target" set is computed — every
+/// link validator (cluster_link apply, fix_generate, indexing_link apply,
+/// link verify, content audit) must use it instead of the raw slug set.
+pub fn load_valid_link_targets(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let mut slugs = load_project_slug_set(conn, project_id)?;
+    let redirected = crate::content::redirects::load_redirect_source_slugs(project_path);
+    if !redirected.is_empty() {
+        slugs.retain(|slug| !redirected.contains(slug));
+    }
+    Ok(slugs)
+}
+
 // ─── Artifact helpers (used by executor) ─────────────────────────────────────
 
 use crate::models::task::TaskArtifact;

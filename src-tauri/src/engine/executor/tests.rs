@@ -558,6 +558,12 @@
         .unwrap();
         std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
         let proj = test_project_in_at_path(&conn, &project_dir.to_string_lossy());
+        // Route through the Ahrefs provider so the flow hits the mocked
+        // endpoints above. The default ("dataforseo") requires real
+        // credentials and makes live API calls — that is why this test
+        // failed on CI but passed on machines with local secrets.
+        conn.execute("UPDATE projects SET seo_provider = 'ahrefs' WHERE id = 'proj1'", [])
+            .unwrap();
 
         // Ensure articles table exists and has a dummy article so the pre-flight check passes.
         conn.execute_batch(

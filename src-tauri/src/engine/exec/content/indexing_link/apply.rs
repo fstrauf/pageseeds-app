@@ -34,7 +34,30 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
         };
     }
 
-    let target_slug = crate::content::slug::normalize_url_slug(target_data["slug"].as_str().unwrap_or(""));
+    // The target must be a valid link target: present in the project slug set
+    // and not redirected away by a consolidation. resolve_slug matches exact
+    // first, so a verbatim-existing slug is never destructively normalized.
+    let raw_target_slug = target_data["slug"].as_str().unwrap_or("");
+    let valid_targets: std::collections::HashSet<String> =
+        if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+            crate::engine::task_store::load_valid_link_targets(&db, &task.project_id, project_path)
+                .unwrap_or_default()
+        } else {
+            std::collections::HashSet::new()
+        };
+    let target_slug = match crate::content::slug::resolve_slug(raw_target_slug, &valid_targets) {
+        Some(slug) => slug,
+        None => {
+            return StepResult {
+                success: false,
+                message: format!(
+                    "Target slug '{}' is not a valid link target (missing from project or redirected away)",
+                    raw_target_slug
+                ),
+                output: None,
+            }
+        }
+    };
     let target_title = target_data["target_keyword"]
         .as_str()
         .unwrap_or(&target_slug)

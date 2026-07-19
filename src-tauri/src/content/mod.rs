@@ -12,6 +12,7 @@ pub mod naming;
 pub mod ops;
 pub mod publish;
 pub mod readability;
+pub mod redirects;
 pub mod slug;
 pub mod tfidf;
 pub mod validator;
