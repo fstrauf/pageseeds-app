@@ -218,6 +218,7 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `slug_from_filename()` | `content/ops.rs` | String manipulation on filenames |
 | `apply_publish()` | `content/publish.rs` | Any publish/status-change workflow |
 | `content_health_check()` | `content/ops.rs` | One-off file existence checks in UI code |
+| `keyword_match::normalize_keyword()` / `keyword_present()` / `keyword_occurrences()` | `content/keyword_match.rs` | Raw `contains()` / `matches()` keyword checks (stored keywords may contain quotes or long phrases) |
 
 ### Database / Export (`db/`)
 

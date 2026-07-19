@@ -278,17 +278,21 @@ fn analyze_structure(content: &ContentToAnalyze) -> QualityDetails {
         .collect();
 
     // Keyword checks
-    let keyword_lower = content.target_keyword.to_lowercase();
+    let keyword_lower = crate::content::keyword_match::normalize_keyword(content.target_keyword);
     let _text_lower = text.to_lowercase();
 
-    let keyword_in_h1 = h1_text.to_lowercase().contains(&keyword_lower);
+    let keyword_in_h1 =
+        crate::content::keyword_match::keyword_present(&h1_text.to_lowercase(), &keyword_lower);
 
     let first_100_words: String = text
         .split_whitespace()
         .take(100)
         .collect::<Vec<_>>()
         .join(" ");
-    let keyword_in_first_100 = first_100_words.to_lowercase().contains(&keyword_lower);
+    let keyword_in_first_100 = crate::content::keyword_match::keyword_present(
+        &first_100_words.to_lowercase(),
+        &keyword_lower,
+    );
 
     // Link counts (markdown format)
     let internal_link_count = count_internal_links(text);
@@ -372,8 +376,8 @@ fn score_keywords(
 
     // Keyword density calculation
     let text_lower = content.content.to_lowercase();
-    let keyword_lower = content.target_keyword.to_lowercase();
-    let keyword_count = text_lower.matches(&keyword_lower).count();
+    let keyword_count =
+        crate::content::keyword_match::keyword_occurrences(&text_lower, content.target_keyword);
     let density = if structure.word_count > 0 {
         (keyword_count as f64 / structure.word_count as f64) * 100.0
     } else {
@@ -407,8 +411,10 @@ fn score_meta(content: &ContentToAnalyze, guidelines: &SeoGuidelines) -> u8 {
         }
 
         // Keyword in title
-        let keyword_lower = content.target_keyword.to_lowercase();
-        if !title.to_lowercase().contains(&keyword_lower) {
+        if !crate::content::keyword_match::keyword_present(
+            &title.to_lowercase(),
+            content.target_keyword,
+        ) {
             score -= 15;
         }
     }

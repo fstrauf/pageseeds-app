@@ -6,6 +6,7 @@ pub mod date_policy;
 pub mod dates;
 pub mod frontmatter;
 pub mod keyword_density;
+pub mod keyword_match;
 pub mod linking;
 pub mod locator;
 pub mod naming;
