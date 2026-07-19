@@ -85,6 +85,19 @@ fn main() {
                 .map_err(|e| e.to_string())
         }
         "article-link-graph" => investigate::scan_link_graph(&ctx).map_err(|e| e.to_string()),
+        "research-shortlist" => {
+            investigate::list_research_shortlist(
+                &ctx,
+                flag(&args, "--status", "-s").as_deref(),
+                flag(&args, "--health", "-H").as_deref(),
+            ).map_err(|e| e.to_string())
+        }
+        "article-quality-reviews" => {
+            let limit: usize = flag(&args, "--limit", "-l")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50);
+            investigate::list_article_quality_reviews(&ctx, limit).map_err(|e| e.to_string())
+        }
         "compare-rendered" => compare_rendered(&require_project_path(), &args),
         "write-feature-spec" => write_spec(&require_project_path(), &args),
         _ => Err(format!("Unknown tool '{}'. Run with --help for list.", tool)),
@@ -671,7 +684,7 @@ Tools:
   article-list  article-frontmatter  article-body-hash  article-title-scan
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
-  compare-rendered  write-feature-spec
+  research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec
 
 Task / queue orchestration:
   list-tasks              -i <id> -p <path> [-t type] [-s status]
@@ -690,6 +703,10 @@ Cannibalization workflow:
 
 Dead-weight remediation (WS4):
   score-zero-impression-articles -i <id> -p <path> [-m <max-impressions>]
+
+Research / quality health:
+  research-shortlist        -i <id> [-s pending|researched|covered] [-H promising|unproven|depleted]
+  article-quality-reviews   -i <id> [-l <limit>]
 
 Common: -i/--project-id  -p/--project-path
 Run with <tool> --help for tool-specific flags.

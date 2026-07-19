@@ -1,10 +1,3 @@
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-
-use crate::engine::project_paths::ProjectPaths;
 use super::*;
 // ═══════════════════════════════════════════════════════════════════════════════
 // Standalone tool functions — shared by Tool impls and CLI
@@ -169,5 +162,96 @@ pub fn scan_link_graph(ctx: &InvestigationContext) -> Result<serde_json::Value, 
     Ok(serde_json::json!({
         "total_articles": scan.total_articles, "total_internal_links": scan.total_internal_links,
         "orphan_count": scan.orphan_ids.len(), "orphans": orphans,
+    }))
+}
+
+/// List research-shortlist entries with optional status and health filters.
+pub fn list_research_shortlist(
+    ctx: &InvestigationContext,
+    status_filter: Option<&str>,
+    health_filter: Option<&str>,
+) -> Result<serde_json::Value, InvestigationToolError> {
+    use crate::db::research_shortlist;
+
+    let db = ctx.open_db().map_err(|e| InvestigationToolError::Execution(e))?;
+    let mut entries = research_shortlist::list_entries(&db, &ctx.project_id, status_filter)
+        .map_err(|e| InvestigationToolError::Execution(format!("Failed to list shortlist: {e}")))?;
+
+    if let Some(health) = health_filter {
+        let health_lower = health.to_lowercase();
+        entries.retain(|e| e.health_status.to_lowercase() == health_lower);
+    }
+
+    let summary = serde_json::json!({
+        "pending": entries.iter().filter(|e| e.status == "pending").count(),
+        "researched": entries.iter().filter(|e| e.status == "researched").count(),
+        "covered": entries.iter().filter(|e| e.status == "covered").count(),
+        "promising": entries.iter().filter(|e| e.health_status == "promising").count(),
+        "unproven": entries.iter().filter(|e| e.health_status == "unproven").count(),
+        "depleted": entries.iter().filter(|e| e.health_status == "depleted").count(),
+    });
+
+    let rows: Vec<serde_json::Value> = entries.into_iter().map(|e| serde_json::json!({
+        "id": e.id,
+        "theme": e.theme,
+        "seeds": e.seeds,
+        "source": e.source,
+        "status": e.status,
+        "priority": e.priority,
+        "article_count": e.article_count,
+        "total_impressions": e.total_impressions,
+        "signal_score": e.signal_score,
+        "health_status": e.health_status,
+        "last_reviewed_at": e.last_reviewed_at,
+        "added_at": e.added_at,
+        "researched_at": e.researched_at,
+        "covered_at": e.covered_at,
+    })).collect();
+
+    Ok(serde_json::json!({
+        "count": rows.len(),
+        "summary": summary,
+        "entries": rows,
+    }))
+}
+
+/// List recent article quality reviews.
+pub fn list_article_quality_reviews(
+    ctx: &InvestigationContext,
+    limit: usize,
+) -> Result<serde_json::Value, InvestigationToolError> {
+    let db = ctx.open_db().map_err(|e| InvestigationToolError::Execution(e))?;
+
+    let mut stmt = db.prepare(
+        "SELECT id, project_id, task_id, article_file, overall_pass, scores_json, checks_json, reviewed_at
+         FROM article_quality_reviews
+         WHERE project_id = ?1
+         ORDER BY reviewed_at DESC
+         LIMIT ?2"
+    ).map_err(|e| InvestigationToolError::Execution(format!("Failed to prepare review query: {e}")))?;
+
+    let rows = stmt.query_map(rusqlite::params![&ctx.project_id, limit as i64], |row| {
+        let scores_json: String = row.get(5)?;
+        let scores: serde_json::Value = serde_json::from_str(&scores_json).unwrap_or_default();
+        Ok(serde_json::json!({
+            "id": row.get::<_, i64>(0)?,
+            "project_id": row.get::<_, String>(1)?,
+            "task_id": row.get::<_, String>(2)?,
+            "article_file": row.get::<_, String>(3)?,
+            "overall_pass": row.get::<_, i32>(4)? == 1,
+            "scores": scores,
+            "checks": row.get::<_, String>(6)?,
+            "reviewed_at": row.get::<_, String>(7)?,
+        }))
+    }).map_err(|e| InvestigationToolError::Execution(format!("Failed to query reviews: {e}")))?;
+
+    let reviews: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
+    let pass_count = reviews.iter().filter(|r| r["overall_pass"].as_bool().unwrap_or(false)).count();
+
+    Ok(serde_json::json!({
+        "count": reviews.len(),
+        "passed": pass_count,
+        "failed": reviews.len().saturating_sub(pass_count),
+        "reviews": reviews,
     }))
 }

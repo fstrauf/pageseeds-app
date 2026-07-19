@@ -8,12 +8,6 @@
 //! These tools are attached to a rig `Agent` during the investigate flow,
 //! allowing the LLM to explore project data freely.
 
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-
 use crate::engine::project_paths::ProjectPaths;
 
 use gsc::*;
@@ -92,5 +86,6 @@ mod tests;
 pub use shared::{
     scan_article_titles, hash_article_bodies, read_content_audit_report,
     read_cannibalization_clusters, get_indexing_status, read_framework_files, scan_link_graph,
+    list_research_shortlist, list_article_quality_reviews,
 };
 pub use articles::list_articles_json;
