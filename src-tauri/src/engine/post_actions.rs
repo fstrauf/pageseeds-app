@@ -850,47 +850,26 @@ fn find_expected_slug_and_file(ctx: &PostStepContext<'_>) -> Option<(String, std
     let project_path = std::path::Path::new(ctx.project_path);
     let desc = ctx.task.description.as_deref().unwrap_or("");
 
-    // Try to extract a file path from the description.
-    // Patterns:
+    // Try to extract a file path from the description via the shared parser
+    // (content::ops::file_path_from_description). Patterns:
     //   "File: ./src/blog/posts/02_post.mdx"
     //   "File: ./webapp/content/blog/13_post.mdx"
-    let file_path = if let Some(start) = desc.find("File: ") {
-        let rest = &desc[start + 6..];
-        let end = rest.find(" |").unwrap_or(rest.len());
-        let path_str = rest[..end].trim();
-        let path = std::path::Path::new(path_str);
-        if path.is_relative() {
-            project_path.join(path)
-        } else {
-            path.to_path_buf()
-        }
-    } else if let Some(start) = desc.find("File:") {
-        // Handle "File:./path" without space
-        let rest = &desc[start + 5..];
-        let end = rest.find(" |").or_else(|| rest.find('\n')).unwrap_or(rest.len());
-        let path_str = rest[..end].trim();
-        let path = std::path::Path::new(path_str);
-        if path.is_relative() {
-            project_path.join(path)
-        } else {
-            path.to_path_buf()
-        }
-    } else {
-        // Fallback: try to parse "Article ID: X" and look up the file in DB
-        if let Some(start) = desc.find("Article ID:") {
-            let rest = &desc[start + 11..];
-            let id_str = rest.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
-            if let Ok(article_id) = id_str.parse::<i64>() {
-                if let Ok(articles) = task_store::list_articles(ctx.conn, &ctx.task.project_id) {
-                    if let Some(article) = articles.iter().find(|a| a.id == article_id) {
-                        let path = std::path::Path::new(&article.file);
-                        if path.is_relative() {
-                            project_path.join(path)
-                        } else {
-                            path.to_path_buf()
-                        }
+    // Fallback: try to parse "Article ID: X" and look up the file in DB.
+    let file_path = if let Some(path) =
+        crate::content::ops::file_path_from_description(desc, project_path)
+    {
+        path
+    } else if let Some(start) = desc.find("Article ID:") {
+        let rest = &desc[start + 11..];
+        let id_str = rest.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
+        if let Ok(article_id) = id_str.parse::<i64>() {
+            if let Ok(articles) = task_store::list_articles(ctx.conn, &ctx.task.project_id) {
+                if let Some(article) = articles.iter().find(|a| a.id == article_id) {
+                    let path = std::path::Path::new(&article.file);
+                    if path.is_relative() {
+                        project_path.join(path)
                     } else {
-                        return None;
+                        path.to_path_buf()
                     }
                 } else {
                     return None;
@@ -901,6 +880,8 @@ fn find_expected_slug_and_file(ctx: &PostStepContext<'_>) -> Option<(String, std
         } else {
             return None;
         }
+    } else {
+        return None;
     };
 
     if !file_path.exists() {

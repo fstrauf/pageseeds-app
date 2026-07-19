@@ -79,26 +79,18 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
         if let Some(content_dir) =
             crate::content::locator::resolve(&paths.repo_root, None).selected
         {
-            for file in crate::content::locator::collect_markdown_files(&content_dir) {
-                let Ok(content) = std::fs::read_to_string(&file) else {
-                    continue;
-                };
-                let file_name = file
+            for m in crate::content::linking::find_links_to_slugs(&content_dir, &redirect_sources)
+            {
+                let file_name = m
+                    .file
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
-                for (_anchor, raw_href, slug_written) in
-                    crate::content::linking::extract_blog_link_hrefs(&content)
-                {
-                    let normalized = crate::content::slug::normalize_url_slug(&slug_written);
-                    if redirect_sources.contains(&normalized) {
-                        issues.push(format!(
-                            "{}: link '{}' still points to redirected slug '{}'",
-                            file_name, raw_href, normalized
-                        ));
-                    }
-                }
+                issues.push(format!(
+                    "{}: link '{}' still points to redirected slug '{}'",
+                    file_name, m.raw_href, m.normalized_slug
+                ));
             }
         }
     }

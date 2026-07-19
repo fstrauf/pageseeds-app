@@ -2,7 +2,7 @@
 ///
 /// Mirrors `packages/seo-content-cli/src/seo_content_mcp/clustering_linking.py`.
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::Serialize;
@@ -140,6 +140,46 @@ pub fn repair_blog_link_hrefs(
             }
         })
         .into_owned()
+}
+
+/// A `/blog/` link found in a content file whose normalized slug belongs to a
+/// caller-supplied slug set.
+#[derive(Debug, Clone)]
+pub struct SlugLinkMatch {
+    /// Full path to the file containing the link.
+    pub file: PathBuf,
+    /// Raw href exactly as written (e.g. `/blog/248_old_post`).
+    pub raw_href: String,
+    /// Normalized slug that matched the target set.
+    pub normalized_slug: String,
+}
+
+/// Walk every markdown file in `content_dir` and return all `/blog/` links
+/// whose normalized slug is in `slugs`.
+///
+/// Shared traversal for the consolidation steps (`merge_rewrite_inbound_links`
+/// builds repairs from it, `merge_validate_output` builds issues from it).
+/// Files are visited in [`crate::content::locator::collect_markdown_files`]
+/// order and links in [`extract_blog_link_hrefs`] order; unreadable files are
+/// skipped.
+pub fn find_links_to_slugs(content_dir: &Path, slugs: &HashSet<String>) -> Vec<SlugLinkMatch> {
+    let mut matches = Vec::new();
+    for file in crate::content::locator::collect_markdown_files(content_dir) {
+        let Ok(content) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for (_anchor, raw_href, slug_written) in extract_blog_link_hrefs(&content) {
+            let normalized_slug = crate::content::slug::normalize_url_slug(&slug_written);
+            if slugs.contains(&normalized_slug) {
+                matches.push(SlugLinkMatch {
+                    file: file.clone(),
+                    raw_href,
+                    normalized_slug,
+                });
+            }
+        }
+    }
+    matches
 }
 
 /// Scan all MDX files in `content_dir` and build a link profile for each article.
@@ -458,6 +498,39 @@ Broken: [stale link] /blog/old_legacy_post here.
             repair_blog_link_hrefs(content, &std::collections::HashMap::new()),
             content
         );
+    }
+
+    #[test]
+    fn find_links_to_slugs_matches_normalized_slugs_across_files() {
+        let dir = std::env::temp_dir().join(format!("pageseeds-find-links-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("1_post.mdx"),
+            "[underscore](/blog/248_old_post) and [plain](/blog/old-post) and \
+             [slash](/blog/old-post/) and [other](/blog/unrelated-post)\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("2_keeper.mdx"), "[hub](/blog/hub-coffee)\n").unwrap();
+
+        let slugs: HashSet<String> = ["old-post".to_string()].into_iter().collect();
+        let matches = find_links_to_slugs(&dir, &slugs);
+
+        // underscore, plain, and trailing-slash forms all normalize to old-post.
+        assert_eq!(matches.len(), 3);
+        assert!(matches
+            .iter()
+            .all(|m| m.file.ends_with("1_post.mdx") && m.normalized_slug == "old-post"));
+        assert!(matches
+            .iter()
+            .any(|m| m.raw_href == "/blog/248_old_post"));
+        assert!(matches.iter().any(|m| m.raw_href == "/blog/old-post"));
+        assert!(matches.iter().any(|m| m.raw_href == "/blog/old-post/"));
+
+        // No overlap → no matches.
+        let none = find_links_to_slugs(&dir, &["ghost".to_string()].into_iter().collect());
+        assert!(none.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

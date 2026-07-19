@@ -107,26 +107,31 @@ fn rewrite_links_to_redirected_slugs(
     source_slugs: &HashSet<String>,
     destination: &str,
 ) -> Result<(usize, Vec<serde_json::Value>), String> {
+    let matches = crate::content::linking::find_links_to_slugs(content_dir, source_slugs);
+
+    // Group matched hrefs into per-file repair maps, preserving traversal
+    // order (matches for one file are consecutive).
+    let mut per_file: Vec<(std::path::PathBuf, std::collections::HashMap<String, String>)> =
+        Vec::new();
+    for m in matches {
+        match per_file.last_mut() {
+            Some((file, repairs)) if *file == m.file => {
+                repairs.insert(m.raw_href, destination.to_string());
+            }
+            _ => per_file.push((
+                m.file,
+                [(m.raw_href, destination.to_string())].into_iter().collect(),
+            )),
+        }
+    }
+
     let mut total = 0usize;
     let mut files: Vec<serde_json::Value> = Vec::new();
 
-    for file in crate::content::locator::collect_markdown_files(content_dir) {
+    for (file, repairs) in per_file {
         let Ok(content) = std::fs::read_to_string(&file) else {
             continue;
         };
-
-        let mut repairs: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for (_anchor, raw_href, slug_written) in
-            crate::content::linking::extract_blog_link_hrefs(&content)
-        {
-            if source_slugs.contains(&crate::content::slug::normalize_url_slug(&slug_written)) {
-                repairs.insert(raw_href, destination.to_string());
-            }
-        }
-        if repairs.is_empty() {
-            continue;
-        }
 
         let repaired = crate::content::linking::repair_blog_link_hrefs(&content, &repairs);
         std::fs::write(&file, repaired)

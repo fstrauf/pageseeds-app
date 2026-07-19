@@ -208,13 +208,14 @@ fn verify_links_in_file(
 
 /// Resolve the file a content-write task just wrote.
 ///
-/// 1. `File: <path>` in the task description (same convention as
-///    `engine::post_actions`), relative paths resolved against the repo root.
+/// 1. `File: <path>` in the task description (shared parser:
+///    [`crate::content::ops::file_path_from_description`], relative paths
+///    resolved against the repo root).
 /// 2. Fallback: the most recently modified `.md`/`.mdx` file in the content
 ///    directory, if modified within the last 30 minutes.
 fn find_written_file(task: &Task, repo_root: &Path, content_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(desc) = task.description.as_deref() {
-        if let Some(path) = file_path_from_description(desc, repo_root) {
+        if let Some(path) = crate::content::ops::file_path_from_description(desc, repo_root) {
             if path.exists() {
                 return Some(path);
             }
@@ -234,30 +235,6 @@ fn find_written_file(task: &Task, repo_root: &Path, content_dir: Option<&Path>) 
         .map(|(path, _)| path)
 }
 
-/// Parse `File: <path>` from a task description (with or without a space after
-/// the colon; terminated by `" |"` or end of line).
-fn file_path_from_description(desc: &str, repo_root: &Path) -> Option<PathBuf> {
-    let (start, prefix_len) = desc
-        .find("File: ")
-        .map(|i| (i, 6))
-        .or_else(|| desc.find("File:").map(|i| (i, 5)))?;
-    let rest = &desc[start + prefix_len..];
-    let end = rest
-        .find(" |")
-        .or_else(|| rest.find('\n'))
-        .unwrap_or(rest.len());
-    let path_str = rest[..end].trim();
-    if path_str.is_empty() {
-        return None;
-    }
-    let path = Path::new(path_str);
-    Some(if path.is_relative() {
-        repo_root.join(path)
-    } else {
-        path.to_path_buf()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,24 +250,6 @@ mod tests {
 
     fn valid_set(slugs: &[&str]) -> HashSet<String> {
         slugs.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn file_path_from_description_parses_conventions() {
-        let root = Path::new("/repo");
-        assert_eq!(
-            file_path_from_description("Write article. File: ./content/1_post.mdx | Keyword: x", root),
-            Some(PathBuf::from("/repo/content/1_post.mdx"))
-        );
-        assert_eq!(
-            file_path_from_description("File:./content/2_post.mdx\nMore text", root),
-            Some(PathBuf::from("/repo/content/2_post.mdx"))
-        );
-        assert_eq!(
-            file_path_from_description("File: /abs/path/3_post.mdx", root),
-            Some(PathBuf::from("/abs/path/3_post.mdx"))
-        );
-        assert_eq!(file_path_from_description("no file here", root), None);
     }
 
     #[test]
