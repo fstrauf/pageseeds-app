@@ -4,7 +4,7 @@
 /// scheduler evaluates all enabled rules for every active project, creates
 /// tasks when due, and records the cycle in the ledger.
 ///
-/// The background timer runs on a dedicated Tokio task (spawned once at app
+/// The background timer runs on a dedicated thread (spawned once at app
 /// startup via `start_background_scheduler`). It replaces launchd/launchctl.
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
@@ -301,8 +301,18 @@ pub struct SchedulerState {
     pub running: bool,
 }
 
-/// Spawn a background Tokio task that runs `run_cycle` for all active projects
+/// Spawn a background thread that runs `run_cycle` for all active projects
 /// at a configurable interval (default every 3600 s = 1 hour).
+///
+/// The tick body is 100% blocking work (SQLite + `run_cycle`, which builds its
+/// own Tokio runtime internally for the batch kick-off) and only the timer was
+/// async, so a plain thread + `sleep` replaces the former
+/// `tokio::spawn`/`interval`/`spawn_blocking` ceremony. This keeps the
+/// function callable from a sync context — the Tauri v2 setup hook runs on the
+/// main thread with no Tokio runtime entered, where `tokio::spawn` panics
+/// ("there is no reactor running").
+///
+/// The first cycle runs after one full interval.
 ///
 /// `db_path` must be the same database file opened by the main app state.
 pub fn start_background_scheduler(
@@ -316,48 +326,36 @@ pub fn start_background_scheduler(
     }));
 
     let state_clone = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
-        interval.tick().await; // skip the first immediate tick
+    std::thread::spawn(move || loop {
+        // Sleep first so the first cycle runs after one full interval.
+        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
 
-        loop {
-            interval.tick().await;
+        let (db_path, running) = match state_clone.lock() {
+            Ok(g) => (g.db_path.clone(), g.running),
+            Err(_) => break,
+        };
 
-            let (db_path, running) = match state_clone.lock() {
-                Ok(g) => (g.db_path.clone(), g.running),
-                Err(_) => break,
-            };
+        if !running {
+            break;
+        }
 
-            if !running {
-                break;
-            }
-
-            // `run_cycle` creates its own Tokio runtime (`Runtime::new().block_on()`)
-            // for the batch execution, which panics if invoked from within an async
-            // context ("Cannot start a runtime from within a runtime"). Blocking
-            // threads have no entered runtime, so running the tick work via
-            // `spawn_blocking` keeps this legal. The std Mutex guard is dropped
-            // above, before the `.await`.
-            let tick_result = tokio::task::spawn_blocking(move || {
-                // Open a fresh connection for this tick (the main connection is Mutex-locked in AppState)
-                match rusqlite::Connection::open(&db_path) {
-                    Ok(conn) => {
-                        if let Ok(projects) = task_store::list_projects_raw(&conn) {
-                            for project_id in projects {
-                                if let Err(e) = run_cycle(&conn, &project_id) {
-                                    log::warn!("[scheduler] cycle error for {project_id}: {e}");
-                                }
-                            }
+        // `run_cycle` creates its own Tokio runtime (`Runtime::new().block_on()`)
+        // for the batch execution, which panics if invoked from within an async
+        // context ("Cannot start a runtime from within a runtime"). This is a
+        // plain blocking thread with no entered runtime, so calling it directly
+        // is legal. Open a fresh connection per tick (the main connection is
+        // Mutex-locked in AppState); `open_connection` sets busy_timeout(10s).
+        match crate::engine::runtime::open_connection(&db_path) {
+            Ok(conn) => {
+                if let Ok(projects) = task_store::list_projects_raw(&conn) {
+                    for project_id in projects {
+                        if let Err(e) = run_cycle(&conn, &project_id) {
+                            log::warn!("[scheduler] cycle error for {project_id}: {e}");
                         }
                     }
-                    Err(e) => log::error!("[scheduler] cannot open DB: {e}"),
                 }
-            })
-            .await;
-
-            if let Err(e) = tick_result {
-                log::error!("[scheduler] tick task failed: {e}");
             }
+            Err(e) => log::error!("[scheduler] cannot open DB: {e}"),
         }
     });
 
@@ -421,10 +419,10 @@ mod tests {
 
     /// Regression test for the runtime-within-runtime trap: when a cycle creates
     /// tasks, `run_cycle` builds its own Tokio runtime for the batch kick-off,
-    /// which panics if called from within an async context. The background loop
-    /// therefore runs the tick via `spawn_blocking` (blocking threads carry no
-    /// entered runtime) — this exercises exactly that mechanism from inside a
-    /// Tokio runtime, as `start_background_scheduler` does.
+    /// which panics if called from within an async context. Blocking threads
+    /// carry no entered runtime, so `run_cycle` stays legal when invoked via
+    /// `spawn_blocking` (or, as the background loop now does, from a plain
+    /// thread) — this exercises that mechanism from inside a Tokio runtime.
     #[tokio::test]
     async fn run_cycle_via_spawn_blocking_inside_runtime_does_not_panic() {
         let (conn, project_id) = test_db();
@@ -437,5 +435,30 @@ mod tests {
 
         assert_eq!(result.tasks_created, 1);
         assert!(result.due_rules[0].is_due);
+    }
+
+    /// Regression test for the missing-runtime trap: `start_background_scheduler`
+    /// is called from the Tauri v2 setup hook, which runs synchronously on the
+    /// main thread with no Tokio runtime entered — a previous `tokio::spawn`
+    /// implementation panicked there ("there is no reactor running"). Calling
+    /// it from this plain sync test must not panic.
+    #[test]
+    fn start_background_scheduler_from_sync_context_does_not_panic() {
+        let db_path = std::env::temp_dir().join(format!(
+            "pageseeds-scheduler-test-{}.db",
+            std::process::id()
+        ));
+        let state = start_background_scheduler(db_path.clone(), 3600);
+
+        {
+            let guard = state.lock().unwrap();
+            assert!(guard.running);
+            assert_eq!(guard.interval_secs, 3600);
+            assert_eq!(guard.db_path, db_path);
+        }
+
+        // Ask the background thread to stop. It is sleeping out its first
+        // interval and the detached thread dies with the test process anyway.
+        state.lock().unwrap().running = false;
     }
 }
