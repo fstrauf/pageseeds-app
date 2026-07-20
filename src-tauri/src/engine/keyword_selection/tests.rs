@@ -339,6 +339,7 @@ fn spec_carries_normalized_idempotency_key() {
         &task,
         "test-kw",
         "proj1",
+        &ContentBriefContext::default(),
     )
     .unwrap();
     assert_eq!(specs.len(), 1);

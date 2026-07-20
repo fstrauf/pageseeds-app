@@ -1,3 +1,7 @@
+use crate::engine::content_brief::{
+    build_content_brief, build_content_brief_artifact, build_content_task_description,
+    extract_article_keyword_meta, load_content_brief_context, ContentBriefContext,
+};
 use crate::engine::spawner::TaskSpec;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskStatus};
 use std::collections::{HashMap, HashSet};
@@ -10,6 +14,7 @@ pub fn build_content_tasks_from_keywords(
     research_task: &Task,
     research_task_id: &str,
     project_id: &str,
+    brief_ctx: &ContentBriefContext,
 ) -> Result<Vec<TaskSpec>, String> {
     // Determine content task type based on research task type
     let content_task_type = if research_task.task_type == "research_landing_pages" {
@@ -64,6 +69,11 @@ pub fn build_content_tasks_from_keywords(
     } else {
         HashMap::new()
     };
+    let article_meta = if content_task_type == "write_article" {
+        extract_article_keyword_meta(research_task)
+    } else {
+        HashMap::new()
+    };
 
     let mut specs = Vec::new();
     for keyword in requested_keywords.iter() {
@@ -71,9 +81,16 @@ pub fn build_content_tasks_from_keywords(
         let normalized = normalize_keyword(keyword);
         let metric = metrics.get(&normalized);
         let priority_enum = compute_task_priority(metric);
-        let description =
-            build_content_task_description(keyword, metric, lp_meta.get(&normalized));
+        let brief = build_content_brief(
+            keyword,
+            metric,
+            lp_meta.get(&normalized),
+            article_meta.get(&normalized),
+            brief_ctx,
+        );
+        let description = build_content_task_description(&brief);
         let provenance = build_keyword_provenance_artifact(keyword, research_task_id);
+        let brief_artifact = build_content_brief_artifact(&brief, research_task_id);
 
         // Deterministic idempotency key per keyword: re-selecting a keyword whose
         // write task is still active returns the existing task (SkipIfActive).
@@ -87,7 +104,7 @@ pub fn build_content_tasks_from_keywords(
             priority: priority_enum,
             agent_policy: AgentPolicy::None,
             depends_on: vec![research_task_id.to_string()],
-            artifacts: vec![provenance],
+            artifacts: vec![provenance, brief_artifact],
             idempotency_key: Some(idempotency_key),
             ..Default::default()
         });
@@ -112,11 +129,14 @@ pub fn create_article_tasks_from_keywords(
     let research_task = crate::engine::task_store::get_task(conn, research_task_id)
         .map_err(|e| e.to_string())?;
 
+    let brief_ctx = load_content_brief_context(conn, project_id, &research_task);
+
     let specs = build_content_tasks_from_keywords(
         keywords,
         &research_task,
         research_task_id,
         project_id,
+        &brief_ctx,
     )?;
 
     let mut tasks = Vec::with_capacity(specs.len());
@@ -169,7 +189,7 @@ pub fn normalize_keyword(s: &str) -> String {
     crate::content::keyword_match::normalize_keyword(s)
 }
 
-fn push_unique_keyword(out: &mut Vec<String>, seen: &mut HashSet<String>, kw: &str) {
+pub(crate) fn push_unique_keyword(out: &mut Vec<String>, seen: &mut HashSet<String>, kw: &str) {
     let trimmed = kw.trim();
     if trimmed.is_empty() {
         return;
@@ -232,44 +252,7 @@ pub fn extract_keywords_from_markdown_table(raw: &str) -> Vec<String> {
 pub fn extract_selectable_keywords(task: &Task) -> Vec<String> {
     use serde_json::Value;
 
-    // New unified workflow: research_final_selection
-    // Legacy artifacts for backward compatibility
-    let artifact = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "research_final_selection")
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "research_normalize_stage")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_research_agentic")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_analyze")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_research")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "research_keywords_cli")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "research_agent_stage")
-        });
-
-    let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
+    let Some(raw) = find_research_selection_artifact(task).and_then(|a| a.content.as_ref()) else {
         return Vec::new();
     };
 
@@ -351,104 +334,46 @@ pub fn extract_selectable_keywords(task: &Task) -> Vec<String> {
 }
 
 pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
-    use serde_json::Value;
     let mut out = HashMap::new();
 
-    // New unified workflow: research_final_selection
-    // Legacy artifacts for backward compatibility
-    let artifact = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "research_final_selection")
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "research_normalize_stage")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_research_agentic")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_analyze")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_research")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "research_keywords_cli")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "research_agent_stage")
-        });
-
-    let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
+    let Some(raw) = find_research_selection_artifact(task).and_then(|a| a.content.as_ref()) else {
         return out;
     };
 
-    // Strip markdown code fences if present
-    let raw_clean =
-        crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
-    let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
-    if let Some(v) = parsed_json {
+    if let Some(v) = parse_artifact_json(task, find_research_selection_artifact(task)) {
         // Standard keyword research format
         if let Some(arr) = v
             .get("difficulty")
             .and_then(|x| x.get("results"))
             .and_then(|x| x.as_array())
         {
-            for item in arr {
-                if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
-                    let kd = item
-                        .get("difficulty")
-                        .and_then(|x| x.as_i64().or_else(|| x.as_f64().map(|n| n.round() as i64)));
-                    let vol = item.get("volume").and_then(|x| {
-                        x.as_i64()
-                            .or_else(|| x.as_str().and_then(parse_range_midpoint))
-                    });
-                    out.insert(
-                        normalize_keyword(kw),
-                        KeywordMetric {
-                            difficulty: kd,
-                            volume: vol,
-                        },
-                    );
-                }
-            }
-            return out;
+            return meta_by_keyword(arr, |item| {
+                let kw = item.get("keyword")?.as_str()?;
+                let kd = item
+                    .get("difficulty")
+                    .and_then(|x| x.as_i64().or_else(|| x.as_f64().map(|n| n.round() as i64)));
+                let vol = item.get("volume").and_then(|x| {
+                    x.as_i64()
+                        .or_else(|| x.as_str().and_then(parse_range_midpoint))
+                });
+                Some((normalize_keyword(kw), KeywordMetric { difficulty: kd, volume: vol }))
+            });
         }
 
         // Landing page analyze format
         if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
-            for item in arr {
-                if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
-                    let kd = item
-                        .get("estimated_kd")
-                        .and_then(|x| x.as_i64())
-                        .or_else(|| item.get("difficulty").and_then(|x| x.as_i64()));
-                    let vol = item
-                        .get("estimated_volume")
-                        .and_then(|x| x.as_i64())
-                        .or_else(|| item.get("volume").and_then(|x| x.as_i64()));
-                    out.insert(
-                        normalize_keyword(kw),
-                        KeywordMetric {
-                            difficulty: kd,
-                            volume: vol,
-                        },
-                    );
-                }
-            }
-            return out;
+            return meta_by_keyword(arr, |item| {
+                let kw = item.get("keyword")?.as_str()?;
+                let kd = item
+                    .get("estimated_kd")
+                    .and_then(|x| x.as_i64())
+                    .or_else(|| item.get("difficulty").and_then(|x| x.as_i64()));
+                let vol = item
+                    .get("estimated_volume")
+                    .and_then(|x| x.as_i64())
+                    .or_else(|| item.get("volume").and_then(|x| x.as_i64()));
+                Some((normalize_keyword(kw), KeywordMetric { difficulty: kd, volume: vol }))
+            });
         }
     }
 
@@ -483,76 +408,81 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
     out
 }
 
+/// Find the research artifact carrying the final keyword / landing-page
+/// selection. Single canonical fallback chain shared by every selection
+/// extractor (`extract_selectable_keywords`, `extract_keyword_metrics`,
+/// `extract_landing_page_meta`, `content_brief::extract_article_keyword_meta`)
+/// so the chain lives in exactly one place: unified `research_final_selection`
+/// first, then the legacy artifacts for backward compatibility.
+pub(crate) fn find_research_selection_artifact(task: &Task) -> Option<&TaskArtifact> {
+    const KEYS: [&str; 7] = [
+        "research_final_selection",
+        "research_normalize_stage",
+        "landing_page_research_agentic",
+        "landing_page_analyze",
+        "landing_page_research",
+        "research_keywords_cli",
+        "research_agent_stage",
+    ];
+    KEYS.iter()
+        .find_map(|key| task.artifacts.iter().find(|a| a.key == *key))
+}
+
+/// Clean (strip markdown code fences) and parse an artifact's JSON content.
+/// Shared preamble for all artifact-metadata extractors; returns `None` when
+/// the artifact is missing, has no inline content, or does not parse.
+pub(crate) fn parse_artifact_json(
+    _task: &Task,
+    artifact: Option<&TaskArtifact>,
+) -> Option<serde_json::Value> {
+    let raw = artifact.and_then(|a| a.content.as_ref())?;
+    let raw_clean =
+        crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
+    serde_json::from_str::<serde_json::Value>(&raw_clean).ok()
+}
+
+/// Collect per-keyword metadata from a JSON array into a map keyed by
+/// normalized keyword. Shared loop for all artifact-metadata extractors;
+/// `map` returns `None` for entries without a usable keyword.
+pub(crate) fn meta_by_keyword<T>(
+    arr: &[serde_json::Value],
+    map: impl Fn(&serde_json::Value) -> Option<(String, T)>,
+) -> HashMap<String, T> {
+    arr.iter().filter_map(map).collect()
+}
+
 /// Extract landing page candidate metadata (intent, page type, proposed title,
 /// opportunity reason) keyed by normalized keyword. Used to enrich the task
 /// description for `create_landing_page` tasks so the spec writer has full context.
 pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCandidateMeta> {
-    use serde_json::Value;
-    let mut out = HashMap::new();
-
-    let artifact = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "research_final_selection")
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "research_normalize_stage")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_research_agentic")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_analyze")
-        })
-        .or_else(|| {
-            task.artifacts
-                .iter()
-                .find(|a| a.key == "landing_page_research")
-        });
-
-    let Some(raw) = artifact.and_then(|a| a.content.as_ref()) else {
-        return out;
+    let Some(v) = parse_artifact_json(task, find_research_selection_artifact(task)) else {
+        return HashMap::new();
     };
-
-    let raw_clean =
-        crate::engine::text::extract_json_string(raw).unwrap_or_else(|| raw.trim().to_string());
-    let parsed_json = serde_json::from_str::<Value>(&raw_clean).ok();
-    if let Some(v) = parsed_json {
-        if let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) {
-            for item in arr {
-                if let Some(kw) = item.get("keyword").and_then(|x| x.as_str()) {
-                    out.insert(
-                        normalize_keyword(kw),
-                        LandingPageCandidateMeta {
-                            intent: item
-                                .get("intent")
-                                .and_then(|x| x.as_str())
-                                .map(|s| s.to_string()),
-                            landing_page_type: item
-                                .get("landing_page_type")
-                                .and_then(|x| x.as_str())
-                                .map(|s| s.to_string()),
-                            proposed_title: item
-                                .get("proposed_title")
-                                .and_then(|x| x.as_str())
-                                .map(|s| s.to_string()),
-                            opportunity_reason: item
-                                .get("opportunity_reason")
-                                .and_then(|x| x.as_str())
-                                .map(|s| s.to_string()),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    out
+    let Some(arr) = v.get("landing_page_candidates").and_then(|x| x.as_array()) else {
+        return HashMap::new();
+    };
+    meta_by_keyword(arr, |item| {
+        let kw = item.get("keyword")?.as_str()?;
+        let meta = LandingPageCandidateMeta {
+            intent: item
+                .get("intent")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
+            landing_page_type: item
+                .get("landing_page_type")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
+            proposed_title: item
+                .get("proposed_title")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
+            opportunity_reason: item
+                .get("opportunity_reason")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
+        };
+        Some((normalize_keyword(kw), meta))
+    })
 }
 
 pub fn compute_task_priority(metric: Option<&KeywordMetric>) -> Priority {
@@ -566,38 +496,6 @@ pub fn compute_task_priority(metric: Option<&KeywordMetric>) -> Priority {
             _ => Priority::Medium,
         },
     }
-}
-
-pub fn build_content_task_description(
-    keyword: &str,
-    metric: Option<&KeywordMetric>,
-    lp_meta: Option<&LandingPageCandidateMeta>,
-) -> String {
-    let mut description = format!("Target keyword: {}", keyword);
-    if let Some(m) = metric {
-        if let Some(kd) = m.difficulty {
-            description.push_str(&format!("\nKD: {}", kd));
-        }
-        if let Some(vol) = m.volume {
-            description.push_str(&format!("\nVolume: {}", vol));
-        }
-    }
-    // Append landing page metadata so the spec writer can use it.
-    if let Some(lp) = lp_meta {
-        if let Some(ref intent) = lp.intent {
-            description.push_str(&format!("\nIntent: {}", intent));
-        }
-        if let Some(ref page_type) = lp.landing_page_type {
-            description.push_str(&format!("\nPage type: {}", page_type));
-        }
-        if let Some(ref proposed_title) = lp.proposed_title {
-            description.push_str(&format!("\nProposed title: {}", proposed_title));
-        }
-        if let Some(ref reason) = lp.opportunity_reason {
-            description.push_str(&format!("\nOpportunity: {}", reason));
-        }
-    }
-    description
 }
 
 pub fn build_keyword_provenance_artifact(keyword: &str, research_task_id: &str) -> TaskArtifact {

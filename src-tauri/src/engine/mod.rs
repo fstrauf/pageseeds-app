@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod batch;
+pub mod content_brief;
 pub mod ctr_state;
 pub mod exec;
 pub mod executor;
