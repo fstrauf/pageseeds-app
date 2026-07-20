@@ -140,12 +140,6 @@ impl StepRegistry {
 
         register_blocking!(
             handlers,
-            StepKind::LandingPageSpecWrite,
-            crate::engine::exec::research::exec_landing_page_spec_write
-        );
-
-        register_blocking!(
-            handlers,
             StepKind::RedditConfigParse,
             crate::engine::exec::reddit::exec_reddit_config_parse,
             agent_provider

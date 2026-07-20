@@ -268,10 +268,10 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
-    // Write article (or hub page) → quality review → cluster_and_link task
+    // Write article (or hub page, or landing page) → quality review → cluster_and_link task
     if matches!(
         ctx.task.task_type.as_str(),
-        "write_article" | "create_hub_page" | "refresh_hub_page"
+        "write_article" | "create_hub_page" | "refresh_hub_page" | "create_landing_page"
     ) {
         if let Some(article_file) = find_written_article_file(ctx) {
             if let Some(task_id) = crate::engine::exec::content::create_review_article_quality_task(
@@ -880,8 +880,7 @@ pub(crate) fn strip_content_task_title_prefix(title: &str) -> &str {
 /// Parse the `"Target keyword:"` line from a content task's description.
 ///
 /// Single source of truth for the keyword line — previously triplicated in
-/// `parse_content_task_keyword_meta`, `exec/agentic.rs::task_topic_stem`,
-/// and `exec/research/landing_page.rs::parse_landing_page_meta`.
+/// `parse_content_task_keyword_meta` and `exec/agentic.rs::task_topic_stem`.
 pub(crate) fn content_task_target_keyword(task: &Task) -> Option<String> {
     let desc = task.description.as_deref()?;
     for line in desc.lines() {

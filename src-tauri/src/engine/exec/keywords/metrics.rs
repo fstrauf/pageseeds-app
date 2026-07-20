@@ -60,6 +60,10 @@ pub(crate) struct Candidate {
     pub(crate) volume: Option<i64>,
     pub(crate) kd: Option<f64>,
     pub(crate) intent: Option<String>,
+    /// Cost per click in USD (DataForSEO keyword_info); `None` when the
+    /// provider does not return CPC. Drives commercial-value ranking for
+    /// landing page candidates.
+    pub(crate) cpc: Option<f64>,
     /// Coverage-gap score (0-100) assigned by `filter_by_coverage_gap`;
     /// `None` when no coverage analysis was available for the project.
     pub(crate) gap_score: Option<f64>,

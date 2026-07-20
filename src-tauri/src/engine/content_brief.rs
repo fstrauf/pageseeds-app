@@ -123,7 +123,7 @@ pub(crate) fn load_content_brief_context(
 /// `SelectedKeyword` entries from the `research_final_selection` artifact
 /// (`difficulty.results` as stored by the deterministic selection step, with a
 /// top-level `results` fallback) so the article writer gets the same research
-/// context the spec writer gets.
+/// context the landing page writer gets.
 pub fn extract_article_keyword_meta(task: &Task) -> HashMap<String, ArticleKeywordMeta> {
     let Some(v) = parse_artifact_json(task, find_research_selection_artifact(task)) else {
         return HashMap::new();

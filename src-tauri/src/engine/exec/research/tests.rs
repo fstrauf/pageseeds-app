@@ -22,6 +22,7 @@ mod tests {
             has_data: Some(true),
             intent_confidence: None,
             gap_score: None,
+            cpc: None,
         }
     }
 
@@ -146,17 +147,79 @@ mod tests {
 
     #[test]
     fn title_generation_matches_workflow() {
+        let year = chrono::Datelike::year(&chrono::Utc::now());
         assert_eq!(
             generate_title("how to sell covered calls", false),
             "How to Sell Covered Calls: A Step-by-Step Guide"
         );
+        // No site-specific branding or stale years in generated titles.
         assert_eq!(
             generate_title("covered call tracker", true),
-            "Covered Call Tracker for Options Traders"
+            "Covered Call Tracker"
+        );
+        assert_eq!(
+            generate_title("best covered call screener", true),
+            format!("Best Covered Call Screener ({})", year)
         );
         assert_eq!(
             generate_title("optionstrat vs tastytrade", true),
             "Optionstrat vs Tastytrade: Which is Right for You?"
+        );
+    }
+
+    #[test]
+    fn landing_selection_ranks_by_volume_times_cpc() {
+        // Lower volume but much higher CPC must outrank raw volume for
+        // landing pages — commercial value is the primary ranking signal.
+        let mut high_value = kw("options profit calculator", 400, 20.0, "commercial");
+        high_value.cpc = Some(5.0); // 400 × $5.00 = 2000
+        let mut high_volume = kw("stock screener app", 3000, 20.0, "commercial");
+        high_volume.cpc = Some(0.30); // 3000 × $0.30 = 900
+        let pipeline = build_pipeline(vec![high_volume, high_value]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        let candidates = output.landing_page_candidates;
+        assert_eq!(candidates[0].keyword, "options profit calculator");
+        assert_eq!(candidates[0].cpc, Some(5.0));
+        assert_eq!(candidates[1].keyword, "stock screener app");
+    }
+
+    #[test]
+    fn landing_opportunity_score_derives_from_commercial_value() {
+        let mut top = kw("top keyword", 1000, 20.0, "commercial");
+        top.cpc = Some(4.0); // 4000
+        let mut mid = kw("mid keyword", 1000, 20.0, "commercial");
+        mid.cpc = Some(2.0); // 2000 → ratio 0.5 → medium
+        let mut low = kw("low keyword", 1000, 20.0, "commercial");
+        low.cpc = Some(0.5); // 500 → ratio 0.125 → low
+        let pipeline = build_pipeline(vec![low, mid, top]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        let candidates = output.landing_page_candidates;
+        assert_eq!(candidates[0].opportunity_score, "high");
+        assert_eq!(candidates[1].opportunity_score, "medium");
+        assert_eq!(candidates[2].opportunity_score, "low");
+        // The reason surfaces CPC, not just KD/volume.
+        assert!(candidates[0].opportunity_reason.contains("$4.00 CPC"));
+    }
+
+    #[test]
+    fn landing_winnability_sort_demotes_avoid_despite_higher_value() {
+        let mut target = kw("winnable tool", 500, 20.0, "commercial");
+        target.cpc = Some(2.0);
+        let mut avoid = kw("authority dominated tool", 5000, 10.0, "commercial");
+        avoid.cpc = Some(9.0);
+        let pipeline = build_pipeline(vec![target, avoid]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        // Simulate enrichment: the high-value keyword is SERP-dominated.
+        output.landing_page_candidates[0].winnability = Some("avoid".to_string());
+        output.landing_page_candidates[1].winnability = Some("target".to_string());
+        sort_by_winnability(&mut output);
+        assert_eq!(
+            output.landing_page_candidates[0].keyword,
+            "winnable tool",
+            "avoid bucket must sink below target despite higher commercial value"
         );
     }
 

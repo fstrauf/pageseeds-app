@@ -204,6 +204,28 @@ pub(crate) fn exec_keyword_research_native(
         }
     }
 
+    // User-supplied themes from the landing-page strategy dialog are honored
+    // directly as seeds (deterministic parse of the description JSON) instead
+    // of being silently re-interpreted by the agentic seed extraction.
+    let user_lp_themes: Vec<String> = if task.task_type == "research_landing_pages" {
+        let (_, user_themes) =
+            crate::engine::task_store::parse_landing_page_description(task.description.as_deref());
+        if !user_themes.is_empty() {
+            log::info!(
+                "[keyword_research_native] research_landing_pages: honoring {} user-supplied themes as seeds",
+                user_themes.len()
+            );
+            for t in &user_themes {
+                if !themes.contains(t) {
+                    themes.push(t.clone());
+                }
+            }
+        }
+        user_themes
+    } else {
+        Vec::new()
+    };
+
     if themes.is_empty() {
         return crate::engine::workflows::StepResult {
             success: false,
@@ -341,6 +363,7 @@ pub(crate) fn exec_keyword_research_native(
     let project_path_thread = project_path.to_string();
     let validated_seeds_thread = validated_seeds;
     let shortlist_seeds_thread = shortlist_seeds;
+    let user_lp_themes_thread = user_lp_themes.clone();
 
     let thread_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
@@ -386,6 +409,11 @@ pub(crate) fn exec_keyword_research_native(
                 };
                 // Also inject pending territory shortlist seeds so they get validated.
                 seeds_to_use.extend(shortlist_seeds_thread);
+                // User-supplied LP dialog themes bypass agentic validation —
+                // the user already vouched for them; research them verbatim.
+                seeds_to_use.extend(
+                    user_lp_themes_thread.iter().map(|t| (t.clone(), t.clone())),
+                );
                 // Deduplicate by seed string
                 {
                     let mut seen_seeds = HashSet::new();
@@ -424,6 +452,7 @@ pub(crate) fn exec_keyword_research_native(
                                     volume: idea.volume_exact,
                                     kd: idea.kd,
                                     intent: idea.intent.clone(),
+                                    cpc: idea.cpc,
                                     gap_score: None,
                                 });
                             }
@@ -473,6 +502,11 @@ pub(crate) fn exec_keyword_research_native(
                         all_themes.push(theme.clone());
                     }
                 }
+                for theme in &user_lp_themes_thread {
+                    if !all_themes.contains(theme) {
+                        all_themes.push(theme.clone());
+                    }
+                }
                 for theme in &all_themes {
                     log::info!("[keyword_research_native] fetching Google autocomplete ideas for theme '{}'", theme);
                     match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
@@ -493,6 +527,7 @@ pub(crate) fn exec_keyword_research_native(
                                     volume: None,
                                     kd: None,
                                     intent: None,
+                                    cpc: None,
                                     gap_score: None,
                                 });
                             }
@@ -571,6 +606,7 @@ pub(crate) fn exec_keyword_research_native(
                                     volume: None,
                                     kd: None,
                                     intent: None,
+                                    cpc: None,
                                     gap_score: None,
                                 });
                             }
@@ -612,6 +648,7 @@ pub(crate) fn exec_keyword_research_native(
                         "keyword": candidate.keyword,
                         "difficulty": candidate.kd,
                         "volume": candidate.volume,
+                        "cpc": candidate.cpc,
                         "intent": candidate.intent,
                         "has_data": has_data,
                         "gap_score": candidate.gap_score,
@@ -790,6 +827,7 @@ pub(crate) fn exec_keyword_research_native(
                 traffic: r["traffic"].as_f64(),
                 has_data: r["has_data"].as_bool(),
                 gap_score: r["gap_score"].as_f64(),
+                cpc: r["cpc"].as_f64(),
             }
         })
         .collect();

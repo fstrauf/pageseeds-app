@@ -1011,6 +1011,7 @@ mod sampling_tests {
             volume,
             kd: None,
             intent: None,
+            cpc: None,
             gap_score: None,
         }
     }

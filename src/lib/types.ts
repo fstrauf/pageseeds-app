@@ -175,6 +175,8 @@ export interface KeywordDifficultyEntry {
   opportunity_score?: number | null
   opportunity_reason?: string | null
   proposed_title?: string | null
+  /** Cost per click in USD (DataForSEO) — commercial value signal for landing pages. */
+  cpc?: number | null
 }
 
 export interface KeywordResearchResult {

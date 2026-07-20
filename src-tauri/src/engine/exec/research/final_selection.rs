@@ -85,10 +85,20 @@ pub fn select_keywords_deterministic(
 
     let used_fallback = false;
 
-    // Sort by volume desc, then KD asc, then coverage-gap score desc.
-    // The gap tiebreak preserves the "prioritize thin clusters" intent from
-    // the coverage filter, which a pure volume/KD sort would otherwise drop.
+    // Sort: landing page candidates rank by commercial value (volume × CPC) —
+    // the standard proxy for conversion-page value — falling back to plain
+    // volume when CPC is unavailable. Blog candidates rank by volume. Ties
+    // break by KD asc, then coverage-gap score desc, preserving the
+    // "prioritize thin clusters" intent from the coverage filter.
     candidates.sort_by(|a, b| {
+        if is_landing_page {
+            let val_cmp = commercial_value(b)
+                .partial_cmp(&commercial_value(a))
+                .unwrap_or(std::cmp::Ordering::Equal);
+            if val_cmp != std::cmp::Ordering::Equal {
+                return val_cmp;
+            }
+        }
         let vol_cmp = b.volume.unwrap_or(0).cmp(&a.volume.unwrap_or(0));
         if vol_cmp != std::cmp::Ordering::Equal {
             return vol_cmp;
@@ -107,25 +117,54 @@ pub fn select_keywords_deterministic(
     let filtered_out = total_candidates.saturating_sub(selected.len());
 
     if is_landing_page {
+        // Opportunity tiers derive from the same commercial-value score used
+        // for ranking: the top candidate sets the scale, others are bucketed
+        // relative to it. When no CPC data exists at all, volume is the score.
+        let max_value = selected
+            .iter()
+            .map(commercial_value)
+            .fold(0.0f64, f64::max);
+        let max_volume = selected
+            .iter()
+            .map(|k| k.volume.unwrap_or(0))
+            .max()
+            .unwrap_or(0) as f64;
+        let (score_of, max_score): (Box<dyn Fn(&crate::models::research::ScoredKeyword) -> f64>, f64) =
+            if max_value > 0.0 {
+                (Box::new(commercial_value), max_value)
+            } else {
+                (Box::new(|k| k.volume.unwrap_or(0) as f64), max_volume)
+            };
         Ok((KeywordPickerOutput {
             landing_page_candidates: selected
                 .into_iter()
-                .map(|k| LandingPageCandidate {
-                    keyword: k.keyword.clone(),
-                    estimated_volume: k.volume.unwrap_or(0),
-                    estimated_kd: k.kd.unwrap_or(0.0) as i64,
-                    intent: k
-                        .intent
-                        .clone()
-                        .unwrap_or_else(|| "informational".to_string()),
-                    landing_page_type: infer_landing_page_type(&k.keyword),
-                    opportunity_score: "high".to_string(),
-                    opportunity_reason: format!(
-                        "KD {} with {} monthly searches",
-                        k.kd.map(|d| d as i64).unwrap_or(0),
-                        k.volume.unwrap_or(0)
-                    ),
-                    proposed_title: generate_title(&k.keyword, true),
+                .map(|k| {
+                    let kd = k.kd.map(|d| d as i64).unwrap_or(0);
+                    let volume = k.volume.unwrap_or(0);
+                    LandingPageCandidate {
+                        keyword: k.keyword.clone(),
+                        estimated_volume: volume,
+                        estimated_kd: kd,
+                        intent: k
+                            .intent
+                            .clone()
+                            .unwrap_or_else(|| "informational".to_string()),
+                        landing_page_type: infer_landing_page_type(&k.keyword),
+                        opportunity_score: opportunity_tier(score_of(&k), max_score).to_string(),
+                        opportunity_reason: match k.cpc {
+                            Some(cpc) => format!(
+                                "KD {} with {} monthly searches, ${:.2} CPC",
+                                kd, volume, cpc
+                            ),
+                            None => format!("KD {} with {} monthly searches", kd, volume),
+                        },
+                        proposed_title: generate_title(&k.keyword, true),
+                        cpc: k.cpc,
+                        // Populated by enrich_with_winnability() after selection,
+                        // before the final sort and trim.
+                        winnability: None,
+                        winnability_reason: None,
+                    }
                 })
                 .collect(),
             difficulty: None,
@@ -166,6 +205,29 @@ pub fn select_keywords_deterministic(
             total_candidates,
             filtered_out,
         }, used_fallback))
+    }
+}
+
+/// Commercial value proxy for a landing page candidate: expected monthly
+/// organic visits worth their equivalent paid cost. Zero when CPC is unknown,
+/// in which case callers fall back to volume.
+fn commercial_value(k: &crate::models::research::ScoredKeyword) -> f64 {
+    k.volume.unwrap_or(0) as f64 * k.cpc.unwrap_or(0.0)
+}
+
+/// Bucket a candidate's commercial-value score relative to the shortlist's
+/// best. Deterministic replacement for the previously hardcoded "high".
+fn opportunity_tier(score: f64, max_score: f64) -> &'static str {
+    if max_score <= 0.0 {
+        return "medium";
+    }
+    let ratio = score / max_score;
+    if ratio >= 0.66 {
+        "high"
+    } else if ratio >= 0.33 {
+        "medium"
+    } else {
+        "low"
     }
 }
 
@@ -217,6 +279,7 @@ fn infer_landing_page_type(keyword: &str) -> String {
 /// Generate a readable title from a keyword.
 ///
 /// Landing page titles are conversion-focused; blog titles are guide-focused.
+/// Titles must stay site-agnostic — no product names or audience hardcoding.
 pub(crate) fn generate_title(keyword: &str, is_landing_page: bool) -> String {
     // Capitalize first letter of each word
     let words: Vec<String> = keyword
@@ -233,26 +296,17 @@ pub(crate) fn generate_title(keyword: &str, is_landing_page: bool) -> String {
 
     let title = words.join(" ");
     let lower = keyword.to_lowercase();
+    let year = chrono::Datelike::year(&chrono::Utc::now());
 
     if is_landing_page {
         if lower.contains("vs") {
             format!("{}: Which is Right for You?", title)
         } else if lower.contains("best") || lower.contains("top") {
-            format!("{} for 2025", title)
+            format!("{} ({})", title, year)
         } else if lower.contains("alternative") || lower.contains("alternatives") {
             format!("The Best {} Alternative", title)
-        } else if lower.contains("software")
-            || lower.contains("tool")
-            || lower.contains("app")
-            || lower.contains("tracker")
-            || lower.contains("screener")
-            || lower.contains("calculator")
-            || lower.contains("dashboard")
-            || lower.contains("platform")
-        {
-            format!("{} for Options Traders", title)
         } else {
-            format!("{} — DaysToExpiry", title)
+            title
         }
     } else {
         if lower.contains("how to") {
@@ -260,7 +314,7 @@ pub(crate) fn generate_title(keyword: &str, is_landing_page: bool) -> String {
         } else if lower.contains("what is") || lower.contains("what are") {
             format!("{} Explained", title)
         } else if lower.contains("best") || lower.contains("top") {
-            format!("{} for 2025", title)
+            format!("{} ({})", title, year)
         } else if lower.contains("vs") {
             format!("{}: Which is Right for You?", title)
         } else if lower.contains("tips") {
@@ -462,13 +516,27 @@ fn cmp_gap_desc(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
 /// Final selection sort, applied after winnability enrichment and before the
 /// trim to `FINAL_RESULTS`. Combined key, in priority order:
 ///   1. Winnability bucket rank — target/unknown, then differentiate, avoid last.
-///   2. Volume descending.
+///   2. Volume descending (landing pages: commercial value — volume × CPC —
+///      descending, then volume).
 ///   3. KD ascending.
 ///   4. Coverage-gap score descending (`None` last among equals).
 /// The sort is stable, so fully-equal keys keep their prior (deterministic)
-/// order. Landing-page candidates carry no winnability scores and keep their
-/// selection order.
+/// order.
 pub(crate) fn sort_by_winnability(output: &mut KeywordPickerOutput) {
+    if !output.landing_page_candidates.is_empty() {
+        output.landing_page_candidates.sort_by(|a, b| {
+            winnability_rank(a.winnability.as_deref())
+                .cmp(&winnability_rank(b.winnability.as_deref()))
+                .then_with(|| {
+                    lp_commercial_value(b)
+                        .partial_cmp(&lp_commercial_value(a))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| b.estimated_volume.cmp(&a.estimated_volume))
+                .then_with(|| a.estimated_kd.cmp(&b.estimated_kd))
+        });
+        return;
+    }
     if let Some(d) = &mut output.difficulty {
         d.results.sort_by(|a, b| {
             winnability_rank(a.winnability.as_deref())
@@ -478,6 +546,11 @@ pub(crate) fn sort_by_winnability(output: &mut KeywordPickerOutput) {
                 .then_with(|| cmp_gap_desc(a.gap_score, b.gap_score))
         });
     }
+}
+
+/// Commercial value of a landing candidate after selection (volume × CPC).
+fn lp_commercial_value(c: &LandingPageCandidate) -> f64 {
+    c.estimated_volume as f64 * c.cpc.unwrap_or(0.0)
 }
 
 /// Apply an off-domain list to the shortlist (case-insensitive, trimmed).
@@ -596,17 +669,21 @@ fn filter_off_domain_candidates(
 ///
 /// Runs on the pre-trim overshoot (up to `RELEVANCE_OVERSHOOT` keywords), so
 /// the paid SERP verdict feeds back into selection via `sort_by_winnability`
-/// instead of being computed and discarded. Calls the DataForSEO SERP API for
-/// each keyword and scores it using the winnability classifier
+/// instead of being computed and discarded. Covers both blog selections
+/// (`difficulty.results`) and landing page candidates — authority-dominated
+/// commercial SERPs must be flagged before selection too. Calls the DataForSEO
+/// SERP API for each keyword and scores it using the winnability classifier
 /// (Target / Differentiate / Avoid). Non-fatal: if the provider is unavailable
 /// or a SERP lookup fails, the keyword keeps its existing fields without a
 /// winnability score.
 fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
-    let keywords = match &mut output.difficulty {
-        Some(d) => &mut d.results,
-        None => return,
-    };
-    if keywords.is_empty() {
+    let landing_count = output.landing_page_candidates.len();
+    let blog_count = output
+        .difficulty
+        .as_ref()
+        .map(|d| d.results.len())
+        .unwrap_or(0);
+    if landing_count == 0 && blog_count == 0 {
         return;
     }
 
@@ -653,34 +730,64 @@ fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
 
         log::info!(
             "[winnability] Enriching {} keywords with SERP features via {}",
-            keywords.len(),
+            landing_count + blog_count,
             provider_name
         );
 
-        for kw in keywords.iter_mut() {
-            match provider.serp_features(&kw.keyword, "us").await {
-                Ok(serp) => {
-                    let assessment = crate::seo::winnability::assess(
-                        &kw.keyword,
-                        &serp,
-                        Some(kw.difficulty as f64),
-                        kw.intent.as_deref(),
-                    );
-                    log::info!(
-                        "[winnability] '{}' → {} (risk={})",
-                        kw.keyword,
-                        assessment.bucket,
-                        assessment.risk_score
-                    );
-                    kw.winnability = Some(assessment.bucket.as_str().to_string());
-                    kw.winnability_reason = Some(assessment.reason);
+        if !output.landing_page_candidates.is_empty() {
+            for kw in output.landing_page_candidates.iter_mut() {
+                match provider.serp_features(&kw.keyword, "us").await {
+                    Ok(serp) => {
+                        let assessment = crate::seo::winnability::assess(
+                            &kw.keyword,
+                            &serp,
+                            Some(kw.estimated_kd as f64),
+                            Some(kw.intent.as_str()),
+                        );
+                        log::info!(
+                            "[winnability] '{}' → {} (risk={})",
+                            kw.keyword,
+                            assessment.bucket,
+                            assessment.risk_score
+                        );
+                        kw.winnability = Some(assessment.bucket.as_str().to_string());
+                        kw.winnability_reason = Some(assessment.reason);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[winnability] SERP lookup failed for '{}': {}",
+                            kw.keyword,
+                            e
+                        );
+                    }
                 }
-                Err(e) => {
-                    log::warn!(
-                        "[winnability] SERP lookup failed for '{}': {}",
-                        kw.keyword,
-                        e
-                    );
+            }
+        } else if let Some(d) = &mut output.difficulty {
+            for kw in d.results.iter_mut() {
+                match provider.serp_features(&kw.keyword, "us").await {
+                    Ok(serp) => {
+                        let assessment = crate::seo::winnability::assess(
+                            &kw.keyword,
+                            &serp,
+                            Some(kw.difficulty as f64),
+                            kw.intent.as_deref(),
+                        );
+                        log::info!(
+                            "[winnability] '{}' → {} (risk={})",
+                            kw.keyword,
+                            assessment.bucket,
+                            assessment.risk_score
+                        );
+                        kw.winnability = Some(assessment.bucket.as_str().to_string());
+                        kw.winnability_reason = Some(assessment.reason);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[winnability] SERP lookup failed for '{}': {}",
+                            kw.keyword,
+                            e
+                        );
+                    }
                 }
             }
         }

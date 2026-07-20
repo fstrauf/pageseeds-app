@@ -156,6 +156,9 @@ interface LandingPageCandidateArtifact {
   opportunity_score?: number | null
   opportunity_reason?: string | null
   proposed_title?: string | null
+  cpc?: number | null
+  winnability?: string | null
+  winnability_reason?: string | null
 }
 
 interface DifficultyArtifact {
@@ -211,6 +214,9 @@ function parseArtifact(content: string): KeywordResearchResult | null {
             opportunity_score: c.opportunity_score,
             opportunity_reason: c.opportunity_reason,
             proposed_title: c.proposed_title,
+            cpc: c.cpc ?? null,
+            winnability: c.winnability ?? null,
+            winnability_reason: c.winnability_reason ?? null,
           })),
         },
       }
@@ -360,6 +366,7 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
       intent_confidence: entry?.intent_confidence,
       winnability: entry?.winnability,
       winnability_reason: entry?.winnability_reason,
+      cpc: typeof entry?.cpc === 'number' && Number.isFinite(entry.cpc) ? entry.cpc : null,
     }
   })
 }
@@ -643,6 +650,15 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
                   {kd != null && row.has_data && (
                     <Badge variant="outline" className={cn('text-[10px] px-1.5 py-0', kdColor(kd))}>
                       KD {kd}
+                    </Badge>
+                  )}
+                  {row.cpc != null && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 border-border text-muted-foreground"
+                      title="Cost per click — paid-search value proxy for this keyword"
+                    >
+                      CPC ${row.cpc.toFixed(2)}
                     </Badge>
                   )}
                   {row.has_data && (

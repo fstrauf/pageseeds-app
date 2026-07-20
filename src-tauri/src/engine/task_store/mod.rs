@@ -976,7 +976,12 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
 }
 
 /// Parse landing page research description JSON to extract context and themes.
-fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
+///
+/// The Overview landing-page dialog writes the task description as
+/// `{"context": "...", "themes": ["...", ...]}`. Shared by the overview
+/// projection, the research pipeline (user themes honored as seeds), and the
+/// seed-extraction/validation prompts (context as a labeled section).
+pub(crate) fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
     let desc = desc.unwrap_or("");
 
     // Try JSON format first
