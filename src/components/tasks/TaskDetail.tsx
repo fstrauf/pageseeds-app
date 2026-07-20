@@ -409,8 +409,8 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
             </>
           )}
 
-          {/* Clarity findings — shown when investigate_clarity is in review status */}
-          {task.type === 'investigate_clarity' && task.status === 'review' && (
+          {/* Clarity findings — shown when a Clarity investigation is in review status */}
+          {(task.type === 'investigate_clarity' || task.type === 'clarity_analytics') && task.status === 'review' && (
             <>
               <Separator className="bg-border" />
               <div className="space-y-2">

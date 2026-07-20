@@ -3,7 +3,8 @@ use crate::clarity::client::{ClarityClient, ClarityClientConfig};
 use crate::config::env_resolver::EnvResolver;
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::clarity::{
-    ClarityConnectionStatus, ClaritySummaryPayload,
+    ClarityConnectionStatus, ClarityFindingPayload, ClaritySummaryPayload,
+    ClarityTaskCreationResult,
 };
 use crate::models::project::Project;
 use tauri::State;
@@ -109,4 +110,16 @@ pub fn clarity_get_summary(_state: State<'_, AppState>, project: Project) -> Res
         Ok(None) => Ok(None),
         Err(e) => Err(format!("Failed to read Clarity summary: {}", e)),
     }
+}
+
+/// Create follow-up tasks from user-selected Clarity findings in the task drawer.
+#[tauri::command]
+pub fn create_clarity_tasks_from_selection(
+    state: State<'_, AppState>,
+    parent_task_id: String,
+    findings: Vec<ClarityFindingPayload>,
+) -> Result<ClarityTaskCreationResult, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    crate::clarity::follow_up::spawn_tasks_from_selection(&db, &parent_task_id, &findings)
+        .map_err(|e| e.into())
 }

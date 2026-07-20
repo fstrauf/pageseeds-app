@@ -3,7 +3,9 @@ import { open as dialogOpen } from '@tauri-apps/plugin-dialog'
 import type {
   Article,
   ClarityConnectionStatus,
+  ClarityFindingPayload,
   ClaritySummaryPayload,
+  ClarityTaskCreationResult,
   ContentHealthResult,
   EmbeddingStatus,
   FormatFixResult,
@@ -449,6 +451,12 @@ export const clarityTestConnection = (project: Project): Promise<ClarityConnecti
 
 export const clarityGetSummary = (project: Project): Promise<ClaritySummaryPayload | null> =>
   invoke('clarity_get_summary', { project })
+
+export const createClarityTasksFromSelection = (
+  parentTaskId: string,
+  findings: ClarityFindingPayload[],
+): Promise<ClarityTaskCreationResult> =>
+  invoke('create_clarity_tasks_from_selection', { parentTaskId, findings })
 
 // ─── SEO / Ahrefs ─────────────────────────────────────────────────────────────
 

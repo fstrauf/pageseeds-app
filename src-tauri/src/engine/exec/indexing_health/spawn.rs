@@ -15,6 +15,7 @@ use crate::models::task::Task;
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
+use crate::engine::exec::content::{recommendation_artifact, ArticleRecommendationPayload};
 use crate::models::task::{AgentPolicy, Priority, TaskRunPolicy};
 use rusqlite::Connection;
 
@@ -256,21 +257,15 @@ pub(crate) fn build_fix_content_spec(
                 }));
             }
 
-            let rec_key = format!("recommendations_{}", article_id);
-            let rec_content = serde_json::json!({
-                "article_id": article_id,
-                "article_file": &ctx.target.file,
-                "article_title": &ctx.target.title,
-                "target_keyword": &ctx.target.target_keyword,
-                "suggestions": suggestions
-            });
-            artifacts.push(crate::models::task::TaskArtifact {
-                key: rec_key,
-                path: None,
-                artifact_type: Some("json".to_string()),
-                source: Some("indexing_health_campaign".to_string()),
-                content: Some(rec_content.to_string()),
-            });
+            let payload = ArticleRecommendationPayload {
+                article_id,
+                article_title: ctx.target.title.clone(),
+                article_file: ctx.target.file.clone(),
+                url_slug: ctx.target.slug.clone(),
+                target_keyword: Some(ctx.target.target_keyword.clone()),
+                suggestions,
+            };
+            artifacts.push(recommendation_artifact(&payload, "indexing_health_campaign"));
         }
     }
 

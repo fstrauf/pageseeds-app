@@ -1,6 +1,7 @@
 pub mod client;
 pub mod db;
 pub mod export;
+pub mod follow_up;
 pub mod models;
 
 #[allow(unused_imports)]

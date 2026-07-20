@@ -9,7 +9,7 @@ pub mod gsc;
 mod live_site;
 pub mod logging;
 pub mod models;
-mod clarity;
+pub mod clarity;
 pub mod reddit;
 pub mod rig;
 pub mod seo;
@@ -189,6 +189,7 @@ pub fn run() {
             commands::clarity_get_status,
             commands::clarity_test_connection,
             commands::clarity_get_summary,
+            commands::create_clarity_tasks_from_selection,
             commands::run_health_audit,
             commands::get_content_audit_report,
             commands::get_indexing_health_summary,

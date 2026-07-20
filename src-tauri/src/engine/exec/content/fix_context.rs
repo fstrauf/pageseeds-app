@@ -71,18 +71,20 @@ pub(crate) fn exec_fix_content_article_context(
         }
     };
 
-    let file = article_rec["article_file"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let article_title = article_rec["article_title"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let target_keyword = article_rec["target_keyword"]
-        .as_str()
+    // Deserialize into the shared payload contract. Historical artifacts may
+    // carry extra/missing fields or an unexpected shape, so anything that
+    // does not fit degrades to defaults — same tolerance as the previous
+    // loose `serde_json::Value` indexing.
+    let payload = serde_json::from_value::<super::ArticleRecommendationPayload>(article_rec)
+        .unwrap_or_default();
+
+    let file = payload.article_file;
+    let article_title = payload.article_title;
+    let target_keyword = payload
+        .target_keyword
+        .as_deref()
         .map(|s| normalize_target_keyword(s, article_id));
-    let suggestions = article_rec["suggestions"].clone();
+    let suggestions = serde_json::Value::Array(payload.suggestions);
 
     // Read current file content
     let file_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &file) {
