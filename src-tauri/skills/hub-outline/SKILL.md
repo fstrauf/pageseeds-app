@@ -1,5 +1,7 @@
 # Hub Outline Architect
 
+<!-- skill-version: 1 -->
+
 Design a structured information architecture for a pillar / hub page based on a cluster of spoke articles.
 
 ## Input

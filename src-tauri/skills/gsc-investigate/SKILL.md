@@ -1,5 +1,7 @@
 # GSC Investigation Skill
 
+<!-- skill-version: 1 -->
+
 Used by the `investigate_gsc` agentic step.
 
 ## Instructions

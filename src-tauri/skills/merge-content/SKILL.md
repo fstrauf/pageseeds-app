@@ -1,5 +1,7 @@
 # Merge Content Skill
 
+<!-- skill-version: 1 -->
+
 Used by the `merge_draft_patch` agentic step.
 
 ## Goal

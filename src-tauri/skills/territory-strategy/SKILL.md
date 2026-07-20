@@ -1,5 +1,7 @@
 # Territory Strategy
 
+<!-- skill-version: 1 -->
+
 Research a content territory and produce a strategy for filling gaps without cannibalizing existing coverage.
 
 ## Input

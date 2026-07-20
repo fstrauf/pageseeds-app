@@ -859,3 +859,180 @@ Some content here.
         assert!(!trimmed_prompt.contains("excerpt"));
         assert!(full_prompt.contains("excerpt"));
     }
+
+    #[test]
+    fn test_can_analyze_fails_loudly_on_stale_url_based_skill() {
+        // A stale project-level skill copy using the old keep_url/redirect_urls
+        // contract must fail the analyze step with an actionable message instead
+        // of silently zeroing every merge recommendation downstream.
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let skill_dir = Path::new(&path)
+            .join(".github")
+            .join("skills")
+            .join("cannibalization-strategy");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "# Cannibalization Strategy Skill\n\nReturn keep_url and redirect_urls.\n",
+        )
+        .unwrap();
+
+        let candidates_doc = serde_json::json!({
+            "candidates": [{
+                "candidate_id": "test_0",
+                "theme": "cash secured puts",
+                "pages": [{ "id": 1, "url": "/blog/a", "title": "A" }]
+            }]
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_candidates.json"),
+            serde_json::to_string_pretty(&candidates_doc).unwrap(),
+        )
+        .unwrap();
+
+        // Redirect the audit-artifact DB lookup to a throwaway path so the
+        // JSON fallback is used and no live app state is touched.
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var(
+            "PAGESEEDS_DB_PATH",
+            Path::new(&path).join("test.db").to_string_lossy().as_ref(),
+        );
+
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "cannibalization_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_can_analyze_candidates(&task, &path, "mock");
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+
+        assert!(!result.success, "stale skill must fail the analyze step");
+        assert!(
+            result.message.contains("keep_id/redirect_ids output contract"),
+            "unexpected failure message: {}",
+            result.message
+        );
+        assert!(result.message.contains(".github/skills/cannibalization-strategy/SKILL.md"));
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_can_reduce_strategy_surfaces_guard_degraded_recommendations() {
+        // Guard-degraded no_action recommendations (keep_id/redirect_ids not in
+        // the candidate page set) must surface as a risk, not vanish silently.
+        // The count comes from the typed `guard_degraded_count` field written by
+        // the analyze step — not from sniffing reason prose, so a genuine
+        // model-authored no_action reason that happens to mention "keep_id"
+        // must NOT be counted.
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        let batch_doc = serde_json::json!({
+            "guard_degraded_count": 1,
+            "batch_outputs": [
+                {
+                    "candidate_id": "test_0",
+                    "success": true,
+                    "message": "ok",
+                    "merge_recommendation": {
+                        "no_action": true,
+                        "reason": "Model returned keep_id=0 which is not in the candidate page set; cannot resolve a canonical keeper URL."
+                    }
+                },
+                {
+                    "candidate_id": "test_1",
+                    "success": true,
+                    "message": "ok",
+                    "merge_recommendation": {
+                        "no_action": true,
+                        "reason": "Neither page is a strong keeper; keep_id selection would be arbitrary, topical overlap only."
+                    }
+                }
+            ]
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_batch_outputs.json"),
+            serde_json::to_string_pretty(&batch_doc).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            auto_dir.join("hub_gaps.json"),
+            serde_json::json!({ "hub_gaps": [] }).to_string(),
+        )
+        .unwrap();
+
+        let task = Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "cannibalization_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_can_reduce_strategy(&task, &path);
+        assert!(result.success, "{}", result.message);
+        assert!(
+            result.message.contains("1 recommendation(s) discarded by id-resolution guard"),
+            "unexpected message: {}",
+            result.message
+        );
+
+        let strategy: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(auto_dir.join("cannibalization_strategy.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            strategy["merge_recommendations"].as_array().unwrap().len(),
+            0
+        );
+        let risks = strategy["risks"].as_array().unwrap();
+        assert!(
+            risks.iter().any(|r| r
+                .as_str()
+                .unwrap()
+                .contains("1 recommendation(s) discarded: model returned keep_id/redirect_ids not in the candidate page set")),
+            "guard-degradation risk missing: {:?}",
+            risks
+        );
+
+        cleanup(&path);
+    }

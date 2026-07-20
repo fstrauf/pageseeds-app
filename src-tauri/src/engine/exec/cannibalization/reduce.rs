@@ -41,6 +41,9 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
 
     let mut merge_recommendations: Vec<serde_json::Value> = Vec::new();
     let mut risks: Vec<String> = Vec::new();
+    // Guard-degradation count computed by the analyze step (typed channel —
+    // do not infer from no_action reason prose, which the model authors).
+    let guard_degraded_count = batch_doc["guard_degraded_count"].as_u64().unwrap_or(0) as usize;
 
     if let Some(outputs) = batch_doc["batch_outputs"].as_array() {
         for output in outputs {
@@ -151,6 +154,17 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
         });
     }
 
+    if guard_degraded_count > 0 {
+        log::warn!(
+            "[cannibalization_audit] {} recommendation(s) discarded: degraded to no_action by the id-resolution guard (possible skill drift or model contract violation)",
+            guard_degraded_count
+        );
+        risks.push(format!(
+            "{} recommendation(s) discarded: model returned keep_id/redirect_ids not in the candidate page set (possible skill drift or model contract violation)",
+            guard_degraded_count
+        ));
+    }
+
     let hub_recommendations: Vec<serde_json::Value> = hub_gaps_doc["hub_gaps"]
         .as_array()
         .cloned()
@@ -196,10 +210,11 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
     StepResult {
         success: true,
         message: format!(
-            "Strategy reduced: {} merge recommendations, {} hub recommendations, {} risks",
+            "Strategy reduced: {} merge recommendations, {} hub recommendations, {} risks, {} recommendation(s) discarded by id-resolution guard",
             merge_recommendations.len(),
             hub_recommendations.len(),
-            risks.len()
+            risks.len(),
+            guard_degraded_count
         ),
         output: Some(serde_json::to_string_pretty(&strategy).unwrap_or_default()),
     }
