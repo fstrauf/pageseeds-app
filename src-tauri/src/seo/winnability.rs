@@ -19,7 +19,7 @@ pub enum WinnabilityBucket {
     /// Winnable only with a proprietary angle (original data, tools, real
     /// experience). Generic educational content will not compete.
     Differentiate,
-    /// Unwinnable: AIO-dominated, authority gap too large, or KD prohibitive.
+    /// Unwinnable: AIO-dominated or authority gap too large.
     /// Do not create an article for this keyword.
     Avoid,
 }
@@ -176,13 +176,9 @@ pub fn assess(
         }
     }
 
-    // Keyword difficulty.
-    if let Some(kd_val) = kd {
-        if kd_val >= 40.0 {
-            risk_score += 1;
-            reasons.push("KD >= 40");
-        }
-    }
+    // Note: no direct KD risk contribution. Final selection pre-filters
+    // candidates to KD <= 30, so a high-KD branch could never fire; KD only
+    // gates the authority-domain signal above.
 
     let bucket = match risk_score {
         0..=1 => WinnabilityBucket::Target,
@@ -305,7 +301,7 @@ mod tests {
             Some(45.0),
             Some("informational"),
         );
-        // Short-answer AIO (+2) + snippet (+1) + 2 authority (KD >= 30) (+2) + KD≥40 (+1) = 6 → Avoid
+        // Short-answer AIO (+2) + snippet (+1) + 2 authority (KD >= 30) (+2) = 5 → Avoid
         assert_eq!(result.bucket, WinnabilityBucket::Avoid);
         assert!(result.risk_score >= 4);
     }

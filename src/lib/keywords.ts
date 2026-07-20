@@ -41,6 +41,8 @@ export interface KeywordRow {
   serp_count?: number
   intent?: string | null
   intent_confidence?: number | null
+  winnability?: string | null
+  winnability_reason?: string | null
 }
 
 /** Compute an opportunity score (0–100) from keyword metrics. */

@@ -60,4 +60,7 @@ pub(crate) struct Candidate {
     pub(crate) volume: Option<i64>,
     pub(crate) kd: Option<f64>,
     pub(crate) intent: Option<String>,
+    /// Coverage-gap score (0-100) assigned by `filter_by_coverage_gap`;
+    /// `None` when no coverage analysis was available for the project.
+    pub(crate) gap_score: Option<f64>,
 }

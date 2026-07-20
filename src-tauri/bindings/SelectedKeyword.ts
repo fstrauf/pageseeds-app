@@ -39,4 +39,9 @@ winnability: string | null,
 /**
  * Human-readable reason for the winnability score
  */
-winnability_reason: string | null, };
+winnability_reason: string | null, 
+/**
+ * Coverage-gap score 0-100 carried through from the pipeline (higher =
+ * fills a thinner cluster); `None` when no coverage analysis was available
+ */
+gap_score: number | null, };

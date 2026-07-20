@@ -171,6 +171,8 @@ fn score_coverage_gap(
 /// Filter and sort candidates by coverage gap score.
 ///
 /// Removes exact duplicates and low-value keywords, prioritizes gap-filling keywords.
+/// The score is persisted on each candidate (`gap_score`) so downstream final
+/// selection can use it as a sort tiebreak instead of the ordering being lost.
 pub(crate) fn filter_by_coverage_gap(
     candidates: Vec<super::Candidate>,
     clusters: &[CoverageCluster],
@@ -211,5 +213,11 @@ pub(crate) fn filter_by_coverage_gap(
         semantic_count
     );
 
-    scored.into_iter().map(|(c, _, _)| c).collect()
+    scored
+        .into_iter()
+        .map(|(mut c, score, _)| {
+            c.gap_score = Some(score as f64);
+            c
+        })
+        .collect()
 }

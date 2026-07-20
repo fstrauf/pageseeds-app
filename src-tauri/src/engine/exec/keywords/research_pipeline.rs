@@ -393,6 +393,7 @@ pub(crate) fn exec_keyword_research_native(
                                     volume: idea.volume_exact,
                                     kd: idea.kd,
                                     intent: idea.intent.clone(),
+                                    gap_score: None,
                                 });
                             }
                         }
@@ -461,6 +462,7 @@ pub(crate) fn exec_keyword_research_native(
                                     volume: None,
                                     kd: None,
                                     intent: None,
+                                    gap_score: None,
                                 });
                             }
                             log::info!("[keyword_research_native] theme '{}' → {} total candidates", theme, candidates.len());
@@ -538,6 +540,7 @@ pub(crate) fn exec_keyword_research_native(
                                     volume: None,
                                     kd: None,
                                     intent: None,
+                                    gap_score: None,
                                 });
                             }
                         }
@@ -580,6 +583,7 @@ pub(crate) fn exec_keyword_research_native(
                         "volume": candidate.volume,
                         "intent": candidate.intent,
                         "has_data": has_data,
+                        "gap_score": candidate.gap_score,
                     });
                     if has_data {
                         with_data_results.push(entry);
@@ -609,6 +613,7 @@ pub(crate) fn exec_keyword_research_native(
                                 "topVolume": top_volume,
                                 "shortage": kd.shortage,
                                 "has_data": has_data,
+                                "gap_score": candidate.gap_score,
                                 "serp_count": kd.serp.len(),
                                 "top_result": kd.serp.first().map(|s| s.url.as_str()).unwrap_or(""),
                                 "last_update": kd.last_update,
@@ -753,6 +758,7 @@ pub(crate) fn exec_keyword_research_native(
                 intent_confidence: Some(confidence),
                 traffic: r["traffic"].as_f64(),
                 has_data: r["has_data"].as_bool(),
+                gap_score: r["gap_score"].as_f64(),
             }
         })
         .collect();

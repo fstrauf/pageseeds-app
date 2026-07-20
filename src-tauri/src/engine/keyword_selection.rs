@@ -144,10 +144,16 @@ pub fn create_article_tasks_from_keywords(
 }
 
 /// Metric associated with a keyword from research output.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct KeywordMetric {
     pub difficulty: Option<i64>,
     pub volume: Option<i64>,
+    /// Search intent from the research artifact (blog keyword path only).
+    pub intent: Option<String>,
+    /// Winnability bucket from the SERP enrichment ("target" | "differentiate" | "avoid").
+    pub winnability: Option<String>,
+    /// Human-readable reason for the winnability verdict.
+    pub winnability_reason: Option<String>,
 }
 
 /// Metadata for a landing page candidate from the research output.
@@ -428,6 +434,18 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
                         KeywordMetric {
                             difficulty: kd,
                             volume: vol,
+                            intent: item
+                                .get("intent")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            winnability: item
+                                .get("winnability")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
+                            winnability_reason: item
+                                .get("winnability_reason")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string()),
                         },
                     );
                 }
@@ -452,6 +470,11 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
                         KeywordMetric {
                             difficulty: kd,
                             volume: vol,
+                            // Landing page candidates carry intent via
+                            // LandingPageCandidateMeta and have no winnability.
+                            intent: None,
+                            winnability: None,
+                            winnability_reason: None,
                         },
                     );
                 }
@@ -484,6 +507,9 @@ pub fn extract_keyword_metrics(task: &Task) -> HashMap<String, KeywordMetric> {
             KeywordMetric {
                 difficulty: kd,
                 volume: vol,
+                intent: None,
+                winnability: None,
+                winnability_reason: None,
             },
         );
     }
@@ -588,6 +614,18 @@ pub fn build_content_task_description(
         }
         if let Some(vol) = m.volume {
             description.push_str(&format!("\nVolume: {}", vol));
+        }
+        if let Some(ref intent) = m.intent {
+            description.push_str(&format!("\nIntent: {}", intent));
+        }
+        // Winnability verdict from the research pipeline's SERP enrichment, so
+        // the writer knows why the keyword was picked — e.g. `differentiate`
+        // demands an original-data/unique-angle treatment (see content-write skill).
+        if let Some(ref bucket) = m.winnability {
+            description.push_str(&format!("\nWinnability: {}", bucket));
+        }
+        if let Some(ref reason) = m.winnability_reason {
+            description.push_str(&format!("\nWinnability reason: {}", reason));
         }
     }
     // Append landing page metadata so the spec writer can use it.
@@ -821,6 +859,60 @@ mod tests {
     fn metrics_empty_for_no_artifacts() {
         let task = make_task(vec![]);
         assert!(extract_keyword_metrics(&task).is_empty());
+    }
+
+    #[test]
+    fn metrics_reads_winnability_and_intent() {
+        let json = serde_json::json!({
+            "difficulty": {
+                "results": [
+                    {
+                        "keyword": "theta decay",
+                        "difficulty": 18,
+                        "volume": 500,
+                        "intent": "informational",
+                        "winnability": "differentiate",
+                        "winnability_reason": "AI Overview present."
+                    },
+                ]
+            }
+        });
+        let task = make_task(vec![artifact("research_final_selection", json)]);
+        let metrics = extract_keyword_metrics(&task);
+        let m = metrics.get("theta decay").expect("metric not found");
+        assert_eq!(m.intent.as_deref(), Some("informational"));
+        assert_eq!(m.winnability.as_deref(), Some("differentiate"));
+        assert_eq!(m.winnability_reason.as_deref(), Some("AI Overview present."));
+    }
+
+    #[test]
+    fn description_includes_winnability_and_intent() {
+        let metric = KeywordMetric {
+            difficulty: Some(18),
+            volume: Some(500),
+            intent: Some("informational".to_string()),
+            winnability: Some("differentiate".to_string()),
+            winnability_reason: Some("AI Overview present.".to_string()),
+        };
+        let desc = build_content_task_description("theta decay", Some(&metric), None);
+        assert!(desc.contains("Target keyword: theta decay"));
+        assert!(desc.contains("\nIntent: informational"));
+        assert!(desc.contains("\nWinnability: differentiate"));
+        assert!(desc.contains("\nWinnability reason: AI Overview present."));
+    }
+
+    #[test]
+    fn description_omits_winnability_when_absent() {
+        let metric = KeywordMetric {
+            difficulty: Some(18),
+            volume: Some(500),
+            intent: None,
+            winnability: None,
+            winnability_reason: None,
+        };
+        let desc = build_content_task_description("theta decay", Some(&metric), None);
+        assert!(!desc.contains("Winnability"));
+        assert!(!desc.contains("Intent"));
     }
 
     // ── normalize_keyword ─────────────────────────────────────────────────────

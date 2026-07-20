@@ -34,7 +34,8 @@ pub struct DifficultyWrapper {
 /// - Filter to keywords with data, acceptable KD, non-navigational intent, and
 ///   intent aligned with the workflow (informational for blog, commercial for
 ///   landing pages).
-/// - Sort by volume (desc), then difficulty (asc).
+/// - Sort by volume (desc), then difficulty (asc), then coverage-gap score
+///   (desc, `None` last among equals).
 /// - Take top `max_results` (callers may overshoot to leave room for the
 ///   downstream relevance check to drop off-domain candidates).
 /// - Generate recommended titles based on keyword type.
@@ -84,7 +85,9 @@ pub fn select_keywords_deterministic(
 
     let used_fallback = false;
 
-    // Sort by volume desc, then KD asc
+    // Sort by volume desc, then KD asc, then coverage-gap score desc.
+    // The gap tiebreak preserves the "prioritize thin clusters" intent from
+    // the coverage filter, which a pure volume/KD sort would otherwise drop.
     candidates.sort_by(|a, b| {
         let vol_cmp = b.volume.unwrap_or(0).cmp(&a.volume.unwrap_or(0));
         if vol_cmp != std::cmp::Ordering::Equal {
@@ -92,7 +95,11 @@ pub fn select_keywords_deterministic(
         }
         let kd_a = a.kd.unwrap_or(100.0) as i64;
         let kd_b = b.kd.unwrap_or(100.0) as i64;
-        kd_a.cmp(&kd_b)
+        let kd_cmp = kd_a.cmp(&kd_b);
+        if kd_cmp != std::cmp::Ordering::Equal {
+            return kd_cmp;
+        }
+        cmp_gap_desc(a.gap_score, b.gap_score)
     });
 
     // Take top N
@@ -140,9 +147,11 @@ pub fn select_keywords_deterministic(
                 ),
                 recommended_title: generate_title(&k.keyword, false),
                 intent: k.intent.clone(),
-                // Populated by enrich_with_winnability() after selection.
+                // Populated by enrich_with_winnability() after selection,
+                // before the final sort and trim.
                 winnability: None,
                 winnability_reason: None,
+                gap_score: k.gap_score,
             })
             .collect();
 
@@ -346,14 +355,21 @@ pub fn exec_research_final_selection(
                 agent_provider,
             );
 
-            // Trim the overshoot after filtering and fix the accounting.
+            // Enrich the overshoot with winnability scores (AIO risk,
+            // competitor authority) BEFORE trimming, so an `Avoid` verdict can
+            // demote a keyword below the cut line instead of being computed
+            // and discarded. Non-fatal per keyword: a failed SERP lookup
+            // leaves the keyword unscored and it sorts as Target-equivalent.
+            enrich_with_winnability(&mut output, &task.project_id);
+
+            // Re-sort by the combined key (winnability bucket, then volume,
+            // KD, gap score) and only then trim: `Avoid` keywords drop out of
+            // the picker whenever enough better candidates exist, and remain
+            // (badged, at the bottom) when they don't.
+            sort_by_winnability(&mut output);
             trim_to_final(&mut output, FINAL_RESULTS);
             let final_count = selected_count(&output);
             output.filtered_out = output.total_candidates.saturating_sub(final_count);
-
-            // Enrich the selected keywords with winnability scores (AIO risk,
-            // competitor authority, KD) before writing the artifact.
-            enrich_with_winnability(&mut output, &task.project_id);
 
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
@@ -378,7 +394,7 @@ pub fn exec_research_final_selection(
                 )
             } else {
                 format!(
-                    "Selected {} keywords deterministically (KD <= 30, sorted by volume{})",
+                    "Selected {} keywords deterministically (KD <= 30, winnability-aware ranking{})",
                     final_count, relevance_note
                 )
             };
@@ -416,6 +432,51 @@ fn trim_to_final(output: &mut KeywordPickerOutput, max: usize) {
         d.results.truncate(max);
         d.total = d.results.len();
         d.successful = d.results.len();
+    }
+}
+
+/// Winnability bucket sort rank: `target` and unknown/missing buckets rank 0
+/// (keywords whose enrichment failed keep pre-enrichment behavior),
+/// `differentiate` ranks 1, `avoid` ranks last. Values are the lowercase
+/// strings written by `WinnabilityBucket::as_str()`.
+fn winnability_rank(winnability: Option<&str>) -> u8 {
+    match winnability {
+        Some("differentiate") => 1,
+        Some("avoid") => 2,
+        _ => 0,
+    }
+}
+
+/// Gap-score tiebreak: higher score first; `None` (no coverage analysis was
+/// available) sorts last among equals. `total_cmp` keeps f64 ordering total
+/// and deterministic.
+fn cmp_gap_desc(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => y.total_cmp(&x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+/// Final selection sort, applied after winnability enrichment and before the
+/// trim to `FINAL_RESULTS`. Combined key, in priority order:
+///   1. Winnability bucket rank — target/unknown, then differentiate, avoid last.
+///   2. Volume descending.
+///   3. KD ascending.
+///   4. Coverage-gap score descending (`None` last among equals).
+/// The sort is stable, so fully-equal keys keep their prior (deterministic)
+/// order. Landing-page candidates carry no winnability scores and keep their
+/// selection order.
+fn sort_by_winnability(output: &mut KeywordPickerOutput) {
+    if let Some(d) = &mut output.difficulty {
+        d.results.sort_by(|a, b| {
+            winnability_rank(a.winnability.as_deref())
+                .cmp(&winnability_rank(b.winnability.as_deref()))
+                .then_with(|| b.volume.cmp(&a.volume))
+                .then_with(|| a.difficulty.cmp(&b.difficulty))
+                .then_with(|| cmp_gap_desc(a.gap_score, b.gap_score))
+        });
     }
 }
 
@@ -531,12 +592,15 @@ fn filter_off_domain_candidates(
     }
 }
 
-/// Enrich selected keywords with winnability scores using SERP feature data.
+/// Enrich shortlisted keywords with winnability scores using SERP feature data.
 ///
-/// Calls the DataForSEO SERP API for each keyword and scores it using the
-/// winnability classifier (Target / Differentiate / Avoid). Non-fatal: if the
-/// provider is unavailable or a SERP lookup fails, the keyword keeps its
-/// existing fields without a winnability score.
+/// Runs on the pre-trim overshoot (up to `RELEVANCE_OVERSHOOT` keywords), so
+/// the paid SERP verdict feeds back into selection via `sort_by_winnability`
+/// instead of being computed and discarded. Calls the DataForSEO SERP API for
+/// each keyword and scores it using the winnability classifier
+/// (Target / Differentiate / Avoid). Non-fatal: if the provider is unavailable
+/// or a SERP lookup fails, the keyword keeps its existing fields without a
+/// winnability score.
 fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
     let keywords = match &mut output.difficulty {
         Some(d) => &mut d.results,
@@ -642,7 +706,54 @@ mod tests {
             traffic: None,
             has_data: Some(true),
             intent_confidence: None,
+            gap_score: None,
         }
+    }
+
+    fn selected(
+        keyword: &str,
+        volume: i64,
+        kd: i64,
+        winnability: Option<&str>,
+        gap_score: Option<f64>,
+    ) -> SelectedKeyword {
+        SelectedKeyword {
+            keyword: keyword.to_string(),
+            volume,
+            difficulty: kd,
+            traffic: None,
+            selection_reason: String::new(),
+            recommended_title: String::new(),
+            intent: Some("informational".to_string()),
+            winnability: winnability.map(|s| s.to_string()),
+            winnability_reason: None,
+            gap_score,
+        }
+    }
+
+    fn picker_output(results: Vec<SelectedKeyword>) -> KeywordPickerOutput {
+        let total = results.len();
+        KeywordPickerOutput {
+            landing_page_candidates: Vec::new(),
+            difficulty: Some(DifficultyWrapper {
+                total,
+                successful: total,
+                results,
+            }),
+            total_candidates: total,
+            filtered_out: 0,
+        }
+    }
+
+    fn result_keywords(output: &KeywordPickerOutput) -> Vec<String> {
+        output
+            .difficulty
+            .as_ref()
+            .unwrap()
+            .results
+            .iter()
+            .map(|r| r.keyword.clone())
+            .collect()
     }
 
     fn build_pipeline(keywords: Vec<ScoredKeyword>) -> KeywordPipelineOutput {
@@ -786,5 +897,110 @@ mod tests {
         // Highest-volume entries survive the trim.
         assert!(d.results.iter().any(|r| r.keyword == "kw 0"));
         assert!(!d.results.iter().any(|r| r.keyword == "kw 14"));
+    }
+
+    #[test]
+    fn selection_uses_gap_score_as_final_tiebreak() {
+        // Same volume and KD: the thinner-cluster keyword sorts first, and the
+        // gap score survives into the picker artifact.
+        let mut thin = kw("thin cluster keyword", 1000, 10.0, "informational");
+        thin.gap_score = Some(80.0);
+        let mut covered = kw("covered cluster keyword", 1000, 10.0, "informational");
+        covered.gap_score = Some(20.0);
+        let pipeline = build_pipeline(vec![covered, thin]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
+        let results = output.difficulty.unwrap().results;
+        assert_eq!(results[0].keyword, "thin cluster keyword");
+        assert_eq!(results[0].gap_score, Some(80.0));
+        assert_eq!(results[1].keyword, "covered cluster keyword");
+    }
+
+    #[test]
+    fn winnability_sort_demotes_avoid_despite_higher_volume() {
+        let mut output = picker_output(vec![
+            selected("avoid high volume", 5000, 10, Some("avoid"), None),
+            selected("target mid volume", 1000, 20, Some("target"), None),
+            selected("differentiate low", 500, 15, Some("differentiate"), None),
+            selected("unscored", 800, 25, None, None),
+        ]);
+        sort_by_winnability(&mut output);
+        // Missing bucket ranks as target-equivalent; avoid sinks to the bottom.
+        assert_eq!(
+            result_keywords(&output),
+            vec![
+                "target mid volume",
+                "unscored",
+                "differentiate low",
+                "avoid high volume"
+            ]
+        );
+    }
+
+    #[test]
+    fn winnability_sort_preserves_volume_kd_gap_order_within_a_bucket() {
+        let mut output = picker_output(vec![
+            selected("low gap", 1000, 10, Some("target"), Some(20.0)),
+            selected("high volume", 2000, 25, Some("target"), Some(50.0)),
+            selected("high gap", 1000, 10, Some("target"), Some(80.0)),
+            selected("lower kd", 1000, 5, Some("target"), None),
+        ]);
+        sort_by_winnability(&mut output);
+        // Volume desc first, then KD asc, then gap desc.
+        assert_eq!(
+            result_keywords(&output),
+            vec!["high volume", "lower kd", "high gap", "low gap"]
+        );
+    }
+
+    #[test]
+    fn trim_after_sort_drops_avoid_when_enough_better_candidates_exist() {
+        // 11 candidates for 10 slots: the Avoid keyword has the highest volume
+        // but must still fall out after sort + trim.
+        let mut results: Vec<SelectedKeyword> = (0..10)
+            .map(|i| {
+                let name = format!("target {}", i);
+                selected(&name, 1000 - i as i64, 10, Some("target"), None)
+            })
+            .collect();
+        results.push(selected("avoid keyword", 9000, 5, Some("avoid"), None));
+        let mut output = picker_output(results);
+
+        sort_by_winnability(&mut output);
+        trim_to_final(&mut output, FINAL_RESULTS);
+
+        let keywords = result_keywords(&output);
+        assert_eq!(keywords.len(), FINAL_RESULTS);
+        assert!(!keywords.iter().any(|k| k == "avoid keyword"));
+        assert!(keywords.iter().any(|k| k == "target 9"));
+    }
+
+    #[test]
+    fn avoid_survives_trim_when_not_enough_better_candidates() {
+        let mut output = picker_output(vec![
+            selected("target one", 1000, 10, Some("target"), None),
+            selected("avoid keyword", 9000, 5, Some("avoid"), None),
+        ]);
+        sort_by_winnability(&mut output);
+        trim_to_final(&mut output, FINAL_RESULTS);
+        assert_eq!(result_keywords(&output), vec!["target one", "avoid keyword"]);
+    }
+
+    #[test]
+    fn winnability_sort_is_deterministic_for_identical_inputs() {
+        let build = || {
+            picker_output(vec![
+                selected("a", 1000, 10, Some("target"), Some(80.0)),
+                selected("b", 1000, 10, Some("avoid"), None),
+                selected("c", 1000, 10, None, Some(50.0)),
+                selected("d", 2000, 20, Some("differentiate"), None),
+                selected("e", 500, 5, Some("target"), None),
+            ])
+        };
+        let mut first = build();
+        let mut second = build();
+        sort_by_winnability(&mut first);
+        sort_by_winnability(&mut second);
+        assert_eq!(result_keywords(&first), result_keywords(&second));
     }
 }
