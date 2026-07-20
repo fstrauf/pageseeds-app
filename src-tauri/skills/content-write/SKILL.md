@@ -1,5 +1,7 @@
 # Content Writer
 
+<!-- skill-version: 1 -->
+
 Write or optimize an MDX article that ranks and earns clicks by offering something
 the ranking competitors do not. Generic educational content that duplicates what
 already occupies the SERP will not win — differentiation is mandatory.

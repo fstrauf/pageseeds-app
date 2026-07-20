@@ -1,5 +1,7 @@
 # Reddit Enrichment Skill
 
+<!-- skill-version: 1 -->
+
 Used by the `reddit_enrich` agentic step.
 
 ## Instructions

@@ -1,5 +1,7 @@
 # CTR Fix Apply Skill
 
+<!-- skill-version: 1 -->
+
 Used by `fix_ctr_article` agentic steps.
 
 ## Objective

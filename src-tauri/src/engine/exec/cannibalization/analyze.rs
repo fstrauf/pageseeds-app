@@ -80,8 +80,19 @@ pub(crate) fn exec_can_analyze_candidates(
         }
     };
 
+    // Output-contract assertion: a stale URL-based skill copy (keep_url/redirect_urls)
+    // deserializes into `CandidateAnalysisOutput` with keep_id=0, and the
+    // id-resolution guard below then silently converts every recommendation to
+    // no_action. Fail loudly instead of producing an empty strategy.
+    if !skill.content.contains("keep_id") {
+        return StepResult::fail(
+            "Skill 'cannibalization-strategy' does not use the keep_id/redirect_ids output contract — it appears to be a stale URL-based copy. Delete .github/skills/cannibalization-strategy/SKILL.md from the project repo to use the embedded app default.".to_string(),
+        );
+    }
+
     let mut batch_outputs: Vec<serde_json::Value> = Vec::new();
     let mut failed_candidates: Vec<String> = Vec::new();
+    let mut guard_degraded_count: usize = 0;
 
     for candidate in &candidates {
         let candidate_id = candidate["candidate_id"]
@@ -217,10 +228,22 @@ pub(crate) fn exec_can_analyze_candidates(
                             "Model returned keep_id={} which is not in the candidate page set; cannot resolve a canonical keeper URL.",
                             rec.keep_id
                         );
+                        guard_degraded_count += 1;
+                        log::warn!(
+                            "[cannibalization_audit] Candidate {}: recommendation degraded to no_action — keep_id={} is not in the candidate page set",
+                            candidate_id,
+                            rec.keep_id
+                        );
                     } else if !missing_redirect_ids.is_empty() {
                         rec.no_action = true;
                         rec.reason = format!(
                             "Model returned redirect_ids not present in the candidate page set: {:?}",
+                            missing_redirect_ids
+                        );
+                        guard_degraded_count += 1;
+                        log::warn!(
+                            "[cannibalization_audit] Candidate {}: recommendation degraded to no_action — redirect_ids not in the candidate page set: {:?}",
+                            candidate_id,
                             missing_redirect_ids
                         );
                     }
@@ -309,13 +332,21 @@ pub(crate) fn exec_can_analyze_candidates(
         .filter(|o| o["success"].as_bool().unwrap_or(false))
         .count();
 
+    if guard_degraded_count > 0 {
+        log::warn!(
+            "[cannibalization_audit] {} recommendation(s) degraded to no_action by the id-resolution guard (model returned keep_id/redirect_ids not in the candidate page set)",
+            guard_degraded_count
+        );
+    }
+
     StepResult {
         success: failed_candidates.is_empty() || success_count > 0,
         message: format!(
-            "Analyzed {}/{} candidates successfully. Failed: {}",
+            "Analyzed {}/{} candidates successfully. Failed: {}. Degraded to no_action by id-resolution guard: {}",
             success_count,
             candidates_len,
-            failed_candidates.len()
+            failed_candidates.len(),
+            guard_degraded_count
         ),
         output: Some(serde_json::to_string_pretty(&batch_doc).unwrap_or_default()),
     }
