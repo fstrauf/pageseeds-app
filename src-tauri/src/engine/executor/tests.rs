@@ -357,16 +357,6 @@
 
         rt.block_on(async {
             // Bridge health check
-            // Google Autocomplete mock
-            Mock::given(method("GET"))
-                .and(path("/complete/search"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                    "risk management",
-                    ["risk management strategy", "risk management framework", "portfolio risk management"]
-                ])))
-                .mount(&mock_server)
-                .await;
-
             Mock::given(method("GET"))
                 .and(path("/health"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -494,7 +484,6 @@
         let old_ahrefs = std::env::var("PAGESEEDS_AHREFS_BASE_URL").ok();
         let old_bridge = std::env::var("KIMI_BRIDGE_URL").ok();
         let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
-        let old_autocomplete = std::env::var("GOOGLE_AUTOCOMPLETE_BASE_URL").ok();
 
         std::env::set_var("CAPSOLVER_API_KEY", "mock-key");
         std::env::set_var(
@@ -507,7 +496,6 @@
         );
         std::env::set_var("PAGESEEDS_AHREFS_BASE_URL", mock_server.uri());
         std::env::set_var("KIMI_BRIDGE_URL", format!("{}/v1", mock_server.uri()));
-        std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", mock_server.uri());
 
         let db_path = project_dir.join("test.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -617,7 +605,7 @@
         assert!(result.success, "expected success, got: {}", result.message);
         assert_eq!(saved_task.status, TaskStatus::Review);
 
-        // 5-step workflow produces 5 artifacts
+        // The workflow produces one artifact per data-producing step
         let artifact_keys: Vec<&str> = saved_task
             .artifacts
             .iter()
@@ -626,11 +614,6 @@
         assert!(
             artifact_keys.contains(&"research_seed_extraction"),
             "missing research_seed_extraction artifact; got: {:?}",
-            artifact_keys
-        );
-        assert!(
-            artifact_keys.contains(&"research_autocomplete"),
-            "missing research_autocomplete artifact; got: {:?}",
             artifact_keys
         );
         assert!(
@@ -702,11 +685,6 @@
             std::env::set_var("PAGESEEDS_DB_PATH", v);
         } else {
             std::env::remove_var("PAGESEEDS_DB_PATH");
-        }
-        if let Some(v) = old_autocomplete {
-            std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", v);
-        } else {
-            std::env::remove_var("GOOGLE_AUTOCOMPLETE_BASE_URL");
         }
 
         std::fs::remove_dir_all(&project_dir).ok();

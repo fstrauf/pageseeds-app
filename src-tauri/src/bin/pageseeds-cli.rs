@@ -45,6 +45,8 @@ fn main() {
         "cancel-tasks" => cancel_tasks(&db.to_string_lossy(), &project_id, &args),
         "create-task" => create_task(&project_id, &db.to_string_lossy(), &args),
         "execute-task" => execute_task(&db.to_string_lossy(), &args),
+        "create-articles-from-keywords" => create_articles_from_keywords(&db.to_string_lossy(), &project_id, &args),
+        "set-task-status" => set_task_status(&db.to_string_lossy(), &args),
         "create-reddit-replies" => create_reddit_replies(&db.to_string_lossy(), &args),
 
         // ── Cannibalization strategy workflow ──
@@ -194,8 +196,42 @@ fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, Str
     }))
 }
 
-fn create_reddit_replies(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+/// Transition a task's status (e.g. mark a manually-completed task done).
+fn set_task_status(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let status = flag(args, "--status", "-s").unwrap_or_else(|| exit("--status required"));
+    let status_enum: TaskStatus = serde_json::from_value(serde_json::Value::String(status.clone()))
+        .map_err(|_| format!("unknown status '{status}' (todo|queued|in_progress|review|done|failed|cancelled)"))?;
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    pageseeds_lib::engine::task_store::update_task_status(&conn, &task_id, status_enum)?;
+    Ok(serde_json::json!({"task_id": task_id, "status": status}))
+}
+
+/// Keyword-pick → content tasks: same creation path as the Tauri command/// (validates picks against the research artifact, marks research done).
+fn create_articles_from_keywords(db_path: &str, project_id: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let research_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let keywords_raw = flag(args, "--keywords", "-k")
+        .unwrap_or_else(|| exit("--keywords required (comma-separated)"));
+    let keywords: Vec<String> = keywords_raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let tasks = pageseeds_lib::engine::keyword_selection::create_article_tasks_from_keywords(
+        &conn,
+        project_id,
+        &research_task_id,
+        keywords,
+    )?;
+    Ok(serde_json::json!({
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
+    }))
+}
+
+fn create_reddit_replies(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
     let post_ids = flag(args, "--post-ids", "-P")
         .map(|s| s.split(',').map(|p| p.trim().to_string()).collect::<Vec<_>>())
         .unwrap_or_else(|| exit("--post-ids required (comma-separated)"));
@@ -570,6 +606,7 @@ Task / queue orchestration:
   cancel-tasks            -i <id> -p <path> -t type [-s status] [--yes]
   create-task             -i <id> -p <path> -t type [-T title] [-r reason] [-a] [-P high|medium|low]
   execute-task            -I <task-id>
+  create-articles-from-keywords -i <id> -I <research-task-id> -k "kw1, kw2, ..."
 
 Cannibalization workflow:
   cannibalization-strategy -i <id> -p <path>

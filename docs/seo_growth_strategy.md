@@ -69,7 +69,7 @@ nohup kimi-acp-bridge > /tmp/kimi-bridge.log 2>&1 &
 - `src-tauri/src/seo/provider.rs` — `serp_features()` on the trait
 - `src-tauri/src/seo/dataforseo.rs` — DataForSEO SERP API implementation
 - `src-tauri/src/seo/mod.rs` — factory defaults to DataForSEO
-- `src-tauri/src/engine/exec/research/autocomplete.rs` — enrichment + fallback removal
+- `src-tauri/src/engine/exec/research/final_selection.rs` — enrichment + fallback removal
 - `src-tauri/src/engine/agent.rs` — workdir threading
 - `src-tauri/src/rig/compat/kimi.rs` — `X-Kimi-Workdir` header
 - `kimi-acp-openai-bridge/src/kimi_acp_bridge/acp_client.py` — fs handlers + capabilities fix
@@ -207,8 +207,8 @@ The `kimi-webbridge` option is only useful for one-off manual spot-checks of a l
 
 ### Q3 — Can we note in the keyword research workflow which keywords we're giving up on?
 
-**Finding:** No such concept exists in the codebase. The research selector (`engine/exec/research/autocomplete.rs:146-270`) uses:
-- `KD ≤ 30` (hardcoded, `autocomplete.rs:154`) — and a **silent fallback** (`autocomplete.rs:181-198`) that drops the KD filter entirely if it filters too much
+**Finding:** No such concept exists in the codebase. The research selector (`engine/exec/research/final_selection.rs`) uses:
+- `KD ≤ 30` (hardcoded) — and a **silent fallback** that drops the KD filter entirely if it filters too much
 - Volume sort
 - Intent ≠ navigational
 - Coverage-gap filter (skips already-covered topics)
@@ -237,7 +237,7 @@ Classify each keyword into one of three buckets:
 
 Store the bucket + score in the `research_final_selection` artifact so the picker UI shows it and the writer receives it. This is the systematic root-cause fix — it prevents dead-weight articles at the source.
 
-**No fallbacks.** The current selector has a silent fallback (`autocomplete.rs:181-198`) that drops the KD filter if it filters too much, returning low-quality keywords rather than failing. **Remove it.** If a research run finds no keywords that meet the winnability bar, it should return empty with a clear message ("no winnable keywords found for these seeds — refine the territory or seeds"), not fabricate candidates. Iterate on the inputs, don't lower the bar. The classifier uses DataForSEO SERP API data (Q1) as a primary signal, not the Ahrefs scraper.
+**No fallbacks.** The current selector has a silent fallback (`final_selection.rs`) that drops the KD filter if it filters too much, returning low-quality keywords rather than failing. **Remove it.** If a research run finds no keywords that meet the winnability bar, it should return empty with a clear message ("no winnable keywords found for these seeds — refine the territory or seeds"), not fabricate candidates. Iterate on the inputs, don't lower the bar. The classifier uses DataForSEO SERP API data (Q1) as a primary signal, not the Ahrefs scraper.
 
 ---
 
@@ -397,7 +397,7 @@ WS1 and WS2 are complete. WS4 is now unblocked — the winnability classifier ca
 | H. Computed insights discarded | Provenance artifact = `{"keyword":"X"}` only | Writer blind to research findings |
 
 ### Key file paths
-- Research selector: `src-tauri/src/engine/exec/research/autocomplete.rs:146`
+- Research selector: `src-tauri/src/engine/exec/research/final_selection.rs`
 - Article handler (no skill): `src-tauri/src/engine/workflows/handlers.rs:220`
 - Generic fallback prompt: `src-tauri/src/engine/workflows/handlers.rs:1194`
 - Ahrefs SERP filter (organic-only): `src-tauri/src/seo/keywords.rs:680`

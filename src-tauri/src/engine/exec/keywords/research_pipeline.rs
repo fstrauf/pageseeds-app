@@ -228,16 +228,10 @@ pub(crate) fn exec_keyword_research_native(
         agent_competitors
     );
 
-    // ── Cost estimate (DataForSEO) ────────────────────────────────────────────
-    // Two-phase: Phase 1 (Google Autocomplete) is free.
-    // Phase 2 tries seeds in order, stopping at first hit (~1-2 calls per theme on average).
-    if is_dataforseo {
-        let est_cost = themes.len() as f64 * 0.012; // ~$0.01/task + $0.0001 × ~20 keywords
-        log::info!(
-            "[keyword_research_native] DataForSEO estimated cost: ~${:.3} ({} themes × ~$0.012/theme, stops at first hit)",
-            est_cost, themes.len()
-        );
-    }
+    // ── Cost note (DataForSEO) ────────────────────────────────────────────────
+    // Each validated (theme, seed) pair costs 2 paid calls (related_keywords +
+    // keyword_suggestions). The actual pair count is only known after the
+    // validation artifact is parsed below, so the estimate is logged there.
 
     // ── Pre-flight: articles must exist in SQLite ────────────────────────────
     let has_articles = if is_live_site_project {
@@ -342,9 +336,10 @@ pub(crate) fn exec_keyword_research_native(
             let mut seen: HashSet<String> = HashSet::new();
 
             if is_dataforseo {
-                // ── DataForSEO path: read validated seeds from Step 3 artifact ────────────
-                // Seeds were pre-filtered for domain relevance by the agentic
-                // research_seed_validation step. One DataForSEO call per seed.
+                // ── DataForSEO path: read validated seeds from the validation artifact ─────
+                // Seeds were validated for domain relevance and phrased by the agentic
+                // research_seed_validation step. Each seed costs 2 paid calls
+                // (related_keywords + keyword_suggestions).
                 if validated_seeds_thread.is_empty() {
                     log::warn!(
                         "[keyword_research_native] research_seed_validation artifact missing or empty — \
@@ -367,8 +362,9 @@ pub(crate) fn exec_keyword_research_native(
                 }
 
                 log::info!(
-                    "[keyword_research_native] {} (theme, seed) pairs to query",
-                    seeds_to_use.len()
+                    "[keyword_research_native] {} (theme, seed) pairs to query (~${:.3} estimated, 2 paid calls per pair)",
+                    seeds_to_use.len(),
+                    seeds_to_use.len() as f64 * 0.02
                 );
 
                 let mut dataforseo_successes = 0usize;

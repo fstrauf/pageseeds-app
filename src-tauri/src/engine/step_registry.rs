@@ -134,6 +134,7 @@ impl StepRegistry {
             handlers,
             StepKind::ResearchFinalSelection,
             crate::engine::exec::research::exec_research_final_selection,
+            agent_provider,
             optional_context
         );
 
@@ -141,12 +142,6 @@ impl StepRegistry {
             handlers,
             StepKind::LandingPageSpecWrite,
             crate::engine::exec::research::exec_landing_page_spec_write
-        );
-
-        register_blocking!(
-            handlers,
-            StepKind::ResearchAutocomplete,
-            crate::engine::exec::research::exec_research_autocomplete
         );
 
         register_blocking!(

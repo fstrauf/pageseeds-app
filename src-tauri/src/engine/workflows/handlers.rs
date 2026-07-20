@@ -127,8 +127,8 @@ impl WorkflowHandler for ResearchHandler {
                 ),
             ],
             "research_keywords" | "research_landing_pages" => {
-                // 7-step hybrid workflow:
-                // deterministic → deterministic → agentic → deterministic → agentic → deterministic → deterministic
+                // 6-step hybrid workflow:
+                // deterministic → deterministic → agentic → agentic → deterministic → deterministic
                 vec![
                     // Step 1 (deterministic): Ensure coverage data is fresh (< 7 days).
                     // If stale or missing, runs coverage analysis inline. Fully invisible to user.
@@ -145,27 +145,26 @@ impl WorkflowHandler for ResearchHandler {
                     // Cannot be deterministic: requires reading intent from free-form text.
                     // Now also reads the research_shortlist to prioritize open territories.
                     WorkflowStep::new("research_seed_extraction", StepKind::Agentic),
-                    // Step 4 (deterministic): fetch Google Autocomplete for all themes.
-                    // Free API, always returns results. Outputs structured JSON: [{theme, suggestions}].
-                    WorkflowStep::new("research_autocomplete", StepKind::ResearchAutocomplete),
-                    // Step 5 (agentic): LLM filters autocomplete suggestions for domain relevance.
+                    // Step 4 (agentic): LLM validates themes for domain relevance and
+                    // proposes 1-3 sharpened seed phrasings per on-topic theme.
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires understanding what is on-topic for this
                     // specific product/site. Hard-coding a relevance rule would produce silent errors
                     // on any input it was not tested against.
-                    // Input contract: [{theme, suggestions: [string]}]
+                    // Input contract: research_seed_extraction artifact {themes: [string]}
                     // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
                     WorkflowStep::new("research_seed_validation", StepKind::Agentic),
-                    // Step 6 (deterministic): DataForSEO related_keywords per validated seed.
+                    // Step 5 (deterministic): DataForSEO related_keywords per validated seed.
                     // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
                     // Also consumes pending territory themes from research_shortlist as extra seeds.
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
                         .with_latest_raw_policy(
                             crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
                         ),
-                    // Step 7 (deterministic): Select best candidates from structured data.
-                    // Outputs clean JSON directly — no normalizer needed because upstream
-                    // agentic steps now use Extractor<T>.
+                    // Step 6 (hybrid): Select best candidates from structured data
+                    // (deterministic filter/sort, overshoot to 15), then one batched
+                    // agentic relevance check drops off-domain candidates (non-fatal),
+                    // then trim to 10 + winnability enrichment.
                     WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection),
                 ]
             }

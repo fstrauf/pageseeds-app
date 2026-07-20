@@ -2,9 +2,10 @@
 import type { ValidatedSeed } from "./ValidatedSeed";
 
 /**
- * Output from Step 3: research_seed_validation
+ * Output from the research_seed_validation step.
  *
- * The LLM filters autocomplete suggestions for domain relevance.
+ * The LLM validates extracted themes for domain relevance and proposes 1-3
+ * seed phrasings per on-topic theme.
  * Contract: MUST return valid JSON with {"validated_seeds": [{"theme": ..., "seeds": [...]}]}
  */
 export type SeedValidationOutput = { validated_seeds: Array<ValidatedSeed>, };

@@ -2,18 +2,17 @@
 ///
 /// Contains the execution logic for the research workflow:
 /// 1. research_seed_extraction - LLM extracts themes from project brief (agentic, structured)
-/// 2. research_autocomplete - Deterministic Rust fetches Google Autocomplete
-/// 3. research_seed_validation - LLM filters suggestions for relevance (agentic, structured)
-/// 4. research_ahrefs_pipeline - Deterministic Rust calls Ahrefs API
-/// 5. research_final_selection - Deterministic filtering/sorting of results
+/// 2. research_seed_validation - LLM validates themes and proposes seed phrasings (agentic, structured)
+/// 3. research_ahrefs_pipeline - Deterministic Rust calls the SEO data provider
+/// 4. research_final_selection - Deterministic filtering/sorting of results
 ///
-/// Steps 1 and 3 use rig's `Extractor<T>` for type-safe structured output,
+/// Steps 1 and 2 use rig's `Extractor<T>` for type-safe structured output,
 /// eliminating the need for a separate normalizer step.
-mod autocomplete;
+mod final_selection;
 mod landing_page;
 mod prompts;
 
-pub(crate) use autocomplete::*;
+pub(crate) use final_selection::*;
 pub(crate) use landing_page::*;
 pub(crate) use prompts::*;
 
@@ -31,7 +30,7 @@ use crate::models::task::Task;
 /// `agent::run_agent` path.
 ///
 /// The `previous_output` parameter contains the output from the previous step,
-/// used to pass data between steps (e.g., autocomplete results to validation).
+/// used to pass data between steps.
 pub async fn exec_research_workflow_step(
     step: &WorkflowStep,
     task: &Task,

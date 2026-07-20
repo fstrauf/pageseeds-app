@@ -242,26 +242,35 @@ pub fn build_research_prompts(
         }
 
         "research_seed_validation" => {
-            // Agentic: LLM filters autocomplete suggestions for domain relevance.
+            // Agentic: LLM validates extracted themes for domain relevance and
+            // proposes 1-3 sharpened seed phrasings per on-topic theme.
             //
             // Why agentic: "is 'options benefits' relevant to an options income tool?"
             // requires understanding the site's domain and user intent. Hard-coding a
             // relevance rule would silently fail on any input it wasn't tested against.
             //
-            // Input: research_autocomplete artifact — [{theme, suggestions: [...]}]
+            // Input: research_seed_extraction artifact — {themes: [string], competitors: [...]}
             // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
-            // Each theme should produce 1-3 validated seeds that are clearly on-topic.
+            // Each on-topic theme should produce 1-3 seeds phrased like real search queries.
 
             let system = include_str!("../../../prompts/seed_validation.md");
 
-            // Read the autocomplete artifact from the task
-            let autocomplete_json = task
+            // Read the seed extraction artifact from the task
+            let extraction_json = task
                 .artifacts
                 .iter()
                 .rev()
-                .find(|a| a.key == "research_autocomplete")
+                .find(|a| a.key == "research_seed_extraction")
                 .and_then(|a| a.content.as_deref())
-                .unwrap_or_else(|| previous_output.unwrap_or("(no autocomplete data)"));
+                .unwrap_or_else(|| previous_output.unwrap_or("(no seed extraction data)"));
+
+            // Extract the themes list for a compact prompt
+            let themes_compact = crate::models::research::parse_seed_extraction(extraction_json)
+                .map(|e| {
+                    serde_json::to_string(&serde_json::json!({ "themes": e.themes }))
+                        .unwrap_or_else(|_| extraction_json.to_string())
+                })
+                .unwrap_or_else(|_| extraction_json.to_string());
 
             // Also load the project brief so the LLM has domain context
             let brief_content = std::fs::read_to_string(paths.automation_dir.join("project.md"))
@@ -275,17 +284,10 @@ pub fn build_research_prompts(
                 brief_content
             };
 
-            // Compact the autocomplete JSON to shave whitespace bytes
-            let autocomplete_compact = serde_json::from_str::<serde_json::Value>(autocomplete_json)
-                .map(|v| {
-                    serde_json::to_string(&v).unwrap_or_else(|_| autocomplete_json.to_string())
-                })
-                .unwrap_or_else(|_| autocomplete_json.to_string());
-
             let user = format!(
-                "## Project Context\n\n{}\n\n## Autocomplete Results\n\n{}\n\n## Task\n\nFilter each theme's suggestions to only those clearly relevant to this site. Output JSON only.",
+                "## Project Context\n\n{}\n\n## Extracted Themes\n\n{}\n\n## Task\n\nValidate each theme for domain relevance and propose 1-3 seed phrasings per on-topic theme. Output JSON only.",
                 brief_trimmed,
-                autocomplete_compact,
+                themes_compact,
             );
 
             Ok((system.to_string(), user))

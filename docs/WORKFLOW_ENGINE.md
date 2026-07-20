@@ -97,16 +97,14 @@ pub struct WorkflowStep {
 
 | Step Name | Kind | Handler | Output |
 |-----------|------|---------|--------|
-| `research_autocomplete` | `ResearchAutocomplete` | `exec_research_autocomplete` | Autocomplete suggestions per theme |
 | `research_seed_validation` | `ResearchSeedValidation` | `exec_research_seed_validation` | Validated seeds with domain relevance |
 | `keyword_research_native` | `KeywordResearchNative` | `exec_keyword_research_native` | `{"difficulty": {...}}` |
 | `research_final_selection` | `ResearchFinalSelection` | `exec_research_final_selection` | `{"landing_page_candidates": [...]}` |
 
 **Research Flow:**
-1. Autocomplete → gathers search suggestions per theme (deterministic)
-2. Seed validation → LLM filters suggestions for domain relevance (agentic)
-3. Keyword research → uses Ahrefs API tools to find keywords with volume/KD data (deterministic)
-4. Final selection → selects best candidates (deterministic)
+1. Seed validation → LLM validates themes and proposes seed phrasings (agentic)
+2. Keyword research → uses the SEO data provider to find keywords with volume/KD data (deterministic)
+3. Final selection → selects best candidates (deterministic), then one batched LLM relevance check drops off-domain candidates before winnability enrichment (agentic, non-fatal)
 
 **Content Write Flow** (`write_article`, `optimize_article`, `create_content`, `optimize_content`, `create_hub_page`, `refresh_hub_page`):
 1. `content_write_stage` → agentic: writes the MDX file directly into the repo (skill: `content-write` or `hub-write`)

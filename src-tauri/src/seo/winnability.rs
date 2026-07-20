@@ -94,26 +94,58 @@ fn is_authority_domain(domain: &str) -> bool {
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 
+/// Short-answer query shapes: definitional lookups an AI Overview can answer
+/// completely inline, so the zero-click risk is real. Process/strategy queries
+/// ("wash sale disallowed", "covered call strategy") imply a user with a
+/// situation — they still click for depth, examples, and tools.
+fn is_short_answer_query(keyword: &str) -> bool {
+    let k = keyword.to_lowercase();
+    k.starts_with("what is")
+        || k.starts_with("what are")
+        || k.starts_with("what's")
+        || k.starts_with("define ")
+        || k.starts_with("meaning of")
+        || k.starts_with("definition of")
+        || k.ends_with(" meaning")
+        || k.ends_with(" definition")
+        || k.contains(" vs ")
+}
+
 /// Assess a keyword's winnability based on SERP features and keyword metrics.
+///
+/// Scoring philosophy:
+/// - AIO presence is weighted by query shape: +2 for short-answer queries
+///   (genuine zero-click risk), +1 otherwise (AIO summarizes but users still
+///   click for depth; AIO citation is also an attainable target).
+/// - Authority domains only add risk when KD >= 30. Below that, KD has already
+///   priced in SERP strength — counting authority again would double-count
+///   the same signal and mark KD-18 keywords with open slots as unwinnable.
 ///
 /// # Arguments
 /// * `keyword` - The keyword being assessed.
 /// * `serp` - SERP feature data (AIO, snippets, competitor domains).
 /// * `kd` - Keyword difficulty score (0-100), if available.
 /// * `intent` - Search intent ("informational", "commercial", "transactional").
+///   Currently reserved for context; the query-shape check carries the
+///   zero-click signal.
 pub fn assess(
     keyword: &str,
     serp: &SerpFeaturesResult,
     kd: Option<f64>,
-    intent: Option<&str>,
+    _intent: Option<&str>,
 ) -> WinnabilityAssessment {
     let mut risk_score: u32 = 0;
     let mut reasons: Vec<&str> = Vec::new();
 
-    // AI Overview — the biggest zero-click risk.
+    // AI Overview — weighted by how completely it can answer the query.
     if serp.ai_overview_present {
-        risk_score += 2;
-        reasons.push("AI Overview present");
+        if is_short_answer_query(keyword) {
+            risk_score += 2;
+            reasons.push("AI Overview present (short-answer query)");
+        } else {
+            risk_score += 1;
+            reasons.push("AI Overview present");
+        }
     }
 
     // Featured snippet — position 0 already captured.
@@ -122,7 +154,9 @@ pub fn assess(
         reasons.push("featured snippet present");
     }
 
-    // Authority competitors in top 5.
+    // Authority competitors in top 5 — only when KD says the SERP is actually
+    // strong (KD < 30 already prices in weak-vs-strong slots).
+    let kd_strong = kd.map(|v| v >= 30.0).unwrap_or(true);
     let authority_competitors: Vec<String> = serp
         .organic_results
         .iter()
@@ -130,14 +164,16 @@ pub fn assess(
         .filter(|r| is_authority_domain(&r.domain))
         .map(|r| r.domain.clone())
         .collect();
-    let auth_count = authority_competitors.len().min(2) as u32;
-    risk_score += auth_count;
-    if auth_count > 0 {
-        reasons.push(if auth_count == 1 {
-            "1 authority domain in top 5"
-        } else {
-            "2+ authority domains in top 5"
-        });
+    if kd_strong {
+        let auth_count = authority_competitors.len().min(2) as u32;
+        risk_score += auth_count;
+        if auth_count > 0 {
+            reasons.push(if auth_count == 1 {
+                "1 authority domain in top 5"
+            } else {
+                "2+ authority domains in top 5"
+            });
+        }
     }
 
     // Keyword difficulty.
@@ -146,12 +182,6 @@ pub fn assess(
             risk_score += 1;
             reasons.push("KD >= 40");
         }
-    }
-
-    // Informational + AIO = highest zero-click risk.
-    if intent == Some("informational") && serp.ai_overview_present {
-        risk_score += 1;
-        reasons.push("informational + AIO");
     }
 
     let bucket = match risk_score {
@@ -221,10 +251,9 @@ mod tests {
     fn differentiate_when_moderate_risk() {
         let serp = make_serp(true, false, false, &["investopedia.com", "smallblog.com"]);
         let result = assess("what is a covered call", &serp, Some(30.0), Some("informational"));
-        // AIO (+2) + 1 authority (+1) + informational+AIO (+1) = 4 → Avoid
-        // Let's test a moderate case instead
-        assert_eq!(result.risk_score, 4);
-        assert_eq!(result.bucket, WinnabilityBucket::Avoid);
+        // Short-answer AIO (+2) + 1 authority (KD >= 30, so counted) (+1) = 3 → Differentiate
+        assert_eq!(result.risk_score, 3);
+        assert_eq!(result.bucket, WinnabilityBucket::Differentiate);
     }
 
     #[test]
@@ -233,6 +262,33 @@ mod tests {
         let result = assess("iron condor strategy", &serp, Some(30.0), Some("informational"));
         // 1 authority (+1) = 1 → Target
         assert_eq!(result.bucket, WinnabilityBucket::Target);
+    }
+
+    #[test]
+    fn low_kd_ignores_authority_domains() {
+        // KD 18 says the SERP has open slots despite Investopedia ranking —
+        // authority is already priced into KD and must not be double-counted.
+        let serp = make_serp(
+            true,
+            false,
+            false,
+            &["investopedia.com", "tastylive.com", "smallblog.com"],
+        );
+        let result = assess("wash sale disallowed", &serp, Some(18.0), Some("informational"));
+        // Non-short-answer AIO (+1) + authority ignored (KD < 30) = 1 → Target
+        assert_eq!(result.risk_score, 1);
+        assert_eq!(result.bucket, WinnabilityBucket::Target);
+    }
+
+    #[test]
+    fn short_answer_query_detection() {
+        assert!(is_short_answer_query("what is iv crush"));
+        assert!(is_short_answer_query("iv crush meaning"));
+        assert!(is_short_answer_query("strike price vs exercise price"));
+        assert!(is_short_answer_query("theta decay definition"));
+        assert!(!is_short_answer_query("wash sale disallowed"));
+        assert!(!is_short_answer_query("covered call strategy"));
+        assert!(!is_short_answer_query("how to roll a covered call"));
     }
 
     #[test]
@@ -249,7 +305,7 @@ mod tests {
             Some(45.0),
             Some("informational"),
         );
-        // AIO (+2) + snippet (+1) + 2 authority (+2) + KD≥40 (+1) + info+AIO (+1) = 7 → Avoid
+        // Short-answer AIO (+2) + snippet (+1) + 2 authority (KD >= 30) (+2) + KD≥40 (+1) = 6 → Avoid
         assert_eq!(result.bucket, WinnabilityBucket::Avoid);
         assert!(result.risk_score >= 4);
     }
@@ -264,9 +320,9 @@ mod tests {
     }
 
     #[test]
-    fn target_for_commercial_intent_even_with_aio() {
-        // Commercial/transactional queries are less AIO-vulnerable.
-        // AIO (+2) + 0 authority = 2 → Differentiate (not Avoid)
+    fn non_short_answer_aio_alone_is_target() {
+        // AIO on a process/strategy query with a weak SERP: users still click
+        // for depth, and the AIO citation itself is winnable.
         let serp = make_serp(true, false, false, &["smallblog.com", "nicissite.com"]);
         let result = assess(
             "best covered call screener",
@@ -274,6 +330,8 @@ mod tests {
             Some(25.0),
             Some("commercial"),
         );
-        assert_eq!(result.bucket, WinnabilityBucket::Differentiate);
+        // Non-short-answer AIO (+1) = 1 → Target
+        assert_eq!(result.risk_score, 1);
+        assert_eq!(result.bucket, WinnabilityBucket::Target);
     }
 }

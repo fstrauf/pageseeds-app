@@ -50,9 +50,7 @@ pub enum StepKind {
     EnsureCoverageFresh,
     RedditPostReply,
     SocialExtractArticle,
-    /// Fetch Google Autocomplete suggestions per theme (deterministic).
-    ResearchAutocomplete,
-    /// LLM filters autocomplete suggestions for domain relevance (agentic).
+    /// LLM validates themes for domain relevance and proposes seed phrasings (agentic).
     ResearchSeedValidation,
     /// Deterministic territory analysis: groups articles by keyword, finds open/saturated themes.
     ResearchTerritoryAnalysis,
@@ -214,7 +212,6 @@ impl StepKind {
             Self::EnsureCoverageFresh => "ensure_coverage_fresh",
             Self::RedditPostReply => "reddit_post_reply",
             Self::SocialExtractArticle => "social_extract_article",
-            Self::ResearchAutocomplete => "research_autocomplete",
             Self::ResearchSeedValidation => "research_seed_validation",
             Self::ResearchTerritoryAnalysis => "research_territory_analysis",
             Self::CtrBuildContext => "ctr_build_context",
@@ -332,7 +329,6 @@ impl FromStr for StepKind {
             "ensure_coverage_fresh" => Ok(Self::EnsureCoverageFresh),
             "reddit_post_reply" => Ok(Self::RedditPostReply),
             "social_extract_article" => Ok(Self::SocialExtractArticle),
-            "research_autocomplete" => Ok(Self::ResearchAutocomplete),
             "research_seed_validation" => Ok(Self::ResearchSeedValidation),
             "research_territory_analysis" => Ok(Self::ResearchTerritoryAnalysis),
             "ctr_build_context" => Ok(Self::CtrBuildContext),
@@ -460,7 +456,6 @@ mod tests {
             StepKind::EnsureCoverageFresh,
             StepKind::RedditPostReply,
             StepKind::SocialExtractArticle,
-            StepKind::ResearchAutocomplete,
             StepKind::ResearchSeedValidation,
             StepKind::ResearchTerritoryAnalysis,
             StepKind::CtrBuildContext,

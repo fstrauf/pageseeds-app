@@ -134,24 +134,11 @@ pub fn create_article_tasks_from_keywords(
     research_task_id: String,
     keywords: Vec<String>,
 ) -> Result<Vec<Task>, String> {
-    use crate::engine::keyword_selection;
-
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let research_task = task_store::get_task(&db, &research_task_id)?;
-
-    let tasks = keyword_selection::build_content_tasks_from_keywords(
-        keywords,
-        &research_task,
-        &research_task_id,
+    crate::engine::keyword_selection::create_article_tasks_from_keywords(
+        &db,
         &project_id,
-    )?;
-
-    for task in &tasks {
-        task_store::create_task(&db, task)?;
-    }
-
-    // Mark the research task done now that keywords have been dispatched.
-    task_store::update_task_status(&db, &research_task_id, TaskStatus::Done)?;
-
-    Ok(tasks)
+        &research_task_id,
+        keywords,
+    )
 }

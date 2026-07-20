@@ -110,6 +110,39 @@ pub fn build_content_tasks_from_keywords(
     Ok(created)
 }
 
+/// Create content tasks from selected keywords and mark the research task done.
+///
+/// Single creation path shared by the Tauri command and the pageseeds-cli
+/// binary: validates the keywords against the research task's selection
+/// artifact, persists one content task per keyword, then transitions the
+/// research task to done (user-selection lifecycle complete).
+pub fn create_article_tasks_from_keywords(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    research_task_id: &str,
+    keywords: Vec<String>,
+) -> Result<Vec<Task>, String> {
+    let research_task = crate::engine::task_store::get_task(conn, research_task_id)
+        .map_err(|e| e.to_string())?;
+
+    let tasks = build_content_tasks_from_keywords(
+        keywords,
+        &research_task,
+        research_task_id,
+        project_id,
+    )?;
+
+    for task in &tasks {
+        crate::engine::task_store::create_task(conn, task).map_err(|e| e.to_string())?;
+    }
+
+    // Mark the research task done now that keywords have been dispatched.
+    crate::engine::task_store::update_task_status(conn, research_task_id, TaskStatus::Done)
+        .map_err(|e| e.to_string())?;
+
+    Ok(tasks)
+}
+
 /// Metric associated with a keyword from research output.
 #[derive(Debug, Clone, Copy)]
 pub struct KeywordMetric {
