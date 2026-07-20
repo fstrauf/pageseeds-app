@@ -35,6 +35,12 @@ pub fn upsert_opportunity(conn: &Connection, opp: &RedditOpportunity) -> Result<
             mention_stance      = excluded.mention_stance,
             product_name        = excluded.product_name,
             reply_text          = excluded.reply_text,
+            -- Revive stale rows on rediscovery (stale -> pending); every other
+            -- status (pending/posted/skipped) is preserved as-is.
+            reply_status        = CASE
+                WHEN reddit_opportunities.reply_status = 'stale' THEN 'pending'
+                ELSE reddit_opportunities.reply_status
+            END,
             updated_at          = excluded.updated_at"#,
         params![
             opp.post_id, opp.title, opp.selftext, opp.url, opp.subreddit, opp.author,
@@ -107,7 +113,7 @@ pub fn mark_skipped(conn: &Connection, post_id: &str) -> Result<()> {
 
 /// Mark all pending rows for a project as 'stale' instead of deleting them.
 /// Stale rows are hidden from the default feed but recoverable (a re-discovered
-/// post is flipped back to 'pending' by the persist step).
+/// post is flipped back to 'pending' by `upsert_opportunity`).
 pub fn mark_pending_stale(conn: &Connection, project_id: &str) -> Result<usize> {
     let now = Utc::now().to_rfc3339();
     let n = conn.execute(

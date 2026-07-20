@@ -63,8 +63,20 @@ pub fn create_reply_tasks_from_opportunities(
         .filter(|o| post_ids.contains(&o.post_id))
         // Prefer the DB row over the artifact snapshot: the picker persists user
         // edits to the opportunity row before spawning, and the DB row is the
-        // source of truth for the draft that will actually be posted.
-        .map(|o| crate::reddit::db::get_opportunity(conn, &o.post_id).unwrap_or(o))
+        // source of truth for the draft that will actually be posted. If the DB
+        // row is missing or unreadable, skip the opportunity rather than silently
+        // discarding the user's edits with the stale artifact snapshot.
+        .filter_map(|o| match crate::reddit::db::get_opportunity(conn, &o.post_id) {
+            Ok(db_opp) => Some(db_opp),
+            Err(e) => {
+                log::warn!(
+                    "[create_reply_tasks_from_opportunities] skipping post_id={}: failed to load DB row: {}",
+                    o.post_id,
+                    e
+                );
+                None
+            }
+        })
         .collect();
 
     if selected_opps.is_empty() {

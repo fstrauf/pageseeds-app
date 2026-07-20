@@ -9,9 +9,9 @@ use std::path::Path;
 ///
 /// Tolerates partial fields — only `post_id` is required.
 /// Marks pending rows from previous runs as 'stale' before inserting fresh results
-/// (stale rows are hidden from the default feed but recoverable — a re-discovered
-/// post is flipped back to 'pending'). Rows with reply_status='posted' or 'skipped'
-/// are preserved for history dedup.
+/// (stale rows are hidden from the default feed but recoverable — `upsert_opportunity`
+/// flips a re-discovered post back to 'pending' atomically). Rows with
+/// reply_status='posted' or 'skipped' are preserved for history dedup.
 pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_str: &str) {
     log::info!(
         "[reddit] persist_reddit_opportunities project={} json_len={}",
@@ -164,13 +164,6 @@ pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_st
         match crate::reddit::db::upsert_opportunity(conn, &opp) {
             Ok(_) => {
                 upserted += 1;
-                // A re-discovered post was just stale-marked above — flip it back to
-                // pending so it shows in the feed again (posted/skipped were already
-                // filtered out by the already_handled check).
-                let _ = conn.execute(
-                    "UPDATE reddit_opportunities SET reply_status='pending', updated_at=?1 WHERE post_id=?2 AND reply_status='stale'",
-                    rusqlite::params![now, opp.post_id],
-                );
             }
             Err(e) => {
                 log::warn!("[reddit] upsert failed post_id={}: {}", opp.post_id, e);
