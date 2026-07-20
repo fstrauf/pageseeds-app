@@ -311,14 +311,21 @@ fn research_artifact_json() -> serde_json::Value {
     })
 }
 
-fn insert_research_task(conn: &rusqlite::Connection) {
-    let mut task = make_task(vec![artifact(
-        "research_final_selection",
-        research_artifact_json(),
-    )]);
-    task.id = "research-1".to_string();
-    task.status = TaskStatus::Review;
-    crate::engine::task_store::create_task(conn, &task).unwrap();
+fn insert_research_task(conn: &rusqlite::Connection) -> String {
+    crate::engine::spawner::TaskSpawner::spawn(
+        conn,
+        crate::engine::spawner::TaskSpec {
+            project_id: "proj1".to_string(),
+            task_type: "research_keywords".to_string(),
+            artifacts: vec![artifact(
+                "research_final_selection",
+                research_artifact_json(),
+            )],
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .id
 }
 
 #[test]
@@ -346,16 +353,16 @@ fn spec_carries_normalized_idempotency_key() {
 #[test]
 fn reselecting_active_keyword_does_not_duplicate_task() {
     let conn = in_memory_db();
-    insert_research_task(&conn);
+    let research_id = insert_research_task(&conn);
 
     let first =
-        create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+        create_article_tasks_from_keywords(&conn, "proj1", &research_id, vec!["seo tools".into()])
             .unwrap();
     assert_eq!(first.len(), 1);
 
     // Re-select while the first write task is still active (todo).
     let second =
-        create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+        create_article_tasks_from_keywords(&conn, "proj1", &research_id, vec!["seo tools".into()])
             .unwrap();
     assert_eq!(second.len(), 1);
     assert_eq!(first[0].id, second[0].id);
@@ -373,19 +380,19 @@ fn reselecting_active_keyword_does_not_duplicate_task() {
 #[test]
 fn casing_and_quote_variants_collapse_to_one_task() {
     let conn = in_memory_db();
-    insert_research_task(&conn);
+    let research_id = insert_research_task(&conn);
 
     let first = create_article_tasks_from_keywords(
         &conn,
         "proj1",
-        "research-1",
+        &research_id,
         vec!["  SEO   Tools ".into()],
     )
     .unwrap();
     let second = create_article_tasks_from_keywords(
         &conn,
         "proj1",
-        "research-1",
+        &research_id,
         vec!["\"seo tools\"".into()],
     )
     .unwrap();
@@ -404,16 +411,16 @@ fn casing_and_quote_variants_collapse_to_one_task() {
 #[test]
 fn reselecting_after_previous_task_done_creates_new_task() {
     let conn = in_memory_db();
-    insert_research_task(&conn);
+    let research_id = insert_research_task(&conn);
 
     let first =
-        create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+        create_article_tasks_from_keywords(&conn, "proj1", &research_id, vec!["seo tools".into()])
             .unwrap();
     crate::engine::task_store::update_task_status(&conn, &first[0].id, TaskStatus::Done)
         .unwrap();
 
     let second =
-        create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+        create_article_tasks_from_keywords(&conn, "proj1", &research_id, vec!["seo tools".into()])
             .unwrap();
     assert_ne!(first[0].id, second[0].id, "SkipIfActive allows re-creation once done");
 }
