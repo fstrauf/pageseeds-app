@@ -976,7 +976,12 @@ pub fn get_project_overview(conn: &Connection, project_id: &str) -> Result<Proje
 }
 
 /// Parse landing page research description JSON to extract context and themes.
-fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
+///
+/// The Overview landing-page dialog writes the task description as
+/// `{"context": "...", "themes": ["...", ...]}`. Shared by the overview
+/// projection, the research pipeline (user themes honored as seeds), and the
+/// seed-extraction/validation prompts (context as a labeled section).
+pub(crate) fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
     let desc = desc.unwrap_or("");
 
     // Try JSON format first
@@ -1003,6 +1008,17 @@ fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec<String>) {
 
     // Fall back to treating entire description as context
     (desc.to_string(), vec![])
+}
+
+/// Unpack the landing-page strategy payload for a task, or `None` when the
+/// task is not a `research_landing_pages` task. Single gate so call sites
+/// don't each repeat the task-type check + description parse.
+pub(crate) fn landing_page_strategy(task: &Task) -> Option<(String, Vec<String>)> {
+    if task.task_type == "research_landing_pages" {
+        Some(parse_landing_page_description(task.description.as_deref()))
+    } else {
+        None
+    }
 }
 
 

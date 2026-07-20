@@ -192,12 +192,42 @@ pub fn build_research_prompts(
             // ── Research shortlist (open territories from GSC analysis) ───────────
             let shortlist_summary = build_shortlist_summary(&task.project_id);
 
+            // Landing page research carries a JSON strategy dialog payload
+            // ({"context": ..., "themes": [...]}). Surface it as labeled
+            // sections instead of raw JSON so the extractor treats user themes
+            // as authoritative seeds and the context as strategy guidance.
+            let task_section = match crate::engine::task_store::landing_page_strategy(task) {
+                Some((context, user_themes)) => {
+                    let mut section = String::new();
+                    if !context.is_empty() {
+                        section.push_str(&format!("## Strategy Context\n\n{}\n\n", context));
+                    }
+                    if !user_themes.is_empty() {
+                        section.push_str(&format!(
+                            "## User-Supplied Themes\n\nThe user explicitly requested these themes — include them verbatim in your extraction:\n\n{}\n\n",
+                            user_themes.join("\n")
+                        ));
+                    }
+                    if section.is_empty() {
+                        section = format!(
+                            "## Task Description\n\n{}\n\n",
+                            task.description.as_deref().unwrap_or("(no description)")
+                        );
+                    }
+                    section
+                }
+                None => format!(
+                    "## Task Description\n\n{}\n\n",
+                    task.description.as_deref().unwrap_or("(no description)")
+                ),
+            };
+
             let user = format!(
-                "## Project Context\n\n{}\n\n## Existing Content Coverage\n\n{}\n\n## Research Shortlist (Priority Territories)\n\n{}\n\n## Task Description\n\n{}\n\n## Project Path\n\n{}",
+                "## Project Context\n\n{}\n\n## Existing Content Coverage\n\n{}\n\n## Research Shortlist (Priority Territories)\n\n{}\n\n{}## Project Path\n\n{}",
                 brief_content,
                 coverage_summary,
                 shortlist_summary,
-                task.description.as_deref().unwrap_or("(no description)"),
+                task_section,
                 project_path
             );
 
@@ -284,9 +314,20 @@ pub fn build_research_prompts(
                 brief_content
             };
 
+            // Landing page research may carry a user-written strategy context —
+            // surface it as a labeled section so validation judges relevance
+            // against the user's stated goals, not just the brief.
+            let strategy_section = match crate::engine::task_store::landing_page_strategy(task) {
+                Some((context, _)) if !context.is_empty() => {
+                    format!("## Strategy Context\n\n{}\n\n", context)
+                }
+                _ => String::new(),
+            };
+
             let user = format!(
-                "## Project Context\n\n{}\n\n## Extracted Themes\n\n{}\n\n## Task\n\nValidate each theme for domain relevance and propose 1-3 seed phrasings per on-topic theme. Output JSON only.",
+                "## Project Context\n\n{}\n\n{}## Extracted Themes\n\n{}\n\n## Task\n\nValidate each theme for domain relevance and propose 1-3 seed phrasings per on-topic theme. Output JSON only.",
                 brief_trimmed,
+                strategy_section,
                 themes_compact,
             );
 

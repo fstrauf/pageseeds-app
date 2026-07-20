@@ -25,7 +25,8 @@ intent: string,
  */
 landing_page_type: string, 
 /**
- * Opportunity score (high/medium/low)
+ * Opportunity score (high/medium/low), derived from the commercial-value
+ * ranking (volume × CPC) relative to the other selected candidates
  */
 opportunity_score: string, 
 /**
@@ -35,4 +36,17 @@ opportunity_reason: string,
 /**
  * Suggested landing page title
  */
-proposed_title: string, };
+proposed_title: string, 
+/**
+ * Cost per click in USD (DataForSEO); `None` when the provider does not
+ * return CPC
+ */
+cpc: number | null, 
+/**
+ * Winnability bucket: "target" | "differentiate" | "avoid"
+ */
+winnability: string | null, 
+/**
+ * Human-readable reason for the winnability score
+ */
+winnability_reason: string | null, };

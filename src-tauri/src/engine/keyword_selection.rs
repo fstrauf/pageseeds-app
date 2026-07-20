@@ -453,7 +453,8 @@ pub(crate) fn meta_by_keyword<T>(
 
 /// Extract landing page candidate metadata (intent, page type, proposed title,
 /// opportunity reason) keyed by normalized keyword. Used to enrich the task
-/// description for `create_landing_page` tasks so the spec writer has full context.
+/// description for `create_landing_page` tasks so the landing page writer has
+/// full context.
 pub fn extract_landing_page_meta(task: &Task) -> HashMap<String, LandingPageCandidateMeta> {
     let Some(v) = parse_artifact_json(task, find_research_selection_artifact(task)) else {
         return HashMap::new();

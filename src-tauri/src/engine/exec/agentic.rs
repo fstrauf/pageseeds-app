@@ -25,6 +25,7 @@ fn is_content_task(task: &Task) -> bool {
             | "optimize_content"
             | "create_hub_page"
             | "refresh_hub_page"
+            | "create_landing_page"
             | "fix_content_article"
     )
 }
@@ -32,7 +33,11 @@ fn is_content_task(task: &Task) -> bool {
 fn is_new_article(task: &Task) -> bool {
     matches!(
         task.task_type.as_str(),
-        "write_article" | "create_content" | "create_hub_page" | "refresh_hub_page"
+        "write_article"
+            | "create_content"
+            | "create_hub_page"
+            | "refresh_hub_page"
+            | "create_landing_page"
     )
 }
 
@@ -362,7 +367,7 @@ fn hub_spoke_context(task: &Task, project_path: &str) -> String {
 fn kimi_backend_preference_for_step(task: &Task, _step: &WorkflowStep) -> Option<&'static str> {
     match task.task_type.as_str() {
         "write_article" | "optimize_article" | "create_content" | "optimize_content"
-        | "create_hub_page" | "refresh_hub_page"
+        | "create_hub_page" | "refresh_hub_page" | "create_landing_page"
         | "fix_content_article" | "fix_ctr_article" => Some("acp"),
         _ => Some("direct"),
     }

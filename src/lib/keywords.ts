@@ -43,6 +43,8 @@ export interface KeywordRow {
   intent_confidence?: number | null
   winnability?: string | null
   winnability_reason?: string | null
+  /** Cost per click in USD (DataForSEO landing research). */
+  cpc?: number | null
 }
 
 /**

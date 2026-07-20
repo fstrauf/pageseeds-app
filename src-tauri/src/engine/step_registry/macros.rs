@@ -11,8 +11,8 @@ use crate::models::task::Task;
 ///
 /// **Simple variant** (task + project_path only):
 /// ```ignore
-/// register_blocking!(handlers, StepKind::LandingPageSpecWrite,
-///     crate::engine::exec::research::exec_landing_page_spec_write);
+/// register_blocking!(handlers, StepKind::ContentAudit,
+///     crate::engine::exec::content_audit::exec_content_audit);
 /// ```
 ///
 /// **With provider variant** (task + project_path + ctx field):

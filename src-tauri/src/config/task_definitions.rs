@@ -57,23 +57,15 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
+    // Landing page writing: full ContentHandler path (landing-page-write skill,
+    // write-verify, link-verify) with the standard post-write follow-ups.
     TaskDefinition {
         task_type: "create_landing_page",
         phase: "implementation",
         run_policy: TaskRunPolicy::UserEnqueue,
         review_surface: TaskReviewSurface::None,
         follow_up_policy: FollowUpPolicy::BackendAuto,
-        handler_family: HandlerFamily::Implementation,
-    },
-    // Deterministic landing page spec: write structured spec from keyword metadata.
-    // Shared handler with create_landing_page; no LLM needed.
-    TaskDefinition {
-        task_type: "landing_page_spec",
-        phase: "implementation",
-        run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::ArtifactReview,
-        follow_up_policy: FollowUpPolicy::BackendAuto,
-        handler_family: HandlerFamily::Implementation,
+        handler_family: HandlerFamily::Content,
     },
     TaskDefinition {
         task_type: "create_content",

@@ -9,12 +9,10 @@
 /// Steps 1 and 2 use rig's `Extractor<T>` for type-safe structured output,
 /// eliminating the need for a separate normalizer step.
 mod final_selection;
-mod landing_page;
 mod prompts;
 mod tests;
 
 pub(crate) use final_selection::*;
-pub(crate) use landing_page::*;
 pub(crate) use prompts::*;
 
 use crate::engine::project_paths::ProjectPaths;

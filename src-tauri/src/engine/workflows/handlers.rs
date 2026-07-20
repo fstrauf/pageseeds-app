@@ -207,6 +207,7 @@ impl WorkflowHandler for ContentHandler {
                 | "optimize_content"
                 | "create_hub_page"
                 | "refresh_hub_page"
+                | "create_landing_page"
                 | "review_article_quality"
         )
     }
@@ -225,11 +226,18 @@ impl WorkflowHandler for ContentHandler {
         let is_hub =
             has_hub_brief || matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
         let step = WorkflowStep::new("content_write_stage", StepKind::Agentic);
-        // Hub pages use the dedicated hub-write skill; all other content tasks
+        // Hub pages use the dedicated hub-write skill; landing pages use the
+        // conversion-focused landing-page-write skill; all other content tasks
         // use content-write, which carries tone, differentiation, and E-E-A-T
         // directives. Previously regular articles loaded no skill at all and
         // fell through to a generic boilerplate prompt with no content strategy.
-        let skill = if is_hub { "hub-write" } else { "content-write" };
+        let skill = if is_hub {
+            "hub-write"
+        } else if task_type(task) == "create_landing_page" {
+            "landing-page-write"
+        } else {
+            "content-write"
+        };
         let mut steps = vec![step.with_param(step_params::SKILL, skill)];
         // Step 2 (deterministic, new-article tasks only): verify the write stage
         // actually produced a registered article file. Turns the silent no-op of
@@ -238,7 +246,11 @@ impl WorkflowHandler for ContentHandler {
         // file is expected and this check does not apply to them.
         if matches!(
             task_type(task),
-            "write_article" | "create_content" | "create_hub_page" | "refresh_hub_page"
+            "write_article"
+                | "create_content"
+                | "create_hub_page"
+                | "refresh_hub_page"
+                | "create_landing_page"
         ) {
             steps.push(WorkflowStep::new(
                 "content_write_verify",
@@ -305,8 +317,6 @@ impl WorkflowHandler for ImplementationHandler {
                 | "content_strategy"
                 | "technical_fix"
                 | "technical_seo"
-                | "landing_page_spec"
-                | "create_landing_page"
                 | "calculator_rollout"
                 | "gsc_indexing_recovery"
                 | "fix_indexing_internal_links"
@@ -497,12 +507,6 @@ impl WorkflowHandler for ImplementationHandler {
                     "gsc_indexing_outcome_report",
                     StepKind::GscIndexingOutcomeReport,
                 ),
-            ],
-            "create_landing_page" | "landing_page_spec" => vec![
-                // Deterministic: build a structured spec file from keyword metadata
-                // already on the task. No LLM needed — the spec is a structured template
-                // populated with keyword, page type, intent, volume, and KD.
-                WorkflowStep::new("landing_page_spec_write", StepKind::LandingPageSpecWrite),
             ],
             "generate_feature_spec" => vec![
                 // Agentic: read all audit artifacts, synthesize findings via LLM,

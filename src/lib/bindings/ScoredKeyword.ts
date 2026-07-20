@@ -36,4 +36,9 @@ intent_confidence: number | null,
  * Coverage-gap score 0-100 from the coverage filter (higher = fills a
  * thinner cluster); `None` when no coverage analysis was available
  */
-gap_score: number | null, };
+gap_score: number | null, 
+/**
+ * Cost per click in USD (DataForSEO); `None` when the provider does not
+ * return CPC. Used to rank landing page candidates by commercial value.
+ */
+cpc: number | null, };

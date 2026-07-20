@@ -80,6 +80,10 @@ pub struct ScoredKeyword {
     /// thinner cluster); `None` when no coverage analysis was available
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gap_score: Option<f64>,
+    /// Cost per click in USD (DataForSEO); `None` when the provider does not
+    /// return CPC. Used to rank landing page candidates by commercial value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpc: Option<f64>,
 }
 
 /// A competitor top keyword from Ahrefs traffic data.
@@ -169,12 +173,23 @@ pub struct LandingPageCandidate {
     pub intent: String,
     /// Type of landing page
     pub landing_page_type: String, // alternative|use_case|category|comparison|feature
-    /// Opportunity score (high/medium/low)
+    /// Opportunity score (high/medium/low), derived from the commercial-value
+    /// ranking (volume × CPC) relative to the other selected candidates
     pub opportunity_score: String,
     /// Why this keyword deserves a landing page
     pub opportunity_reason: String,
     /// Suggested landing page title
     pub proposed_title: String,
+    /// Cost per click in USD (DataForSEO); `None` when the provider does not
+    /// return CPC
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpc: Option<f64>,
+    /// Winnability bucket: "target" | "differentiate" | "avoid"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winnability: Option<String>,
+    /// Human-readable reason for the winnability score
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winnability_reason: Option<String>,
 }
 
 /// Output from Step 3: research_final_selection
