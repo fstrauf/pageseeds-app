@@ -40,6 +40,21 @@ fn is_hub_task(step: &WorkflowStep) -> bool {
     step.params.get(step_params::SKILL).map(|s| s.as_str()) == Some("hub-write")
 }
 
+/// Derive the filename stem for a new-article task: the target keyword from the
+/// task description when present, otherwise the task title with known
+/// imperative prefixes stripped.
+fn task_topic_stem(task: &Task) -> String {
+    if let Some(keyword) = crate::engine::post_actions::content_task_target_keyword(task) {
+        return keyword;
+    }
+    task.title
+        .as_deref()
+        .map(crate::engine::post_actions::strip_content_task_title_prefix)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("article")
+        .to_string()
+}
+
 fn is_research_step(step: &WorkflowStep) -> bool {
     matches!(
         step.name.as_str(),
@@ -51,6 +66,10 @@ fn is_research_step(step: &WorkflowStep) -> bool {
 
 /// Build the publish-date, file-format, link-format, and filename-convention
 /// directive sections for content tasks. Returns `None` for non-content tasks.
+///
+/// `target` is the deterministic target path for new-article tasks plus whether
+/// the configured provider can write files itself. When present, the directive
+/// names the exact path instead of the approximate numbering hint.
 fn content_directives(
     task: &Task,
     content_context: &Option<(
@@ -59,6 +78,7 @@ fn content_directives(
         Option<crate::content::naming::NumberedMdxStyle>,
     )>,
     next_publish_date: &Option<String>,
+    target: Option<(&std::path::Path, bool)>,
 ) -> Option<String> {
     if !is_content_task(task) {
         return None;
@@ -99,14 +119,37 @@ fn content_directives(
          - If you include a 'Related Articles' section, use the same `[title](/blog/slug)` format for every bullet.",
     );
 
-    if let Some((_, _, Some(style))) = content_context {
-        sections.push_str(&format!(
-            "\n\n## Content Filename Convention (Required)\n\
-             - Follow this naming format: `{{id}}_topic_slug.mdx`\n\
-             - Use lowercase with underscores in the slug.\n\
-             - Continue numbering from approximately {}.",
-            style.next_id
-        ));
+    match target {
+        Some((path, true)) => {
+            sections.push_str(&format!(
+                "\n\n## Target File (Required)\n\
+                 - Write the article to EXACTLY this path: `{}`\n\
+                 - Keep the numeric prefix and underscored slug exactly as given.\n\
+                 - Do not invent a different filename, directory, or extension.",
+                path.display()
+            ));
+        }
+        Some((path, false)) => {
+            sections.push_str(&format!(
+                "\n\n## Target File (Required)\n\
+                 - The target path for this article is: `{}`\n\
+                 - You cannot write files. Return ONLY the complete MDX content \
+                 (frontmatter + body) — the caller persists it to that exact path.\n\
+                 - No explanations, commentary, or code fences outside the MDX document.",
+                path.display()
+            ));
+        }
+        None => {
+            if let Some((_, _, Some(style))) = content_context {
+                sections.push_str(&format!(
+                    "\n\n## Content Filename Convention (Required)\n\
+                     - Follow this naming format: `{{id}}_topic_slug.mdx`\n\
+                     - Use lowercase with underscores in the slug.\n\
+                     - Continue numbering from approximately {}.",
+                    style.next_id
+                ));
+            }
+        }
     }
 
     Some(sections)
@@ -141,15 +184,15 @@ fn hub_directives(task: &Task, project_path: &str) -> Option<String> {
 ///   3. Call `agent::run_agent(provider, prompt, project_path)`
 ///   4. Return the raw output as the step result
 fn hub_spoke_context(task: &Task, project_path: &str) -> String {
+    // Only hub titles yield a topic — gate on the hub prefixes, then use the
+    // shared stripper for the actual prefix removal.
     let hub_topic = task
         .title
         .as_deref()
-        .and_then(|t| {
-            t.strip_prefix("Create hub:")
-                .or_else(|| t.strip_prefix("Refresh hub:"))
-        })
-        .unwrap_or("")
-        .trim();
+        .map(str::trim)
+        .filter(|t| t.starts_with("Create hub:") || t.starts_with("Refresh hub:"))
+        .map(crate::engine::post_actions::strip_content_task_title_prefix)
+        .unwrap_or("");
 
     if hub_topic.is_empty() {
         return String::new();
@@ -377,6 +420,25 @@ pub async fn exec_agentic(
         None
     };
 
+    // Text-only providers (Claude / OpenAI / Ollama rig backends) are pure
+    // prompt→text completions — they cannot write the article file themselves,
+    // so the executor must persist the returned MDX (see the fallback below).
+    let provider_has_file_io = crate::rig::provider::provider_supports_file_io(agent_provider);
+    // The provider name String below is moved into the blocking closure; keep
+    // the original &str for post-call logging.
+    let provider_name = agent_provider;
+
+    // Deterministic target path for new-article tasks. Passed to the agent as
+    // an exact directive and reused by the executor-write fallback, so prompt
+    // and fallback never disagree on the filename.
+    let target_path = if is_new_article(task) {
+        content_context.as_ref().map(|(dir, _, style)| {
+            crate::content::naming::next_article_path(dir, *style, &task_topic_stem(task))
+        })
+    } else {
+        None
+    };
+
     // 1. Load skill if specified.  A declared skill is required — missing it is
     //    a hard error so the step does not silently degrade to a vague generic
     //    prompt that produces unparseable prose.
@@ -478,7 +540,12 @@ pub async fn exec_agentic(
     }
 
     // Append task-type-specific prompt sections
-    if let Some(dirs) = content_directives(task, &content_context, &next_publish_date) {
+    if let Some(dirs) = content_directives(
+        task,
+        &content_context,
+        &next_publish_date,
+        target_path.as_deref().map(|p| (p, provider_has_file_io)),
+    ) {
         prompt.push_str(&dirs);
     }
 
@@ -577,6 +644,52 @@ pub async fn exec_agentic(
                                 old.display(),
                                 new.display()
                             );
+                        }
+                    }
+                }
+
+                // Executor-write fallback (issue #13): text-only providers
+                // return the article as chat text and cannot write it. When no
+                // new file appeared, persist the returned MDX to the exact
+                // target path so the downstream ingest/link-verify steps see a
+                // real file. Skipped for file-IO providers — a missing file
+                // there is an agent failure that content_write_verify reports.
+                if !provider_has_file_io && is_new_article(task) {
+                    let new_file_appeared =
+                        crate::content::locator::collect_markdown_files(&content_dir)
+                            .iter()
+                            .any(|p| !before.contains_key(p));
+                    if !new_file_appeared {
+                        if let Some(target) = &target_path {
+                            match crate::engine::text::extract_mdx_document(&output) {
+                                Some(mdx) => match std::fs::write(target, &mdx) {
+                                    Ok(()) => {
+                                        log::info!(
+                                            "[content_write] provider '{}' returned MDX as text — wrote {} ({} chars)",
+                                            provider_name,
+                                            target.display(),
+                                            mdx.len()
+                                        );
+                                        message.push_str(&format!(
+                                            " · wrote returned MDX to {}",
+                                            target.display()
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        log::warn!(
+                                            "[content_write] failed to write returned MDX to {}: {}",
+                                            target.display(),
+                                            e
+                                        );
+                                    }
+                                },
+                                None => {
+                                    log::warn!(
+                                        "[content_write] provider '{}' produced no file and no parseable MDX document — content_write_verify will fail the task",
+                                        provider_name
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -785,5 +898,88 @@ mod tests {
     fn test_estimate_prompt_bytes() {
         assert_eq!(estimate_prompt_bytes("hello"), 5);
         assert_eq!(estimate_prompt_bytes(""), 0);
+    }
+
+    // ── task_topic_stem ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_task_topic_stem_prefers_target_keyword() {
+        let mut task = make_task("write_article");
+        task.description =
+            Some("Target keyword: gamma scalping strategy\nKD: 35\nVolume: 3000".to_string());
+        assert_eq!(task_topic_stem(&task), "gamma scalping strategy");
+    }
+
+    #[test]
+    fn test_task_topic_stem_strips_title_prefixes() {
+        let mut task = make_task("write_article");
+        task.title = Some("Write article: delta hedging".to_string());
+        assert_eq!(task_topic_stem(&task), "delta hedging");
+
+        task.title = Some("Create hub: options greeks".to_string());
+        assert_eq!(task_topic_stem(&task), "options greeks");
+    }
+
+    #[test]
+    fn test_task_topic_stem_falls_back_to_article() {
+        let mut task = make_task("write_article");
+        task.title = None;
+        assert_eq!(task_topic_stem(&task), "article");
+    }
+
+    // ── content_directives target path ───────────────────────────────────────
+
+    fn numbered_ctx(
+        next_id: i64,
+    ) -> Option<(
+        std::path::PathBuf,
+        std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+        Option<crate::content::naming::NumberedMdxStyle>,
+    )> {
+        Some((
+            std::path::PathBuf::from("/repo/content"),
+            std::collections::HashMap::new(),
+            Some(crate::content::naming::NumberedMdxStyle { next_id }),
+        ))
+    }
+
+    #[test]
+    fn test_content_directives_exact_target_for_file_io_provider() {
+        let task = make_task("write_article");
+        let target = std::path::PathBuf::from("/repo/content/7_gamma_scalping.mdx");
+        let out = content_directives(
+            &task,
+            &numbered_ctx(7),
+            &Some("2024-01-01".to_string()),
+            Some((&target, true)),
+        )
+        .unwrap();
+        assert!(out.contains("/repo/content/7_gamma_scalping.mdx"));
+        assert!(out.contains("EXACTLY"));
+        assert!(!out.contains("approximately"));
+    }
+
+    #[test]
+    fn test_content_directives_text_only_provider_returns_mdx() {
+        let task = make_task("write_article");
+        let target = std::path::PathBuf::from("/repo/content/7_gamma_scalping.mdx");
+        let out =
+            content_directives(&task, &numbered_ctx(7), &None, Some((&target, false))).unwrap();
+        assert!(out.contains("/repo/content/7_gamma_scalping.mdx"));
+        assert!(out.contains("You cannot write files"));
+        assert!(out.contains("Return ONLY the complete MDX content"));
+    }
+
+    #[test]
+    fn test_content_directives_approximate_hint_without_target() {
+        let task = make_task("optimize_article");
+        let out = content_directives(&task, &numbered_ctx(7), &None, None).unwrap();
+        assert!(out.contains("approximately 7"));
+    }
+
+    #[test]
+    fn test_content_directives_none_for_non_content_task() {
+        let task = make_task("content_audit");
+        assert!(content_directives(&task, &None, &None, None).is_none());
     }
 }

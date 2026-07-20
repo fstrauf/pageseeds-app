@@ -11,7 +11,7 @@ pub mod logging;
 pub mod models;
 mod clarity;
 pub mod reddit;
-mod rig;
+pub mod rig;
 pub mod seo;
 mod social;
 

@@ -102,6 +102,9 @@ pub enum StepKind {
     /// Deterministic: verify /blog/ links in a freshly written article resolve to
     /// project slugs; auto-repair filename-form hrefs, fail on unresolvable links.
     LinkIntegrityVerify,
+    /// Deterministic: verify a new-article write produced a file on disk that is
+    /// registered in the article index; fails the task loudly otherwise.
+    ContentWriteVerify,
     /// Load approved merge plan from strategy artifact.
     MergeLoadPlan,
     /// Preflight checks before merging (files exist, no cycles, keeper indexable).
@@ -237,6 +240,7 @@ impl StepKind {
             Self::FixContentArticleApply => "fix_content_article_apply",
             Self::FixContentArticleVerify => "fix_content_article_verify",
             Self::LinkIntegrityVerify => "link_integrity_verify",
+            Self::ContentWriteVerify => "content_write_verify",
             Self::MergeLoadPlan => "merge_load_plan",
             Self::MergePreflight => "merge_preflight",
             Self::MergeExtractSections => "merge_extract_sections",
@@ -354,6 +358,7 @@ impl FromStr for StepKind {
             "fix_content_article_apply" => Ok(Self::FixContentArticleApply),
             "fix_content_article_verify" => Ok(Self::FixContentArticleVerify),
             "link_integrity_verify" => Ok(Self::LinkIntegrityVerify),
+            "content_write_verify" => Ok(Self::ContentWriteVerify),
             "merge_load_plan" => Ok(Self::MergeLoadPlan),
             "merge_preflight" => Ok(Self::MergePreflight),
             "merge_extract_sections" => Ok(Self::MergeExtractSections),
@@ -482,6 +487,7 @@ mod tests {
             StepKind::FixContentArticleApply,
             StepKind::FixContentArticleVerify,
             StepKind::LinkIntegrityVerify,
+            StepKind::ContentWriteVerify,
             StepKind::MergeLoadPlan,
             StepKind::MergePreflight,
             StepKind::MergeExtractSections,

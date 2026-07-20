@@ -107,8 +107,9 @@ pub struct WorkflowStep {
 3. Final selection → selects best candidates (deterministic), then one batched LLM relevance check drops off-domain candidates before winnability enrichment (agentic, non-fatal)
 
 **Content Write Flow** (`write_article`, `optimize_article`, `create_content`, `optimize_content`, `create_hub_page`, `refresh_hub_page`):
-1. `content_write_stage` → agentic: writes the MDX file directly into the repo (skill: `content-write` or `hub-write`)
-2. `content_link_verify` (`LinkIntegrityVerify`) → deterministic: every `/blog/` link in the written file must resolve to the project slug set (minus redirected slugs). Filename-form hrefs (`/blog/248_roast_profile_management`) are auto-repaired in place; any unresolvable link fails the step with a per-link report, and the file is left untouched (all-or-nothing).
+1. `content_write_stage` → agentic: writes the MDX file directly into the repo (skill: `content-write` or `hub-write`). New-article tasks get an exact target path directive; for text-only providers (Claude/OpenAI/Ollama) the executor persists the returned MDX to that path itself.
+2. `content_write_verify` (`ContentWriteVerify`, new-article tasks only) → deterministic: fails the task when the write stage produced no registered article file (issue #13 safety net).
+3. `content_link_verify` (`LinkIntegrityVerify`) → deterministic: every `/blog/` link in the written file must resolve to the project slug set (minus redirected slugs). Filename-form hrefs (`/blog/248_roast_profile_management`) are auto-repaired in place; any unresolvable link fails the step with a per-link report, and the file is left untouched (all-or-nothing). Fails when no written file exists.
 
 **Consolidate Cluster Flow** (`consolidate_cluster`):
 1. `merge_load_plan` → `merge_preflight` → `merge_extract_sections` → `merge_draft_patch` (agentic) → `merge_apply_patch`

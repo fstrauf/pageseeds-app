@@ -20,8 +20,7 @@ pub fn exec_landing_page_spec_write(task: &Task, project_path: &str) -> StepResu
     }
 
     // Parse metadata from task description (format: "Target keyword: X\nKD: Y\nVolume: Z\n...")
-    let desc = task.description.as_deref().unwrap_or("");
-    let meta = parse_landing_page_meta(desc);
+    let meta = parse_landing_page_meta(task);
 
     let slug = slugify(&meta.keyword);
     let filename = format!("landing_page_spec_{}.md", slug);
@@ -75,9 +74,14 @@ struct LandingPageMeta {
 ///   Page type: <string>
 ///   Proposed title: <string>
 ///   Opportunity: <string>
-fn parse_landing_page_meta(desc: &str) -> LandingPageMeta {
+///
+/// The keyword line is parsed by the shared
+/// `post_actions::content_task_target_keyword` helper.
+fn parse_landing_page_meta(task: &Task) -> LandingPageMeta {
+    let desc = task.description.as_deref().unwrap_or("");
     let mut meta = LandingPageMeta {
-        keyword: String::new(),
+        keyword: crate::engine::post_actions::content_task_target_keyword(task)
+            .unwrap_or_default(),
         kd: None,
         volume: None,
         intent: None,
@@ -88,9 +92,7 @@ fn parse_landing_page_meta(desc: &str) -> LandingPageMeta {
 
     for line in desc.lines() {
         let line = line.trim();
-        if let Some(val) = line.strip_prefix("Target keyword:") {
-            meta.keyword = val.trim().to_string();
-        } else if let Some(val) = line.strip_prefix("KD:") {
+        if let Some(val) = line.strip_prefix("KD:") {
             meta.kd = val.trim().parse().ok();
         } else if let Some(val) = line.strip_prefix("Volume:") {
             meta.volume = val.trim().parse().ok();

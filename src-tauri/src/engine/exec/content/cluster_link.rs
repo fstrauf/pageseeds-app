@@ -165,8 +165,10 @@ pub(crate) fn create_cluster_and_link_task(
     let parent_title = parent_task
         .title
         .as_deref()
-        .unwrap_or("new article")
-        .trim_start_matches("Write article: ");
+        .map_or(
+            "new article",
+            crate::engine::post_actions::strip_content_task_title_prefix,
+        );
 
     let title = format!("Cluster and link: {}", parent_title);
     let description = format!(

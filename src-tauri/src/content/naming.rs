@@ -79,6 +79,44 @@ fn normalize_slug_underscored(stem: &str) -> String {
     }
 }
 
+/// Compute the exact target path for a new article file, fully deterministically.
+///
+/// With an established numbered style the file is `{next_id}_{slug}.mdx`,
+/// incrementing past any occupied id (mirrors the collision loop in
+/// [`rename_new_files_to_numbered_mdx`]). Without a numbered style the file is
+/// `{slug}.mdx`, with a numeric suffix appended if that name is taken.
+///
+/// Used both to tell the agent the exact path to write (prompt directive) and
+/// by the executor when it must persist returned MDX content itself.
+pub(crate) fn next_article_path(
+    dir: &std::path::Path,
+    style: Option<NumberedMdxStyle>,
+    stem: &str,
+) -> std::path::PathBuf {
+    let slug = normalize_slug_underscored(stem);
+    match style {
+        Some(style) => {
+            let mut next_id = style.next_id;
+            loop {
+                let candidate = dir.join(format!("{}_{}.mdx", next_id, slug));
+                if !candidate.exists() {
+                    break candidate;
+                }
+                next_id += 1;
+            }
+        }
+        None => {
+            let mut candidate = dir.join(format!("{}.mdx", slug));
+            let mut n = 2i64;
+            while candidate.exists() {
+                candidate = dir.join(format!("{}_{}.mdx", slug, n));
+                n += 1;
+            }
+            candidate
+        }
+    }
+}
+
 pub(crate) fn rename_new_files_to_numbered_mdx(
     dir: &std::path::Path,
     before: &std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
@@ -192,4 +230,54 @@ pub(crate) fn rename_new_or_modified_md_to_mdx(
     }
 
     renamed
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pageseeds-naming-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn next_article_path_uses_numbered_style() {
+        let dir = temp_dir();
+        let path = next_article_path(&dir, Some(NumberedMdxStyle { next_id: 7 }), "Gamma Scalping!");
+        assert_eq!(path, dir.join("7_gamma_scalping.mdx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn next_article_path_increments_past_occupied_ids() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("7_gamma_scalping.mdx"), "x").unwrap();
+        std::fs::write(dir.join("8_gamma_scalping.mdx"), "x").unwrap();
+        let path = next_article_path(&dir, Some(NumberedMdxStyle { next_id: 7 }), "gamma scalping");
+        assert_eq!(path, dir.join("9_gamma_scalping.mdx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn next_article_path_without_style_suffixes_collisions() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("gamma_scalping.mdx"), "x").unwrap();
+        let path = next_article_path(&dir, None, "gamma scalping");
+        assert_eq!(path, dir.join("gamma_scalping_2.mdx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn next_article_path_empty_stem_falls_back_to_article() {
+        let dir = temp_dir();
+        let path = next_article_path(&dir, None, "!!!");
+        assert_eq!(path, dir.join("article.mdx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
