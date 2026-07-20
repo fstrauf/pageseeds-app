@@ -1,0 +1,20 @@
+{
+  "name": "internal-links",
+  "mdx_path": "content/blog/grow-tomatoes-in-pots.mdx",
+  "mdx": "---\ntitle: \"Grow Tomatoes in Pots\"\ndescription: \"Grow tomatoes in pots with deep containers, rich potting mix, full sun, and steady watering for a reliable harvest on any balcony or patio.\"\ndate: \"2026-02-14\"\n---\n\n# Grow Tomatoes in Pots\n\nTomatoes are the most rewarding container vegetable. Choose a compact variety, give it a deep pot, and keep watering consistent to avoid split fruit and blossom end rot.\n\n## Container size\n\nUse at least a 20-litre pot per plant. Determinate varieties stay compact; indeterminate ones need staking.\n\n## Feeding\n\nFeed with a tomato fertilizer every two weeks once flowers appear.\n\n## Common problems\n\nBlossom end rot comes from irregular watering. Mulch the surface to even out moisture.\n",
+  "content_fix_context": {
+    "article_id": 22,
+    "article_file": "content/blog/grow-tomatoes-in-pots.mdx",
+    "article_title": "Grow Tomatoes in Pots",
+    "target_keyword": "grow tomatoes in pots",
+    "suggestions": [
+      {
+        "category": "internal_links",
+        "current": "The article has no internal links.",
+        "proposed": "Add links to related articles such as container-gardening-vegetables and best-soil-for-containers where they help the reader.",
+        "reason": "Zero internal links; related container gardening articles exist and would distribute page authority."
+      }
+    ]
+  },
+  "valid_slugs": ["container-gardening-vegetables", "best-soil-for-containers", "balcony-herb-garden"]
+}

@@ -45,7 +45,7 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 agent-wrapper = { git = "https://github.com/fstrauf/agent-wrapper", tag = "v0.1.0" }
-rig-core = { version = "0.35", features = ["derive"] }
+rig-core = { version = "0.35", features = ["derive", "experimental"] }
 schemars = "1.0"
 async-trait = "0.1"
 writing-analysis = "0.1"

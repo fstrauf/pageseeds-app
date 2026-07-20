@@ -1,0 +1,26 @@
+{
+  "name": "intro-and-faq",
+  "mdx_path": "content/blog/companion-planting-containers.mdx",
+  "mdx": "---\ntitle: \"Companion Planting in Containers\"\ndescription: \"Companion planting in containers pairs compatible vegetables and herbs in the same pot to save space, deter pests, and improve growth on small balconies.\"\ndate: \"2026-01-28\"\n---\n\n# Companion Planting in Containers\n\nSome plants grow better together.\n\n## Classic container pairings\n\nTomatoes with basil, peppers with parsley, and lettuce with radishes all share pots well.\n\n## Pairings to avoid\n\nFennel inhibits most vegetables. Beans dislike onions and garlic.\n\n## Pot size for pairs\n\nA shared pot needs at least 25 litres so both root systems have room.\n",
+  "content_fix_context": {
+    "article_id": 23,
+    "article_file": "content/blog/companion-planting-containers.mdx",
+    "article_title": "Companion Planting in Containers",
+    "target_keyword": "companion planting containers",
+    "suggestions": [
+      {
+        "category": "intro",
+        "current": "Some plants grow better together.",
+        "proposed": "A 40-60 word intro that answers the query directly and includes the target keyword",
+        "reason": "Intro is 6 words and does not contain the target keyword."
+      },
+      {
+        "category": "faq",
+        "current": "No FAQ frontmatter present.",
+        "proposed": "Add 3-5 FAQ entries covering pairings, pot size, and mistakes to avoid.",
+        "reason": "Competitors hold FAQ rich snippets for this query."
+      }
+    ]
+  },
+  "valid_slugs": ["container-gardening-vegetables", "best-soil-for-containers", "grow-tomatoes-in-pots"]
+}

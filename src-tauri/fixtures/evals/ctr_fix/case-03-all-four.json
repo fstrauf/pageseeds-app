@@ -1,0 +1,41 @@
+{
+  "name": "all-four-fixes",
+  "mdx_path": "content/blog/balcony-herb-garden.mdx",
+  "mdx": "---\ntitle: \"How To Grow Herbs On Your Balcony\"\ndescription: \"Grow herbs on your balcony.\"\ndate: \"2025-11-20\"\n---\n\n# How To Grow Herbs On Your Balcony\n\nHerbs are easy.\n\n## Sunlight needs\n\nMost culinary herbs need at least six hours of direct sun. South-facing balconies work best.\n\n## Watering schedule\n\nSmall pots dry out fast. Check daily in summer and water when the top inch is dry.\n\n## Best herbs for beginners\n\nBasil, mint, chives, and parsley tolerate mistakes and regrow after harvesting.\n",
+  "ctr_recommendation": {
+    "article_id": 13,
+    "url_slug": "balcony-herb-garden",
+    "file": "content/blog/balcony-herb-garden.mdx",
+    "priority": "high",
+    "target_keyword": "balcony herb garden",
+    "fixes": [
+      {
+        "type": "title_rewrite",
+        "current": "How To Grow Herbs On Your Balcony",
+        "recommended": "Keyword-led title with a specific benefit or number",
+        "reason": "Title lacks the exact target keyword phrasing and any hook; CTR is 0.6% at position 4."
+      },
+      {
+        "type": "meta_description",
+        "current": "Grow herbs on your balcony.",
+        "recommended": "120-155 char meta with target keyword and benefit",
+        "reason": "Meta is 27 chars and gets rewritten by Google."
+      },
+      {
+        "type": "faq_schema",
+        "recommended": [
+          "Which herbs grow best on a balcony?",
+          "How much sun do balcony herbs need?",
+          "How often should I water balcony herbs?"
+        ],
+        "reason": "No FAQ frontmatter; SERP shows People-Also-Ask boxes for this query."
+      },
+      {
+        "type": "snippet_bait",
+        "current": "Herbs are easy.",
+        "recommended": "40-60 word direct-answer paragraph for the featured snippet",
+        "reason": "First paragraph is 3 words; position 1 holds a paragraph snippet we can challenge."
+      }
+    ]
+  }
+}

@@ -15,6 +15,11 @@ pub mod rig;
 pub mod seo;
 mod social;
 
+/// Live LLM eval regression tests (rig::evals). Test-only: nothing here ships in the binary.
+/// Run with: `cargo test evals -- --ignored --nocapture`
+#[cfg(test)]
+mod evals;
+
 use commands::{AppState, GscState, SeoState};
 use std::sync::Mutex;
 use tauri::Manager;

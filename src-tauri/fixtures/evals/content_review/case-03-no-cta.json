@@ -1,0 +1,14 @@
+{
+  "name": "no-cta-weak-structure",
+  "article_context": {
+    "article_id": 33,
+    "article_title": "Balcony Composting Guide",
+    "article_file": "content/blog/balcony-composting.mdx",
+    "url_slug": "balcony-composting",
+    "target_keyword": "balcony composting",
+    "published_date": "2025-12-05",
+    "gsc_snapshot": { "clicks_30d": 8, "impressions_30d": 1800, "ctr": 0.0044, "position": 5.5 },
+    "failed_checks": ["no_cta", "heading_structure", "eeat_signals"],
+    "source_excerpt": "# Balcony Composting Guide\n\nBalcony composting turns kitchen scraps into potting gold without smells or pests, using a sealed bokashi bin or a compact worm farm sized for small spaces. Both methods fit under a bench and process a household's vegetable scraps.\n\nBokashi ferments scraps with bran in an airtight bucket. Worm farms digest scraps into castings. Both need a carbon balance and weekly attention.\n\nStart with fruit and vegetable peels, avoid meat and dairy in worm farms, and drain bokashi tea twice a week to use as diluted fertilizer."
+  }
+}

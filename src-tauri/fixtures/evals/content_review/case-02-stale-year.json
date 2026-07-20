@@ -1,0 +1,14 @@
+{
+  "name": "stale-year-freshness",
+  "article_context": {
+    "article_id": 32,
+    "article_title": "Best Balcony Plants 2024: Top Picks for Small Spaces",
+    "article_file": "content/blog/best-balcony-plants.mdx",
+    "url_slug": "best-balcony-plants",
+    "target_keyword": "best balcony plants",
+    "published_date": "2026-01-10",
+    "gsc_snapshot": { "clicks_30d": 12, "impressions_30d": 5400, "ctr": 0.0022, "position": 3.8 },
+    "failed_checks": ["year_freshness", "ctr_below_expected"],
+    "source_excerpt": "# Best Balcony Plants 2024: Top Picks for Small Spaces\n\nThe best balcony plants tolerate wind, handle pots, and look good from indoors. Our top picks for 2024 include lavender, dwarf olive, trailing rosemary, and compact hydrangeas.\n\n## Sun lovers\n\nLavender and dwarf olive thrive on hot south-facing balconies.\n\n## Shade tolerant\n\nHostas and ferns suit north-facing balconies with indirect light."
+  }
+}
