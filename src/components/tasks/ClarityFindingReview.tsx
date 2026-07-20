@@ -3,8 +3,8 @@ import { Check, ExternalLink, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { clarityGetSummary, createTask } from '../../lib/tauri'
-import type { ClarityFindingPayload, Project, Task } from '../../lib/types'
+import { clarityGetSummary, createClarityTasksFromSelection } from '../../lib/tauri'
+import type { ClarityFindingPayload, ClarityTaskCreationResult, Project, Task } from '../../lib/types'
 
 interface Props {
   task: Task
@@ -13,11 +13,12 @@ interface Props {
   onClose?: () => void
 }
 
-export function ClarityFindingReview({ project, onTasksCreated, onClose }: Props) {
+export function ClarityFindingReview({ task, project, onTasksCreated, onClose }: Props) {
   const [findings, setFindings] = useState<ClarityFindingPayload[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [result, setResult] = useState<ClarityTaskCreationResult | null>(null)
 
   useEffect(() => {
     if (!project) return
@@ -46,34 +47,22 @@ export function ClarityFindingReview({ project, onTasksCreated, onClose }: Props
     if (!project) return
     setCreating(true)
     try {
-      const newTasks: Task[] = []
-      for (const idx of Array.from(selected)) {
-        const finding = findings[idx]
-        if (!finding) continue
+      const selectedFindings = Array.from(selected)
+        .map(idx => findings[idx])
+        .filter((f): f is ClarityFindingPayload => Boolean(f))
 
-        const taskType =
-          finding.issue_type === 'Quickback bounces' || finding.issue_type === 'Low engagement'
-            ? 'fix_content_article'
-            : finding.issue_type === 'Rage clicks' || finding.issue_type === 'Dead clicks'
-            ? 'create_landing_page'
-            : 'write_article'
-
-        const newTask = await createTask(
-          project.id,
-          taskType,
-          `${finding.issue_type}: ${finding.url}`,
-          `From Clarity investigation: ${finding.evidence}\n\nRecommendation: ${finding.recommendation}\n\nDashboard: ${finding.clarity_dashboard_url}`,
-          finding.severity === 'high' ? 'high' : 'medium',
-        )
-        newTasks.push(newTask)
-      }
-      onTasksCreated?.(newTasks)
-      onClose?.()
+      const creationResult = await createClarityTasksFromSelection(task.id, selectedFindings)
+      setResult(creationResult)
     } catch (e) {
       console.error('Failed to create tasks from Clarity findings', e)
     } finally {
       setCreating(false)
     }
+  }
+
+  const handleDone = () => {
+    onTasksCreated?.(result?.created_tasks ?? [])
+    onClose?.()
   }
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading findings…</p>
@@ -82,6 +71,38 @@ export function ClarityFindingReview({ project, onTasksCreated, onClose }: Props
       <p className="text-sm text-muted-foreground">
         No findings available. The summary may not have been generated yet.
       </p>
+    )
+  }
+
+  if (result) {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm">
+          Created {result.created_tasks.length} fix task
+          {result.created_tasks.length !== 1 ? 's' : ''}.
+        </p>
+        {result.skipped.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              {result.skipped.length} finding{result.skipped.length !== 1 ? 's were' : ' was'} skipped:
+            </p>
+            {result.skipped.map((skip, idx) => (
+              <Card key={idx}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">{skip.issue_type}</CardTitle>
+                  <CardDescription className="truncate">{skip.url}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-xs text-muted-foreground">{skip.reason}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+        <Button onClick={handleDone} className="w-full">
+          Done
+        </Button>
+      </div>
     )
   }
 

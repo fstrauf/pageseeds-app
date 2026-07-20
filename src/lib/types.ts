@@ -63,7 +63,9 @@ export type {
   ClarityExportRowPayload,
   ClarityFindingPayload,
   ClarityPageScorePayload,
+  ClaritySkippedFinding,
   ClaritySummaryPayload,
+  ClarityTaskCreationResult,
   
   // Reddit Models
   MigrationResult,

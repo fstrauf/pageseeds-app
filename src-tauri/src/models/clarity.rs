@@ -32,6 +32,23 @@ pub struct ClarityFindingPayload {
     pub clarity_dashboard_url: String,
 }
 
+/// A finding that was skipped during follow-up task creation, with the reason.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ClaritySkippedFinding {
+    pub issue_type: String,
+    pub url: String,
+    pub reason: String,
+}
+
+/// Result of creating follow-up tasks from selected Clarity findings.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ClarityTaskCreationResult {
+    pub created_tasks: Vec<crate::models::task::Task>,
+    pub skipped: Vec<ClaritySkippedFinding>,
+}
+
 /// Summary payload exposed over IPC.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
