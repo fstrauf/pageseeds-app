@@ -41,7 +41,9 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
 
     let mut merge_recommendations: Vec<serde_json::Value> = Vec::new();
     let mut risks: Vec<String> = Vec::new();
-    let mut guard_degraded_count: usize = 0;
+    // Guard-degradation count computed by the analyze step (typed channel —
+    // do not infer from no_action reason prose, which the model authors).
+    let guard_degraded_count = batch_doc["guard_degraded_count"].as_u64().unwrap_or(0) as usize;
 
     if let Some(outputs) = batch_doc["batch_outputs"].as_array() {
         for output in outputs {
@@ -62,16 +64,6 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false)
                 {
-                    // Distinguish guard-degraded recommendations (the analyze
-                    // step's id-resolution guard rewrote them to no_action)
-                    // from genuine model no_action decisions.
-                    let reason = rec.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-                    if reason.contains("keep_id")
-                        || reason.contains("redirect_ids")
-                        || reason.contains("candidate page set")
-                    {
-                        guard_degraded_count += 1;
-                    }
                     continue;
                 }
 

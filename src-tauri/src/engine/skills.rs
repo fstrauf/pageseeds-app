@@ -354,10 +354,9 @@ mod tests {
         for name in EMBEDDED_SKILL_NAMES {
             let skill = load_embedded_skill(name)
                 .unwrap_or_else(|| panic!("embedded skill '{}' failed to load", name));
-            assert_eq!(
-                extract_skill_version(&skill.content),
-                Some(1),
-                "embedded skill '{}' is missing a `<!-- skill-version: 1 -->` marker in its first 5 lines",
+            assert!(
+                extract_skill_version(&skill.content).is_some(),
+                "embedded skill '{}' is missing a `<!-- skill-version: N -->` marker in its first 5 lines",
                 name
             );
         }

@@ -944,12 +944,17 @@ Some content here.
     fn test_can_reduce_strategy_surfaces_guard_degraded_recommendations() {
         // Guard-degraded no_action recommendations (keep_id/redirect_ids not in
         // the candidate page set) must surface as a risk, not vanish silently.
+        // The count comes from the typed `guard_degraded_count` field written by
+        // the analyze step — not from sniffing reason prose, so a genuine
+        // model-authored no_action reason that happens to mention "keep_id"
+        // must NOT be counted.
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
         let auto_dir = Path::new(&path).join(".github").join("automation");
         std::fs::create_dir_all(&auto_dir).unwrap();
 
         let batch_doc = serde_json::json!({
+            "guard_degraded_count": 1,
             "batch_outputs": [
                 {
                     "candidate_id": "test_0",
@@ -966,7 +971,7 @@ Some content here.
                     "message": "ok",
                     "merge_recommendation": {
                         "no_action": true,
-                        "reason": "Topical overlap only"
+                        "reason": "Neither page is a strong keeper; keep_id selection would be arbitrary, topical overlap only."
                     }
                 }
             ]

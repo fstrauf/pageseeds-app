@@ -312,6 +312,7 @@ pub(crate) fn exec_can_analyze_candidates(
         "generated_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         "batch_outputs": batch_outputs,
         "failed_candidates": failed_candidates,
+        "guard_degraded_count": guard_degraded_count,
     });
 
     let batch_path = paths
