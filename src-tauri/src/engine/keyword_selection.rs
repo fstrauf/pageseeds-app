@@ -2,22 +2,20 @@ use crate::engine::content_brief::{
     build_content_brief, build_content_brief_artifact, build_content_task_description,
     extract_article_keyword_meta, load_content_brief_context, ContentBriefContext,
 };
-use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRun, TaskStatus};
+use crate::engine::spawner::TaskSpec;
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskStatus};
 use std::collections::{HashMap, HashSet};
 
-/// Build content tasks from selected keywords and mark the research task as done.
-/// Validates inputs, deduplicates, and constructs task specs.
+/// Build content task specs from selected keywords for the research task.
+/// Validates inputs, deduplicates, and constructs spawner specs — IDs, phase,
+/// status, and lifecycle defaults are resolved by the spawner.
 pub fn build_content_tasks_from_keywords(
     requested_keywords: Vec<String>,
     research_task: &Task,
     research_task_id: &str,
     project_id: &str,
     brief_ctx: &ContentBriefContext,
-) -> Result<Vec<Task>, String> {
-    use crate::config::{
-        default_follow_up_policy, default_phase, default_review_surface, default_run_policy,
-    };
-
+) -> Result<Vec<TaskSpec>, String> {
     // Determine content task type based on research task type
     let content_task_type = if research_task.task_type == "research_landing_pages" {
         "create_landing_page"
@@ -77,56 +75,51 @@ pub fn build_content_tasks_from_keywords(
         HashMap::new()
     };
 
-    let mut created = Vec::new();
-    for (idx, keyword) in requested_keywords.iter().enumerate() {
-        let now = chrono::Utc::now().to_rfc3339();
-        let id = format!("task-{}-{}", chrono::Utc::now().timestamp_millis(), idx);
+    let mut specs = Vec::new();
+    for keyword in requested_keywords.iter() {
         let title = to_title_case(keyword);
-        let metric = metrics.get(&normalize_keyword(keyword));
+        let normalized = normalize_keyword(keyword);
+        let metric = metrics.get(&normalized);
         let priority_enum = compute_task_priority(metric);
         let brief = build_content_brief(
             keyword,
             metric,
-            lp_meta.get(&normalize_keyword(keyword)),
-            article_meta.get(&normalize_keyword(keyword)),
+            lp_meta.get(&normalized),
+            article_meta.get(&normalized),
             brief_ctx,
         );
         let description = build_content_task_description(&brief);
         let provenance = build_keyword_provenance_artifact(keyword, research_task_id);
         let brief_artifact = build_content_brief_artifact(&brief, research_task_id);
 
-        let task = Task {
-            id,
-            phase: default_phase(content_task_type).to_string(),
-            run_policy: default_run_policy(content_task_type),
-            review_surface: default_review_surface(content_task_type),
-            follow_up_policy: default_follow_up_policy(content_task_type),
+        // Deterministic idempotency key per keyword: re-selecting a keyword whose
+        // write task is still active returns the existing task (SkipIfActive).
+        let idempotency_key = format!("{content_task_type}:{project_id}:{normalized}");
+
+        specs.push(TaskSpec {
+            project_id: project_id.to_string(),
             task_type: content_task_type.to_string(),
-            status: TaskStatus::Todo,
-            priority: priority_enum,
-            agent_policy: AgentPolicy::None,
             title: Some(title),
             description: Some(description),
-            project_id: project_id.to_string(),
+            priority: priority_enum,
+            agent_policy: AgentPolicy::None,
             depends_on: vec![research_task_id.to_string()],
             artifacts: vec![provenance, brief_artifact],
-            run: TaskRun::default(),
-            created_at: now.clone(),
-            updated_at: now,
-            not_before: None,
-        };
-        created.push(task);
+            idempotency_key: Some(idempotency_key),
+            ..Default::default()
+        });
     }
 
-    Ok(created)
+    Ok(specs)
 }
 
 /// Create content tasks from selected keywords and mark the research task done.
 ///
 /// Single creation path shared by the Tauri command and the pageseeds-cli
 /// binary: validates the keywords against the research task's selection
-/// artifact, persists one content task per keyword, then transitions the
-/// research task to done (user-selection lifecycle complete).
+/// artifact, spawns one content task per keyword via the TaskSpawner
+/// (idempotent per keyword), then transitions the research task to done
+/// (user-selection lifecycle complete).
 pub fn create_article_tasks_from_keywords(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -138,7 +131,7 @@ pub fn create_article_tasks_from_keywords(
 
     let brief_ctx = load_content_brief_context(conn, project_id, &research_task);
 
-    let tasks = build_content_tasks_from_keywords(
+    let specs = build_content_tasks_from_keywords(
         keywords,
         &research_task,
         research_task_id,
@@ -146,8 +139,11 @@ pub fn create_article_tasks_from_keywords(
         &brief_ctx,
     )?;
 
-    for task in &tasks {
-        crate::engine::task_store::create_task(conn, task).map_err(|e| e.to_string())?;
+    let mut tasks = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let task = crate::engine::spawner::TaskSpawner::spawn(conn, spec)
+            .map_err(|e| e.to_string())?;
+        tasks.push(task);
     }
 
     // Mark the research task done now that keywords have been dispatched.
@@ -187,8 +183,10 @@ pub fn to_title_case(s: &str) -> String {
         .join(" ")
 }
 
+/// Normalize a keyword for dedup and idempotency keys. Delegates to the
+/// canonical normalizer (strips quotes, collapses whitespace, lowercases).
 pub fn normalize_keyword(s: &str) -> String {
-    s.trim().to_lowercase()
+    crate::content::keyword_match::normalize_keyword(s)
 }
 
 pub(crate) fn push_unique_keyword(out: &mut Vec<String>, seen: &mut HashSet<String>, kw: &str) {
@@ -512,248 +510,7 @@ pub fn build_keyword_provenance_artifact(keyword: &str, research_task_id: &str) 
         )),
     }
 }
-
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::task::{
-        AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun,
-        TaskRunPolicy, TaskStatus,
-    };
-
-    fn make_task(artifacts: Vec<TaskArtifact>) -> Task {
-        Task {
-            id: "test-kw".to_string(),
-            task_type: "research_keywords".to_string(),
-            phase: "research".to_string(),
-            status: TaskStatus::Review,
-            priority: Priority::Medium,
-            run_policy: TaskRunPolicy::UserEnqueue,
-            review_surface: TaskReviewSurface::None,
-            follow_up_policy: FollowUpPolicy::None,
-            agent_policy: AgentPolicy::Optional,
-            title: Some("Keyword test".to_string()),
-            description: None,
-            project_id: "proj1".to_string(),
-            depends_on: vec![],
-            artifacts,
-            run: TaskRun::default(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            updated_at: "2024-01-01T00:00:00Z".to_string(),
-            not_before: None,
-        }
-    }
-
-    fn artifact(key: &str, content: serde_json::Value) -> TaskArtifact {
-        TaskArtifact {
-            key: key.to_string(),
-            path: None,
-            artifact_type: None,
-            source: None,
-            content: Some(content.to_string()),
-        }
-    }
-
-    // ── parse_range_midpoint ──────────────────────────────────────────────────
-
-    #[test]
-    fn range_midpoint_range_string() {
-        assert_eq!(parse_range_midpoint("1,000-10,000"), Some(5500));
-    }
-
-    #[test]
-    fn range_midpoint_single_number_with_comma() {
-        assert_eq!(parse_range_midpoint("1,200"), Some(1200));
-    }
-
-    #[test]
-    fn range_midpoint_single_plain_number() {
-        assert_eq!(parse_range_midpoint("1200"), Some(1200));
-    }
-
-    #[test]
-    fn range_midpoint_empty_string() {
-        assert_eq!(parse_range_midpoint(""), None);
-    }
-
-    #[test]
-    fn range_midpoint_em_dash_placeholder() {
-        assert_eq!(parse_range_midpoint("—"), None);
-    }
-
-    #[test]
-    fn range_midpoint_second_boundary_of_range() {
-        assert_eq!(parse_range_midpoint("5,000-10,000"), Some(7500));
-    }
-
-    // ── extract_keywords_from_markdown_table ──────────────────────────────────
-
-    #[test]
-    fn markdown_table_extracts_keyword_column() {
-        let raw = "| Priority | Keyword | Volume | KD |\n\
-                   |---|---|---|---|\n\
-                   | High | seo tools | 5,000-10,000 | 30 |\n\
-                   | Medium | content marketing | 1,000-5,000 | 45 |\n";
-        let kws = extract_keywords_from_markdown_table(raw);
-        assert!(kws.contains(&"seo tools".to_string()), "got: {kws:?}");
-        assert!(
-            kws.contains(&"content marketing".to_string()),
-            "got: {kws:?}"
-        );
-    }
-
-    #[test]
-    fn markdown_table_skips_header_row() {
-        let raw = "| Priority | Keyword | Volume | KD |\n|---|---|---|---|\n";
-        assert!(extract_keywords_from_markdown_table(raw).is_empty());
-    }
-
-    #[test]
-    fn markdown_table_deduplicates_keywords() {
-        let raw = "| Priority | Keyword | Volume | KD |\n\
-                   |---|---|---|---|\n\
-                   | High | seo tools | 1,000 | 30 |\n\
-                   | High | seo tools | 2,000 | 35 |\n";
-        let kws = extract_keywords_from_markdown_table(raw);
-        assert_eq!(kws.iter().filter(|k| k.as_str() == "seo tools").count(), 1);
-    }
-
-    // ── extract_selectable_keywords ───────────────────────────────────────────
-
-    #[test]
-    fn selectable_reads_difficulty_results_array() {
-        let json = serde_json::json!({
-            "difficulty": {
-                "results": [
-                    {"keyword": "seo tools", "difficulty": 30, "volume": "5,000-10,000"},
-                    {"keyword": "content strategy", "difficulty": 45, "volume": "1,000-5,000"},
-                ]
-            }
-        });
-        let task = make_task(vec![artifact("research_keywords_cli", json)]);
-        let kws = extract_selectable_keywords(&task);
-        assert!(kws.contains(&"seo tools".to_string()), "got: {kws:?}");
-        assert!(
-            kws.contains(&"content strategy".to_string()),
-            "got: {kws:?}"
-        );
-    }
-
-    #[test]
-    fn selectable_falls_back_to_new_keywords() {
-        let json = serde_json::json!({
-            "new_keywords": ["keyword a", "keyword b", "keyword c"]
-        });
-        let task = make_task(vec![artifact("research_keywords_cli", json)]);
-        let kws = extract_selectable_keywords(&task);
-        assert!(kws.contains(&"keyword a".to_string()), "got: {kws:?}");
-        assert_eq!(kws.len(), 3);
-    }
-
-    #[test]
-    fn selectable_prefers_normalize_stage_over_cli_artifact() {
-        let cli_json = serde_json::json!({
-            "difficulty": {"results": [{"keyword": "from_cli", "difficulty": 20, "volume": "500"}]}
-        });
-        let norm_json = serde_json::json!({
-            "difficulty": {"results": [{"keyword": "from_normalizer", "difficulty": 15, "volume": "1000"}]}
-        });
-        let task = make_task(vec![
-            artifact("research_keywords_cli", cli_json),
-            artifact("research_normalize_stage", norm_json),
-        ]);
-        let kws = extract_selectable_keywords(&task);
-        assert!(kws.contains(&"from_normalizer".to_string()), "got: {kws:?}");
-        assert!(!kws.contains(&"from_cli".to_string()), "got: {kws:?}");
-    }
-
-    #[test]
-    fn selectable_empty_for_no_artifacts() {
-        let task = make_task(vec![]);
-        assert!(extract_selectable_keywords(&task).is_empty());
-    }
-
-    // ── extract_keyword_metrics ───────────────────────────────────────────────
-
-    #[test]
-    fn metrics_reads_difficulty_and_volume_midpoint() {
-        let json = serde_json::json!({
-            "difficulty": {
-                "results": [
-                    {"keyword": "seo tools", "difficulty": 28, "volume": "5,000-10,000"},
-                ]
-            }
-        });
-        let task = make_task(vec![artifact("research_keywords_cli", json)]);
-        let metrics = extract_keyword_metrics(&task);
-        let m = metrics.get("seo tools").expect("metric not found");
-        assert_eq!(m.difficulty, Some(28));
-        assert_eq!(m.volume, Some(7500)); // midpoint of 5000–10000
-    }
-
-    #[test]
-    fn metrics_handles_null_difficulty() {
-        let json = serde_json::json!({
-            "difficulty": {
-                "results": [
-                    {"keyword": "hard keyword", "difficulty": null, "volume": "1,000-5,000"},
-                ]
-            }
-        });
-        let task = make_task(vec![artifact("research_keywords_cli", json)]);
-        let metrics = extract_keyword_metrics(&task);
-        let m = metrics.get("hard keyword").expect("metric not found");
-        assert_eq!(m.difficulty, None);
-        assert_eq!(m.volume, Some(3000)); // midpoint of 1000–5000
-    }
-
-    #[test]
-    fn metrics_empty_for_no_artifacts() {
-        let task = make_task(vec![]);
-        assert!(extract_keyword_metrics(&task).is_empty());
-    }
-
-    // ── normalize_keyword ─────────────────────────────────────────────────────
-
-    #[test]
-    fn normalize_trims_and_lowercases() {
-        assert_eq!(normalize_keyword("  SEO Tools  "), "seo tools");
-        assert_eq!(normalize_keyword("Content Marketing"), "content marketing");
-    }
-
-    // ── to_title_case ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn debug_research_output_format() {
-        // Sample output from research_ahrefs_pipeline to verify format
-        let sample = r#"{
-            "keywords": [
-                {"keyword": "test", "volume": 100, "kd": 25.0, "traffic": 500.0, "has_data": true}
-            ],
-            "themes": ["test"],
-            "total_candidates": 1,
-            "with_data_count": 1
-        }"#;
-
-        let parsed: serde_json::Value = serde_json::from_str(sample).unwrap();
-
-        // Verify the format
-        if let Some(keywords) = parsed.get("keywords").and_then(|k| k.as_array()) {
-            if let Some(first) = keywords.first() {
-                println!("Keyword: {:?}", first.get("keyword"));
-                println!("Volume: {:?}", first.get("volume"));
-                println!("KD: {:?}", first.get("kd"));
-                println!("Traffic: {:?}", first.get("traffic"));
-                println!("Has data: {:?}", first.get("has_data"));
-            }
-        }
-    }
-
-    #[test]
-    fn title_case_capitalizes_each_word() {
-        assert_eq!(to_title_case("seo tools guide"), "Seo Tools Guide");
-        assert_eq!(to_title_case("content"), "Content");
-    }
-}
+mod tests;
