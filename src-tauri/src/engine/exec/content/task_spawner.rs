@@ -1,10 +1,13 @@
 use crate::engine::project_paths::ProjectPaths;
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskArtifact};
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 
-pub(crate) fn recommendation_article_id(article: &serde_json::Value) -> Option<i64> {
-    match article.get("article_id") {
-        Some(serde_json::Value::String(id)) => {
+/// Leniently coerce a JSON value to an article id: accepts numbers and
+/// numeric strings (historical artifacts were written both ways).
+fn value_as_i64(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::String(id) => {
             let trimmed = id.trim();
             if trimmed.is_empty() {
                 None
@@ -12,8 +15,61 @@ pub(crate) fn recommendation_article_id(article: &serde_json::Value) -> Option<i
                 trimmed.parse::<i64>().ok()
             }
         }
-        Some(serde_json::Value::Number(id)) => id.as_i64(),
+        serde_json::Value::Number(id) => id.as_i64(),
         _ => None,
+    }
+}
+
+pub(crate) fn recommendation_article_id(article: &serde_json::Value) -> Option<i64> {
+    article.get("article_id").and_then(value_as_i64)
+}
+
+fn deserialize_lenient_i64<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value_as_i64(&value).unwrap_or(0))
+}
+
+/// Typed payload of the `recommendations_{article_id}` task artifact — the
+/// single writer/reader contract for per-article fix recommendations.
+///
+/// Consumers also read historical artifacts stored in the DB, so every field
+/// tolerates absence (`#[serde(default)]`) and `article_id` accepts both
+/// numbers and numeric strings, mirroring the loose `serde_json::Value`
+/// indexing previously used in `fix_context`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct ArticleRecommendationPayload {
+    #[serde(default, deserialize_with = "deserialize_lenient_i64")]
+    pub article_id: i64,
+    #[serde(default)]
+    pub article_title: String,
+    #[serde(default)]
+    pub article_file: String,
+    #[serde(default)]
+    pub url_slug: String,
+    #[serde(default)]
+    pub target_keyword: Option<String>,
+    /// Kept as raw JSON values: historical suggestions vary in shape and are
+    /// passed through verbatim to the fix pipeline's generate step, which
+    /// parses them tolerantly into `ReviewSuggestion`.
+    #[serde(default)]
+    pub suggestions: Vec<serde_json::Value>,
+}
+
+/// Build the single `recommendations_{article_id}` artifact for a fix task.
+/// Owns the artifact key format so all writers agree on it.
+pub(crate) fn recommendation_artifact(
+    payload: &ArticleRecommendationPayload,
+    source: &str,
+) -> TaskArtifact {
+    TaskArtifact {
+        key: format!("recommendations_{}", payload.article_id),
+        path: None,
+        artifact_type: Some("json".to_string()),
+        source: Some(source.to_string()),
+        content: Some(serde_json::to_string(payload).unwrap_or_default()),
     }
 }
 
@@ -112,7 +168,7 @@ pub(crate) fn create_fix_content_article_tasks(
     project_path: &str,
 ) -> Vec<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{AgentPolicy, Priority, TaskArtifact, TaskRunPolicy, TaskStatus};
+    use crate::models::task::{AgentPolicy, Priority, TaskRunPolicy, TaskStatus};
     use std::collections::HashSet;
 
     let paths = ProjectPaths::from_path(project_path);
@@ -174,27 +230,20 @@ pub(crate) fn create_fix_content_article_tasks(
 
         // Store the full single-article recommendations so the fix task is self-contained.
         // This matches the CTR pattern where follow-up tasks carry their full context.
-        let article_rec = serde_json::json!({
-            "article_id": article_id,
-            "article_title": article_title,
-            "article_file": article_file,
-            "url_slug": article["url_slug"].as_str().unwrap_or(""),
-            "target_keyword": article["target_keyword"].as_str().unwrap_or(""),
-            "suggestions": article["suggestions"].clone(),
-        });
-        let article_rec_str = serde_json::to_string(&article_rec).unwrap_or_default();
+        let payload = ArticleRecommendationPayload {
+            article_id,
+            article_title: article_title.to_string(),
+            article_file: article_file.to_string(),
+            url_slug: article["url_slug"].as_str().unwrap_or("").to_string(),
+            target_keyword: Some(article["target_keyword"].as_str().unwrap_or("").to_string()),
+            suggestions: article["suggestions"].as_array().cloned().unwrap_or_default(),
+        };
         let article_id_str = article_id.to_string();
 
         let title = format!("Fix: {}", article_title);
 
         // Create individual artifact for this article
-        let artifact = TaskArtifact {
-            key: format!("recommendations_{}", article_id_str),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some("content_review".to_string()),
-            content: Some(article_rec_str),
-        };
+        let artifact = recommendation_artifact(&payload, "content_review");
 
         // Idempotency key per article: fix_content_article:{project_id}:{article_id}
         let idempotency_key = format!(

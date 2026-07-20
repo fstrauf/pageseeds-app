@@ -13,6 +13,7 @@
 
 use rusqlite::Connection;
 
+use crate::engine::exec::content::{recommendation_artifact, ArticleRecommendationPayload};
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
 use crate::engine::task_store;
 use crate::error::{Error, Result};
@@ -20,7 +21,7 @@ use crate::models::clarity::{
     ClarityFindingPayload, ClaritySkippedFinding, ClarityTaskCreationResult,
 };
 use crate::models::content_review::ReviewSuggestion;
-use crate::models::task::{AgentPolicy, Priority, TaskArtifact, TaskRunPolicy, TaskStatus};
+use crate::models::task::{AgentPolicy, Priority, TaskRunPolicy, TaskStatus};
 
 /// Create follow-up tasks from user selections in the task drawer.
 ///
@@ -77,8 +78,8 @@ pub fn spawn_tasks_from_selection(
             }
         };
 
-        // Self-contained single-article recommendation, matching the shape
-        // written by `create_fix_content_article_tasks` so the fix pipeline's
+        // Self-contained single-article recommendation in the shared
+        // `recommendations_{article_id}` contract, so the fix pipeline's
         // context step can consume it directly.
         let suggestion = ReviewSuggestion {
             category: "clarity".to_string(),
@@ -90,21 +91,15 @@ pub fn spawn_tasks_from_selection(
             ),
             priority: Some(finding.severity.clone()),
         };
-        let article_rec = serde_json::json!({
-            "article_id": article.id,
-            "article_title": article.title,
-            "article_file": article.file,
-            "url_slug": article.url_slug,
-            "target_keyword": article.target_keyword,
-            "suggestions": [suggestion],
-        });
-        let artifact = TaskArtifact {
-            key: format!("recommendations_{}", article.id),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some(parent_task.task_type.clone()),
-            content: Some(article_rec.to_string()),
+        let payload = ArticleRecommendationPayload {
+            article_id: article.id,
+            article_title: article.title.clone(),
+            article_file: article.file.clone(),
+            url_slug: article.url_slug.clone(),
+            target_keyword: article.target_keyword.clone(),
+            suggestions: vec![serde_json::to_value(&suggestion).unwrap_or_default()],
         };
+        let artifact = recommendation_artifact(&payload, &parent_task.task_type);
 
         let normalized_slug = crate::content::slug::normalize_url_slug(&article.url_slug);
         let idempotency_key = format!(

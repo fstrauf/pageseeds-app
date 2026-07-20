@@ -18,6 +18,7 @@ export function ClarityFindingReview({ task, project, onTasksCreated, onClose }:
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const [result, setResult] = useState<ClarityTaskCreationResult | null>(null)
 
   useEffect(() => {
@@ -46,6 +47,7 @@ export function ClarityFindingReview({ task, project, onTasksCreated, onClose }:
   const handleCreateTasks = async () => {
     if (!project) return
     setCreating(true)
+    setCreateError(null)
     try {
       const selectedFindings = Array.from(selected)
         .map(idx => findings[idx])
@@ -55,6 +57,7 @@ export function ClarityFindingReview({ task, project, onTasksCreated, onClose }:
       setResult(creationResult)
     } catch (e) {
       console.error('Failed to create tasks from Clarity findings', e)
+      setCreateError(e instanceof Error ? e.message : String(e))
     } finally {
       setCreating(false)
     }
@@ -168,6 +171,12 @@ export function ClarityFindingReview({ task, project, onTasksCreated, onClose }:
           </CardContent>
         </Card>
       ))}
+
+      {createError && (
+        <p className="text-sm text-destructive" role="alert">
+          {createError}
+        </p>
+      )}
 
       <Button
         onClick={handleCreateTasks}
