@@ -1,4 +1,4 @@
-use super::load_search_params_from_artifact;
+use super::{extract_user_context_from_description, load_search_params_from_artifact};
 use crate::models::task::Task;
 use rusqlite::Connection;
 use std::path::Path;
@@ -8,9 +8,11 @@ use std::path::Path;
 /// Parse a JSON array of Reddit opportunity objects and upsert each into SQLite.
 ///
 /// Tolerates partial fields — only `post_id` is required.
-/// Clears pending rows from previous runs before inserting fresh results.
-/// Rows with reply_status='posted' or 'skipped' are preserved.
-pub(crate) fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_str: &str) {
+/// Marks pending rows from previous runs as 'stale' before inserting fresh results
+/// (stale rows are hidden from the default feed but recoverable — a re-discovered
+/// post is flipped back to 'pending'). Rows with reply_status='posted' or 'skipped'
+/// are preserved for history dedup.
+pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_str: &str) {
     log::info!(
         "[reddit] persist_reddit_opportunities project={} json_len={}",
         project_id,
@@ -47,17 +49,12 @@ pub(crate) fn persist_reddit_opportunities(conn: &Connection, project_id: &str, 
         return;
     };
 
-    // Clear pending rows from previous runs; preserve posted/skipped for history dedup.
-    let deleted = conn
-        .execute(
-            "DELETE FROM reddit_opportunities WHERE project_id=?1 AND reply_status='pending'",
-            rusqlite::params![project_id],
-        )
-        .unwrap_or(0);
-    if deleted > 0 {
+    // Mark pending rows from previous runs as stale; preserve posted/skipped for history dedup.
+    let staled = crate::reddit::db::mark_pending_stale(conn, project_id).unwrap_or(0);
+    if staled > 0 {
         log::info!(
-            "[reddit] cleared {} stale pending rows for project={}",
-            deleted,
+            "[reddit] marked {} pending rows stale for project={}",
+            staled,
             project_id
         );
     }
@@ -89,6 +86,10 @@ pub(crate) fn persist_reddit_opportunities(conn: &Connection, project_id: &str, 
             post_id,
             title: item
                 .get("title")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            selftext: item
+                .get("selftext")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             url: item.get("url").and_then(|v| v.as_str()).map(str::to_string),
@@ -163,6 +164,13 @@ pub(crate) fn persist_reddit_opportunities(conn: &Connection, project_id: &str, 
         match crate::reddit::db::upsert_opportunity(conn, &opp) {
             Ok(_) => {
                 upserted += 1;
+                // A re-discovered post was just stale-marked above — flip it back to
+                // pending so it shows in the feed again (posted/skipped were already
+                // filtered out by the already_handled check).
+                let _ = conn.execute(
+                    "UPDATE reddit_opportunities SET reply_status='pending', updated_at=?1 WHERE post_id=?2 AND reply_status='stale'",
+                    rusqlite::params![now, opp.post_id],
+                );
             }
             Err(e) => {
                 log::warn!("[reddit] upsert failed post_id={}: {}", opp.post_id, e);
@@ -202,16 +210,17 @@ pub fn exec_reddit_enrich(
         String,
         Option<String>,
         Option<String>,
+        Option<String>,
         Option<f64>,
         Option<f64>,
     )> = {
         let mut result = Vec::new();
         if let Ok(mut stmt) = conn.prepare(
-            "SELECT post_id, title, subreddit, engagement_score, accessibility_score \
+            "SELECT post_id, title, subreddit, selftext, engagement_score, accessibility_score \
              FROM reddit_opportunities \
              WHERE project_id=?1 \
                AND (why_relevant IS NULL OR reply_text IS NULL) \
-               AND reply_status != 'skipped' \
+               AND reply_status = 'pending' \
              LIMIT 5",
         ) {
             if let Ok(mapped) = stmt.query_map(rusqlite::params![project_id], |row| {
@@ -219,8 +228,9 @@ pub fn exec_reddit_enrich(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<f64>>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, Option<f64>>(5)?,
                 ))
             }) {
                 for item in mapped.flatten() {
@@ -269,19 +279,24 @@ pub fn exec_reddit_enrich(
     }
 
     // Try to load structured params from the artifact (produced by reddit_config_parse_stage)
-    let (product_name, mention_stance_str) =
+    let (product_name, mention_stance_str, user_context) =
         match load_search_params_from_artifact(task, project_path) {
             Some(params) => {
                 let name = params
                     .product_name
                     .unwrap_or_else(|| "the product".to_string());
                 let stance = params.mention_stance.to_uppercase();
+                // Fall back to the task description for artifacts created before
+                // user_context was wired through.
+                let ctx = params
+                    .user_context
+                    .or_else(|| extract_user_context_from_description(task));
                 log::info!(
                     "[reddit_enrich] using artifact params: product_name='{}', stance='{}'",
                     name,
                     stance
                 );
-                (name, stance)
+                (name, stance, ctx)
             }
             None => {
                 // Fallback: deterministic parse from reddit_config.md
@@ -293,7 +308,7 @@ pub fn exec_reddit_enrich(
                     .product_name
                     .unwrap_or_else(|| "the product".to_string());
                 let stance = cfg.mention_stance.as_str().to_string();
-                (name, stance)
+                (name, stance, extract_user_context_from_description(task))
             }
         };
 
@@ -321,9 +336,17 @@ pub fn exec_reddit_enrich(
     let posts_block: String = rows
         .iter()
         .enumerate()
-        .map(|(i, (pid, title, sub, _, _))| {
+        .map(|(i, (pid, title, sub, selftext, _, _))| {
+            let body = selftext
+                .as_deref()
+                .unwrap_or("")
+                .replace('"', "'")
+                .replace('\n', " ")
+                .chars()
+                .take(500)
+                .collect::<String>();
             format!(
-                "{}. post_id=\"{}\"  subreddit=\"{}\"  title=\"{}\"",
+                "{}. post_id=\"{}\"  subreddit=\"{}\"  title=\"{}\"  body=\"{}\"",
                 i + 1,
                 pid,
                 sub.as_deref().unwrap_or("unknown"),
@@ -333,24 +356,35 @@ pub fn exec_reddit_enrich(
                     .replace('"', "'")
                     .chars()
                     .take(200)
-                    .collect::<String>()
+                    .collect::<String>(),
+                body
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
+    let user_focus_block = match &user_context {
+        Some(ctx) if !ctx.trim().is_empty() => format!(
+            "## USER FOCUS FOR THIS SEARCH\nThe user provided this extra focus for the search — weigh it when assessing relevance and drafting replies:\n{}\n\n",
+            ctx.trim()
+        ),
+        _ => String::new(),
+    };
+
     let context = format!(
         "## PROJECT CONTEXT\n{project_context}\n\n\
          ## REDDIT CONFIG\n{reddit_config_raw}\n\n\
+         {user_focus_block}\
          ## REPLY GUARDRAILS\n{guardrails}\n\n\
          ## PRODUCT MENTION RULES\n\
          Product name: {product_name}\n\
          Mention stance: {mention_stance_str}\n\
          {stance_instruction}\n\n\
-         ## POST TITLES\n\
+         ## POSTS (title + body)\n\
          {posts_block}",
         project_context = project_context,
         reddit_config_raw = reddit_config_raw,
+        user_focus_block = user_focus_block,
         guardrails = guardrails,
         product_name = product_name,
         mention_stance_str = mention_stance_str,
@@ -428,8 +462,8 @@ pub fn exec_reddit_enrich(
 
         let (engagement_score, accessibility_score): (f64, f64) = rows
             .iter()
-            .find(|(pid, _, _, _, _)| pid == post_id)
-            .map(|(_, _, _, eng, acc)| (eng.unwrap_or(5.0), acc.unwrap_or(5.0)))
+            .find(|(pid, _, _, _, _, _)| pid == post_id)
+            .map(|(_, _, _, _, eng, acc)| (eng.unwrap_or(5.0), acc.unwrap_or(5.0)))
             .unwrap_or((5.0, 5.0));
 
         let final_score = (relevance_score + engagement_score + accessibility_score) / 3.0;

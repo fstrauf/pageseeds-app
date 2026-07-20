@@ -318,6 +318,16 @@ pub fn migrate_reddit_db(
     reddit::db::migrate_from_client_ops(&db, &project_id, &path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn update_reddit_reply_text(
+    state: State<'_, AppState>,
+    post_id: String,
+    reply_text: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    reddit::db::update_reply_text(&db, &post_id, &reply_text).map_err(|e| e.to_string())
+}
+
 /// Create reddit_reply tasks from selected opportunities in a completed search task.
 #[tauri::command]
 pub fn create_reddit_reply_tasks(

@@ -25,6 +25,8 @@ pub(crate) use search::*;
 
 // Public re-exports for integration tests
 pub use config::exec_reddit_config_parse;
+pub use enrich::persist_reddit_opportunities;
+pub use reply::exec_reddit_post_reply;
 
 /// Load structured search params from the reddit_config_parse_stage artifact.
 /// Returns None if no artifact found or parsing fails.
@@ -87,5 +89,6 @@ pub(crate) fn parse_config_fallback(config: &str) -> RedditSearchParams {
         query_keywords: queries,
         seed_subreddits: seed_subs,
         excluded_subreddits: excluded,
+        user_context: None,
     }
 }

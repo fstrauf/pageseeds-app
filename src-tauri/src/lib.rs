@@ -172,6 +172,7 @@ pub fn run() {
             commands::draft_reddit_reply,
             commands::enrich_reddit_opportunities,
             commands::create_reddit_reply_tasks,
+            commands::update_reddit_reply_text,
             commands::gsc_get_auth_status,
             commands::gsc_authenticate,
             commands::gsc_oauth_start,

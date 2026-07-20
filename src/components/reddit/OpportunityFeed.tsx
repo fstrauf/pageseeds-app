@@ -161,7 +161,7 @@ export function OpportunityFeed({ projectId, selectedId, onSelect, onStatusChang
       {/* toolbar */}
       <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: 'var(--color-border)' }}>
         <div className="flex gap-1">
-          {(['', 'pending', 'posted', 'skipped'] as const).map(s => (
+          {(['', 'pending', 'posted', 'skipped', 'stale'] as const).map(s => (
             <button
               key={s}
               onClick={() => { setStatusFilter(s); setSelectedIds(new Set()) }}

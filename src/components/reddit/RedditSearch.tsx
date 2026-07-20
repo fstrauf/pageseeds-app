@@ -44,6 +44,7 @@ export function RedditSearch({ projectId, onSaved }: Props) {
       const opp: RedditOpportunity = {
         post_id: submission.post_id,
         title: submission.title,
+        selftext: submission.selftext ?? null,
         url: submission.url,
         subreddit: submission.subreddit,
         author: submission.author,

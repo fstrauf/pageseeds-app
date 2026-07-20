@@ -23,7 +23,7 @@ pub fn exec_reddit_fetch_results(
                 relevance_score, engagement_score, accessibility_score, final_score, severity,
                 why_relevant, key_pain_points, website_fit, mention_stance, product_name, reply_status,
                 reply_text, reply_url, reply_upvotes, reply_replies, posted_at,
-                project_id, created_at, updated_at
+                project_id, created_at, updated_at, selftext
          FROM reddit_opportunities
          WHERE project_id=?1 AND reply_status='pending'
          ORDER BY final_score DESC NULLS LAST, relevance_score DESC NULLS LAST
@@ -37,6 +37,7 @@ pub fn exec_reddit_fetch_results(
                 Ok(RedditOpportunity {
                     post_id: row.get(0)?,
                     title: row.get(1).ok(),
+                    selftext: row.get(27).ok(),
                     url: row.get(2).ok(),
                     subreddit: row.get(3).ok(),
                     author: row.get(4).ok(),
@@ -122,8 +123,9 @@ pub fn exec_reddit_fetch_results(
 
 /// Execute a reddit_reply task: post the reply to Reddit via API.
 ///
-/// Extracts post_id and reply_text from the task description,
-/// calls the Reddit API to post the comment, and updates the database.
+/// Extracts post_id and reply_text from the task description, validates the reply
+/// (base rules + project mention stance) BEFORE any Reddit API call — a failed
+/// validation fails the task — then posts the comment and updates the database.
 pub fn exec_reddit_post_reply(
     task: &Task,
     project_path: &str,
@@ -147,6 +149,35 @@ pub fn exec_reddit_post_reply(
     };
 
     log::info!("[reddit_post_reply] posting to post_id={}", post_id);
+
+    // Validate the reply BEFORE any Reddit API call — the automated lane must
+    // enforce the same rules as the manual UI lane (length, no URLs, no markdown
+    // links, sentence/word counts, mention stance).
+    let base_check = crate::reddit::validation::validate_reply(&reply_text);
+    if !base_check.valid {
+        let reason = base_check.error.unwrap_or_else(|| "invalid reply".to_string());
+        log::warn!("[reddit_post_reply] validation failed: {}", reason);
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("Reply validation failed: {}", reason),
+            output: None,
+        };
+    }
+    let automation_dir = std::path::Path::new(project_path)
+        .join(".github")
+        .join("automation");
+    let stance_check = crate::reddit::validation::validate_project_stance(&reply_text, &automation_dir);
+    if !stance_check.valid {
+        let reason = stance_check
+            .error
+            .unwrap_or_else(|| "mention stance violation".to_string());
+        log::warn!("[reddit_post_reply] stance validation failed: {}", reason);
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!("Reply validation failed: {}", reason),
+            output: None,
+        };
+    }
 
     // Load Reddit credentials
     let resolver = EnvResolver::new(std::path::Path::new(project_path));

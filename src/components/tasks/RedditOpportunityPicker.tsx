@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CheckSquare, Square, Loader2, ExternalLink, MessageSquare } from 'lucide-react'
-import { createRedditReplyTasks } from '../../lib/tauri'
-import { useQueue } from '../../lib/queue-context'
+import { createRedditReplyTasks, updateRedditReplyText } from '../../lib/tauri'
 import { useErrorHandler } from '../../lib/toast-context'
 import type { Task } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { Textarea } from '@/components/ui/textarea'
 import { cn } from '../../lib/utils'
 
 interface RedditOpportunity {
@@ -72,11 +72,13 @@ function formatDate(dateStr?: string): string {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportunityPickerProps) {
-  const queue = useQueue()
   const [rows, setRows] = useState<OpportunityRow[]>([])
   const [creating, setCreating] = useState(false)
   const { showError } = useErrorHandler()
   const [expandedReply, setExpandedReply] = useState<string | null>(null)
+  // User edits to draft replies, keyed by post_id. Persisted to the opportunity
+  // row before reply tasks are created — nothing is posted without this gate.
+  const [draftEdits, setDraftEdits] = useState<Record<string, string>>({})
 
   // Parse opportunities from task artifact
   useEffect(() => {
@@ -118,30 +120,30 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
   }
 
   async function handleCreateTasks() {
-    const selectedIds = rows.filter(r => r.selected).map(r => r.opportunity.post_id)
+    const selected = rows.filter(r => r.selected)
+    const selectedIds = selected.map(r => r.opportunity.post_id)
     console.log('[RedditOpportunityPicker] handleCreateTasks called, selectedIds:', selectedIds)
     if (selectedIds.length === 0) return
 
     setCreating(true)
 
     try {
+      // Persist any edited drafts back to the opportunity rows before spawning —
+      // the spawner reads the DB row, so this is what ends up in the reply task.
+      for (const row of selected) {
+        const postId = row.opportunity.post_id
+        const edited = draftEdits[postId]
+        if (edited != null && edited !== (row.opportunity.reply_text ?? '')) {
+          await updateRedditReplyText(postId, edited)
+        }
+      }
+
       console.log('[RedditOpportunityPicker] calling createRedditReplyTasks with task.id:', task.id)
       const newTasks = await createRedditReplyTasks(task.id, selectedIds)
       console.log('[RedditOpportunityPicker] createRedditReplyTasks returned', newTasks.length, 'tasks')
-      
-      // Auto-add created tasks to the queue (shopping cart pattern)
-      if (newTasks.length > 0) {
-        queue.enqueue(
-          newTasks.map(t => ({
-            taskId: t.id,
-            projectId: t.project_id,
-            title: t.title ?? 'Reply to Reddit post',
-            taskType: t.type,
-            projectName: undefined,
-          }))
-        )
-      }
-      
+
+      // Deliberately NOT auto-enqueued: the user reviews the created reply tasks
+      // and starts them explicitly from the queue UI.
       onTasksCreated(newTasks)
     } catch (e: unknown) {
       console.error('[RedditOpportunityPicker] createRedditReplyTasks failed:', e)
@@ -279,7 +281,7 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
                 </p>
               )}
 
-              {/* Draft reply (expandable) */}
+              {/* Draft reply (expandable + editable) */}
               {opp.reply_text && (
                 <div className="pl-7">
                   <button
@@ -287,13 +289,18 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
                     className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
                   >
                     <MessageSquare size={12} />
-                    {isExpanded ? 'Hide draft reply' : 'Show draft reply'}
+                    {isExpanded ? 'Hide draft reply' : 'Show / edit draft reply'}
                   </button>
 
                   {isExpanded && (
-                    <div className="mt-2 p-3 rounded-md bg-secondary/60 text-xs text-foreground whitespace-pre-wrap">
-                      {opp.reply_text}
-                    </div>
+                    <Textarea
+                      value={draftEdits[opp.post_id] ?? opp.reply_text}
+                      onChange={(e) =>
+                        setDraftEdits(prev => ({ ...prev, [opp.post_id]: e.target.value }))
+                      }
+                      rows={5}
+                      className="mt-2 text-xs bg-secondary/60"
+                    />
                   )}
                 </div>
               )}
@@ -309,7 +316,7 @@ export function RedditOpportunityPicker({ task, onTasksCreated }: RedditOpportun
         <div className="text-xs text-muted-foreground">
           {selectedCount === 0
             ? 'Select opportunities to create reply tasks'
-            : `${selectedCount} selected`}
+            : `${selectedCount} selected — edits are saved on create; tasks are started manually from the queue`}
         </div>
 
         <Button
