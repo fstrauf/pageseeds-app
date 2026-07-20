@@ -359,6 +359,15 @@ export const createRedditReplyTasks = (
 ): Promise<Task[]> =>
   invoke('create_reddit_reply_tasks', { taskId, postIds })
 
+/** Persist a user-edited draft reply back to the opportunity row.
+ * Called by the opportunity picker before spawning reply tasks.
+ */
+export const updateRedditReplyText = (
+  postId: string,
+  replyText: string,
+): Promise<void> =>
+  invoke('update_reddit_reply_text', { postId, replyText })
+
 // ─── GSC ─────────────────────────────────────────────────────────────────────
 
 import type {

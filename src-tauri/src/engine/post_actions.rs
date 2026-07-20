@@ -47,7 +47,7 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
                 .query_row(
                     "SELECT COUNT(*) FROM reddit_opportunities \
                  WHERE project_id=?1 AND (why_relevant IS NULL OR reply_text IS NULL) \
-                 AND reply_status != 'skipped'",
+                 AND reply_status = 'pending'",
                     rusqlite::params![&ctx.task.project_id],
                     |r| r.get(0),
                 )

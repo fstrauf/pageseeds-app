@@ -10,14 +10,15 @@ pub fn upsert_opportunity(conn: &Connection, opp: &RedditOpportunity) -> Result<
 
     conn.execute(
         r#"INSERT INTO reddit_opportunities (
-            post_id, title, url, subreddit, author, posted_date, upvotes, comment_count,
+            post_id, title, selftext, url, subreddit, author, posted_date, upvotes, comment_count,
             relevance_score, engagement_score, accessibility_score, final_score,
             severity, why_relevant, key_pain_points, website_fit, mention_stance, product_name,
             reply_status, reply_text, reply_url, reply_upvotes, reply_replies, posted_at,
             project_id, created_at, updated_at
-        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28)
         ON CONFLICT(post_id) DO UPDATE SET
             title               = excluded.title,
+            selftext            = excluded.selftext,
             url                 = excluded.url,
             subreddit           = excluded.subreddit,
             author              = excluded.author,
@@ -34,9 +35,15 @@ pub fn upsert_opportunity(conn: &Connection, opp: &RedditOpportunity) -> Result<
             mention_stance      = excluded.mention_stance,
             product_name        = excluded.product_name,
             reply_text          = excluded.reply_text,
+            -- Revive stale rows on rediscovery (stale -> pending); every other
+            -- status (pending/posted/skipped) is preserved as-is.
+            reply_status        = CASE
+                WHEN reddit_opportunities.reply_status = 'stale' THEN 'pending'
+                ELSE reddit_opportunities.reply_status
+            END,
             updated_at          = excluded.updated_at"#,
         params![
-            opp.post_id, opp.title, opp.url, opp.subreddit, opp.author,
+            opp.post_id, opp.title, opp.selftext, opp.url, opp.subreddit, opp.author,
             opp.posted_date, opp.upvotes, opp.comment_count,
             opp.relevance_score, opp.engagement_score, opp.accessibility_score, opp.final_score,
             opp.severity, opp.why_relevant, pain_points_json, opp.website_fit, opp.mention_stance, opp.product_name,
@@ -100,6 +107,28 @@ pub fn mark_skipped(conn: &Connection, post_id: &str) -> Result<()> {
     conn.execute(
         "UPDATE reddit_opportunities SET reply_status='skipped', updated_at=?1 WHERE post_id=?2",
         params![now, post_id],
+    )?;
+    Ok(())
+}
+
+/// Mark all pending rows for a project as 'stale' instead of deleting them.
+/// Stale rows are hidden from the default feed but recoverable (a re-discovered
+/// post is flipped back to 'pending' by `upsert_opportunity`).
+pub fn mark_pending_stale(conn: &Connection, project_id: &str) -> Result<usize> {
+    let now = Utc::now().to_rfc3339();
+    let n = conn.execute(
+        "UPDATE reddit_opportunities SET reply_status='stale', updated_at=?1 WHERE project_id=?2 AND reply_status='pending'",
+        params![now, project_id],
+    )?;
+    Ok(n)
+}
+
+/// Persist a user-edited draft reply back to the opportunity row.
+pub fn update_reply_text(conn: &Connection, post_id: &str, reply_text: &str) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE reddit_opportunities SET reply_text=?1, updated_at=?2 WHERE post_id=?3",
+        params![reply_text, now, post_id],
     )?;
     Ok(())
 }
@@ -247,6 +276,7 @@ pub fn migrate_from_client_ops(
         let opp = RedditOpportunity {
             post_id: r.0.clone(),
             title: r.1,
+            selftext: None,
             url: r.2,
             subreddit: r.3,
             author: r.4,
@@ -303,6 +333,7 @@ fn row_to_opportunity(row: &rusqlite::Row<'_>) -> rusqlite::Result<RedditOpportu
     Ok(RedditOpportunity {
         post_id: row.get("post_id")?,
         title: row.get("title")?,
+        selftext: row.get("selftext").unwrap_or(None),
         url: row.get("url")?,
         subreddit: row.get("subreddit")?,
         author: row.get("author")?,

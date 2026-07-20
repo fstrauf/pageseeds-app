@@ -52,6 +52,13 @@ pub fn build_draft_reply_prompt(
     };
 
     let post_title = opp.title.as_deref().unwrap_or("(no title)");
+    let post_body = opp
+        .selftext
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(500)
+        .collect::<String>();
     let post_subreddit = opp.subreddit.as_deref().unwrap_or("");
     let why_relevant = opp.why_relevant.as_deref().unwrap_or("");
     let pain_points = opp.key_pain_points.join(", ");
@@ -75,6 +82,7 @@ Mention stance: {mention_stance}
 ## POST DETAILS
 Title: {post_title}
 Subreddit: r/{post_subreddit}
+Post body: {post_body}
 Why relevant: {why_relevant}
 Pain points: {pain_points}
 Website fit: {website_fit}

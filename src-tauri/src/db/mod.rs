@@ -1429,6 +1429,15 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 47 {
+        // Add selftext column to reddit_opportunities; ignore error if already exists
+        let _ = conn.execute_batch(MIGRATION_V47);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (47, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1484,6 +1493,11 @@ CREATE TABLE IF NOT EXISTS article_quality_reviews (
 CREATE INDEX IF NOT EXISTS idx_article_quality_reviews_project ON article_quality_reviews(project_id);
 CREATE INDEX IF NOT EXISTS idx_article_quality_reviews_task ON article_quality_reviews(task_id);
 CREATE INDEX IF NOT EXISTS idx_article_quality_reviews_file ON article_quality_reviews(project_id, article_file);
+"#;
+
+static MIGRATION_V47: &str = r#"
+-- Persist Reddit post body (selftext) so enrichment/drafting see more than the title
+ALTER TABLE reddit_opportunities ADD COLUMN selftext TEXT;
 "#;
 
 // ═══════════════════════════════════════════════════════════════════════════════

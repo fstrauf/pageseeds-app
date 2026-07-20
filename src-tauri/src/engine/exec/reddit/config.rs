@@ -13,6 +13,10 @@ pub struct RedditSearchParams {
     pub query_keywords: Vec<String>,
     pub seed_subreddits: Vec<String>,
     pub excluded_subreddits: Vec<String>,
+    /// Free-form focus the user entered in the UI before starting the search.
+    /// Not extracted by the LLM — injected from the task description after parsing.
+    #[serde(default)]
+    pub user_context: Option<String>,
 }
 
 impl Default for RedditSearchParams {
@@ -24,8 +28,22 @@ impl Default for RedditSearchParams {
             query_keywords: vec![],
             seed_subreddits: vec![],
             excluded_subreddits: vec![],
+            user_context: None,
         }
     }
+}
+
+/// Extract `user_context` from a reddit_opportunity_search task description.
+/// The UI serializes it as `{"user_context": "..."}`; anything else yields None.
+pub(crate) fn extract_user_context_from_description(task: &Task) -> Option<String> {
+    let desc = task.description.as_deref()?.trim();
+    let value: serde_json::Value = serde_json::from_str(desc).ok()?;
+    value
+        .get("user_context")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 // ─── Config parsers ───────────────────────────────────────────────────────────
@@ -166,7 +184,7 @@ pub(crate) fn extract_excluded_subreddits(config: &str) -> std::collections::Has
 /// Cannot be deterministic: understanding markdown structure and identifying
 /// semantic sections requires language understanding.
 pub fn exec_reddit_config_parse(
-    _task: &Task,
+    task: &Task,
     project_path: &str,
     agent_provider: &str,
 ) -> crate::engine::workflows::StepResult {
@@ -268,7 +286,11 @@ pub fn exec_reddit_config_parse(
     });
 
     match result {
-        Ok(params) => {
+        Ok(mut params) => {
+            // Wire the user-provided search focus through to enrichment — the LLM
+            // extraction does not see the task description, so inject it here.
+            params.user_context = extract_user_context_from_description(task);
+
             log::info!(
                 "[reddit_config_parse] structured extraction succeeded: {} keywords, {} topics, {} subreddits",
                 params.query_keywords.len(),
