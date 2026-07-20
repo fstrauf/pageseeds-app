@@ -165,6 +165,12 @@ export interface KeywordDifficultyEntry {
   top_result?: string
   intent?: string | null
   intent_confidence?: number | null
+  /** Winnability bucket from the research pipeline SERP enrichment. */
+  winnability?: string | null
+  /** Human-readable reason for the winnability verdict. */
+  winnability_reason?: string | null
+  /** Coverage-gap score 0-100 (higher = fills a thinner cluster). */
+  gap_score?: number | null
   landing_page_type?: string | null
   opportunity_score?: number | null
   opportunity_reason?: string | null

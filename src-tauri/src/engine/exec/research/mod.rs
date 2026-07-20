@@ -11,6 +11,7 @@
 mod final_selection;
 mod landing_page;
 mod prompts;
+mod tests;
 
 pub(crate) use final_selection::*;
 pub(crate) use landing_page::*;

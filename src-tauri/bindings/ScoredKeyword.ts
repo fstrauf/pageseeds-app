@@ -31,4 +31,9 @@ has_data: boolean | null,
 /**
  * Search intent confidence score 0-100
  */
-intent_confidence: number | null, };
+intent_confidence: number | null, 
+/**
+ * Coverage-gap score 0-100 from the coverage filter (higher = fills a
+ * thinner cluster); `None` when no coverage analysis was available
+ */
+gap_score: number | null, };

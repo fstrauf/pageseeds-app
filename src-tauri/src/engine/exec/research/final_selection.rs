@@ -34,7 +34,8 @@ pub struct DifficultyWrapper {
 /// - Filter to keywords with data, acceptable KD, non-navigational intent, and
 ///   intent aligned with the workflow (informational for blog, commercial for
 ///   landing pages).
-/// - Sort by volume (desc), then difficulty (asc).
+/// - Sort by volume (desc), then difficulty (asc), then coverage-gap score
+///   (desc, `None` last among equals).
 /// - Take top `max_results` (callers may overshoot to leave room for the
 ///   downstream relevance check to drop off-domain candidates).
 /// - Generate recommended titles based on keyword type.
@@ -84,7 +85,9 @@ pub fn select_keywords_deterministic(
 
     let used_fallback = false;
 
-    // Sort by volume desc, then KD asc
+    // Sort by volume desc, then KD asc, then coverage-gap score desc.
+    // The gap tiebreak preserves the "prioritize thin clusters" intent from
+    // the coverage filter, which a pure volume/KD sort would otherwise drop.
     candidates.sort_by(|a, b| {
         let vol_cmp = b.volume.unwrap_or(0).cmp(&a.volume.unwrap_or(0));
         if vol_cmp != std::cmp::Ordering::Equal {
@@ -92,7 +95,11 @@ pub fn select_keywords_deterministic(
         }
         let kd_a = a.kd.unwrap_or(100.0) as i64;
         let kd_b = b.kd.unwrap_or(100.0) as i64;
-        kd_a.cmp(&kd_b)
+        let kd_cmp = kd_a.cmp(&kd_b);
+        if kd_cmp != std::cmp::Ordering::Equal {
+            return kd_cmp;
+        }
+        cmp_gap_desc(a.gap_score, b.gap_score)
     });
 
     // Take top N
@@ -140,9 +147,11 @@ pub fn select_keywords_deterministic(
                 ),
                 recommended_title: generate_title(&k.keyword, false),
                 intent: k.intent.clone(),
-                // Populated by enrich_with_winnability() after selection.
+                // Populated by enrich_with_winnability() after selection,
+                // before the final sort and trim.
                 winnability: None,
                 winnability_reason: None,
+                gap_score: k.gap_score,
             })
             .collect();
 
@@ -208,7 +217,7 @@ fn infer_landing_page_type(keyword: &str) -> String {
 /// Generate a readable title from a keyword.
 ///
 /// Landing page titles are conversion-focused; blog titles are guide-focused.
-fn generate_title(keyword: &str, is_landing_page: bool) -> String {
+pub(crate) fn generate_title(keyword: &str, is_landing_page: bool) -> String {
     // Capitalize first letter of each word
     let words: Vec<String> = keyword
         .split_whitespace()
@@ -291,7 +300,7 @@ fn capitalize_first(s: &str) -> String {
 }
 
 /// Final shortlist size after relevance filtering.
-const FINAL_RESULTS: usize = 10;
+pub(crate) const FINAL_RESULTS: usize = 10;
 /// How many candidates to select before the relevance check, so off-domain
 /// removals don't shrink the final shortlist below FINAL_RESULTS.
 const RELEVANCE_OVERSHOOT: usize = 15;
@@ -346,14 +355,21 @@ pub fn exec_research_final_selection(
                 agent_provider,
             );
 
-            // Trim the overshoot after filtering and fix the accounting.
+            // Enrich the overshoot with winnability scores (AIO risk,
+            // competitor authority) BEFORE trimming, so an `Avoid` verdict can
+            // demote a keyword below the cut line instead of being computed
+            // and discarded. Non-fatal per keyword: a failed SERP lookup
+            // leaves the keyword unscored and it sorts as Target-equivalent.
+            enrich_with_winnability(&mut output, &task.project_id);
+
+            // Re-sort by the combined key (winnability bucket, then volume,
+            // KD, gap score) and only then trim: `Avoid` keywords drop out of
+            // the picker whenever enough better candidates exist, and remain
+            // (badged, at the bottom) when they don't.
+            sort_by_winnability(&mut output);
             trim_to_final(&mut output, FINAL_RESULTS);
             let final_count = selected_count(&output);
             output.filtered_out = output.total_candidates.saturating_sub(final_count);
-
-            // Enrich the selected keywords with winnability scores (AIO risk,
-            // competitor authority, KD) before writing the artifact.
-            enrich_with_winnability(&mut output, &task.project_id);
 
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
@@ -378,7 +394,7 @@ pub fn exec_research_final_selection(
                 )
             } else {
                 format!(
-                    "Selected {} keywords deterministically (KD <= 30, sorted by volume{})",
+                    "Selected {} keywords deterministically (KD <= 30, winnability-aware ranking{})",
                     final_count, relevance_note
                 )
             };
@@ -397,7 +413,7 @@ pub fn exec_research_final_selection(
     }
 }
 
-fn selected_count(output: &KeywordPickerOutput) -> usize {
+pub(crate) fn selected_count(output: &KeywordPickerOutput) -> usize {
     if !output.landing_page_candidates.is_empty() {
         output.landing_page_candidates.len()
     } else {
@@ -410,7 +426,7 @@ fn selected_count(output: &KeywordPickerOutput) -> usize {
 }
 
 /// Truncate both output shapes to `max` entries (post-relevance-check).
-fn trim_to_final(output: &mut KeywordPickerOutput, max: usize) {
+pub(crate) fn trim_to_final(output: &mut KeywordPickerOutput, max: usize) {
     output.landing_page_candidates.truncate(max);
     if let Some(d) = &mut output.difficulty {
         d.results.truncate(max);
@@ -419,9 +435,54 @@ fn trim_to_final(output: &mut KeywordPickerOutput, max: usize) {
     }
 }
 
+/// Winnability bucket sort rank: `target` and unknown/missing buckets rank 0
+/// (keywords whose enrichment failed keep pre-enrichment behavior),
+/// `differentiate` ranks 1, `avoid` ranks last. Values are the lowercase
+/// strings written by `WinnabilityBucket::as_str()`.
+fn winnability_rank(winnability: Option<&str>) -> u8 {
+    match winnability {
+        Some("differentiate") => 1,
+        Some("avoid") => 2,
+        _ => 0,
+    }
+}
+
+/// Gap-score tiebreak: higher score first; `None` (no coverage analysis was
+/// available) sorts last among equals. `total_cmp` keeps f64 ordering total
+/// and deterministic.
+fn cmp_gap_desc(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => y.total_cmp(&x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+/// Final selection sort, applied after winnability enrichment and before the
+/// trim to `FINAL_RESULTS`. Combined key, in priority order:
+///   1. Winnability bucket rank — target/unknown, then differentiate, avoid last.
+///   2. Volume descending.
+///   3. KD ascending.
+///   4. Coverage-gap score descending (`None` last among equals).
+/// The sort is stable, so fully-equal keys keep their prior (deterministic)
+/// order. Landing-page candidates carry no winnability scores and keep their
+/// selection order.
+pub(crate) fn sort_by_winnability(output: &mut KeywordPickerOutput) {
+    if let Some(d) = &mut output.difficulty {
+        d.results.sort_by(|a, b| {
+            winnability_rank(a.winnability.as_deref())
+                .cmp(&winnability_rank(b.winnability.as_deref()))
+                .then_with(|| b.volume.cmp(&a.volume))
+                .then_with(|| a.difficulty.cmp(&b.difficulty))
+                .then_with(|| cmp_gap_desc(a.gap_score, b.gap_score))
+        });
+    }
+}
+
 /// Apply an off-domain list to the shortlist (case-insensitive, trimmed).
 /// Pure — unit-tested without an LLM. Returns the number removed.
-fn apply_off_domain_filter(
+pub(crate) fn apply_off_domain_filter(
     output: &mut KeywordPickerOutput,
     off_domain: &std::collections::HashSet<String>,
 ) -> usize {
@@ -531,12 +592,15 @@ fn filter_off_domain_candidates(
     }
 }
 
-/// Enrich selected keywords with winnability scores using SERP feature data.
+/// Enrich shortlisted keywords with winnability scores using SERP feature data.
 ///
-/// Calls the DataForSEO SERP API for each keyword and scores it using the
-/// winnability classifier (Target / Differentiate / Avoid). Non-fatal: if the
-/// provider is unavailable or a SERP lookup fails, the keyword keeps its
-/// existing fields without a winnability score.
+/// Runs on the pre-trim overshoot (up to `RELEVANCE_OVERSHOOT` keywords), so
+/// the paid SERP verdict feeds back into selection via `sort_by_winnability`
+/// instead of being computed and discarded. Calls the DataForSEO SERP API for
+/// each keyword and scores it using the winnability classifier
+/// (Target / Differentiate / Avoid). Non-fatal: if the provider is unavailable
+/// or a SERP lookup fails, the keyword keeps its existing fields without a
+/// winnability score.
 fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
     let keywords = match &mut output.difficulty {
         Some(d) => &mut d.results,
@@ -621,170 +685,4 @@ fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
             }
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::research::ScoredKeyword;
-
-    fn kw(
-        keyword: &str,
-        volume: i64,
-        kd: f64,
-        intent: &str,
-    ) -> ScoredKeyword {
-        ScoredKeyword {
-            keyword: keyword.to_string(),
-            volume: Some(volume),
-            kd: Some(kd),
-            intent: Some(intent.to_string()),
-            traffic: None,
-            has_data: Some(true),
-            intent_confidence: None,
-        }
-    }
-
-    fn build_pipeline(keywords: Vec<ScoredKeyword>) -> KeywordPipelineOutput {
-        KeywordPipelineOutput {
-            keywords,
-            themes: vec!["covered calls".to_string()],
-            competitors: vec![],
-            competitor_insights: vec![],
-            total_candidates: 0,
-            with_data_count: 0,
-        }
-    }
-
-    #[test]
-    fn blog_selection_prefers_informational_intent() {
-        let pipeline = build_pipeline(vec![
-            kw("how to sell covered calls", 1200, 25.0, "informational"),
-            kw("covered call tracker", 800, 25.0, "commercial"),
-            kw("what is a covered call", 3000, 20.0, "informational"),
-        ]);
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
-        let results = output.difficulty.unwrap().results;
-        assert!(
-            results.iter().any(|r| r.keyword == "how to sell covered calls"),
-            "informational keyword should be selected for blog"
-        );
-        assert!(
-            !results.iter().any(|r| r.keyword == "covered call tracker"),
-            "commercial keyword should not be selected for blog"
-        );
-    }
-
-    #[test]
-    fn landing_page_selection_prefers_commercial_intent() {
-        let pipeline = build_pipeline(vec![
-            kw("how to sell covered calls", 1200, 25.0, "informational"),
-            kw("covered call tracker", 800, 25.0, "commercial"),
-            kw("best covered call screener", 600, 30.0, "commercial"),
-        ]);
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
-        let candidates = output.landing_page_candidates;
-        assert!(
-            candidates.iter().any(|c| c.keyword == "covered call tracker"),
-            "commercial keyword should be selected for landing page"
-        );
-        assert!(
-            !candidates.iter().any(|c| c.keyword == "how to sell covered calls"),
-            "informational keyword should not be selected for landing page"
-        );
-    }
-
-    #[test]
-    fn selection_fails_when_nothing_matches_filters() {
-        // All keywords exceed KD 30 — no fallback, the function should fail
-        // with an actionable error rather than silently relaxing the bar.
-        let pipeline = build_pipeline(vec![
-            kw("how to sell covered calls", 1200, 55.0, "informational"),
-            kw("covered call strike selection", 400, 50.0, "informational"),
-        ]);
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let result = select_keywords_deterministic(&json, false, 10);
-        assert!(
-            result.is_err(),
-            "should fail (not fallback) when no keywords meet the KD bar"
-        );
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("No keywords met the quality bar"),
-            "error should explain the failure: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn title_generation_matches_workflow() {
-        assert_eq!(
-            generate_title("how to sell covered calls", false),
-            "How to Sell Covered Calls: A Step-by-Step Guide"
-        );
-        assert_eq!(
-            generate_title("covered call tracker", true),
-            "Covered Call Tracker for Options Traders"
-        );
-        assert_eq!(
-            generate_title("optionstrat vs tastytrade", true),
-            "Optionstrat vs Tastytrade: Which is Right for You?"
-        );
-    }
-
-    #[test]
-    fn off_domain_filter_removes_flagged_case_insensitively() {
-        let pipeline = build_pipeline(vec![
-            kw("what is iv crush", 260, 0.0, "informational"),
-            kw("assignment risk ao3", 140, 0.0, "informational"),
-            kw("iv crush meaning", 210, 0.0, "informational"),
-        ]);
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
-
-        // Production lowercases flagged keywords before building the set.
-        let off_domain: std::collections::HashSet<String> =
-            ["assignment risk ao3".to_string()].into_iter().collect();
-        let removed = apply_off_domain_filter(&mut output, &off_domain);
-
-        assert_eq!(removed, 1);
-        let results = output.difficulty.unwrap().results;
-        assert_eq!(results.len(), 2);
-        assert!(!results.iter().any(|r| r.keyword == "assignment risk ao3"));
-    }
-
-    #[test]
-    fn off_domain_filter_empty_set_is_noop() {
-        let pipeline = build_pipeline(vec![kw("what is iv crush", 260, 0.0, "informational")]);
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
-
-        let removed = apply_off_domain_filter(&mut output, &std::collections::HashSet::new());
-        assert_eq!(removed, 0);
-        assert_eq!(output.difficulty.unwrap().results.len(), 1);
-    }
-
-    #[test]
-    fn trim_to_final_caps_both_output_shapes() {
-        let kws: Vec<ScoredKeyword> = (0..15)
-            .map(|i| {
-                let name = format!("kw {}", i);
-                kw(&name, 1000 - i as i64, 10.0, "informational")
-            })
-            .collect();
-        let pipeline = build_pipeline(kws);
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, false, 15).unwrap();
-        assert_eq!(selected_count(&output), 15);
-
-        trim_to_final(&mut output, FINAL_RESULTS);
-        assert_eq!(selected_count(&output), FINAL_RESULTS);
-        let d = output.difficulty.unwrap();
-        assert_eq!(d.total, FINAL_RESULTS);
-        // Highest-volume entries survive the trim.
-        assert!(d.results.iter().any(|r| r.keyword == "kw 0"));
-        assert!(!d.results.iter().any(|r| r.keyword == "kw 14"));
-    }
 }

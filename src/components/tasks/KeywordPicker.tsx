@@ -66,6 +66,30 @@ function intentDescription(intent: string | null | undefined): string {
   }
 }
 
+// ─── Winnability helpers ──────────────────────────────────────────────────────
+
+function winnabilityColor(bucket: string | null | undefined): string {
+  switch (bucket?.toLowerCase()) {
+    case 'target':
+      return 'bg-emerald-100 text-emerald-700 border-transparent'
+    case 'differentiate':
+      return 'bg-amber-100 text-amber-700 border-transparent'
+    case 'avoid':
+      return 'bg-red-100 text-red-700 border-transparent'
+    default:
+      return 'bg-secondary text-secondary-foreground border-transparent'
+  }
+}
+
+function winnabilityLabel(bucket: string | null | undefined): string {
+  if (!bucket) return ''
+  return bucket.charAt(0).toUpperCase() + bucket.slice(1).toLowerCase()
+}
+
+function isAvoid(row: KeywordRow): boolean {
+  return row.winnability?.toLowerCase() === 'avoid'
+}
+
 function parseRangeMidpoint(raw: string): number | null {
   const nums = (raw.match(/\d[\d,]*/g) ?? [])
     .map(s => Number.parseInt(s.replace(/,/g, ''), 10))
@@ -141,6 +165,9 @@ interface DifficultyArtifact {
   traffic?: number | string | null
   intent?: string | null
   intent_confidence?: number | null
+  winnability?: string | null
+  winnability_reason?: string | null
+  gap_score?: number | null
 }
 
 type KeywordArtifact = {
@@ -207,6 +234,8 @@ function parseArtifact(content: string): KeywordResearchResult | null {
             has_data: r.difficulty != null && r.volume != null,
             intent: r.intent,
             intent_confidence: r.intent_confidence,
+            winnability: r.winnability ?? null,
+            winnability_reason: r.winnability_reason ?? null,
           })),
         },
       }
@@ -225,6 +254,8 @@ function parseArtifact(content: string): KeywordResearchResult | null {
         has_data: r.difficulty != null && r.volume != null,
         intent: r.intent,
         intent_confidence: r.intent_confidence,
+        winnability: r.winnability ?? null,
+        winnability_reason: r.winnability_reason ?? null,
       }))
       console.log('[KeywordPicker] Mapped results:', results.slice(0, 3))
       return {
@@ -327,6 +358,8 @@ function extractRows(result: KeywordResearchResult): KeywordRow[] {
       serp_count: entry?.serp_count,
       intent: entry?.intent,
       intent_confidence: entry?.intent_confidence,
+      winnability: entry?.winnability,
+      winnability_reason: entry?.winnability_reason,
     }
   })
 }
@@ -566,6 +599,8 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
                   isSelected
                     ? 'bg-primary/8 border border-primary/20'
                     : 'bg-secondary/40 border border-transparent hover:bg-secondary/70',
+                  // De-emphasize keywords the SERP enrichment scored unwinnable.
+                  isAvoid(row) && 'opacity-60',
                 )}
               >
                 {isSelected
@@ -580,6 +615,15 @@ export function KeywordPicker({ task, onTasksCreated }: KeywordPickerProps) {
                     title={intentDescription(row.intent)}
                   >
                     {intentLabel(row.intent)}
+                  </Badge>
+                )}
+                {row.winnability && (
+                  <Badge
+                    variant="outline"
+                    className={cn('text-[10px] px-1.5 py-0', winnabilityColor(row.winnability))}
+                    title={row.winnability_reason ?? undefined}
+                  >
+                    {winnabilityLabel(row.winnability)}
                   </Badge>
                 )}
                 <div className="flex items-center gap-1.5 shrink-0 max-w-[48%]">

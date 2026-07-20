@@ -76,6 +76,10 @@ pub struct ScoredKeyword {
     /// Search intent confidence score 0-100
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent_confidence: Option<f64>,
+    /// Coverage-gap score 0-100 from the coverage filter (higher = fills a
+    /// thinner cluster); `None` when no coverage analysis was available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap_score: Option<f64>,
 }
 
 /// A competitor top keyword from Ahrefs traffic data.
@@ -145,6 +149,10 @@ pub struct SelectedKeyword {
     /// Human-readable reason for the winnability score
     #[serde(skip_serializing_if = "Option::is_none")]
     pub winnability_reason: Option<String>,
+    /// Coverage-gap score 0-100 carried through from the pipeline (higher =
+    /// fills a thinner cluster); `None` when no coverage analysis was available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap_score: Option<f64>,
 }
 
 /// A landing page candidate (for commercial research)
