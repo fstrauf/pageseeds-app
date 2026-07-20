@@ -4,7 +4,7 @@
 /// scheduler evaluates all enabled rules for every active project, creates
 /// tasks when due, and records the cycle in the ledger.
 ///
-/// The background timer runs on a dedicated Tokio task (spawned once at app
+/// The background timer runs on a dedicated thread (spawned once at app
 /// startup via `start_background_scheduler`). It replaces launchd/launchctl.
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::Connection;
@@ -301,8 +301,18 @@ pub struct SchedulerState {
     pub running: bool,
 }
 
-/// Spawn a background Tokio task that runs `run_cycle` for all active projects
+/// Spawn a background thread that runs `run_cycle` for all active projects
 /// at a configurable interval (default every 3600 s = 1 hour).
+///
+/// The tick body is 100% blocking work (SQLite + `run_cycle`, which builds its
+/// own Tokio runtime internally for the batch kick-off) and only the timer was
+/// async, so a plain thread + `sleep` replaces the former
+/// `tokio::spawn`/`interval`/`spawn_blocking` ceremony. This keeps the
+/// function callable from a sync context — the Tauri v2 setup hook runs on the
+/// main thread with no Tokio runtime entered, where `tokio::spawn` panics
+/// ("there is no reactor running").
+///
+/// The first cycle runs after one full interval.
 ///
 /// `db_path` must be the same database file opened by the main app state.
 pub fn start_background_scheduler(
@@ -316,38 +326,139 @@ pub fn start_background_scheduler(
     }));
 
     let state_clone = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
-        interval.tick().await; // skip the first immediate tick
+    std::thread::spawn(move || loop {
+        // Sleep first so the first cycle runs after one full interval.
+        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
 
-        loop {
-            interval.tick().await;
+        let (db_path, running) = match state_clone.lock() {
+            Ok(g) => (g.db_path.clone(), g.running),
+            Err(_) => break,
+        };
 
-            let state_guard = state_clone.lock();
-            let (db_path, running) = match state_guard {
-                Ok(g) => (g.db_path.clone(), g.running),
-                Err(_) => break,
-            };
+        if !running {
+            break;
+        }
 
-            if !running {
-                break;
-            }
-
-            // Open a fresh connection for this tick (the main connection is Mutex-locked in AppState)
-            match rusqlite::Connection::open(&db_path) {
-                Ok(conn) => {
-                    if let Ok(projects) = task_store::list_projects_raw(&conn) {
-                        for project_id in projects {
-                            if let Err(e) = run_cycle(&conn, &project_id) {
-                                log::warn!("[scheduler] cycle error for {project_id}: {e}");
-                            }
+        // `run_cycle` creates its own Tokio runtime (`Runtime::new().block_on()`)
+        // for the batch execution, which panics if invoked from within an async
+        // context ("Cannot start a runtime from within a runtime"). This is a
+        // plain blocking thread with no entered runtime, so calling it directly
+        // is legal. Open a fresh connection per tick (the main connection is
+        // Mutex-locked in AppState); `open_connection` sets busy_timeout(10s).
+        match crate::engine::runtime::open_connection(&db_path) {
+            Ok(conn) => {
+                if let Ok(projects) = task_store::list_projects_raw(&conn) {
+                    for project_id in projects {
+                        if let Err(e) = run_cycle(&conn, &project_id) {
+                            log::warn!("[scheduler] cycle error for {project_id}: {e}");
                         }
                     }
                 }
-                Err(e) => log::error!("[scheduler] cannot open DB: {e}"),
             }
+            Err(e) => log::error!("[scheduler] cannot open DB: {e}"),
         }
     });
 
     state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In-memory DB with the full migrated schema (see `db::init_with_conn`)
+    /// plus one project row (tasks and scheduler_rules have FK to projects).
+    fn test_db() -> (Connection, String) {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        let project_id = "proj-test".to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![project_id, "Test Project", "/tmp/test"],
+        )
+        .unwrap();
+        (conn, project_id)
+    }
+
+    /// A due rule for a task type with no task definition. Unknown types default
+    /// to `UserEnqueue`, so the batch kick-off finds no AutoEnqueue-ready tasks
+    /// and executes nothing (no network, no agent calls).
+    fn due_noop_rule(rule_id: &str, project_id: &str) -> SchedulerRule {
+        SchedulerRule {
+            rule_id: rule_id.to_string(),
+            project_id: project_id.to_string(),
+            task_type: "test_noop_task".to_string(),
+            action: "create_task".to_string(),
+            interval_hours: 24,
+            priority: "medium".to_string(),
+            phase: "collection".to_string(),
+            enabled: true,
+            last_run_at: None, // never run → overdue
+        }
+    }
+
+    #[test]
+    fn run_cycle_creates_task_for_due_rule() {
+        let (conn, project_id) = test_db();
+        upsert_rule(&conn, &due_noop_rule("rule-sync", &project_id)).unwrap();
+
+        let result = run_cycle(&conn, &project_id).unwrap();
+
+        assert_eq!(result.rules_evaluated, 1);
+        assert_eq!(result.tasks_created, 1);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let task_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE project_id = ?1",
+                [&project_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(task_count, 1);
+    }
+
+    /// Regression test for the runtime-within-runtime trap: when a cycle creates
+    /// tasks, `run_cycle` builds its own Tokio runtime for the batch kick-off,
+    /// which panics if called from within an async context. Blocking threads
+    /// carry no entered runtime, so `run_cycle` stays legal when invoked via
+    /// `spawn_blocking` (or, as the background loop now does, from a plain
+    /// thread) — this exercises that mechanism from inside a Tokio runtime.
+    #[tokio::test]
+    async fn run_cycle_via_spawn_blocking_inside_runtime_does_not_panic() {
+        let (conn, project_id) = test_db();
+        upsert_rule(&conn, &due_noop_rule("rule-blocking", &project_id)).unwrap();
+
+        let result = tokio::task::spawn_blocking(move || run_cycle(&conn, &project_id))
+            .await
+            .expect("run_cycle panicked inside runtime context")
+            .expect("run_cycle failed");
+
+        assert_eq!(result.tasks_created, 1);
+        assert!(result.due_rules[0].is_due);
+    }
+
+    /// Regression test for the missing-runtime trap: `start_background_scheduler`
+    /// is called from the Tauri v2 setup hook, which runs synchronously on the
+    /// main thread with no Tokio runtime entered — a previous `tokio::spawn`
+    /// implementation panicked there ("there is no reactor running"). Calling
+    /// it from this plain sync test must not panic.
+    #[test]
+    fn start_background_scheduler_from_sync_context_does_not_panic() {
+        let db_path = std::env::temp_dir().join(format!(
+            "pageseeds-scheduler-test-{}.db",
+            std::process::id()
+        ));
+        let state = start_background_scheduler(db_path.clone(), 3600);
+
+        {
+            let guard = state.lock().unwrap();
+            assert!(guard.running);
+            assert_eq!(guard.interval_secs, 3600);
+            assert_eq!(guard.db_path, db_path);
+        }
+
+        // Ask the background thread to stop. It is sleeping out its first
+        // interval and the detached thread dies with the test process anyway.
+        state.lock().unwrap().running = false;
+    }
 }
