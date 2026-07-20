@@ -195,6 +195,17 @@ pub struct ClarityPageScore {
     pub quickback_rate: f64,
     pub z_score: f64,
     pub clarity_dashboard_url: String,
+    /// GSC clicks for the page (from collect_gsc sidecar metadata), when a
+    /// matching article exists. Context for the LLM only — not part of the
+    /// behavioral z-score ranking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gsc_clicks: Option<f64>,
+    /// GSC impressions for the page, when a matching article exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gsc_impressions: Option<f64>,
+    /// GSC average position for the page, when a matching article exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gsc_position: Option<f64>,
 }
 
 /// A single agentic finding.
