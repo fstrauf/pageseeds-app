@@ -1,21 +1,16 @@
-use crate::models::task::{
-    AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun,
-    TaskStatus,
-};
+use crate::engine::spawner::TaskSpec;
+use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskStatus};
 use std::collections::{HashMap, HashSet};
 
-/// Build content tasks from selected keywords and mark the research task as done.
-/// Validates inputs, deduplicates, and constructs task specs.
+/// Build content task specs from selected keywords for the research task.
+/// Validates inputs, deduplicates, and constructs spawner specs — IDs, phase,
+/// status, and lifecycle defaults are resolved by the spawner.
 pub fn build_content_tasks_from_keywords(
     requested_keywords: Vec<String>,
     research_task: &Task,
     research_task_id: &str,
     project_id: &str,
-) -> Result<Vec<Task>, String> {
-    use crate::config::{
-        default_follow_up_policy, default_phase, default_review_surface, default_run_policy,
-    };
-
+) -> Result<Vec<TaskSpec>, String> {
     // Determine content task type based on research task type
     let content_task_type = if research_task.task_type == "research_landing_pages" {
         "create_landing_page"
@@ -70,52 +65,44 @@ pub fn build_content_tasks_from_keywords(
         HashMap::new()
     };
 
-    let mut created = Vec::new();
-    for (idx, keyword) in requested_keywords.iter().enumerate() {
-        let now = chrono::Utc::now().to_rfc3339();
-        let id = format!("task-{}-{}", chrono::Utc::now().timestamp_millis(), idx);
+    let mut specs = Vec::new();
+    for keyword in requested_keywords.iter() {
         let title = to_title_case(keyword);
-        let metric = metrics.get(&normalize_keyword(keyword));
+        let normalized = normalize_keyword(keyword);
+        let metric = metrics.get(&normalized);
         let priority_enum = compute_task_priority(metric);
-        let description = build_content_task_description(
-            keyword,
-            metric,
-            lp_meta.get(&normalize_keyword(keyword)),
-        );
+        let description =
+            build_content_task_description(keyword, metric, lp_meta.get(&normalized));
         let provenance = build_keyword_provenance_artifact(keyword, research_task_id);
 
-        let task = Task {
-            id,
-            phase: default_phase(content_task_type).to_string(),
-            run_policy: default_run_policy(content_task_type),
-            review_surface: default_review_surface(content_task_type),
-            follow_up_policy: default_follow_up_policy(content_task_type),
+        // Deterministic idempotency key per keyword: re-selecting a keyword whose
+        // write task is still active returns the existing task (SkipIfActive).
+        let idempotency_key = format!("{content_task_type}:{project_id}:{normalized}");
+
+        specs.push(TaskSpec {
+            project_id: project_id.to_string(),
             task_type: content_task_type.to_string(),
-            status: TaskStatus::Todo,
-            priority: priority_enum,
-            agent_policy: AgentPolicy::None,
             title: Some(title),
             description: Some(description),
-            project_id: project_id.to_string(),
+            priority: priority_enum,
+            agent_policy: AgentPolicy::None,
             depends_on: vec![research_task_id.to_string()],
             artifacts: vec![provenance],
-            run: TaskRun::default(),
-            created_at: now.clone(),
-            updated_at: now,
-            not_before: None,
-        };
-        created.push(task);
+            idempotency_key: Some(idempotency_key),
+            ..Default::default()
+        });
     }
 
-    Ok(created)
+    Ok(specs)
 }
 
 /// Create content tasks from selected keywords and mark the research task done.
 ///
 /// Single creation path shared by the Tauri command and the pageseeds-cli
 /// binary: validates the keywords against the research task's selection
-/// artifact, persists one content task per keyword, then transitions the
-/// research task to done (user-selection lifecycle complete).
+/// artifact, spawns one content task per keyword via the TaskSpawner
+/// (idempotent per keyword), then transitions the research task to done
+/// (user-selection lifecycle complete).
 pub fn create_article_tasks_from_keywords(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -125,15 +112,18 @@ pub fn create_article_tasks_from_keywords(
     let research_task = crate::engine::task_store::get_task(conn, research_task_id)
         .map_err(|e| e.to_string())?;
 
-    let tasks = build_content_tasks_from_keywords(
+    let specs = build_content_tasks_from_keywords(
         keywords,
         &research_task,
         research_task_id,
         project_id,
     )?;
 
-    for task in &tasks {
-        crate::engine::task_store::create_task(conn, task).map_err(|e| e.to_string())?;
+    let mut tasks = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let task = crate::engine::spawner::TaskSpawner::spawn(conn, spec)
+            .map_err(|e| e.to_string())?;
+        tasks.push(task);
     }
 
     // Mark the research task done now that keywords have been dispatched.
@@ -173,8 +163,10 @@ pub fn to_title_case(s: &str) -> String {
         .join(" ")
 }
 
+/// Normalize a keyword for dedup and idempotency keys. Delegates to the
+/// canonical normalizer (strips quotes, collapses whitespace, lowercases).
 pub fn normalize_keyword(s: &str) -> String {
-    s.trim().to_lowercase()
+    crate::content::keyword_match::normalize_keyword(s)
 }
 
 fn push_unique_keyword(out: &mut Vec<String>, seen: &mut HashSet<String>, kw: &str) {
@@ -863,5 +855,185 @@ mod tests {
     fn title_case_capitalizes_each_word() {
         assert_eq!(to_title_case("seo tools guide"), "Seo Tools Guide");
         assert_eq!(to_title_case("content"), "Content");
+    }
+
+    // ── spawner-based creation (idempotency) ───────────────────────────────
+
+    fn in_memory_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Minimal schema matching engine/spawner.rs test helper
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                active INTEGER DEFAULT 1
+            );
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
+                agent_policy TEXT NOT NULL DEFAULT 'none',
+                title TEXT,
+                description TEXT,
+                project_id TEXT NOT NULL,
+                depends_on TEXT NOT NULL DEFAULT '[]',
+                artifacts TEXT NOT NULL DEFAULT '[]',
+                run_attempts INTEGER DEFAULT 0,
+                run_last_error TEXT,
+                run_provider TEXT,
+                not_before TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE task_idempotency_keys (
+                key TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT
+            );
+            CREATE TABLE task_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                provider TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                success INTEGER,
+                error TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active) VALUES ('proj1', 'Test', '/tmp/test', 1)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn research_artifact_json() -> serde_json::Value {
+        serde_json::json!({
+            "difficulty": {
+                "results": [
+                    {"keyword": "seo tools", "difficulty": 30, "volume": "5,000-10,000"},
+                    {"keyword": "content strategy", "difficulty": 45, "volume": "1,000-5,000"},
+                ]
+            }
+        })
+    }
+
+    fn insert_research_task(conn: &rusqlite::Connection) {
+        let mut task = make_task(vec![artifact(
+            "research_final_selection",
+            research_artifact_json(),
+        )]);
+        task.id = "research-1".to_string();
+        task.status = TaskStatus::Review;
+        crate::engine::task_store::create_task(conn, &task).unwrap();
+    }
+
+    #[test]
+    fn spec_carries_normalized_idempotency_key() {
+        let task = make_task(vec![artifact(
+            "research_final_selection",
+            research_artifact_json(),
+        )]);
+        let specs = build_content_tasks_from_keywords(
+            vec!["  SEO   Tools ".to_string()],
+            &task,
+            "test-kw",
+            "proj1",
+        )
+        .unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(
+            specs[0].idempotency_key.as_deref(),
+            Some("write_article:proj1:seo tools")
+        );
+        assert_eq!(specs[0].depends_on, vec!["test-kw".to_string()]);
+        assert_eq!(specs[0].agent_policy, AgentPolicy::None);
+    }
+
+    #[test]
+    fn reselecting_active_keyword_does_not_duplicate_task() {
+        let conn = in_memory_db();
+        insert_research_task(&conn);
+
+        let first =
+            create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+                .unwrap();
+        assert_eq!(first.len(), 1);
+
+        // Re-select while the first write task is still active (todo).
+        let second =
+            create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+                .unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].id, second[0].id);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE type = 'write_article'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "no duplicate write_article task");
+    }
+
+    #[test]
+    fn casing_and_quote_variants_collapse_to_one_task() {
+        let conn = in_memory_db();
+        insert_research_task(&conn);
+
+        let first = create_article_tasks_from_keywords(
+            &conn,
+            "proj1",
+            "research-1",
+            vec!["  SEO   Tools ".into()],
+        )
+        .unwrap();
+        let second = create_article_tasks_from_keywords(
+            &conn,
+            "proj1",
+            "research-1",
+            vec!["\"seo tools\"".into()],
+        )
+        .unwrap();
+        assert_eq!(first[0].id, second[0].id);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE type = 'write_article'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn reselecting_after_previous_task_done_creates_new_task() {
+        let conn = in_memory_db();
+        insert_research_task(&conn);
+
+        let first =
+            create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+                .unwrap();
+        crate::engine::task_store::update_task_status(&conn, &first[0].id, TaskStatus::Done)
+            .unwrap();
+
+        let second =
+            create_article_tasks_from_keywords(&conn, "proj1", "research-1", vec!["seo tools".into()])
+                .unwrap();
+        assert_ne!(first[0].id, second[0].id, "SkipIfActive allows re-creation once done");
     }
 }
