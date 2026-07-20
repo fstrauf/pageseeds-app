@@ -323,8 +323,7 @@ pub fn start_background_scheduler(
         loop {
             interval.tick().await;
 
-            let state_guard = state_clone.lock();
-            let (db_path, running) = match state_guard {
+            let (db_path, running) = match state_clone.lock() {
                 Ok(g) => (g.db_path.clone(), g.running),
                 Err(_) => break,
             };
@@ -333,21 +332,110 @@ pub fn start_background_scheduler(
                 break;
             }
 
-            // Open a fresh connection for this tick (the main connection is Mutex-locked in AppState)
-            match rusqlite::Connection::open(&db_path) {
-                Ok(conn) => {
-                    if let Ok(projects) = task_store::list_projects_raw(&conn) {
-                        for project_id in projects {
-                            if let Err(e) = run_cycle(&conn, &project_id) {
-                                log::warn!("[scheduler] cycle error for {project_id}: {e}");
+            // `run_cycle` creates its own Tokio runtime (`Runtime::new().block_on()`)
+            // for the batch execution, which panics if invoked from within an async
+            // context ("Cannot start a runtime from within a runtime"). Blocking
+            // threads have no entered runtime, so running the tick work via
+            // `spawn_blocking` keeps this legal. The std Mutex guard is dropped
+            // above, before the `.await`.
+            let tick_result = tokio::task::spawn_blocking(move || {
+                // Open a fresh connection for this tick (the main connection is Mutex-locked in AppState)
+                match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => {
+                        if let Ok(projects) = task_store::list_projects_raw(&conn) {
+                            for project_id in projects {
+                                if let Err(e) = run_cycle(&conn, &project_id) {
+                                    log::warn!("[scheduler] cycle error for {project_id}: {e}");
+                                }
                             }
                         }
                     }
+                    Err(e) => log::error!("[scheduler] cannot open DB: {e}"),
                 }
-                Err(e) => log::error!("[scheduler] cannot open DB: {e}"),
+            })
+            .await;
+
+            if let Err(e) = tick_result {
+                log::error!("[scheduler] tick task failed: {e}");
             }
         }
     });
 
     state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In-memory DB with the full migrated schema (see `db::init_with_conn`)
+    /// plus one project row (tasks and scheduler_rules have FK to projects).
+    fn test_db() -> (Connection, String) {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        let project_id = "proj-test".to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![project_id, "Test Project", "/tmp/test"],
+        )
+        .unwrap();
+        (conn, project_id)
+    }
+
+    /// A due rule for a task type with no task definition. Unknown types default
+    /// to `UserEnqueue`, so the batch kick-off finds no AutoEnqueue-ready tasks
+    /// and executes nothing (no network, no agent calls).
+    fn due_noop_rule(rule_id: &str, project_id: &str) -> SchedulerRule {
+        SchedulerRule {
+            rule_id: rule_id.to_string(),
+            project_id: project_id.to_string(),
+            task_type: "test_noop_task".to_string(),
+            action: "create_task".to_string(),
+            interval_hours: 24,
+            priority: "medium".to_string(),
+            phase: "collection".to_string(),
+            enabled: true,
+            last_run_at: None, // never run → overdue
+        }
+    }
+
+    #[test]
+    fn run_cycle_creates_task_for_due_rule() {
+        let (conn, project_id) = test_db();
+        upsert_rule(&conn, &due_noop_rule("rule-sync", &project_id)).unwrap();
+
+        let result = run_cycle(&conn, &project_id).unwrap();
+
+        assert_eq!(result.rules_evaluated, 1);
+        assert_eq!(result.tasks_created, 1);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let task_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE project_id = ?1",
+                [&project_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(task_count, 1);
+    }
+
+    /// Regression test for the runtime-within-runtime trap: when a cycle creates
+    /// tasks, `run_cycle` builds its own Tokio runtime for the batch kick-off,
+    /// which panics if called from within an async context. The background loop
+    /// therefore runs the tick via `spawn_blocking` (blocking threads carry no
+    /// entered runtime) — this exercises exactly that mechanism from inside a
+    /// Tokio runtime, as `start_background_scheduler` does.
+    #[tokio::test]
+    async fn run_cycle_via_spawn_blocking_inside_runtime_does_not_panic() {
+        let (conn, project_id) = test_db();
+        upsert_rule(&conn, &due_noop_rule("rule-blocking", &project_id)).unwrap();
+
+        let result = tokio::task::spawn_blocking(move || run_cycle(&conn, &project_id))
+            .await
+            .expect("run_cycle panicked inside runtime context")
+            .expect("run_cycle failed");
+
+        assert_eq!(result.tasks_created, 1);
+        assert!(result.due_rules[0].is_due);
+    }
 }
