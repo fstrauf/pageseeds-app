@@ -221,15 +221,30 @@ impl WorkflowHandler for ContentHandler {
         // directives. Previously regular articles loaded no skill at all and
         // fell through to a generic boilerplate prompt with no content strategy.
         let skill = if is_hub { "hub-write" } else { "content-write" };
-        vec![
-            step.with_param(step_params::SKILL, skill),
-            // Step 2 (deterministic): verify every /blog/ link the agent wrote
+        let mut steps = vec![step.with_param(step_params::SKILL, skill)];
+        // Step 2 (deterministic, new-article tasks only): verify the write stage
+        // actually produced a registered article file. Turns the silent no-op of
+        // text-only providers (task Done, zero output, issue #13) into a loud,
+        // retryable failure. Optimize tasks modify an existing file, so no new
+        // file is expected and this check does not apply to them.
+        if matches!(
+            task_type(task),
+            "write_article" | "create_content" | "create_hub_page" | "refresh_hub_page"
+        ) {
+            steps.push(WorkflowStep::new(
+                "content_write_verify",
+                StepKind::ContentWriteVerify,
+            ));
+        }
+        steps.push(
+            // Final step (deterministic): verify every /blog/ link the agent wrote
             // resolves to a project article. Auto-repairs filename-form hrefs
             // (e.g. /blog/248_roast_profile_management) and fails the task with
             // a per-link report when a link target does not exist — broken
             // internal links must not reach the repo unrepaired.
             WorkflowStep::new("content_link_verify", StepKind::LinkIntegrityVerify),
-        ]
+        );
+        steps
     }
 }
 

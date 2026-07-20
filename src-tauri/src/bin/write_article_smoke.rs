@@ -9,10 +9,15 @@
 ///   3. Creates a `write_article` task for TARGET_KEYWORD
 ///   4. Executes the task directly through executor::execute_task
 ///   5. Prints the generated MDX so you can review content quality
+///   6. Asserts the issue #13 contract per provider:
+///      - success ⟹ a new .mdx file exists AND is registered as a draft row
+///      - no output ⟹ the task fails loudly (never Done with zero files)
 ///
 /// This exercises the full ContentHandler → content-write skill → exec_agentic
 /// path without the Tauri app, queue, or IPC. Use it to iterate on the
-/// content-write skill and review output quality before shipping.
+/// content-write skill and review output quality before shipping. Run it with
+/// different `agent_provider` global settings (kimi vs claude/openai/ollama)
+/// to cover both the file-IO and the executor-write fallback paths.
 use pageseeds_lib::{
     db,
     engine::{executor, task_store},
@@ -21,6 +26,12 @@ use pageseeds_lib::{
         TaskStatus,
     },
 };
+
+/// Mirror of `rig::provider::provider_supports_file_io` (the rig module is
+/// crate-private). Text-only providers rely on the executor-write fallback.
+fn provider_has_file_io(provider: &str) -> bool {
+    !matches!(provider, "claude" | "openai" | "ollama")
+}
 
 /// Target project. days_to_expiry = the call-analyzer repo.
 const PROJECT_ID: &str = "days_to_expiry";
@@ -55,6 +66,17 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    let provider = db::global_settings::resolve_agent_provider(&conn, project.agent_provider.as_deref());
+    println!(
+        "✓ Agent provider: {} ({})",
+        provider,
+        if provider_has_file_io(&provider) {
+            "file-IO capable — agent writes the file itself"
+        } else {
+            "text-only — executor-write fallback must persist the returned MDX"
+        }
+    );
 
     // Snapshot the content dir so we can detect the newly written file.
     let content_blog = std::path::Path::new(&project.path)
@@ -154,8 +176,12 @@ async fn main() {
 
     if new_files.is_empty() {
         println!("✗ No new .mdx file detected in {}", content_blog.display());
-        println!("  (The agent may have returned content without writing a file,");
-        println!("   or execution failed before the write step.)");
+        if result.success {
+            println!("  (This is the issue #13 silent no-op — it must NOT happen anymore.");
+        } else {
+            println!("  (The task failed loudly, which is the intended behavior when the");
+            println!("   provider produced no file and no parseable MDX output.)");
+        }
     } else {
         for f in &new_files {
             let path = content_blog.join(f);
@@ -174,7 +200,68 @@ async fn main() {
         }
     }
 
+    // ── Assert the issue #13 contract ───────────────────────────────────────
+    println!("━━━━━━━━━━━━━━━━━━━  Assertions  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    let mut failures: Vec<String> = vec![];
+
+    let verify_step = result
+        .steps
+        .iter()
+        .find(|s| s.step_name == "content_write_verify");
+    match verify_step {
+        Some(s) => println!("✓ content_write_verify step present (status: {})", s.status),
+        None => failures.push("content_write_verify step missing from the step graph".to_string()),
+    }
+
+    if result.success {
+        if new_files.is_empty() {
+            failures.push(
+                "task succeeded but no new .mdx file was written (silent no-op)".to_string(),
+            );
+        }
+        if matches!(verify_step, Some(s) if s.status != "ok") {
+            failures.push("task succeeded but content_write_verify did not pass".to_string());
+        }
+        for f in &new_files {
+            let registered: bool = conn
+                .query_row(
+                    "SELECT 1 FROM articles \
+                     WHERE project_id = ?1 AND file LIKE ?2 AND status = 'draft' LIMIT 1",
+                    rusqlite::params![PROJECT_ID, format!("%{}", f)],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if registered {
+                println!("✓ {} registered as a draft row in SQLite", f);
+            } else {
+                failures.push(format!("{} written but no draft row registered in SQLite", f));
+            }
+        }
+    } else {
+        let status = task_store::get_task(&conn, &task_id)
+            .map(|t| t.status)
+            .unwrap_or(TaskStatus::Failed);
+        if status == TaskStatus::Failed {
+            println!("✓ failure path: task status is Failed (loud, retryable)");
+        } else {
+            failures.push(format!(
+                "task execution failed but DB status is {:?}, expected Failed",
+                status
+            ));
+        }
+    }
+
     // Clean up the smoke task from the DB so it doesn't clutter the queue.
     let _ = task_store::delete_task(&conn, &task_id);
     println!("✓ Cleaned up smoke task from DB.");
+
+    if failures.is_empty() {
+        println!("\n✓ All assertions passed.");
+    } else {
+        println!("\n✗ {} assertion(s) failed:", failures.len());
+        for f in &failures {
+            println!("  - {}", f);
+        }
+        std::process::exit(1);
+    }
 }

@@ -36,9 +36,15 @@ pub(crate) fn exec_link_integrity_verify(task: &Task, project_path: &str) -> Ste
     let file_path = match find_written_file(task, repo_root, content_dir.as_deref()) {
         Some(p) => p,
         None => {
+            // A content-write task that produced no file must not pass
+            // verification vacuously (issue #13): there is nothing to check,
+            // which means the write failed upstream.
             return StepResult {
-                success: true,
-                message: "no written article file found — skipping link verify".to_string(),
+                success: false,
+                message:
+                    "Link verify failed: no written article file found — nothing to verify. \
+                     The preceding write step must produce a file before links can be checked."
+                        .to_string(),
                 output: None,
             }
         }
@@ -213,7 +219,13 @@ fn verify_links_in_file(
 ///    resolved against the repo root).
 /// 2. Fallback: the most recently modified `.md`/`.mdx` file in the content
 ///    directory, if modified within the last 30 minutes.
-fn find_written_file(task: &Task, repo_root: &Path, content_dir: Option<&Path>) -> Option<PathBuf> {
+///
+/// Shared with the `content_write_verify` step.
+pub(crate) fn find_written_file(
+    task: &Task,
+    repo_root: &Path,
+    content_dir: Option<&Path>,
+) -> Option<PathBuf> {
     if let Some(desc) = task.description.as_deref() {
         if let Some(path) = crate::content::ops::file_path_from_description(desc, repo_root) {
             if path.exists() {

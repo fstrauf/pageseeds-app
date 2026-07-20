@@ -104,42 +104,12 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
 
     if ctx.step.name == "content_write_stage" && ctx.result.success {
         let project_path = std::path::Path::new(ctx.project_path);
-        match crate::content::article_index::ingest_orphans(
-            ctx.conn,
-            &ctx.task.project_id,
-            project_path,
-        ) {
-            Ok(ingested) if ingested.ingested > 0 => {
-                let (keyword, kd_str, vol) = parse_content_task_keyword_meta(ctx.task);
-                for filename in &ingested.files {
-                    let _ = ctx.conn.execute(
-                        "UPDATE articles
-                         SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                             status='draft'
-                         WHERE project_id=?4 AND file LIKE ?5",
-                        rusqlite::params![
-                            keyword.as_deref(),
-                            kd_str.as_deref(),
-                            vol,
-                            &ctx.task.project_id,
-                            format!("%{}", filename),
-                        ],
-                    );
-                }
-                let _ = crate::content::article_index::export_projection(
-                    ctx.conn,
-                    &ctx.task.project_id,
-                    project_path,
-                );
-                log::info!(
-                    "[content_register] registered {} article(s): {:?}",
-                    ingested.ingested,
-                    ingested.files
-                );
-            }
-            Ok(_) => {
-                log::info!("[content_register] no new orphan files to register after content write")
-            }
+        match ingest_content_write_files(ctx.conn, ctx.task, project_path) {
+            Ok(summary) if summary.ingested > 0 => {}
+            Ok(_) => log::warn!(
+                "[content_register] no new orphan files registered after content write — \
+                 content_write_verify will fail the task if no article file was written"
+            ),
             Err(e) => log::warn!("[content_register] article registration failed: {}", e),
         }
     }
@@ -219,6 +189,52 @@ pub struct StepOutcomeOverride {
     pub output: Option<String>,
     /// If set, the caller should append this artifact to the task.
     pub artifact: Option<crate::models::task::TaskArtifact>,
+}
+
+/// Ingest new content files after a content-write step, tag them with the
+/// task's keyword metadata, mark them as drafts, and export the articles.json
+/// projection.
+///
+/// Shared by `after_step` (post-write registration) and the deterministic
+/// `content_write_verify` step (idempotent safety net). Returns the ingest
+/// summary so callers can distinguish "registered N new files" from "nothing
+/// new on disk".
+pub(crate) fn ingest_content_write_files(
+    conn: &Connection,
+    task: &Task,
+    project_path: &std::path::Path,
+) -> Result<crate::content::article_index::IngestSummary, String> {
+    let ingested =
+        crate::content::article_index::ingest_orphans(conn, &task.project_id, project_path)
+            .map_err(|e| e.to_string())?;
+
+    if ingested.ingested > 0 {
+        let (keyword, kd_str, vol) = parse_content_task_keyword_meta(task);
+        for filename in &ingested.files {
+            let _ = conn.execute(
+                "UPDATE articles
+                 SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                     status='draft'
+                 WHERE project_id=?4 AND file LIKE ?5",
+                rusqlite::params![
+                    keyword.as_deref(),
+                    kd_str.as_deref(),
+                    vol,
+                    &task.project_id,
+                    format!("%{}", filename),
+                ],
+            );
+        }
+        let _ =
+            crate::content::article_index::export_projection(conn, &task.project_id, project_path);
+        log::info!(
+            "[content_register] registered {} article(s): {:?}",
+            ingested.ingested,
+            ingested.files
+        );
+    }
+
+    Ok(ingested)
 }
 
 // ─── Post-task context ───────────────────────────────────────────────────────

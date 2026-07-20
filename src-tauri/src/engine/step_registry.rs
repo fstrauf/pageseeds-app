@@ -624,6 +624,18 @@ impl StepRegistry {
         );
 
         handlers.insert(
+            StepKind::ContentWriteVerify,
+            Box::new(|_step, ctx| {
+                let result = crate::engine::exec::content::exec_content_write_verify(
+                    ctx.conn,
+                    ctx.task,
+                    ctx.project_path,
+                );
+                Box::pin(async move { result })
+            }),
+        );
+
+        handlers.insert(
             StepKind::FixContentArticleGenerate,
             Box::new(|step, ctx| {
                 let task = ctx.task.clone();
