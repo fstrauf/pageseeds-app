@@ -297,6 +297,8 @@ pub(crate) fn exec_keyword_research_native(
     // Fail-closed: when seed validation ran and rejected every theme, the gate
     // has condemned all seeds — do NOT fall back to raw themes (that would bill
     // the user for off-domain DataForSEO calls the validator just rejected).
+    // Note: pending territory shortlist seeds are also not researched in this
+    // case — they stay pending until the user refines the brief and re-runs.
     if is_dataforseo && matches!(validated_seeds, ValidatedSeeds::RejectedAll) {
         return crate::engine::workflows::StepResult {
             success: false,
@@ -357,11 +359,24 @@ pub(crate) fn exec_keyword_research_native(
                 // (related_keywords + keyword_suggestions).
                 // Use validated seeds if available, otherwise fall back to raw themes.
                 // `Missing` keeps the legacy fallback (artifact absent/unreadable).
-                // `RejectedAll` already failed the step above for DataForSEO and is
-                // unreachable here.
                 let mut seeds_to_use: Vec<(String, String)> = match validated_seeds_thread {
                     ValidatedSeeds::Seeds(seeds) => seeds,
-                    ValidatedSeeds::Missing | ValidatedSeeds::RejectedAll => {
+                    // Belt-and-braces guard: the outer fail-closed gate uses
+                    // `seo_provider.eq_ignore_ascii_case("dataforseo")` on the raw
+                    // settings string, while this branch re-checks via
+                    // `resolve_provider(...).name()`, which maps ANY non-"ahrefs"
+                    // value to DataForSEO. If those two checks diverge (e.g. a stored
+                    // provider value that is neither literal "dataforseo" nor "ahrefs"),
+                    // `RejectedAll` can reach here — fail closed instead of billing
+                    // paid DataForSEO calls against seeds the validator rejected.
+                    ValidatedSeeds::RejectedAll => {
+                        return Err(crate::error::Error::Other(
+                            "Seed validation rejected all themes as off-domain; \
+                             refusing to fall back to raw themes."
+                                .to_string()
+                        ));
+                    }
+                    ValidatedSeeds::Missing => {
                         log::warn!(
                             "[keyword_research_native] research_seed_validation artifact missing — \
                              falling back to raw themes as seeds"
