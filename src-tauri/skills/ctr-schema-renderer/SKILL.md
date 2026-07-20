@@ -1,5 +1,7 @@
 # CTR Schema Renderer Fix Skill
 
+<!-- skill-version: 1 -->
+
 Used by `fix_ctr_schema_renderer` agentic steps.
 
 ## Objective

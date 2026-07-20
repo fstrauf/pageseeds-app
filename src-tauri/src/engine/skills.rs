@@ -29,6 +29,7 @@ pub struct Skill {
 const EMBEDDED_SKILL_NAMES: &[&str] = &[
     "cannibalization-strategy",
     "clarity-investigate",
+    "content-fix-apply",
     "content-write",
     "ctr-fix-apply",
     "ctr-optimization",
@@ -49,6 +50,7 @@ fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
             include_str!("../../skills/cannibalization-strategy/SKILL.md")
         }
         "clarity-investigate" => include_str!("../../skills/clarity-investigate/SKILL.md"),
+        "content-fix-apply" => include_str!("../../skills/content-fix-apply/SKILL.md"),
         "content-write" => include_str!("../../skills/content-write/SKILL.md"),
         "ctr-fix-apply" => include_str!("../../skills/ctr-fix-apply/SKILL.md"),
         "ctr-optimization" => include_str!("../../skills/ctr-optimization/SKILL.md"),
@@ -118,11 +120,59 @@ pub fn load_skill(repo_root: &Path, skill_name: &str) -> Option<Skill> {
     // 1. Project-level skill first
     let skill_dir = repo_root.join(".github").join("skills").join(skill_name);
     if let Some(skill) = load_skill_from_dir(&skill_dir, repo_root) {
+        // TODO(issue #4): version-comparison drift detection is a stopgap until
+        // skills carry content hashes/semver.
+        if let Some((override_version, embedded_version)) = skill_version_drift(&skill, skill_name) {
+            log::warn!(
+                "[skills] Project-level skill '{}' overrides the embedded app default but its version ({}) differs from the embedded version ({}). The override may have drifted — delete .github/skills/{}/SKILL.md from the project repo to inherit the app default.",
+                skill_name,
+                override_version
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                embedded_version
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                skill_name,
+            );
+        }
         return Some(skill);
     }
 
     // 2. Fall back to embedded app-level skill
     load_embedded_skill(skill_name)
+}
+
+/// Extract the `<!-- skill-version: N -->` marker from skill content.
+///
+/// Only the first 5 lines are scanned — the marker is a header convention,
+/// not content that may appear anywhere in the body.
+pub fn extract_skill_version(content: &str) -> Option<u32> {
+    for line in content.lines().take(5) {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("<!-- skill-version:") {
+            if let Some(num) = rest.strip_suffix("-->") {
+                if let Ok(version) = num.trim().parse::<u32>() {
+                    return Some(version);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Detect version drift between a project-level override and its embedded
+/// counterpart. Returns `Some((override_version, embedded_version))` when an
+/// embedded baseline exists and the versions differ (a missing override
+/// marker counts as drift). Project-only skills have no baseline and never
+/// drift, so this returns `None` for them.
+fn skill_version_drift(
+    override_skill: &Skill,
+    skill_name: &str,
+) -> Option<(Option<u32>, Option<u32>)> {
+    let embedded = load_embedded_skill(skill_name)?;
+    let override_version = extract_skill_version(&override_skill.content);
+    let embedded_version = extract_skill_version(&embedded.content);
+    (override_version != embedded_version).then_some((override_version, embedded_version))
 }
 
 /// Load a skill or return a `StepResult` error message.
@@ -254,4 +304,128 @@ fn relative_path(path: &Path, base: &Path) -> String {
 /// Return the absolute path to a skill directory given the repo root and skill name.
 pub fn skill_dir_path(repo_root: &Path, skill_name: &str) -> PathBuf {
     repo_root.join(".github").join("skills").join(skill_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn test_dir() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("skills_test_{}_{}", std::process::id(), n))
+    }
+
+    fn write_project_skill(repo_root: &Path, name: &str, content: &str) {
+        let dir = repo_root.join(".github").join("skills").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), content).unwrap();
+    }
+
+    #[test]
+    fn test_extract_skill_version_marker_in_header() {
+        let content = "# Skill\n\n<!-- skill-version: 3 -->\n\nBody text.\n";
+        assert_eq!(extract_skill_version(content), Some(3));
+    }
+
+    #[test]
+    fn test_extract_skill_version_missing_marker() {
+        assert_eq!(extract_skill_version("# Skill\n\nNo marker here.\n"), None);
+    }
+
+    #[test]
+    fn test_extract_skill_version_ignores_marker_beyond_first_lines() {
+        let content = "# Skill\n\n## Section\n\n## Another\n\n## More\n\n<!-- skill-version: 9 -->\n";
+        assert_eq!(extract_skill_version(content), None);
+    }
+
+    #[test]
+    fn test_extract_skill_version_malformed_marker() {
+        assert_eq!(
+            extract_skill_version("# Skill\n\n<!-- skill-version: abc -->\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_all_embedded_skills_have_version_markers() {
+        for name in EMBEDDED_SKILL_NAMES {
+            let skill = load_embedded_skill(name)
+                .unwrap_or_else(|| panic!("embedded skill '{}' failed to load", name));
+            assert!(
+                extract_skill_version(&skill.content).is_some(),
+                "embedded skill '{}' is missing a `<!-- skill-version: N -->` marker in its first 5 lines",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_skill_version_drift_flags_missing_override_version() {
+        let embedded = load_embedded_skill("cannibalization-strategy").unwrap();
+        let override_skill = Skill {
+            content: "# Stale copy without a version marker\n".to_string(),
+            ..embedded.clone()
+        };
+        let drift = skill_version_drift(&override_skill, "cannibalization-strategy");
+        assert_eq!(drift, Some((None, Some(1))));
+    }
+
+    #[test]
+    fn test_skill_version_drift_flags_mismatched_version() {
+        let override_skill = Skill {
+            content: "# Skill\n\n<!-- skill-version: 99 -->\n".to_string(),
+            ..Default::default()
+        };
+        let drift = skill_version_drift(&override_skill, "cannibalization-strategy");
+        assert_eq!(drift, Some((Some(99), Some(1))));
+    }
+
+    #[test]
+    fn test_skill_version_drift_none_when_versions_match() {
+        let embedded = load_embedded_skill("cannibalization-strategy").unwrap();
+        let drift = skill_version_drift(&embedded, "cannibalization-strategy");
+        assert_eq!(drift, None);
+    }
+
+    #[test]
+    fn test_skill_version_drift_none_for_project_only_skill() {
+        // Project-only skills have no embedded baseline — nothing to drift from.
+        let override_skill = Skill {
+            content: "# Project-only skill\n".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(skill_version_drift(&override_skill, "indexing-distinctiveness"), None);
+    }
+
+    #[test]
+    fn test_load_skill_project_override_still_wins() {
+        let repo = test_dir();
+        let _ = std::fs::remove_dir_all(&repo);
+        write_project_skill(
+            &repo,
+            "cannibalization-strategy",
+            "# Stale override\n\nkeep_url based contract\n",
+        );
+
+        let skill = load_skill(&repo, "cannibalization-strategy").unwrap();
+        // Resolution is unchanged by drift detection: the override still wins.
+        assert!(skill.content.contains("Stale override"));
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_load_skill_falls_back_to_embedded() {
+        let repo = test_dir();
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let skill = load_skill(&repo, "cannibalization-strategy").unwrap();
+        assert!(skill.content.contains("keep_id"));
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }

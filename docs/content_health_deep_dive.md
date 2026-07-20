@@ -35,7 +35,7 @@ fix_content_article task
 
 - Source: `src-tauri/src/engine/workflows/handlers.rs` (`ImplementationHandler`)
 - Steps: `src-tauri/src/engine/exec/content/fix_*.rs`
-- Skill: `.github/skills/content-fix-apply/SKILL.md`
+- Skill: `src-tauri/skills/content-fix-apply/SKILL.md` (embedded app default)
 
 ### 1.3 Frontend Health Dashboard
 

@@ -23,7 +23,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 
 | If you need to... | Use this path | Do NOT |
 |---|---|---|
-| **Adjust how an AI writes/reviews content** | Edit or add a skill in `.github/skills/{skill}/SKILL.md` (or embedded defaults in `src-tauri/src/skills/`). Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
+| **Adjust how an AI writes/reviews content** | Edit the embedded skill in `src-tauri/skills/{skill}/SKILL.md` — it is the single source of truth for app-default skills (registered in `engine/skills.rs`). Project-level `.github/skills/{skill}/SKILL.md` overrides still work for per-project customization, but trigger a drift warning at load time when an embedded counterpart exists and its version marker differs. Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
 | **Add or change task lifecycle behavior** | Follow the [Task Lifecycle Contract](#task-lifecycle-contract), then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
 | **Attach tasks to execution** | Use backend queue commands through `tauri.ts` (`enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`). | Call `executeTask` directly from components |

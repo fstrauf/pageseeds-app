@@ -1,5 +1,7 @@
 # CTR Site Template Fix Skill
 
+<!-- skill-version: 1 -->
+
 Used by `fix_ctr_site_template` agentic steps.
 
 ## Objective

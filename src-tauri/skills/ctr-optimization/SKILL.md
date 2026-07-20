@@ -1,5 +1,7 @@
 # CTR Optimization Skill
 
+<!-- skill-version: 1 -->
+
 Used by the `ctr_analyze` agentic step.
 
 ## Input

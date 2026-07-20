@@ -5,7 +5,6 @@
 #   - engine/spawner.rs (the central spawner itself)
 #   - engine/task_store.rs (the low-level CRUD module)
 #   - commands/tasks.rs (user-facing create_task command)
-#   - engine/keyword_selection.rs (keyword-pick → content-task creation)
 #   - test files
 #   - engine/executor.rs (for test helpers)
 
@@ -19,7 +18,6 @@ violations=$(grep -rn "task_store::create_task" src-tauri/src --include="*.rs" |
     if [[ "$file" == *engine/spawner.rs \
         || "$file" == *engine/task_store.rs \
         || "$file" == *commands/tasks.rs \
-        || "$file" == *engine/keyword_selection.rs \
         || "$file" == *executor.rs \
         || "$file" == *executor/tests.rs \
         || "$file" == *bin/* \
@@ -43,7 +41,7 @@ if [ -n "$violations" ]; then
     echo "Violations:"
     echo "$violations"
     echo ""
-    echo "Allowed locations: engine/spawner.rs, engine/task_store.rs, commands/tasks.rs, engine/keyword_selection.rs, executor.rs (tests only)"
+    echo "Allowed locations: engine/spawner.rs, engine/task_store.rs, commands/tasks.rs, executor.rs (tests only)"
     exit 1
 fi
 
