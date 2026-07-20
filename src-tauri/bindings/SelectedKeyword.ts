@@ -29,6 +29,10 @@ selection_reason: string,
  */
 recommended_title: string, 
 /**
+ * Search intent classification (informational/commercial/transactional)
+ */
+intent: string | null, 
+/**
  * Winnability bucket: "target" | "differentiate" | "avoid"
  */
 winnability: string | null, 

@@ -833,29 +833,26 @@ mod keyword_workflow_tests {
             .expect("Should find handler");
         let steps = handler.plan(&task);
 
-        // 7-step hybrid workflow:
+        // 6-step hybrid workflow:
         //   0. ensure coverage fresh (deterministic)
         //   1. territory analysis (deterministic)
         //   2. seed extraction (agentic, structured)
-        //   3. autocomplete (deterministic)
-        //   4. seed validation (agentic, structured)
-        //   5. ahrefs pipeline (deterministic)
-        //   6. final selection (deterministic)
-        assert_eq!(steps.len(), 7, "Should have 7 steps: deterministic → deterministic → agentic → deterministic → agentic → deterministic → deterministic");
+        //   3. seed validation (agentic, structured)
+        //   4. ahrefs pipeline (deterministic)
+        //   5. final selection (deterministic)
+        assert_eq!(steps.len(), 6, "Should have 6 steps: deterministic → deterministic → agentic → agentic → deterministic → deterministic");
         assert_eq!(steps[0].name, "ensure_coverage_fresh");
         assert_eq!(steps[0].kind, StepKind::EnsureCoverageFresh);
         assert_eq!(steps[1].name, "research_territory_analysis");
         assert_eq!(steps[1].kind, StepKind::ResearchTerritoryAnalysis);
         assert_eq!(steps[2].name, "research_seed_extraction");
         assert_eq!(steps[2].kind, StepKind::Agentic);
-        assert_eq!(steps[3].name, "research_autocomplete");
-        assert_eq!(steps[3].kind, StepKind::ResearchAutocomplete);
-        assert_eq!(steps[4].name, "research_seed_validation");
-        assert_eq!(steps[4].kind, StepKind::Agentic);
-        assert_eq!(steps[5].name, "research_ahrefs_pipeline");
-        assert_eq!(steps[5].kind, StepKind::KeywordResearchNative);
-        assert_eq!(steps[6].name, "research_final_selection");
-        assert_eq!(steps[6].kind, StepKind::ResearchFinalSelection);
+        assert_eq!(steps[3].name, "research_seed_validation");
+        assert_eq!(steps[3].kind, StepKind::Agentic);
+        assert_eq!(steps[4].name, "research_ahrefs_pipeline");
+        assert_eq!(steps[4].kind, StepKind::KeywordResearchNative);
+        assert_eq!(steps[5].name, "research_final_selection");
+        assert_eq!(steps[5].kind, StepKind::ResearchFinalSelection);
 
         std::fs::remove_dir_all(&temp_dir).ok();
     }

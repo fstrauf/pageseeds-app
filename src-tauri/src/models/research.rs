@@ -31,14 +31,28 @@ pub struct ValidatedSeed {
     pub seeds: Vec<String>,
 }
 
-/// Output from Step 3: research_seed_validation
+/// Output from the research_seed_validation step.
 ///
-/// The LLM filters autocomplete suggestions for domain relevance.
+/// The LLM validates extracted themes for domain relevance and proposes 1-3
+/// seed phrasings per on-topic theme.
 /// Contract: MUST return valid JSON with {"validated_seeds": [{"theme": ..., "seeds": [...]}]}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 pub struct SeedValidationOutput {
     pub validated_seeds: Vec<ValidatedSeed>,
+}
+
+/// Output from the candidate relevance check inside final selection.
+///
+/// The LLM flags shortlist keywords that drifted out of the site's domain
+/// (DataForSEO expansion can return same-vocabulary but off-domain phrases,
+/// e.g. "assignment risk ao3" from an options-trading seed). Internal to the
+/// pipeline — never crosses IPC, so no TS export.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CandidateRelevanceOutput {
+    /// Keywords from the input list that are off-domain for this site.
+    #[serde(default)]
+    pub off_domain_keywords: Vec<String>,
 }
 
 /// A scored keyword from the Ahrefs pipeline
@@ -122,6 +136,9 @@ pub struct SelectedKeyword {
     pub selection_reason: String,
     /// Recommended article title
     pub recommended_title: String,
+    /// Search intent classification (informational/commercial/transactional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
     /// Winnability bucket: "target" | "differentiate" | "avoid"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub winnability: Option<String>,

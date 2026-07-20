@@ -1,5 +1,7 @@
 # Content Fix Apply
 
+<!-- skill-version: 1 -->
+
 Apply SEO content improvements to a single MDX article based on structured recommendations.
 
 ## Input

@@ -2,112 +2,6 @@ use crate::engine::workflows::StepResult;
 use crate::models::research::{KeywordPipelineOutput, LandingPageCandidate, SelectedKeyword};
 use crate::models::task::Task;
 
-/// Deterministic Step 2: fetch Google Autocomplete suggestions for all themes.
-///
-/// Reads the `research_seed_extraction` artifact from the task, calls Google
-/// Autocomplete (free, no auth) for each theme, and outputs structured JSON:
-/// `[{theme: string, suggestions: [string]}]`
-///
-/// This output is consumed by the agentic Step 3 (research_seed_validation).
-pub fn exec_research_autocomplete(task: &Task, project_path: &str) -> StepResult {
-    use crate::engine::exec::keywords::parse_seed_extraction_artifact;
-
-    let seed_artifact = parse_seed_extraction_artifact(task);
-
-    if seed_artifact.themes.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No themes found in research_seed_extraction artifact. Step 1 must run first."
-                .to_string(),
-            output: None,
-        };
-    }
-
-    log::info!(
-        "[research_autocomplete] Fetching Google Autocomplete for {} themes",
-        seed_artifact.themes.len()
-    );
-
-    let themes = seed_artifact.themes.clone();
-    let _project_path = project_path.to_string();
-
-    let thread_result = std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("Failed to create runtime: {}", e))?;
-
-        rt.block_on(async move {
-            let mut results: Vec<serde_json::Value> = Vec::new();
-
-            for theme in &themes {
-                tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-
-                let suggestions =
-                    match crate::seo::google_autocomplete::fetch_suggestions(theme, "us", "en")
-                        .await
-                    {
-                        Ok(s) => s,
-                        Err(e) => {
-                            log::warn!(
-                                "[research_autocomplete] Autocomplete failed for '{}': {}",
-                                theme,
-                                e
-                            );
-                            vec![]
-                        }
-                    };
-
-                let suggestion_list: Vec<String> = suggestions
-                    .iter()
-                    .take(4)
-                    .map(|s| s.keyword.clone())
-                    .collect();
-
-                log::info!(
-                    "[research_autocomplete] theme '{}' → {} suggestions: {:?}",
-                    theme,
-                    suggestion_list.len(),
-                    suggestion_list
-                );
-
-                results.push(serde_json::json!({
-                    "theme": theme,
-                    "suggestions": suggestion_list,
-                }));
-            }
-
-            Ok::<Vec<serde_json::Value>, String>(results)
-        })
-    })
-    .join()
-    .map_err(|_| "Autocomplete thread panicked".to_string());
-
-    match thread_result {
-        Ok(Ok(results)) => {
-            let json = serde_json::to_string_pretty(&results).unwrap_or_else(|_| "[]".to_string());
-            log::info!(
-                "[research_autocomplete] Complete — {} theme entries ({} chars)",
-                results.len(),
-                json.len()
-            );
-            StepResult {
-                success: true,
-                message: format!("Google Autocomplete fetched for {} themes", results.len()),
-                output: Some(json),
-            }
-        }
-        Ok(Err(e)) => StepResult {
-            success: false,
-            message: format!("Autocomplete failed: {}", e),
-            output: None,
-        },
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Autocomplete thread error: {}", e),
-            output: None,
-        },
-    }
-}
-
 /// Output format matching what the frontend KeywordPicker expects.
 ///
 /// The frontend expects either:
@@ -141,18 +35,19 @@ pub struct DifficultyWrapper {
 ///   intent aligned with the workflow (informational for blog, commercial for
 ///   landing pages).
 /// - Sort by volume (desc), then difficulty (asc).
-/// - Take top N (default 10).
+/// - Take top `max_results` (callers may overshoot to leave room for the
+///   downstream relevance check to drop off-domain candidates).
 /// - Generate recommended titles based on keyword type.
 pub fn select_keywords_deterministic(
     pipeline_json: &str,
     is_landing_page: bool,
+    max_results: usize,
 ) -> Result<(KeywordPickerOutput, bool), String> {
     // Parse pipeline output
     let pipeline: KeywordPipelineOutput = serde_json::from_str(pipeline_json)
         .map_err(|e| format!("Failed to parse pipeline output: {}", e))?;
 
     let target_kd = 30i64; // 0-100 scale (DataForSEO/Ahrefs unified)
-    let max_results = 10usize;
     let total_candidates = pipeline.keywords.len();
 
     // Primary filter: data + KD + non-navigational + workflow-aligned intent.
@@ -244,6 +139,7 @@ pub fn select_keywords_deterministic(
                     k.volume.unwrap_or(0)
                 ),
                 recommended_title: generate_title(&k.keyword, false),
+                intent: k.intent.clone(),
                 // Populated by enrich_with_winnability() after selection.
                 winnability: None,
                 winnability_reason: None,
@@ -394,14 +290,22 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-/// Execute the deterministic final selection step.
+/// Final shortlist size after relevance filtering.
+const FINAL_RESULTS: usize = 10;
+/// How many candidates to select before the relevance check, so off-domain
+/// removals don't shrink the final shortlist below FINAL_RESULTS.
+const RELEVANCE_OVERSHOOT: usize = 15;
+
+/// Execute the final selection step.
 ///
 /// This is called by the executor when it encounters a step with kind "research_final_selection".
-/// It reads the previous step's output (keyword pipeline results) and applies deterministic
-/// filtering/sorting to select the best candidates.
+/// It reads the previous step's output (keyword pipeline results), applies deterministic
+/// filtering/sorting, then runs one batched agentic relevance check to drop
+/// off-domain candidates before writing the artifact.
 pub fn exec_research_final_selection(
     task: &Task,
-    _project_path: &str,
+    project_path: &str,
+    agent_provider: &str,
     previous_output: Option<&str>,
 ) -> StepResult {
     let pipeline_json = match previous_output {
@@ -424,8 +328,29 @@ pub fn exec_research_final_selection(
         is_landing_page
     );
 
-    match select_keywords_deterministic(pipeline_json, is_landing_page) {
+    match select_keywords_deterministic(pipeline_json, is_landing_page, RELEVANCE_OVERSHOOT) {
         Ok((mut output, used_fallback)) => {
+            // Agentic relevance check: DataForSEO expansion can return
+            // same-vocabulary but off-domain candidates (e.g. "assignment risk
+            // ao3" from an options-trading seed). Cannot be deterministic:
+            // telling "ao3" (off-domain) apart from "61-day" (on-domain new
+            // term) requires domain judgment. Non-fatal — on failure the
+            // deterministic shortlist stands and the human reviewer decides.
+            let themes: Vec<String> = serde_json::from_str::<KeywordPipelineOutput>(pipeline_json)
+                .map(|p| p.themes)
+                .unwrap_or_default();
+            let removed = filter_off_domain_candidates(
+                &mut output,
+                &themes,
+                project_path,
+                agent_provider,
+            );
+
+            // Trim the overshoot after filtering and fix the accounting.
+            trim_to_final(&mut output, FINAL_RESULTS);
+            let final_count = selected_count(&output);
+            output.filtered_out = output.total_candidates.saturating_sub(final_count);
+
             // Enrich the selected keywords with winnability scores (AIO risk,
             // competitor authority, KD) before writing the artifact.
             enrich_with_winnability(&mut output, &task.project_id);
@@ -441,25 +366,20 @@ pub fn exec_research_final_selection(
                 }
             };
 
-            let count = if is_landing_page {
-                output.landing_page_candidates.len()
+            let relevance_note = if removed > 0 {
+                format!(", {} off-domain removed", removed)
             } else {
-                output
-                    .difficulty
-                    .as_ref()
-                    .map(|d| d.results.len())
-                    .unwrap_or(0)
+                String::new()
             };
-
             let msg = if used_fallback {
                 format!(
-                    "Selected {} keywords (API data unavailable; showing best candidates without KD/volume filters)",
-                    count
+                    "Selected {} keywords (API data unavailable; showing best candidates without KD/volume filters{})",
+                    final_count, relevance_note
                 )
             } else {
                 format!(
-                    "Selected {} keywords deterministically (KD <= 30, sorted by volume)",
-                    count
+                    "Selected {} keywords deterministically (KD <= 30, sorted by volume{})",
+                    final_count, relevance_note
                 )
             };
 
@@ -474,6 +394,140 @@ pub fn exec_research_final_selection(
             message: format!("Keyword selection failed: {}", e),
             output: None,
         },
+    }
+}
+
+fn selected_count(output: &KeywordPickerOutput) -> usize {
+    if !output.landing_page_candidates.is_empty() {
+        output.landing_page_candidates.len()
+    } else {
+        output
+            .difficulty
+            .as_ref()
+            .map(|d| d.results.len())
+            .unwrap_or(0)
+    }
+}
+
+/// Truncate both output shapes to `max` entries (post-relevance-check).
+fn trim_to_final(output: &mut KeywordPickerOutput, max: usize) {
+    output.landing_page_candidates.truncate(max);
+    if let Some(d) = &mut output.difficulty {
+        d.results.truncate(max);
+        d.total = d.results.len();
+        d.successful = d.results.len();
+    }
+}
+
+/// Apply an off-domain list to the shortlist (case-insensitive, trimmed).
+/// Pure — unit-tested without an LLM. Returns the number removed.
+fn apply_off_domain_filter(
+    output: &mut KeywordPickerOutput,
+    off_domain: &std::collections::HashSet<String>,
+) -> usize {
+    if off_domain.is_empty() {
+        return 0;
+    }
+    let before = selected_count(output);
+    output
+        .landing_page_candidates
+        .retain(|c| !off_domain.contains(&c.keyword.trim().to_lowercase()));
+    if let Some(d) = &mut output.difficulty {
+        d.results
+            .retain(|k| !off_domain.contains(&k.keyword.trim().to_lowercase()));
+    }
+    before - selected_count(output)
+}
+
+/// One batched LLM call flagging off-domain candidates in the shortlist.
+/// Non-fatal: returns 0 (keeps everything) when the check is unavailable.
+fn filter_off_domain_candidates(
+    output: &mut KeywordPickerOutput,
+    themes: &[String],
+    project_path: &str,
+    agent_provider: &str,
+) -> usize {
+    let keywords: Vec<String> = if !output.landing_page_candidates.is_empty() {
+        output
+            .landing_page_candidates
+            .iter()
+            .map(|c| c.keyword.clone())
+            .collect()
+    } else {
+        output
+            .difficulty
+            .as_ref()
+            .map(|d| d.results.iter().map(|k| k.keyword.clone()).collect())
+            .unwrap_or_default()
+    };
+    if keywords.is_empty() {
+        return 0;
+    }
+
+    let brief = std::fs::read_to_string(
+        crate::engine::project_paths::ProjectPaths::from_path(project_path)
+            .automation_dir
+            .join("project.md"),
+    )
+    .unwrap_or_else(|_| "(no brief found)".to_string());
+    const MAX_BRIEF_LEN: usize = 8_000;
+    let brief_trimmed = if brief.len() > MAX_BRIEF_LEN {
+        format!("{}… [truncated]", &brief[..MAX_BRIEF_LEN])
+    } else {
+        brief
+    };
+
+    let system = include_str!("../../../prompts/candidate_relevance.md");
+    let user = format!(
+        "## Project Context\n\n{}\n\n## Research Themes\n\n{}\n\n## Candidate Keywords\n\n{}",
+        brief_trimmed,
+        themes.join(", "),
+        keywords.join("\n")
+    );
+    let prompt = format!("{}\n\n---\n\n{}", system, user);
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[relevance_check] Failed to create runtime: {}", e);
+            return 0;
+        }
+    };
+
+    let result = rt.block_on(async {
+        crate::rig::extraction::extract_structured::<
+            crate::models::research::CandidateRelevanceOutput,
+        >(agent_provider, &prompt, Some(system), Some("direct"), None)
+        .await
+    });
+
+    match result {
+        Ok(check) => {
+            let off_domain: std::collections::HashSet<String> = check
+                .off_domain_keywords
+                .iter()
+                .map(|k| k.trim().to_lowercase())
+                .filter(|k| !k.is_empty())
+                .collect();
+            let removed = apply_off_domain_filter(output, &off_domain);
+            if removed > 0 {
+                log::info!(
+                    "[relevance_check] removed {} off-domain candidates: {:?}",
+                    removed,
+                    off_domain
+                );
+            } else {
+                log::info!("[relevance_check] all {} candidates on-domain", keywords.len());
+            }
+            removed
+        }
+        Err(e) => {
+            log::warn!(
+                "[relevance_check] extraction failed ({}); keeping deterministic shortlist",
+                e
+            );
+            0
+        }
     }
 }
 
@@ -546,7 +600,7 @@ fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
                         &kw.keyword,
                         &serp,
                         Some(kw.difficulty as f64),
-                        Some("informational"),
+                        kw.intent.as_deref(),
                     );
                     log::info!(
                         "[winnability] '{}' → {} (risk={})",
@@ -610,7 +664,7 @@ mod tests {
             kw("what is a covered call", 3000, 20.0, "informational"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, false).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
         let results = output.difficulty.unwrap().results;
         assert!(
             results.iter().any(|r| r.keyword == "how to sell covered calls"),
@@ -630,7 +684,7 @@ mod tests {
             kw("best covered call screener", 600, 30.0, "commercial"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, true).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
         let candidates = output.landing_page_candidates;
         assert!(
             candidates.iter().any(|c| c.keyword == "covered call tracker"),
@@ -651,7 +705,7 @@ mod tests {
             kw("covered call strike selection", 400, 50.0, "informational"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let result = select_keywords_deterministic(&json, false);
+        let result = select_keywords_deterministic(&json, false, 10);
         assert!(
             result.is_err(),
             "should fail (not fallback) when no keywords meet the KD bar"
@@ -678,5 +732,59 @@ mod tests {
             generate_title("optionstrat vs tastytrade", true),
             "Optionstrat vs Tastytrade: Which is Right for You?"
         );
+    }
+
+    #[test]
+    fn off_domain_filter_removes_flagged_case_insensitively() {
+        let pipeline = build_pipeline(vec![
+            kw("what is iv crush", 260, 0.0, "informational"),
+            kw("assignment risk ao3", 140, 0.0, "informational"),
+            kw("iv crush meaning", 210, 0.0, "informational"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
+
+        // Production lowercases flagged keywords before building the set.
+        let off_domain: std::collections::HashSet<String> =
+            ["assignment risk ao3".to_string()].into_iter().collect();
+        let removed = apply_off_domain_filter(&mut output, &off_domain);
+
+        assert_eq!(removed, 1);
+        let results = output.difficulty.unwrap().results;
+        assert_eq!(results.len(), 2);
+        assert!(!results.iter().any(|r| r.keyword == "assignment risk ao3"));
+    }
+
+    #[test]
+    fn off_domain_filter_empty_set_is_noop() {
+        let pipeline = build_pipeline(vec![kw("what is iv crush", 260, 0.0, "informational")]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
+
+        let removed = apply_off_domain_filter(&mut output, &std::collections::HashSet::new());
+        assert_eq!(removed, 0);
+        assert_eq!(output.difficulty.unwrap().results.len(), 1);
+    }
+
+    #[test]
+    fn trim_to_final_caps_both_output_shapes() {
+        let kws: Vec<ScoredKeyword> = (0..15)
+            .map(|i| {
+                let name = format!("kw {}", i);
+                kw(&name, 1000 - i as i64, 10.0, "informational")
+            })
+            .collect();
+        let pipeline = build_pipeline(kws);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, false, 15).unwrap();
+        assert_eq!(selected_count(&output), 15);
+
+        trim_to_final(&mut output, FINAL_RESULTS);
+        assert_eq!(selected_count(&output), FINAL_RESULTS);
+        let d = output.difficulty.unwrap();
+        assert_eq!(d.total, FINAL_RESULTS);
+        // Highest-volume entries survive the trim.
+        assert!(d.results.iter().any(|r| r.keyword == "kw 0"));
+        assert!(!d.results.iter().any(|r| r.keyword == "kw 14"));
     }
 }

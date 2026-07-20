@@ -100,6 +100,55 @@
         assert!(!slugs.contains("/blog/hub-coffee"));
     }
 
+    /// load_valid_link_targets excludes slugs redirected away by a consolidation
+    /// (sources in redirects.csv) while keeping every other project slug.
+    #[test]
+    fn load_valid_link_targets_excludes_redirect_sources() {
+        let conn = in_memory_db();
+        let project_dir = std::env::temp_dir().join(format!(
+            "pageseeds-link-targets-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let automation = project_dir.join(".github").join("automation");
+        std::fs::create_dir_all(&automation).unwrap();
+        let project_path = project_dir.to_string_lossy().to_string();
+
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('p1', 'Test', ?1, 1, 'workspace')",
+            [&project_path],
+        ).unwrap();
+        for (id, slug) in [(1, "hub-coffee"), (2, "old-merged-post")] {
+            conn.execute(
+                "INSERT INTO articles (
+                    id, project_id, title, url_slug, file, status,
+                    content_gaps_addressed, target_volume, word_count, review_count
+                 ) VALUES (?1, 'p1', ?2, ?3, 'article.mdx', 'published', '[]', 0, 0, 0)",
+                rusqlite::params![id, format!("Article {}", id), slug],
+            ).unwrap();
+        }
+
+        // Without a redirect map the valid set equals the raw slug set.
+        let targets = load_valid_link_targets(&conn, "p1", &project_path).unwrap();
+        assert!(targets.contains("hub-coffee"));
+        assert!(targets.contains("old-merged-post"));
+
+        std::fs::write(
+            automation.join("redirects.csv"),
+            "source,destination,status\n/blog/old-merged-post,/blog/hub-coffee,301\n",
+        )
+        .unwrap();
+
+        let targets = load_valid_link_targets(&conn, "p1", &project_path).unwrap();
+        assert!(targets.contains("hub-coffee"));
+        assert!(
+            !targets.contains("old-merged-post"),
+            "redirected slug must not be a valid link target"
+        );
+
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
     /// Completing the new audit tasks increases done and reduces todo.
     #[test]
     fn project_overview_reflects_completed_tasks() {

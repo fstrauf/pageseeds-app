@@ -127,8 +127,8 @@ impl WorkflowHandler for ResearchHandler {
                 ),
             ],
             "research_keywords" | "research_landing_pages" => {
-                // 7-step hybrid workflow:
-                // deterministic → deterministic → agentic → deterministic → agentic → deterministic → deterministic
+                // 6-step hybrid workflow:
+                // deterministic → deterministic → agentic → agentic → deterministic → deterministic
                 vec![
                     // Step 1 (deterministic): Ensure coverage data is fresh (< 7 days).
                     // If stale or missing, runs coverage analysis inline. Fully invisible to user.
@@ -145,27 +145,26 @@ impl WorkflowHandler for ResearchHandler {
                     // Cannot be deterministic: requires reading intent from free-form text.
                     // Now also reads the research_shortlist to prioritize open territories.
                     WorkflowStep::new("research_seed_extraction", StepKind::Agentic),
-                    // Step 4 (deterministic): fetch Google Autocomplete for all themes.
-                    // Free API, always returns results. Outputs structured JSON: [{theme, suggestions}].
-                    WorkflowStep::new("research_autocomplete", StepKind::ResearchAutocomplete),
-                    // Step 5 (agentic): LLM filters autocomplete suggestions for domain relevance.
+                    // Step 4 (agentic): LLM validates themes for domain relevance and
+                    // proposes 1-3 sharpened seed phrasings per on-topic theme.
                     // Uses rig Extractor<T> for guaranteed structured JSON output.
                     // Cannot be deterministic: requires understanding what is on-topic for this
                     // specific product/site. Hard-coding a relevance rule would produce silent errors
                     // on any input it was not tested against.
-                    // Input contract: [{theme, suggestions: [string]}]
+                    // Input contract: research_seed_extraction artifact {themes: [string]}
                     // Output contract: {validated_seeds: [{theme: string, seeds: [string]}]}
                     WorkflowStep::new("research_seed_validation", StepKind::Agentic),
-                    // Step 6 (deterministic): DataForSEO related_keywords per validated seed.
+                    // Step 5 (deterministic): DataForSEO related_keywords per validated seed.
                     // Deterministic: given validated seeds, fetches keyword ideas + KD + volume.
                     // Also consumes pending territory themes from research_shortlist as extra seeds.
                     WorkflowStep::new("research_ahrefs_pipeline", StepKind::KeywordResearchNative)
                         .with_latest_raw_policy(
                             crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
                         ),
-                    // Step 7 (deterministic): Select best candidates from structured data.
-                    // Outputs clean JSON directly — no normalizer needed because upstream
-                    // agentic steps now use Extractor<T>.
+                    // Step 6 (hybrid): Select best candidates from structured data
+                    // (deterministic filter/sort, overshoot to 15), then one batched
+                    // agentic relevance check drops off-domain candidates (non-fatal),
+                    // then trim to 10 + winnability enrichment.
                     WorkflowStep::new("research_final_selection", StepKind::ResearchFinalSelection),
                 ]
             }
@@ -231,7 +230,30 @@ impl WorkflowHandler for ContentHandler {
         // directives. Previously regular articles loaded no skill at all and
         // fell through to a generic boilerplate prompt with no content strategy.
         let skill = if is_hub { "hub-write" } else { "content-write" };
-        vec![step.with_param(step_params::SKILL, skill)]
+        let mut steps = vec![step.with_param(step_params::SKILL, skill)];
+        // Step 2 (deterministic, new-article tasks only): verify the write stage
+        // actually produced a registered article file. Turns the silent no-op of
+        // text-only providers (task Done, zero output, issue #13) into a loud,
+        // retryable failure. Optimize tasks modify an existing file, so no new
+        // file is expected and this check does not apply to them.
+        if matches!(
+            task_type(task),
+            "write_article" | "create_content" | "create_hub_page" | "refresh_hub_page"
+        ) {
+            steps.push(WorkflowStep::new(
+                "content_write_verify",
+                StepKind::ContentWriteVerify,
+            ));
+        }
+        steps.push(
+            // Final step (deterministic): verify every /blog/ link the agent wrote
+            // resolves to a project article. Auto-repairs filename-form hrefs
+            // (e.g. /blog/248_roast_profile_management) and fails the task with
+            // a per-link report when a link target does not exist — broken
+            // internal links must not reach the repo unrepaired.
+            WorkflowStep::new("content_link_verify", StepKind::LinkIntegrityVerify),
+        );
+        steps
     }
 }
 
@@ -716,9 +738,15 @@ impl WorkflowHandler for ConsolidateClusterHandler {
             WorkflowStep::new("merge_apply_patch", StepKind::MergeApplyPatch),
             // Step 6 (deterministic): Generate redirect rules as generic CSV.
             WorkflowStep::new("merge_generate_redirects", StepKind::MergeGenerateRedirects),
-            // Step 7 (deterministic): Validate merged keeper and redirect map.
+            // Step 7 (deterministic): Rewrite inbound links to redirected slugs
+            // across all MDX files so nothing links to a redirected URL.
+            WorkflowStep::new(
+                "merge_rewrite_inbound_links",
+                StepKind::MergeRewriteInboundLinks,
+            ),
+            // Step 8 (deterministic): Validate merged keeper and redirect map.
             WorkflowStep::new("merge_validate_output", StepKind::MergeValidateOutput),
-            // Step 8 (deterministic): Sync merged articles back to SQLite and articles.json.
+            // Step 9 (deterministic): Sync merged articles back to SQLite and articles.json.
             WorkflowStep::new("merge_sync_articles", StepKind::MergeSyncArticles),
         ]
     }

@@ -219,6 +219,51 @@ pub fn extract_markdown_document(raw: &str, expected_heading: Option<&str>) -> O
     None
 }
 
+/// Extract an MDX document (frontmatter + markdown body) from raw LLM output.
+///
+/// Text-only providers (Claude / OpenAI / Ollama rig backends) return the whole
+/// article as chat text, often wrapped in a ```mdx fence or surrounded by
+/// commentary. This extracts the persistable document:
+///
+/// 1. Strip common agent preambles/postambles.
+/// 2. If the reply is (or contains) a fenced code block, unwrap the first one.
+/// 3. Accept the result when it starts with a `---` frontmatter block.
+/// 4. Otherwise fall back to [`extract_markdown_document`] (heading-based).
+///
+/// Returns `None` when no plausible MDX/markdown document is present, so the
+/// caller can fail loudly instead of writing commentary to a content file.
+pub fn extract_mdx_document(raw: &str) -> Option<String> {
+    let cleaned = strip_agent_markdown_preambles(raw);
+    let trimmed = cleaned.trim();
+
+    // Unwrap the first fenced code block, whether it is the whole reply or
+    // embedded in prose.
+    let unwrapped = if let Some(rest) = trimmed.strip_prefix("```") {
+        let body = rest.split_once('\n').map(|(_, b)| b).unwrap_or(rest);
+        let end = body.rfind("```").unwrap_or(body.len());
+        Some(body[..end].trim().to_string())
+    } else if let Some(fence_start) = trimmed.find("\n```") {
+        let after = &trimmed[fence_start + 4..];
+        let body = after.split_once('\n').map(|(_, b)| b).unwrap_or(after);
+        let end = body.find("\n```").map(|p| p + 1).unwrap_or(body.len());
+        Some(body[..end].trim().to_string())
+    } else {
+        None
+    };
+
+    if let Some(doc) = unwrapped {
+        if doc.starts_with("---") || doc.starts_with('#') {
+            return Some(doc);
+        }
+    }
+
+    if trimmed.starts_with("---") {
+        return Some(trimmed.to_string());
+    }
+
+    extract_markdown_document(raw, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +355,38 @@ mod tests {
         let raw = "Some intro\n# Any Heading\nContent here.";
         let doc = extract_markdown_document(raw, None);
         assert!(doc.unwrap().starts_with("# Any Heading"));
+    }
+
+    // ── extract_mdx_document ─────────────────────────────────────────────────
+
+    #[test]
+    fn mdx_extracts_plain_frontmatter_document() {
+        let raw = "---\ntitle: Test\ndate: 2024-01-01\n---\n\n# Body\n";
+        let doc = extract_mdx_document(raw).unwrap();
+        assert!(doc.starts_with("---"));
+        assert!(doc.contains("# Body"));
+    }
+
+    #[test]
+    fn mdx_unwraps_fenced_block() {
+        let raw = "```mdx\n---\ntitle: Fenced\n---\n\n# Fenced Body\n```";
+        let doc = extract_mdx_document(raw).unwrap();
+        assert!(doc.starts_with("---"));
+        assert!(doc.contains("# Fenced Body"));
+        assert!(!doc.contains("```"));
+    }
+
+    #[test]
+    fn mdx_unwraps_fence_embedded_in_prose() {
+        let raw = "Here is the article you asked for:\n\n```mdx\n---\ntitle: Embedded\n---\n\n# Hi\n```\n\nHope this helps!";
+        let doc = extract_mdx_document(raw).unwrap();
+        assert!(doc.starts_with("---"));
+        assert!(doc.contains("# Hi"));
+    }
+
+    #[test]
+    fn mdx_returns_none_for_plain_commentary() {
+        let raw = "I wrote the article to the file you specified.";
+        assert!(extract_mdx_document(raw).is_none());
     }
 }

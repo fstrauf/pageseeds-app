@@ -36,6 +36,23 @@ pub enum LlmBackend {
     Ollama { base_url: String, model: String },
 }
 
+/// Provider-name-based file-IO capability check — the single source of truth
+/// for whether a provider can read/write files in the project repo itself.
+///
+/// Agentic CLI / ACP providers (Kimi in any mode) run an agent with file tools
+/// in the repo, so a `write_article` prompt can create the MDX file on disk
+/// itself. The native rig HTTP providers (Claude / OpenAI / Ollama) are pure
+/// prompt→text completions — the executor must persist any returned content
+/// to disk itself.
+///
+/// The executor only carries the configured provider name (backend resolution
+/// happens inside the agent layer and may depend on health checks), hence the
+/// string-based check. Unknown providers default to file-IO-capable so the
+/// executor does not write agent output over a backend it does not know.
+pub fn provider_supports_file_io(provider: &str) -> bool {
+    !matches!(provider, "claude" | "openai" | "ollama")
+}
+
 /// Result of an agent run.
 #[derive(Debug, Clone)]
 pub struct AgentResponse {
@@ -452,6 +469,17 @@ mod tests {
         } else {
             std::env::remove_var("KIMI_BRIDGE_URL");
         }
+    }
+
+    #[test]
+    fn test_provider_supports_file_io() {
+        assert!(provider_supports_file_io("kimi"));
+        assert!(!provider_supports_file_io("claude"));
+        assert!(!provider_supports_file_io("openai"));
+        assert!(!provider_supports_file_io("ollama"));
+        // Unknown providers default to file-IO-capable so the executor does
+        // not write agent output over a backend it does not know.
+        assert!(provider_supports_file_io("unknown"));
     }
 
     #[test]

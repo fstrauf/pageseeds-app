@@ -34,6 +34,37 @@ pub fn slug_from_filename(filename: &str) -> String {
     crate::content::slug::strip_numeric_prefix(basename)
 }
 
+/// Parse `File: <path>` from a task description and resolve it against the
+/// repo root.
+///
+/// Shared convention used by `engine::post_actions` (expected-output lookup)
+/// and `engine::exec::content::link_verify` (written-file lookup). Accepts
+/// `"File: "` and `"File:"` (no space); the path runs until `" |"` or a
+/// newline, whichever comes first. Relative paths are joined onto
+/// `repo_root`; absolute paths are returned as-is. Returns `None` when no
+/// `File:` marker or an empty path is present.
+pub fn file_path_from_description(desc: &str, repo_root: &Path) -> Option<PathBuf> {
+    let (start, prefix_len) = desc
+        .find("File: ")
+        .map(|i| (i, 6))
+        .or_else(|| desc.find("File:").map(|i| (i, 5)))?;
+    let rest = &desc[start + prefix_len..];
+    let end = rest
+        .find(" |")
+        .or_else(|| rest.find('\n'))
+        .unwrap_or(rest.len());
+    let path_str = rest[..end].trim();
+    if path_str.is_empty() {
+        return None;
+    }
+    let path = Path::new(path_str);
+    Some(if path.is_relative() {
+        repo_root.join(path)
+    } else {
+        path.to_path_buf()
+    })
+}
+
 /// Read a markdown file's frontmatter and count body words.
 pub fn read_file_metadata(path: &Path) -> Result<FileMetadata> {
     let content = std::fs::read_to_string(path)?;
@@ -939,6 +970,34 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         crate::db::init_with_conn(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn file_path_from_description_parses_conventions() {
+        let root = Path::new("/repo");
+        // "File: " with " |" terminator, relative path joined onto repo root.
+        assert_eq!(
+            file_path_from_description("Write article. File: ./content/1_post.mdx | Keyword: x", root),
+            Some(PathBuf::from("/repo/content/1_post.mdx"))
+        );
+        // "File:" without space, newline terminator.
+        assert_eq!(
+            file_path_from_description("File:./content/2_post.mdx\nMore text", root),
+            Some(PathBuf::from("/repo/content/2_post.mdx"))
+        );
+        // "File: " with newline terminator (no " |" separator).
+        assert_eq!(
+            file_path_from_description("File: ./content/3_post.mdx\nNext line", root),
+            Some(PathBuf::from("/repo/content/3_post.mdx"))
+        );
+        // Absolute path returned as-is.
+        assert_eq!(
+            file_path_from_description("File: /abs/path/4_post.mdx", root),
+            Some(PathBuf::from("/abs/path/4_post.mdx"))
+        );
+        // No marker, or an empty path after the marker.
+        assert_eq!(file_path_from_description("no file here", root), None);
+        assert_eq!(file_path_from_description("File:  | Keyword: x", root), None);
     }
 
     fn setup_test_project(conn: &Connection, project_id: &str, project_path: &std::path::Path) {

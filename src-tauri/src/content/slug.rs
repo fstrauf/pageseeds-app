@@ -110,6 +110,40 @@ pub fn strip_numeric_prefix(stem: &str) -> String {
     numeric_prefix_re().replace(stem, "").to_string()
 }
 
+/// Resolve a slug as written in a link against the set of valid link targets.
+///
+/// Exact match (as written, trimmed) is checked FIRST; only when there is no
+/// exact match does it fall back to the [`normalize_url_slug`] form. This
+/// protects a verbatim-existing slug with a leading number (e.g.
+/// `5-best-coffees`) from being destructively normalized into a different,
+/// dead URL.
+///
+/// Returns the canonical slug to link to, or `None` when nothing resolves.
+///
+/// # Examples
+///
+/// ```
+/// use pageseeds_lib::content::slug::resolve_slug;
+/// use std::collections::HashSet;
+///
+/// let valid: HashSet<String> = ["my-post".to_string(), "5-best-coffees".to_string()].into_iter().collect();
+/// assert_eq!(resolve_slug("my-post", &valid), Some("my-post".to_string()));
+/// assert_eq!(resolve_slug("001_my_post", &valid), Some("my-post".to_string()));
+/// assert_eq!(resolve_slug("5-best-coffees", &valid), Some("5-best-coffees".to_string()));
+/// assert_eq!(resolve_slug("nope", &valid), None);
+/// ```
+pub fn resolve_slug(slug: &str, valid: &std::collections::HashSet<String>) -> Option<String> {
+    let trimmed = slug.trim();
+    if valid.contains(trimmed) {
+        return Some(trimmed.to_string());
+    }
+    let normalized = normalize_url_slug(trimmed);
+    if !normalized.is_empty() && valid.contains(&normalized) {
+        return Some(normalized);
+    }
+    None
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // URL extraction
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -297,5 +331,43 @@ mod tests {
         assert_eq!(strip_numeric_prefix("001_my_post"), "my_post");
         assert_eq!(strip_numeric_prefix("001-my-post"), "my-post");
         assert_eq!(strip_numeric_prefix("my-post"), "my-post");
+    }
+
+    #[test]
+    fn resolve_slug_exact_match_wins_over_normalization() {
+        let valid: std::collections::HashSet<String> = [
+            "my-post".to_string(),
+            "5-best-coffees".to_string(),
+        ]
+        .into_iter()
+        .collect();
+
+        // Exact hit returns the written form unchanged.
+        assert_eq!(
+            resolve_slug("my-post", &valid),
+            Some("my-post".to_string())
+        );
+        // A verbatim-existing slug with a leading number is never rewritten.
+        assert_eq!(
+            resolve_slug("5-best-coffees", &valid),
+            Some("5-best-coffees".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_slug_falls_back_to_normalized_form() {
+        let valid: std::collections::HashSet<String> =
+            ["roast-profile-management".to_string()].into_iter().collect();
+
+        assert_eq!(
+            resolve_slug("248_roast_profile_management", &valid),
+            Some("roast-profile-management".to_string())
+        );
+        assert_eq!(
+            resolve_slug("/blog/Roast_Profile_Management/", &valid),
+            Some("roast-profile-management".to_string())
+        );
+        assert_eq!(resolve_slug("ghost-slug", &valid), None);
+        assert_eq!(resolve_slug("", &valid), None);
     }
 }

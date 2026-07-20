@@ -1,5 +1,7 @@
 # Hub Page Writer
 
+<!-- skill-version: 1 -->
+
 Generate a comprehensive pillar / hub page MDX document that connects a cluster of spoke articles under a single broad topic.
 
 ## Input

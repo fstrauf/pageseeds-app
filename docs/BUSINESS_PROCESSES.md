@@ -61,20 +61,17 @@ Step 1: research_theme_selection_agent (agentic) — IF no explicit themes
   ├─ Extracts 3-4 focused themes to research
   └─ Output: {"themes": [...]}
   ↓
-Step 2: research_autocomplete (deterministic)
-  ├─ Gathers search suggestions per theme
-  └─ Output: Autocomplete suggestions
-  ↓
-Step 3: research_seed_validation (agentic)
-  ├─ Filters suggestions for domain relevance
+Step 2: research_seed_validation (agentic)
+  ├─ Validates themes for domain relevance
+  ├─ Proposes 1-3 seed phrasings per on-topic theme
   └─ Output: Validated seeds
   ↓
-Step 4: keyword_research_native (deterministic)
+Step 3: keyword_research_native (deterministic)
   ├─ Ahrefs API: keyword ideas + difficulty scores
   ├─ Iterates until 10+ qualified keywords found
   └─ Output: {"difficulty": {"results": [...]}}
   ↓
-Step 5: research_final_selection (deterministic)
+Step 4: research_final_selection (deterministic)
   ├─ Filters by volume, KD, intent
   ├─ Deduplicates against existing content
   └─ Output: Final selection JSON

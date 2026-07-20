@@ -50,9 +50,7 @@ pub enum StepKind {
     EnsureCoverageFresh,
     RedditPostReply,
     SocialExtractArticle,
-    /// Fetch Google Autocomplete suggestions per theme (deterministic).
-    ResearchAutocomplete,
-    /// LLM filters autocomplete suggestions for domain relevance (agentic).
+    /// LLM validates themes for domain relevance and proposes seed phrasings (agentic).
     ResearchSeedValidation,
     /// Deterministic territory analysis: groups articles by keyword, finds open/saturated themes.
     ResearchTerritoryAnalysis,
@@ -105,6 +103,12 @@ pub enum StepKind {
     FixContentArticleApply,
     /// Deterministic: verify applied content fixes meet health thresholds.
     FixContentArticleVerify,
+    /// Deterministic: verify /blog/ links in a freshly written article resolve to
+    /// project slugs; auto-repair filename-form hrefs, fail on unresolvable links.
+    LinkIntegrityVerify,
+    /// Deterministic: verify a new-article write produced a file on disk that is
+    /// registered in the article index; fails the task loudly otherwise.
+    ContentWriteVerify,
     /// Load approved merge plan from strategy artifact.
     MergeLoadPlan,
     /// Preflight checks before merging (files exist, no cycles, keeper indexable).
@@ -117,6 +121,8 @@ pub enum StepKind {
     MergeApplyPatch,
     /// Generate redirect rules (generic CSV first, platform adapters later).
     MergeGenerateRedirects,
+    /// Rewrite inbound links to redirected slugs across all MDX files.
+    MergeRewriteInboundLinks,
     /// Validate merged keeper and redirect map.
     MergeValidateOutput,
     /// Sync merged articles back to SQLite and articles.json.
@@ -219,7 +225,6 @@ impl StepKind {
             Self::EnsureCoverageFresh => "ensure_coverage_fresh",
             Self::RedditPostReply => "reddit_post_reply",
             Self::SocialExtractArticle => "social_extract_article",
-            Self::ResearchAutocomplete => "research_autocomplete",
             Self::ResearchSeedValidation => "research_seed_validation",
             Self::ResearchTerritoryAnalysis => "research_territory_analysis",
             Self::CtrBuildContext => "ctr_build_context",
@@ -246,12 +251,15 @@ impl StepKind {
             Self::FixContentArticleGenerate => "fix_content_article_generate",
             Self::FixContentArticleApply => "fix_content_article_apply",
             Self::FixContentArticleVerify => "fix_content_article_verify",
+            Self::LinkIntegrityVerify => "link_integrity_verify",
+            Self::ContentWriteVerify => "content_write_verify",
             Self::MergeLoadPlan => "merge_load_plan",
             Self::MergePreflight => "merge_preflight",
             Self::MergeExtractSections => "merge_extract_sections",
             Self::MergeDraftPatch => "merge_draft_patch",
             Self::MergeApplyPatch => "merge_apply_patch",
             Self::MergeGenerateRedirects => "merge_generate_redirects",
+            Self::MergeRewriteInboundLinks => "merge_rewrite_inbound_links",
             Self::MergeValidateOutput => "merge_validate_output",
             Self::MergeSyncArticles => "merge_sync_articles",
             Self::TerritoryLoadRecommendation => "territory_load_recommendation",
@@ -339,7 +347,6 @@ impl FromStr for StepKind {
             "ensure_coverage_fresh" => Ok(Self::EnsureCoverageFresh),
             "reddit_post_reply" => Ok(Self::RedditPostReply),
             "social_extract_article" => Ok(Self::SocialExtractArticle),
-            "research_autocomplete" => Ok(Self::ResearchAutocomplete),
             "research_seed_validation" => Ok(Self::ResearchSeedValidation),
             "research_territory_analysis" => Ok(Self::ResearchTerritoryAnalysis),
             "ctr_build_context" => Ok(Self::CtrBuildContext),
@@ -366,12 +373,15 @@ impl FromStr for StepKind {
             "fix_content_article_generate" => Ok(Self::FixContentArticleGenerate),
             "fix_content_article_apply" => Ok(Self::FixContentArticleApply),
             "fix_content_article_verify" => Ok(Self::FixContentArticleVerify),
+            "link_integrity_verify" => Ok(Self::LinkIntegrityVerify),
+            "content_write_verify" => Ok(Self::ContentWriteVerify),
             "merge_load_plan" => Ok(Self::MergeLoadPlan),
             "merge_preflight" => Ok(Self::MergePreflight),
             "merge_extract_sections" => Ok(Self::MergeExtractSections),
             "merge_draft_patch" => Ok(Self::MergeDraftPatch),
             "merge_apply_patch" => Ok(Self::MergeApplyPatch),
             "merge_generate_redirects" => Ok(Self::MergeGenerateRedirects),
+            "merge_rewrite_inbound_links" => Ok(Self::MergeRewriteInboundLinks),
             "merge_validate_output" => Ok(Self::MergeValidateOutput),
             "merge_sync_articles" => Ok(Self::MergeSyncArticles),
             "territory_load_recommendation" => Ok(Self::TerritoryLoadRecommendation),
@@ -469,7 +479,6 @@ mod tests {
             StepKind::EnsureCoverageFresh,
             StepKind::RedditPostReply,
             StepKind::SocialExtractArticle,
-            StepKind::ResearchAutocomplete,
             StepKind::ResearchSeedValidation,
             StepKind::ResearchTerritoryAnalysis,
             StepKind::CtrBuildContext,
@@ -497,12 +506,15 @@ mod tests {
             StepKind::FixContentArticleGenerate,
             StepKind::FixContentArticleApply,
             StepKind::FixContentArticleVerify,
+            StepKind::LinkIntegrityVerify,
+            StepKind::ContentWriteVerify,
             StepKind::MergeLoadPlan,
             StepKind::MergePreflight,
             StepKind::MergeExtractSections,
             StepKind::MergeDraftPatch,
             StepKind::MergeApplyPatch,
             StepKind::MergeGenerateRedirects,
+            StepKind::MergeRewriteInboundLinks,
             StepKind::MergeValidateOutput,
             StepKind::TerritoryLoadRecommendation,
             StepKind::TerritoryBuildContext,

@@ -97,16 +97,26 @@ pub struct WorkflowStep {
 
 | Step Name | Kind | Handler | Output |
 |-----------|------|---------|--------|
-| `research_autocomplete` | `ResearchAutocomplete` | `exec_research_autocomplete` | Autocomplete suggestions per theme |
 | `research_seed_validation` | `ResearchSeedValidation` | `exec_research_seed_validation` | Validated seeds with domain relevance |
 | `keyword_research_native` | `KeywordResearchNative` | `exec_keyword_research_native` | `{"difficulty": {...}}` |
 | `research_final_selection` | `ResearchFinalSelection` | `exec_research_final_selection` | `{"landing_page_candidates": [...]}` |
 
 **Research Flow:**
-1. Autocomplete → gathers search suggestions per theme (deterministic)
-2. Seed validation → LLM filters suggestions for domain relevance (agentic)
-3. Keyword research → uses Ahrefs API tools to find keywords with volume/KD data (deterministic)
-4. Final selection → selects best candidates (deterministic)
+1. Seed validation → LLM validates themes and proposes seed phrasings (agentic)
+2. Keyword research → uses the SEO data provider to find keywords with volume/KD data (deterministic)
+3. Final selection → selects best candidates (deterministic), then one batched LLM relevance check drops off-domain candidates before winnability enrichment (agentic, non-fatal)
+
+**Content Write Flow** (`write_article`, `optimize_article`, `create_content`, `optimize_content`, `create_hub_page`, `refresh_hub_page`):
+1. `content_write_stage` → agentic: writes the MDX file directly into the repo (skill: `content-write` or `hub-write`). New-article tasks get an exact target path directive; for text-only providers (Claude/OpenAI/Ollama) the executor persists the returned MDX to that path itself.
+2. `content_write_verify` (`ContentWriteVerify`, new-article tasks only) → deterministic: fails the task when the write stage produced no registered article file (issue #13 safety net).
+3. `content_link_verify` (`LinkIntegrityVerify`) → deterministic: every `/blog/` link in the written file must resolve to the project slug set (minus redirected slugs). Filename-form hrefs (`/blog/248_roast_profile_management`) are auto-repaired in place; any unresolvable link fails the step with a per-link report, and the file is left untouched (all-or-nothing). Fails when no written file exists.
+
+**Consolidate Cluster Flow** (`consolidate_cluster`):
+1. `merge_load_plan` → `merge_preflight` → `merge_extract_sections` → `merge_draft_patch` (agentic) → `merge_apply_patch`
+2. `merge_generate_redirects` → appends source→keeper rules to `.github/automation/redirects.csv`
+3. `merge_rewrite_inbound_links` (`MergeRewriteInboundLinks`) → deterministic: rewrites every `/blog/` link pointing at a redirected slug to the keeper URL across all MDX files
+4. `merge_validate_output` → validates keeper + redirect map, and asserts zero remaining links to redirected slugs
+5. `merge_sync_articles`
 
 **Data Flow:** Step output flows to the next step via `latest_raw_output` when the step kind is in the `latest_raw` carry list.
 
@@ -148,6 +158,7 @@ engine/exec/
 ├── content/
 │   ├── mod.rs                    # Content review/apply
 │   ├── cluster_link.rs           # Internal link graph
+│   ├── link_verify.rs            # Post-write /blog/ link verification + repair
 │   └── hub_page.rs               # Legacy hub creation (deprecated)
 ├── content_audit.rs              # 21-check deterministic audit
 ├── reddit.rs                     # Search + enrichment

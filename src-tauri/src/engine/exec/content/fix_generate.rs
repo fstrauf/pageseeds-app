@@ -146,7 +146,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     // 5. Normalize and validate
     let target_kw = context.target_keyword.as_deref();
     let repairs = normalize_patch_before_validation(&mut patch, &original_content);
-    let errors = validate_patch_before_write(&patch, &original_content, target_kw, &task.project_id);
+    let errors = validate_patch_before_write(&patch, &original_content, target_kw, &task.project_id, project_path);
 
     // 6. One repair attempt if needed
     if !errors.is_empty() {
@@ -159,7 +159,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         match repair_content_fix_patch_with_backend(backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
                 let _repair_notes = normalize_patch_before_validation(&mut repaired, &original_content);
-                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id);
+                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id, project_path);
 
                 if !repair_errors.is_empty() {
                     return StepResult {
@@ -572,6 +572,7 @@ fn validate_patch_before_write(
     original_content: &str,
     target_keyword: Option<&str>,
     project_id: &str,
+    project_path: &str,
 ) -> Vec<String> {
     let mut errors = Vec::new();
     let title_max = crate::engine::exec::audit_health::TITLE_MAX_LEN;
@@ -685,11 +686,13 @@ fn validate_patch_before_write(
         }
     }
 
-    // Validate internal_links: target slugs must exist in the project
+    // Validate internal_links: target slugs must exist in the project and not
+    // be redirected away. Exact match first (resolve_slug) so verbatim-existing
+    // slugs are never destructively normalized.
     if let Some(ref links) = patch.changes.internal_links {
         let valid_slugs: std::collections::HashSet<String> =
             if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
-                crate::engine::task_store::load_project_slug_set(&db, project_id)
+                crate::engine::task_store::load_valid_link_targets(&db, project_id, project_path)
                     .unwrap_or_default()
             } else {
                 std::collections::HashSet::new()
@@ -700,8 +703,7 @@ fn validate_patch_before_write(
                 errors.push(format!("internal_links[{}].target_slug is empty", i));
             } else if link.anchor_text.trim().is_empty() {
                 errors.push(format!("internal_links[{}].anchor_text is empty", i));
-            } else if !valid_slugs
-                .contains(&crate::content::slug::normalize_url_slug(&link.target_slug))
+            } else if crate::content::slug::resolve_slug(&link.target_slug, &valid_slugs).is_none()
             {
                 errors.push(format!(
                     "internal_links[{}].target_slug '{}' does not match any article in this project",

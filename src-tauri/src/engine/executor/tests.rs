@@ -357,16 +357,6 @@
 
         rt.block_on(async {
             // Bridge health check
-            // Google Autocomplete mock
-            Mock::given(method("GET"))
-                .and(path("/complete/search"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                    "risk management",
-                    ["risk management strategy", "risk management framework", "portfolio risk management"]
-                ])))
-                .mount(&mock_server)
-                .await;
-
             Mock::given(method("GET"))
                 .and(path("/health"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -494,7 +484,6 @@
         let old_ahrefs = std::env::var("PAGESEEDS_AHREFS_BASE_URL").ok();
         let old_bridge = std::env::var("KIMI_BRIDGE_URL").ok();
         let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
-        let old_autocomplete = std::env::var("GOOGLE_AUTOCOMPLETE_BASE_URL").ok();
 
         std::env::set_var("CAPSOLVER_API_KEY", "mock-key");
         std::env::set_var(
@@ -507,7 +496,6 @@
         );
         std::env::set_var("PAGESEEDS_AHREFS_BASE_URL", mock_server.uri());
         std::env::set_var("KIMI_BRIDGE_URL", format!("{}/v1", mock_server.uri()));
-        std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", mock_server.uri());
 
         let db_path = project_dir.join("test.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -558,6 +546,12 @@
         .unwrap();
         std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
         let proj = test_project_in_at_path(&conn, &project_dir.to_string_lossy());
+        // Route through the Ahrefs provider so the flow hits the mocked
+        // endpoints above. The default ("dataforseo") requires real
+        // credentials and makes live API calls — that is why this test
+        // failed on CI but passed on machines with local secrets.
+        conn.execute("UPDATE projects SET seo_provider = 'ahrefs' WHERE id = 'proj1'", [])
+            .unwrap();
 
         // Ensure articles table exists and has a dummy article so the pre-flight check passes.
         conn.execute_batch(
@@ -611,7 +605,7 @@
         assert!(result.success, "expected success, got: {}", result.message);
         assert_eq!(saved_task.status, TaskStatus::Review);
 
-        // 5-step workflow produces 5 artifacts
+        // The workflow produces one artifact per data-producing step
         let artifact_keys: Vec<&str> = saved_task
             .artifacts
             .iter()
@@ -620,11 +614,6 @@
         assert!(
             artifact_keys.contains(&"research_seed_extraction"),
             "missing research_seed_extraction artifact; got: {:?}",
-            artifact_keys
-        );
-        assert!(
-            artifact_keys.contains(&"research_autocomplete"),
-            "missing research_autocomplete artifact; got: {:?}",
             artifact_keys
         );
         assert!(
@@ -697,11 +686,6 @@
         } else {
             std::env::remove_var("PAGESEEDS_DB_PATH");
         }
-        if let Some(v) = old_autocomplete {
-            std::env::set_var("GOOGLE_AUTOCOMPLETE_BASE_URL", v);
-        } else {
-            std::env::remove_var("GOOGLE_AUTOCOMPLETE_BASE_URL");
-        }
 
         std::fs::remove_dir_all(&project_dir).ok();
     }
@@ -769,27 +753,7 @@
 
     // ── Fix 2: keyword metadata parsing ───────────────────────────────────────
 
-    fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<String>, i64) {
-        let desc = match task.description.as_deref() {
-            Some(d) if !d.is_empty() => d,
-            _ => return (None, None, 0),
-        };
-        let mut keyword = None;
-        let mut kd: Option<String> = None;
-        let mut volume = 0i64;
-        for line in desc.lines() {
-            if let Some(rest) = line.strip_prefix("Target keyword:") {
-                keyword = Some(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("KD:") {
-                if let Ok(n) = rest.trim().parse::<i64>() {
-                    kd = Some(n.to_string());
-                }
-            } else if let Some(rest) = line.strip_prefix("Volume:") {
-                volume = rest.trim().parse::<i64>().unwrap_or(0);
-            }
-        }
-        (keyword, kd, volume)
-    }
+    use crate::engine::post_actions::parse_content_task_keyword_meta;
 
     // parse_content_task_keyword_meta extracts all three fields from a full description.
     #[test]

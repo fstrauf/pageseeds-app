@@ -49,6 +49,8 @@ fn main() {
         "update-task-status" => update_task_status_cmd(&db.to_string_lossy(), &args),
         "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
         "select-cannibalization" => select_cannibalization(&db.to_string_lossy(), &args),
+        "create-articles-from-keywords" => create_articles_from_keywords(&db.to_string_lossy(), &project_id, &args),
+        "set-task-status" => set_task_status(&db.to_string_lossy(), &args),
         "create-reddit-replies" => create_reddit_replies(&db.to_string_lossy(), &args),
 
         // ── Cannibalization strategy workflow ──
@@ -240,6 +242,8 @@ fn update_task_status_cmd(db_path: &str, args: &[String]) -> Result<serde_json::
 /// Mirror of the `create_article_tasks_from_keywords` Tauri command:
 /// build content tasks from selected keywords, persist them, mark the
 /// research task done. project_id is derived from the research task row.
+/// Uses the canonical creation path in `engine::keyword_selection` so the
+/// content brief context is attached exactly like the Tauri command does.
 fn select_keywords(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let research_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
     let keywords: Vec<String> = flag(args, "--keywords", "-K")
@@ -251,27 +255,16 @@ fn select_keywords(db_path: &str, args: &[String]) -> Result<serde_json::Value, 
         .map_err(|e| e.to_string())?;
     let project_id = research_task.project_id.clone();
 
-    let tasks = pageseeds_lib::engine::keyword_selection::build_content_tasks_from_keywords(
-        keywords,
-        &research_task,
-        &research_task_id,
-        &project_id,
-    )?;
-
-    for task in &tasks {
-        pageseeds_lib::engine::task_store::create_task(&conn, task).map_err(|e| e.to_string())?;
-    }
-
-    let parent = pageseeds_lib::engine::task_store::update_task_status(
+    let tasks = pageseeds_lib::engine::keyword_selection::create_article_tasks_from_keywords(
         &conn,
+        &project_id,
         &research_task_id,
-        TaskStatus::Done,
-    )
-    .map_err(|e| e.to_string())?;
+        keywords,
+    )?;
 
     Ok(serde_json::json!({
         "parent_task_id": research_task_id,
-        "parent_status": parent.status,
+        "parent_status": TaskStatus::Done,
         "created": tasks.len(),
         "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
         "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
@@ -309,6 +302,41 @@ fn select_cannibalization(db_path: &str, args: &[String]) -> Result<serde_json::
 
     Ok(serde_json::json!({
         "parent_task_id": parent_task_id,
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
+    }))
+}
+
+/// Transition a task's status (e.g. mark a manually-completed task done).
+fn set_task_status(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let status = flag(args, "--status", "-s").unwrap_or_else(|| exit("--status required"));
+    let status_enum: TaskStatus = serde_json::from_value(serde_json::Value::String(status.clone()))
+        .map_err(|_| format!("unknown status '{status}' (todo|queued|in_progress|review|done|failed|cancelled)"))?;
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    pageseeds_lib::engine::task_store::update_task_status(&conn, &task_id, status_enum)?;
+    Ok(serde_json::json!({"task_id": task_id, "status": status}))
+}
+
+/// Keyword-pick → content tasks: same creation path as the Tauri command/// (validates picks against the research artifact, marks research done).
+fn create_articles_from_keywords(db_path: &str, project_id: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let research_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let keywords_raw = flag(args, "--keywords", "-k")
+        .unwrap_or_else(|| exit("--keywords required (comma-separated)"));
+    let keywords: Vec<String> = keywords_raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let tasks = pageseeds_lib::engine::keyword_selection::create_article_tasks_from_keywords(
+        &conn,
+        project_id,
+        &research_task_id,
+        keywords,
+    )?;
+    Ok(serde_json::json!({
         "created": tasks.len(),
         "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
         "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
@@ -695,6 +723,8 @@ Task / queue orchestration:
   update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks
   select-keywords         -I <research-task-id> -K <kw,kw,...>  Create content tasks, mark research done
   select-cannibalization  -I <parent-task-id> -S <type:id,...>  Spawn cannibalization fixes, mark parent done
+  create-articles-from-keywords -i <id> -I <research-task-id> -k "kw1, kw2, ..."
+  set-task-status         -I <task-id> -s <status>              Set any task status
 
 Cannibalization workflow:
   cannibalization-strategy -i <id> -p <path>

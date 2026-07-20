@@ -18,14 +18,18 @@ mod indexing_link;
 ///   - exec_fix_content_article_generate  (agentic: structured extraction of ContentFixPatch)
 ///   - exec_fix_content_article_apply     (deterministic: apply patch to MDX)
 ///   - exec_fix_content_article_verify    (deterministic: verify fixes meet thresholds)
+///   - exec_link_integrity_verify         (deterministic: verify/repair /blog/ links after agentic writes)
+///   - exec_content_write_verify          (deterministic: fail the task when a new-article write left no registered file)
 mod fix_apply;
 mod fix_context;
 mod fix_generate;
 mod fix_verify;
+mod link_verify;
 mod quality_review;
 mod review;
 mod sync;
 mod task_spawner;
+mod write_verify;
 
 pub(crate) use cluster_link::*;
 pub(crate) use fix_apply::*;
@@ -33,12 +37,14 @@ pub(crate) use fix_context::*;
 pub(crate) use fix_generate::*;
 pub(crate) use fix_verify::*;
 pub(crate) use indexing_link::*;
+pub(crate) use link_verify::*;
 pub(crate) use quality_review::*;
 pub(crate) use review::*;
 #[cfg(test)]
 use rusqlite::Connection;
 pub(crate) use sync::*;
 pub(crate) use task_spawner::*;
+pub(crate) use write_verify::*;
 
 #[cfg(test)]
 use crate::engine::project_paths::ProjectPaths;

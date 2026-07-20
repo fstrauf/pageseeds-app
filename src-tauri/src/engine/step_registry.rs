@@ -134,6 +134,7 @@ impl StepRegistry {
             handlers,
             StepKind::ResearchFinalSelection,
             crate::engine::exec::research::exec_research_final_selection,
+            agent_provider,
             optional_context
         );
 
@@ -141,12 +142,6 @@ impl StepRegistry {
             handlers,
             StepKind::LandingPageSpecWrite,
             crate::engine::exec::research::exec_landing_page_spec_write
-        );
-
-        register_blocking!(
-            handlers,
-            StepKind::ResearchAutocomplete,
-            crate::engine::exec::research::exec_research_autocomplete
         );
 
         register_blocking!(
@@ -652,6 +647,24 @@ impl StepRegistry {
             crate::engine::exec::content::exec_fix_content_article_context
         );
 
+        register_blocking!(
+            handlers,
+            StepKind::LinkIntegrityVerify,
+            crate::engine::exec::content::exec_link_integrity_verify
+        );
+
+        handlers.insert(
+            StepKind::ContentWriteVerify,
+            Box::new(|_step, ctx| {
+                let result = crate::engine::exec::content::exec_content_write_verify(
+                    ctx.conn,
+                    ctx.task,
+                    ctx.project_path,
+                );
+                Box::pin(async move { result })
+            }),
+        );
+
         handlers.insert(
             StepKind::FixContentArticleGenerate,
             Box::new(|step, ctx| {
@@ -824,6 +837,12 @@ impl StepRegistry {
             handlers,
             StepKind::MergeGenerateRedirects,
             crate::engine::exec::consolidate_cluster::exec_merge_generate_redirects
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::MergeRewriteInboundLinks,
+            crate::engine::exec::consolidate_cluster::exec_merge_rewrite_inbound_links
         );
 
         register_blocking!(

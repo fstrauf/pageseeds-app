@@ -108,6 +108,12 @@ pub fn exec_content_audit(
         map
     };
 
+    // Valid internal link targets: project slugs minus slugs redirected away by
+    // a consolidation. Used by the broken-links check in audit_one_article.
+    let valid_link_targets =
+        crate::engine::task_store::load_valid_link_targets(&db, &task.project_id, project_path)
+            .unwrap_or_default();
+
     let mut results: Vec<serde_json::Value> = to_audit
         .iter()
         .map(|article| {
@@ -120,6 +126,7 @@ pub fn exec_content_audit(
                 &malformed_link_re,
                 &temporal_url_re,
                 &gsc_metrics,
+                &valid_link_targets,
             )
         })
         .collect();
@@ -250,13 +257,13 @@ pub fn exec_content_audit(
     malformed_link_re: &regex::Regex,
     temporal_url_re: &regex::Regex,
     gsc_metrics: &std::collections::HashMap<i64, serde_json::Value>,
+    valid_link_targets: &std::collections::HashSet<String>,
 ) -> serde_json::Value {
-    let keyword = article
-        .target_keyword
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
+    // Stored keywords may contain literal quotes or long multi-token phrases;
+    // normalize once so every check below matches reality (see content::keyword_match).
+    let keyword = crate::content::keyword_match::normalize_keyword(
+        article.target_keyword.as_deref().unwrap_or(""),
+    );
     let db_title = article.title.trim().to_string();
     let file_ref = article.file.trim().to_string();
     let gsc = gsc_metrics
@@ -339,8 +346,7 @@ pub fn exec_content_audit(
     let kw_count = if keyword.is_empty() {
         0
     } else {
-        let kw_lower = keyword.as_str();
-        body.to_lowercase().matches(kw_lower).count()
+        crate::content::keyword_match::keyword_occurrences(&body.to_lowercase(), &keyword)
     };
     let kw_density = if actual_word_count > 0 && !keyword.is_empty() {
         kw_count as f64 / actual_word_count as f64 * 100.0
@@ -356,7 +362,9 @@ pub fn exec_content_audit(
         .unwrap_or("")
         .to_lowercase();
 
-    // Links — count internal links and broken links without collecting all into a Vec
+    // Links — count internal links and broken links without collecting all into a Vec.
+    // A /blog/<slug> href whose slug is not a valid link target (missing from the
+    // project, or redirected away by a consolidation) counts as broken.
     let mut internal_link_count = 0usize;
     let mut broken_links = Vec::new();
     for c in link_extract_re.captures_iter(&body) {
@@ -367,6 +375,18 @@ pub fn exec_content_audit(
         if href.contains("TODO") || href.trim() == "" || href.trim() == "#" {
             let text = c.get(1).map(|m| m.as_str()).unwrap_or("");
             broken_links.push(serde_json::json!({ "text": text, "href": href }));
+            continue;
+        }
+        if let Some(rest) = href.strip_prefix("/blog/") {
+            let slug_written = rest.split('/').next().unwrap_or(rest);
+            if crate::content::slug::resolve_slug(slug_written, valid_link_targets).is_none() {
+                let text = c.get(1).map(|m| m.as_str()).unwrap_or("");
+                broken_links.push(serde_json::json!({
+                    "text": text,
+                    "href": href,
+                    "reason": "target not found in project",
+                }));
+            }
         }
     }
 
@@ -476,12 +496,12 @@ pub fn exec_content_audit(
     };
 
     let checks = serde_json::json!({
-        "title_keyword":        check_pass(kw_opt.as_ref().map(|kw| title.to_lowercase().contains(kw.as_str())), "Title contains keyword"),
-        "h1_keyword":           check_pass(kw_opt.as_ref().map(|kw| h1.to_lowercase().contains(kw.as_str())), "H1 contains keyword"),
+        "title_keyword":        check_pass(kw_opt.as_ref().map(|kw| crate::content::keyword_match::keyword_present(&title.to_lowercase(), kw)), "Title contains keyword"),
+        "h1_keyword":           check_pass(kw_opt.as_ref().map(|kw| crate::content::keyword_match::keyword_present(&h1.to_lowercase(), kw)), "H1 contains keyword"),
         "meta_desc_present":    check_pass(Some(!meta_description.is_empty()), "Meta description present"),
-        "meta_desc_keyword":    check_pass(kw_opt.as_ref().map(|kw| meta_description.to_lowercase().contains(kw.as_str())), "Meta description contains keyword"),
+        "meta_desc_keyword":    check_pass(kw_opt.as_ref().map(|kw| crate::content::keyword_match::keyword_present(&meta_description.to_lowercase(), kw)), "Meta description contains keyword"),
         "meta_desc_length":     check_val(Some(meta_description.len() >= 50 && meta_description.len() <= 155), serde_json::json!(meta_description.len()), "Meta description length 50–155 chars"),
-        "keyword_first_para":   check_pass(kw_opt.as_ref().map(|kw| first_para.contains(kw.as_str())), "Keyword in first paragraph"),
+        "keyword_first_para":   check_pass(kw_opt.as_ref().map(|kw| crate::content::keyword_match::keyword_present(&first_para, kw)), "Keyword in first paragraph"),
         "word_count":           check_val(Some(actual_word_count >= 800), serde_json::json!(actual_word_count), "Word count ≥ 800"),
         "keyword_density":      check_val(kw_opt.as_ref().map(|_| kw_density >= 0.2 && kw_density <= 0.8), serde_json::json!(format!("{:.2}%", kw_density)), "Keyword density 0.2–0.8%"),
         "h2_structure":         check_val(Some(h2_count >= 2), serde_json::json!(h2_count), "Has ≥2 H2 headings"),
@@ -707,6 +727,7 @@ mod tests {
             &regex::Regex::new(r"\]").unwrap(),
             &regex::Regex::new(r"foo").unwrap(),
             &map,
+            &std::collections::HashSet::new(),
         );
 
         let gsc = &result["gsc"];
@@ -733,6 +754,7 @@ mod tests {
             &regex::Regex::new(r"\]").unwrap(),
             &regex::Regex::new(r"foo").unwrap(),
             &map,
+            &std::collections::HashSet::new(),
         );
 
         let gsc = &result["gsc"];
@@ -740,5 +762,47 @@ mod tests {
 
         let gsc_check = &result["checks"]["gsc_data"];
         assert_eq!(gsc_check["pass"].as_bool().unwrap(), false, "gsc_data check should fail without metrics");
+    }
+
+    /// /blog/ links whose slug is not a valid link target are flagged broken.
+    #[test]
+    fn broken_links_flags_unresolvable_blog_targets() {
+        let dir = std::env::temp_dir().join(format!("pageseeds-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("post.mdx"),
+            "---\ntitle: T\ndate: 2025-01-01\ndescription: d\n---\n\n[ok](/blog/keeper) [dead](/blog/ghost) [placeholder](TODO)\n",
+        )
+        .unwrap();
+
+        let article = make_article(1, "T", "post", "post.mdx", "kw");
+        let map: HashMap<i64, serde_json::Value> = HashMap::new();
+        let valid: std::collections::HashSet<String> =
+            ["keeper".to_string()].into_iter().collect();
+
+        let result = audit_one_article(
+            &article,
+            &dir,
+            &regex::Regex::new(r"^\d+[_\-]+").unwrap(),
+            &regex::Regex::new(r"(?s)```.*?```").unwrap(),
+            &regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap(),
+            &regex::Regex::new(r"\]").unwrap(),
+            &regex::Regex::new(r"foo").unwrap(),
+            &map,
+            &valid,
+        );
+
+        let check = &result["checks"]["broken_links"];
+        assert_eq!(check["pass"].as_bool(), Some(false));
+        // /blog/ghost (unresolvable) + TODO placeholder; /blog/keeper resolves.
+        assert_eq!(check["value"].as_i64(), Some(2));
+        let issues = check["issues"].as_array().unwrap();
+        let ghost = issues
+            .iter()
+            .find(|i| i["href"] == "/blog/ghost")
+            .expect("ghost link reported");
+        assert_eq!(ghost["reason"], "target not found in project");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

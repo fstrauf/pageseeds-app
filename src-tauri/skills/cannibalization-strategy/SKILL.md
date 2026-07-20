@@ -1,5 +1,7 @@
 # Cannibalization Strategy Skill
 
+<!-- skill-version: 1 -->
+
 Used by the `can_analyze_candidates` agentic step.
 
 ## Input

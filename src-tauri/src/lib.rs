@@ -11,7 +11,7 @@ pub mod logging;
 pub mod models;
 mod clarity;
 pub mod reddit;
-mod rig;
+pub mod rig;
 pub mod seo;
 mod social;
 
@@ -114,6 +114,11 @@ pub fn run() {
                 db: std::sync::Arc::new(std::sync::Mutex::new(conn)),
                 db_path: db_path.clone(),
             });
+            // Start the background scheduler: evaluates due rules hourly and runs
+            // AutoEnqueue collection/audit tasks without manual intervention.
+            let scheduler_state = engine::scheduler::start_background_scheduler(db_path, 3600);
+            app.manage(scheduler_state);
+            log::info!("[startup] Background scheduler started (interval 3600s)");
             app.manage(GscState {
                 token: Mutex::new(None),
             });

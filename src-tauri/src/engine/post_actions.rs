@@ -104,42 +104,12 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
 
     if ctx.step.name == "content_write_stage" && ctx.result.success {
         let project_path = std::path::Path::new(ctx.project_path);
-        match crate::content::article_index::ingest_orphans(
-            ctx.conn,
-            &ctx.task.project_id,
-            project_path,
-        ) {
-            Ok(ingested) if ingested.ingested > 0 => {
-                let (keyword, kd_str, vol) = parse_content_task_keyword_meta(ctx.task);
-                for filename in &ingested.files {
-                    let _ = ctx.conn.execute(
-                        "UPDATE articles
-                         SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                             status='draft'
-                         WHERE project_id=?4 AND file LIKE ?5",
-                        rusqlite::params![
-                            keyword.as_deref(),
-                            kd_str.as_deref(),
-                            vol,
-                            &ctx.task.project_id,
-                            format!("%{}", filename),
-                        ],
-                    );
-                }
-                let _ = crate::content::article_index::export_projection(
-                    ctx.conn,
-                    &ctx.task.project_id,
-                    project_path,
-                );
-                log::info!(
-                    "[content_register] registered {} article(s): {:?}",
-                    ingested.ingested,
-                    ingested.files
-                );
-            }
-            Ok(_) => {
-                log::info!("[content_register] no new orphan files to register after content write")
-            }
+        match ingest_content_write_files(ctx.conn, ctx.task, project_path) {
+            Ok(summary) if summary.ingested > 0 => {}
+            Ok(_) => log::warn!(
+                "[content_register] no new orphan files registered after content write — \
+                 content_write_verify will fail the task if no article file was written"
+            ),
             Err(e) => log::warn!("[content_register] article registration failed: {}", e),
         }
     }
@@ -219,6 +189,52 @@ pub struct StepOutcomeOverride {
     pub output: Option<String>,
     /// If set, the caller should append this artifact to the task.
     pub artifact: Option<crate::models::task::TaskArtifact>,
+}
+
+/// Ingest new content files after a content-write step, tag them with the
+/// task's keyword metadata, mark them as drafts, and export the articles.json
+/// projection.
+///
+/// Shared by `after_step` (post-write registration) and the deterministic
+/// `content_write_verify` step (idempotent safety net). Returns the ingest
+/// summary so callers can distinguish "registered N new files" from "nothing
+/// new on disk".
+pub(crate) fn ingest_content_write_files(
+    conn: &Connection,
+    task: &Task,
+    project_path: &std::path::Path,
+) -> Result<crate::content::article_index::IngestSummary, String> {
+    let ingested =
+        crate::content::article_index::ingest_orphans(conn, &task.project_id, project_path)
+            .map_err(|e| e.to_string())?;
+
+    if ingested.ingested > 0 {
+        let (keyword, kd_str, vol) = parse_content_task_keyword_meta(task);
+        for filename in &ingested.files {
+            let _ = conn.execute(
+                "UPDATE articles
+                 SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                     status='draft'
+                 WHERE project_id=?4 AND file LIKE ?5",
+                rusqlite::params![
+                    keyword.as_deref(),
+                    kd_str.as_deref(),
+                    vol,
+                    &task.project_id,
+                    format!("%{}", filename),
+                ],
+            );
+        }
+        let _ =
+            crate::content::article_index::export_projection(conn, &task.project_id, project_path);
+        log::info!(
+            "[content_register] registered {} article(s): {:?}",
+            ingested.ingested,
+            ingested.files
+        );
+    }
+
+    Ok(ingested)
 }
 
 // ─── Post-task context ───────────────────────────────────────────────────────
@@ -830,21 +846,66 @@ fn fetch_baseline_metrics(
     (0.0, 0.0, 0.0, 0.0)
 }
 
-// ─── Helpers (copied from executor.rs to avoid cross-module privacy issues) ──
+// ─── Content-task keyword / title helpers ───────────────────────────────────
+
+/// Known imperative prefixes used by content-task factories
+/// ("Write article: X", "Create hub: X", …).
+const CONTENT_TASK_TITLE_PREFIXES: &[&str] = &[
+    "Write territory article:",
+    "Write article:",
+    "Create hub:",
+    "Refresh hub:",
+];
+
+/// Strip known content-task title prefixes, returning the bare topic.
+///
+/// Single source of truth for title-prefix stripping — previously inlined in
+/// `exec/agentic.rs` (`task_topic_stem`, `hub_spoke_context`) and
+/// `exec/content/cluster_link.rs`.
+pub(crate) fn strip_content_task_title_prefix(title: &str) -> &str {
+    let mut topic = title.trim();
+    loop {
+        let before = topic;
+        for prefix in CONTENT_TASK_TITLE_PREFIXES {
+            if let Some(rest) = topic.strip_prefix(prefix) {
+                topic = rest.trim_start();
+            }
+        }
+        if topic == before {
+            return topic;
+        }
+    }
+}
+
+/// Parse the `"Target keyword:"` line from a content task's description.
+///
+/// Single source of truth for the keyword line — previously triplicated in
+/// `parse_content_task_keyword_meta`, `exec/agentic.rs::task_topic_stem`,
+/// and `exec/research/landing_page.rs::parse_landing_page_meta`.
+pub(crate) fn content_task_target_keyword(task: &Task) -> Option<String> {
+    let desc = task.description.as_deref()?;
+    for line in desc.lines() {
+        if let Some(rest) = line.strip_prefix("Target keyword:") {
+            let keyword = rest.trim();
+            if !keyword.is_empty() {
+                return Some(keyword.to_string());
+            }
+        }
+    }
+    None
+}
 
 /// Parse keyword metadata embedded in the write_article task description.
-fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<String>, i64) {
+pub(crate) fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<String>, i64) {
     let desc = match task.description.as_deref() {
         Some(d) if !d.is_empty() => d,
         _ => return (None, None, 0),
     };
-    let mut keyword = None;
+    let keyword = content_task_target_keyword(task);
     let mut kd: Option<String> = None;
     let mut volume = 0i64;
     for line in desc.lines() {
-        if let Some(rest) = line.strip_prefix("Target keyword:") {
-            keyword = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("KD:") {
+        if let Some(rest) = line.strip_prefix("KD:") {
             if let Ok(n) = rest.trim().parse::<i64>() {
                 kd = Some(n.to_string());
             }
@@ -864,47 +925,26 @@ fn find_expected_slug_and_file(ctx: &PostStepContext<'_>) -> Option<(String, std
     let project_path = std::path::Path::new(ctx.project_path);
     let desc = ctx.task.description.as_deref().unwrap_or("");
 
-    // Try to extract a file path from the description.
-    // Patterns:
+    // Try to extract a file path from the description via the shared parser
+    // (content::ops::file_path_from_description). Patterns:
     //   "File: ./src/blog/posts/02_post.mdx"
     //   "File: ./webapp/content/blog/13_post.mdx"
-    let file_path = if let Some(start) = desc.find("File: ") {
-        let rest = &desc[start + 6..];
-        let end = rest.find(" |").unwrap_or(rest.len());
-        let path_str = rest[..end].trim();
-        let path = std::path::Path::new(path_str);
-        if path.is_relative() {
-            project_path.join(path)
-        } else {
-            path.to_path_buf()
-        }
-    } else if let Some(start) = desc.find("File:") {
-        // Handle "File:./path" without space
-        let rest = &desc[start + 5..];
-        let end = rest.find(" |").or_else(|| rest.find('\n')).unwrap_or(rest.len());
-        let path_str = rest[..end].trim();
-        let path = std::path::Path::new(path_str);
-        if path.is_relative() {
-            project_path.join(path)
-        } else {
-            path.to_path_buf()
-        }
-    } else {
-        // Fallback: try to parse "Article ID: X" and look up the file in DB
-        if let Some(start) = desc.find("Article ID:") {
-            let rest = &desc[start + 11..];
-            let id_str = rest.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
-            if let Ok(article_id) = id_str.parse::<i64>() {
-                if let Ok(articles) = task_store::list_articles(ctx.conn, &ctx.task.project_id) {
-                    if let Some(article) = articles.iter().find(|a| a.id == article_id) {
-                        let path = std::path::Path::new(&article.file);
-                        if path.is_relative() {
-                            project_path.join(path)
-                        } else {
-                            path.to_path_buf()
-                        }
+    // Fallback: try to parse "Article ID: X" and look up the file in DB.
+    let file_path = if let Some(path) =
+        crate::content::ops::file_path_from_description(desc, project_path)
+    {
+        path
+    } else if let Some(start) = desc.find("Article ID:") {
+        let rest = &desc[start + 11..];
+        let id_str = rest.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
+        if let Ok(article_id) = id_str.parse::<i64>() {
+            if let Ok(articles) = task_store::list_articles(ctx.conn, &ctx.task.project_id) {
+                if let Some(article) = articles.iter().find(|a| a.id == article_id) {
+                    let path = std::path::Path::new(&article.file);
+                    if path.is_relative() {
+                        project_path.join(path)
                     } else {
-                        return None;
+                        path.to_path_buf()
                     }
                 } else {
                     return None;
@@ -915,6 +955,8 @@ fn find_expected_slug_and_file(ctx: &PostStepContext<'_>) -> Option<(String, std
         } else {
             return None;
         }
+    } else {
+        return None;
     };
 
     if !file_path.exists() {
@@ -1144,5 +1186,87 @@ mod tests {
         let (_, score) = classify_topic_health(70, 1, 3.0, 500.0);
         // 70 + (3 * 10) + (500 / 100) = 70 + 30 + 5 = 105
         assert_eq!(score, Some(105.0));
+    }
+
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
+
+    fn make_task() -> Task {
+        Task {
+            id: "test-task".to_string(),
+            task_type: "write_article".to_string(),
+            phase: "implementation".to_string(),
+            status: TaskStatus::Todo,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
+            title: None,
+            description: None,
+            project_id: "proj1".to_string(),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+        }
+    }
+
+    #[test]
+    fn content_task_target_keyword_reads_keyword_line() {
+        let mut task = make_task();
+        task.description =
+            Some("Target keyword: gamma scalping strategy\nKD: 35\nVolume: 3000".to_string());
+        assert_eq!(
+            content_task_target_keyword(&task).as_deref(),
+            Some("gamma scalping strategy")
+        );
+    }
+
+    #[test]
+    fn content_task_target_keyword_skips_empty_and_missing() {
+        let mut task = make_task();
+        assert!(content_task_target_keyword(&task).is_none());
+
+        task.description = Some("KD: 35\nVolume: 3000".to_string());
+        assert!(content_task_target_keyword(&task).is_none());
+
+        task.description = Some("Target keyword:\nKD: 35".to_string());
+        assert!(content_task_target_keyword(&task).is_none());
+    }
+
+    #[test]
+    fn strip_content_task_title_prefix_strips_known_prefixes() {
+        assert_eq!(
+            strip_content_task_title_prefix("Write article: delta hedging"),
+            "delta hedging"
+        );
+        assert_eq!(
+            strip_content_task_title_prefix("Write territory article: theta decay"),
+            "theta decay"
+        );
+        assert_eq!(
+            strip_content_task_title_prefix("Create hub: options greeks"),
+            "options greeks"
+        );
+        assert_eq!(
+            strip_content_task_title_prefix("Refresh hub: options greeks"),
+            "options greeks"
+        );
+        // No-space variant (hub titles are stripped with bare prefixes upstream).
+        assert_eq!(
+            strip_content_task_title_prefix("Create hub:options greeks"),
+            "options greeks"
+        );
+        // Unknown prefixes and bare titles are returned trimmed but intact.
+        assert_eq!(
+            strip_content_task_title_prefix("Cluster and link: delta hedging"),
+            "Cluster and link: delta hedging"
+        );
+        assert_eq!(strip_content_task_title_prefix("plain title"), "plain title");
     }
 }

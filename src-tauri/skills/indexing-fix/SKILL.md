@@ -1,5 +1,7 @@
 # Indexing Fix Skill
 
+<!-- skill-version: 1 -->
+
 Used by the `fix_indexing` / `fix_technical` agentic steps.
 
 ## Instructions

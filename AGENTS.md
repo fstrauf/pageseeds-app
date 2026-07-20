@@ -23,7 +23,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 
 | If you need to... | Use this path | Do NOT |
 |---|---|---|
-| **Adjust how an AI writes/reviews content** | Edit or add a skill in `.github/skills/{skill}/SKILL.md` (or embedded defaults in `src-tauri/src/skills/`). Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
+| **Adjust how an AI writes/reviews content** | Edit the embedded skill in `src-tauri/skills/{skill}/SKILL.md` — it is the single source of truth for app-default skills (registered in `engine/skills.rs`). Project-level `.github/skills/{skill}/SKILL.md` overrides still work for per-project customization, but trigger a drift warning at load time when an embedded counterpart exists and its version marker differs. Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
 | **Run the weekly SEO pass on a project** | Invoke the `weekly-seo` skill (`.agents/skills/weekly-seo/SKILL.md`, discoverable by Kimi Code) — it drives `pageseeds-cli` tools to check recency, evaluate signals, execute tasks and their follow-ups, resolve mechanical review decisions, and report measures taken. The skill is the workflow; judgment lives in the agent. | Build a Rust orchestrator, scheduler, or cross-project runner |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
 | **Add or change task lifecycle behavior** | Follow the [Task Lifecycle Contract](#task-lifecycle-contract), then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
@@ -207,6 +207,8 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `frontmatter::extract_frontmatter_string()` | `content/frontmatter.rs` | Inline frontmatter field extraction |
 | `slug::normalize_url_slug()` | `content/slug.rs` | Custom `slugify()` |
 | `slug::strip_numeric_prefix()` | `content/slug.rs` | Inline regex `^\d+_` |
+| `slug::resolve_slug()` | `content/slug.rs` | Bare `set.contains(&normalize_url_slug(...))` — exact match first, normalized fallback |
+| `redirects::load_redirect_source_slugs()` | `content/redirects.rs` | Ad-hoc `redirects.csv` parsing |
 | `date_policy::find_first_free_past_date()` | `content/date_policy.rs` | Backward-cursor date loops |
 | `date_policy::suggest_next_safe_date()` | `content/date_policy.rs` | Reading dates and walking backward manually |
 | `ingest_orphan_files()` | `content/ops.rs` | A new "save article to DB + disk" function |
@@ -217,6 +219,7 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `slug_from_filename()` | `content/ops.rs` | String manipulation on filenames |
 | `apply_publish()` | `content/publish.rs` | Any publish/status-change workflow |
 | `content_health_check()` | `content/ops.rs` | One-off file existence checks in UI code |
+| `keyword_match::normalize_keyword()` / `keyword_present()` / `keyword_occurrences()` | `content/keyword_match.rs` | Raw `contains()` / `matches()` keyword checks (stored keywords may contain quotes or long phrases) |
 
 ### Project / Site URL (`models/project.rs`)
 
@@ -233,6 +236,7 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `export::export_articles()` | `db/export.rs` | Manual SQL → JSON serialization |
 | `export::merge_unknown_fields()` | `db/export.rs` | Naive JSON overwrite that drops extra fields |
 | `task_store::list_articles()` | `engine/task_store.rs` | Raw SQL `SELECT * FROM articles` |
+| `task_store::load_valid_link_targets()` | `engine/task_store.rs` | Raw `load_project_slug_set()` for link-target checks — redirected slugs are not valid targets |
 
 ### Article Writing / Workflow (`engine/`)
 
@@ -250,6 +254,8 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 |---|---|---|
 | `append_related_section()` | `engine/exec/content/cluster_link.rs` | Inline string manipulation for link sections |
 | `exec_cluster_link_scan()` | `engine/exec/content/cluster_link.rs` | Custom file traversal for internal links |
+| `extract_blog_link_hrefs()` | `content/linking.rs` | Any new `/blog/` link regex — canonical + malformed patterns are shared here |
+| `repair_blog_link_hrefs()` | `content/linking.rs` | Inline string replacement of link hrefs |
 
 ### Per-Article Fix Pipeline (`engine/exec/content/`, `engine/exec/ctr_audit/`)
 
