@@ -142,6 +142,143 @@ mod tests {
         );
     }
 
+    /// Build a minimal `fix_indexing_internal_links` task carrying the given artifacts.
+    fn indexing_link_task(artifacts: Vec<crate::models::task::TaskArtifact>) -> Task {
+        Task {
+            id: "task-1".to_string(),
+            project_id: "proj-1".to_string(),
+            task_type: "fix_indexing_internal_links".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::Todo,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: crate::models::task::TaskReviewSurface::None,
+            follow_up_policy: crate::models::task::FollowUpPolicy::BackendAuto,
+            agent_policy: crate::models::task::AgentPolicy::Required,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts,
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+        }
+    }
+
+    fn target_artifact_with_candidates() -> crate::models::task::TaskArtifact {
+        crate::models::task::TaskArtifact {
+            key: "indexing_link_target".to_string(),
+            path: None,
+            artifact_type: None,
+            source: None,
+            content: Some(
+                r#"{"target": {
+                    "article_id": 42,
+                    "slug": "target-page",
+                    "title": "Target Page",
+                    "url": "https://example.com/blog/target-page",
+                    "target_keyword": "target keyword",
+                    "reason_code": "no_internal_links",
+                    "source_candidates": [
+                        {"article_id": 7, "slug": "source-a", "file": "source-a.mdx", "title": "Source A", "gsc_impressions": 120, "score": 0.9},
+                        {"article_id": 8, "slug": "source-b", "file": "source-b.mdx", "title": "Source B", "gsc_impressions": 45, "score": 0.5}
+                    ]
+                }}"#
+                .to_string(),
+            ),
+        }
+    }
+
+    /// Regression test for issue #34: the context step used to early-return
+    /// "Nothing to verify" when no `indexing_link_plan` artifact existed yet
+    /// (the plan is only written by step 2), emitting an output with no
+    /// `sources` array. That made the plan step short-circuit with empty
+    /// `links_to_add` and the verify step fail every task.
+    ///
+    /// The context step must instead build a non-empty `sources` array from
+    /// the target artifact's `source_candidates`, and that context must flow
+    /// into the plan step without hitting the empty-sources short-circuit.
+    #[test]
+    fn context_step_builds_sources_and_hands_off_to_plan() {
+        // Temp project dir with a freshly written link_scan.json so the
+        // context step never falls back to opening the real app DB + rescan
+        // (fresh mtime is never stale).
+        let temp_dir = std::env::temp_dir().join(format!(
+            "indexing_link_ctx_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let automation_dir = temp_dir.join(".github").join("automation");
+        std::fs::create_dir_all(&automation_dir).expect("create automation dir");
+        std::fs::write(automation_dir.join("link_scan.json"), r#"{"profiles": []}"#)
+            .expect("write link_scan.json");
+        let project_path = temp_dir.to_string_lossy().to_string();
+
+        let task = indexing_link_task(vec![target_artifact_with_candidates()]);
+
+        // Step 1: context must succeed and emit a non-empty sources array.
+        let ctx = exec_indexing_link_context(&task, &project_path);
+        assert!(ctx.success, "context step failed: {}", ctx.message);
+        let ctx_json: serde_json::Value =
+            serde_json::from_str(ctx.output.as_deref().unwrap_or("{}")).expect("context output JSON");
+        let sources = ctx_json["sources"].as_array().cloned().unwrap_or_default();
+        assert_eq!(
+            sources.len(),
+            2,
+            "context sources must be built from source_candidates, got: {}",
+            ctx.output.as_deref().unwrap_or("<none>")
+        );
+
+        // Handoff: attach the context output as the artifact the plan step
+        // reads, then run plan. With non-empty sources, plan proceeds past the
+        // short-circuit to the agent call; the unknown provider makes that call
+        // fail fast with a clean error (no subprocess), which proves the
+        // sources flowed through.
+        let mut task_with_ctx = task.clone();
+        task_with_ctx.artifacts.push(crate::models::task::TaskArtifact {
+            key: "indexing_link_context".to_string(),
+            path: None,
+            artifact_type: None,
+            source: None,
+            content: ctx.output.clone(),
+        });
+        let plan = exec_indexing_link_plan(&task_with_ctx, &project_path, "__test_unknown_provider__");
+        assert!(
+            !(plan.success && plan.message.contains("Nothing to do")),
+            "plan must not short-circuit on empty sources; got: success={} message={}",
+            plan.success,
+            plan.message
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Inverse of the handoff test: a context with empty `sources` must still
+    /// make the plan step short-circuit successfully (no behavior change there).
+    #[test]
+    fn plan_still_short_circuits_on_empty_sources() {
+        let mut task = indexing_link_task(vec![target_artifact_with_candidates()]);
+        task.artifacts.push(crate::models::task::TaskArtifact {
+            key: "indexing_link_context".to_string(),
+            path: None,
+            artifact_type: None,
+            source: None,
+            content: Some(r#"{"target": {}, "sources": []}"#.to_string()),
+        });
+
+        let plan = exec_indexing_link_plan(&task, "/nonexistent", "__test_unknown_provider__");
+        assert!(plan.success, "plan should short-circuit successfully: {}", plan.message);
+        assert!(
+            plan.message.contains("Nothing to do"),
+            "expected empty-sources short-circuit, got: {}",
+            plan.message
+        );
+    }
+
     /// End-to-end test: apply a link to the real learnedlate repo file and verify
     /// scan_links detects it. This exercises the full apply → verify path.
     #[test]
