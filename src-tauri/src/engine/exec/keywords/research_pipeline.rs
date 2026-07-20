@@ -207,23 +207,22 @@ pub(crate) fn exec_keyword_research_native(
     // User-supplied themes from the landing-page strategy dialog are honored
     // directly as seeds (deterministic parse of the description JSON) instead
     // of being silently re-interpreted by the agentic seed extraction.
-    let user_lp_themes: Vec<String> = if task.task_type == "research_landing_pages" {
-        let (_, user_themes) =
-            crate::engine::task_store::parse_landing_page_description(task.description.as_deref());
-        if !user_themes.is_empty() {
-            log::info!(
-                "[keyword_research_native] research_landing_pages: honoring {} user-supplied themes as seeds",
-                user_themes.len()
-            );
-            for t in &user_themes {
-                if !themes.contains(t) {
-                    themes.push(t.clone());
+    let user_lp_themes: Vec<String> = match crate::engine::task_store::landing_page_strategy(task) {
+        Some((_, user_themes)) => {
+            if !user_themes.is_empty() {
+                log::info!(
+                    "[keyword_research_native] research_landing_pages: honoring {} user-supplied themes as seeds",
+                    user_themes.len()
+                );
+                for t in &user_themes {
+                    if !themes.contains(t) {
+                        themes.push(t.clone());
+                    }
                 }
             }
+            user_themes
         }
-        user_themes
-    } else {
-        Vec::new()
+        None => Vec::new(),
     };
 
     if themes.is_empty() {

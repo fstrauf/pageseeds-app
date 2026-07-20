@@ -196,33 +196,30 @@ pub fn build_research_prompts(
             // ({"context": ..., "themes": [...]}). Surface it as labeled
             // sections instead of raw JSON so the extractor treats user themes
             // as authoritative seeds and the context as strategy guidance.
-            let task_section = if task.task_type == "research_landing_pages" {
-                let (context, user_themes) =
-                    crate::engine::task_store::parse_landing_page_description(
-                        task.description.as_deref(),
-                    );
-                let mut section = String::new();
-                if !context.is_empty() {
-                    section.push_str(&format!("## Strategy Context\n\n{}\n\n", context));
+            let task_section = match crate::engine::task_store::landing_page_strategy(task) {
+                Some((context, user_themes)) => {
+                    let mut section = String::new();
+                    if !context.is_empty() {
+                        section.push_str(&format!("## Strategy Context\n\n{}\n\n", context));
+                    }
+                    if !user_themes.is_empty() {
+                        section.push_str(&format!(
+                            "## User-Supplied Themes\n\nThe user explicitly requested these themes — include them verbatim in your extraction:\n\n{}\n\n",
+                            user_themes.join("\n")
+                        ));
+                    }
+                    if section.is_empty() {
+                        section = format!(
+                            "## Task Description\n\n{}\n\n",
+                            task.description.as_deref().unwrap_or("(no description)")
+                        );
+                    }
+                    section
                 }
-                if !user_themes.is_empty() {
-                    section.push_str(&format!(
-                        "## User-Supplied Themes\n\nThe user explicitly requested these themes — include them verbatim in your extraction:\n\n{}\n\n",
-                        user_themes.join("\n")
-                    ));
-                }
-                if section.is_empty() {
-                    section = format!(
-                        "## Task Description\n\n{}\n\n",
-                        task.description.as_deref().unwrap_or("(no description)")
-                    );
-                }
-                section
-            } else {
-                format!(
+                None => format!(
                     "## Task Description\n\n{}\n\n",
                     task.description.as_deref().unwrap_or("(no description)")
-                )
+                ),
             };
 
             let user = format!(
@@ -320,17 +317,11 @@ pub fn build_research_prompts(
             // Landing page research may carry a user-written strategy context —
             // surface it as a labeled section so validation judges relevance
             // against the user's stated goals, not just the brief.
-            let strategy_section = if task.task_type == "research_landing_pages" {
-                let (context, _) = crate::engine::task_store::parse_landing_page_description(
-                    task.description.as_deref(),
-                );
-                if context.is_empty() {
-                    String::new()
-                } else {
+            let strategy_section = match crate::engine::task_store::landing_page_strategy(task) {
+                Some((context, _)) if !context.is_empty() => {
                     format!("## Strategy Context\n\n{}\n\n", context)
                 }
-            } else {
-                String::new()
+                _ => String::new(),
             };
 
             let user = format!(

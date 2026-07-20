@@ -1010,6 +1010,17 @@ pub(crate) fn parse_landing_page_description(desc: Option<&str>) -> (String, Vec
     (desc.to_string(), vec![])
 }
 
+/// Unpack the landing-page strategy payload for a task, or `None` when the
+/// task is not a `research_landing_pages` task. Single gate so call sites
+/// don't each repeat the task-type check + description parse.
+pub(crate) fn landing_page_strategy(task: &Task) -> Option<(String, Vec<String>)> {
+    if task.task_type == "research_landing_pages" {
+        Some(parse_landing_page_description(task.description.as_deref()))
+    } else {
+        None
+    }
+}
+
 
 #[cfg(test)]
 mod tests;

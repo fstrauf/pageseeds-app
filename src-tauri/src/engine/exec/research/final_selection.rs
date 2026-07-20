@@ -698,6 +698,46 @@ fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
         }
     };
 
+    // Normalize both output shapes into one uniform view (keyword, KD,
+    // intent, and mutable winnability slots) so the SERP enrichment loop
+    // below runs once instead of as two copy-pasted branches.
+    let targets: Vec<(
+        &String,
+        f64,
+        Option<&str>,
+        &mut Option<String>,
+        &mut Option<String>,
+    )> = if !output.landing_page_candidates.is_empty() {
+        output
+            .landing_page_candidates
+            .iter_mut()
+            .map(|kw| {
+                (
+                    &kw.keyword,
+                    kw.estimated_kd as f64,
+                    Some(kw.intent.as_str()),
+                    &mut kw.winnability,
+                    &mut kw.winnability_reason,
+                )
+            })
+            .collect()
+    } else if let Some(d) = &mut output.difficulty {
+        d.results
+            .iter_mut()
+            .map(|kw| {
+                (
+                    &kw.keyword,
+                    kw.difficulty as f64,
+                    kw.intent.as_deref(),
+                    &mut kw.winnability,
+                    &mut kw.winnability_reason,
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     rt.block_on(async {
         let conn = match rusqlite::Connection::open(crate::db::default_db_path()) {
             Ok(c) => c,
@@ -734,60 +774,22 @@ fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
             provider_name
         );
 
-        if !output.landing_page_candidates.is_empty() {
-            for kw in output.landing_page_candidates.iter_mut() {
-                match provider.serp_features(&kw.keyword, "us").await {
-                    Ok(serp) => {
-                        let assessment = crate::seo::winnability::assess(
-                            &kw.keyword,
-                            &serp,
-                            Some(kw.estimated_kd as f64),
-                            Some(kw.intent.as_str()),
-                        );
-                        log::info!(
-                            "[winnability] '{}' → {} (risk={})",
-                            kw.keyword,
-                            assessment.bucket,
-                            assessment.risk_score
-                        );
-                        kw.winnability = Some(assessment.bucket.as_str().to_string());
-                        kw.winnability_reason = Some(assessment.reason);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[winnability] SERP lookup failed for '{}': {}",
-                            kw.keyword,
-                            e
-                        );
-                    }
+        for (keyword, kd, intent, winnability, reason) in targets {
+            match provider.serp_features(keyword, "us").await {
+                Ok(serp) => {
+                    let assessment =
+                        crate::seo::winnability::assess(keyword, &serp, Some(kd), intent);
+                    log::info!(
+                        "[winnability] '{}' → {} (risk={})",
+                        keyword,
+                        assessment.bucket,
+                        assessment.risk_score
+                    );
+                    *winnability = Some(assessment.bucket.as_str().to_string());
+                    *reason = Some(assessment.reason);
                 }
-            }
-        } else if let Some(d) = &mut output.difficulty {
-            for kw in d.results.iter_mut() {
-                match provider.serp_features(&kw.keyword, "us").await {
-                    Ok(serp) => {
-                        let assessment = crate::seo::winnability::assess(
-                            &kw.keyword,
-                            &serp,
-                            Some(kw.difficulty as f64),
-                            kw.intent.as_deref(),
-                        );
-                        log::info!(
-                            "[winnability] '{}' → {} (risk={})",
-                            kw.keyword,
-                            assessment.bucket,
-                            assessment.risk_score
-                        );
-                        kw.winnability = Some(assessment.bucket.as_str().to_string());
-                        kw.winnability_reason = Some(assessment.reason);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[winnability] SERP lookup failed for '{}': {}",
-                            kw.keyword,
-                            e
-                        );
-                    }
+                Err(e) => {
+                    log::warn!("[winnability] SERP lookup failed for '{}': {}", keyword, e);
                 }
             }
         }
