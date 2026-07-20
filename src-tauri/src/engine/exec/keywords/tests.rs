@@ -703,6 +703,147 @@ mod integration_tests {
 }
 
 #[cfg(test)]
+mod validated_seeds_tests {
+    use crate::engine::exec::keywords::{parse_validated_seeds_artifact, ValidatedSeeds};
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskArtifact, TaskReviewSurface, TaskRun,
+        TaskRunPolicy, TaskStatus,
+    };
+
+    /// Build a minimal task whose only artifact is `research_seed_validation`
+    /// with the given content (or `None` for no content / no artifact).
+    fn task_with_validation_artifact(content: Option<Option<&str>>) -> Task {
+        let artifacts = match content {
+            None => vec![],
+            Some(content) => vec![TaskArtifact {
+                key: "research_seed_validation".to_string(),
+                path: None,
+                artifact_type: Some("agentic".to_string()),
+                source: Some("agentic".to_string()),
+                content: content.map(|s| s.to_string()),
+            }],
+        };
+        Task {
+            id: "t-validation".to_string(),
+            task_type: "research_keywords".to_string(),
+            phase: "research".to_string(),
+            status: TaskStatus::Todo,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::Optional,
+            title: None,
+            description: None,
+            project_id: "p1".to_string(),
+            depends_on: vec![],
+            artifacts,
+            run: TaskRun::default(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            not_before: None,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    // ── Missing: artifact absent or unusable → legacy raw-themes fallback ─────
+
+    #[test]
+    fn missing_artifact_returns_missing() {
+        let task = task_with_validation_artifact(None);
+        assert_eq!(parse_validated_seeds_artifact(&task), ValidatedSeeds::Missing);
+    }
+
+    #[test]
+    fn artifact_without_content_returns_missing() {
+        let task = task_with_validation_artifact(Some(None));
+        assert_eq!(parse_validated_seeds_artifact(&task), ValidatedSeeds::Missing);
+    }
+
+    #[test]
+    fn unparseable_content_returns_missing() {
+        let task = task_with_validation_artifact(Some(Some("not json at all {{{")));
+        assert_eq!(parse_validated_seeds_artifact(&task), ValidatedSeeds::Missing);
+    }
+
+    #[test]
+    fn json_without_validated_seeds_array_returns_missing() {
+        let task = task_with_validation_artifact(Some(Some(r#"{"themes": ["seo tools"]}"#)));
+        assert_eq!(parse_validated_seeds_artifact(&task), ValidatedSeeds::Missing);
+    }
+
+    // ── RejectedAll: validation ran, yielded zero (theme, seed) pairs ─────────
+
+    #[test]
+    fn empty_validated_seeds_array_returns_rejected_all() {
+        let task = task_with_validation_artifact(Some(Some(r#"{"validated_seeds": []}"#)));
+        assert_eq!(
+            parse_validated_seeds_artifact(&task),
+            ValidatedSeeds::RejectedAll
+        );
+    }
+
+    #[test]
+    fn entries_with_empty_seeds_return_rejected_all() {
+        let raw = r#"{"validated_seeds": [
+            {"theme": "off topic one", "seeds": []},
+            {"theme": "", "seeds": ["ignored, empty theme"]}
+        ]}"#;
+        let task = task_with_validation_artifact(Some(Some(raw)));
+        assert_eq!(
+            parse_validated_seeds_artifact(&task),
+            ValidatedSeeds::RejectedAll
+        );
+    }
+
+    #[test]
+    fn fenced_json_with_empty_validated_seeds_returns_rejected_all() {
+        let raw = "Some agent prose\n```json\n{\"validated_seeds\": []}\n```\n";
+        let task = task_with_validation_artifact(Some(Some(raw)));
+        assert_eq!(
+            parse_validated_seeds_artifact(&task),
+            ValidatedSeeds::RejectedAll
+        );
+    }
+
+    // ── Seeds: validation accepted at least one seed ─────────────────────────
+
+    #[test]
+    fn valid_entries_return_seed_pairs() {
+        let raw = r#"{"validated_seeds": [
+            {"theme": "SEO Tools", "seeds": ["seo tools for beginners", "keyword research"]},
+            {"theme": "Content Marketing", "seeds": ["content marketing"]}
+        ]}"#;
+        let task = task_with_validation_artifact(Some(Some(raw)));
+        assert_eq!(
+            parse_validated_seeds_artifact(&task),
+            ValidatedSeeds::Seeds(vec![
+                ("SEO Tools".to_string(), "seo tools for beginners".to_string()),
+                ("SEO Tools".to_string(), "keyword research".to_string()),
+                ("Content Marketing".to_string(), "content marketing".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn latest_artifact_wins_when_multiple_present() {
+        let mut task = task_with_validation_artifact(Some(Some(r#"{"validated_seeds": []}"#)));
+        task.artifacts.push(TaskArtifact {
+            key: "research_seed_validation".to_string(),
+            path: None,
+            artifact_type: Some("agentic".to_string()),
+            source: Some("agentic".to_string()),
+            content: Some(
+                r#"{"validated_seeds": [{"theme": "T", "seeds": ["s"]}]}"#.to_string(),
+            ),
+        });
+        assert_eq!(
+            parse_validated_seeds_artifact(&task),
+            ValidatedSeeds::Seeds(vec![("T".to_string(), "s".to_string())])
+        );
+    }
+}
+
+#[cfg(test)]
 mod volume_tests {
     use crate::engine::exec::keywords::estimate_volume;
 
