@@ -294,6 +294,23 @@ pub(crate) fn exec_keyword_research_native(
     // ── Pre-parse validated seeds (needs task borrow, must happen before thread spawn) ──
     let validated_seeds = parse_validated_seeds_artifact(task);
 
+    // Fail-closed: when seed validation ran and rejected every theme, the gate
+    // has condemned all seeds — do NOT fall back to raw themes (that would bill
+    // the user for off-domain DataForSEO calls the validator just rejected).
+    // Note: pending territory shortlist seeds are also not researched in this
+    // case — they stay pending until the user refines the brief and re-runs.
+    if is_dataforseo && matches!(validated_seeds, ValidatedSeeds::RejectedAll) {
+        return crate::engine::workflows::StepResult {
+            success: false,
+            message: format!(
+                "Seed validation rejected all {} extracted themes as off-domain. \
+                 Refine the project brief (project.md) or re-run research with a more specific task description.",
+                themes.len()
+            ),
+            output: None,
+        };
+    }
+
     // ── Read pending territory shortlist entries ──────────────────────────────
     let pending_shortlist = read_pending_shortlist(task);
     let pending_shortlist_ids: Vec<i64> = pending_shortlist.iter().filter_map(|e| e.id).collect();
@@ -340,20 +357,34 @@ pub(crate) fn exec_keyword_research_native(
                 // Seeds were validated for domain relevance and phrased by the agentic
                 // research_seed_validation step. Each seed costs 2 paid calls
                 // (related_keywords + keyword_suggestions).
-                if validated_seeds_thread.is_empty() {
-                    log::warn!(
-                        "[keyword_research_native] research_seed_validation artifact missing or empty — \
-                         falling back to raw themes as seeds"
-                    );
-                }
-
                 // Use validated seeds if available, otherwise fall back to raw themes.
-                // Also inject pending territory shortlist seeds so they get validated.
-                let mut seeds_to_use: Vec<(String, String)> = if !validated_seeds_thread.is_empty() {
-                    validated_seeds_thread
-                } else {
-                    themes_thread.iter().map(|t| (t.clone(), t.clone())).collect()
+                // `Missing` keeps the legacy fallback (artifact absent/unreadable).
+                let mut seeds_to_use: Vec<(String, String)> = match validated_seeds_thread {
+                    ValidatedSeeds::Seeds(seeds) => seeds,
+                    // Belt-and-braces guard: the outer fail-closed gate uses
+                    // `seo_provider.eq_ignore_ascii_case("dataforseo")` on the raw
+                    // settings string, while this branch re-checks via
+                    // `resolve_provider(...).name()`, which maps ANY non-"ahrefs"
+                    // value to DataForSEO. If those two checks diverge (e.g. a stored
+                    // provider value that is neither literal "dataforseo" nor "ahrefs"),
+                    // `RejectedAll` can reach here — fail closed instead of billing
+                    // paid DataForSEO calls against seeds the validator rejected.
+                    ValidatedSeeds::RejectedAll => {
+                        return Err(crate::error::Error::Other(
+                            "Seed validation rejected all themes as off-domain; \
+                             refusing to fall back to raw themes."
+                                .to_string()
+                        ));
+                    }
+                    ValidatedSeeds::Missing => {
+                        log::warn!(
+                            "[keyword_research_native] research_seed_validation artifact missing — \
+                             falling back to raw themes as seeds"
+                        );
+                        themes_thread.iter().map(|t| (t.clone(), t.clone())).collect()
+                    }
                 };
+                // Also inject pending territory shortlist seeds so they get validated.
                 seeds_to_use.extend(shortlist_seeds_thread);
                 // Deduplicate by seed string
                 {

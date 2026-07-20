@@ -88,12 +88,28 @@ pub(crate) fn competitors_from_json(v: &serde_json::Value) -> Vec<String> {
     vec![]
 }
 
+/// Tri-state result of parsing the `research_seed_validation` artifact.
+///
+/// The distinction matters: `Missing` means validation never produced usable
+/// output, so falling back to raw themes is safe. `RejectedAll` means the
+/// validation step ran successfully and condemned every theme — falling back
+/// to the raw themes would bill the user for seeds the gate just rejected.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ValidatedSeeds {
+    /// Artifact absent, unparseable as JSON, or no `validated_seeds` array.
+    Missing,
+    /// Artifact parsed fine with a `validated_seeds` array, but yields zero
+    /// (theme, seed) pairs — the validator rejected every extracted theme.
+    RejectedAll,
+    /// Flat list of `(theme, seed)` pairs ready for DataForSEO calls.
+    Seeds(Vec<(String, String)>),
+}
+
 /// Parse the `research_seed_validation` artifact.
 ///
-/// Returns a flat list of `(theme, seed)` pairs ready for DataForSEO calls.
 /// Expected artifact format:
 /// `{validated_seeds: [{theme: string, seeds: [string]}]}`
-pub(crate) fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String)> {
+pub(crate) fn parse_validated_seeds_artifact(task: &Task) -> ValidatedSeeds {
     let content = task
         .artifacts
         .iter()
@@ -102,7 +118,7 @@ pub(crate) fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String
         .and_then(|a| a.content.as_deref());
 
     let Some(raw) = content else {
-        return vec![];
+        return ValidatedSeeds::Missing;
     };
 
     // Try direct JSON parse first, then extract_json helper
@@ -111,13 +127,13 @@ pub(crate) fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String
         .or_else(|| crate::engine::text::extract_json(raw));
 
     let Some(json) = json else {
-        return vec![];
+        return ValidatedSeeds::Missing;
     };
 
     let validated = json.get("validated_seeds").and_then(|v| v.as_array());
 
     let Some(validated) = validated else {
-        return vec![];
+        return ValidatedSeeds::Missing;
     };
 
     let mut pairs: Vec<(String, String)> = vec![];
@@ -142,7 +158,11 @@ pub(crate) fn parse_validated_seeds_artifact(task: &Task) -> Vec<(String, String
             }
         }
     }
-    pairs
+    if pairs.is_empty() {
+        ValidatedSeeds::RejectedAll
+    } else {
+        ValidatedSeeds::Seeds(pairs)
+    }
 }
 
 pub(crate) fn read_pending_shortlist(task: &Task) -> Vec<crate::db::research_shortlist::ResearchShortlistEntry> {
