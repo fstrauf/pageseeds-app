@@ -9,6 +9,11 @@ already occupies the SERP will not win — differentiation is mandatory.
 ## Input
 
 - **Target keyword** (and KD / Volume when available) in the task description.
+- **Structured brief** (`content_brief` task artifact, JSON): search intent,
+  proposed title, winnability assessment and reason, why the keyword was
+  selected, research themes/territory context, and
+  `internal_link_candidates` — a list of valid internal-link targets
+  (`slug` + `title`) from this site. Use it when present.
 - **Project context**: repo path, site URL.
 - **Intent**: informational, commercial, or transactional (when provided).
 - **Existing article** (for optimize tasks): the current MDX to revise, not replace.
@@ -72,7 +77,9 @@ For finance, health, legal, and other YMYL topics this is non-negotiable:
 - **FAQ section** (3-5 questions) addressing the natural follow-ups a searcher has —
   these feed FAQ schema and People-Also-Ask capture.
 - **Internal links** to genuinely related articles on this site, using descriptive
-  anchor text. Only link where it helps the reader, not for keyword stuffing.
+  anchor text. Choose from the brief's `internal_link_candidates` list — those
+  slugs are verified to exist. Only link where it helps the reader, not for
+  keyword stuffing.
 - Target **1,200+ words** for topical depth. Depth means covering the sub-questions a
   searcher would ask next, not repeating the same point in different words.
 
@@ -95,6 +102,10 @@ commentary, no explanations outside the document.
 
 - Write as `.mdx`. Preserve valid frontmatter and MDX syntax.
 - Internal links use `[anchor text](/blog/slug)` format.
+- **Never invent internal-link slugs.** Link only to slugs listed in the brief's
+  `internal_link_candidates`. If the brief has no candidates (or none fit), write
+  the article without internal links rather than guessing a slug — invented
+  slugs fail link verification.
 - The frontmatter `date` must be exactly the publish date provided in the task — do not
   invent one.
 - Do not fabricate statistics, citations, or results. If you lack real data, say so or
