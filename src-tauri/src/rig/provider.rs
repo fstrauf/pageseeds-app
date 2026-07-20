@@ -36,33 +36,19 @@ pub enum LlmBackend {
     Ollama { base_url: String, model: String },
 }
 
-impl LlmBackend {
-    /// Whether this backend can read/write files in the project repo itself.
-    ///
-    /// Agentic CLI / ACP backends (Kimi CLI, bridge ACP session, legacy direct
-    /// CLI) run an agent with file tools in the repo, so a `write_article`
-    /// prompt can create the MDX file on disk itself. The native rig HTTP
-    /// backends (Claude / OpenAI / Ollama) are pure prompt→text completions —
-    /// the executor must persist any returned content to disk itself.
-    ///
-    /// Kept public even though the executor currently uses the provider-name
-    /// check [`provider_supports_file_io`] — callers that hold a resolved
-    /// backend (health checks, future provider-aware steps) should use this.
-    #[allow(dead_code)]
-    pub fn supports_file_io(&self) -> bool {
-        matches!(
-            self,
-            LlmBackend::KimiCli { .. } | LlmBackend::KimiBridge { .. } | LlmBackend::KimiDirect
-        )
-    }
-}
-
-/// Provider-name-based file-IO capability check.
+/// Provider-name-based file-IO capability check — the single source of truth
+/// for whether a provider can read/write files in the project repo itself.
+///
+/// Agentic CLI / ACP providers (Kimi in any mode) run an agent with file tools
+/// in the repo, so a `write_article` prompt can create the MDX file on disk
+/// itself. The native rig HTTP providers (Claude / OpenAI / Ollama) are pure
+/// prompt→text completions — the executor must persist any returned content
+/// to disk itself.
 ///
 /// The executor only carries the configured provider name (backend resolution
-/// happens inside the agent layer and may depend on health checks), so this
-/// string-based check mirrors [`LlmBackend::supports_file_io`] without
-/// re-resolving the backend.
+/// happens inside the agent layer and may depend on health checks), hence the
+/// string-based check. Unknown providers default to file-IO-capable so the
+/// executor does not write agent output over a backend it does not know.
 pub fn provider_supports_file_io(provider: &str) -> bool {
     !matches!(provider, "claude" | "openai" | "ollama")
 }
@@ -483,35 +469,6 @@ mod tests {
         } else {
             std::env::remove_var("KIMI_BRIDGE_URL");
         }
-    }
-
-    #[test]
-    fn test_supports_file_io() {
-        assert!(LlmBackend::KimiCli {
-            work_dir: ".".to_string()
-        }
-        .supports_file_io());
-        assert!(LlmBackend::KimiBridge {
-            base_url: "http://localhost:8080/v1".to_string(),
-            model: "kimi-k2.5".to_string(),
-        }
-        .supports_file_io());
-        assert!(LlmBackend::KimiDirect.supports_file_io());
-        assert!(!LlmBackend::Claude {
-            api_key: String::new(),
-            model: "claude-sonnet-4-6".to_string(),
-        }
-        .supports_file_io());
-        assert!(!LlmBackend::OpenAi {
-            api_key: String::new(),
-            model: "gpt-4o".to_string(),
-        }
-        .supports_file_io());
-        assert!(!LlmBackend::Ollama {
-            base_url: "http://localhost:11434".to_string(),
-            model: "llama3.2".to_string(),
-        }
-        .supports_file_io());
     }
 
     #[test]

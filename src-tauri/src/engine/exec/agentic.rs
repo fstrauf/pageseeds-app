@@ -44,25 +44,12 @@ fn is_hub_task(step: &WorkflowStep) -> bool {
 /// task description when present, otherwise the task title with known
 /// imperative prefixes stripped.
 fn task_topic_stem(task: &Task) -> String {
-    if let Some(desc) = task.description.as_deref() {
-        for line in desc.lines() {
-            if let Some(rest) = line.strip_prefix("Target keyword:") {
-                let keyword = rest.trim();
-                if !keyword.is_empty() {
-                    return keyword.to_string();
-                }
-            }
-        }
+    if let Some(keyword) = crate::engine::post_actions::content_task_target_keyword(task) {
+        return keyword;
     }
     task.title
         .as_deref()
-        .map(|t| {
-            t.trim_start_matches("Write territory article: ")
-                .trim_start_matches("Write article: ")
-                .trim_start_matches("Create hub: ")
-                .trim_start_matches("Refresh hub: ")
-                .trim()
-        })
+        .map(crate::engine::post_actions::strip_content_task_title_prefix)
         .filter(|t| !t.is_empty())
         .unwrap_or("article")
         .to_string()
@@ -197,15 +184,15 @@ fn hub_directives(task: &Task, project_path: &str) -> Option<String> {
 ///   3. Call `agent::run_agent(provider, prompt, project_path)`
 ///   4. Return the raw output as the step result
 fn hub_spoke_context(task: &Task, project_path: &str) -> String {
+    // Only hub titles yield a topic — gate on the hub prefixes, then use the
+    // shared stripper for the actual prefix removal.
     let hub_topic = task
         .title
         .as_deref()
-        .and_then(|t| {
-            t.strip_prefix("Create hub:")
-                .or_else(|| t.strip_prefix("Refresh hub:"))
-        })
-        .unwrap_or("")
-        .trim();
+        .map(str::trim)
+        .filter(|t| t.starts_with("Create hub:") || t.starts_with("Refresh hub:"))
+        .map(crate::engine::post_actions::strip_content_task_title_prefix)
+        .unwrap_or("");
 
     if hub_topic.is_empty() {
         return String::new();

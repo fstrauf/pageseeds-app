@@ -25,13 +25,8 @@ use pageseeds_lib::{
         AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
         TaskStatus,
     },
+    rig::provider::provider_supports_file_io,
 };
-
-/// Mirror of `rig::provider::provider_supports_file_io` (the rig module is
-/// crate-private). Text-only providers rely on the executor-write fallback.
-fn provider_has_file_io(provider: &str) -> bool {
-    !matches!(provider, "claude" | "openai" | "ollama")
-}
 
 /// Target project. days_to_expiry = the call-analyzer repo.
 const PROJECT_ID: &str = "days_to_expiry";
@@ -71,7 +66,7 @@ async fn main() {
     println!(
         "✓ Agent provider: {} ({})",
         provider,
-        if provider_has_file_io(&provider) {
+        if provider_supports_file_io(&provider) {
             "file-IO capable — agent writes the file itself"
         } else {
             "text-only — executor-write fallback must persist the returned MDX"

@@ -753,27 +753,7 @@
 
     // ── Fix 2: keyword metadata parsing ───────────────────────────────────────
 
-    fn parse_content_task_keyword_meta(task: &Task) -> (Option<String>, Option<String>, i64) {
-        let desc = match task.description.as_deref() {
-            Some(d) if !d.is_empty() => d,
-            _ => return (None, None, 0),
-        };
-        let mut keyword = None;
-        let mut kd: Option<String> = None;
-        let mut volume = 0i64;
-        for line in desc.lines() {
-            if let Some(rest) = line.strip_prefix("Target keyword:") {
-                keyword = Some(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("KD:") {
-                if let Ok(n) = rest.trim().parse::<i64>() {
-                    kd = Some(n.to_string());
-                }
-            } else if let Some(rest) = line.strip_prefix("Volume:") {
-                volume = rest.trim().parse::<i64>().unwrap_or(0);
-            }
-        }
-        (keyword, kd, volume)
-    }
+    use crate::engine::post_actions::parse_content_task_keyword_meta;
 
     // parse_content_task_keyword_meta extracts all three fields from a full description.
     #[test]
