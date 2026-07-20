@@ -45,6 +45,19 @@ export interface KeywordRow {
   winnability_reason?: string | null
 }
 
+/**
+ * Winnability penalty folded into the opportunity score, mirroring the
+ * backend bucket ordering (target → differentiate → avoid). The raw score is
+ * 0–100, so the avoid penalty (150) exceeds the entire raw range: a keyword
+ * that survived the backend trim with bucket "avoid" can never top the
+ * picker list regardless of its volume/KD. The differentiate penalty (25)
+ * keeps those rows below otherwise-equal targets without hiding them.
+ */
+const WINNABILITY_PENALTY: Record<string, number> = {
+  differentiate: 25,
+  avoid: 150,
+}
+
 /** Compute an opportunity score (0–100) from keyword metrics. */
 export function opportunityScore(row: KeywordRow): number {
   const kd = row.difficulty
@@ -52,7 +65,9 @@ export function opportunityScore(row: KeywordRow): number {
   // Use traffic or volume only — never use shortage as a traffic proxy.
   const trafficSignal = Math.max(0, row.traffic ?? row.volume ?? 0)
   const trafficScore = Math.min(100, Math.log10(trafficSignal + 1) * 25)
-  return kdScore * 0.6 + trafficScore * 0.4
+  const raw = kdScore * 0.6 + trafficScore * 0.4
+  const penalty = WINNABILITY_PENALTY[row.winnability?.toLowerCase() ?? ''] ?? 0
+  return Math.max(0, raw - penalty)
 }
 
 /** Classify a keyword row's opportunity score into a tier. */
