@@ -91,6 +91,15 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
+    // Quality gate: structured review of a freshly written article before clustering/linking.
+    TaskDefinition {
+        task_type: "review_article_quality",
+        phase: "implementation",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::BackendAuto,
+        handler_family: HandlerFamily::Content,
+    },
     // Content Review
     TaskDefinition {
         task_type: "content_review",
@@ -502,6 +511,18 @@ const DEFINITIONS: &[TaskDefinition] = &[
         run_policy: TaskRunPolicy::UserEnqueue,
         review_surface: TaskReviewSurface::ArtifactReview,
         follow_up_policy: FollowUpPolicy::BackendAuto,
+        handler_family: HandlerFamily::Implementation,
+    },
+    // Unified SEO health scan
+    // Fuses content audit, CTR, indexing, cannibalization, and Clarity UX signals
+    // into a single ranked opportunity backlog. Phase 1 surfaces the JSON artifact
+    // via ArtifactReview; Phase 2 will add a dedicated OpportunityReview UI.
+    TaskDefinition {
+        task_type: "seo_health_scan",
+        phase: "investigation",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::Implementation,
     },
     // Feature Spec Generation

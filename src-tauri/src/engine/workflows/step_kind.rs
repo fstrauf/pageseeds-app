@@ -76,6 +76,10 @@ pub enum StepKind {
     CtrVerifyFix,
     /// Deterministic rendered SERP audit — fetch live HTML, compare with source.
     CtrRenderedSerpAudit,
+    /// Deterministic: load a freshly written MDX file and build quality review context.
+    ContentQualityContext,
+    /// Agentic: score an article against usefulness, visual, SEO, and cluster-fit criteria.
+    ContentQualityReview,
     /// Deterministic detection of repeated site-wide title template patterns.
     CtrTemplateDetect,
     /// Agentic/manual step: plan framework-aware title template fix.
@@ -165,6 +169,12 @@ pub enum StepKind {
     IhcReducePlan,
     /// Agentic: synthesize audit findings into a prioritized developer feature spec.
     GenerateFeatureSpec,
+    /// Deterministic: fuse content audit, CTR, indexing, cannibalization, and UX
+    /// signals into a ranked seo_opportunities.json artifact.
+    RankOpportunities,
+    /// Agentic: write a one-paragraph explanation per top opportunity.
+    /// Reserved for Phase 2; not used in Phase 1.
+    OpportunityReviewAgent,
     /// Fallback for unknown strings during deserialization.
     Unknown,
 }
@@ -228,6 +238,8 @@ impl StepKind {
             Self::CtrFixApply => "ctr_fix_apply",
             Self::CtrVerifyFix => "ctr_verify_fix",
             Self::CtrRenderedSerpAudit => "ctr_rendered_serp_audit",
+            Self::ContentQualityContext => "content_quality_context",
+            Self::ContentQualityReview => "content_quality_review",
             Self::CtrTemplateDetect => "ctr_template_detect",
             Self::CtrTemplatePlan => "ctr_template_plan",
             Self::CtrTemplateVerifyRender => "ctr_template_verify_render",
@@ -269,6 +281,8 @@ impl StepKind {
             Self::IhcDistinctivenessReview => "ihc_distinctiveness_review",
             Self::IhcReducePlan => "ihc_reduce_plan",
             Self::GenerateFeatureSpec => "generate_feature_spec",
+            Self::RankOpportunities => "rank_opportunities",
+            Self::OpportunityReviewAgent => "opportunity_review_agent",
             Self::Unknown => "unknown",
         }
     }
@@ -346,6 +360,8 @@ impl FromStr for StepKind {
             "ctr_fix_apply" => Ok(Self::CtrFixApply),
             "ctr_verify_fix" => Ok(Self::CtrVerifyFix),
             "ctr_rendered_serp_audit" => Ok(Self::CtrRenderedSerpAudit),
+            "content_quality_context" => Ok(Self::ContentQualityContext),
+            "content_quality_review" => Ok(Self::ContentQualityReview),
             "ctr_template_detect" => Ok(Self::CtrTemplateDetect),
             "ctr_template_plan" => Ok(Self::CtrTemplatePlan),
             "ctr_template_verify_render" => Ok(Self::CtrTemplateVerifyRender),
@@ -387,6 +403,8 @@ impl FromStr for StepKind {
             "ihc_distinctiveness_review" => Ok(Self::IhcDistinctivenessReview),
             "ihc_reduce_plan" => Ok(Self::IhcReducePlan),
             "generate_feature_spec" => Ok(Self::GenerateFeatureSpec),
+            "rank_opportunities" => Ok(Self::RankOpportunities),
+            "opportunity_review_agent" => Ok(Self::OpportunityReviewAgent),
             _ => Err(()),
         }
     }
@@ -475,6 +493,8 @@ mod tests {
             StepKind::CtrFixApply,
             StepKind::CtrVerifyFix,
             StepKind::CtrRenderedSerpAudit,
+            StepKind::ContentQualityContext,
+            StepKind::ContentQualityReview,
             StepKind::CtrTemplateDetect,
             StepKind::CtrTemplatePlan,
             StepKind::CtrTemplateVerifyRender,
@@ -515,6 +535,8 @@ mod tests {
             StepKind::IhcDistinctivenessReview,
             StepKind::IhcReducePlan,
             StepKind::GenerateFeatureSpec,
+            StepKind::RankOpportunities,
+            StepKind::OpportunityReviewAgent,
         ];
 
         for variant in &variants {

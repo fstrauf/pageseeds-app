@@ -129,3 +129,39 @@ pub struct ContentFixVerifiedItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected: Option<String>,
 }
+
+// ─── Quality Gate Review ─────────────────────────────────────────────────────
+
+/// Structured output from the article quality review agent.
+/// Used by the review_article_quality task to gate articles before clustering/linking.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct ContentQualityReview {
+    pub overall_pass: bool,
+    #[serde(default)]
+    pub usefulness_score: i64,
+    #[serde(default)]
+    pub image_score: i64,
+    #[serde(default)]
+    pub seo_score: i64,
+    #[serde(default)]
+    pub cluster_fit_score: i64,
+    #[serde(default)]
+    pub signal_score: Option<f64>,
+    #[serde(default)]
+    pub checks: Vec<QualityCheck>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct QualityCheck {
+    pub id: String,
+    pub label: String,
+    pub pass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}

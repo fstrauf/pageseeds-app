@@ -45,6 +45,10 @@ fn main() {
         "cancel-tasks" => cancel_tasks(&db.to_string_lossy(), &project_id, &args),
         "create-task" => create_task(&project_id, &db.to_string_lossy(), &args),
         "execute-task" => execute_task(&db.to_string_lossy(), &args),
+        "get-task" => get_task(&db.to_string_lossy(), &args),
+        "update-task-status" => update_task_status_cmd(&db.to_string_lossy(), &args),
+        "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
+        "select-cannibalization" => select_cannibalization(&db.to_string_lossy(), &args),
         "create-articles-from-keywords" => create_articles_from_keywords(&db.to_string_lossy(), &project_id, &args),
         "set-task-status" => set_task_status(&db.to_string_lossy(), &args),
         "create-reddit-replies" => create_reddit_replies(&db.to_string_lossy(), &args),
@@ -83,6 +87,19 @@ fn main() {
                 .map_err(|e| e.to_string())
         }
         "article-link-graph" => investigate::scan_link_graph(&ctx).map_err(|e| e.to_string()),
+        "research-shortlist" => {
+            investigate::list_research_shortlist(
+                &ctx,
+                flag(&args, "--status", "-s").as_deref(),
+                flag(&args, "--health", "-H").as_deref(),
+            ).map_err(|e| e.to_string())
+        }
+        "article-quality-reviews" => {
+            let limit: usize = flag(&args, "--limit", "-l")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50);
+            investigate::list_article_quality_reviews(&ctx, limit).map_err(|e| e.to_string())
+        }
         "compare-rendered" => compare_rendered(&require_project_path(), &args),
         "write-feature-spec" => write_spec(&require_project_path(), &args),
         _ => Err(format!("Unknown tool '{}'. Run with --help for list.", tool)),
@@ -196,6 +213,101 @@ fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, Str
     }))
 }
 
+fn get_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let task = pageseeds_lib::engine::task_store::get_task(&conn, &task_id)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&task).map_err(|e| e.to_string())
+}
+
+fn update_task_status_cmd(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let status_str = flag(args, "--status", "-s").unwrap_or_else(|| exit("--status required"));
+    let status = match status_str.as_str() {
+        "done" => TaskStatus::Done,
+        "cancelled" => TaskStatus::Cancelled,
+        other => {
+            return Err(format!(
+                "unsupported status '{other}': only 'done' and 'cancelled' are allowed"
+            ));
+        }
+    };
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let task = pageseeds_lib::engine::task_store::update_task_status(&conn, &task_id, status)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&task).map_err(|e| e.to_string())
+}
+
+/// Mirror of the `create_article_tasks_from_keywords` Tauri command:
+/// build content tasks from selected keywords, persist them, mark the
+/// research task done. project_id is derived from the research task row.
+/// Uses the canonical creation path in `engine::keyword_selection` so the
+/// content brief context is attached exactly like the Tauri command does.
+fn select_keywords(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let research_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let keywords: Vec<String> = flag(args, "--keywords", "-K")
+        .map(|s| s.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect())
+        .unwrap_or_else(|| exit("--keywords required (comma-separated)"));
+
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let research_task = pageseeds_lib::engine::task_store::get_task(&conn, &research_task_id)
+        .map_err(|e| e.to_string())?;
+    let project_id = research_task.project_id.clone();
+
+    let tasks = pageseeds_lib::engine::keyword_selection::create_article_tasks_from_keywords(
+        &conn,
+        &project_id,
+        &research_task_id,
+        keywords,
+    )?;
+
+    Ok(serde_json::json!({
+        "parent_task_id": research_task_id,
+        "parent_status": TaskStatus::Done,
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
+    }))
+}
+
+/// Mirror of the `create_cannibalization_tasks_from_selection` Tauri command.
+/// Selections are parsed from `-S merge:rec-123,hub:rec-456`.
+fn select_cannibalization(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let parent_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let raw = flag(args, "--selections", "-S")
+        .unwrap_or_else(|| exit("--selections required (comma-separated type:id pairs)"));
+
+    let mut selections = Vec::new();
+    for pair in raw.split(',').map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        let (rec_type, rec_id) = pair.split_once(':').ok_or_else(|| {
+            format!("invalid selection '{pair}': expected 'type:id'")
+        })?;
+        if rec_type.is_empty() || rec_id.is_empty() {
+            return Err(format!("invalid selection '{pair}': expected 'type:id'"));
+        }
+        selections.push(pageseeds_lib::models::cannibalization::CannibalizationSelection {
+            recommendation_type: rec_type.to_string(),
+            recommendation_id: rec_id.to_string(),
+        });
+    }
+
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let tasks = pageseeds_lib::cannibalization::spawn_tasks_from_selection(
+        &conn,
+        &parent_task_id,
+        &selections,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "parent_task_id": parent_task_id,
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
+    }))
+}
+
 /// Transition a task's status (e.g. mark a manually-completed task done).
 fn set_task_status(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
@@ -231,7 +343,8 @@ fn create_articles_from_keywords(db_path: &str, project_id: &str, args: &[String
     }))
 }
 
-fn create_reddit_replies(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+fn create_reddit_replies(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
     let post_ids = flag(args, "--post-ids", "-P")
         .map(|s| s.split(',').map(|p| p.trim().to_string()).collect::<Vec<_>>())
         .unwrap_or_else(|| exit("--post-ids required (comma-separated)"));
@@ -599,14 +712,19 @@ Tools:
   article-list  article-frontmatter  article-body-hash  article-title-scan
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
-  compare-rendered  write-feature-spec
+  research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec
 
 Task / queue orchestration:
   list-tasks              -i <id> -p <path> [-t type] [-s status]
   cancel-tasks            -i <id> -p <path> -t type [-s status] [--yes]
   create-task             -i <id> -p <path> -t type [-T title] [-r reason] [-a] [-P high|medium|low]
   execute-task            -I <task-id>
+  get-task                -I <task-id>                          Full task JSON incl. artifacts
+  update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks
+  select-keywords         -I <research-task-id> -K <kw,kw,...>  Create content tasks, mark research done
+  select-cannibalization  -I <parent-task-id> -S <type:id,...>  Spawn cannibalization fixes, mark parent done
   create-articles-from-keywords -i <id> -I <research-task-id> -k "kw1, kw2, ..."
+  set-task-status         -I <task-id> -s <status>              Set any task status
 
 Cannibalization workflow:
   cannibalization-strategy -i <id> -p <path>
@@ -615,6 +733,10 @@ Cannibalization workflow:
 
 Dead-weight remediation (WS4):
   score-zero-impression-articles -i <id> -p <path> [-m <max-impressions>]
+
+Research / quality health:
+  research-shortlist        -i <id> [-s pending|researched|covered] [-H promising|unproven|depleted]
+  article-quality-reviews   -i <id> [-l <limit>]
 
 Common: -i/--project-id  -p/--project-path
 Run with <tool> --help for tool-specific flags.

@@ -28,6 +28,9 @@ pub struct ResearchShortlistEntry {
     pub priority: String,
     pub article_count: Option<i64>,
     pub total_impressions: Option<f64>,
+    pub signal_score: Option<f64>,
+    pub health_status: String,
+    pub last_reviewed_at: Option<String>,
     pub added_at: String,
     pub researched_at: Option<String>,
     pub covered_at: Option<String>,
@@ -53,6 +56,9 @@ impl ResearchShortlistEntry {
             priority: priority.to_string(),
             article_count,
             total_impressions,
+            signal_score: None,
+            health_status: "unproven".to_string(),
+            last_reviewed_at: None,
             added_at: chrono::Utc::now().to_rfc3339(),
             researched_at: None,
             covered_at: None,
@@ -81,14 +87,20 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                  priority = ?2,
                  article_count = ?3,
                  total_impressions = ?4,
+                 signal_score = ?5,
+                 health_status = ?6,
+                 last_reviewed_at = ?7,
                  status = CASE WHEN status = 'covered' THEN 'pending' ELSE status END,
-                 added_at = ?5
-             WHERE id = ?6",
+                 added_at = ?8
+             WHERE id = ?9",
             rusqlite::params![
                 &seeds_json,
                 &entry.priority,
                 entry.article_count,
                 entry.total_impressions,
+                entry.signal_score,
+                &entry.health_status,
+                entry.last_reviewed_at.as_ref(),
                 &entry.added_at,
                 id,
             ],
@@ -97,8 +109,8 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
     } else {
         conn.execute(
             "INSERT INTO research_shortlist
-             (project_id, theme, seeds, source, status, priority, article_count, total_impressions, added_at, researched_at, covered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             (project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 &entry.project_id,
                 &entry.theme,
@@ -108,6 +120,9 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                 &entry.priority,
                 entry.article_count,
                 entry.total_impressions,
+                entry.signal_score,
+                &entry.health_status,
+                entry.last_reviewed_at.as_ref(),
                 &entry.added_at,
                 entry.researched_at.as_ref(),
                 entry.covered_at.as_ref(),
@@ -124,12 +139,12 @@ pub fn list_entries(
     status_filter: Option<&str>,
 ) -> Result<Vec<ResearchShortlistEntry>> {
     let sql = if status_filter.is_some() {
-        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, added_at, researched_at, covered_at
+        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at
          FROM research_shortlist
          WHERE project_id = ?1 AND status = ?2
          ORDER BY priority DESC, total_impressions DESC"
     } else {
-        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, added_at, researched_at, covered_at
+        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at
          FROM research_shortlist
          WHERE project_id = ?1
          ORDER BY priority DESC, total_impressions DESC"
@@ -176,6 +191,44 @@ pub fn mark_covered(conn: &Connection, id: i64) -> Result<usize> {
     Ok(affected)
 }
 
+/// Update topic health for a given theme.
+pub fn update_health(
+    conn: &Connection,
+    project_id: &str,
+    theme: &str,
+    health_status: &str,
+    signal_score: Option<f64>,
+) -> Result<usize> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let affected = conn.execute(
+        "UPDATE research_shortlist
+         SET health_status = ?1,
+             signal_score = ?2,
+             last_reviewed_at = ?3
+         WHERE project_id = ?4 AND theme = ?5",
+        rusqlite::params![health_status, signal_score, &now, project_id, theme],
+    )?;
+    Ok(affected)
+}
+
+/// List pending shortlist entries for a project, excluding depleted themes.
+pub fn list_pending_excluding_depleted(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<ResearchShortlistEntry>> {
+    let sql = "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at
+         FROM research_shortlist
+         WHERE project_id = ?1 AND status = 'pending' AND health_status != 'depleted'
+         ORDER BY priority DESC, total_impressions DESC";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([project_id], map_row)?;
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row?);
+    }
+    Ok(entries)
+}
+
 /// Delete old covered entries to prevent table bloat.
 pub fn prune_covered(conn: &Connection, project_id: &str, older_than_days: i64) -> Result<usize> {
     let cutoff = chrono::Utc::now() - chrono::Duration::days(older_than_days);
@@ -200,8 +253,118 @@ fn map_row(row: &rusqlite::Row) -> std::result::Result<ResearchShortlistEntry, r
         priority: row.get(6)?,
         article_count: row.get(7)?,
         total_impressions: row.get(8)?,
-        added_at: row.get(9)?,
-        researched_at: row.get(10)?,
-        covered_at: row.get(11)?,
+        signal_score: row.get(9)?,
+        health_status: row.get(10)?,
+        last_reviewed_at: row.get(11)?,
+        added_at: row.get(12)?,
+        researched_at: row.get(13)?,
+        covered_at: row.get(14)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE research_shortlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                theme TEXT NOT NULL,
+                seeds TEXT NOT NULL DEFAULT '[]',
+                source TEXT NOT NULL,
+                status TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                article_count INTEGER,
+                total_impressions REAL,
+                signal_score REAL,
+                health_status TEXT NOT NULL,
+                last_reviewed_at TEXT,
+                added_at TEXT NOT NULL,
+                researched_at TEXT,
+                covered_at TEXT
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_entry(
+        conn: &Connection,
+        project_id: &str,
+        theme: &str,
+        status: &str,
+        health_status: &str,
+    ) -> i64 {
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status, added_at)
+             VALUES (?1, ?2, '[]', 'test', ?3, 'medium', ?4, ?5)",
+            rusqlite::params![project_id, theme, status, health_status, chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn list_pending_excluding_depleted_returns_only_pending_non_depleted_entries() {
+        let conn = in_memory_db();
+        insert_entry(&conn, "proj1", "seo tools", "pending", "unproven");
+        insert_entry(&conn, "proj1", "keyword research", "pending", "promising");
+        insert_entry(&conn, "proj1", "content marketing", "pending", "depleted");
+        insert_entry(&conn, "proj1", "technical seo", "researched", "unproven");
+        insert_entry(&conn, "proj2", "link building", "pending", "depleted");
+
+        let entries = list_pending_excluding_depleted(&conn, "proj1").unwrap();
+        assert_eq!(entries.len(), 2);
+        let themes: Vec<String> = entries.iter().map(|e| e.theme.clone()).collect();
+        assert!(themes.contains(&"seo tools".to_string()));
+        assert!(themes.contains(&"keyword research".to_string()));
+        assert!(!themes.contains(&"content marketing".to_string()));
+        assert!(!themes.contains(&"technical seo".to_string()));
+        assert!(!themes.contains(&"link building".to_string()));
+    }
+
+    #[test]
+    fn update_health_sets_status_signal_score_and_timestamp() {
+        let conn = in_memory_db();
+        insert_entry(&conn, "proj1", "seo tools", "pending", "unproven");
+
+        let affected = update_health(&conn, "proj1", "seo tools", "promising", Some(85.0)).unwrap();
+        assert_eq!(affected, 1);
+
+        let entries = list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].health_status, "promising");
+        assert_eq!(entries[0].signal_score, Some(85.0));
+        assert!(entries[0].last_reviewed_at.is_some());
+    }
+
+    #[test]
+    fn upsert_entry_prevents_duplicate_themes_for_same_project_and_source() {
+        let conn = in_memory_db();
+        let mut entry = ResearchShortlistEntry::new(
+            "proj1",
+            "seo tools",
+            vec!["seo".to_string()],
+            "test",
+            "high",
+            None,
+            None,
+        );
+        let id1 = upsert_entry(&conn, &entry).unwrap();
+
+        entry.seeds = vec!["seo".to_string(), "search engine optimization".to_string()];
+        entry.health_status = "promising".to_string();
+        let id2 = upsert_entry(&conn, &entry).unwrap();
+
+        assert_eq!(id1, id2);
+
+        let entries = list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].seeds.len(), 2);
+        assert_eq!(entries[0].health_status, "promising");
+    }
 }

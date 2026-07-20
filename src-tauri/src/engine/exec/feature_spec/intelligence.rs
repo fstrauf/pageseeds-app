@@ -119,6 +119,27 @@ pub async fn collect_site_observations(
 // Phase 1: Sitemap Crawler
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Build the sitemap URL candidates for a project's `site_url`.
+///
+/// `site_url` may be a GSC property ID (`sc-domain:example.com`), so the raw
+/// value must never be concatenated into a URL directly — it goes through
+/// `models::project::site_base_url` first.
+fn sitemap_candidates(site_url: &str) -> Vec<String> {
+    let base = crate::models::project::site_base_url(site_url);
+    if base.ends_with("sitemap.xml")
+        || base.ends_with("sitemap_index.xml")
+        || base.ends_with("sitemap-index.xml")
+    {
+        vec![base]
+    } else {
+        vec![
+            format!("{}/sitemap.xml", base),
+            format!("{}/sitemap_index.xml", base),
+            format!("{}/sitemap-index.xml", base),
+        ]
+    }
+}
+
 async fn crawl_sitemap(site_url: &str) -> Result<SitemapCrawl, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -128,19 +149,9 @@ async fn crawl_sitemap(site_url: &str) -> Result<SitemapCrawl, String> {
     // Determine sitemap URLs to try.
     // If the user already provided a sitemap URL (ends with sitemap.xml etc),
     // use it directly. Otherwise try common locations under the base URL.
-    let trimmed = site_url.trim_end_matches('/');
-    let sitemap_urls: Vec<String> = if trimmed.ends_with("sitemap.xml")
-        || trimmed.ends_with("sitemap_index.xml")
-        || trimmed.ends_with("sitemap-index.xml")
-    {
-        vec![trimmed.to_string()]
-    } else {
-        vec![
-            format!("{}/sitemap.xml", trimmed),
-            format!("{}/sitemap_index.xml", trimmed),
-            format!("{}/sitemap-index.xml", trimmed),
-        ]
-    };
+    // `site_url` may be a GSC property ID (`sc-domain:…`), so it must be
+    // converted to a fetchable base URL first.
+    let sitemap_urls = sitemap_candidates(site_url);
 
     let mut sitemap_xml = String::new();
     let mut sitemap_errors = Vec::new();
@@ -725,4 +736,36 @@ fn detect_tech_stack_from_observations(_observations: &[PageObservation]) -> Str
     // store raw HTML in PageObservation, so we can't detect from rendered
     // signatures either. Return unknown rather than guess.
     "Unknown (not detectable from rendered output)".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sitemap_candidates_convert_gsc_domain_property() {
+        // Regression: sc-domain: property IDs previously produced
+        // "sc-domain:example.com/sitemap.xml", which is not a fetchable URL.
+        let candidates = sitemap_candidates("sc-domain:daystoexpiry.com");
+        assert_eq!(
+            candidates,
+            vec![
+                "https://daystoexpiry.com/sitemap.xml",
+                "https://daystoexpiry.com/sitemap_index.xml",
+                "https://daystoexpiry.com/sitemap-index.xml",
+            ]
+        );
+    }
+
+    #[test]
+    fn sitemap_candidates_pass_through_explicit_sitemap_url() {
+        let candidates = sitemap_candidates("https://example.com/sitemap.xml");
+        assert_eq!(candidates, vec!["https://example.com/sitemap.xml"]);
+    }
+
+    #[test]
+    fn sitemap_candidates_handle_bare_host_and_trailing_slash() {
+        let candidates = sitemap_candidates("example.com/");
+        assert_eq!(candidates[0], "https://example.com/sitemap.xml");
+    }
 }

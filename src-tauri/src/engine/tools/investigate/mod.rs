@@ -1,18 +1,12 @@
 //! Agentic investigation tools — rig-native `Tool` trait implementations.
 //!
 //! Each tool is a thin wrapper around existing Rust module functions.
-//! Tools are read-only by default; only `RunContentAuditTool` and `CreateTaskTool`
-//! mutate state. The tool catalog (`tool_catalog.toml`) describes each tool's
-//! purpose and usage rules to the agent.
+//! Tools are read-only by default; `RunContentAuditTool`, `CreateTaskTool`,
+//! `EnqueueTaskTool`, and `WriteFeatureSpecTool` mutate state. The tool catalog
+//! (`tool_catalog.toml`) describes each tool's purpose and usage rules to the agent.
 //!
 //! These tools are attached to a rig `Agent` during the investigate flow,
 //! allowing the LLM to explore project data freely.
-
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::engine::project_paths::ProjectPaths;
 
@@ -77,6 +71,8 @@ pub fn investigation_tools(ctx: InvestigationContext) -> Vec<Box<dyn rig::tool::
         Box::new(FrameworkFilesTool { ctx: ctx.clone() }),
         Box::new(ArticleLinkGraphTool { ctx: ctx.clone() }),
         Box::new(CreateTaskTool { ctx: ctx.clone() }),
+        Box::new(EnqueueTaskTool { ctx: ctx.clone() }),
+        Box::new(GetTaskStatusTool { ctx: ctx.clone() }),
         Box::new(WriteFeatureSpecTool { ctx: ctx.clone() }),
     ]
 }
@@ -90,5 +86,6 @@ mod tests;
 pub use shared::{
     scan_article_titles, hash_article_bodies, read_content_audit_report,
     read_cannibalization_clusters, get_indexing_status, read_framework_files, scan_link_graph,
+    list_research_shortlist, list_article_quality_reviews,
 };
 pub use articles::list_articles_json;

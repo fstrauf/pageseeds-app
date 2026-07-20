@@ -283,7 +283,12 @@ pub fn spawn_tasks_from_approved(
         if !approved.contains(&key) {
             continue;
         }
-        let idempotency_key = format!("can_fix:merge:{}:{}", project_id, rec.cluster_id);
+        // Include the strategy_id in the idempotency key so a new strategy version
+        // does not silently reuse a stale task that was created from an older audit.
+        let idempotency_key = format!(
+            "can_fix:merge:{}:{}:{}",
+            project_id, rec.cluster_id, strategy_id
+        );
         let spec = TaskSpec {
             project_id: project_id.to_string(),
             task_type: "consolidate_cluster".to_string(),
@@ -313,7 +318,10 @@ pub fn spawn_tasks_from_approved(
         if !approved.contains(&key) {
             continue;
         }
-        let idempotency_key = format!("can_fix:hub:{}:{}", project_id, rec.topic);
+        let idempotency_key = format!(
+            "can_fix:hub:{}:{}:{}",
+            project_id, rec.topic, strategy_id
+        );
         let hub_brief = serde_json::json!({
             "topic": rec.topic,
             "suggested_title": rec.suggested_title,
@@ -363,7 +371,10 @@ pub fn spawn_tasks_from_approved(
         if !approved.contains(&key) {
             continue;
         }
-        let idempotency_key = format!("can_fix:calculator:{}:{}", project_id, rec.strategy);
+        let idempotency_key = format!(
+            "can_fix:calculator:{}:{}:{}",
+            project_id, rec.strategy, strategy_id
+        );
         let spec = TaskSpec {
             project_id: project_id.to_string(),
             task_type: "calculator_rollout".to_string(),

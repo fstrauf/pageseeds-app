@@ -377,13 +377,8 @@ fn enrich_with_query_metrics(
     };
 
     let site_url_for_api = site_url.clone(); // keep original for GSC API calls
-    let base_url = if site_url.starts_with("sc-domain:") {
-        format!("https://{}/", &site_url["sc-domain:".len()..])
-    } else if !site_url.ends_with('/') {
-        format!("{}/", site_url)
-    } else {
-        site_url
-    };
+    // `site_url` may be a GSC property ID (sc-domain:…) — convert for fetching.
+    let base_url = format!("{}/", crate::models::project::site_base_url(&site_url));
 
     let end = chrono::Utc::now().date_naive() - chrono::Duration::days(1);
     let start = end - chrono::Duration::days(89); // 90-day window

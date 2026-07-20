@@ -58,7 +58,7 @@ pub trait WorkflowHandler: Send + Sync {
 1. CollectionHandler      — collect_gsc
 2. InvestigationHandler   — investigate_gsc
 3. ResearchHandler        — research_keywords, custom_keyword_research
-4. ContentHandler         — write_article, optimize_article
+4. ContentHandler         — write_article, optimize_article, review_article_quality
 5. ContentReviewHandler   — content_review, content_audit
 6. RedditHandler          — reddit_search, reddit_reply
 7. PerformanceHandler     — gsc_performance
@@ -229,6 +229,61 @@ When `content_review` completes successfully, the system automatically:
 4. Tasks are `Batchable` priority (can run in batch) and sorted by issue count (more issues = higher priority)
 
 **Idempotency:** Each fix task uses idempotency key `fix_content_article:{project_id}:{article_id}` to prevent duplicates if the review is re-run.
+
+---
+
+## Content Quality Gate (`review_article_quality`)
+
+Every article produced by `write_article`, `create_hub_page`, or `refresh_hub_page` is now automatically followed by a `review_article_quality` task. This implements the "useful + visual + SEO basics + cluster fit" quality bar from the SEO baseline strategy.
+
+### Flow
+
+1. **`content_quality_context`** (deterministic)
+   - Loads the MDX file written by the parent task.
+   - Extracts frontmatter fields (title, description, H1, target keyword, slug, canonical, image).
+   - Counts words and internal `/blog/...` links.
+   - Returns a structured JSON context artifact.
+
+2. **`content_quality_review`** (agentic)
+   - Runs the `content-quality-review` skill via Rig `Extractor<ContentQualityReview>`.
+   - Scores the article on four criteria (1–100):
+     - `usefulness_score` — original insight, examples, data
+     - `image_score` — at least one relevant, genuinely useful image
+     - `seo_score` — title, meta description, H1, slug, canonical, internal links
+     - `cluster_fit_score` — maps to a pillar/cluster and references related content
+   - Sets `overall_pass` only if all four scores are ≥ 60 and no critical SEO field is missing.
+   - Persists the result to `article_quality_reviews` and syncs `articles.quality_score / quality_reviewed_at / quality_pass`.
+
+### UI / Downstream Effects
+
+- The task is `AutoEnqueue` and `ArtifactReview`, so it runs automatically and surfaces the structured review for inspection.
+- Quality failures can be read from `articles.quality_pass` and `article_quality_reviews`.
+- The quality gate runs *before* `cluster_and_link`, so only reviewed (not necessarily passing) articles enter the linking stage.
+
+---
+
+## Topic Health Reducer
+
+After `content_review` or `content_audit` completes, a deterministic reducer aggregates audit signals by `target_keyword` and updates `research_shortlist.health_status`.
+
+### Health Status Thresholds
+
+| Status | Rule | Meaning |
+|--------|------|---------|
+| `promising` | avg quality ≥ 70 AND (clicks > 0 OR impressions ≥ 1000) | Strong signal; produce more tangential content |
+| `depleted` | avg quality < 50 AND impressions < 100 AND clicks = 0 | Weak signal; deprioritize new content |
+| `unproven` | everything else | Insufficient evidence; keep in pool |
+
+The reducer also writes a composite `signal_score`:
+
+```
+signal_score = avg_quality + (clicks * 10) + (impressions / 100)
+```
+
+### Consumption
+
+- Keyword research reads pending shortlist entries with `list_pending_excluding_depleted`, so depleted themes are filtered out of new article production.
+- The `research_shortlist.signal_score` and `health_status` columns feed future prioritization UIs.
 
 ---
 

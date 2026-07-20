@@ -24,6 +24,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 | If you need to... | Use this path | Do NOT |
 |---|---|---|
 | **Adjust how an AI writes/reviews content** | Edit the embedded skill in `src-tauri/skills/{skill}/SKILL.md` — it is the single source of truth for app-default skills (registered in `engine/skills.rs`). Project-level `.github/skills/{skill}/SKILL.md` overrides still work for per-project customization, but trigger a drift warning at load time when an embedded counterpart exists and its version marker differs. Test with `build_prompt_preview` before touching executor logic. | Add a new task type or handler just to change the prompt |
+| **Run the weekly SEO pass on a project** | Invoke the `weekly-seo` skill (`.agents/skills/weekly-seo/SKILL.md`, discoverable by Kimi Code) — it drives `pageseeds-cli` tools to check recency, evaluate signals, execute tasks and their follow-ups, resolve mechanical review decisions, and report measures taken. The skill is the workflow; judgment lives in the agent. | Build a Rust orchestrator, scheduler, or cross-project runner |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
 | **Add or change task lifecycle behavior** | Follow the [Task Lifecycle Contract](#task-lifecycle-contract), then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
 | **Attach tasks to execution** | Use backend queue commands through `tauri.ts` (`enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`). | Call `executeTask` directly from components |
@@ -219,6 +220,13 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `apply_publish()` | `content/publish.rs` | Any publish/status-change workflow |
 | `content_health_check()` | `content/ops.rs` | One-off file existence checks in UI code |
 | `keyword_match::normalize_keyword()` / `keyword_present()` / `keyword_occurrences()` | `content/keyword_match.rs` | Raw `contains()` / `matches()` keyword checks (stored keywords may contain quotes or long phrases) |
+
+### Project / Site URL (`models/project.rs`)
+
+| Function | File | Use instead of writing... |
+|---|---|---|
+| `site_base_url()` | `models/project.rs` | Any inline `sc-domain:` → `https://` conversion or `format!("{}/sitemap.xml", site_url)` — `site_url` stores the GSC property ID and is **not** always a fetchable URL. GSC API calls are the only exception (they need the raw property ID) |
+| `validate_site_url()` | `models/project.rs` | Ad-hoc site_url validation at write boundaries |
 
 ### Database / Export (`db/`)
 

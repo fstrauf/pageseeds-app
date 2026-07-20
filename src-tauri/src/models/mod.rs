@@ -12,5 +12,6 @@ pub mod project;
 pub mod queue;
 pub mod reddit;
 pub mod research;
+pub mod seo_discovery;
 pub mod social;
 pub mod task;

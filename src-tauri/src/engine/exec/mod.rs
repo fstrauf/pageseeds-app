@@ -20,6 +20,7 @@ pub mod keywords;
 pub mod quality_rater;
 pub mod reddit;
 pub mod research;
+pub mod seo_discovery;
 pub mod social;
 pub mod territory_research;
 pub mod investigate;

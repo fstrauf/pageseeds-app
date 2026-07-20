@@ -103,6 +103,16 @@ const QUICK_ACTIONS: ActionDef[] = [
     nextLabel: 'See campaign results',
   },
   {
+    task_type: 'seo_health_scan',
+    label: 'SEO Health Scan',
+    description: 'Fuses content audit, CTR, indexing, cannibalization, and Clarity signals into a ranked opportunity backlog',
+    icon: <Globe size={16} />,
+    phase: 'investigation',
+    frequency: 'monthly',
+    nextView: 'tasks',
+    nextLabel: 'Review opportunities',
+  },
+  {
     task_type: 'clarity_analytics',
     label: 'Clarity Analytics',
     description: 'Collect Microsoft Clarity behavioral data, score pages for UX anomalies, and surface ranked findings',
@@ -583,9 +593,11 @@ export function Overview({
               <div className="text-xs text-muted-foreground mt-0.5">{project.site_url}</div>
             )}
           </div>
-          <Button variant="ghost" size="icon-sm" onClick={load} disabled={loading} className="text-muted-foreground">
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon-sm" onClick={load} disabled={loading} className="text-muted-foreground">
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            </Button>
+          </div>
         </div>
 
         {!isLiveSiteProject && (

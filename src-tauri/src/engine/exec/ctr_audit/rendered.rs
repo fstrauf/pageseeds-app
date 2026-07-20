@@ -256,18 +256,9 @@ fn resolve_content_path_prefix(automation_dir: &std::path::Path) -> String {
 }
 
 fn normalize_base_url(site_url: &str) -> String {
-    let mut url = if site_url.starts_with("sc-domain:") {
-        format!("https://{}/", &site_url["sc-domain:".len()..])
-    } else if !site_url.ends_with('/') {
-        format!("{}/", site_url)
-    } else {
-        site_url.to_string()
-    };
-    // Ensure trailing slash
-    if !url.ends_with('/') {
-        url.push('/');
-    }
-    url
+    // `site_url` may be a GSC property ID (sc-domain:…) — convert for fetching.
+    let base = crate::models::project::site_base_url(site_url);
+    format!("{}/", base)
 }
 
 fn normalize_path_prefix(prefix: &str) -> String {

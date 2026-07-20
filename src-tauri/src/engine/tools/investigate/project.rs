@@ -161,9 +161,29 @@ impl Tool for ArticleLinkGraphTool {
 // Tool: create_task
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Task types the autonomous orchestrator is allowed to spawn.
+/// All of these either are AutoEnqueue or produce BackendAuto follow-ups,
+/// so they do not require human pickers.
+pub const ORCHESTRATOR_TASK_TYPES: &[&str] = &[
+    "collect_gsc",
+    "collect_clarity",
+    "ctr_audit",
+    "indexing_diagnostics",
+    "cannibalization_audit",
+    "update_research_shortlist",
+    "generate_feature_spec",
+    "fix_indexing_internal_links",
+    "cluster_and_link",
+    "fix_content_article",
+    "consolidate_cluster",
+    "content_cleanup",
+    "interlinking",
+    "seo_health_scan",
+];
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateTaskArgs {
-    /// Task type: fix_content_article, consolidate_cluster, content_cleanup, interlinking
+    /// Task type from the allowed orchestrator list
     pub task_type: String,
     /// Human-readable title
     pub title: String,
@@ -189,16 +209,20 @@ impl Tool for CreateTaskTool {
     type Output = CreateTaskOutput;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
+        let valid_list = ORCHESTRATOR_TASK_TYPES.join(", ");
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a fix task in the PageSeeds task system. \
-                Valid types: fix_content_article, consolidate_cluster, content_cleanup, \
-                interlinking. DO NOT call this without first explaining what the task \
-                will do and why. Max 3 tasks per investigation.".to_string(),
+            description: format!(
+                "Create a task in the PageSeeds task system. \
+                Valid autonomous types: {}. \
+                DO NOT call this without first explaining what the task will do and why. \
+                After creating a task, call enqueue_task if you want it to run automatically.",
+                valid_list
+            ),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "task_type": { "type": "string", "description": "Task type: fix_content_article, consolidate_cluster, content_cleanup, interlinking" },
+                    "task_type": { "type": "string", "description": format!("Task type: {}", valid_list) },
                     "title": { "type": "string", "description": "Human-readable task title" },
                     "reason": { "type": "string", "description": "Why this task is needed — appears in the task description" }
                 },
@@ -208,10 +232,9 @@ impl Tool for CreateTaskTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let valid_types = ["fix_content_article", "consolidate_cluster", "content_cleanup", "interlinking"];
-        if !valid_types.contains(&args.task_type.as_str()) {
+        if !ORCHESTRATOR_TASK_TYPES.contains(&args.task_type.as_str()) {
             return Err(InvestigationToolError::Execution(
-                format!("Invalid task_type '{}'. Valid types: {:?}", args.task_type, valid_types)
+                format!("Invalid task_type '{}'. Valid types: {:?}", args.task_type, ORCHESTRATOR_TASK_TYPES)
             ));
         }
 
@@ -236,6 +259,164 @@ impl Tool for CreateTaskTool {
             task_type: args.task_type,
             title: args.title,
             status: "created".to_string(),
+        })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tool: enqueue_task
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EnqueueTaskArgs {
+    /// ID of the task to enqueue (returned by create_task)
+    pub task_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct EnqueueTaskOutput {
+    pub task_id: String,
+    pub status: String,
+    pub run_id: String,
+    pub position: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnqueueTaskTool { pub(crate) ctx: InvestigationContext }
+
+impl Tool for EnqueueTaskTool {
+    const NAME: &'static str = "enqueue_task";
+    type Error = InvestigationToolError;
+    type Args = EnqueueTaskArgs;
+    type Output = EnqueueTaskOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Enqueue a previously created PageSeeds task into the backend queue \
+                so it runs automatically. Use this immediately after create_task for any task \
+                you want the system to execute.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID returned by create_task" }
+                },
+                "required": ["task_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let db = self.ctx.open_db().map_err(|e| InvestigationToolError::Execution(e))?;
+
+        // Verify the task exists and belongs to this project
+        let task = crate::engine::task_store::get_task(&db, &args.task_id)
+            .map_err(|e| InvestigationToolError::Execution(format!("Task lookup failed: {e}")))?;
+        if task.project_id != self.ctx.project_id {
+            return Err(InvestigationToolError::Execution(
+                "Task does not belong to this project".to_string()
+            ));
+        }
+
+        let snapshot = crate::engine::queue::enqueue_tasks(
+            &db,
+            vec![crate::models::queue::EnqueueItem {
+                task_id: args.task_id.clone(),
+                project_id: self.ctx.project_id.clone(),
+                title: task.title.clone(),
+                task_type: Some(task.task_type.clone()),
+                project_name: None,
+            }],
+            crate::models::queue::EnqueueMode::Append,
+        )
+        .map_err(|e| InvestigationToolError::Execution(format!("Failed to enqueue task: {e}")))?;
+
+        let item = snapshot.items.iter()
+            .find(|i| i.task_id == args.task_id)
+            .cloned()
+            .unwrap_or_else(|| crate::models::queue::QueueItem {
+                run_id: snapshot.run.as_ref().map(|r| r.id.clone()).unwrap_or_default(),
+                position: 0,
+                task_id: args.task_id.clone(),
+                project_id: self.ctx.project_id.clone(),
+                status: crate::models::queue::QueueItemStatus::Pending,
+                error: None,
+                result_json: None,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+                title: task.title.clone(),
+                task_type: Some(task.task_type.clone()),
+                project_name: None,
+            });
+
+        Ok(EnqueueTaskOutput {
+            task_id: args.task_id,
+            status: task.status.as_str().to_string(),
+            run_id: item.run_id,
+            position: item.position,
+        })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tool: get_task_status
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetTaskStatusArgs {
+    /// ID of the task to check
+    pub task_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GetTaskStatusOutput {
+    pub task_id: String,
+    pub task_type: String,
+    pub title: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetTaskStatusTool { pub(crate) ctx: InvestigationContext }
+
+impl Tool for GetTaskStatusTool {
+    const NAME: &'static str = "get_task_status";
+    type Error = InvestigationToolError;
+    type Args = GetTaskStatusArgs;
+    type Output = GetTaskStatusOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Check the current status of a PageSeeds task. \
+                Use this when you need to verify a dependency before creating a follow-up task.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task ID to check" }
+                },
+                "required": ["task_id"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let db = self.ctx.open_db().map_err(|e| InvestigationToolError::Execution(e))?;
+
+        let task = crate::engine::task_store::get_task_light(&db, &args.task_id)
+            .map_err(|e| InvestigationToolError::Execution(format!("Task lookup failed: {e}")))?;
+
+        if task.project_id != self.ctx.project_id {
+            return Err(InvestigationToolError::Execution(
+                "Task does not belong to this project".to_string()
+            ));
+        }
+
+        Ok(GetTaskStatusOutput {
+            task_id: args.task_id,
+            task_type: task.task_type,
+            title: task.title.unwrap_or_default(),
+            status: task.status.as_str().to_string(),
         })
     }
 }

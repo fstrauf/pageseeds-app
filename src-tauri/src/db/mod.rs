@@ -7,6 +7,7 @@ pub mod content_audit;
 pub mod export;
 pub mod global_settings;
 pub mod research_shortlist;
+pub mod seo_discovery;
 
 /// Get the default database path based on platform conventions.
 /// Used when we need to access the DB without having the AppState.
@@ -1412,8 +1413,78 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 45 {
+        conn.execute_batch(MIGRATION_V45)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (45, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 46 {
+        conn.execute_batch(MIGRATION_V46)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (46, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
+
+static MIGRATION_V45: &str = r#"
+-- Unified SEO discovery opportunity backlog
+CREATE TABLE IF NOT EXISTS seo_opportunities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    article_id INTEGER NOT NULL,
+    url_slug TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    opportunity_score INTEGER NOT NULL,
+    effort TEXT NOT NULL,
+    recommended_action TEXT NOT NULL,
+    signals_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'open',
+    accepted_at TEXT,
+    resulting_task_id TEXT,
+    UNIQUE(project_id, article_id, generated_at),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_seo_opportunities_project_score ON seo_opportunities(project_id, status, opportunity_score DESC);
+CREATE INDEX IF NOT EXISTS idx_seo_opportunities_project_generated ON seo_opportunities(project_id, generated_at);
+"#;
+
+static MIGRATION_V46: &str = r#"
+-- Topic health tracking on research_shortlist
+ALTER TABLE research_shortlist ADD COLUMN signal_score REAL;
+ALTER TABLE research_shortlist ADD COLUMN health_status TEXT NOT NULL DEFAULT 'unproven';
+ALTER TABLE research_shortlist ADD COLUMN last_reviewed_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_research_shortlist_health ON research_shortlist(project_id, health_status);
+
+-- Quality review fields on articles for quick UI surfacing
+ALTER TABLE articles ADD COLUMN quality_score INTEGER;
+ALTER TABLE articles ADD COLUMN quality_reviewed_at TEXT;
+ALTER TABLE articles ADD COLUMN quality_pass INTEGER;
+CREATE INDEX IF NOT EXISTS idx_articles_quality ON articles(project_id, quality_pass);
+
+-- Structured quality reviews for individual articles
+CREATE TABLE IF NOT EXISTS article_quality_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    article_file TEXT NOT NULL,
+    overall_pass INTEGER NOT NULL DEFAULT 0,
+    scores_json TEXT NOT NULL DEFAULT '{}',
+    checks_json TEXT NOT NULL DEFAULT '[]',
+    reviewed_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_article_quality_reviews_project ON article_quality_reviews(project_id);
+CREATE INDEX IF NOT EXISTS idx_article_quality_reviews_task ON article_quality_reviews(task_id);
+CREATE INDEX IF NOT EXISTS idx_article_quality_reviews_file ON article_quality_reviews(project_id, article_file);
+"#;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Article Audit State CRUD

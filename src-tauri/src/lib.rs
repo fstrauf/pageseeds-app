@@ -108,7 +108,7 @@ pub fn run() {
             log::info!(
                 "[startup] Registered {} workflow handlers, {} Tauri commands",
                 handlers.len(),
-                85 // Approximate count; hard-coded because tauri::generate_handler! is macro-generated
+                86 // Approximate count; hard-coded because tauri::generate_handler! is macro-generated
             );
             app.manage(AppState {
                 db: std::sync::Arc::new(std::sync::Mutex::new(conn)),

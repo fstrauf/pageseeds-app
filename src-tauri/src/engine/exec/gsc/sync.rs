@@ -113,12 +113,8 @@ pub(crate) fn exec_gsc_sync_articles(
         }
     };
 
-    let base_url = if site_url.starts_with("sc-domain:") {
-        format!("https://{}", &site_url["sc-domain:".len()..])
-    } else {
-        site_url.clone()
-    };
-    let base_url = base_url.trim_end_matches('/').to_string();
+    // `site_url` may be a GSC property ID (sc-domain:…) — convert for fetching.
+    let base_url = crate::models::project::site_base_url(&site_url);
     let _ = &base_url;
 
     // 5. Fetch GSC metrics (90-day window) - Spawn thread with own runtime
