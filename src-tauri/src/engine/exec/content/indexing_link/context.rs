@@ -22,28 +22,6 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
         }
     };
 
-    // Check plan — if it had no links, there's nothing to verify
-    let plan: serde_json::Value = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "indexing_link_plan")
-        .and_then(|a| a.content.as_ref())
-        .and_then(|c| serde_json::from_str(c).ok())
-        .unwrap_or_default();
-    let planned_links = plan["links_to_add"].as_array().cloned().unwrap_or_default();
-    if planned_links.is_empty() {
-        return StepResult {
-            success: true,
-            message: "Nothing to verify — no links were planned for this target".to_string(),
-            output: Some(serde_json::json!({
-                "target_article_id": target_data["article_id"].as_i64().unwrap_or(0),
-                "target_slug": target_data["slug"].as_str().unwrap_or(""),
-                "planned_links": 0,
-                "passed": true,
-            }).to_string()),
-        };
-    }
-
     let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
     if target_article_id == 0 {
         return StepResult {
