@@ -33,13 +33,17 @@ mod tests {
         names
     }
 
-    #[test]
-    fn test_tool_definitions_smoke() {
-        let ctx = InvestigationContext {
+    fn test_ctx() -> InvestigationContext {
+        InvestigationContext {
             project_id: "test".into(),
             project_path: ".".into(),
             db_path: ":memory:".into(),
-        };
+        }
+    }
+
+    #[test]
+    fn test_tool_definitions_smoke() {
+        let ctx = test_ctx();
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let tools = investigation_tools(ctx);
@@ -57,11 +61,7 @@ mod tests {
 
     #[test]
     fn test_investigation_read_only_tools_excludes_mutators() {
-        let ctx = InvestigationContext {
-            project_id: "test".into(),
-            project_path: ".".into(),
-            db_path: ":memory:".into(),
-        };
+        let ctx = test_ctx();
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let full = investigation_tools(ctx.clone());
@@ -86,6 +86,75 @@ mod tests {
             names.iter().any(|n| n == "get_task_status"),
             "RO set must include get_task_status; got {names:?}"
         );
+    }
+
+    #[test]
+    fn test_kit_catalog_and_tools_aligned_per_mode() {
+        let ctx = test_ctx();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        for access in [InvestigationAccess::Full, InvestigationAccess::ReadOnly] {
+            let kit = investigation_kit(ctx.clone(), access);
+            let expected = inventory_names(access);
+            let actual = rt.block_on(tool_names(&kit.tools));
+
+            assert_eq!(
+                actual.len(),
+                expected.len(),
+                "{access:?}: tool count mismatch"
+            );
+            assert_eq!(
+                actual, expected,
+                "{access:?}: registered tool names must match inventory order"
+            );
+
+            for name in &expected {
+                assert!(
+                    kit.catalog.contains(&format!("[tools.{name}]")),
+                    "{access:?}: catalog missing section for tool {name}"
+                );
+            }
+
+            // No extra mutator sections in RO catalog
+            if access == InvestigationAccess::ReadOnly {
+                for mutator in [
+                    "create_task",
+                    "enqueue_task",
+                    "run_content_audit",
+                    "write_feature_spec",
+                ] {
+                    assert!(
+                        !kit.catalog.contains(&format!("[tools.{mutator}]")),
+                        "RO catalog must not advertise mutator {mutator}"
+                    );
+                }
+                assert!(!kit.catalog.contains("mutates = true"));
+            } else {
+                assert!(kit.catalog.contains("mutates = true"));
+                assert!(kit.catalog.contains("[tools.get_task_status]"));
+            }
+        }
+
+        assert_eq!(inventory_names(InvestigationAccess::Full).len(), 18);
+        assert_eq!(inventory_names(InvestigationAccess::ReadOnly).len(), 14);
+    }
+
+    #[test]
+    fn test_wrappers_match_kit() {
+        let ctx = test_ctx();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let full_tools = rt.block_on(tool_names(&investigation_tools(ctx.clone())));
+        let full_kit = rt.block_on(tool_names(
+            &investigation_kit(ctx.clone(), InvestigationAccess::Full).tools,
+        ));
+        assert_eq!(full_tools, full_kit);
+
+        let ro_tools = rt.block_on(tool_names(&investigation_read_only_tools(ctx.clone())));
+        let ro_kit = rt.block_on(tool_names(
+            &investigation_kit(ctx, InvestigationAccess::ReadOnly).tools,
+        ));
+        assert_eq!(ro_tools, ro_kit);
     }
 
     fn temp_db_path(suffix: &str) -> String {

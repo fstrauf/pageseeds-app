@@ -10,9 +10,13 @@
 
 pub mod investigate;
 pub use investigate::{
+    investigation_catalog,
+    investigation_kit,
     investigation_read_only_tools,
     investigation_tools,
+    InvestigationAccess,
     InvestigationContext,
+    InvestigationKit,
     InvestigationToolError,
 };
 
