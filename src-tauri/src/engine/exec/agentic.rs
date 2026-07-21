@@ -793,8 +793,9 @@ fn load_coverage_context(automation_dir: &std::path::Path) -> String {
     )
 }
 
-/// Read all articles for a project from SQLite and return the next
-/// unoccupied past date using the canonical `date_policy::suggest_next_safe_date`.
+/// Read all articles for a project from SQLite and return the next publish
+/// date using the canonical `date_policy::suggest_next_safe_date` (most recent
+/// unoccupied past date, capped at `MAX_LOOKBACK_DAYS` lookback).
 ///
 /// This is more current than reading articles.json because SQLite is
 /// updated by ingest_orphans before articles.json is exported.

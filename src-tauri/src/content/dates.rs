@@ -1,7 +1,8 @@
-/// Article date analysis and safe redistribution.
+/// Article date analysis and future-date correction.
 ///
 /// Mirrors `packages/seo-content-cli/src/seo_content_mcp/date_distributor.py`
-/// and `date_utils.py`.
+/// and `date_utils.py`. Duplicate dates are reported informationally but never
+/// rewritten.
 use std::collections::HashMap;
 
 use chrono::{Duration, NaiveDate, Utc};
@@ -13,7 +14,7 @@ use crate::models::article::Article;
 #[derive(Debug, Clone, Serialize)]
 pub struct DateIssue {
     pub article_id: i64,
-    pub issue_type: String, // future_date | duplicate_date | invalid_format | missing_date
+    pub issue_type: String, // future_date | invalid_format | missing_date
     pub description: String,
     pub current_date: String,
 }
@@ -44,7 +45,9 @@ pub struct DateFixResult {
     pub dry_run: bool,
 }
 
-/// Analyse article dates. Detects future dates, duplicates, and missing values.
+/// Analyse article dates. Detects future dates and missing values; duplicate
+/// dates are reported informationally via `duplicate_count`/`duplicate_dates`
+/// but are not issues.
 pub fn analyse_dates(articles: &[Article]) -> DateAnalysis {
     let mut issues = Vec::new();
     let mut missing_count = 0;
@@ -109,20 +112,23 @@ pub fn analyse_dates(articles: &[Article]) -> DateAnalysis {
     }
 }
 
-/// Produce a fix plan that redistributes problematic dates (future or duplicate)
-/// evenly in the past without touching already-published articles that are fine.
+/// Produce a fix plan that reassigns future dates into the past without
+/// touching already-published articles that are fine.
+///
+/// Duplicate dates are intentionally NOT fixed: sharing a date is acceptable
+/// and rewriting existing dates would sacrifice freshness signals.
 ///
 /// If `dry_run` is false, the caller is responsible for persisting the changes.
 pub fn calculate_fixes(articles: &[Article]) -> DateFixResult {
     let analysis = analyse_dates(articles);
     let today = Utc::now().date_naive();
 
-    // Collect articles that need a new date (future or duplicate).
+    // Collect articles that need a new date (future only — duplicates are fine).
     // We re-assign them evenly spaced, working backward from today.
     let mut bad_ids: Vec<i64> = analysis
         .issues
         .iter()
-        .filter(|i| i.issue_type == "future_date" || i.issue_type == "duplicate_date")
+        .filter(|i| i.issue_type == "future_date")
         .map(|i| i.article_id)
         .collect();
     bad_ids.sort();
@@ -202,11 +208,12 @@ pub fn apply_fixes_to_db_and_export(
 
 /// Deterministic post-write date enforcement.
 ///
-/// Loads all articles from SQLite, detects duplicate/future dates,
+/// Loads all articles from SQLite, detects future dates,
 /// patches MDX frontmatter, updates SQLite, and exports articles.json.
 ///
 /// This is a safety net that runs after any content-modifying task to ensure
-/// no agent mistake or race condition leaves the project with overlapping dates.
+/// no agent mistake or race condition leaves the project with a future date.
+/// Duplicate dates are acceptable and are never rewritten.
 pub fn enforce_safe_dates(
     conn: &rusqlite::Connection,
     project_id: &str,
@@ -270,4 +277,92 @@ fn patch_mdx_date(text: &str, new_date: &str) -> Option<String> {
     let (fm, body) = crate::content::frontmatter::split_mdx(text)?;
     let patched_fm = crate::content::frontmatter::replace_scalar(fm, "date", new_date);
     Some(crate::content::cleaner::rebuild_mdx(&patched_fm, body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn article(id: i64, published_date: Option<&str>) -> Article {
+        Article {
+            id,
+            title: format!("Article {id}"),
+            url_slug: format!("article-{id}"),
+            file: format!("article-{id}.mdx"),
+            target_keyword: None,
+            keyword_difficulty: None,
+            target_volume: 0,
+            published_date: published_date.map(str::to_string),
+            word_count: 0,
+            status: "published".into(),
+            review_status: None,
+            review_started_at: None,
+            last_reviewed_at: None,
+            review_count: 0,
+            content_gaps_addressed: vec![],
+            estimated_traffic_monthly: None,
+            project_id: "proj".into(),
+            quality_score: None,
+            quality_grade: None,
+            quality_rated_at: None,
+            publishing_ready: None,
+            quality_breakdown: None,
+            page_type: None,
+            content_hash: None,
+            last_edited_at: None,
+        }
+    }
+
+    fn fmt(d: NaiveDate) -> String {
+        d.format("%Y-%m-%d").to_string()
+    }
+
+    #[test]
+    fn calculate_fixes_produces_no_fixes_for_duplicate_only_dates() {
+        let today = Utc::now().date_naive();
+        let shared = fmt(today - Duration::days(1));
+        let articles = vec![
+            article(1, Some(&shared)),
+            article(2, Some(&shared)),
+            article(3, Some(&fmt(today - Duration::days(2)))),
+        ];
+
+        let result = calculate_fixes(&articles);
+
+        assert_eq!(result.articles_fixed, 0);
+        assert!(result.fixes.is_empty());
+    }
+
+    #[test]
+    fn calculate_fixes_still_fixes_future_dates() {
+        let today = Utc::now().date_naive();
+        let articles = vec![
+            article(1, Some(&fmt(today - Duration::days(1)))),
+            article(2, Some(&fmt(today + Duration::days(5)))),
+        ];
+
+        let result = calculate_fixes(&articles);
+
+        assert_eq!(result.articles_fixed, 1);
+        assert_eq!(result.fixes.len(), 1);
+        assert_eq!(result.fixes[0].article_id, 2);
+        let new_date = NaiveDate::parse_from_str(&result.fixes[0].new_date, "%Y-%m-%d").unwrap();
+        assert!(new_date <= today, "fix must land in the past, got {new_date}");
+    }
+
+    #[test]
+    fn analyse_dates_reports_duplicates_informationally() {
+        let today = Utc::now().date_naive();
+        let shared = fmt(today - Duration::days(1));
+        let articles = vec![article(1, Some(&shared)), article(2, Some(&shared))];
+
+        let analysis = analyse_dates(&articles);
+
+        assert_eq!(analysis.duplicate_count, 1);
+        assert_eq!(analysis.duplicate_dates, vec![(shared, vec![1, 2])]);
+        assert!(
+            analysis.issues.iter().all(|i| i.issue_type != "duplicate_date"),
+            "duplicates must not surface as issues"
+        );
+    }
 }
