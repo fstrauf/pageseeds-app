@@ -244,9 +244,8 @@ pub(crate) async fn exec_content_quality_review(
 
 fn build_review_prompt(project_path: &str, context_json: &str) -> Result<String, String> {
     let repo_root = Path::new(project_path);
-    let skill_content = crate::engine::skills::load_skill(repo_root, "content-quality-review")
-        .map(|s| s.content)
-        .unwrap_or_else(|| DEFAULT_SKILL.to_string());
+    let skill_content =
+        crate::engine::skills::load_skill_or_fail(repo_root, "content-quality-review")?.content;
 
     let context: serde_json::Value =
         serde_json::from_str(context_json).map_err(|e| e.to_string())?;
@@ -257,17 +256,6 @@ fn build_review_prompt(project_path: &str, context_json: &str) -> Result<String,
         context = serde_json::to_string_pretty(&context).unwrap_or_default(),
     ))
 }
-
-const DEFAULT_SKILL: &str = r#"Review the article against four criteria and return a ContentQualityReview:
-
-1. usefulness_score (1-100): Does it answer a specific question with original examples, data, or first-hand insight? Would a reader learn something not found in the top 3 Google results?
-2. image_score (1-100): Does it include at least one relevant, genuinely useful image, diagram, chart, or screenshot?
-3. seo_score (1-100): Does it have a clean title (<60 chars), meta description, H1 aligned with the target keyword, clean slug, canonical URL, and internal links?
-4. cluster_fit_score (1-100): Does it clearly map to a pillar/cluster and reference related content on the site?
-
-Set overall_pass to true only if all four scores are >= 60 and no critical SEO field is missing.
-Include a checks array with one entry per failed or borderline criterion, using ids: usefulness, image, seo_basics, cluster_fit.
-"#;
 
 fn persist_review(
     task: &Task,

@@ -245,7 +245,7 @@ Every article produced by `write_article`, `create_hub_page`, or `refresh_hub_pa
    - Returns a structured JSON context artifact.
 
 2. **`content_quality_review`** (agentic)
-   - Runs the `content-quality-review` skill via Rig `Extractor<ContentQualityReview>`.
+   - Runs the embedded `content-quality-review` skill (`src-tauri/skills/content-quality-review/SKILL.md`, overridable per-project via `.github/skills/content-quality-review/SKILL.md`) via Rig `Extractor<ContentQualityReview>`. A missing skill fails the step rather than falling back to a built-in prompt.
    - Scores the article on four criteria (1–100):
      - `usefulness_score` — original insight, examples, data
      - `image_score` — at least one relevant, genuinely useful image
@@ -282,7 +282,7 @@ signal_score = avg_quality + (clicks * 10) + (impressions / 100)
 
 ### Consumption
 
-- Keyword research reads pending shortlist entries with `list_pending_excluding_depleted`, so depleted themes are filtered out of new article production.
+- Keyword research reads pending shortlist entries with `list_pending_excluding_depleted`, so depleted themes are filtered out of new article production. This applies to both the deterministic seed pipeline (`keywords/parsing.rs`) and the agentic seed-extraction prompt (`research/prompts.rs::build_shortlist_summary`) — depleted themes are never presented to the LLM as priority territories.
 - The `research_shortlist.signal_score` and `health_status` columns feed future prioritization UIs.
 
 ---
