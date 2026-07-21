@@ -284,6 +284,68 @@
         cleanup(&path);
     }
 
+    #[test]
+    fn create_ctr_fix_tasks_spawns_for_ctr_only_admission() {
+        let path = test_dir();
+        setup_project(&path);
+        let conn = test_db();
+        insert_test_project(&conn, &path);
+
+        // Format-clean article admitted solely for CTR underperformance.
+        let context = serde_json::json!({
+            "total_articles": 1,
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "ctr-only",
+                    "file": "content/001_ctr_only.mdx",
+                    "content_hash": "hash-ctr",
+                    "target_keyword": "test",
+                    "clicks_lost": 42.0,
+                    "has_frontmatter_faq": false,
+                    "detection_reasons": ["ctr_underperformance"],
+                    "issues_detected": {
+                        "file_not_found": false,
+                        "title_too_long": false,
+                        "meta_too_short": false,
+                        "snippet_suboptimal": false,
+                        "missing_faq_schema": false
+                    },
+                    "top_queries": serde_json::Value::Null,
+                }
+            ]
+        });
+        let parent = ctr_parent_task("parent-ctr-only", context);
+        crate::engine::task_store::create_task(&conn, &parent).unwrap();
+
+        let ids = create_ctr_fix_tasks(&conn, &parent, &path);
+        assert_eq!(
+            ids.len(),
+            1,
+            "CTR-only admission must spawn a fix task, got {}",
+            ids.len()
+        );
+
+        let task = crate::engine::task_store::get_task(&conn, &ids[0]).unwrap();
+        assert_eq!(task.task_type, "fix_ctr_article");
+
+        // The fix context must surface the CTR signal to the analyze step.
+        let ctx = task
+            .artifacts
+            .iter()
+            .find(|a| a.key == "ctr_context")
+            .expect("fix task should carry a ctr_context artifact");
+        let ctx_json: serde_json::Value =
+            serde_json::from_str(ctx.content.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            ctx_json["articles"][0]["issues_detected"]["ctr_underperformance"].as_bool(),
+            Some(true),
+            "fix context should flag ctr_underperformance for the agent"
+        );
+
+        cleanup(&path);
+    }
+
     fn article_json(
         id: i64,
         slug: &str,

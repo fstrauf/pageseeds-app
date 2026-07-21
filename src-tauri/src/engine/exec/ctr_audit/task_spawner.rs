@@ -89,7 +89,7 @@ pub(crate) fn create_ctr_fix_tasks(
     };
 
     let mut created_ids = Vec::new();
-    let mut skipped_healthy = 0usize;
+    let mut skipped_no_issues = 0usize;
     let mut skipped_existing = 0usize;
 
     // Rank articles by clicks_lost (descending) to derive per-article fix priority.
@@ -111,6 +111,15 @@ pub(crate) fn create_ctr_fix_tasks(
         let file_ref = article["file"].as_str().unwrap_or("");
         let clicks_lost = article["clicks_lost"].as_f64().unwrap_or(0.0);
 
+        // Spawn-worthiness consumes the admission decision: a non-empty
+        // `detection_reasons` array means ctr_build_context admitted this article
+        // (format violation and/or CTR underperformance).
+        let detection_reasons: Vec<&str> = article["detection_reasons"]
+            .as_array()
+            .map(|reasons| reasons.iter().filter_map(|r| r.as_str()).collect())
+            .unwrap_or_default();
+        let ctr_underperformance = detection_reasons.contains(&"ctr_underperformance");
+
         // Skip articles with no detected issues
         let issues = &article["issues_detected"];
         let has_frontmatter_faq = article["has_frontmatter_faq"].as_bool().unwrap_or(false);
@@ -126,14 +135,19 @@ pub(crate) fn create_ctr_fix_tasks(
             && !has_frontmatter_faq
             && has_question_intent_query(article);
 
-        let has_issues = issues["file_not_found"].as_bool().unwrap_or(false)
+        let format_violation = issues["file_not_found"].as_bool().unwrap_or(false)
             || issues["title_too_long"].as_bool().unwrap_or(false)
             || issues["meta_too_short"].as_bool().unwrap_or(false)
             || issues["snippet_suboptimal"].as_bool().unwrap_or(false)
             || missing_source_faq;
 
+        // Admitted articles (non-empty detection_reasons) are always spawn-worthy;
+        // the finer-grained format flags remain as a fallback for contexts that
+        // predate the detection_reasons field.
+        let has_issues = !detection_reasons.is_empty() || format_violation;
+
         if !has_issues {
-            skipped_healthy += 1;
+            skipped_no_issues += 1;
             continue;
         }
 
@@ -158,10 +172,18 @@ pub(crate) fn create_ctr_fix_tasks(
             continue;
         }
 
-        // Build single-article context
+        // Build single-article context. Surface the CTR signal inside
+        // `issues_detected` alongside the finer-grained format flags so the
+        // downstream analyze step (and the agent) sees what needs fixing even
+        // when every format flag is false.
+        let mut article_context = article.clone();
+        if ctr_underperformance {
+            article_context["issues_detected"]["ctr_underperformance"] =
+                serde_json::Value::Bool(true);
+        }
         let single_context = serde_json::json!({
             "total_articles": 1,
-            "articles": [article],
+            "articles": [article_context],
         });
 
         let context_str = match serde_json::to_string(&single_context) {
@@ -232,9 +254,9 @@ pub(crate) fn create_ctr_fix_tasks(
     let total_scanned = articles.len();
     let spawned = created_ids.len();
     log::info!(
-        "[ctr_audit] Spawner result: {} scanned, {} healthy skipped, {} existing skipped, {} fix task(s) returned",
+        "[ctr_audit] Spawner result: {} scanned, {} no-issues skipped, {} existing skipped, {} fix task(s) returned",
         total_scanned,
-        skipped_healthy,
+        skipped_no_issues,
         skipped_existing,
         spawned
     );
@@ -264,6 +286,16 @@ fn ctr_issue_signature(article: &serde_json::Value) -> String {
         if issues[issue].as_bool().unwrap_or(false) {
             parts.push(issue);
         }
+    }
+
+    // CTR underperformance is an admission reason that lives outside the format
+    // flags — include it so a CTR-only article does not sign as "no_issues".
+    let ctr_flag = article["detection_reasons"]
+        .as_array()
+        .map(|reasons| reasons.iter().any(|r| r.as_str() == Some("ctr_underperformance")))
+        .unwrap_or(false);
+    if ctr_flag {
+        parts.push("ctr_underperformance");
     }
 
     let issue_set = if parts.is_empty() {

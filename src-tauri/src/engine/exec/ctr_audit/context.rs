@@ -112,7 +112,8 @@ pub fn classify_query_intent(query: &str) -> &'static str {
 ///
 /// Uses persistent `article_audit_state` to skip articles that were healthy on the
 /// last audit AND have not changed since. This prevents re-flagging already-fixed
-/// issues across repeated audit runs.
+/// issues across repeated audit runs. The skip is bypassed when fresh GSC data
+/// shows CTR underperformance — the content hash does not cover GSC movement.
 pub(crate) fn exec_ctr_build_context(
     task: &Task,
     project_path: &str,
@@ -171,6 +172,13 @@ pub(crate) fn exec_ctr_build_context(
             continue;
         }
 
+        // CTR underperformance derives from GSC data only, so it must be evaluated
+        // BEFORE the skip-unchanged cache: `content_hash` covers title/meta/snippet/
+        // FAQ state, not GSC movement. A fresh CTR collapse on an unchanged MDX file
+        // must still re-admit the article.
+        let target_ctr = target_ctr_for_position(avg_position);
+        let ctr_underperforming = ctr_underperforms(ctr, target_ctr);
+
         // Extract current MDX state
         let (current_title, meta_description, first_paragraph, h1, has_faq_schema, file_found) =
             crate::engine::exec::audit_health::read_article_excerpt(project_path, &file_ref);
@@ -194,13 +202,17 @@ pub(crate) fn exec_ctr_build_context(
             has_faq_schema,
         );
 
-        // Check stored audit state: if hash matches and was healthy, skip
-        if let Ok(Some(stored)) =
-            crate::db::get_article_audit_state(conn, &task.project_id, &file_ref, "ctr_audit")
-        {
-            if stored.content_hash == content_hash && stored.was_healthy {
-                skipped_unchanged += 1;
-                continue;
+        // Check stored audit state: skip only when the hash matches, the article
+        // was healthy, AND CTR still meets the position-expected target. The hash
+        // does not cover GSC movement, so a CTR collapse bypasses the skip.
+        if !ctr_underperforming {
+            if let Ok(Some(stored)) =
+                crate::db::get_article_audit_state(conn, &task.project_id, &file_ref, "ctr_audit")
+            {
+                if stored.content_hash == content_hash && stored.was_healthy {
+                    skipped_unchanged += 1;
+                    continue;
+                }
             }
         }
 
@@ -215,7 +227,6 @@ pub(crate) fn exec_ctr_build_context(
         );
 
         // Compute clicks_lost using position-aware target CTR
-        let target_ctr = target_ctr_for_position(avg_position);
         let clicks_lost = impressions * (target_ctr - ctr).max(0.0);
 
         // Admission gate: core format violation OR CTR underperformance.
@@ -223,7 +234,7 @@ pub(crate) fn exec_ctr_build_context(
         if !health.all_ok() {
             detection_reasons.push("format_violation");
         }
-        if ctr_underperforms(ctr, target_ctr) {
+        if ctr_underperforming {
             detection_reasons.push("ctr_underperformance");
         }
         let healthy = detection_reasons.is_empty();

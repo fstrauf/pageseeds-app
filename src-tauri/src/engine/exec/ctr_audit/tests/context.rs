@@ -494,6 +494,89 @@ Q: What?\nA: This.
     }
 
     #[test]
+    fn test_ctr_collapse_bypasses_skip_unchanged() {
+        // Run 1: healthy CTR — article is skipped as healthy and the audit state
+        // (was_healthy + content_hash) is persisted.
+        let path = setup_single_article_project(
+            "skip-bypass",
+            "Good Title",
+            &good_meta(),
+            &good_snippet(),
+            // pos 8.5 → target 0.008; ctr 0.006 >= half of target → healthy
+            serde_json::json!({ "impressions": 10000.0, "clicks": 60.0, "ctr": 0.006, "avg_position": 8.5 }),
+        );
+
+        let conn = test_db();
+        let result = exec_ctr_build_context(&test_task("task-run1"), &path, None, &conn);
+        assert!(result.success, "run 1 failed: {}", result.message);
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            0,
+            "healthy article should not be admitted"
+        );
+
+        // Sanity: an unchanged, still-healthy article hits the skip-unchanged cache.
+        let result = exec_ctr_build_context(&test_task("task-run2"), &path, None, &conn);
+        assert!(result.success);
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            0,
+            "unchanged healthy article should be skipped"
+        );
+
+        // Run 3: same MDX (identical content_hash) but CTR collapsed in fresh GSC
+        // data → the skip must be bypassed and the article re-admitted.
+        let auto_dir = std::path::Path::new(&path)
+            .join(".github")
+            .join("automation");
+        let articles = serde_json::json!({
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "skip-bypass",
+                    "title": "Good Title",
+                    "target_keyword": "test keyword",
+                    "file": "content/001_article.mdx",
+                    "gsc": { "impressions": 10000.0, "clicks": 10.0, "ctr": 0.001, "avg_position": 8.5 }
+                }
+            ]
+        });
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            serde_json::to_string_pretty(&articles).unwrap(),
+        )
+        .unwrap();
+
+        let result = exec_ctr_build_context(&test_task("task-run3"), &path, None, &conn);
+        assert!(result.success, "run 3 failed: {}", result.message);
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            1,
+            "CTR collapse on unchanged content must bypass the skip-unchanged cache"
+        );
+
+        let reasons: Vec<&str> = output["articles"][0]["detection_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            reasons,
+            vec!["ctr_underperformance"],
+            "only CTR underperformance should be detected, got {:?}",
+            reasons
+        );
+        cleanup(&path);
+    }
+
+    #[test]
     fn test_check_article_health_faq_advisory() {
         let health = crate::engine::exec::audit_health::check_article_health(
             "Good Title",
