@@ -61,8 +61,9 @@ pub(crate) fn load_plan_from_task_or_file(task: &Task, project_path: &str) -> St
 ///
 /// Matching is exact/normalized only — never substring — so a bad match can
 /// never patch the wrong live article. Resolution order:
-///   1. Exact filename stem match, or numeric-prefixed stem (`001_{slug}`)
+///   1. Exact filename stem match
 ///   2. Normalized stem match via `content::slug::normalize_url_slug`
+///      (covers numeric-prefixed stems like `001_{slug}` and `-`/`_` differences)
 ///   3. Frontmatter `url_slug` match (exact or normalized)
 ///
 /// Returns `Ok(None)` when nothing matches. Returns `Err` when more than one
@@ -80,14 +81,13 @@ pub(crate) fn find_file_by_slug(
     let files = crate::content::locator::collect_markdown_files(&content_dir);
     let slug_normalized = crate::content::slug::normalize_url_slug(slug);
 
-    // Pass 1: filename stem matching (exact, numeric-prefix suffix, normalized).
+    // Pass 1: filename stem matching (exact or normalized).
     let mut matches: Vec<PathBuf> = Vec::new();
     for file in &files {
         let Some(stem) = file.file_stem().map(|s| s.to_string_lossy().to_string()) else {
             continue;
         };
         let stem_matches = stem == slug
-            || stem.ends_with(&format!("_{}", slug))
             || (!slug_normalized.is_empty()
                 && crate::content::slug::normalize_url_slug(&stem) == slug_normalized);
         if stem_matches {

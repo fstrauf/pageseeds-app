@@ -61,7 +61,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
         .unwrap_or(("", keeper_content.as_str()));
     // Lightweight keeper outline: just heading levels and titles (no body).
     // The agent only needs these for insertion-point selection.
-    let keeper_outline: Vec<serde_json::Value> = keeper_body
+    let keeper_outline: Vec<OutlineHeading> = keeper_body
         .lines()
         .filter(|l| {
             let t = l.trim_start();
@@ -70,7 +70,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
         .map(|l| {
             let level = l.trim_start().chars().take_while(|&c| c == '#').count() as u8;
             let text = l.trim_start_matches('#').trim().to_string();
-            serde_json::json!({"level": level, "text": text})
+            OutlineHeading { level, text }
         })
         .collect();
     const KEEPER_EXCERPT_CHARS: usize = 1_500;
@@ -97,10 +97,10 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
     // the keeper are marked covered and their bodies are dropped to save budget.
     let keeper_heading_texts: std::collections::HashSet<String> = keeper_outline
         .iter()
-        .filter_map(|h| h["text"].as_str().map(|t| t.to_lowercase()))
+        .map(|h| h.text.to_lowercase())
         .collect();
 
-    let mut pages: Vec<serde_json::Value> = Vec::new();
+    let mut pages: Vec<RedirectPage> = Vec::new();
 
     for url in &redirect_urls {
         let slug = url.trim_start_matches("/blog/").trim_start_matches('/');
@@ -137,76 +137,68 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
 
         let word_count = crate::content::ops::count_words(&body);
 
-        let sections: Vec<serde_json::Value> = extract_headings(&body)
+        let sections: Vec<MergeSection> = extract_headings(&body)
             .into_iter()
             .map(|h| {
                 let covered = keeper_heading_texts.contains(&h.text.to_lowercase());
-                serde_json::json!({
-                    "level": h.level,
-                    "text": h.text,
+                MergeSection {
+                    level: h.level,
+                    text: h.text,
                     // Sections the keeper already covers get title-only; unique
                     // sections carry their full body so real content survives.
-                    "body": if covered { String::new() } else { h.body },
-                    "covered_by_keeper": covered,
-                })
+                    body: if covered { String::new() } else { h.body },
+                    covered_by_keeper: covered,
+                }
             })
             .collect();
 
-        let tables: Vec<serde_json::Value> = extract_tables(&body)
+        let tables: Vec<MergeTable> = extract_tables(&body)
             .into_iter()
-            .map(|t| serde_json::json!({"markdown": t.markdown}))
+            .map(|t| MergeTable { markdown: t.markdown })
             .collect();
-        let examples: Vec<serde_json::Value> = extract_examples(&body)
+        let examples: Vec<MergeExample> = extract_examples(&body)
             .into_iter()
-            .map(|e| serde_json::json!({"language": e.language, "code": e.code}))
+            .map(|e| MergeExample { language: e.language, code: e.code })
             .collect();
-        let faqs: Vec<serde_json::Value> = extract_faqs(&body)
+        let faqs: Vec<MergeFaq> = extract_faqs(&body)
             .into_iter()
-            .map(|f| serde_json::json!({"question": f.question, "answer": f.answer}))
+            .map(|f| MergeFaq { question: f.question, answer: f.answer })
             .collect();
 
-        pages.push(serde_json::json!({
-            "file": file.to_string_lossy().to_string(),
-            "url": url,
-            "title": title,
-            "word_count": word_count,
-            "sections": sections,
-            "tables": tables,
-            "examples": examples,
-            "faqs": faqs,
-        }));
+        pages.push(RedirectPage {
+            file: file.to_string_lossy().to_string(),
+            url: url.clone(),
+            title,
+            word_count,
+            sections,
+            tables,
+            examples,
+            faqs,
+        });
     }
 
     // Sort by word count (most content-rich first), then pack into batches.
     // Pages are never dropped: clusters with more redirect pages than fit one
     // prompt are processed in sequential draft→apply rounds against the keeper.
-    pages.sort_by(|a, b| {
-        let wc = |v: &serde_json::Value| v["word_count"].as_u64().unwrap_or(0);
-        wc(b).cmp(&wc(a))
-    });
-    let batches = pack_redirect_batches(pages);
-
-    let batch_values: Vec<serde_json::Value> = batches
+    pages.sort_by(|a, b| b.word_count.cmp(&a.word_count));
+    let batches: Vec<MergeBatch> = pack_redirect_batches(pages)
         .into_iter()
         .enumerate()
-        .map(|(i, pages)| serde_json::json!({"batch_index": i, "redirect_pages": pages}))
+        .map(|(i, redirect_pages)| MergeBatch { batch_index: i, redirect_pages })
         .collect();
 
-    let total_redirects: usize = batch_values
-        .iter()
-        .map(|b| b["redirect_pages"].as_array().map(|a| a.len()).unwrap_or(0))
-        .sum();
+    let total_redirects: usize = batches.iter().map(|b| b.redirect_pages.len()).sum();
 
-    let output_doc = serde_json::json!({
-        "keeper_file": keeper_file.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        "keeper_outline": keeper_outline,
-        "keeper_excerpt": keeper_excerpt,
-        "total_redirects": total_redirects,
-        "batch_count": batch_values.len(),
-        "batches": batch_values,
-    });
+    let context = MergeContext {
+        keeper_file: keeper_file.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        keeper_outline,
+        keeper_excerpt,
+        total_redirects,
+        batch_count: batches.len(),
+        batches,
+    };
 
-    let output_json = serde_json::to_string_pretty(&output_doc).unwrap_or_default();
+    let output_json = serde_json::to_string_pretty(&context).unwrap_or_default();
     const MAX_EXTRACT_OUTPUT_BYTES: usize = 250_000;
     if output_json.len() > MAX_EXTRACT_OUTPUT_BYTES {
         return StepResult {
@@ -226,7 +218,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
         message: format!(
             "Extracted unique sections from {} redirect pages in {} batch(es) ({} bytes)",
             total_redirects,
-            output_doc["batch_count"],
+            context.batch_count,
             output_json.len(),
         ),
         output: Some(output_json),
@@ -246,11 +238,9 @@ pub(crate) const BATCH_BYTE_BUDGET: usize = 12_000;
 /// at most `BATCH_BYTE_BUDGET` serialized bytes each. Every page lands in
 /// exactly one batch — batching replaces the old top-5 truncation so clusters
 /// with >5 redirect pages lose no content.
-pub(crate) fn pack_redirect_batches(
-    pages: Vec<serde_json::Value>,
-) -> Vec<Vec<serde_json::Value>> {
-    let mut batches: Vec<Vec<serde_json::Value>> = Vec::new();
-    let mut current: Vec<serde_json::Value> = Vec::new();
+pub(crate) fn pack_redirect_batches(pages: Vec<RedirectPage>) -> Vec<Vec<RedirectPage>> {
+    let mut batches: Vec<Vec<RedirectPage>> = Vec::new();
+    let mut current: Vec<RedirectPage> = Vec::new();
     let mut current_bytes = 0usize;
 
     for page in pages {

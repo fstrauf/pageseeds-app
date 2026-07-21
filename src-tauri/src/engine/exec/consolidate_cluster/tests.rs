@@ -294,12 +294,71 @@ A: Because.
         assert!(!keeper.with_extension("mdx.snapshot").exists());
     }
 
+    #[test]
+    fn test_apply_patch_failing_later_round_leaves_original_untouched() {
+        let project = TempProject::new("apply_atomic");
+        let original = "---\ntitle: Keeper\n---\n\nKeeper body.\n";
+        let keeper = project.write_content_file("001_keeper.mdx", original);
+
+        // Round 1 is valid; round 2 removes the frontmatter delimiter, making
+        // the accumulated result invalid. The apply is atomic: nothing from
+        // round 1 may reach the disk.
+        let patch = serde_json::json!({
+            "patches": [
+                {
+                    "keeper_file": keeper.to_string_lossy(),
+                    "additions": [{
+                        "heading": "Round One",
+                        "content": "Content from round one.",
+                        "position": "end",
+                        "source_file": "content/002_a.mdx"
+                    }],
+                    "transitions": [],
+                    "notes": []
+                },
+                {
+                    "keeper_file": keeper.to_string_lossy(),
+                    "additions": [],
+                    "transitions": [{"find": "---\n", "replace": ""}],
+                    "notes": []
+                }
+            ]
+        });
+
+        let result = exec_merge_apply_patch(
+            &Task::default(),
+            project.path().to_str().unwrap(),
+            &patch.to_string(),
+        );
+
+        assert!(!result.success, "failing round must fail the apply: {}", result.message);
+        let on_disk = std::fs::read_to_string(&keeper).unwrap();
+        assert_eq!(on_disk, original, "keeper must be byte-identical after failure");
+        assert!(
+            !keeper.with_extension("mdx.snapshot").exists(),
+            "snapshot must be cleaned up"
+        );
+    }
+
     // ─── redirect batching ───────────────────────────────────────────────────
+
+    fn redirect_page(url: &str, word_count: usize, sections: Vec<MergeSection>) -> RedirectPage {
+        RedirectPage {
+            file: format!("content/{}.mdx", url.trim_start_matches("/blog/")),
+            url: url.to_string(),
+            title: url.to_string(),
+            word_count,
+            sections,
+            tables: vec![],
+            examples: vec![],
+            faqs: vec![],
+        }
+    }
 
     #[test]
     fn test_pack_redirect_batches_splits_beyond_five_pages() {
-        let pages: Vec<serde_json::Value> = (0..7)
-            .map(|i| serde_json::json!({"url": format!("/blog/page-{}", i), "word_count": 10}))
+        let pages: Vec<RedirectPage> = (0..7)
+            .map(|i| redirect_page(&format!("/blog/page-{}", i), 10, vec![]))
             .collect();
 
         let batches = pack_redirect_batches(pages);
@@ -311,7 +370,7 @@ A: Because.
         let urls: Vec<&str> = batches
             .iter()
             .flatten()
-            .filter_map(|p| p["url"].as_str())
+            .map(|p| p.url.as_str())
             .collect();
         assert_eq!(urls.len(), 7);
         for i in 0..7 {
@@ -322,13 +381,18 @@ A: Because.
     #[test]
     fn test_pack_redirect_batches_respects_byte_budget() {
         let big_body = "x".repeat(7_000);
-        let pages: Vec<serde_json::Value> = (0..3)
+        let pages: Vec<RedirectPage> = (0..3)
             .map(|i| {
-                serde_json::json!({
-                    "url": format!("/blog/big-{}", i),
-                    "word_count": 1000,
-                    "sections": [{"level": 2, "text": "Big", "body": big_body, "covered_by_keeper": false}],
-                })
+                redirect_page(
+                    &format!("/blog/big-{}", i),
+                    1000,
+                    vec![MergeSection {
+                        level: 2,
+                        text: "Big".to_string(),
+                        body: big_body.clone(),
+                        covered_by_keeper: false,
+                    }],
+                )
             })
             .collect();
 

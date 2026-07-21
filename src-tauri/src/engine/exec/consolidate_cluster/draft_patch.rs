@@ -41,21 +41,22 @@ pub(crate) fn exec_merge_draft_patch(
     // redirect pages), run one draft round per batch against the same keeper
     // instead of dropping pages. The rounds are applied sequentially by
     // `merge_apply_patch`.
-    let context: serde_json::Value = serde_json::from_str(context_json).unwrap_or_default();
-    let batch_contexts: Vec<String> = match context["batches"].as_array() {
-        Some(batches) if !batches.is_empty() => batches
+    let context: Option<MergeContext> = serde_json::from_str(context_json).ok();
+    let batch_contexts: Vec<String> = match &context {
+        Some(context) if !context.batches.is_empty() => context
+            .batches
             .iter()
             .map(|b| {
-                serde_json::json!({
-                    "keeper_file": context["keeper_file"],
-                    "keeper_outline": context["keeper_outline"],
-                    "keeper_excerpt": context["keeper_excerpt"],
-                    "total_redirects": context["total_redirects"],
-                    "batch_count": context["batch_count"],
-                    "batch_index": b["batch_index"],
-                    "redirect_pages": b["redirect_pages"],
+                serde_json::to_string(&MergeRoundContext {
+                    keeper_file: &context.keeper_file,
+                    keeper_outline: &context.keeper_outline,
+                    keeper_excerpt: &context.keeper_excerpt,
+                    total_redirects: context.total_redirects,
+                    batch_count: context.batch_count,
+                    batch_index: b.batch_index,
+                    redirect_pages: &b.redirect_pages,
                 })
-                .to_string()
+                .unwrap_or_default()
             })
             .collect(),
         // Backward-compatible fallback: no batch structure → single round with
