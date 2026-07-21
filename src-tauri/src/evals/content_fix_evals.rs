@@ -165,9 +165,6 @@ fn check_patch(
     if requested.contains(&"internal_links") {
         match &changes.internal_links {
             Some(links) => {
-                if links.is_empty() {
-                    violations.push("internal_links suggested but patch link list is empty".to_string());
-                }
                 for link in links {
                     if link.anchor_text.trim().is_empty() {
                         violations.push("internal link has empty anchor_text".to_string());
@@ -186,8 +183,11 @@ fn check_patch(
                     }
                 }
             }
-            None => violations
-                .push("internal_links suggested but patch has no internal_links".to_string()),
+            // Omission is accepted: the prompt says "if you are unsure whether a
+            // target exists, do NOT include it", and from the eval's temp project
+            // the model cannot verify slugs (its work_dir is the app repo, not the
+            // fixture project). The hallucination guard above is the real contract.
+            None => {}
         }
     }
 

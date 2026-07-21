@@ -300,7 +300,7 @@ Each case runs the real production step against a live backend, then two check l
 2. **LLM judge** — `rig::evals::LlmScoreMetric` (0–1, threshold 0.7) for quality.
    Skipped when no judge key is set; deterministic checks still gate.
 
-Env config: `EVAL_PROVIDER` (generation, default `kimi` bridge), `EVAL_JUDGE_PROVIDER`
+Env config: `EVAL_PROVIDER` (generation, default `kimi` via the CLI connector), `EVAL_JUDGE_PROVIDER`
 plus `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` for the judge. Add a case by dropping a new
 `case-*.json` into the pipeline's fixture dir — no code changes needed.
 

@@ -11,7 +11,7 @@
 //!    threshold 0.7). Requires a judge provider key; skipped with a note otherwise.
 //!
 //! Config via env:
-//! - `EVAL_PROVIDER` — generation backend: `kimi` (default, bridge), `claude`, `openai`, `ollama`
+//! - `EVAL_PROVIDER` — generation backend: `kimi` (default, CLI connector), `claude`, `openai`, `ollama`
 //! - `EVAL_JUDGE_PROVIDER` — judge provider: `claude`/`anthropic` or `openai`.
 //!   Auto-detected from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` when unset.
 //!
@@ -33,8 +33,8 @@ use crate::rig::provider::LlmBackend;
 pub const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/evals");
 
 /// Global lock serializing live eval suites: cargo runs test fns in parallel by
-/// default, and the Kimi bridge rate-limits concurrent requests. Every live eval
-/// test must hold this lock for its whole run.
+/// default, and concurrent LLM calls get rate-limited (bridge) or spawn competing
+/// CLI subprocesses. Every live eval test must hold this lock for its whole run.
 pub static EVAL_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
     once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
 
@@ -121,17 +121,18 @@ pub fn task_with_artifact(task_type: &str, key: &str, content: String) -> Task {
 
 // ─── Backends ────────────────────────────────────────────────────────────────
 
-/// Resolve the generation backend for evals. Explicit `Some("bridge")` mode keeps
-/// this hermetic (no app DB read in `resolve_backend`). Panics with guidance when
-/// no provider is reachable — eval tests are `#[ignore]`d and expect credentials.
+/// Resolve the generation backend for evals. Explicit `Some("cli")` mode keeps
+/// this hermetic (no app DB read in `resolve_backend`) and routes Kimi through
+/// the native CLI connector (the bridge is no longer used). Panics with guidance
+/// when no provider is reachable — eval tests are `#[ignore]`d and expect credentials.
 pub async fn generation_backend() -> LlmBackend {
     let provider = std::env::var("EVAL_PROVIDER").unwrap_or_else(|_| "kimi".to_string());
-    crate::rig::provider::resolve_backend(&provider, None, None, Some("bridge"))
+    crate::rig::provider::resolve_backend(&provider, None, None, Some("cli"))
         .await
         .unwrap_or_else(|e| {
             panic!(
                 "could not resolve EVAL_PROVIDER={} backend: {}. \
-                 Start the Kimi bridge or set ANTHROPIC_API_KEY/OPENAI_API_KEY and EVAL_PROVIDER.",
+                 Install the kimi CLI (or set ANTHROPIC_API_KEY/OPENAI_API_KEY and EVAL_PROVIDER).",
                 provider, e
             )
         })

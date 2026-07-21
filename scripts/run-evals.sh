@@ -4,7 +4,7 @@
 # Evals call real providers, so they are #[ignore]d in the normal test run.
 #
 # Env:
-#   EVAL_PROVIDER        generation backend: kimi (default, bridge) | claude | openai | ollama
+#   EVAL_PROVIDER        generation backend: kimi (default, CLI connector) | claude | openai | ollama
 #   EVAL_JUDGE_PROVIDER  judge provider: claude | openai (auto-detected from API keys when unset)
 #   ANTHROPIC_API_KEY / OPENAI_API_KEY — required for the LLM judge (deterministic
 #                        contract checks still run and gate without them)
