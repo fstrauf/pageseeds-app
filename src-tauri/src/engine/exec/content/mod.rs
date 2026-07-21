@@ -13,6 +13,7 @@ mod indexing_link;
 ///   - build_review_context        (structured context for LLM)
 ///   - build_review_prompt         (prompt assembly)
 ///   - create_fix_content_article_tasks (auto-spawn follow-up task after content_review)
+///   - release_fix_content_article_in_review (reset in_review when a fix fails or is cancelled)
 ///   - create_cluster_and_link_task    (auto-spawn follow-up task after write_article)
 ///   - exec_fix_content_article_context   (deterministic: load recs + file for per-article fix)
 ///   - exec_fix_content_article_generate  (agentic: structured extraction of ContentFixPatch)
@@ -94,7 +95,15 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 path TEXT NOT NULL,
-                active INTEGER DEFAULT 1
+                content_dir TEXT,
+                site_url TEXT,
+                site_id TEXT,
+                sitemap_url TEXT,
+                project_mode TEXT NOT NULL DEFAULT 'workspace',
+                active INTEGER DEFAULT 1,
+                agent_provider TEXT,
+                seo_provider TEXT,
+                clarity_project_id TEXT
             );
             CREATE TABLE tasks (
                 id TEXT PRIMARY KEY,
@@ -636,5 +645,154 @@ mod tests {
         assert_eq!(exported_article["review_status"], "reviewed");
         assert_eq!(exported_article["review_count"], 1);
         assert!(exported_article.get("last_reviewed_at").is_some());
+    }
+
+    /// Shared setup: project + one published article, a content_review parent
+    /// whose recommendations spawn a single fix_content_article task that marks
+    /// the article in_review. Returns the created fix task.
+    fn spawn_fix_task_marking_article_in_review(
+        conn: &Connection,
+        project_dir: &TempProjectDir,
+        project_path: &str,
+    ) -> Task {
+        create_test_project(conn, "proj1", project_path);
+        insert_test_article(conn, "proj1", 109, "published", None);
+
+        write_recommendations(
+            project_dir.path(),
+            json!({
+                "articles": [
+                    {
+                        "article_id": 109,
+                        "article_title": "Alpha",
+                        "article_file": "./content/109_alpha.mdx",
+                        "suggestions": [{ "category": "title" }]
+                    }
+                ]
+            }),
+        );
+
+        let parent = make_parent_task("proj1");
+        let created = create_fix_content_article_tasks(conn, &parent, project_path);
+        assert_eq!(created.len(), 1);
+        task_store::get_task(conn, &created[0]).unwrap()
+    }
+
+    fn exported_articles(project_dir: &TempProjectDir) -> Vec<serde_json::Value> {
+        let exported: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                project_dir
+                    .path()
+                    .join(".github")
+                    .join("automation")
+                    .join("articles.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        exported["articles"].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn failed_fix_content_article_releases_in_review_and_restores_selectability() {
+        let conn = in_memory_db();
+        let project_dir = TempProjectDir::new();
+        let project_path = project_dir.path().to_string_lossy().to_string();
+        let task = spawn_fix_task_marking_article_in_review(&conn, &project_dir, &project_path);
+
+        // While in_review, the article is excluded from review selection.
+        let raw = exported_articles(&project_dir);
+        assert!(select_priority_articles(&raw, &[], 5).is_empty());
+
+        // Simulate the executor's soft-failure path (verification failed →
+        // task lands in Review, after_task_success never runs).
+        crate::engine::post_actions::after_task_failure(
+            &crate::engine::post_actions::PostTaskContext {
+                conn: &conn,
+                task: &task,
+                project_path: &project_path,
+                progress: &[],
+            },
+        );
+
+        let articles = task_store::list_articles(&conn, "proj1").unwrap();
+        let article = articles.iter().find(|a| a.id == 109).unwrap();
+        assert_eq!(article.review_status, None);
+        assert!(article.review_started_at.is_none());
+        // No review happened — review bookkeeping stays untouched.
+        assert_eq!(article.review_count, 0);
+        assert!(article.last_reviewed_at.is_none());
+
+        // The repo projection no longer carries in_review and the article is
+        // selectable again.
+        let raw = exported_articles(&project_dir);
+        let exported_article = raw.iter().find(|a| a["id"] == 109).unwrap();
+        assert!(exported_article.get("review_status").is_none());
+        let selected = select_priority_articles(&raw, &[], 5);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["id"], 109);
+    }
+
+    #[test]
+    fn cancelled_fix_content_article_releases_in_review() {
+        let conn = in_memory_db();
+        let project_dir = TempProjectDir::new();
+        let project_path = project_dir.path().to_string_lossy().to_string();
+        let task = spawn_fix_task_marking_article_in_review(&conn, &project_dir, &project_path);
+
+        let cancelled = crate::engine::post_actions::cancel_task(&conn, &task.id).unwrap();
+        assert_eq!(cancelled.status, TaskStatus::Cancelled);
+
+        let articles = task_store::list_articles(&conn, "proj1").unwrap();
+        let article = articles.iter().find(|a| a.id == 109).unwrap();
+        assert_eq!(article.review_status, None);
+        assert!(article.review_started_at.is_none());
+
+        let raw = exported_articles(&project_dir);
+        let selected = select_priority_articles(&raw, &[], 5);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0]["id"], 109);
+    }
+
+    #[test]
+    fn release_fix_content_article_in_review_does_not_clobber_reviewed() {
+        let conn = in_memory_db();
+        let project_dir = TempProjectDir::new();
+        let project_path = project_dir.path().to_string_lossy().to_string();
+        create_test_project(&conn, "proj1", &project_path);
+        insert_test_article(&conn, "proj1", 109, "published", Some("reviewed"));
+        conn.execute(
+            "UPDATE articles SET review_count = 1, last_reviewed_at = ?1
+             WHERE id = 109 AND project_id = 'proj1'",
+            [chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let mut task = make_parent_task("proj1");
+        task.task_type = "fix_content_article".to_string();
+        task.artifacts = vec![crate::models::task::TaskArtifact {
+            key: "recommendations_109".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("content_review".to_string()),
+            content: Some(
+                serde_json::to_string(&json!({
+                    "article_id": 109,
+                    "article_title": "Alpha",
+                    "article_file": "./content/109_alpha.mdx",
+                    "suggestions": []
+                }))
+                .unwrap(),
+            ),
+        }];
+
+        let released = release_fix_content_article_in_review(&conn, &task, &project_path).unwrap();
+        assert_eq!(released, None);
+
+        let articles = task_store::list_articles(&conn, "proj1").unwrap();
+        let article = articles.iter().find(|a| a.id == 109).unwrap();
+        assert_eq!(article.review_status.as_deref(), Some("reviewed"));
+        assert_eq!(article.review_count, 1);
+        assert!(article.last_reviewed_at.is_some());
     }
 }

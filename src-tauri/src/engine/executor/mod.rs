@@ -310,6 +310,15 @@ pub async fn execute_task_with_token(
                 progress: &progress,
             },
         ));
+    } else {
+        crate::engine::post_actions::after_task_failure(
+            &crate::engine::post_actions::PostTaskContext {
+                conn,
+                task: &task,
+                project_path: &project_path,
+                progress: &progress,
+            },
+        );
     }
     let follow_up_tasks: Vec<FollowUpTask> = follow_up_ids
         .iter()

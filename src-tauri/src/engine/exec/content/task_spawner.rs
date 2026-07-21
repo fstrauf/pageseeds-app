@@ -158,6 +158,39 @@ pub(crate) fn mark_fix_content_article_reviewed(
     }
 }
 
+/// Release an article's `in_review` flag when its fix task did not complete
+/// successfully (soft-failed verification or cancellation). Resets the review
+/// state to the pre-review default (NULL, matching how articles ship before any
+/// review) so the article becomes selectable by `select_priority_articles`
+/// again. `last_reviewed_at` and `review_count` are deliberately untouched —
+/// no review happened.
+///
+/// Only releases when the article is still `in_review`, so a `reviewed` state
+/// written by another successful fix is never clobbered.
+pub(crate) fn release_fix_content_article_in_review(
+    conn: &Connection,
+    task: &Task,
+    project_path: &str,
+) -> crate::error::Result<Option<i64>> {
+    let Some(article_id) = fix_content_article_id(task) else {
+        return Ok(None);
+    };
+
+    let rows = conn.execute(
+        "UPDATE articles
+         SET review_status = NULL, review_started_at = NULL
+         WHERE id = ?1 AND project_id = ?2 AND review_status = 'in_review'",
+        rusqlite::params![article_id, &task.project_id],
+    )?;
+
+    if rows > 0 {
+        sync_article_review_state_to_repo(conn, &task.project_id, project_path)?;
+        Ok(Some(article_id))
+    } else {
+        Ok(None)
+    }
+}
+
 /// After a successful content review, create individual `fix_content_article` tasks
 /// for each article in recommendations.json.
 ///

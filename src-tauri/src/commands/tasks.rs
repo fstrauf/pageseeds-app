@@ -117,11 +117,7 @@ pub fn delete_task(state: State<'_, AppState>, id: String) -> Result<(), String>
 #[tauri::command]
 pub fn cancel_task(state: State<'_, AppState>, id: String) -> Result<Task, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    Ok(task_store::update_task_status(
-        &db,
-        &id,
-        TaskStatus::Cancelled,
-    )?)
+    Ok(crate::engine::post_actions::cancel_task(&db, &id)?)
 }
 
 /// Create content tasks from selected keywords and mark the research task as done.

@@ -9,7 +9,7 @@ use crate::engine::task_store;
 use crate::engine::workflows::StepResult;
 use crate::engine::workflows::{StepKind, WorkflowStep};
 use crate::models::ctr::CtrOutcome;
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskStatus};
 
 // ─── Post-step context ───────────────────────────────────────────────────────
 
@@ -637,6 +637,48 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
     retry_blocked_ihc_tasks(ctx, &mut follow_up_ids);
 
     follow_up_ids
+}
+
+/// Run domain-specific side effects after a task completes with one or more
+/// failed steps (`all_ok == false`). Symmetric counterpart to
+/// [`after_task_success`]; the executor calls it from the failure branch.
+pub fn after_task_failure(ctx: &PostTaskContext<'_>) {
+    // A failed fix_content_article (soft-failed verification lands the task in
+    // Review, so after_task_success never runs) must release the article's
+    // in_review flag — otherwise the article is permanently excluded from
+    // select_priority_articles and silently leaves the review pipeline.
+    if ctx.task.task_type == "fix_content_article" {
+        if let Err(e) = crate::engine::exec::content::release_fix_content_article_in_review(
+            ctx.conn,
+            ctx.task,
+            ctx.project_path,
+        ) {
+            log::warn!(
+                "[content_review] failed to release article in_review after fix failure: {}",
+                e
+            );
+        }
+    }
+}
+
+/// Cancel a task and run domain-specific cancel side effects.
+///
+/// Cancellation shares its side effects with [`after_task_failure`] (a
+/// cancelled fix_content_article releases the article's in_review flag), so
+/// future failure-cleanup logic automatically applies to cancellations too.
+pub fn cancel_task(conn: &Connection, task_id: &str) -> crate::error::Result<Task> {
+    let task = task_store::update_task_status(conn, task_id, TaskStatus::Cancelled)?;
+
+    if let Ok(project) = task_store::get_project(conn, &task.project_id) {
+        after_task_failure(&PostTaskContext {
+            conn,
+            task: &task,
+            project_path: &project.path,
+            progress: &[],
+        });
+    }
+
+    Ok(task)
 }
 
 /// When a helper task (collect_gsc, cluster_and_link, content_audit) completes,
