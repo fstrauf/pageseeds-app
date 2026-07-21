@@ -12,7 +12,6 @@ mod indexing_link;
 ///   - select_priority_articles    (scoring formula)
 ///   - build_review_context        (structured context for LLM)
 ///   - build_review_prompt         (prompt assembly)
-///   - create_fix_content_article_tasks (legacy helper; selection path is content_review_selection)
 ///   - release_fix_content_article_in_review (reset in_review when a fix fails or is cancelled)
 ///   - create_cluster_and_link_task    (auto-spawn follow-up task after write_article)
 ///   - exec_fix_content_article_context   (deterministic: load recs + file for per-article fix)
@@ -261,16 +260,6 @@ mod tests {
         .unwrap();
     }
 
-    fn idempotency_keys(conn: &Connection) -> Vec<String> {
-        let mut stmt = conn
-            .prepare("SELECT key FROM task_idempotency_keys ORDER BY key")
-            .unwrap();
-        stmt.query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<String>>>()
-            .unwrap()
-    }
-
     #[test]
     fn recommendation_article_id_accepts_strings_and_numbers() {
         assert_eq!(
@@ -420,159 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn create_fix_content_article_tasks_uses_numeric_article_ids_in_idempotency_keys() {
-        let conn = in_memory_db();
-        let project_dir = TempProjectDir::new();
-        let project_path = project_dir.path().to_string_lossy().to_string();
-        create_test_project(&conn, "proj1", &project_path);
-        insert_test_article(&conn, "proj1", 109, "published", None);
-        insert_test_article(&conn, "proj1", 111, "published", None);
-
-        write_recommendations(
-            project_dir.path(),
-            json!({
-                "articles": [
-                    {
-                        "article_id": 109,
-                        "article_title": "Alpha",
-                        "article_file": "./content/109_alpha.mdx",
-                        "suggestions": [{ "category": "title" }]
-                    },
-                    {
-                        "article_id": 111,
-                        "article_title": "Beta",
-                        "article_file": "./content/111_beta.mdx",
-                        "suggestions": [{ "category": "meta_description" }, { "category": "cta" }]
-                    }
-                ]
-            }),
-        );
-
-        let parent = make_parent_task("proj1");
-        let created = create_fix_content_article_tasks(&conn, &parent, &project_path);
-
-        assert_eq!(created.len(), 2);
-        assert_eq!(
-            idempotency_keys(&conn),
-            vec![
-                "fix_content_article:proj1:109".to_string(),
-                "fix_content_article:proj1:111".to_string(),
-            ]
-        );
-
-        let tasks = task_store::list_tasks(&conn, "proj1").unwrap();
-        assert_eq!(tasks.len(), 2);
-        assert!(tasks
-            .iter()
-            .all(|task| task.task_type == "fix_content_article"));
-        assert!(tasks.iter().all(|task| {
-            task.artifacts.iter().any(|artifact| {
-                artifact.key == "recommendations_109" || artifact.key == "recommendations_111"
-            })
-        }));
-
-        let articles = task_store::list_articles(&conn, "proj1").unwrap();
-        assert!(articles
-            .iter()
-            .all(|article| article.review_status.as_deref() == Some("in_review")));
-
-        let exported: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(
-                project_dir
-                    .path()
-                    .join(".github")
-                    .join("automation")
-                    .join("articles.json"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let exported_articles = exported["articles"].as_array().unwrap();
-        assert!(exported_articles
-            .iter()
-            .all(|article| article["review_status"] == "in_review"));
-    }
-
-    #[test]
-    fn create_fix_content_article_tasks_gates_fixes_behind_user_enqueue() {
-        let conn = in_memory_db();
-        let project_dir = TempProjectDir::new();
-        let project_path = project_dir.path().to_string_lossy().to_string();
-        create_test_project(&conn, "proj1", &project_path);
-        insert_test_article(&conn, "proj1", 109, "published", None);
-
-        write_recommendations(
-            project_dir.path(),
-            json!({
-                "articles": [
-                    {
-                        "article_id": 109,
-                        "article_title": "Alpha",
-                        "article_file": "./content/109_alpha.mdx",
-                        "suggestions": [{ "category": "title" }]
-                    }
-                ]
-            }),
-        );
-
-        let parent = make_parent_task("proj1");
-        let created = create_fix_content_article_tasks(&conn, &parent, &project_path);
-        assert_eq!(created.len(), 1);
-
-        // A completed content_review must leave fix tasks pending explicit
-        // user action: UserEnqueue policy, Todo status — never auto-run.
-        let tasks = task_store::list_tasks(&conn, "proj1").unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert!(tasks
-            .iter()
-            .all(|task| task.run_policy == TaskRunPolicy::UserEnqueue));
-        assert!(tasks.iter().all(|task| task.status == TaskStatus::Todo));
-    }
-
-    #[test]
-    fn create_fix_content_article_tasks_skips_invalid_and_duplicate_article_ids() {
-        let conn = in_memory_db();
-        let project_dir = TempProjectDir::new();
-        let project_path = project_dir.path().to_string_lossy().to_string();
-        create_test_project(&conn, "proj1", &project_path);
-        insert_test_article(&conn, "proj1", 109, "published", None);
-
-        write_recommendations(
-            project_dir.path(),
-            json!({
-                "articles": [
-                    {
-                        "article_id": 109,
-                        "article_title": "Alpha",
-                        "article_file": "./content/109_alpha.mdx",
-                        "suggestions": [{ "category": "title" }]
-                    },
-                    {
-                        "article_id": 109,
-                        "article_title": "Alpha Duplicate",
-                        "article_file": "./content/109_alpha_dup.mdx",
-                        "suggestions": [{ "category": "cta" }]
-                    },
-                    {
-                        "article_title": "Missing ID",
-                        "article_file": "./content/missing_id.mdx",
-                        "suggestions": [{ "category": "faq" }]
-                    }
-                ]
-            }),
-        );
-
-        let parent = make_parent_task("proj1");
-        let created = create_fix_content_article_tasks(&conn, &parent, &project_path);
-
-        assert_eq!(created.len(), 1);
-        assert_eq!(
-            idempotency_keys(&conn),
-            vec!["fix_content_article:proj1:109".to_string()]
-        );
-    }
-
-    #[test]
     fn mark_fix_content_article_reviewed_updates_article_state_and_export() {
         let conn = in_memory_db();
         let project_dir = TempProjectDir::new();
@@ -648,8 +484,8 @@ mod tests {
     }
 
     /// Shared setup: project + one published article, a content_review parent
-    /// whose recommendations spawn a single fix_content_article task that marks
-    /// the article in_review. Returns the created fix task.
+    /// whose user-selected recommendations spawn a single fix_content_article
+    /// task that marks the article in_review. Returns the created fix task.
     fn spawn_fix_task_marking_article_in_review(
         conn: &Connection,
         project_dir: &TempProjectDir,
@@ -666,16 +502,34 @@ mod tests {
                         "article_id": 109,
                         "article_title": "Alpha",
                         "article_file": "./content/109_alpha.mdx",
-                        "suggestions": [{ "category": "title" }]
+                        "suggestions": [{
+                            "category": "title",
+                            "current": "a",
+                            "proposed": "b",
+                            "reason": "r"
+                        }]
                     }
                 ]
             }),
         );
 
         let parent = make_parent_task("proj1");
-        let created = create_fix_content_article_tasks(conn, &parent, project_path);
+        task_store::create_task(conn, &parent).unwrap();
+        let art = crate::engine::content_review_selection::build_and_store_proposals_artifact(
+            conn,
+            &parent,
+            project_path,
+        )
+        .unwrap();
+        assert_eq!(art.proposals.len(), 1);
+        let created = crate::engine::content_review_selection::spawn_from_selection(
+            conn,
+            &parent.id,
+            &[art.proposals[0].id.clone()],
+        )
+        .unwrap();
         assert_eq!(created.len(), 1);
-        task_store::get_task(conn, &created[0]).unwrap()
+        created.into_iter().next().unwrap()
     }
 
     fn exported_articles(project_dir: &TempProjectDir) -> Vec<serde_json::Value> {
