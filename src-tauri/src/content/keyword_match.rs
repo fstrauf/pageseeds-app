@@ -78,6 +78,54 @@ pub fn keyword_occurrences(text_lower: &str, keyword: &str) -> usize {
     total / tokens.len()
 }
 
+/// Maximum content words kept from a backfilled GSC query. Longer phrases
+/// can never appear in a 55-char title, so fix-pipeline keyword validation
+/// would be unsatisfiable (issue #74).
+const BACKFILLED_KEYWORD_MAX_WORDS: usize = 5;
+
+/// Normalize a GSC query into a titleable target keyword for backfill.
+///
+/// A query is not a keyword: real top-clicked queries are long natural-
+/// language phrases, branded/navigational terms, or scraped Q&A junk
+/// (`3. joelle wants … * 1 point 3 months 9 months`). Normalization:
+/// lowercase + strip quotes (via `normalize_keyword`), reject quiz/PAQ junk
+/// (leading enumeration like `3. `, points markers like `* 1 point`) and
+/// queries containing any of the project's brand tokens, drop stopwords,
+/// cap at 5 content words. Returns `None` when nothing titleable remains —
+/// the caller then leaves `target_keyword` empty rather than storing junk.
+pub fn normalize_backfilled_keyword(query: &str, brand_tokens: &[String]) -> Option<String> {
+    let normalized = normalize_keyword(query);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    // Scraped quiz / Q&A junk — nothing titleable survives, reject outright.
+    let leading_enumeration = regex::Regex::new(r"^\d{1,2}[.)]\s").unwrap();
+    let points_marker = regex::Regex::new(r"\*+\s*\d+\s*points?\b").unwrap();
+    if leading_enumeration.is_match(&normalized) || points_marker.is_match(&normalized) {
+        return None;
+    }
+
+    // Branded / navigational queries name the project — not targetable keywords.
+    let brands: Vec<String> = brand_tokens.iter().map(|t| t.to_lowercase()).collect();
+    if !brands.is_empty()
+        && normalized
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|token| !token.is_empty() && brands.iter().any(|b| b == token))
+    {
+        return None;
+    }
+
+    let content_words: Vec<String> = significant_tokens(&normalized)
+        .into_iter()
+        .take(BACKFILLED_KEYWORD_MAX_WORDS)
+        .collect();
+    if content_words.is_empty() {
+        return None;
+    }
+    Some(content_words.join(" "))
+}
+
 /// Whole-word occurrence count of a single token (substring matching would
 /// count "50" inside "500" or "put" inside "computer").
 fn token_match_count(text_lower: &str, token: &str) -> usize {
@@ -158,5 +206,63 @@ mod tests {
     fn empty_keyword_never_matches() {
         assert!(!keyword_present("anything", ""));
         assert_eq!(keyword_occurrences("anything", ""), 0);
+    }
+
+    #[test]
+    fn backfill_long_query_with_stopwords_capped_at_five_words() {
+        let brand: Vec<String> = vec![];
+        // 8-word natural-language query → stopwords dropped, capped at 5.
+        assert_eq!(
+            normalize_backfilled_keyword(
+                "adding custom categories to google sheets budget template",
+                &brand
+            ),
+            Some("adding custom categories google sheets".to_string())
+        );
+        // Quotes stripped before normalization.
+        assert_eq!(
+            normalize_backfilled_keyword("\"iron condor\" adjustments", &brand),
+            Some("iron condor adjustments".to_string())
+        );
+    }
+
+    #[test]
+    fn backfill_quiz_question_query_returns_none() {
+        let brand: Vec<String> = vec![];
+        // Real scraped quiz question observed on the expense project.
+        assert_eq!(
+            normalize_backfilled_keyword(
+                "3. joelle wants to have an emergency fund… * 1 point 3 months 9 months 24 months 30 months",
+                &brand
+            ),
+            None
+        );
+        // Points marker alone also marks the query as junk.
+        assert_eq!(
+            normalize_backfilled_keyword("how many months of expenses * 1 point", &brand),
+            None
+        );
+    }
+
+    #[test]
+    fn backfill_brand_query_returns_none() {
+        let brand = vec!["expense".to_string(), "sorted".to_string()];
+        assert_eq!(normalize_backfilled_keyword("expense sorted", &brand), None);
+        assert_eq!(
+            normalize_backfilled_keyword("expense tracker spreadsheet", &brand),
+            None
+        );
+        // Non-brand queries survive.
+        assert_eq!(
+            normalize_backfilled_keyword("budget spreadsheet template", &brand),
+            Some("budget spreadsheet template".to_string())
+        );
+    }
+
+    #[test]
+    fn backfill_stopword_only_query_returns_none() {
+        let brand: Vec<String> = vec![];
+        assert_eq!(normalize_backfilled_keyword("how to what is", &brand), None);
+        assert_eq!(normalize_backfilled_keyword("", &brand), None);
     }
 }

@@ -191,24 +191,15 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         });
     }
 
-    // Keyword placement checks — verify each word of the target keyword appears
-    // in the generated text. Using word-level matching so a keyword like
-    // "Butterfly Spread Options: Complete DTE & Strike Guide" succeeds if all
-    // individual words appear, rather than requiring the full string verbatim.
-    //
-    // Skip keyword validation when the keyword is excessively long (>10
-    // significant tokens). A fifty-word question is not a keyword, it is a
-    // misclassified full question from the content_review pipeline.
+    // Keyword placement checks — verify the target keyword appears in the
+    // generated text via the canonical tolerant matcher
+    // (`content::keyword_match::keyword_present`): verbatim phrase first,
+    // all-significant-tokens fallback for long keywords. Backfilled keywords
+    // are normalized to titleable length at the GSC sync boundary (issue
+    // #74), so no length-based skip is needed here.
     let target_kw = load_target_keyword(task);
-    let kw_is_viable = !target_kw.is_empty()
-        && target_kw
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-            .filter(|w| is_significant_keyword_token(w))
-            .count()
-            <= 10;
 
-    if !target_kw.is_empty() && kw_is_viable {
+    if !target_kw.is_empty() {
         let kw_lower = target_kw.to_lowercase();
 
         // H1 keyword check
@@ -227,14 +218,14 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
                         })
                 })
                 .unwrap_or_default();
-            if keyword_words_present(&kw_lower, &h1_text) {
+            if crate::content::keyword_match::keyword_present(&h1_text, &kw_lower) {
                 verified_count += 1;
                 fixes.push(ContentFixVerifiedItem {
                     category: "h1_keyword".to_string(),
                     status: "verified".to_string(),
                     detail: Some("Target keyword found in H1".to_string()),
                     actual: Some(h1_text),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             } else {
                 failed_count += 1;
@@ -243,7 +234,7 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
                     status: "failed".to_string(),
                     detail: Some("Target keyword NOT found in H1 after fix".to_string()),
                     actual: Some(h1_text),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             }
         }
@@ -251,14 +242,14 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         // Meta description keyword check
         if patch.changes.description.is_some() {
             let meta = get_scalar("description").to_lowercase();
-            if keyword_words_present(&kw_lower, &meta) {
+            if crate::content::keyword_match::keyword_present(&meta, &kw_lower) {
                 verified_count += 1;
                 fixes.push(ContentFixVerifiedItem {
                     category: "meta_desc_keyword".to_string(),
                     status: "verified".to_string(),
                     detail: Some("Target keyword found in meta description".to_string()),
                     actual: Some(meta),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             } else {
                 failed_count += 1;
@@ -267,7 +258,7 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
                     status: "failed".to_string(),
                     detail: Some("Target keyword NOT found in meta description after fix".to_string()),
                     actual: Some(meta),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             }
         }
@@ -275,14 +266,14 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         // Title keyword check
         if patch.changes.title.is_some() {
             let title_lower = get_scalar("title").to_lowercase();
-            if keyword_words_present(&kw_lower, &title_lower) {
+            if crate::content::keyword_match::keyword_present(&title_lower, &kw_lower) {
                 verified_count += 1;
                 fixes.push(ContentFixVerifiedItem {
                     category: "title_keyword".to_string(),
                     status: "verified".to_string(),
                     detail: Some("Target keyword found in title".to_string()),
                     actual: Some(title_lower),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             } else {
                 failed_count += 1;
@@ -291,7 +282,7 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
                     status: "failed".to_string(),
                     detail: Some("Target keyword NOT found in title after fix".to_string()),
                     actual: Some(title_lower),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             }
         }
@@ -301,14 +292,14 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
             let first_para = crate::content::cleaner::find_first_paragraph_range(body)
                 .map(|(start, end)| body[start..end].trim().to_lowercase())
                 .unwrap_or_default();
-            if keyword_words_present(&kw_lower, &first_para) {
+            if crate::content::keyword_match::keyword_present(&first_para, &kw_lower) {
                 verified_count += 1;
                 fixes.push(ContentFixVerifiedItem {
                     category: "keyword_first_para".to_string(),
                     status: "verified".to_string(),
                     detail: Some("Target keyword found in first paragraph".to_string()),
                     actual: Some(first_para),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             } else {
                 failed_count += 1;
@@ -317,7 +308,7 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
                     status: "failed".to_string(),
                     detail: Some("Target keyword NOT found in first paragraph after fix".to_string()),
                     actual: Some(first_para),
-                    expected: Some(format!("contains (word-level): {}", target_kw)),
+                    expected: Some(format!("contains (keyword_match): {}", target_kw)),
                 });
             }
         }
@@ -400,59 +391,24 @@ fn load_target_keyword(task: &Task) -> String {
         .unwrap_or_default()
 }
 
-/// Check whether all significant words of the keyword appear in the target text.
-/// Splits the keyword into words, strips punctuation, filters out noise
-/// (single chars, conjunctions), and requires every remaining word to be
-/// found in the target.
-pub(crate) fn keyword_words_present(keyword: &str, text: &str) -> bool {
-    keyword
-        .split_whitespace()
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-        .filter(|w| is_significant_keyword_token(w))
-        .all(|w| text.contains(w))
-}
-
-/// Return true when a token is a significant keyword word, not a
-/// conjunction, stopword, or single character.
-pub(crate) fn is_significant_keyword_token(w: &str) -> bool {
-    if w.len() <= 1 {
-        return false;
-    }
-    match w {
-        "vs" | "and" | "or" | "the" | "a" | "an" | "in" | "of" | "to" | "for" | "&" => false,
-        _ => true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_keyword_words_present_with_quoted_vs_keyword() {
-        // "vs" is a conjunction, not a contentful keyword word.
-        // The check should succeed when all CONTENT words are present
+    fn test_keyword_present_with_quoted_vs_keyword() {
+        // "vs" is a stopword in the canonical matcher, not a contentful
+        // keyword word. The check succeeds when all CONTENT words are present
         // even if the intro uses "are two strategies" instead of "vs".
         let kw = r#""cash-secured put" vs "naked put""#;
         let kw_lower = kw.to_lowercase();
 
         let first_para = "naked puts and cash-secured puts are two popular options strategies, but they differ dramatically in capital requirements and risk. a cash-secured put requires holding the full assignment amount in cash, limiting risk to the strike price minus premium. a naked put uses margin instead, requiring only a fraction of the capital but exposing you to margin calls and amplified losses if the stock drops sharply.";
 
-        assert!(keyword_words_present(&kw_lower, first_para));
-    }
-
-    #[test]
-    fn test_keyword_words_present_with_conjunction_keywords() {
-        // "and" / "or" should also be treated as conjunctions
-        assert!(is_significant_keyword_token("coffee"));
-        assert!(!is_significant_keyword_token("vs"));
-        assert!(!is_significant_keyword_token("and"));
-        assert!(!is_significant_keyword_token("or"));
-        assert!(!is_significant_keyword_token("the"));
-        assert!(!is_significant_keyword_token("a"));
-        assert!(!is_significant_keyword_token("of"));
-        assert!(!is_significant_keyword_token("&"));
-        assert!(!is_significant_keyword_token("x")); // single char
+        assert!(crate::content::keyword_match::keyword_present(
+            first_para,
+            &kw_lower
+        ));
     }
 
     #[test]
@@ -480,7 +436,7 @@ more text here.";
             "first_para should contain 'naked', got: '{}'", para
         );
 
-        let result = keyword_words_present(&kw_lower, &para_lower);
-        assert!(result, "keyword_words_present should return true for the full paragraph from find_first_paragraph_range. para='{}'", para);
+        let result = crate::content::keyword_match::keyword_present(&para_lower, &kw_lower);
+        assert!(result, "keyword_present should return true for the full paragraph from find_first_paragraph_range. para='{}'", para);
     }
 }

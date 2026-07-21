@@ -9,10 +9,10 @@
 use serde::Deserialize;
 
 use super::{finish_suite, generation_backend, judge_score, list_cases, load_fixture, temp_project_with_mdx, task_with_artifact, CaseReport};
+use crate::content::keyword_match::keyword_present;
 use crate::content::ops::count_words;
 use crate::engine::exec::audit_health;
 use crate::engine::exec::content::exec_fix_content_article_generate_with_backend;
-use crate::engine::exec::content::keyword_words_present;
 use crate::models::content_review::ContentFixPatch;
 
 const JUDGE_CRITERIA: &[&str] = &[
@@ -89,8 +89,10 @@ fn check_patch(
 
     let changes = &patch.changes;
 
-    // Word-level keyword presence, identical to the production verifier
-    // (`fix_verify.rs`): every significant keyword token must appear, so
+    // Keyword presence via the canonical tolerant matcher
+    // (`content::keyword_match::keyword_present`), identical to the
+    // production verifier (`fix_verify.rs`): verbatim phrase first,
+    // all-significant-tokens fallback for long keywords — so
     // "companion planting in containers" satisfies "companion planting containers".
     let kw_lower = keyword.to_lowercase();
 
@@ -106,7 +108,7 @@ fn check_patch(
                     ));
                 }
                 if !keyword.is_empty()
-                    && !keyword_words_present(&kw_lower, &title.to_lowercase())
+                    && !keyword_present(&title.to_lowercase(), &kw_lower)
                 {
                     violations.push(format!("new title missing target keyword \"{}\"", keyword));
                 }
@@ -128,7 +130,7 @@ fn check_patch(
                     ));
                 }
                 if !keyword.is_empty()
-                    && !keyword_words_present(&kw_lower, &desc.to_lowercase())
+                    && !keyword_present(&desc.to_lowercase(), &kw_lower)
                 {
                     violations
                         .push(format!("new description missing target keyword \"{}\"", keyword));
@@ -143,7 +145,7 @@ fn check_patch(
         match &changes.h1 {
             Some(h1) => {
                 if !keyword.is_empty()
-                    && !keyword_words_present(&kw_lower, &h1.to_lowercase())
+                    && !keyword_present(&h1.to_lowercase(), &kw_lower)
                 {
                     violations.push(format!("new h1 missing target keyword \"{}\"", keyword));
                 }
@@ -160,7 +162,7 @@ fn check_patch(
                     violations.push(format!("new intro is {} words (allowed 40-60)", words));
                 }
                 if !keyword.is_empty()
-                    && !keyword_words_present(&kw_lower, &intro.to_lowercase())
+                    && !keyword_present(&intro.to_lowercase(), &kw_lower)
                 {
                     violations.push(format!("new intro missing target keyword \"{}\"", keyword));
                 }

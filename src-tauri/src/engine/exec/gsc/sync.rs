@@ -348,6 +348,23 @@ pub(crate) fn exec_gsc_sync_articles(
     let mut query_matched = 0usize;
     let mut target_keyword_updated = 0usize;
 
+    // Brand tokens for backfill filtering (project name + id, tokenized):
+    // navigational queries naming the project are not targetable keywords.
+    let brand_tokens: Vec<String> = {
+        let project_name: String = db
+            .query_row(
+                "SELECT name FROM projects WHERE id = ?1",
+                rusqlite::params![task.project_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        format!("{} {}", project_name, task.project_id)
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| t.len() >= 2)
+            .map(|t| t.to_lowercase())
+            .collect()
+    };
+
     for (article_id, queries) in &mut queries_by_article {
         // Sort by clicks descending so top query is first
         queries.sort_by(|a, b| {
@@ -389,14 +406,29 @@ pub(crate) fn exec_gsc_sync_articles(
             query_matched += 1;
         }
 
-        // Update target_keyword from top query if currently empty
-        if let Ok(top_query) = queries.first().map(|q| q.query.as_str()).ok_or("") {
-            if !top_query.is_empty() {
+        // NOTE: Backfill normalization contract (issue #74) — a GSC query is
+        // not a keyword. Every backfilled target_keyword passes through
+        // `content::keyword_match::normalize_backfilled_keyword`, which
+        // lowercases, strips quotes, rejects quiz/PAQ junk and branded/
+        // navigational queries (`None` → the keyword stays empty), drops
+        // stopwords, and caps at 5 content words. Never write the raw query
+        // verbatim: over-long phrases make fix-pipeline keyword validation
+        // unsatisfiable and pollute territory analysis, research dedup, and
+        // cannibalization matching.
+        if let Some(top_query) = queries
+            .first()
+            .map(|q| q.query.as_str())
+            .filter(|q| !q.is_empty())
+        {
+            if let Some(keyword) = crate::content::keyword_match::normalize_backfilled_keyword(
+                top_query,
+                &brand_tokens,
+            ) {
                 let updated = db.execute(
                     "UPDATE articles SET target_keyword = ?1
                      WHERE project_id = ?2 AND id = ?3
                        AND (target_keyword IS NULL OR target_keyword = '')",
-                    rusqlite::params![top_query, task.project_id, article_id],
+                    rusqlite::params![keyword, task.project_id, article_id],
                 );
                 if let Ok(rows) = updated {
                     if rows > 0 {

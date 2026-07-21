@@ -580,28 +580,12 @@ fn validate_patch_before_write(
     let intro_max = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
     let has_faq = crate::engine::exec::audit_health::has_frontmatter_faq(original_content);
 
-    // If the target keyword is excessively long (>10 significant tokens), it is
-    // likely a full question or description mistakenly stored as a keyword. Skip
-    // keyword placement checks — requiring fifty words in a 55-char title is
-    // impossible. The upstream content_review pipeline should be fixed for this.
-    let kw_for_check: Option<String> = target_keyword.and_then(|kw| {
-        let significant_count = kw
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-            .filter(|w| crate::engine::exec::content::fix_verify::is_significant_keyword_token(w))
-            .count();
-        if significant_count > 10 {
-            log::warn!(
-                "[fix_content_generate] Skipping keyword validation: keyword '{}' has {} significant tokens (>10). \
-                 This is likely a full question or description, not a keyword. The content_review pipeline \
-                 should be updated to extract shorter target keywords.",
-                kw, significant_count
-            );
-            None
-        } else {
-            Some(kw.to_lowercase())
-        }
-    });
+    // Keywords are normalized to titleable length at the GSC backfill
+    // boundary (issue #74), so no length-based skip is needed here — an
+    // empty keyword simply disables the keyword placement checks.
+    let kw_for_check: Option<String> = target_keyword
+        .map(|kw| kw.trim().to_lowercase())
+        .filter(|kw| !kw.is_empty());
 
     if let Some(ref t) = patch.changes.title {
         if t.chars().count() > title_max {
@@ -612,10 +596,7 @@ fn validate_patch_before_write(
             ));
         }
         if let Some(ref kw) = kw_for_check {
-            if !crate::engine::exec::content::fix_verify::keyword_words_present(
-                kw,
-                &t.to_lowercase(),
-            ) {
+            if !crate::content::keyword_match::keyword_present(&t.to_lowercase(), kw) {
                 errors.push(format!(
                     "title does not contain target keyword '{}'",
                     kw
@@ -633,10 +614,7 @@ fn validate_patch_before_write(
             ));
         }
         if let Some(ref kw) = kw_for_check {
-            if !crate::engine::exec::content::fix_verify::keyword_words_present(
-                kw,
-                &d.to_lowercase(),
-            ) {
+            if !crate::content::keyword_match::keyword_present(&d.to_lowercase(), kw) {
                 errors.push(format!(
                     "description does not contain target keyword '{}'",
                     kw
@@ -654,10 +632,7 @@ fn validate_patch_before_write(
             ));
         }
         if let Some(ref kw) = kw_for_check {
-            if !crate::engine::exec::content::fix_verify::keyword_words_present(
-                kw,
-                &intro.to_lowercase(),
-            ) {
+            if !crate::content::keyword_match::keyword_present(&intro.to_lowercase(), kw) {
                 errors.push(format!(
                     "intro does not contain target keyword '{}'",
                     kw
