@@ -32,6 +32,27 @@ pub enum LatestRawPolicy {
     Clear,
 }
 
+/// A declarative prompt section an agentic step wants appended to its prompt.
+///
+/// Issue #4 stage C: prompt-assembly policy lives in the step plan, not in
+/// `exec_agentic`. Handlers declare which sections a step needs;
+/// `exec_agentic` iterates this list and resolves each section's content from
+/// runtime context (content dir, target path, hub briefs). Sections are
+/// assembled in declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PromptSection {
+    /// Publish-date, file-format, link-format, and target-file directives for
+    /// content tasks. `new_article` selects the "required date + exact target
+    /// path" variant (new articles) over the "preserve date + approximate
+    /// filename hint" variant (optimize/fix tasks), and also drives the
+    /// executor-write fallback for text-only providers.
+    ContentDirectives { new_article: bool },
+    /// Hub spoke context (briefs gathered from SQLite) plus the hub page
+    /// requirements block. Also suppresses the bulky `cannibalization_strategy`
+    /// artifact from the generic task-artifacts section.
+    HubDirectives,
+}
+
 /// A single step in a workflow plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowStep {
@@ -40,6 +61,10 @@ pub struct WorkflowStep {
     pub params: std::collections::HashMap<String, String>,
     pub optional: bool,
     pub latest_raw_policy: LatestRawPolicy,
+    /// Prompt sections this step declares for `exec_agentic` to assemble.
+    /// Empty for steps whose prompt is just the skill body + artifacts.
+    #[serde(default)]
+    pub prompt_sections: Vec<PromptSection>,
 }
 
 impl WorkflowStep {
@@ -57,6 +82,7 @@ impl WorkflowStep {
             params: Default::default(),
             optional: false,
             latest_raw_policy,
+            prompt_sections: Vec::new(),
         }
     }
 
@@ -78,6 +104,11 @@ impl WorkflowStep {
 
     pub fn with_latest_raw_policy(mut self, policy: LatestRawPolicy) -> Self {
         self.latest_raw_policy = policy;
+        self
+    }
+
+    pub fn with_prompt_section(mut self, section: PromptSection) -> Self {
+        self.prompt_sections.push(section);
         self
     }
 }

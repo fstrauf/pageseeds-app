@@ -1,11 +1,14 @@
 //! Step execution helpers used by the executor for agentic steps.
 //!
-//! Stage C of issue #4 refactored `exec_agentic`'s boolean lattice into
-//! discrete prompt-section builders. Each task-type-specific concern is
-//! a self-contained function that checks its own applicability.
+//! Stage C of issue #4 replaced `exec_agentic`'s boolean lattice with
+//! per-step [`PromptSection`] declarations: handlers attach the prompt
+//! sections a step needs to its `WorkflowStep`, and `exec_agentic` is a
+//! generic assembler that iterates the declared sections. The section
+//! builders below (`content_directives`, `hub_directives`) own the actual
+//! section text.
 
 use crate::engine::project_paths::ProjectPaths;
-use crate::engine::workflows::{step_params, StepResult, WorkflowStep};
+use crate::engine::workflows::{step_params, PromptSection, StepResult, WorkflowStep};
 use crate::models::task::Task;
 
 // Helpers relocated to `content/naming.rs` (Stage A.1).
@@ -30,6 +33,11 @@ fn is_content_task(task: &Task) -> bool {
     )
 }
 
+/// New-article task types. Used by `content_directives` to select the
+/// "Publish Date (Required)" variant over "(Preserve)". Whether the builder
+/// runs at all — and the target-path/fallback behavior — is driven by the
+/// step's declared `PromptSection::ContentDirectives { new_article }`, which
+/// `ContentHandler` derives from the same task-type list.
 fn is_new_article(task: &Task) -> bool {
     matches!(
         task.task_type.as_str(),
@@ -39,10 +47,6 @@ fn is_new_article(task: &Task) -> bool {
             | "refresh_hub_page"
             | "create_landing_page"
     )
-}
-
-fn is_hub_task(step: &WorkflowStep) -> bool {
-    step.params.get(step_params::SKILL).map(|s| s.as_str()) == Some("hub-write")
 }
 
 /// Derive the filename stem for a new-article task: the target keyword from the
@@ -69,6 +73,14 @@ fn is_research_step(step: &WorkflowStep) -> bool {
 
 // ─── Content-task prompt sections ─────────────────────────────────────────────
 
+/// Snapshot of the resolved content directory taken before the agent runs:
+/// the directory, per-file mtimes, and the detected numbered-MDX style.
+type ContentDirSnapshot = (
+    std::path::PathBuf,
+    std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+    Option<crate::content::naming::NumberedMdxStyle>,
+);
+
 /// Build the publish-date, file-format, link-format, and filename-convention
 /// directive sections for content tasks. Returns `None` for non-content tasks.
 ///
@@ -77,11 +89,7 @@ fn is_research_step(step: &WorkflowStep) -> bool {
 /// names the exact path instead of the approximate numbering hint.
 fn content_directives(
     task: &Task,
-    content_context: &Option<(
-        std::path::PathBuf,
-        std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
-        Option<crate::content::naming::NumberedMdxStyle>,
-    )>,
+    content_context: &Option<ContentDirSnapshot>,
     next_publish_date: &Option<String>,
     target: Option<(&std::path::Path, bool)>,
 ) -> Option<String> {
@@ -181,13 +189,12 @@ fn hub_directives(task: &Task, project_path: &str) -> Option<String> {
     Some(sections)
 }
 
-/// Execute an agentic step — invokes the configured agent CLI with a built prompt.
+/// Gather the hub topic, suggested title/URL, and spoke article briefs for a
+/// hub task and format them as the `## Hub Page Task` prompt section.
 ///
-/// Build order:
-///   1. Load skill from step params ("skill" key) → SKILL.md text
-///   2. Build a prompt via `prompts::build_prompt`
-///   3. Call `agent::run_agent(provider, prompt, project_path)`
-///   4. Return the raw output as the step result
+/// Data source: the focused `hub_brief` artifact when present, otherwise the
+/// legacy `cannibalization_strategy` artifact (kept — still load-bearing for
+/// hub tasks spawned before `hub_brief` existed).
 fn hub_spoke_context(task: &Task, project_path: &str) -> String {
     // Only hub titles yield a topic — gate on the hub prefixes, then use the
     // shared stripper for the actual prefix removal.
@@ -396,6 +403,167 @@ fn estimate_prompt_bytes(prompt: &str) -> usize {
     prompt.len()
 }
 
+/// Everything the generic prompt assembler needs, gathered by `exec_agentic`.
+struct PromptInputs<'a> {
+    step: &'a WorkflowStep,
+    task: &'a Task,
+    project_path: &'a str,
+    site_url: &'a str,
+    agent_provider: &'a str,
+    content_context: &'a Option<ContentDirSnapshot>,
+    next_publish_date: &'a Option<String>,
+    target: Option<(&'a std::path::Path, bool)>,
+}
+
+/// Assemble the full agent prompt: skill body (or fallback task prompt),
+/// optional artifact file, embedded task artifacts, then the `PromptSection`s
+/// the step declares — in declaration order. Returns a failed `StepResult`
+/// when a declared skill or artifact file is missing.
+fn assemble_prompt(inputs: &PromptInputs) -> Result<String, StepResult> {
+    use crate::engine::{prompts, skills};
+
+    let step = inputs.step;
+    let task = inputs.task;
+    let repo_root = std::path::Path::new(inputs.project_path);
+    let paths = ProjectPaths::from_path(inputs.project_path);
+
+    // 1. Load skill if specified.  A declared skill is required — missing it is
+    //    a hard error so the step does not silently degrade to a vague generic
+    //    prompt that produces unparseable prose.
+    let skill = if let Some(name) = step.params.get("skill") {
+        match skills::load_skill(repo_root, name) {
+            Some(s) => Some(s),
+            None => {
+                return Err(StepResult {
+                    success: false,
+                    message: format!(
+                        "Required skill '{}' not found in project repo or app defaults",
+                        name
+                    ),
+                    output: None,
+                });
+            }
+        }
+    } else {
+        None
+    };
+
+    // 2. Optionally load step artifact content into prompt context.
+    let artifact_context = if let Some(artifact_name) = step.params.get(step_params::ARTIFACT) {
+        let artifact_path = paths.automation_dir.join(artifact_name);
+        match std::fs::read_to_string(&artifact_path) {
+            Ok(content) => format!(
+                "\n\n## Artifact: {}\n\n```json\n{}\n```",
+                artifact_name, content
+            ),
+            Err(_) => {
+                return Err(StepResult {
+                    success: false,
+                    message: format!("{} not found — run collect_gsc first", artifact_name),
+                    output: None,
+                });
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    // 3. Build prompt
+    let mut prompt = if let Some(ref s) = skill {
+        let mut p = prompts::build_prompt(task, s, inputs.project_path, Some(inputs.site_url)).prompt;
+        p.push_str(&artifact_context);
+        p
+    } else {
+        // Fallback prompt when no skill is configured.
+        // Include description so the agent knows exactly which file to edit and
+        // what checks to fix — avoiding any need for shell-based file discovery.
+        let desc_section = task
+            .description
+            .as_deref()
+            .filter(|d| !d.is_empty())
+            .map(|d| format!("\n\n## Task Details\n\n{}", d))
+            .unwrap_or_default();
+        format!(
+            "## Task\n\n- ID: {}\n- Type: {}\n- Title: {}\n- Step: {}\n- Site: {}\n- Repo: {}{}\n\nExecute this task step and return the results.",
+            task.id,
+            task.task_type,
+            task.title.as_deref().unwrap_or("(untitled)"),
+            step.name,
+            inputs.site_url,
+            inputs.project_path,
+            desc_section,
+        ) + &artifact_context
+    };
+
+    // Include embedded task artifacts so follow-up fix tasks receive parent context
+    // (e.g. ctr_recommendations, cannibalization_strategy attached by create_*_fix_tasks).
+    let wants_hub_directives = step
+        .prompt_sections
+        .contains(&PromptSection::HubDirectives);
+    let task_artifacts: Vec<String> = task
+        .artifacts
+        .iter()
+        .filter(|a| {
+            // Hub tasks get focused hub context via hub_spoke_context(); inlining the
+            // full cannibalization_strategy here duplicates data and blows the prompt
+            // budget (it can be 20-90KB). Skip it for hub tasks.
+            !(wants_hub_directives && a.key == "cannibalization_strategy")
+        })
+        .filter_map(|a| {
+            a.content.as_ref().map(|c| {
+                const MAX_ARTIFACT_CHARS: usize = 10_000;
+                let preview = if c.len() > MAX_ARTIFACT_CHARS {
+                    format!(
+                        "{}… [truncated]",
+                        crate::engine::text::char_prefix(c, MAX_ARTIFACT_CHARS)
+                    )
+                } else {
+                    c.clone()
+                };
+                format!("\n\n## Artifact: {}\n\n```\n{}\n```", a.key, preview)
+            })
+        })
+        .collect();
+    if !task_artifacts.is_empty() {
+        prompt.push_str("\n\n## Task Artifacts\n");
+        prompt.push_str(&task_artifacts.join("\n"));
+    }
+
+    log::info!(
+        "[executor] agentic step '{}' with provider '{}' (skill: {:?})",
+        step.name,
+        inputs.agent_provider,
+        step.params.get(step_params::SKILL)
+    );
+
+    // 4. Append the prompt sections this step declared, in declaration order.
+    for section in &step.prompt_sections {
+        match section {
+            PromptSection::ContentDirectives { .. } => {
+                if let Some(dirs) = content_directives(
+                    task,
+                    inputs.content_context,
+                    inputs.next_publish_date,
+                    inputs.target,
+                ) {
+                    prompt.push_str(&dirs);
+                }
+            }
+            PromptSection::HubDirectives => {
+                prompt.push_str(&hub_directives(task, inputs.project_path).unwrap_or_default());
+            }
+        }
+    }
+
+    Ok(prompt)
+}
+
+/// Execute an agentic step — invokes the configured agent with a built prompt.
+///
+/// Build order:
+///   1. Resolve the content-dir snapshot / target path the declared sections need
+///   2. Assemble the prompt via `assemble_prompt` (skill body + declared sections)
+///   3. Call the agent and return the raw output as the step result
 pub async fn exec_agentic(
     step: &WorkflowStep,
     task: &Task,
@@ -405,14 +573,24 @@ pub async fn exec_agentic(
     latest_raw_output: Option<&str>,
     next_publish_date: Option<String>,
 ) -> StepResult {
-    use crate::engine::project_paths::ProjectPaths;
-    use crate::engine::{agent, prompts, skills};
+    use crate::engine::agent;
     use std::path::Path;
 
     let repo_root = Path::new(project_path);
-    let paths = ProjectPaths::from_path(project_path);
 
-    let content_context = if is_content_task(task) {
+    // Prompt-assembly policy is declared on the step by its handler (issue #4
+    // stage C). These derived flags also drive the content side-effects below
+    // (file snapshot/rename, executor-write fallback).
+    let wants_content_directives = step
+        .prompt_sections
+        .iter()
+        .any(|s| matches!(s, PromptSection::ContentDirectives { .. }));
+    let new_article = step
+        .prompt_sections
+        .iter()
+        .any(|s| matches!(s, PromptSection::ContentDirectives { new_article: true }));
+
+    let content_context = if wants_content_directives {
         let resolved = crate::content::locator::resolve(repo_root, None);
         resolved.selected.as_ref().map(|dir| {
             (
@@ -436,7 +614,7 @@ pub async fn exec_agentic(
     // Deterministic target path for new-article tasks. Passed to the agent as
     // an exact directive and reused by the executor-write fallback, so prompt
     // and fallback never disagree on the filename.
-    let target_path = if is_new_article(task) {
+    let target_path = if new_article {
         content_context.as_ref().map(|(dir, _, style)| {
             crate::content::naming::next_article_path(dir, *style, &task_topic_stem(task))
         })
@@ -444,126 +622,19 @@ pub async fn exec_agentic(
         None
     };
 
-    // 1. Load skill if specified.  A declared skill is required — missing it is
-    //    a hard error so the step does not silently degrade to a vague generic
-    //    prompt that produces unparseable prose.
-    let skill = if let Some(name) = step.params.get("skill") {
-        match skills::load_skill(repo_root, name) {
-            Some(s) => Some(s),
-            None => {
-                return StepResult {
-                    success: false,
-                    message: format!(
-                        "Required skill '{}' not found in project repo or app defaults",
-                        name
-                    ),
-                    output: None,
-                };
-            }
-        }
-    } else {
-        None
-    };
-
-    // 2. Optionally load step artifact content into prompt context.
-    let artifact_context = if let Some(artifact_name) = step.params.get(step_params::ARTIFACT) {
-        let artifact_path = paths.automation_dir.join(artifact_name);
-        match std::fs::read_to_string(&artifact_path) {
-            Ok(content) => format!(
-                "\n\n## Artifact: {}\n\n```json\n{}\n```",
-                artifact_name, content
-            ),
-            Err(_) => {
-                return StepResult {
-                    success: false,
-                    message: format!("{} not found — run collect_gsc first", artifact_name),
-                    output: None,
-                };
-            }
-        }
-    } else {
-        String::new()
-    };
-
-    // 3. Build prompt
-    let mut prompt = if let Some(ref s) = skill {
-        let mut p = prompts::build_prompt(task, s, project_path, Some(site_url)).prompt;
-        p.push_str(&artifact_context);
-        p
-    } else {
-        // Fallback prompt when no skill is configured.
-        // Include description so the agent knows exactly which file to edit and
-        // what checks to fix — avoiding any need for shell-based file discovery.
-        let desc_section = task
-            .description
-            .as_deref()
-            .filter(|d| !d.is_empty())
-            .map(|d| format!("\n\n## Task Details\n\n{}", d))
-            .unwrap_or_default();
-        format!(
-            "## Task\n\n- ID: {}\n- Type: {}\n- Title: {}\n- Step: {}\n- Site: {}\n- Repo: {}{}\n\nExecute this task step and return the results.",
-            task.id,
-            task.task_type,
-            task.title.as_deref().unwrap_or("(untitled)"),
-            step.name,
-            site_url,
-            project_path,
-            desc_section,
-        ) + &artifact_context
-    };
-
-    // Include embedded task artifacts so follow-up fix tasks receive parent context
-    // (e.g. ctr_recommendations, cannibalization_strategy attached by create_*_fix_tasks).
-    let hub = is_hub_task(step);
-    let task_artifacts: Vec<String> = task
-        .artifacts
-        .iter()
-        .filter(|a| {
-            // Hub tasks get focused hub context via hub_spoke_context(); inlining the
-            // full cannibalization_strategy here duplicates data and blows the prompt
-            // budget (it can be 20-90KB). Skip it for hub tasks.
-            !(hub && a.key == "cannibalization_strategy")
-        })
-        .filter_map(|a| {
-            a.content.as_ref().map(|c| {
-                const MAX_ARTIFACT_CHARS: usize = 10_000;
-                let preview = if c.len() > MAX_ARTIFACT_CHARS {
-                    format!(
-                        "{}… [truncated]",
-                        crate::engine::text::char_prefix(c, MAX_ARTIFACT_CHARS)
-                    )
-                } else {
-                    c.clone()
-                };
-                format!("\n\n## Artifact: {}\n\n```\n{}\n```", a.key, preview)
-            })
-        })
-        .collect();
-    if !task_artifacts.is_empty() {
-        prompt.push_str("\n\n## Task Artifacts\n");
-        prompt.push_str(&task_artifacts.join("\n"));
-    }
-
-    // Append task-type-specific prompt sections
-    if let Some(dirs) = content_directives(
+    let prompt = match assemble_prompt(&PromptInputs {
+        step,
         task,
-        &content_context,
-        &next_publish_date,
-        target_path.as_deref().map(|p| (p, provider_has_file_io)),
-    ) {
-        prompt.push_str(&dirs);
-    }
-
-    log::info!(
-        "[executor] agentic step '{}' with provider '{}' (skill: {:?})",
-        step.name,
+        project_path,
+        site_url,
         agent_provider,
-        step.params.get(step_params::SKILL)
-    );
-
-    if hub {
-        prompt.push_str(&hub_directives(task, project_path).unwrap_or_default());
-    }
+        content_context: &content_context,
+        next_publish_date: &next_publish_date,
+        target: target_path.as_deref().map(|p| (p, provider_has_file_io)),
+    }) {
+        Ok(p) => p,
+        Err(result) => return result,
+    };
 
     // Research steps use a separate workflow path
     if is_research_step(step) {
@@ -659,7 +730,7 @@ pub async fn exec_agentic(
                 // target path so the downstream ingest/link-verify steps see a
                 // real file. Skipped for file-IO providers — a missing file
                 // there is an agent failure that content_write_verify reports.
-                if !provider_has_file_io && is_new_article(task) {
+                if !provider_has_file_io && new_article {
                     let new_file_appeared =
                         crate::content::locator::collect_markdown_files(&content_dir)
                             .iter()
