@@ -168,7 +168,7 @@ pub(crate) fn create_fix_content_article_tasks(
     project_path: &str,
 ) -> Vec<String> {
     use crate::engine::spawner::{TaskSpawner, TaskSpec};
-    use crate::models::task::{AgentPolicy, Priority, TaskRunPolicy, TaskStatus};
+    use crate::models::task::{AgentPolicy, Priority};
     use std::collections::HashSet;
 
     let paths = ProjectPaths::from_path(project_path);
@@ -277,7 +277,9 @@ pub(crate) fn create_fix_content_article_tasks(
                 article_file
             )),
             phase: Some("implementation".to_string()),
-            run_policy: Some(TaskRunPolicy::AutoEnqueue),
+            // No run_policy override: inherits the task definition's
+            // UserEnqueue policy so fixes sit in Todo until the user
+            // explicitly enqueues them (human gate before repo writes).
             priority,
             agent_policy: AgentPolicy::Required,
             idempotency_key: Some(idempotency_key),
