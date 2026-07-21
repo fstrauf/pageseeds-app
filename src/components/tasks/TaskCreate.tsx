@@ -18,7 +18,6 @@ import {
 const TASK_TYPES = [
   'write_article',
   'create_landing_page',
-  'collect_posthog',
   'collect_clarity',
   'investigate_clarity',
   'clarity_analytics',

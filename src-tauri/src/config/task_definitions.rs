@@ -135,20 +135,15 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Research,
     },
     // Collection
+    // NOTE: collect_posthog was removed (issue #27) — it had no PostHog
+    // integration and reported success without collecting anything. Re-add
+    // only once a real implementation exists.
     TaskDefinition {
         task_type: "collect_gsc",
         phase: "collection",
         run_policy: TaskRunPolicy::AutoEnqueue,
         review_surface: TaskReviewSurface::None,
         follow_up_policy: FollowUpPolicy::None,
-        handler_family: HandlerFamily::Collection,
-    },
-    TaskDefinition {
-        task_type: "collect_posthog",
-        phase: "collection",
-        run_policy: TaskRunPolicy::AutoEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Collection,
     },
     TaskDefinition {
@@ -160,16 +155,10 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Collection,
     },
     // Investigation
+    // NOTE: investigate_posthog was removed with collect_posthog (issue #27) —
+    // it analyzed data that was never collected.
     TaskDefinition {
         task_type: "investigate_gsc",
-        phase: "investigation",
-        run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::None,
-        follow_up_policy: FollowUpPolicy::None,
-        handler_family: HandlerFamily::Investigation,
-    },
-    TaskDefinition {
-        task_type: "investigate_posthog",
         phase: "investigation",
         run_policy: TaskRunPolicy::UserEnqueue,
         review_surface: TaskReviewSurface::None,
@@ -703,10 +692,6 @@ mod tests {
     fn auto_enqueue_tasks_are_collection_and_audit() {
         assert_eq!(
             default_run_policy("collect_gsc"),
-            TaskRunPolicy::AutoEnqueue
-        );
-        assert_eq!(
-            default_run_policy("collect_posthog"),
             TaskRunPolicy::AutoEnqueue
         );
         assert_eq!(default_run_policy("ctr_audit"), TaskRunPolicy::AutoEnqueue);
