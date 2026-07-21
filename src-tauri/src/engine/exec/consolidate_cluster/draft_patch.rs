@@ -75,21 +75,17 @@ pub(crate) fn exec_merge_draft_patch(
 
     let mut patches: Vec<crate::models::merge_patch::ContentMergePatch> = Vec::new();
     for (i, batch_context) in batch_contexts.iter().enumerate() {
-        let prompt = skill.content.clone()
-            + "\n\n---\n\n## Merge Context\n\n"
-            + batch_context
-            + "\n\nPlease draft a ContentMergePatch JSON that merges the most valuable unique content from the redirect pages into the keeper."
-            + "\n\nCRITICAL: Return ONLY a single JSON object matching the ContentMergePatch structure."
-            + " Do not include markdown prose, summaries, or explanations outside the JSON.";
+        let prompt = assemble_merge_prompt(&skill.content, batch_context);
 
-        const HARD_PROMPT_LIMIT_BYTES: usize = 20_000;
+        let budget = crate::config::prompt_budget::default_prompt_budget();
         let prompt_bytes = prompt.len();
-        if prompt_bytes > HARD_PROMPT_LIMIT_BYTES {
+        if prompt_bytes > budget.hard {
             return StepResult::fail(format!(
-                    "Merge prompt too large ({} bytes) for batch {}/{}. Limit: {} bytes. \
-                     The batch has too much redirect content to fit the Kimi bridge limit. \
-                     Consider splitting the cluster into smaller groups or running merge manually.",
-                    prompt_bytes, i + 1, batch_contexts.len(), HARD_PROMPT_LIMIT_BYTES
+                    "Merge prompt too large ({} bytes) for batch {}/{}. Hard budget: {} bytes. \
+                     Batching and per-page truncation in merge_extract_sections should have \
+                     kept every round under this budget — treat this as a bug there, not a \
+                     provider limit.",
+                    prompt_bytes, i + 1, batch_contexts.len(), budget.hard
                 ));
         }
 
@@ -98,7 +94,9 @@ pub(crate) fn exec_merge_draft_patch(
                 agent_provider,
                 &prompt,
                 Some("You are an expert content editor. Draft a precise ContentMergePatch JSON."),
-                Some("direct"),
+                // Backend preference is only honored by the legacy Kimi bridge;
+                // the default CLI backend ignores it.
+                None,
                 None,
             )
             .await
@@ -141,5 +139,18 @@ pub(crate) fn exec_merge_draft_patch(
         },
         Err(e) => StepResult::fail(format!("Failed to serialize merge patch: {}", e)),
     }
+}
+
+/// Assemble the full merge prompt for one draft round: skill content +
+/// merge-context header + serialized round context + instruction tail. Kept
+/// as one function so tests can assert the assembled size against the shared
+/// prompt budget exactly as the step produces it.
+pub(crate) fn assemble_merge_prompt(skill_content: &str, batch_context_json: &str) -> String {
+    skill_content.to_string()
+        + "\n\n---\n\n## Merge Context\n\n"
+        + batch_context_json
+        + "\n\nPlease draft a ContentMergePatch JSON that merges the most valuable unique content from the redirect pages into the keeper."
+        + "\n\nCRITICAL: Return ONLY a single JSON object matching the ContentMergePatch structure."
+        + " Do not include markdown prose, summaries, or explanations outside the JSON."
 }
 
