@@ -43,7 +43,16 @@ pub(crate) fn exec_merge_preflight(
     let keeper_slug = keep_url
         .trim_start_matches("/blog/")
         .trim_start_matches('/');
-    let keeper_file = find_file_by_slug(project_path, keeper_slug);
+    let keeper_file = match find_file_by_slug(project_path, keeper_slug) {
+        Ok(f) => f,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: e,
+                output: None,
+            };
+        }
+    };
     let keeper_exists = keeper_file.as_ref().map(|p| p.exists()).unwrap_or(false);
 
     // Check keeper is indexable (no noindex in frontmatter)
@@ -65,8 +74,15 @@ pub(crate) fn exec_merge_preflight(
             continue;
         }
         match find_file_by_slug(project_path, slug) {
-            Some(p) if p.exists() => redirect_files_exist.push(url.clone()),
-            _ => redirect_files_missing.push(url.clone()),
+            Ok(Some(p)) if p.exists() => redirect_files_exist.push(url.clone()),
+            Ok(_) => redirect_files_missing.push(url.clone()),
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    message: e,
+                    output: None,
+                };
+            }
         }
     }
 

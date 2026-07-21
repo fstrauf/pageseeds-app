@@ -13,13 +13,24 @@ use super::*;
 // Step 5: Apply Patch
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Apply a ContentMergePatch to the keeper file, snapshotting the original.
+/// Apply one or more ContentMergePatches to the keeper file.
+///
+/// Safety contract (mirrors the canonical fix pipeline in
+/// `engine/exec/content/fix_apply.rs`):
+///   1. The original keeper is snapshotted to `keeper.mdx.snapshot` before any write.
+///   2. The patched content is validated in memory BEFORE the file is touched.
+///   3. On validation or write failure the snapshot is restored, leaving the
+///      original keeper byte-identical on disk; on success the snapshot is removed.
+///
+/// When `merge_draft_patch` ran multiple batch rounds, `patch_json` is
+/// `{"patches": [...]}` and the patches are applied sequentially against the
+/// same keeper. A single round is a bare ContentMergePatch object.
 pub(crate) fn exec_merge_apply_patch(
     _task: &Task,
     project_path: &str,
     patch_json: &str,
 ) -> StepResult {
-    let patch: ContentMergePatch = match serde_json::from_str(patch_json) {
+    let patches: Vec<ContentMergePatch> = match parse_patches(patch_json) {
         Ok(p) => p,
         Err(e) => {
             return StepResult {
@@ -30,6 +41,80 @@ pub(crate) fn exec_merge_apply_patch(
         }
     };
 
+    let mut total_word_count = 0usize;
+    let mut last_keeper = String::new();
+    let mut applied_rounds = 0usize;
+
+    for (i, patch) in patches.iter().enumerate() {
+        match apply_single_patch(project_path, patch) {
+            Ok((keeper, word_count)) => {
+                last_keeper = keeper;
+                total_word_count = word_count;
+                applied_rounds += 1;
+            }
+            Err(e) => {
+                return StepResult {
+                    success: false,
+                    message: if patches.len() > 1 {
+                        format!(
+                            "Merge patch round {}/{} failed: {}",
+                            i + 1,
+                            patches.len(),
+                            e
+                        )
+                    } else {
+                        e
+                    },
+                    output: None,
+                };
+            }
+        }
+    }
+
+    let total_additions: usize = patches.iter().map(|p| p.additions.len()).sum();
+    let total_transitions: usize = patches.iter().map(|p| p.transitions.len()).sum();
+
+    StepResult {
+        success: true,
+        message: format!(
+            "Patch applied: {} round(s), {} additions, {} transitions, {} words",
+            applied_rounds, total_additions, total_transitions, total_word_count,
+        ),
+        output: Some(
+            serde_json::json!({
+                "keeper_file": last_keeper,
+                "rounds_applied": applied_rounds,
+                "word_count": total_word_count,
+                "validation_valid": true,
+            })
+            .to_string(),
+        ),
+    }
+}
+
+/// Parse either a bare ContentMergePatch or a `{"patches": [...]}` wrapper.
+fn parse_patches(patch_json: &str) -> std::result::Result<Vec<ContentMergePatch>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(patch_json).map_err(|e| e.to_string())?;
+    if let Some(arr) = value["patches"].as_array() {
+        return arr
+            .iter()
+            .map(|p| {
+                serde_json::from_value::<ContentMergePatch>(p.clone()).map_err(|e| e.to_string())
+            })
+            .collect();
+    }
+    serde_json::from_value::<ContentMergePatch>(value)
+        .map(|p| vec![p])
+        .map_err(|e| e.to_string())
+}
+
+/// Apply a single patch round to the keeper file.
+/// Returns the keeper path (display form) and the resulting word count.
+fn apply_single_patch(
+    project_path: &str,
+    patch: &ContentMergePatch,
+) -> std::result::Result<(String, usize), String> {
     let keeper_path = Path::new(&patch.keeper_file);
     let keeper_path = if keeper_path.is_absolute() {
         keeper_path.to_path_buf()
@@ -38,30 +123,19 @@ pub(crate) fn exec_merge_apply_patch(
     };
 
     if !keeper_path.exists() {
-        return StepResult {
-            success: false,
-            message: format!("Keeper file not found: {}", keeper_path.display()),
-            output: None,
-        };
+        return Err(format!("Keeper file not found: {}", keeper_path.display()));
     }
 
-    let original = match std::fs::read_to_string(&keeper_path) {
-        Ok(c) => c,
-        Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to read keeper file: {}", e),
-                output: None,
-            };
-        }
-    };
+    let original = std::fs::read_to_string(&keeper_path)
+        .map_err(|e| format!("Failed to read keeper file: {}", e))?;
 
     // Apply patch
     let mut modified = original.clone();
 
-    // Apply transitions first
+    // Apply transitions first — first occurrence only, so a repeated phrase
+    // elsewhere in the article is never rewritten by accident.
     for transition in &patch.transitions {
-        modified = modified.replace(&transition.find, &transition.replace);
+        modified = modified.replacen(&transition.find, &transition.replace, 1);
     }
 
     // Apply additions
@@ -102,37 +176,34 @@ pub(crate) fn exec_merge_apply_patch(
         }
     }
 
-    // Write modified file
-    if let Err(e) = std::fs::write(&keeper_path, &modified) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write modified keeper: {}", e),
-            output: None,
-        };
+    // Snapshot the original before touching the file on disk.
+    let snapshot_path = keeper_path.with_extension("mdx.snapshot");
+    if let Err(e) = std::fs::write(&snapshot_path, &original) {
+        return Err(format!("Failed to write keeper snapshot: {}", e));
     }
 
-    // Validate MDX structure
-    let validation = crate::content::cleaner::validate_mdx_structure(&modified);
+    // Validate the patched content in memory FIRST — a corrupt patch must
+    // never reach the live keeper file.
+    if let Err(e) = crate::content::cleaner::validate_mdx_structure(&modified) {
+        let _ = std::fs::remove_file(&snapshot_path);
+        return Err(format!(
+            "Patch produced invalid MDX structure: {}. Original keeper left untouched.",
+            e
+        ));
+    }
+
+    // Write modified file; restore the snapshot if the write fails.
+    if let Err(e) = std::fs::write(&keeper_path, &modified) {
+        let _ = std::fs::rename(&snapshot_path, &keeper_path);
+        return Err(format!(
+            "Failed to write modified keeper: {}. Original restored from snapshot.",
+            e
+        ));
+    }
+
+    // Clean up snapshot on success.
+    let _ = std::fs::remove_file(&snapshot_path);
 
     let word_count = crate::content::ops::count_words(&modified);
-
-    StepResult {
-        success: validation.is_ok(),
-        message: format!(
-            "Patch applied: {} additions, {} transitions, {} words",
-            patch.additions.len(),
-            patch.transitions.len(),
-            word_count,
-        ),
-        output: Some(
-            serde_json::json!({
-                "keeper_file": keeper_path.to_string_lossy().to_string(),
-                "word_count": word_count,
-                "validation_valid": validation.is_ok(),
-                "validation_issues": validation.err().map(|e| vec![e]).unwrap_or_default(),
-            })
-            .to_string(),
-        ),
-    }
+    Ok((keeper_path.to_string_lossy().to_string(), word_count))
 }
-
