@@ -475,26 +475,39 @@ fn extract_snippet_markup(document: &Html) -> CtrSnippetMarkup {
     }
 }
 
+/// Classify whether a title issue originates in the content file or the site template.
+///
+/// A plain `Page Title | Brand` suffix is the standard, healthy title convention —
+/// it is only a site-template problem when the suffix actually harms the rendered
+/// title (see [`rendered_title_harmed_by_suffix`]).
 fn classify_title_issue(source_title: &str, rendered_title: &str) -> &'static str {
     if rendered_title.is_empty() {
         return "unknown";
     }
-    if source_title != rendered_title {
-        // If the rendered title contains duplication patterns not in source, it's likely template
-        if is_brand_duplicated(rendered_title) && !is_brand_duplicated(source_title) {
-            return "site_template";
-        }
+    if source_title != rendered_title
+        && rendered_title_harmed_by_suffix(source_title, rendered_title)
+    {
         return "site_template";
-    }
-    if source_title.len() > crate::engine::exec::audit_health::TITLE_MAX_LEN {
-        return "content_file";
     }
     "content_file"
 }
 
+/// True when the site template suffix actually harms the rendered title:
+/// - the rendered title exceeds `TITLE_MAX_LEN` but would fit without the suffix, or
+/// - the template introduced brand duplication that is absent from the source title.
+pub(crate) fn rendered_title_harmed_by_suffix(source_title: &str, rendered_title: &str) -> bool {
+    if rendered_title.len() > crate::engine::exec::audit_health::TITLE_MAX_LEN
+        && strip_brand_suffix(rendered_title).len()
+            <= crate::engine::exec::audit_health::TITLE_MAX_LEN
+    {
+        return true;
+    }
+    is_brand_duplicated(rendered_title) && !is_brand_duplicated(source_title)
+}
+
 /// Strip a trailing brand/site suffix such as " | BrewedLate Coffee" or " - Site Name"
 /// so that rendered titles can be compared against source titles.
-fn strip_brand_suffix(title: &str) -> String {
+pub(crate) fn strip_brand_suffix(title: &str) -> String {
     let trimmed = title.trim();
     if let Some(idx) = trimmed.rfind(" | ") {
         return trimmed[..idx].trim().to_string();
@@ -505,7 +518,7 @@ fn strip_brand_suffix(title: &str) -> String {
     trimmed.to_string()
 }
 
-fn is_brand_duplicated(title: &str) -> bool {
+pub(crate) fn is_brand_duplicated(title: &str) -> bool {
     // Simple heuristic: if a word appears 3+ times, it's likely duplicated brand
     let words: Vec<&str> = title.split_whitespace().collect();
     if words.len() < 4 {
@@ -534,4 +547,97 @@ fn has_source_faq(file_ref: &str, project_path: &str) -> bool {
         }
     }
     false
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_title_issue_empty_rendered() {
+        assert_eq!(classify_title_issue("Source", ""), "unknown");
+    }
+
+    #[test]
+    fn test_classify_title_issue_identical_titles() {
+        assert_eq!(classify_title_issue("Same Title", "Same Title"), "content_file");
+    }
+
+    #[test]
+    fn test_classify_title_issue_harmless_brand_suffix_is_not_template() {
+        // The normal `Page Title | Brand` convention must NOT be classified
+        // as a site template issue.
+        assert_eq!(
+            classify_title_issue("Best Coffee Makers", "Best Coffee Makers | BrewedLate"),
+            "content_file"
+        );
+    }
+
+    #[test]
+    fn test_classify_title_issue_suffix_length_overflow_is_template() {
+        // Source fits within TITLE_MAX_LEN, but the suffix pushes the rendered
+        // title over the limit.
+        let source = "The Complete Guide to Options Trading Strategies"; // 48 chars
+        let rendered = "The Complete Guide to Options Trading Strategies | Brand";
+        assert!(rendered.len() > crate::engine::exec::audit_health::TITLE_MAX_LEN);
+        assert_eq!(classify_title_issue(source, rendered), "site_template");
+    }
+
+    #[test]
+    fn test_classify_title_issue_template_brand_duplication_is_template() {
+        assert_eq!(
+            classify_title_issue("Article A", "Article A | Brand | Brand | Brand"),
+            "site_template"
+        );
+    }
+
+    #[test]
+    fn test_classify_title_issue_source_duplication_is_not_template() {
+        // Duplication already present in the source title is a content problem.
+        assert_eq!(
+            classify_title_issue(
+                "Brand Brand Brand Guide",
+                "Brand Brand Brand Guide | Brand"
+            ),
+            "content_file"
+        );
+    }
+
+    #[test]
+    fn test_rendered_title_harmed_by_suffix_harmless() {
+        assert!(!rendered_title_harmed_by_suffix(
+            "Best Coffee Makers",
+            "Best Coffee Makers | BrewedLate"
+        ));
+    }
+
+    #[test]
+    fn test_rendered_title_harmed_by_suffix_length_overflow() {
+        let source = "The Complete Guide to Options Trading Strategies";
+        let rendered = "The Complete Guide to Options Trading Strategies | Brand";
+        assert!(rendered_title_harmed_by_suffix(source, rendered));
+    }
+
+    #[test]
+    fn test_rendered_title_harmed_by_suffix_duplication() {
+        assert!(rendered_title_harmed_by_suffix(
+            "Article A",
+            "Article A | Brand | Brand | Brand"
+        ));
+    }
+
+    #[test]
+    fn test_rendered_title_harmed_by_suffix_long_source_not_suffix_fault() {
+        // Both source and rendered exceed the limit even without the suffix —
+        // that is a content-file problem, not template harm.
+        let source = "An Extremely Long Source Title That Already Exceeds The Limit Alone";
+        let rendered = "An Extremely Long Source Title That Already Exceeds The Limit Alone | B";
+        assert!(source.len() > crate::engine::exec::audit_health::TITLE_MAX_LEN);
+        assert!(!rendered_title_harmed_by_suffix(source, rendered));
+    }
 }

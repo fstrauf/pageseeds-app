@@ -1,4 +1,7 @@
-use crate::engine::exec::ctr_audit::rendered::extract_json_ld_schema_types_with_faq_count;
+use crate::engine::exec::ctr_audit::rendered::{
+    extract_json_ld_schema_types_with_faq_count, is_brand_duplicated,
+    rendered_title_harmed_by_suffix,
+};
 /// Site title template detection and fix workflow for CTR recovery.
 ///
 /// Detects repeated brand/title suffix patterns across rendered pages and
@@ -72,6 +75,13 @@ fn detect_template_patterns(
 
     for audit in audits {
         if audit.title_issue_source != "site_template" {
+            continue;
+        }
+        // Harm check: a plain `Page Title | Brand` suffix is the standard title
+        // convention, not a defect. Only suffixes that actually harm the rendered
+        // title (length overflow caused by the suffix, or template-introduced
+        // brand duplication) qualify as site-template patterns.
+        if !rendered_title_harmed_by_suffix(&audit.source_title, &audit.rendered_title) {
             continue;
         }
         if let Some(suffix) = extract_template_suffix(&audit.source_title, &audit.rendered_title) {
@@ -558,24 +568,6 @@ fn fetch_current_title(url: &str) -> Result<String, crate::error::Error> {
 
         Ok(title)
     })
-}
-
-fn is_brand_duplicated(title: &str) -> bool {
-    let words: Vec<&str> = title.split_whitespace().collect();
-    if words.len() < 4 {
-        return false;
-    }
-    let mut counts = std::collections::HashMap::new();
-    for word in words {
-        let lower = word
-            .to_lowercase()
-            .trim_matches(|c: char| !c.is_alphanumeric())
-            .to_string();
-        if !lower.is_empty() {
-            *counts.entry(lower).or_insert(0) += 1;
-        }
-    }
-    counts.values().any(|&c| c >= 3)
 }
 
 // ─── Schema Renderer Detection ────────────────────────────────────────────────
