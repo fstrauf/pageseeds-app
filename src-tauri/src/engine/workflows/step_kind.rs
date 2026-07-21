@@ -159,6 +159,10 @@ pub enum StepKind {
     GscIndexingOutcomeInspect,
     /// Deterministic: compare before/after indexing status and write report.
     GscIndexingOutcomeReport,
+    // ─── Content Outcome Review (issue #23) ─────────────────────────────────
+    /// Deterministic: compare pre/post GSC snapshot windows for an article and
+    /// classify improved/regressed/neutral/insufficient_data. No LLM call.
+    ContentOutcomeCompare,
     // ─── Indexing Health Campaign ─────────────────────────────────────────────
     /// Deterministic: check prerequisite artifact freshness.
     IhcCheckPrerequisites,
@@ -278,6 +282,7 @@ impl StepKind {
             Self::IndexingLinkVerify => "indexing_link_verify",
             Self::GscIndexingOutcomeInspect => "gsc_indexing_outcome_inspect",
             Self::GscIndexingOutcomeReport => "gsc_indexing_outcome_report",
+            Self::ContentOutcomeCompare => "content_outcome_compare",
             Self::IhcCheckPrerequisites => "ihc_check_prerequisites",
             Self::IhcBuildTargetContext => "ihc_build_target_context",
             Self::IhcDistinctivenessReview => "ihc_distinctiveness_review",
@@ -401,6 +406,7 @@ impl FromStr for StepKind {
             "indexing_link_verify" => Ok(Self::IndexingLinkVerify),
             "gsc_indexing_outcome_inspect" => Ok(Self::GscIndexingOutcomeInspect),
             "gsc_indexing_outcome_report" => Ok(Self::GscIndexingOutcomeReport),
+            "content_outcome_compare" => Ok(Self::ContentOutcomeCompare),
             "ihc_check_prerequisites" => Ok(Self::IhcCheckPrerequisites),
             "ihc_build_target_context" => Ok(Self::IhcBuildTargetContext),
             "ihc_distinctiveness_review" => Ok(Self::IhcDistinctivenessReview),
@@ -534,6 +540,7 @@ mod tests {
             StepKind::IndexingLinkVerify,
             StepKind::GscIndexingOutcomeInspect,
             StepKind::GscIndexingOutcomeReport,
+            StepKind::ContentOutcomeCompare,
             StepKind::IhcCheckPrerequisites,
             StepKind::IhcBuildTargetContext,
             StepKind::IhcDistinctivenessReview,

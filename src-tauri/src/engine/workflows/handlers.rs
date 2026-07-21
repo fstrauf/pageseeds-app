@@ -321,6 +321,7 @@ impl WorkflowHandler for ImplementationHandler {
                 | "gsc_indexing_recovery"
                 | "fix_indexing_internal_links"
                 | "gsc_indexing_outcome_review"
+                | "content_outcome_review"
                 | "indexing_health_campaign"
                 | "generate_feature_spec"
         ) || t.starts_with("fix_")
@@ -521,6 +522,16 @@ impl WorkflowHandler for ImplementationHandler {
                     "gsc_indexing_outcome_report",
                     StepKind::GscIndexingOutcomeReport,
                 ),
+            ],
+            "content_outcome_review" => vec![
+                // Step 1 (deterministic): compare pre/post GSC daily snapshot
+                // windows for the article slug, classify
+                // improved/regressed/neutral/insufficient_data, and persist the
+                // result. Cannot need an LLM: it is a computable mapping from
+                // structured snapshot rows to a classification (issue #23).
+                // Output contract: JSON report with slug, baseline/recent
+                // window metrics, and classification.
+                WorkflowStep::new("content_outcome_compare", StepKind::ContentOutcomeCompare),
             ],
             "generate_feature_spec" => vec![
                 // Agentic: read all audit artifacts, synthesize findings via LLM,

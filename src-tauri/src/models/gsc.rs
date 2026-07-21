@@ -34,6 +34,19 @@ pub struct PageQueryMetrics {
     pub position: f64,
 }
 
+/// Per-page, per-day metrics from a `["page", "date"]` Search Analytics pull.
+/// Stored append-only in `gsc_page_daily` — the time series behind
+/// before/after outcome measurement (issue #23).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageDailyMetrics {
+    pub page: String,
+    pub date: String,
+    pub clicks: f64,
+    pub impressions: f64,
+    pub ctr: f64,
+    pub position: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

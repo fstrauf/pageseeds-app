@@ -992,6 +992,15 @@ impl StepRegistry {
             crate::engine::exec::gsc::exec_gsc_indexing_outcome_report
         );
 
+        // ─── Content Outcome Review (issue #23) ─────────────────────────────
+
+        register_blocking!(
+            handlers,
+            StepKind::ContentOutcomeCompare,
+            crate::engine::exec::outcome_review::exec_content_outcome_compare,
+            db_conn
+        );
+
         // ─── Indexing Health Campaign ───────────────────────────────────────────
 
         register_blocking!(
