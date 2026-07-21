@@ -477,6 +477,17 @@ UPDATE tasks SET follow_up_policy = 'backend_auto' WHERE type IN ('collect_gsc',
 UPDATE tasks SET follow_up_policy = 'user_selection' WHERE type IN ('research_keywords', 'custom_keyword_research', 'research_landing_pages', 'reddit_opportunity_search');
 "#;
 
+static MIGRATION_V38: &str = r#"
+-- Reset over-long GSC-backfilled target_keywords (word count > 5) to empty so
+-- the next GSC sync re-backfills them through normalize_backfilled_keyword
+-- (issue #74).
+UPDATE articles
+SET target_keyword = ''
+WHERE target_keyword IS NOT NULL
+  AND target_keyword != ''
+  AND length(target_keyword) - length(replace(target_keyword, ' ', '')) + 1 > 5;
+"#;
+
 static MIGRATION_V31: &str = r#"
 -- Backend-owned task queue: durable queue runs and items
 CREATE TABLE IF NOT EXISTS queue_runs (
@@ -1092,6 +1103,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (37, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
+    if version < 38 {
+        conn.execute_batch(MIGRATION_V38)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (38, ?1)",
             [chrono::Utc::now().to_rfc3339()],
         )?;
     }
@@ -2693,5 +2712,48 @@ mod tests {
         // Newest first.
         assert_eq!(results[0].classification, "improved");
         assert_eq!(results[1].classification, "neutral");
+    }
+
+    #[test]
+    fn migration_v38_resets_overlong_target_keywords() {
+        // Exercise the migration SQL directly: schema_version is already at the
+        // latest version after init, so the `version < 38` gate would skip it.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE articles (
+                id INTEGER NOT NULL,
+                project_id TEXT NOT NULL,
+                target_keyword TEXT,
+                PRIMARY KEY (id, project_id)
+            );",
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO articles (id, project_id, target_keyword) VALUES
+                (1, 'proj1', 'adding custom categories to google sheets budget template'),
+                (2, 'proj1', 'iron condor'),
+                (3, 'proj1', NULL),
+                (4, 'proj1', ''),
+                (5, 'proj1', 'one two three four five');",
+        )
+        .unwrap();
+
+        conn.execute_batch(MIGRATION_V38).unwrap();
+
+        let keyword = |id: i64| -> Option<String> {
+            conn.query_row(
+                "SELECT target_keyword FROM articles WHERE id = ?1 AND project_id = 'proj1'",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        // >5 words → reset to empty so the next sync re-backfills normalized.
+        assert_eq!(keyword(1), Some(String::new()));
+        // ≤5 words, NULL, and already-empty keywords are untouched.
+        assert_eq!(keyword(2), Some("iron condor".to_string()));
+        assert_eq!(keyword(3), None);
+        assert_eq!(keyword(4), Some(String::new()));
+        assert_eq!(keyword(5), Some("one two three four five".to_string()));
     }
 }

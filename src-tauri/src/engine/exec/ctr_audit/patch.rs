@@ -181,7 +181,10 @@ pub(crate) fn validate_patch_before_write(
         if let Ok(Some(rec)) = extract_recommendation(task) {
             let keyword_lower = rec.target_keyword.to_lowercase();
             let has_kw_or_question = keyword_lower.is_empty()
-                || first_paragraph.to_lowercase().contains(&keyword_lower)
+                || crate::content::keyword_match::keyword_present(
+                    &first_paragraph.to_lowercase(),
+                    &keyword_lower,
+                )
                 || first_paragraph.contains('?');
             if !has_kw_or_question {
                 errors.push(format!(
@@ -464,9 +467,10 @@ fn shorten_meta_description(value: &str, min_chars: usize, max_chars: usize) -> 
 
 fn has_keyword_or_question(value: &str, target_keyword: &str) -> bool {
     target_keyword.is_empty()
-        || value
-            .to_lowercase()
-            .contains(&target_keyword.to_lowercase())
+        || crate::content::keyword_match::keyword_present(
+            &value.to_lowercase(),
+            &target_keyword.to_lowercase(),
+        )
         || value.contains('?')
 }
 

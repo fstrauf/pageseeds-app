@@ -372,7 +372,10 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
                 // Backward-compatible check: first paragraph
                 let word_count = crate::content::ops::count_words(&first_paragraph);
                 let has_kw_or_q = keyword_lower.is_empty()
-                    || first_paragraph.to_lowercase().contains(&keyword_lower)
+                    || crate::content::keyword_match::keyword_present(
+                        &first_paragraph.to_lowercase(),
+                        &keyword_lower,
+                    )
                     || first_paragraph.contains('?');
                 let first_para_ok = word_count
                     >= crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
@@ -517,7 +520,8 @@ fn check_snippet_structure(body: &str, keyword_lower: &str) -> SnippetCheck {
                 || h2_text.starts_with("why ")
                 || h2_text.starts_with("when ")
                 || h2_text.starts_with("where ");
-            let has_keyword = !keyword_lower.is_empty() && h2_text.contains(keyword_lower);
+            let has_keyword = !keyword_lower.is_empty()
+                && crate::content::keyword_match::keyword_present(&h2_text, keyword_lower);
             if has_question || has_keyword {
                 result.has_h2 = true;
                 // Count words in the next non-empty paragraph
