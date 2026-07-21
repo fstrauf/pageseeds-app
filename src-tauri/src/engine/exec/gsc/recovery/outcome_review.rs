@@ -28,11 +28,7 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
     let target_url = match target_url {
         Some(u) => u,
         None => {
-            return StepResult {
-                success: false,
-                message: "No target URL found in indexing_link_target artifact".to_string(),
-                output: None,
-            }
+            return StepResult::fail("No target URL found in indexing_link_target artifact".to_string())
         }
     };
 
@@ -75,11 +71,7 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to create tokio runtime: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to create tokio runtime: {}", e))
         }
     };
 
@@ -114,11 +106,7 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
                 output: Some(outcome.to_string()),
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            message: format!("URL Inspection API failed: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("URL Inspection API failed: {}", e)),
     }
 }
 

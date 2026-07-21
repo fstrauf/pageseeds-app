@@ -1,4 +1,7 @@
-use crate::engine::exec::ctr_audit::rendered::extract_json_ld_schema_types_with_faq_count;
+use crate::engine::exec::ctr_audit::rendered::{
+    extract_json_ld_schema_types_with_faq_count, is_brand_duplicated,
+    rendered_title_harmed_by_suffix,
+};
 /// Site title template detection and fix workflow for CTR recovery.
 ///
 /// Detects repeated brand/title suffix patterns across rendered pages and
@@ -24,11 +27,7 @@ pub(crate) fn exec_ctr_template_detect(
     let audits = match crate::db::list_ctr_rendered_audits(conn, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load rendered audits: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load rendered audits: {}", e));
         }
     };
 
@@ -72,6 +71,13 @@ fn detect_template_patterns(
 
     for audit in audits {
         if audit.title_issue_source != "site_template" {
+            continue;
+        }
+        // Harm check: a plain `Page Title | Brand` suffix is the standard title
+        // convention, not a defect. Only suffixes that actually harm the rendered
+        // title (length overflow caused by the suffix, or template-introduced
+        // brand duplication) qualify as site-template patterns.
+        if !rendered_title_harmed_by_suffix(&audit.source_title, &audit.rendered_title) {
             continue;
         }
         if let Some(suffix) = extract_template_suffix(&audit.source_title, &audit.rendered_title) {
@@ -440,21 +446,13 @@ pub(crate) fn exec_ctr_template_verify_render(
         .unwrap_or_default();
 
     if detection_json.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No ctr_template_detection artifact found".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No ctr_template_detection artifact found".to_string());
     }
 
     let results: Vec<CtrTemplateDetectionResult> = match serde_json::from_str(&detection_json) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to parse detection artifact: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to parse detection artifact: {}", e));
         }
     };
 
@@ -560,24 +558,6 @@ fn fetch_current_title(url: &str) -> Result<String, crate::error::Error> {
     })
 }
 
-fn is_brand_duplicated(title: &str) -> bool {
-    let words: Vec<&str> = title.split_whitespace().collect();
-    if words.len() < 4 {
-        return false;
-    }
-    let mut counts = std::collections::HashMap::new();
-    for word in words {
-        let lower = word
-            .to_lowercase()
-            .trim_matches(|c: char| !c.is_alphanumeric())
-            .to_string();
-        if !lower.is_empty() {
-            *counts.entry(lower).or_insert(0) += 1;
-        }
-    }
-    counts.values().any(|&c| c >= 3)
-}
-
 // ─── Schema Renderer Detection ────────────────────────────────────────────────
 
 /// Detect articles where source has FAQ content but rendered HTML lacks FAQPage JSON-LD.
@@ -589,11 +569,7 @@ pub(crate) fn exec_ctr_schema_detect(
     let audits = match crate::db::list_ctr_rendered_audits(conn, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load rendered audits: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load rendered audits: {}", e));
         }
     };
 
@@ -648,21 +624,13 @@ pub(crate) fn exec_ctr_schema_verify_render(
         .unwrap_or_default();
 
     if detection_json.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No ctr_schema_detection artifact found".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No ctr_schema_detection artifact found".to_string());
     }
 
     let affected: Vec<serde_json::Value> = match serde_json::from_str(&detection_json) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to parse detection artifact: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to parse detection artifact: {}", e));
         }
     };
 

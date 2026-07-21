@@ -28,11 +28,7 @@ pub(crate) fn exec_merge_sync_articles(task: &Task, project_path: &str) -> StepR
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to open DB for sync: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to open DB for sync: {}", e));
         }
     };
 
@@ -84,11 +80,7 @@ pub(crate) fn exec_merge_sync_articles(task: &Task, project_path: &str) -> StepR
                 ),
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Failed to sync merged articles: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("Failed to sync merged articles: {}", e)),
     }
 }
 

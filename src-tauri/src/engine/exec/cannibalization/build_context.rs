@@ -32,11 +32,7 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     let articles = &project_articles.articles;
 
     if articles.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No articles found in articles.json".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No articles found in articles.json".to_string());
     }
 
     // ── 1. Build article records with content extraction ──────────────────────

@@ -45,15 +45,11 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
-            return Err(StepResult {
-                success: false,
-                message: format!(
+            return Err(StepResult::fail(format!(
                     "manifest.json not found at {} and failed to open DB for fallback: {}",
                     manifest_path.display(),
                     e
-                ),
-                output: None,
-            });
+                )));
         }
     };
 
@@ -65,15 +61,11 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .map(String::from)
-                .ok_or_else(|| StepResult {
-                    success: false,
-                    message: format!(
+                .ok_or_else(|| StepResult::fail(format!(
                         "manifest.json not found at {} and project '{}' has no site_url configured",
                         manifest_path.display(),
                         task.project_id
-                    ),
-                    output: None,
-                })?;
+                    )))?;
             let sitemap_url = project
                 .sitemap_url
                 .as_deref()
@@ -88,15 +80,11 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
                 });
             Ok((site_url, sitemap_url))
         }
-        Err(e) => Err(StepResult {
-            success: false,
-            message: format!(
+        Err(e) => Err(StepResult::fail(format!(
                 "manifest.json not found at {} and failed to load project from DB: {}",
                 manifest_path.display(),
                 e
-            ),
-            output: None,
-        }),
+            ))),
     }
 }
 
@@ -106,10 +94,14 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
 ///
 /// 1. Reads sitemap URL from manifest.json (or project DB for live-site).
 /// 2. Mints a service account token.
-/// 3. Fetches all sitemap URLs (up to 200).
-/// 4. Calls the URL Inspection API for each URL.
+/// 3. Fetches all sitemap URLs; sends at most [`super::GSC_INSPECTION_CAP`]
+///    to the URL Inspection API.
+/// 4. Calls the URL Inspection API for each capped URL.
 /// 5. Classifies each result into a reason code.
-/// 6. Writes `gsc_collection.json` to the automation dir.
+/// 6. Writes `gsc_collection.json` to the automation dir, including coverage
+///    meta (`sitemap_url_count`, `inspected_count`, `cap`, `truncated`) so
+///    drift detection can tell cap-skipped URLs apart from URLs GSC has
+///    genuinely never inspected (issue #26).
 pub(crate) fn exec_collect_gsc(
     task: &Task,
     project_path: &str,
@@ -145,12 +137,8 @@ pub(crate) fn exec_collect_gsc(
     {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: "GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets"
-                    .to_string(),
-                output: None,
-            }
+            return StepResult::fail("GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets"
+                    .to_string())
         }
     };
 
@@ -167,46 +155,46 @@ pub(crate) fn exec_collect_gsc(
                 .await
                 .map(|t| t.access_token)?;
 
-            // Fetch sitemap URLs
-            let urls = crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url_owned, 200).await?;
-            if urls.is_empty() {
+            // Fetch the full sitemap so the true URL count is known, then cap
+            // how many URLs are sent to the URL Inspection API (issue #26).
+            let entries =
+                crate::gsc::sitemap::fetch_sitemap_entries(&sitemap_url_owned, usize::MAX).await?;
+            if entries.is_empty() {
                 return Err(crate::error::Error::Other(format!(
                     "Sitemap at '{}' is empty or unreachable",
                     sitemap_url_owned
                 )));
             }
+            let sitemap_url_count = entries.len();
+            let urls: Vec<String> = entries
+                .into_iter()
+                .take(super::GSC_INSPECTION_CAP)
+                .map(|e| e.url)
+                .collect();
 
             // URL Inspection API
             let records =
                 crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls).await?;
 
-            Ok::<_, crate::error::Error>((records, token))
+            Ok::<_, crate::error::Error>((records, token, sitemap_url_count))
         })
     })
     .join();
 
-    let (records, _token) = match gsc_result {
-        Ok(Ok((r, t))) => (r, t),
+    let (records, _token, sitemap_url_count) = match gsc_result {
+        Ok(Ok((r, t, n))) => (r, t, n),
         Ok(Err(e)) => {
             let msg = e.to_string();
-            return StepResult {
-                success: false,
-                message: if msg.contains("sitemap") || msg.contains("Sitemap") {
+            return StepResult::fail(if msg.contains("sitemap") || msg.contains("Sitemap") {
                     format!("Failed to fetch sitemap: {}", msg)
                 } else if msg.contains("auth") || msg.contains("token") {
                     format!("GSC auth failed: {}", msg)
                 } else {
                     format!("URL Inspection API failed: {}", msg)
-                },
-                output: None,
-            };
+                });
         }
         Err(_) => {
-            return StepResult {
-                success: false,
-                message: "GSC collection thread panicked".to_string(),
-                output: None,
-            }
+            return StepResult::fail("GSC collection thread panicked".to_string())
         }
     };
 
@@ -241,14 +229,10 @@ pub(crate) fn exec_collect_gsc(
     }
 
     if sample_size > 0 && sample_matches == 0 {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "GSC site URL mismatch: 0/{} inspected URLs match '{}'. Check 'url'/'gsc_site' in manifest.json.",
                 sample_size, site_match_prefix
-            ),
-            output: None,
-        };
+            ));
     }
 
     // 5. Domain validation (normalize for www. comparison)
@@ -260,16 +244,12 @@ pub(crate) fn exec_collect_gsc(
         })
         .count();
     if records.len() > 5 && url_matching < records.len() / 2 {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "GSC site URL mismatch: only {}/{} URLs match '{}'. Check 'url' in manifest.json.",
                 url_matching,
                 records.len(),
                 site_match_prefix
-            ),
-            output: None,
-        };
+            ));
     }
 
     // 6. Build output
@@ -308,6 +288,13 @@ pub(crate) fn exec_collect_gsc(
             "collected_at": now_iso,
             "total_urls": records.len(),
             "issues_found": issues_found,
+            // Inspection coverage (issue #26): lets drift detection distinguish
+            // URLs GSC has genuinely never inspected from URLs that were simply
+            // skipped because the sitemap exceeded the inspection cap.
+            "sitemap_url_count": sitemap_url_count,
+            "inspected_count": records.len(),
+            "cap": super::GSC_INSPECTION_CAP,
+            "truncated": sitemap_url_count > super::GSC_INSPECTION_CAP,
         },
         "counts": counts,
         "items": items,
@@ -316,11 +303,7 @@ pub(crate) fn exec_collect_gsc(
     // 7. Write gsc_collection.json
     let output_path = paths.automation_dir.join("gsc_collection.json");
     if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to create automation dir: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to create automation dir: {}", e));
     }
     if let Err(e) =
         crate::engine::exec::common::write_json(&output_path, &collection, "gsc_collection.json")
@@ -350,16 +333,12 @@ pub(crate) fn exec_collect_gsc(
         );
         // Fail the step (issue #25): gsc_collection.json is already on disk, so
         // a retry only needs to redo the sync — which is idempotent (DELETE+INSERT).
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "URL inspection succeeded ({} URLs inspected, {} issues found, gsc_collection.json written), but the Search Analytics sync failed: {}. Downstream audits would run on stale metrics. Re-run collect_gsc to retry the sync.",
                 records.len(),
                 issues_found,
                 sync_msg
-            ),
-            output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
-        };
+            ), serde_json::to_string_pretty(&collection).unwrap_or_default());
     }
 
     log::info!("[collect_gsc] analytics sync succeeded: {}", sync_msg);

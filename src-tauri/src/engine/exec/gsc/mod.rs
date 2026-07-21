@@ -18,6 +18,11 @@ mod task_spawner;
 /// indexing-health prerequisite gate to fail closed on stale/missing metrics.
 pub(crate) const GSC_METRICS_SYNC_MARKER: &str = "gsc_metrics_synced_at";
 
+/// Maximum number of sitemap URLs sent to the URL Inspection API per
+/// `collect_gsc` run. The full sitemap is still fetched so the true URL count
+/// can be recorded in the collection meta (issue #26).
+pub(crate) const GSC_INSPECTION_CAP: usize = 200;
+
 pub(crate) use collect::*;
 pub(crate) use drift::*;
 pub(crate) use investigate::*;

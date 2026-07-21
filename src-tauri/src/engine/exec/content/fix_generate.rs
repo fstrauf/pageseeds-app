@@ -23,23 +23,15 @@ pub(crate) async fn exec_fix_content_article_generate(
         match crate::rig::provider::resolve_backend(agent_provider, None, None, None).await {
             Ok(b) => b,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Could not resolve LLM backend: {}", e),
-                    output: None,
-                };
+                return StepResult::fail(format!("Could not resolve LLM backend: {}", e));
             }
         };
 
     match &backend {
         LlmBackend::KimiDirect => {
-            return StepResult {
-                success: false,
-                message: "Structured extraction is not supported with KimiDirect (CLI fallback). \
+            return StepResult::fail("Structured extraction is not supported with KimiDirect (CLI fallback). \
                  Please ensure the Kimi bridge is running or use another provider."
-                    .to_string(),
-                output: None,
-            };
+                    .to_string());
         }
         _ => {}
     }
@@ -57,22 +49,14 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let context = match extract_context(task) {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return StepResult {
-                success: false,
-                message: "No content_fix_context artifact found on task".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No content_fix_context artifact found on task".to_string());
         }
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "content_fix_context artifact exists but is invalid: {}. \
                      This usually means the context step produced unexpected JSON.",
                     e
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
@@ -81,25 +65,17 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let file_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &context.file) {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "File not found: {}. Run sanitize_content to repair paths.",
                     context.file
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(_e) => {
-            return StepResult {
-                success: false,
-                message: format!("File not found: {}", file_path.display()),
-                output: None,
-            };
+            return StepResult::fail(format!("File not found: {}", file_path.display()));
         }
     };
 
@@ -107,11 +83,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let prompt = match build_fix_prompt(task, project_path, &context, &original_content) {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to build content fix prompt: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to build content fix prompt: {}", e));
         }
     };
 
@@ -131,15 +103,11 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "Structured extraction failed for ContentFixPatch: {}. \
                      If you are using KimiDirect, please switch to a structured-output provider (Kimi bridge, Claude, OpenAI, or Ollama).",
                     e
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
@@ -162,26 +130,18 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
                 let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id, project_path);
 
                 if !repair_errors.is_empty() {
-                    return StepResult {
-                        success: false,
-                        message: format!(
+                    return StepResult::fail(format!(
                             "Content fix patch failed validation after repair: {}. No changes written.",
                             repair_errors.join("; ")
-                        ),
-                        output: None,
-                    };
+                        ));
                 }
                 patch = repaired;
             }
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "Content fix patch repair extraction failed: {}. No changes written.",
                         e
-                    ),
-                    output: None,
-                };
+                    ));
             }
         }
     }
@@ -190,11 +150,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let patch_json = match serde_json::to_string_pretty(&patch) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize ContentFixPatch: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize ContentFixPatch: {}", e));
         }
     };
 
@@ -219,6 +175,11 @@ struct FixContext {
     pub article_title: String,
     pub target_keyword: Option<String>,
     pub suggestions: Vec<ReviewSuggestion>,
+    /// Deterministic valid internal link targets, enriched by the context
+    /// step from `task_store::load_valid_link_targets`. Empty for historical
+    /// artifacts or when the lookup failed — the prompt then falls back to
+    /// the "do not link when unsure" rule.
+    pub available_link_slugs: Vec<String>,
 }
 
 fn extract_context(task: &Task) -> Result<Option<FixContext>, String> {
@@ -255,12 +216,22 @@ fn extract_context(task: &Task) -> Result<Option<FixContext>, String> {
         .filter_map(|s| serde_json::from_value(s.clone()).ok())
         .collect();
 
+    let available_link_slugs: Vec<String> = value["available_link_slugs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(Some(FixContext {
         article_id,
         file,
         article_title,
         target_keyword,
         suggestions,
+        available_link_slugs,
     }))
 }
 
@@ -300,8 +271,29 @@ fn build_fix_prompt(
     let title_max = crate::engine::exec::audit_health::TITLE_MAX_LEN;
     let meta_min = crate::engine::exec::audit_health::META_MIN_LEN;
     let meta_max = crate::engine::exec::audit_health::META_MAX_LEN;
+    let intro_min = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
+    let intro_max = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
 
     let suggestions_json = serde_json::to_string_pretty(&context.suggestions).map_err(|e| e.to_string())?;
+
+    // The valid-target list is guaranteed by Rust context enrichment (same
+    // source as validate_patch_before_write enforces). When it is non-empty
+    // the model may ONLY link from it; when it is empty (historical artifact
+    // or failed lookup) the old "do not link when unsure" rule applies.
+    let (link_targets_section, link_rule) = if context.available_link_slugs.is_empty() {
+        (
+            String::new(),
+            "Only link to articles that actually exist in this project. If you are unsure whether a target exists, do NOT include it.".to_string(),
+        )
+    } else {
+        (
+            format!(
+                "### Valid internal link targets in this project\n```\n{}\n```\n\n",
+                context.available_link_slugs.join("\n")
+            ),
+            "Only link to slugs from the valid internal link target list above — every slug in that list is guaranteed to exist in this project. Never invent a target that is not on the list.".to_string(),
+        )
+    };
 
     let prompt = format!(
         r#"## Skill
@@ -330,7 +322,7 @@ fn build_fix_prompt(
 ### Has frontmatter FAQ
 {has_faq}
 
-### Body excerpt
+{link_targets_section}### Body excerpt
 ```
 {body_excerpt}
 ```
@@ -348,7 +340,7 @@ You must produce a ContentFixPatch JSON that addresses every suggestion listed a
 Validation rules (enforced by Rust):
 - title: must be ≤ {title_max} chars if provided
 - description: must be {meta_min}-{meta_max} chars if provided
-- intro: should be 40-60 words if provided
+- intro: should be {intro_min}-{intro_max} words if provided
 - faq_questions: must be 3-5 questions if provided and file has no existing frontmatter FAQ
 
 **CRITICAL — Keyword placement**: The target keyword is "{target_keyword}". Whenever you generate a new title, H1, meta description, or intro, you MUST naturally include the target keyword in the text. This applies to ALL changes in those fields, not just keyword-specific recommendations:
@@ -360,7 +352,7 @@ Validation rules (enforced by Rust):
 **CRITICAL — Internal links format**:
 - If you include `internal_links`, each entry must use the bare slug as `target_slug` (e.g., `"my-post"`), NEVER `/blog/my-post` or `blog/my-post`.
 - The Rust code automatically wraps it as `/blog/<slug>` when writing the file.
-- Only link to articles that actually exist in this project. If you are unsure whether a target exists, do NOT include it.
+- {link_rule}
 - Example CORRECT: `{{"anchor_text": "learn more", "target_slug": "options-trading-basics"}}`
 - Example WRONG: `{{"anchor_text": "learn more", "target_slug": "/blog/options-trading-basics"}}`
 
@@ -380,6 +372,8 @@ Only include fields that need to change. Do not include title/description/intro/
         meta_max = meta_max,
         current_first = current_first,
         first_words = crate::content::ops::count_words(&current_first),
+        intro_min = intro_min,
+        intro_max = intro_max,
         has_faq = if has_faq {
             "yes — do NOT generate faq_questions"
         } else {
@@ -764,4 +758,113 @@ Fix the patch so it passes all validation rules. Return only the corrected Conte
         None,
     )
     .await
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskArtifact, TaskReviewSurface, TaskRun,
+        TaskRunPolicy, TaskStatus,
+    };
+
+    const SAMPLE_MDX: &str = "---\ntitle: \"Container Gardening Basics\"\ndescription: \"A solid meta description.\"\ndate: \"2026-01-01\"\n---\n\n# Container Gardening Basics\n\nAn intro paragraph about container gardening with enough words to matter.\n";
+
+    fn task_with_context_artifact(context: serde_json::Value) -> Task {
+        let now = chrono::Utc::now().to_rfc3339();
+        Task {
+            id: "task-fix-gen".to_string(),
+            project_id: "p1".to_string(),
+            task_type: "fix_content_article".to_string(),
+            phase: "fix".to_string(),
+            status: TaskStatus::InProgress,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::None,
+            title: Some("Fix article".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![TaskArtifact {
+                key: "content_fix_context".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(context.to_string()),
+            }],
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            not_before: None,
+            updated_at: now,
+        }
+    }
+
+    fn context_json(extra: serde_json::Value) -> serde_json::Value {
+        let mut ctx = serde_json::json!({
+            "article_id": 7,
+            "article_file": "content/blog/slug.mdx",
+            "article_title": "Some Article",
+            "target_keyword": "container gardening",
+            "suggestions": [],
+        });
+        if let serde_json::Value::Object(extra) = extra {
+            for (k, v) in extra {
+                ctx[k] = v;
+            }
+        }
+        ctx
+    }
+
+    fn fix_context(link_slugs: Vec<String>) -> FixContext {
+        FixContext {
+            article_id: 7,
+            file: "content/blog/slug.mdx".to_string(),
+            article_title: "Some Article".to_string(),
+            target_keyword: Some("container gardening".to_string()),
+            suggestions: vec![],
+            available_link_slugs: link_slugs,
+        }
+    }
+
+    #[test]
+    fn extract_context_reads_available_link_slugs() {
+        let task = task_with_context_artifact(context_json(serde_json::json!({
+            "available_link_slugs": ["alpha-post", "beta-post"]
+        })));
+        let ctx = extract_context(&task).unwrap().unwrap();
+        assert_eq!(ctx.available_link_slugs, vec!["alpha-post", "beta-post"]);
+    }
+
+    #[test]
+    fn extract_context_tolerates_missing_link_slugs() {
+        // Historical artifacts predate the enrichment — absence must degrade
+        // to an empty list, not an error.
+        let task = task_with_context_artifact(context_json(serde_json::json!({})));
+        let ctx = extract_context(&task).unwrap().unwrap();
+        assert!(ctx.available_link_slugs.is_empty());
+    }
+
+    #[test]
+    fn prompt_lists_valid_targets_and_list_only_rule() {
+        let task = task_with_context_artifact(context_json(serde_json::json!({})));
+        let ctx = fix_context(vec!["alpha-post".to_string(), "beta-post".to_string()]);
+        let prompt = build_fix_prompt(&task, "/tmp", &ctx, SAMPLE_MDX).unwrap();
+        assert!(prompt.contains("Valid internal link targets in this project"));
+        assert!(prompt.contains("alpha-post"));
+        assert!(prompt.contains("beta-post"));
+        assert!(prompt.contains("Only link to slugs from the valid internal link target list"));
+        assert!(!prompt.contains("If you are unsure whether a target exists"));
+    }
+
+    #[test]
+    fn prompt_without_targets_keeps_unsure_rule() {
+        let task = task_with_context_artifact(context_json(serde_json::json!({})));
+        let ctx = fix_context(vec![]);
+        let prompt = build_fix_prompt(&task, "/tmp", &ctx, SAMPLE_MDX).unwrap();
+        assert!(!prompt.contains("Valid internal link targets in this project"));
+        assert!(prompt.contains("If you are unsure whether a target exists, do NOT include it"));
+    }
 }

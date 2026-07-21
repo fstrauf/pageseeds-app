@@ -42,17 +42,9 @@ pub fn exec_social_design_template(
                     output: Some(serde_json::to_string(&template).unwrap_or_default()),
                 }
             }
-            Err(e) => StepResult {
-                success: false,
-                message: format!("Failed to parse template output: {}", e),
-                output: Some(output),
-            },
+            Err(e) => StepResult::fail_with_output(format!("Failed to parse template output: {}", e), output),
         },
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Agent failed: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("Agent failed: {}", e)),
     }
 }
 

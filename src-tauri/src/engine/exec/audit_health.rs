@@ -82,7 +82,7 @@ impl ArticleHealth {
 /// |------------------|--------------------------------------------------|
 /// | file_found       | MDX file exists on disk                          |
 /// | title_ok         | title.len() <= 55                                |
-/// | meta_ok          | meta.len() >= 130 && meta.len() <= 155           |
+/// | meta_ok          | meta.len() >= 120 && meta.len() <= 155           |
 /// | snippet_ok       | word_count >= 40 && word_count <= 60 && (has_keyword \|\| has '?') |
 /// | faq_ok           | has_faq_schema == true (advisory only — not in `issues`, not in `all_ok()`) |
 pub const TITLE_MAX_LEN: usize = 55;

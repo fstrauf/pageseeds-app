@@ -24,11 +24,7 @@ pub(crate) fn exec_merge_rewrite_inbound_links(task: &Task, project_path: &str) 
     let plan: serde_json::Value = match serde_json::from_str(&plan_json) {
         Ok(v) => v,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid merge plan JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid merge plan JSON: {}", e));
         }
     };
 
@@ -59,11 +55,7 @@ pub(crate) fn exec_merge_rewrite_inbound_links(task: &Task, project_path: &str) 
     {
         Some(d) => d,
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not locate content directory".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Could not locate content directory".to_string())
         }
     };
 
@@ -90,11 +82,7 @@ pub(crate) fn exec_merge_rewrite_inbound_links(task: &Task, project_path: &str) 
                 output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            message: e,
-            output: None,
-        },
+        Err(e) => StepResult::fail(e),
     }
 }
 

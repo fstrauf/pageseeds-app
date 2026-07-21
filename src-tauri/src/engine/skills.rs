@@ -30,6 +30,7 @@ const EMBEDDED_SKILL_NAMES: &[&str] = &[
     "cannibalization-strategy",
     "clarity-investigate",
     "content-fix-apply",
+    "content-quality-review",
     "content-write",
     "ctr-fix-apply",
     "ctr-optimization",
@@ -52,6 +53,9 @@ fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
         }
         "clarity-investigate" => include_str!("../../skills/clarity-investigate/SKILL.md"),
         "content-fix-apply" => include_str!("../../skills/content-fix-apply/SKILL.md"),
+        "content-quality-review" => {
+            include_str!("../../skills/content-quality-review/SKILL.md")
+        }
         "content-write" => include_str!("../../skills/content-write/SKILL.md"),
         "ctr-fix-apply" => include_str!("../../skills/ctr-fix-apply/SKILL.md"),
         "ctr-optimization" => include_str!("../../skills/ctr-optimization/SKILL.md"),
@@ -427,6 +431,24 @@ mod tests {
 
         let skill = load_skill(&repo, "cannibalization-strategy").unwrap();
         assert!(skill.content.contains("keep_id"));
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_load_skill_content_fix_apply_resolves_embedded_without_project_copy() {
+        // Issue #33: `content-fix-apply` must resolve from embedded skills on a
+        // managed repo with no `.github/skills` copy — no one-line fallback.
+        let repo = test_dir();
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(!repo.join(".github").join("skills").exists());
+
+        let skill = load_skill(&repo, "content-fix-apply")
+            .expect("content-fix-apply must resolve from embedded defaults");
+        assert!(skill.content.contains("ContentFixPatch"));
+        assert!(skill.content.contains("40-60"));
+        assert!(skill.content.contains("120-155"));
 
         let _ = std::fs::remove_dir_all(&repo);
     }

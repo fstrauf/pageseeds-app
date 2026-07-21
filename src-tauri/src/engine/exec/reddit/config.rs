@@ -212,12 +212,8 @@ pub fn exec_reddit_config_parse(
         std::fs::read_to_string(automation_dir.join("reddit_config.md")).unwrap_or_default();
 
     if reddit_config.is_empty() && project_context.is_empty() {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: "No reddit_config.md or project.md found — create config files first"
-                .to_string(),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail("No reddit_config.md or project.md found — create config files first"
+                .to_string());
     }
 
     // Build prompt for agentic parsing.
@@ -266,11 +262,7 @@ pub fn exec_reddit_config_parse(
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to create runtime for extraction: {}", e),
-                output: None,
-            };
+            return crate::engine::workflows::StepResult::fail(format!("Failed to create runtime for extraction: {}", e));
         }
     };
 
@@ -299,11 +291,7 @@ pub fn exec_reddit_config_parse(
             );
 
             if params.query_keywords.is_empty() && params.trigger_topics.is_empty() {
-                crate::engine::workflows::StepResult {
-                    success: false,
-                    message: "No query keywords or trigger topics found in config — add them to reddit_config.md".to_string(),
-                    output: Some(serde_json::to_string_pretty(&params).unwrap_or_default()),
-                }
+                crate::engine::workflows::StepResult::fail_with_output("No query keywords or trigger topics found in config — add them to reddit_config.md".to_string(), serde_json::to_string_pretty(&params).unwrap_or_default())
             } else {
                 crate::engine::workflows::StepResult {
                     success: true,
@@ -319,11 +307,7 @@ pub fn exec_reddit_config_parse(
         }
         Err(e) => {
             log::warn!("[reddit_config_parse] structured extraction failed: {}", e);
-            crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to extract RedditSearchParams: {}", e),
-                output: None,
-            }
+            crate::engine::workflows::StepResult::fail(format!("Failed to extract RedditSearchParams: {}", e))
         }
     }
 }

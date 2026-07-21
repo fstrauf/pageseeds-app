@@ -29,20 +29,12 @@ pub async fn exec_social_generate_posts(
     let articles = match list_articles(&task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load articles: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load articles: {}", e));
         }
     };
     
     if articles.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No articles found. Add articles to your project first.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No articles found. Add articles to your project first.".to_string());
     }
     
     log::info!("[social_generate_posts] found {} articles", articles.len());
@@ -51,11 +43,7 @@ pub async fn exec_social_generate_posts(
     let paths = ProjectPaths::from_path(_project_path);
     let output_dir = paths.social_output_dir();
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to create output directory: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to create output directory: {}", e));
     }
     
     // Generate posts agentically
@@ -70,20 +58,12 @@ pub async fn exec_social_generate_posts(
     ).await {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to generate posts: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to generate posts: {}", e));
         }
     };
     
     if posts.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No posts were generated. Check agent output.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No posts were generated. Check agent output.".to_string());
     }
     
     // Save posts to database
@@ -105,11 +85,7 @@ pub async fn exec_social_generate_posts(
     let posts_json = match serde_json::to_string(&posts) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize posts: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize posts: {}", e));
         }
     };
     

@@ -25,21 +25,13 @@ pub fn exec_collect_clarity(task: &Task, project_path: &str, conn: &Connection) 
     let project = match task_store::get_project(conn, &task.project_id) {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load project '{}': {}", task.project_id, e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load project '{}': {}", task.project_id, e))
         }
     };
     let project_id = match project.clarity_project_id.as_deref().filter(|id| !id.is_empty()) {
         Some(id) => id.to_string(),
         None => {
-            return StepResult {
-                success: false,
-                message: "clarity_project_id not set in project settings".to_string(),
-                output: None,
-            }
+            return StepResult::fail("clarity_project_id not set in project settings".to_string())
         }
     };
 
@@ -50,12 +42,8 @@ pub fn exec_collect_clarity(task: &Task, project_path: &str, conn: &Connection) 
     {
         Some(t) => t,
         None => {
-            return StepResult {
-                success: false,
-                message: "CLARITY_API_TOKEN not configured — add it in Settings → Secrets"
-                    .to_string(),
-                output: None,
-            }
+            return StepResult::fail("CLARITY_API_TOKEN not configured — add it in Settings → Secrets"
+                    .to_string())
         }
     };
 
@@ -84,24 +72,16 @@ pub fn exec_collect_clarity(task: &Task, project_path: &str, conn: &Connection) 
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
             let msg = e.to_string();
-            return StepResult {
-                success: false,
-                message: if msg.contains("401") || msg.contains("Unauthorized") {
+            return StepResult::fail(if msg.contains("401") || msg.contains("Unauthorized") {
                     "Clarity API token is invalid or expired".to_string()
                 } else if msg.contains("429") || msg.contains("TooManyRequests") {
                     "Clarity API daily request limit reached".to_string()
                 } else {
                     format!("Clarity Export API failed: {}", msg)
-                },
-                output: None,
-            };
+                });
         }
         Err(_) => {
-            return StepResult {
-                success: false,
-                message: "Clarity collection thread panicked".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Clarity collection thread panicked".to_string())
         }
     };
 
@@ -134,11 +114,7 @@ pub fn exec_collect_clarity(task: &Task, project_path: &str, conn: &Connection) 
 
     // 5. Store rows in SQLite.
     if let Err(e) = db::insert_rows(conn, &task.project_id, &exported_at, &all_rows) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to store Clarity rows: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to store Clarity rows: {}", e));
     }
 
     // 6. Prune rows older than 90 days to keep the table bounded.
@@ -159,11 +135,7 @@ pub fn exec_collect_clarity(task: &Task, project_path: &str, conn: &Connection) 
     };
 
     if let Err(e) = export::write_collection(&paths.automation_dir, &collection) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write clarity_collection.json: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write clarity_collection.json: {}", e));
     }
 
     StepResult {

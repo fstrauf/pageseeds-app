@@ -58,11 +58,7 @@ pub fn exec_social_save_campaign(
     let posts = match load_posts_from_artifacts(task) {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: "No posts to save. Run previous steps first.".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No posts to save. Run previous steps first.".to_string());
         }
     };
 

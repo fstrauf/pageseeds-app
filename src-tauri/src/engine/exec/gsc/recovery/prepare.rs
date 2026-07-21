@@ -62,11 +62,7 @@ pub(crate) fn exec_gsc_recovery_prepare(
         match refresh_link_scan(&paths, &task.project_id) {
             Ok(summary) => messages.push(summary),
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Failed to refresh link scan: {}", e),
-                    output: None,
-                };
+                return StepResult::fail(format!("Failed to refresh link scan: {}", e));
             }
         }
     } else {

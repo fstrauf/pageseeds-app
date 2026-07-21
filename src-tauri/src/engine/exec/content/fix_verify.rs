@@ -24,36 +24,24 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         match crate::engine::exec::audit_health::resolve_content_file(repo_root, &patch.file) {
             Some(p) => p,
             None => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "File not found: {}. Run sanitize_content to repair paths.",
                         patch.file
-                    ),
-                    output: None,
-                };
+                    ));
             }
         };
 
     let content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(_e) => {
-            return StepResult {
-                success: false,
-                message: format!("File not found: {}", file_path.display()),
-                output: None,
-            };
+            return StepResult::fail(format!("File not found: {}", file_path.display()));
         }
     };
 
     let (frontmatter, body) = match crate::content::frontmatter::split_mdx(&content) {
         Some((f, b)) => (f, b),
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not parse frontmatter from MDX file".to_string(),
-                output: None,
-            };
+            return StepResult::fail("Could not parse frontmatter from MDX file".to_string());
         }
     };
 
@@ -370,11 +358,7 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
     let report_json = match serde_json::to_string_pretty(&report) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize verification report: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize verification report: {}", e));
         }
     };
 
@@ -393,24 +377,16 @@ fn resolve_patch(task: &Task) -> Result<ContentFixPatch, StepResult> {
             match serde_json::from_str::<ContentFixPatch>(content) {
                 Ok(p) => return Ok(p),
                 Err(e) => {
-                    return Err(StepResult {
-                        success: false,
-                        message: format!(
+                    return Err(StepResult::fail_with_output(format!(
                             "content_fix_patch artifact exists but is invalid JSON: {}",
                             e
-                        ),
-                        output: Some(content.clone()),
-                    });
+                        ), content.clone()));
                 }
             }
         }
     }
 
-    Err(StepResult {
-        success: false,
-        message: "No content_fix_patch artifact found. Run the generate step first.".to_string(),
-        output: None,
-    })
+    Err(StepResult::fail("No content_fix_patch artifact found. Run the generate step first.".to_string()))
 }
 
 /// Extract the target keyword from the content_fix_context artifact.

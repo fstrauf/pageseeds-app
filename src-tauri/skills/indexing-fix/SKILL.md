@@ -1,6 +1,6 @@
 # Indexing Fix Skill
 
-<!-- skill-version: 2 -->
+<!-- skill-version: 3 -->
 
 Used by the `fix_indexing` / `fix_technical` agentic generate step.
 
@@ -38,7 +38,7 @@ apply step performs all file writes:
   "changes": {
     "title": "new frontmatter title (optional)",
     "h1": "new top-level body heading, without the leading '# ' (optional)",
-    "description": "new meta description, 120-160 chars (optional)",
+    "description": "new meta description, 120-155 chars (optional)",
     "intro": "full replacement first paragraph (optional)",
     "frontmatter": [{ "key": "robots", "value": "index, follow" }]
   }

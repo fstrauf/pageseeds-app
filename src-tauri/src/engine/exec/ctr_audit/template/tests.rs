@@ -63,8 +63,8 @@ use super::*;
                 url: "https://example.com/a".to_string(),
                 file: "content/001_a.mdx".to_string(),
                 source_title: "Article A".to_string(),
-                rendered_title: "Article A | Brand | Brand".to_string(),
-                rendered_title_length: 25,
+                rendered_title: "Article A | Brand | Brand | Brand".to_string(),
+                rendered_title_length: 33,
                 title_issue_source: "site_template".to_string(),
                 source_description: "".to_string(),
                 rendered_description: None,
@@ -82,8 +82,8 @@ use super::*;
                 url: "https://example.com/b".to_string(),
                 file: "content/002_b.mdx".to_string(),
                 source_title: "Article B".to_string(),
-                rendered_title: "Article B | Brand | Brand".to_string(),
-                rendered_title_length: 25,
+                rendered_title: "Article B | Brand | Brand | Brand".to_string(),
+                rendered_title_length: 33,
                 title_issue_source: "site_template".to_string(),
                 source_description: "".to_string(),
                 rendered_description: None,
@@ -121,7 +121,7 @@ use super::*;
         assert_eq!(results.len(), 2, "Should detect suffix group + literal variable pattern");
         let suffix_result = results
             .iter()
-            .find(|r| r.detected_pattern == "{title} | Brand | Brand")
+            .find(|r| r.detected_pattern == "{title} | Brand | Brand | Brand")
             .expect("Should find suffix group result");
         assert_eq!(suffix_result.affected_pages, 2);
         assert_eq!(suffix_result.desired_pattern, "{title} | Brand");
@@ -159,4 +159,86 @@ use super::*;
             results.is_empty(),
             "Should not detect patterns for content_file issues"
         );
+    }
+
+    /// Build a rendered-page audit with only the fields relevant to template detection.
+    fn audit(article_id: i64, source_title: &str, rendered_title: &str) -> CtrRenderedPageAudit {
+        CtrRenderedPageAudit {
+            article_id,
+            url: format!("https://example.com/{}", article_id),
+            file: format!("content/{:03}_{}.mdx", article_id, article_id),
+            source_title: source_title.to_string(),
+            rendered_title: rendered_title.to_string(),
+            rendered_title_length: rendered_title.len(),
+            title_issue_source: "site_template".to_string(),
+            source_description: "".to_string(),
+            rendered_description: None,
+            canonical_url: None,
+            rendered_h1: None,
+            schema_types: vec![],
+            has_rendered_faq_page: false,
+            rendered_faq_question_count: 0,
+            snippet_markup: Default::default(),
+            issues: vec![],
+            checked_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn test_detect_template_patterns_ignores_harmless_brand_suffix() {
+        // The normal `Page Title | Brand` convention on 2+ pages must not
+        // produce a template pattern (and hence no fix_ctr_site_template task).
+        let audits = vec![
+            audit(1, "Best Coffee Makers", "Best Coffee Makers | Brand"),
+            audit(2, "How to Brew Espresso", "How to Brew Espresso | Brand"),
+            audit(3, "French Press Guide", "French Press Guide | Brand"),
+        ];
+
+        let results = detect_template_patterns("/tmp", &audits);
+        assert!(
+            results.is_empty(),
+            "Harmless pipe-Brand suffix should not be detected as a template pattern"
+        );
+    }
+
+    #[test]
+    fn test_detect_template_patterns_flags_suffix_length_overflow() {
+        // The suffix pushes the rendered title over TITLE_MAX_LEN while the
+        // source title alone would fit — that is template harm.
+        let audits = vec![
+            audit(
+                1,
+                "The Complete Guide to Options Trading Strategies",
+                "The Complete Guide to Options Trading Strategies | Brand",
+            ),
+            audit(
+                2,
+                "Understanding Iron Condors And Vertical Spread Trades",
+                "Understanding Iron Condors And Vertical Spread Trades | Brand",
+            ),
+        ];
+
+        let results = detect_template_patterns("/tmp", &audits);
+        let suffix_result = results
+            .iter()
+            .find(|r| r.detected_pattern == "{title} | Brand")
+            .expect("Suffix length overflow should be detected as a template pattern");
+        assert_eq!(suffix_result.affected_pages, 2);
+    }
+
+    #[test]
+    fn test_detect_template_patterns_flags_brand_duplication() {
+        // True template-introduced brand duplication still triggers a pattern.
+        let audits = vec![
+            audit(1, "Article A", "Article A | Brand | Brand | Brand"),
+            audit(2, "Article B", "Article B | Brand | Brand | Brand"),
+        ];
+
+        let results = detect_template_patterns("/tmp", &audits);
+        let suffix_result = results
+            .iter()
+            .find(|r| r.detected_pattern == "{title} | Brand | Brand | Brand")
+            .expect("Brand duplication should be detected as a template pattern");
+        assert_eq!(suffix_result.affected_pages, 2);
+        assert_eq!(suffix_result.desired_pattern, "{title} | Brand");
     }
