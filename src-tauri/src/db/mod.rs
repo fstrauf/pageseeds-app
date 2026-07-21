@@ -625,6 +625,16 @@ pub fn init_with_conn(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Run a migration step whose failure is tolerated (the statement may already
+/// be applied, so idempotency is preserved), but log loudly — a silently
+/// swallowed failure with the schema version still recorded hides schema drift
+/// (issue #71).
+fn run_tolerated_migration(conn: &Connection, version: u32, sql: &str) {
+    if let Err(e) = conn.execute_batch(sql) {
+        log::error!("[db::run_migrations] V{} migration failed: {}", version, e);
+    }
+}
+
 fn run_migrations(conn: &Connection) -> Result<()> {
     // unwrap_or(0) handles the case where schema_version doesn't exist yet
     let version: i64 = conn
@@ -645,7 +655,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 2 {
         // Add site_id column if it doesn't exist yet (idempotent)
-        let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN site_id TEXT;");
+        run_tolerated_migration(conn, 2, "ALTER TABLE projects ADD COLUMN site_id TEXT;");
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (2, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -653,7 +663,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 3 {
-        let _ = conn.execute_batch(
+        run_tolerated_migration(
+            conn,
+            3,
             "CREATE TABLE IF NOT EXISTS task_runs (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id     TEXT NOT NULL,
@@ -676,8 +688,11 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     if version < 4 {
         // Add agent_provider to projects; ignore error if column already exists
         // Note: This is legacy - agent_provider is now global. Default to 'kimi'.
-        let _ = conn
-            .execute_batch("ALTER TABLE projects ADD COLUMN agent_provider TEXT DEFAULT 'kimi';");
+        run_tolerated_migration(
+            conn,
+            4,
+            "ALTER TABLE projects ADD COLUMN agent_provider TEXT DEFAULT 'kimi';",
+        );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (4, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -685,9 +700,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 5 {
-        // Add mention_stance column to reddit_opportunities; ignore error if already exists
-        let _ =
-            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN mention_stance TEXT;");
+        // Add mention_stance column to reddit_opportunities; tolerate "duplicate
+        // column" for idempotency, but log loudly — a failed ALTER with the version
+        // still recorded hides schema drift (issue #71).
+        run_tolerated_migration(
+            conn,
+            5,
+            "ALTER TABLE reddit_opportunities ADD COLUMN mention_stance TEXT;",
+        );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (5, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -752,7 +772,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 13 {
         // Add seo_provider column for dual SEO provider support (Ahrefs / DataForSEO)
-        let _ = conn.execute_batch(
+        run_tolerated_migration(
+            conn,
+            13,
             "ALTER TABLE projects ADD COLUMN seo_provider TEXT NOT NULL DEFAULT 'ahrefs';",
         );
         conn.execute(
@@ -800,9 +822,13 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 15 {
-        // Add product_name column to reddit_opportunities for agentic config consumption
-        let _ =
-            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN product_name TEXT;");
+        // Add product_name column to reddit_opportunities for agentic config consumption.
+        // Tolerate failure for idempotency, but log loudly (issue #71).
+        run_tolerated_migration(
+            conn,
+            15,
+            "ALTER TABLE reddit_opportunities ADD COLUMN product_name TEXT;",
+        );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (15, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -810,7 +836,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 16 {
-        let _ = conn.execute_batch(MIGRATION_V16);
+        run_tolerated_migration(conn, 16, MIGRATION_V16);
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (16, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -856,7 +882,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 17 {
-        let _ = conn.execute_batch(MIGRATION_V17);
+        run_tolerated_migration(conn, 17, MIGRATION_V17);
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (17, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -888,7 +914,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 19 {
-        let _ = conn.execute_batch(MIGRATION_V19);
+        run_tolerated_migration(conn, 19, MIGRATION_V19);
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (19, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -896,7 +922,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 20 {
-        let _ = conn.execute_batch(MIGRATION_V20);
+        run_tolerated_migration(conn, 20, MIGRATION_V20);
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (20, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -912,7 +938,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 22 {
-        let _ = conn.execute_batch(MIGRATION_V22);
+        run_tolerated_migration(conn, 22, MIGRATION_V22);
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (22, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -920,7 +946,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 23 {
-        let _ = conn.execute_batch(MIGRATION_V23);
+        run_tolerated_migration(conn, 23, MIGRATION_V23);
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (23, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -1039,8 +1065,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 36 {
         // Add page_type to articles for hub/pillar/spoke classification
-        let _ = conn.execute_batch("ALTER TABLE articles ADD COLUMN page_type TEXT;");
-        let _ = conn.execute_batch(
+        run_tolerated_migration(conn, 36, "ALTER TABLE articles ADD COLUMN page_type TEXT;");
+        run_tolerated_migration(
+            conn,
+            36,
             "CREATE INDEX IF NOT EXISTS idx_articles_page_type ON articles(project_id, page_type);",
         );
         conn.execute(
@@ -1130,7 +1158,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 37 {
         // Add not_before support for delayed task execution (e.g. outcome reviews)
-        let _ = conn.execute_batch("ALTER TABLE tasks ADD COLUMN not_before TEXT;");
+        run_tolerated_migration(conn, 37, "ALTER TABLE tasks ADD COLUMN not_before TEXT;");
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (37, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -1139,8 +1167,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if version < 40 {
         // Add content_hash and last_edited_at to articles for tracking
-        let _ = conn.execute_batch("ALTER TABLE articles ADD COLUMN content_hash TEXT;");
-        let _ = conn.execute_batch("ALTER TABLE articles ADD COLUMN last_edited_at TEXT;");
+        run_tolerated_migration(conn, 40, "ALTER TABLE articles ADD COLUMN content_hash TEXT;");
+        run_tolerated_migration(
+            conn,
+            40,
+            "ALTER TABLE articles ADD COLUMN last_edited_at TEXT;",
+        );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (40, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -1218,9 +1250,11 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
         // Clean up deprecated territory_research tasks (delete child runs first to satisfy FK).
         // Wrapped in its own execute_batch so a missing task_runs table doesn't block the migration.
-        let _ = conn.execute_batch(
+        run_tolerated_migration(
+            conn,
+            39,
             "DELETE FROM task_runs WHERE task_id IN (SELECT id FROM tasks WHERE type = 'territory_research');
-             DELETE FROM tasks WHERE type = 'territory_research';"
+             DELETE FROM tasks WHERE type = 'territory_research';",
         );
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (39, ?1)",
@@ -1406,7 +1440,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 44 {
-        let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN clarity_project_id TEXT;");
+        run_tolerated_migration(conn, 44, "ALTER TABLE projects ADD COLUMN clarity_project_id TEXT;");
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (44, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -1430,8 +1464,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 47 {
-        // Add selftext column to reddit_opportunities; ignore error if already exists
-        let _ = conn.execute_batch(MIGRATION_V47);
+        // Add selftext column to reddit_opportunities; tolerate failure for
+        // idempotency, but log loudly — silently recording V47 while the column is
+        // missing caused the reddit persistence drift in issue #71.
+        run_tolerated_migration(conn, 47, MIGRATION_V47);
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (47, ?1)",
             [chrono::Utc::now().to_rfc3339()],

@@ -116,7 +116,7 @@ fn main() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn list_tasks(db_path: &str, project_id: &str, args: &[String]) -> Result<serde_json::Value, String> {
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let task_type = flag(args, "--task-type", "-t");
     let status = flag(args, "--status", "-s");
     let mut tasks = pageseeds_lib::engine::task_store::list_tasks_light(&conn, project_id)
@@ -139,7 +139,7 @@ fn list_tasks(db_path: &str, project_id: &str, args: &[String]) -> Result<serde_
 }
 
 fn cancel_tasks(db_path: &str, project_id: &str, args: &[String]) -> Result<serde_json::Value, String> {
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let task_type = flag(args, "--task-type", "-t");
     let status = flag(args, "--status", "-s");
     let yes = has_flag(args, "--yes", "-y");
@@ -199,7 +199,7 @@ fn cancel_tasks(db_path: &str, project_id: &str, args: &[String]) -> Result<serd
 
 fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let result = rt.block_on(async {
         pageseeds_lib::engine::executor::execute_task_with_token(&conn, &task_id, None, None, false).await
@@ -215,7 +215,7 @@ fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, Str
 
 fn get_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let task = pageseeds_lib::engine::task_store::get_task(&conn, &task_id)
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&task).map_err(|e| e.to_string())
@@ -233,7 +233,7 @@ fn update_task_status_cmd(db_path: &str, args: &[String]) -> Result<serde_json::
             ));
         }
     };
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let task = pageseeds_lib::engine::task_store::update_task_status(&conn, &task_id, status)
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&task).map_err(|e| e.to_string())
@@ -250,7 +250,7 @@ fn select_keywords(db_path: &str, args: &[String]) -> Result<serde_json::Value, 
         .map(|s| s.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect())
         .unwrap_or_else(|| exit("--keywords required (comma-separated)"));
 
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let research_task = pageseeds_lib::engine::task_store::get_task(&conn, &research_task_id)
         .map_err(|e| e.to_string())?;
     let project_id = research_task.project_id.clone();
@@ -292,7 +292,7 @@ fn select_cannibalization(db_path: &str, args: &[String]) -> Result<serde_json::
         });
     }
 
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let tasks = pageseeds_lib::cannibalization::spawn_tasks_from_selection(
         &conn,
         &parent_task_id,
@@ -314,7 +314,7 @@ fn set_task_status(db_path: &str, args: &[String]) -> Result<serde_json::Value, 
     let status = flag(args, "--status", "-s").unwrap_or_else(|| exit("--status required"));
     let status_enum: TaskStatus = serde_json::from_value(serde_json::Value::String(status.clone()))
         .map_err(|_| format!("unknown status '{status}' (todo|queued|in_progress|review|done|failed|cancelled)"))?;
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     pageseeds_lib::engine::task_store::update_task_status(&conn, &task_id, status_enum)?;
     Ok(serde_json::json!({"task_id": task_id, "status": status}))
 }
@@ -329,7 +329,7 @@ fn create_articles_from_keywords(db_path: &str, project_id: &str, args: &[String
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let tasks = pageseeds_lib::engine::keyword_selection::create_article_tasks_from_keywords(
         &conn,
         project_id,
@@ -348,7 +348,7 @@ fn create_reddit_replies(db_path: &str, args: &[String]) -> Result<serde_json::V
     let post_ids = flag(args, "--post-ids", "-P")
         .map(|s| s.split(',').map(|p| p.trim().to_string()).collect::<Vec<_>>())
         .unwrap_or_else(|| exit("--post-ids required (comma-separated)"));
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let tasks = pageseeds_lib::reddit::spawner::create_reply_tasks_from_opportunities(&conn, &task_id, &post_ids)?;
     Ok(serde_json::json!({
         "created": tasks.len(),
@@ -362,7 +362,7 @@ fn create_reddit_replies(db_path: &str, args: &[String]) -> Result<serde_json::V
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn cannibalization_strategy(db_path: &str, project_id: &str) -> Result<serde_json::Value, String> {
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let strategy = pageseeds_lib::cannibalization::get_strategy_with_reviews(&conn, project_id)
         .map_err(|e| e.to_string())?;
     match strategy {
@@ -386,7 +386,7 @@ fn set_review_status(db_path: &str, args: &[String]) -> Result<serde_json::Value
         _ => ApprovalStatus::Pending,
     };
 
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let review = pageseeds_lib::db::set_strategy_review(
         &conn,
         &strategy_id,
@@ -406,14 +406,14 @@ fn create_tasks_from_approved(db_path: &str, project_id: &str, args: &[String]) 
         .unwrap_or_else(|| exit("--strategy-id required (use 'latest' to resolve from project)"));
     let strategy_id = if strategy_id == "latest" {
         pageseeds_lib::cannibalization::resolve_strategy_id(
-            &rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?,
+            &open_db(db_path)?,
             project_id,
         ).map_err(|e| e.to_string())?
     } else {
         strategy_id
     };
 
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let created = pageseeds_lib::cannibalization::spawn_tasks_from_approved(&conn, &strategy_id, project_id)
         .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
@@ -428,7 +428,7 @@ fn create_tasks_from_approved(db_path: &str, project_id: &str, args: &[String]) 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn score_zero_impression_articles(db_path: &str, project_id: &str, project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let project = pageseeds_lib::engine::task_store::get_project(&conn, project_id).map_err(|e| e.to_string())?;
 
     // Resolve SEO provider (DataForSEO by default).
@@ -569,7 +569,7 @@ fn run_audit(project_id: &str, project_path: &str) -> Result<serde_json::Value, 
 }
 
 fn ctr_health(project_id: &str, project_path: &str, db_path: &str) -> Result<serde_json::Value, String> {
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let articles = pageseeds_lib::engine::task_store::list_articles(&conn, project_id).map_err(|e| e.to_string())?;
     let summary = pageseeds_lib::content::ops::build_ctr_health_summary(
         std::path::Path::new(project_path), &articles, 0, 0, &conn, project_id,
@@ -590,7 +590,7 @@ fn create_task(project_id: &str, db_path: &str, args: &[String]) -> Result<serde
         _ => Priority::Medium,
     };
 
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    let conn = open_db(db_path)?;
     let task = pageseeds_lib::engine::spawner::TaskSpawner::spawn(&conn, pageseeds_lib::engine::spawner::TaskSpec {
         project_id: project_id.to_string(), task_type: tt.clone(),
         title: Some(title.clone()), description: Some(reason),
@@ -672,7 +672,7 @@ async fn gsc_token(project_id: &str, project_path: &str) -> Result<(String, Stri
         .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS").map(|(v, _)| v))
         .ok_or_else(|| "GSC not connected".to_string())?;
     let token = pageseeds_lib::gsc::auth::get_service_account_token(&sa).await.map_err(|e| e.to_string())?;
-    let conn = rusqlite::Connection::open(pageseeds_lib::db::default_db_path().to_string_lossy().to_string()).map_err(|e| e.to_string())?;
+    let conn = open_db(&pageseeds_lib::db::default_db_path().to_string_lossy())?;
     let project = pageseeds_lib::engine::task_store::get_project(&conn, project_id).map_err(|e| e.to_string())?;
     let site = project.site_url.unwrap_or_default();
     if site.is_empty() { return Err("No site_url configured".into()); }
@@ -682,6 +682,13 @@ async fn gsc_token(project_id: &str, project_path: &str) -> Result<(String, Stri
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/// Open the production DB through the canonical migrated open (`db::init`).
+/// Raw `Connection::open` skips migrations, which lets the schema drift behind
+/// the app and silently breaks writes (see issue #71).
+fn open_db(db_path: &str) -> Result<rusqlite::Connection, String> {
+    pageseeds_lib::db::init(std::path::Path::new(db_path)).map_err(|e| e.to_string())
+}
 
 fn flag(args: &[String], long: &str, short: &str) -> Option<String> {
     for i in 0..args.len() { if args[i] == long || args[i] == short { if i + 1 < args.len() { return Some(args[i + 1].clone()); } } }

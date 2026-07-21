@@ -45,11 +45,37 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
 
     if ctx.step.kind == StepKind::RedditSearch && ctx.result.success {
         if let Some(ref out) = ctx.result.output {
-            crate::engine::exec::reddit::persist_reddit_opportunities(
+            match crate::engine::exec::reddit::persist_reddit_opportunities(
                 ctx.conn,
                 &ctx.task.project_id,
                 out,
-            );
+            ) {
+                Ok(outcome) => {
+                    // Success-with-zero-of-N must be impossible (issue #71): when
+                    // upserts fail for every parsed post, the picker would come up
+                    // empty. Fail the step with the underlying DB error so the
+                    // drift surfaces instead of silently wiping the feed. Pure
+                    // dedup (already posted/skipped rows counted in `skipped`)
+                    // must not fail the step.
+                    if outcome.db_failures > 0 && outcome.upserted == 0 {
+                        let detail = outcome
+                            .errors
+                            .unwrap_or_else(|| "unknown DB error".to_string());
+                        override_out.success = Some(false);
+                        override_out.status = Some("failed".to_string());
+                        override_out.message = Some(format!(
+                            "Persisted 0 of {} Reddit opportunities: {}",
+                            outcome.parsed, detail
+                        ));
+                    }
+                }
+                Err(e) => {
+                    override_out.success = Some(false);
+                    override_out.status = Some("failed".to_string());
+                    override_out.message =
+                        Some(format!("Failed to persist Reddit opportunities: {}", e));
+                }
+            }
         }
     }
 
@@ -198,6 +224,9 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
 /// Optional overrides for step progress after domain post-processing.
 #[derive(Default)]
 pub struct StepOutcomeOverride {
+    /// If set, overrides the step's success flag (e.g. a post-step persistence
+    /// check failed even though the step itself ran fine).
+    pub success: Option<bool>,
     pub status: Option<String>,
     pub message: Option<String>,
     pub output: Option<String>,

@@ -174,7 +174,7 @@ pub async fn execute_task_with_token(
     for (i, step) in steps.iter().enumerate() {
         progress[i].status = "running".to_string();
 
-        let result = run_step(
+        let mut result = run_step(
             step,
             &task,
             &project_path,
@@ -272,6 +272,14 @@ pub async fn execute_task_with_token(
         if let Some(artifact) = post.artifact {
             let _ = task_store::upsert_task_artifact(conn, task_id, &artifact);
             upsert_artifact_in_memory(&mut task.artifacts, artifact);
+        }
+        // Post-step side effects may flip the step to failed (e.g. persistence
+        // checks) — apply before the failure gate below.
+        if let Some(success) = post.success {
+            result.success = success;
+            if !success {
+                result.message = progress[i].message.clone();
+            }
         }
 
         if !result.success {
