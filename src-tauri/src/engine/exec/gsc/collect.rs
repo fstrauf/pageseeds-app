@@ -106,10 +106,14 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
 ///
 /// 1. Reads sitemap URL from manifest.json (or project DB for live-site).
 /// 2. Mints a service account token.
-/// 3. Fetches all sitemap URLs (up to 200).
-/// 4. Calls the URL Inspection API for each URL.
+/// 3. Fetches all sitemap URLs; sends at most [`super::GSC_INSPECTION_CAP`]
+///    to the URL Inspection API.
+/// 4. Calls the URL Inspection API for each capped URL.
 /// 5. Classifies each result into a reason code.
-/// 6. Writes `gsc_collection.json` to the automation dir.
+/// 6. Writes `gsc_collection.json` to the automation dir, including coverage
+///    meta (`sitemap_url_count`, `inspected_count`, `cap`, `truncated`) so
+///    drift detection can tell cap-skipped URLs apart from URLs GSC has
+///    genuinely never inspected (issue #26).
 pub(crate) fn exec_collect_gsc(
     task: &Task,
     project_path: &str,
@@ -167,26 +171,34 @@ pub(crate) fn exec_collect_gsc(
                 .await
                 .map(|t| t.access_token)?;
 
-            // Fetch sitemap URLs
-            let urls = crate::gsc::sitemap::fetch_sitemap_urls(&sitemap_url_owned, 200).await?;
-            if urls.is_empty() {
+            // Fetch the full sitemap so the true URL count is known, then cap
+            // how many URLs are sent to the URL Inspection API (issue #26).
+            let entries =
+                crate::gsc::sitemap::fetch_sitemap_entries(&sitemap_url_owned, usize::MAX).await?;
+            if entries.is_empty() {
                 return Err(crate::error::Error::Other(format!(
                     "Sitemap at '{}' is empty or unreachable",
                     sitemap_url_owned
                 )));
             }
+            let sitemap_url_count = entries.len();
+            let urls: Vec<String> = entries
+                .into_iter()
+                .take(super::GSC_INSPECTION_CAP)
+                .map(|e| e.url)
+                .collect();
 
             // URL Inspection API
             let records =
                 crate::gsc::indexing::inspect_batch(&token, &site_url_owned, urls).await?;
 
-            Ok::<_, crate::error::Error>((records, token))
+            Ok::<_, crate::error::Error>((records, token, sitemap_url_count))
         })
     })
     .join();
 
-    let (records, _token) = match gsc_result {
-        Ok(Ok((r, t))) => (r, t),
+    let (records, _token, sitemap_url_count) = match gsc_result {
+        Ok(Ok((r, t, n))) => (r, t, n),
         Ok(Err(e)) => {
             let msg = e.to_string();
             return StepResult {
@@ -308,6 +320,13 @@ pub(crate) fn exec_collect_gsc(
             "collected_at": now_iso,
             "total_urls": records.len(),
             "issues_found": issues_found,
+            // Inspection coverage (issue #26): lets drift detection distinguish
+            // URLs GSC has genuinely never inspected from URLs that were simply
+            // skipped because the sitemap exceeded the inspection cap.
+            "sitemap_url_count": sitemap_url_count,
+            "inspected_count": records.len(),
+            "cap": super::GSC_INSPECTION_CAP,
+            "truncated": sitemap_url_count > super::GSC_INSPECTION_CAP,
         },
         "counts": counts,
         "items": items,

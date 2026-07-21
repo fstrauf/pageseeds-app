@@ -6,6 +6,14 @@
 ///   - URLs that are not indexed (with reason breakdown)
 ///   - A prioritized list of resubmission candidates
 ///
+/// Coverage cap (issue #26): `collect_gsc` inspects at most
+/// `GSC_INSPECTION_CAP` sitemap URLs per run. When the collection meta reports
+/// `truncated: true`, sitemap URLs beyond the inspected set are NOT treated as
+/// "GSC has never inspected it" candidates — they land in the informational
+/// `coverage_capped_uninspected` bucket instead. Collection files written
+/// before this change have no meta; the pre-existing behavior is preserved for
+/// them (re-running `collect_gsc` writes the meta).
+///
 /// Reads:
 ///   - manifest.json (site_url + sitemap_url)
 ///   - sitemap.xml (live fetch)
@@ -13,6 +21,8 @@
 ///   - link_scan.json (internal link graph)
 ///   - articles.json (article metadata for scoring)
 use std::collections::{HashMap, HashSet};
+
+use serde::Deserialize;
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::gsc::{DriftUrl, GscDriftReport, ResubmitCandidate};
@@ -38,8 +48,9 @@ pub(crate) async fn exec_gsc_drift(
     // 2. Fetch sitemap entries with lastmod (high limit — drift detection needs completeness)
     let sitemap_entries = crate::gsc::sitemap::fetch_sitemap_entries(&sitemap_url, 5000).await?;
 
-    // 3. Load GSC inspection data
-    let gsc_items = load_gsc_items(&paths, project_id)?;
+    // 3. Load GSC inspection data (+ coverage meta when the data comes from
+    //    a gsc_collection.json written by collect_gsc)
+    let (gsc_items, collection_meta) = load_gsc_items(&paths, project_id)?;
 
     // 4. Load link scan data (trigger fresh scan if missing or stale >24h)
     let link_scan_path = paths.automation_dir.join("link_scan.json");
@@ -102,39 +113,35 @@ pub(crate) async fn exec_gsc_drift(
     let content_dir = crate::content::locator::resolve(&paths.repo_root, None).selected;
 
     // 7. Compute drift categories
-    let mut in_sitemap_not_in_gsc: Vec<DriftUrl> = Vec::new();
-    let mut in_gsc_not_in_sitemap: Vec<DriftUrl> = Vec::new();
-    let mut not_indexed: Vec<DriftUrl> = Vec::new();
-    let mut indexed_count = 0usize;
+    //
+    // Coverage cap (issue #26): when the collection run truncated the sitemap,
+    // only the first `cap` sitemap URLs were sent to the Inspection API. URLs
+    // beyond that set are not evidence that GSC has never inspected them, so
+    // they go into an informational bucket instead of the phantom
+    // "never inspected" candidate list.
+    let inspected_set = inspected_sitemap_set(&sitemap_entries, collection_meta.as_ref());
+    let buckets = categorize_sitemap_urls(
+        &sitemap_map,
+        &gsc_map,
+        inspected_set.as_ref(),
+        content_dir.as_deref(),
+    );
+    let in_sitemap_not_in_gsc = buckets.in_sitemap_not_in_gsc;
+    let coverage_capped_uninspected = buckets.coverage_capped_uninspected;
+    let not_indexed = buckets.not_indexed;
+    let indexed_count = buckets.indexed_count;
 
-    for (norm, (original_url, lastmod)) in &sitemap_map {
-        if let Some(gsc_item) = gsc_map.get(norm) {
-            if gsc_item.reason_code.as_deref() == Some("indexed_pass") {
-                indexed_count += 1;
-            } else {
-                not_indexed.push(DriftUrl {
-                    url: original_url.clone(),
-                    slug: crate::content::slug::extract_slug_from_url(original_url),
-                    reason_code: gsc_item.reason_code.clone(),
-                    verdict: gsc_item.verdict.clone(),
-                    lastmod: lastmod.clone(),
-                    has_content_file: content_file_exists(content_dir.as_deref(), original_url),
-                    issues: diagnose_url(content_dir.as_deref(), original_url),
-                });
-            }
-        } else {
-            in_sitemap_not_in_gsc.push(DriftUrl {
-                url: original_url.clone(),
-                slug: crate::content::slug::extract_slug_from_url(original_url),
-                reason_code: None,
-                verdict: None,
-                lastmod: lastmod.clone(),
-                has_content_file: content_file_exists(content_dir.as_deref(), original_url),
-                issues: diagnose_url(content_dir.as_deref(), original_url),
-            });
-        }
+    if let Some(meta) = collection_meta.as_ref().filter(|m| m.truncated) {
+        log::info!(
+            "[gsc_drift] collection was coverage-capped: {} sitemap URLs, {} inspected (cap {}); {} URLs marked not-yet-inspected",
+            meta.sitemap_url_count.unwrap_or(0),
+            meta.inspected_count.unwrap_or(0),
+            meta.cap.unwrap_or(super::GSC_INSPECTION_CAP),
+            coverage_capped_uninspected.len(),
+        );
     }
 
+    let mut in_gsc_not_in_sitemap: Vec<DriftUrl> = Vec::new();
     for (norm, gsc_item) in &gsc_map {
         if !sitemap_map.contains_key(norm) {
             in_gsc_not_in_sitemap.push(DriftUrl {
@@ -201,6 +208,7 @@ pub(crate) async fn exec_gsc_drift(
         indexed_count,
         not_indexed_count,
         in_sitemap_not_in_gsc,
+        coverage_capped_uninspected,
         in_gsc_not_in_sitemap,
         not_indexed,
         resubmit_priority: candidates,
@@ -265,10 +273,30 @@ fn resolve_site_config(
     Ok((site_url, sitemap_url))
 }
 
+/// Inspection-coverage metadata written by `collect_gsc` into
+/// `gsc_collection.json` (issue #26).
+///
+/// Files written before this change have none of these fields; the serde
+/// defaults then keep `truncated == false`, preserving the pre-existing drift
+/// behavior (every sitemap URL without an inspection record is treated as
+/// "never inspected by GSC"). Re-running `collect_gsc` writes the meta.
+#[derive(Debug, Default, Clone, Deserialize)]
+struct GscCollectionMeta {
+    /// Total sitemap URLs discovered at collection time (before capping).
+    sitemap_url_count: Option<usize>,
+    /// How many URLs were actually sent to the URL Inspection API.
+    inspected_count: Option<usize>,
+    /// The inspection cap applied at collection time.
+    cap: Option<usize>,
+    /// True when the sitemap had more URLs than the cap.
+    #[serde(default)]
+    truncated: bool,
+}
+
 fn load_gsc_items(
     paths: &ProjectPaths,
     project_id: &str,
-) -> Result<Vec<GscItem>, crate::error::Error> {
+) -> Result<(Vec<GscItem>, Option<GscCollectionMeta>), crate::error::Error> {
     // Prefer gsc_collection.json (most recent bulk inspection)
     let collection_path = paths.automation_dir.join("gsc_collection.json");
     if let Ok(raw) = std::fs::read_to_string(&collection_path) {
@@ -284,24 +312,29 @@ fn load_gsc_items(
                     .filter(|i| !i.url.is_empty())
                     .collect();
                 if !gsc_items.is_empty() {
-                    return Ok(gsc_items);
+                    let meta = doc
+                        .get("meta")
+                        .and_then(|m| serde_json::from_value(m.clone()).ok());
+                    return Ok((gsc_items, meta));
                 }
             }
         }
     }
 
-    // Fallback: SQLite gsc_url_indexing_status table
+    // Fallback: SQLite gsc_url_indexing_status table (no coverage meta available)
     let db_path = crate::db::default_db_path();
     let conn = rusqlite::Connection::open(&db_path)?;
     let rows = crate::gsc::db::list_by_project(&conn, project_id)?;
-    Ok(rows
-        .into_iter()
-        .map(|r| GscItem {
-            url: r.url,
-            reason_code: r.last_reason_code,
-            verdict: r.last_verdict,
-        })
-        .collect())
+    Ok((
+        rows.into_iter()
+            .map(|r| GscItem {
+                url: r.url,
+                reason_code: r.last_reason_code,
+                verdict: r.last_verdict,
+            })
+            .collect(),
+        None,
+    ))
 }
 
 #[derive(Debug, Default)]
@@ -432,6 +465,95 @@ fn file_age_hours(path: &std::path::Path) -> Option<i32> {
     let modified = metadata.modified().ok()?;
     let elapsed = modified.elapsed().ok()?;
     Some((elapsed.as_secs() / 3600) as i32)
+}
+
+/// Build the set of normalized sitemap URLs that were sent to the URL
+/// Inspection API during collection — but only when the collection meta
+/// reports that the sitemap was truncated by the inspection cap (issue #26).
+///
+/// Returns `None` when no truncation was recorded (including old collection
+/// files without meta), in which case every sitemap URL missing from GSC is
+/// treated as genuinely never inspected (legacy behavior).
+fn inspected_sitemap_set(
+    sitemap_entries: &[crate::gsc::sitemap::SitemapEntry],
+    meta: Option<&GscCollectionMeta>,
+) -> Option<HashSet<String>> {
+    let meta = meta.filter(|m| m.truncated)?;
+    let cap = meta.cap.unwrap_or(super::GSC_INSPECTION_CAP);
+    Some(
+        sitemap_entries
+            .iter()
+            .take(cap)
+            .map(|e| crate::engine::exec::gsc::normalize_url_for_comparison(&e.url))
+            .collect(),
+    )
+}
+
+/// Result of categorizing sitemap URLs against GSC inspection records.
+struct DriftBuckets {
+    /// In sitemap, no GSC inspection record — genuinely never inspected.
+    in_sitemap_not_in_gsc: Vec<DriftUrl>,
+    /// In sitemap, no GSC record, but beyond the coverage-capped inspected
+    /// set. Informational only; never becomes a resubmit candidate.
+    coverage_capped_uninspected: Vec<DriftUrl>,
+    /// Inspected by GSC and not indexed.
+    not_indexed: Vec<DriftUrl>,
+    indexed_count: usize,
+}
+
+/// Categorize sitemap URLs against the GSC inspection records.
+///
+/// `inspected_set` is `Some` only when collection was coverage-capped; sitemap
+/// URLs outside that set (and without a GSC record) are coverage-capped rather
+/// than "never inspected".
+fn categorize_sitemap_urls(
+    sitemap_map: &HashMap<String, (String, Option<String>)>,
+    gsc_map: &HashMap<String, GscItem>,
+    inspected_set: Option<&HashSet<String>>,
+    content_dir: Option<&std::path::Path>,
+) -> DriftBuckets {
+    let mut buckets = DriftBuckets {
+        in_sitemap_not_in_gsc: Vec::new(),
+        coverage_capped_uninspected: Vec::new(),
+        not_indexed: Vec::new(),
+        indexed_count: 0,
+    };
+
+    for (norm, (original_url, lastmod)) in sitemap_map {
+        if let Some(gsc_item) = gsc_map.get(norm) {
+            if gsc_item.reason_code.as_deref() == Some("indexed_pass") {
+                buckets.indexed_count += 1;
+            } else {
+                buckets.not_indexed.push(DriftUrl {
+                    url: original_url.clone(),
+                    slug: crate::content::slug::extract_slug_from_url(original_url),
+                    reason_code: gsc_item.reason_code.clone(),
+                    verdict: gsc_item.verdict.clone(),
+                    lastmod: lastmod.clone(),
+                    has_content_file: content_file_exists(content_dir, original_url),
+                    issues: diagnose_url(content_dir, original_url),
+                });
+            }
+        } else {
+            let drift_url = DriftUrl {
+                url: original_url.clone(),
+                slug: crate::content::slug::extract_slug_from_url(original_url),
+                reason_code: None,
+                verdict: None,
+                lastmod: lastmod.clone(),
+                has_content_file: content_file_exists(content_dir, original_url),
+                issues: diagnose_url(content_dir, original_url),
+            };
+            match inspected_set {
+                Some(set) if !set.contains(norm) => {
+                    buckets.coverage_capped_uninspected.push(drift_url)
+                }
+                _ => buckets.in_sitemap_not_in_gsc.push(drift_url),
+            }
+        }
+    }
+
+    buckets
 }
 
 /// Check whether an MDX file exists for the given URL slug.
@@ -654,5 +776,157 @@ fn build_candidate_for_unknown(
         target_keyword: meta.and_then(|m| m.target_keyword.clone()),
         published_date: meta.and_then(|m| m.published_date.clone()),
         recovery_status: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gsc::sitemap::SitemapEntry;
+
+    fn sitemap_entries(n: usize) -> Vec<SitemapEntry> {
+        (0..n)
+            .map(|i| SitemapEntry {
+                url: format!("https://example.com/page-{}", i),
+                lastmod: None,
+            })
+            .collect()
+    }
+
+    fn sitemap_map(entries: &[SitemapEntry]) -> HashMap<String, (String, Option<String>)> {
+        entries
+            .iter()
+            .map(|e| {
+                (
+                    crate::engine::exec::gsc::normalize_url_for_comparison(&e.url),
+                    (e.url.clone(), e.lastmod.clone()),
+                )
+            })
+            .collect()
+    }
+
+    fn gsc_map(entries: &[SitemapEntry], n: usize, reason_code: &str) -> HashMap<String, GscItem> {
+        entries
+            .iter()
+            .take(n)
+            .map(|e| {
+                (
+                    crate::engine::exec::gsc::normalize_url_for_comparison(&e.url),
+                    GscItem {
+                        url: e.url.clone(),
+                        reason_code: Some(reason_code.to_string()),
+                        verdict: None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Issue #26: 500 sitemap URLs, 200 inspected (cap), truncated meta →
+    /// the 300 uninspected URLs must NOT become phantom "never inspected"
+    /// candidates; genuinely not-indexed inspected URLs still surface.
+    #[test]
+    fn coverage_capped_urls_are_not_phantom_never_inspected() {
+        let entries = sitemap_entries(500);
+        let smap = sitemap_map(&entries);
+
+        // First 200 URLs were inspected: 199 indexed, 1 crawled-but-not-indexed.
+        let mut gmap = gsc_map(&entries, 200, "indexed_pass");
+        let not_indexed_norm =
+            crate::engine::exec::gsc::normalize_url_for_comparison("https://example.com/page-7");
+        gmap.get_mut(&not_indexed_norm).unwrap().reason_code =
+            Some("not_indexed_crawled".to_string());
+
+        let meta = GscCollectionMeta {
+            sitemap_url_count: Some(500),
+            inspected_count: Some(200),
+            cap: Some(200),
+            truncated: true,
+        };
+
+        let inspected_set = inspected_sitemap_set(&entries, Some(&meta));
+        let buckets = categorize_sitemap_urls(&smap, &gmap, inspected_set.as_ref(), None);
+
+        assert_eq!(
+            buckets.in_sitemap_not_in_gsc.len(),
+            0,
+            "no phantom 'never inspected' URLs when collection was coverage-capped"
+        );
+        assert_eq!(
+            buckets.coverage_capped_uninspected.len(),
+            300,
+            "the 300 URLs beyond the cap land in the informational bucket"
+        );
+        assert_eq!(buckets.indexed_count, 199);
+        assert_eq!(buckets.not_indexed.len(), 1);
+
+        // The genuinely not-indexed URL still becomes a candidate with its
+        // normal score: base 40 (crawled-not-indexed) + 30 zero-internal-links.
+        let candidate = build_candidate(
+            &buckets.not_indexed[0],
+            &LinkScanData::default(),
+            &HashMap::new(),
+        )
+        .expect("crawled-not-indexed URL should produce a resubmit candidate");
+        assert_eq!(candidate.reason_code, "not_indexed_crawled");
+        assert_eq!(candidate.priority_score, 70);
+    }
+
+    /// Old collection files without coverage meta keep the legacy behavior:
+    /// every sitemap URL missing from GSC is a "never inspected" candidate.
+    #[test]
+    fn missing_meta_preserves_legacy_behavior() {
+        let entries = sitemap_entries(500);
+        let smap = sitemap_map(&entries);
+        let gmap = gsc_map(&entries, 200, "indexed_pass");
+
+        assert!(
+            inspected_sitemap_set(&entries, None).is_none(),
+            "no meta → no inspected set"
+        );
+
+        let buckets = categorize_sitemap_urls(&smap, &gmap, None, None);
+        assert_eq!(buckets.in_sitemap_not_in_gsc.len(), 300);
+        assert_eq!(buckets.coverage_capped_uninspected.len(), 0);
+
+        // Legacy phantom candidates still get the never-inspected boost.
+        let candidate = build_candidate_for_unknown(
+            &buckets.in_sitemap_not_in_gsc[0],
+            &LinkScanData::default(),
+            &HashMap::new(),
+        );
+        assert_eq!(candidate.reason_code, "not_in_gsc");
+        assert_eq!(candidate.priority_score, 80 + 30);
+    }
+
+    /// Meta from old collection files (no coverage fields) deserializes with
+    /// defaults that keep `truncated == false`.
+    #[test]
+    fn collection_meta_deserializes_with_backward_compatible_defaults() {
+        // Old-style meta block: only the pre-#26 fields.
+        let old_meta = serde_json::json!({
+            "site_url": "https://example.com",
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "collected_at": "2026-01-01T00:00:00Z",
+            "total_urls": 50,
+            "issues_found": 3,
+        });
+        let meta: GscCollectionMeta = serde_json::from_value(old_meta).unwrap();
+        assert!(!meta.truncated);
+        assert!(meta.sitemap_url_count.is_none());
+        assert!(meta.cap.is_none());
+
+        // New-style meta block round-trips.
+        let new_meta = serde_json::json!({
+            "site_url": "https://example.com",
+            "sitemap_url_count": 500,
+            "inspected_count": 200,
+            "cap": 200,
+            "truncated": true,
+        });
+        let meta: GscCollectionMeta = serde_json::from_value(new_meta).unwrap();
+        assert!(meta.truncated);
+        assert_eq!(meta.sitemap_url_count, Some(500));
+        assert_eq!(meta.cap, Some(200));
     }
 }
