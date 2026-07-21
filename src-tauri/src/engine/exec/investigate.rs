@@ -4,6 +4,10 @@
 //! investigation. The agent has access to GSC, articles, audit data, indexing
 //! status, link graph, framework files, and more. It calls tools freely to
 //! answer the user's question.
+//!
+//! Catalog modes:
+//! - **Full** — standalone investigate (includes mutators).
+//! - **Read-only** — for unattended in-workflow use (no mutators; see #79/#80).
 
 use crate::engine::tools::{investigation_tools, InvestigationContext};
 use rig::completion::Prompt;
@@ -13,10 +17,18 @@ async fn run_tool_agent<A: Prompt + Send>(agent: A, prompt: &str) -> Result<Stri
     agent.prompt(prompt).await.map_err(|e| format!("Agent error: {e}"))
 }
 
-/// Default tool catalog embedded as fallback if the config file is not found.
-const DEFAULT_TOOL_CATALOG: &str = r#"
-# Tool catalog for agentic investigation.
+/// Which tool catalog to embed in the agent preamble.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogMode {
+    /// Full catalog including mutators (standalone investigate).
+    Full,
+    /// Read-only tools only (in-workflow unattended agents; wired in #80).
+    #[allow(dead_code)] // used by tests; production callers land in #80
+    ReadOnly,
+}
 
+/// Shared read-only tool entries (no mutators, no `mutates = true`).
+const TOOL_CATALOG_READ_ONLY_ENTRIES: &str = r#"
 [tools.gsc_performance]
 purpose = "Get GSC page-level performance data (clicks, impressions, CTR, position)"
 when_to_use = "When investigating impression trends, CTR changes, or ranking movements"
@@ -57,12 +69,6 @@ purpose = "Return the full content_audit.json with 21 checks per article"
 when_to_use = "When you need comprehensive article health data"
 when_not_to_use = ""
 
-[tools.run_content_audit]
-purpose = "Run the deterministic content audit and write fresh content_audit.json"
-when_to_use = "When you need fresh audit data"
-when_not_to_use = "If recent audit exists, use content_audit_report instead"
-mutates = true
-
 [tools.cannibalization_clusters]
 purpose = "Return cannibalization clusters and merge recommendations"
 when_to_use = "When investigating keyword cannibalization"
@@ -88,10 +94,30 @@ purpose = "Return the internal link graph"
 when_to_use = "When investigating linking gaps or site structure"
 when_not_to_use = ""
 
+[tools.get_task_status]
+purpose = "Get status of a task by ID"
+when_to_use = "When checking whether a previously created task has completed"
+when_not_to_use = ""
+"#;
+
+/// Mutator-only catalog entries for standalone investigate.
+const TOOL_CATALOG_MUTATOR_ENTRIES: &str = r#"
+[tools.run_content_audit]
+purpose = "Run the deterministic content audit and write fresh content_audit.json"
+when_to_use = "When you need fresh audit data"
+when_not_to_use = "If recent audit exists, use content_audit_report instead"
+mutates = true
+
 [tools.create_task]
 purpose = "Create a fix task in PageSeeds to address issues found"
 when_to_use = "ONLY after investigation found specific, actionable issues"
 when_not_to_use = "Do NOT create tasks speculatively. Max 3 per investigation."
+mutates = true
+
+[tools.enqueue_task]
+purpose = "Enqueue an existing task for execution"
+when_to_use = "After create_task, when the task should run immediately"
+when_not_to_use = "Do not enqueue tasks that still need user review"
 mutates = true
 
 [tools.write_feature_spec]
@@ -101,10 +127,30 @@ when_not_to_use = "Do not use for content-only issues that PageSeeds can auto-fi
 mutates = true
 "#;
 
+/// Tool catalog text for the given mode.
+///
+/// - [`CatalogMode::Full`] — all tools including mutators (standalone investigate).
+/// - [`CatalogMode::ReadOnly`] — read-only tools only (in-workflow; no mutators).
+pub(crate) fn tool_catalog_text(mode: CatalogMode) -> String {
+    match mode {
+        CatalogMode::Full => {
+            let mut s = String::from("# Tool catalog for agentic investigation.\n");
+            s.push_str(TOOL_CATALOG_READ_ONLY_ENTRIES);
+            s.push_str(TOOL_CATALOG_MUTATOR_ENTRIES);
+            s
+        }
+        CatalogMode::ReadOnly => {
+            let mut s = String::from("# Tool catalog for agentic investigation (read-only).\n");
+            s.push_str(TOOL_CATALOG_READ_ONLY_ENTRIES);
+            s
+        }
+    }
+}
+
 /// Run an agentic investigation with full tool access.
 ///
-/// 1. Builds the agent preamble from the tool catalog
-/// 2. Attaches all investigation tools to the agent
+/// 1. Builds the agent preamble from the full tool catalog
+/// 2. Attaches all investigation tools (including mutators) to the agent
 /// 3. Runs the agent with the user's question
 /// 4. Parses the structured output via rig Extractor
 pub async fn exec_investigate(
@@ -122,7 +168,8 @@ pub async fn exec_investigate(
         db_path: db_path.to_string(),
     };
 
-    let preamble = build_investigation_preamble(&ctx).await;
+    // Standalone investigate always uses the full catalog + full tool set.
+    let preamble = build_investigation_preamble(&ctx, CatalogMode::Full).await;
 
     let prompt = format!(
         "Investigate the following and report your findings:\n\nQuestion: {question}\n\n\
@@ -207,9 +254,14 @@ pub async fn exec_investigate(
 }
 
 /// Build the investigation preamble from the tool catalog.
-/// Uses the bundled tool_catalog.toml embedded at compile time.
-async fn build_investigation_preamble(ctx: &InvestigationContext) -> String {
-    let catalog = DEFAULT_TOOL_CATALOG;
+///
+/// Standalone investigate uses [`CatalogMode::Full`]. In-workflow callers (issue #80)
+/// should use [`CatalogMode::ReadOnly`].
+pub(crate) async fn build_investigation_preamble(
+    ctx: &InvestigationContext,
+    mode: CatalogMode,
+) -> String {
+    let catalog = tool_catalog_text(mode);
 
     // Gather quick project context
     let article_count = match ctx.open_db() {
@@ -234,7 +286,7 @@ async fn build_investigation_preamble(ctx: &InvestigationContext) -> String {
         ctx.project_id, ctx.project_path, article_count,
     );
 
-    preamble.push_str(catalog);
+    preamble.push_str(&catalog);
     preamble.push_str("\n\n---\n\n");
 
     // Output contract
@@ -256,4 +308,42 @@ async fn build_investigation_preamble(ctx: &InvestigationContext) -> String {
     );
 
     preamble
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_catalog_read_only_excludes_mutators() {
+        let ro = tool_catalog_text(CatalogMode::ReadOnly);
+        assert!(
+            ro.contains("get_task_status"),
+            "RO catalog must include get_task_status"
+        );
+        for mutator in [
+            "create_task",
+            "enqueue_task",
+            "run_content_audit",
+            "write_feature_spec",
+        ] {
+            // Match section headers only (tools.NAME)
+            assert!(
+                !ro.contains(&format!("[tools.{mutator}]")),
+                "RO catalog must not contain mutator section [{mutator}]"
+            );
+        }
+        assert!(!ro.contains("mutates = true"));
+    }
+
+    #[test]
+    fn tool_catalog_full_includes_mutators_and_get_task_status() {
+        let full = tool_catalog_text(CatalogMode::Full);
+        assert!(full.contains("[tools.get_task_status]"));
+        assert!(full.contains("[tools.create_task]"));
+        assert!(full.contains("[tools.enqueue_task]"));
+        assert!(full.contains("[tools.run_content_audit]"));
+        assert!(full.contains("[tools.write_feature_spec]"));
+        assert!(full.contains("mutates = true"));
+    }
 }

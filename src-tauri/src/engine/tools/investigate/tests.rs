@@ -24,6 +24,15 @@ mod tests {
         assert!(ctx.open_db().is_err());
     }
 
+    async fn tool_names(tools: &[Box<dyn rig::tool::ToolDyn>]) -> Vec<String> {
+        let mut names = Vec::with_capacity(tools.len());
+        for tool in tools {
+            let def = rig::tool::ToolDyn::definition(tool.as_ref(), "test".to_string()).await;
+            names.push(def.name);
+        }
+        names
+    }
+
     #[test]
     fn test_tool_definitions_smoke() {
         let ctx = InvestigationContext {
@@ -44,6 +53,39 @@ mod tests {
             assert!(!def.name.is_empty(), "Tool name must not be empty");
             assert!(!def.description.is_empty(), "Tool description must not be empty for {}", def.name);
         }
+    }
+
+    #[test]
+    fn test_investigation_read_only_tools_excludes_mutators() {
+        let ctx = InvestigationContext {
+            project_id: "test".into(),
+            project_path: ".".into(),
+            db_path: ":memory:".into(),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let full = investigation_tools(ctx.clone());
+        assert_eq!(full.len(), 18, "full set must remain 18 tools");
+
+        let ro = investigation_read_only_tools(ctx);
+        assert_eq!(ro.len(), 14, "read-only set must be 14 tools");
+
+        let names = rt.block_on(tool_names(&ro));
+        for mutator in [
+            "create_task",
+            "enqueue_task",
+            "run_content_audit",
+            "write_feature_spec",
+        ] {
+            assert!(
+                !names.iter().any(|n| n == mutator),
+                "RO set must not include mutator {mutator}; got {names:?}"
+            );
+        }
+        assert!(
+            names.iter().any(|n| n == "get_task_status"),
+            "RO set must include get_task_status; got {names:?}"
+        );
     }
 
     fn temp_db_path(suffix: &str) -> String {
