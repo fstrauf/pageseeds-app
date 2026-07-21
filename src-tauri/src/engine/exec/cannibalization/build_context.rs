@@ -331,15 +331,27 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
         }
     });
 
+    // Staleness warning (issue #25): ctr_query_metrics older than the IHC gate
+    // tolerance must be visible in the task output. Warning only — never fails.
+    let staleness_warning = db_conn
+        .as_ref()
+        .and_then(|db| crate::engine::exec::common::ctr_metrics_staleness_warning(db, &task.project_id));
+    if let Some(ref warning) = staleness_warning {
+        log::warn!("[cannibalization_audit] {}", warning);
+    }
+
     StepResult {
         success: true,
         message: format!(
-            "Cannibalization context built: {} articles, {} similar pairs, {} keyword groups, {} clusters, {} hub gaps",
+            "Cannibalization context built: {} articles, {} similar pairs, {} keyword groups, {} clusters, {} hub gaps{}",
             articles_json.len(),
             similarity_pairs.len(),
             keyword_groups_json.len(),
             clusters.len(),
             hub_gaps.len(),
+            staleness_warning
+                .map(|w| format!(" — {}", w))
+                .unwrap_or_default(),
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
     }

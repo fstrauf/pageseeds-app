@@ -328,6 +328,15 @@ pub(crate) fn exec_ctr_build_context(
         msg.push_str(&format!(" — query data for {} articles", query_enriched));
     }
 
+    // Staleness warning (issue #25): metrics older than the IHC gate tolerance
+    // must be visible in the task output. Warning only — never a hard failure.
+    if let Some(warning) =
+        crate::engine::exec::common::ctr_metrics_staleness_warning(conn, &task.project_id)
+    {
+        log::warn!("[ctr_audit] {}", warning);
+        msg.push_str(&format!(" — {}", warning));
+    }
+
     StepResult {
         success: true,
         message: msg,

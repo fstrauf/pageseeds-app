@@ -179,3 +179,96 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T, context: &str) -> Result
         ))),
     }
 }
+
+// ─── GSC metrics staleness ────────────────────────────────────────────────────
+
+/// Maximum tolerated age of the Search Analytics metrics before downstream
+/// consumers warn / the indexing-health gate fails closed (issue #25).
+pub const GSC_METRICS_MAX_AGE_DAYS: i64 = 7;
+
+/// Build a visible staleness warning when the newest row in `ctr_query_metrics`
+/// is older than [`GSC_METRICS_MAX_AGE_DAYS`].
+///
+/// Returns `None` when metrics are fresh, when the table is empty (no data at
+/// all is handled by the callers' existing fallbacks), or when the check
+/// itself fails — this is a warning, never a hard failure.
+pub fn ctr_metrics_staleness_warning(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> Option<String> {
+    let last_synced = crate::db::ctr_query_metrics_max_fetched_at(conn, project_id).ok()??;
+    let synced_at = chrono::DateTime::parse_from_rfc3339(&last_synced).ok()?;
+    let age = chrono::Utc::now().signed_duration_since(synced_at);
+    if age > chrono::Duration::days(GSC_METRICS_MAX_AGE_DAYS) {
+        Some(format!(
+            "WARNING: GSC query metrics are stale (last synced {}, {} days ago — threshold is {} days). Re-run collect_gsc to refresh.",
+            last_synced,
+            age.num_days(),
+            GSC_METRICS_MAX_AGE_DAYS
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_memory_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
+    fn insert_metric(conn: &rusqlite::Connection, project_id: &str, fetched_at: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, 'Test', '/tmp/test', 1, 'workspace')",
+            rusqlite::params![project_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ctr_query_metrics
+             (project_id, article_id, page_url, query, impressions, clicks, ctr, avg_position, fetched_at)
+             VALUES (?1, 1, '/page', 'kw', 10.0, 1.0, 0.1, 5.0, ?2)",
+            rusqlite::params![project_id, fetched_at],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn staleness_warning_none_when_table_empty() {
+        let conn = in_memory_db();
+        assert!(ctr_metrics_staleness_warning(&conn, "p1").is_none());
+    }
+
+    #[test]
+    fn staleness_warning_none_when_fresh() {
+        let conn = in_memory_db();
+        insert_metric(&conn, "p1", &chrono::Utc::now().to_rfc3339());
+        assert!(ctr_metrics_staleness_warning(&conn, "p1").is_none());
+    }
+
+    #[test]
+    fn staleness_warning_some_when_older_than_threshold() {
+        let conn = in_memory_db();
+        let old = (chrono::Utc::now()
+            - chrono::Duration::days(GSC_METRICS_MAX_AGE_DAYS + 3))
+        .to_rfc3339();
+        insert_metric(&conn, "p1", &old);
+        let warning = ctr_metrics_staleness_warning(&conn, "p1").expect("must warn on stale metrics");
+        assert!(warning.contains("WARNING"));
+        assert!(warning.contains("collect_gsc"));
+    }
+
+    #[test]
+    fn staleness_warning_scoped_to_project() {
+        let conn = in_memory_db();
+        let old = (chrono::Utc::now()
+            - chrono::Duration::days(GSC_METRICS_MAX_AGE_DAYS + 3))
+        .to_rfc3339();
+        insert_metric(&conn, "other-project", &old);
+        assert!(ctr_metrics_staleness_warning(&conn, "p1").is_none());
+    }
+}
