@@ -270,7 +270,7 @@ fn persist_stores_selftext_from_search_json() {
     })
     .to_string();
 
-    persist_reddit_opportunities(&conn, &project_id, &json);
+    persist_reddit_opportunities(&conn, &project_id, &json).expect("persist failed");
 
     let fetched = reddit_db::get_opportunity(&conn, "post_body_1").expect("fetch failed");
     assert_eq!(
@@ -305,7 +305,7 @@ fn persist_marks_pending_stale_and_preserves_posted() {
         ]
     })
     .to_string();
-    persist_reddit_opportunities(&conn, &project_id, &json);
+    persist_reddit_opportunities(&conn, &project_id, &json).expect("persist failed");
 
     let old = reddit_db::get_opportunity(&conn, "old_pending").expect("old row must still exist");
     assert_eq!(
@@ -326,7 +326,7 @@ fn persist_marks_pending_stale_and_preserves_posted() {
         ]
     })
     .to_string();
-    persist_reddit_opportunities(&conn, &project_id, &json);
+    persist_reddit_opportunities(&conn, &project_id, &json).expect("persist failed");
     let revived = reddit_db::get_opportunity(&conn, "old_pending").expect("row must exist");
     assert_eq!(
         revived.reply_status, "pending",

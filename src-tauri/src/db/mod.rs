@@ -685,9 +685,17 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 5 {
-        // Add mention_stance column to reddit_opportunities; ignore error if already exists
-        let _ =
-            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN mention_stance TEXT;");
+        // Add mention_stance column to reddit_opportunities; tolerate "duplicate
+        // column" for idempotency, but log loudly — a failed ALTER with the version
+        // still recorded hides schema drift (issue #71).
+        if let Err(e) =
+            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN mention_stance TEXT;")
+        {
+            log::error!(
+                "[db::run_migrations] V5 ALTER reddit_opportunities.mention_stance failed: {}",
+                e
+            );
+        }
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (5, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -800,9 +808,16 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 15 {
-        // Add product_name column to reddit_opportunities for agentic config consumption
-        let _ =
-            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN product_name TEXT;");
+        // Add product_name column to reddit_opportunities for agentic config consumption.
+        // Tolerate failure for idempotency, but log loudly (issue #71).
+        if let Err(e) =
+            conn.execute_batch("ALTER TABLE reddit_opportunities ADD COLUMN product_name TEXT;")
+        {
+            log::error!(
+                "[db::run_migrations] V15 ALTER reddit_opportunities.product_name failed: {}",
+                e
+            );
+        }
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (15, ?1)",
             [chrono::Utc::now().to_rfc3339()],
@@ -1430,8 +1445,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     if version < 47 {
-        // Add selftext column to reddit_opportunities; ignore error if already exists
-        let _ = conn.execute_batch(MIGRATION_V47);
+        // Add selftext column to reddit_opportunities; tolerate failure for
+        // idempotency, but log loudly — silently recording V47 while the column is
+        // missing caused the reddit persistence drift in issue #71.
+        if let Err(e) = conn.execute_batch(MIGRATION_V47) {
+            log::error!("[db::run_migrations] V47 migration failed: {}", e);
+        }
         conn.execute(
             "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (47, ?1)",
             [chrono::Utc::now().to_rfc3339()],

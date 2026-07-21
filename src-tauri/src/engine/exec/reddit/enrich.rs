@@ -5,6 +5,24 @@ use std::path::Path;
 
 // ─── Persist ─────────────────────────────────────────────────────────────────
 
+/// Summary of one `persist_reddit_opportunities` run.
+///
+/// Callers use this to distinguish "search found nothing" (parsed == 0) from
+/// "search found posts but none landed in the DB" (parsed > 0, upserted == 0) —
+/// the latter must fail the workflow step instead of silently emptying the picker
+/// (issue #71).
+#[derive(Debug, Clone, Default)]
+pub struct PersistOutcome {
+    /// Post objects parsed from the search output.
+    pub parsed: usize,
+    /// Rows successfully upserted.
+    pub upserted: usize,
+    /// Posts skipped (missing post_id, already posted/skipped, or failed upsert).
+    pub skipped: usize,
+    /// First upsert error message, if any upsert failed.
+    pub errors: Option<String>,
+}
+
 /// Parse a JSON array of Reddit opportunity objects and upsert each into SQLite.
 ///
 /// Tolerates partial fields — only `post_id` is required.
@@ -12,7 +30,15 @@ use std::path::Path;
 /// (stale rows are hidden from the default feed but recoverable — `upsert_opportunity`
 /// flips a re-discovered post back to 'pending' atomically). Rows with
 /// reply_status='posted' or 'skipped' are preserved for history dedup.
-pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_str: &str) {
+///
+/// Returns a `PersistOutcome` with per-run counts and the first DB error, if any.
+/// Individual upsert failures are logged at warn and counted in `skipped`; the
+/// caller decides whether the outcome constitutes step failure.
+pub fn persist_reddit_opportunities(
+    conn: &Connection,
+    project_id: &str,
+    json_str: &str,
+) -> crate::error::Result<PersistOutcome> {
     log::info!(
         "[reddit] persist_reddit_opportunities project={} json_len={}",
         project_id,
@@ -28,7 +54,10 @@ pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_st
                 e,
                 preview
             );
-            return;
+            return Err(crate::error::Error::InvalidJson(format!(
+                "failed to parse reddit search output: {}",
+                e
+            )));
         }
     };
 
@@ -46,7 +75,9 @@ pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_st
                 .as_object()
                 .map(|o| o.keys().cloned().collect::<Vec<_>>())
         );
-        return;
+        return Err(crate::error::Error::InvalidJson(
+            "unrecognised reddit search output structure (expected an array or a posts/results/opportunities/items field)".to_string(),
+        ));
     };
 
     // Mark pending rows from previous runs as stale; preserve posted/skipped for history dedup.
@@ -60,14 +91,16 @@ pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_st
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let mut upserted = 0usize;
-    let mut skipped = 0usize;
+    let mut outcome = PersistOutcome {
+        parsed: array.len(),
+        ..Default::default()
+    };
 
     for item in &array {
         let post_id = match item.get("post_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
-                skipped += 1;
+                outcome.skipped += 1;
                 continue;
             }
         };
@@ -78,7 +111,7 @@ pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_st
             |row| row.get::<_, i64>(0),
         ).unwrap_or(0) > 0;
         if already_handled {
-            skipped += 1;
+            outcome.skipped += 1;
             continue;
         }
 
@@ -163,21 +196,27 @@ pub fn persist_reddit_opportunities(conn: &Connection, project_id: &str, json_st
 
         match crate::reddit::db::upsert_opportunity(conn, &opp) {
             Ok(_) => {
-                upserted += 1;
+                outcome.upserted += 1;
             }
             Err(e) => {
                 log::warn!("[reddit] upsert failed post_id={}: {}", opp.post_id, e);
-                skipped += 1;
+                if outcome.errors.is_none() {
+                    outcome.errors = Some(e.to_string());
+                }
+                outcome.skipped += 1;
             }
         }
     }
 
     log::info!(
-        "[reddit] done — upserted={} skipped={} project={}",
-        upserted,
-        skipped,
+        "[reddit] done — parsed={} upserted={} skipped={} project={}",
+        outcome.parsed,
+        outcome.upserted,
+        outcome.skipped,
         project_id
     );
+
+    Ok(outcome)
 }
 
 // ─── Enrichment ───────────────────────────────────────────────────────────────

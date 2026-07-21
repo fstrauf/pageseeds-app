@@ -549,4 +549,116 @@ Helpful, technical, and concise.
             );
         }
     }
+
+    // ─── Issue #71: persistence regression tests ──────────────────────────────
+
+    /// A search-shaped payload must persist N pending rows and the results step
+    /// must return a non-empty feed — the picker must never come up empty after
+    /// a successful search.
+    #[test]
+    fn persist_search_payload_yields_pending_results() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_persist_71");
+
+        let json = serde_json::json!({
+            "posts": [
+                { "post_id": "p71_a", "title": "First post", "subreddit": "testing", "selftext": "body a" },
+                { "post_id": "p71_b", "title": "Second post", "subreddit": "testing" }
+            ]
+        })
+        .to_string();
+
+        let outcome =
+            crate::engine::exec::reddit::persist_reddit_opportunities(&conn, &project_id, &json)
+                .expect("persist must succeed");
+        assert_eq!(outcome.parsed, 2);
+        assert_eq!(outcome.upserted, 2);
+        assert!(outcome.errors.is_none());
+
+        let pending: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM reddit_opportunities \
+                 WHERE project_id=?1 AND reply_status='pending'",
+                [&project_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 2, "both posts must land as pending rows");
+
+        let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
+        assert!(result.success, "fetch failed: {}", result.message);
+        let output = result.output.expect("fetch must return output");
+        let fetched: Vec<serde_json::Value> =
+            serde_json::from_str(&output).expect("fetch output must be a JSON array");
+        assert_eq!(
+            fetched.len(),
+            2,
+            "picker feed must not be empty after a successful search"
+        );
+    }
+
+    /// Against a pre-V47 schema (reddit_opportunities without `selftext`) the
+    /// upsert failure must surface in the outcome — never a silent 0-of-N.
+    #[test]
+    fn persist_against_v46_schema_surfaces_error() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // V46-shaped reddit_opportunities: identical to in_memory_db() but
+        // without the selftext column added by V47.
+        conn.execute_batch(
+            "CREATE TABLE reddit_opportunities (
+                post_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT,
+                url TEXT,
+                subreddit TEXT,
+                author TEXT,
+                posted_date TEXT,
+                upvotes INTEGER,
+                comment_count INTEGER,
+                relevance_score REAL,
+                engagement_score REAL,
+                accessibility_score REAL,
+                final_score REAL,
+                severity TEXT,
+                why_relevant TEXT,
+                key_pain_points TEXT NOT NULL DEFAULT '[]',
+                website_fit TEXT,
+                mention_stance TEXT,
+                product_name TEXT,
+                reply_status TEXT NOT NULL DEFAULT 'pending',
+                reply_text TEXT,
+                reply_url TEXT,
+                reply_upvotes INTEGER,
+                reply_replies INTEGER,
+                posted_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+
+        let json = serde_json::json!({
+            "posts": [
+                { "post_id": "p71_drift", "title": "Drifted schema post", "subreddit": "testing" }
+            ]
+        })
+        .to_string();
+
+        let outcome =
+            crate::engine::exec::reddit::persist_reddit_opportunities(&conn, "proj-drift", &json)
+                .expect("persist reports per-row DB errors in the outcome, not via Err");
+        assert_eq!(outcome.parsed, 1);
+        assert_eq!(
+            outcome.upserted, 0,
+            "upsert must fail against the drifted schema"
+        );
+        let err = outcome
+            .errors
+            .expect("the first DB error must be recorded in the outcome");
+        assert!(
+            err.contains("selftext"),
+            "error should name the missing column, got: {}",
+            err
+        );
+    }
 }

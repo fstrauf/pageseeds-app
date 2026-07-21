@@ -186,6 +186,8 @@ pub fn init(db_path: &Path) -> Result<Connection> {
 
 All migrations must be idempotent (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`).
 
+**Rule:** Every process/binary that opens `pageseeds.db` must open it via `db::init` (or `init_with_conn`). Raw `Connection::open` is only allowed downstream of a migrated connection — opening the DB without running migrations lets the schema drift behind the app and turns later writes into silent failures (issue #71).
+
 ---
 
 ## JSON Files (Committed Content)
