@@ -485,6 +485,42 @@ mod tests {
     }
 
     #[test]
+    fn create_fix_content_article_tasks_gates_fixes_behind_user_enqueue() {
+        let conn = in_memory_db();
+        let project_dir = TempProjectDir::new();
+        let project_path = project_dir.path().to_string_lossy().to_string();
+        create_test_project(&conn, "proj1", &project_path);
+        insert_test_article(&conn, "proj1", 109, "published", None);
+
+        write_recommendations(
+            project_dir.path(),
+            json!({
+                "articles": [
+                    {
+                        "article_id": 109,
+                        "article_title": "Alpha",
+                        "article_file": "./content/109_alpha.mdx",
+                        "suggestions": [{ "category": "title" }]
+                    }
+                ]
+            }),
+        );
+
+        let parent = make_parent_task("proj1");
+        let created = create_fix_content_article_tasks(&conn, &parent, &project_path);
+        assert_eq!(created.len(), 1);
+
+        // A completed content_review must leave fix tasks pending explicit
+        // user action: UserEnqueue policy, Todo status — never auto-run.
+        let tasks = task_store::list_tasks(&conn, "proj1").unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks
+            .iter()
+            .all(|task| task.run_policy == TaskRunPolicy::UserEnqueue));
+        assert!(tasks.iter().all(|task| task.status == TaskStatus::Todo));
+    }
+
+    #[test]
     fn create_fix_content_article_tasks_skips_invalid_and_duplicate_article_ids() {
         let conn = in_memory_db();
         let project_dir = TempProjectDir::new();
