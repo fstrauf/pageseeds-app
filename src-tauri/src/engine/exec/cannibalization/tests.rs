@@ -623,6 +623,157 @@ Some content here.
         cleanup(&path);
     }
 
+    fn audit_task() -> Task {
+        Task {
+            id: "task-test".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "cannibalization_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn test_build_context_excludes_redirect_sources() {
+        let path = test_dir();
+        setup_project(&path);
+        // csp-strategy-explained was merged away into best-stocks-csp.
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::write(
+            auto_dir.join("redirects.csv"),
+            "source,destination,status\n/blog/csp-strategy-explained,/blog/best-stocks-csp,301\n",
+        )
+        .unwrap();
+
+        let result = exec_can_build_context(&audit_task(), &path);
+        assert!(result.success, "build_context failed: {}", result.message);
+
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(output["summary"]["total_articles"].as_i64().unwrap(), 3);
+
+        let ctx =
+            std::fs::read_to_string(auto_dir.join("cannibalization_audit_context.json")).unwrap();
+        assert!(
+            !ctx.contains("csp-strategy-explained"),
+            "redirect source must not appear in fingerprint records"
+        );
+        assert!(ctx.contains("best-stocks-csp"), "keeper stays in the audit");
+
+        cleanup(&path);
+    }
+
+    fn write_clusters_file(path: &str, pages: serde_json::Value) {
+        let auto_dir = Path::new(path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let doc = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "clusters": [{
+                "cluster_id": "c1",
+                "theme": "cash secured puts",
+                "pages": pages,
+                "top_shared_queries": [],
+                "shared_query_count": 0,
+            }],
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_clusters.json"),
+            serde_json::to_string_pretty(&doc).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn cluster_page(id: i64, slug: &str, keyword: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "url": format!("/blog/{}", slug),
+            "title": slug,
+            "h1": slug,
+            "target_keyword": keyword,
+            "impressions": 100.0,
+            "clicks": 5.0,
+            "avg_position": 8.0,
+            "word_count": 800,
+            "incoming_internal_links": 1,
+            "outgoing_internal_links": 1,
+            "published_date": "2024-01-01",
+            "first_200_words": "cash secured puts income strategy",
+        })
+    }
+
+    fn read_candidates(path: &str) -> Vec<serde_json::Value> {
+        let auto_dir = Path::new(path).join(".github").join("automation");
+        let doc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(auto_dir.join("cannibalization_candidates.json")).unwrap(),
+        )
+        .unwrap();
+        doc["candidates"].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn test_select_candidates_keeps_cluster_with_all_distinct_keywords() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        // A semantic cluster whose pages all have distinct target keywords used
+        // to produce zero candidates: every per-keyword group had size 1.
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                cluster_page(1, "csp-guide", "cash secured puts"),
+                cluster_page(2, "best-csp-stocks", "best stocks for cash secured puts"),
+                cluster_page(3, "csp-income", "csp income strategy"),
+            ]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(result.success, "select_candidates failed: {}", result.message);
+
+        let candidates = read_candidates(&path);
+        assert_eq!(candidates.len(), 1, "theme must fall back to one candidate");
+        assert_eq!(candidates[0]["page_count"].as_i64().unwrap(), 3);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_select_candidates_still_splits_when_every_group_has_two_pages() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                cluster_page(1, "csp-a", "cash secured puts"),
+                cluster_page(2, "csp-b", "cash secured puts"),
+                cluster_page(3, "cc-a", "covered calls"),
+                cluster_page(4, "cc-b", "covered calls"),
+            ]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(result.success, "select_candidates failed: {}", result.message);
+
+        let candidates = read_candidates(&path);
+        assert_eq!(candidates.len(), 2, "balanced groups must still split");
+        assert!(candidates
+            .iter()
+            .all(|c| c["page_count"].as_i64().unwrap() == 2));
+
+        cleanup(&path);
+    }
+
     #[test]
     fn test_can_reduce_strategy_merges_batch_outputs() {
         let path = test_dir();

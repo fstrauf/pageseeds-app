@@ -306,6 +306,28 @@ pub fn load_recommendation_task_statuses(
 // Task Spawning
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Content-based idempotency key for merge (`consolidate_cluster`) tasks.
+///
+/// Cluster/candidate ids are run-indexed and shift between audit runs, so
+/// keying on them let the same merge be approved and executed twice
+/// (double-merge). The sorted set of redirect source slugs is stable across
+/// runs and identifies the merge by what it actually does. Falls back to the
+/// cluster id when the recommendation carries no redirect URLs.
+fn merge_idempotency_key(project_id: &str, cluster_id: &str, redirect_urls: &[String]) -> String {
+    let mut slugs: Vec<String> = redirect_urls
+        .iter()
+        .map(|u| crate::content::slug::normalize_url_slug(u))
+        .filter(|s| !s.is_empty())
+        .collect();
+    slugs.sort();
+    slugs.dedup();
+    if slugs.is_empty() {
+        format!("can_fix:merge:{}:{}", project_id, cluster_id)
+    } else {
+        format!("can_fix:merge:{}:{}", project_id, slugs.join("+"))
+    }
+}
+
 /// Create follow-up tasks from approved recommendations.
 ///
 /// Only creates tasks for recommendations with `approval_status = Approved`.
@@ -365,12 +387,10 @@ pub fn spawn_tasks_from_approved(
         if !approved.contains(&key) {
             continue;
         }
-        // Include the strategy_id in the idempotency key so a new strategy version
-        // does not silently reuse a stale task that was created from an older audit.
-        let idempotency_key = format!(
-            "can_fix:merge:{}:{}:{}",
-            project_id, rec.cluster_id, strategy_id
-        );
+        // Content-based key (sorted redirect source slugs): stable across audit
+        // runs, unlike cluster ids, so the same merge cannot be approved twice.
+        let idempotency_key =
+            merge_idempotency_key(project_id, &rec.cluster_id, &rec.redirect_urls);
         let spec = TaskSpec {
             project_id: project_id.to_string(),
             task_type: "consolidate_cluster".to_string(),
@@ -622,7 +642,11 @@ pub fn spawn_tasks_from_selection(
                             .collect()
                     })
                     .unwrap_or_default();
-                let idempotency_key = format!("can_fix:merge:{}:{}", project_id, cluster_id);
+                // Content-based key (sorted redirect source slugs): stable across
+                // audit runs, unlike cluster ids, so the same merge cannot be
+                // approved twice.
+                let idempotency_key =
+                    merge_idempotency_key(&project_id, &cluster_id, &redirect_urls);
                 let spec = TaskSpec {
                     project_id: project_id.clone(),
                     task_type: "consolidate_cluster".to_string(),
@@ -972,5 +996,153 @@ mod tests {
         let second = spawn_tasks_from_selection(&conn, &parent.id, &selections).unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(first[0].id, second[0].id);
+    }
+
+    #[test]
+    fn merge_idempotency_key_is_content_based() {
+        // Same source slugs, different cluster ids and order → same key.
+        let a = merge_idempotency_key(
+            "p1",
+            "cluster-a",
+            &["/blog/old-one".to_string(), "/blog/old-two".to_string()],
+        );
+        let b = merge_idempotency_key(
+            "p1",
+            "cluster-b",
+            &["/blog/old-two".to_string(), "/blog/01_old_one".to_string()],
+        );
+        assert_eq!(a, b);
+        assert_eq!(a, "can_fix:merge:p1:old-one+old-two");
+
+        // No redirect URLs → cluster id fallback.
+        let c = merge_idempotency_key("p1", "cluster-a", &[]);
+        assert_eq!(c, "can_fix:merge:p1:cluster-a");
+    }
+
+    fn rekeyed_strategy_artifact(new_cluster_id: &str) -> TaskArtifact {
+        // A later audit run re-recommends the same merge (same keep/redirect
+        // URLs) under a new run-indexed cluster id.
+        let json = serde_json::json!({
+            "generated_at": "2024-01-02T00:00:00Z",
+            "merge_recommendations": [
+                {
+                    "cluster_id": new_cluster_id,
+                    "confidence": "high",
+                    "keep_url": "/blog/risk",
+                    "redirect_urls": ["/blog/risk-old"],
+                    "reason": "Duplicate coverage"
+                }
+            ]
+        });
+        TaskArtifact {
+            key: "cannibalization_strategy".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("cannibalization_audit".to_string()),
+            content: Some(json.to_string()),
+        }
+    }
+
+    #[test]
+    fn selection_spawn_dedupes_across_shifting_cluster_ids() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        let mut parent = make_task("cannibalization_audit", &project_id);
+        parent.artifacts.push(strategy_artifact());
+        task_store::create_task(&conn, &parent).unwrap();
+
+        let first = spawn_tasks_from_selection(
+            &conn,
+            &parent.id,
+            &[CannibalizationSelection {
+                recommendation_type: "merge".to_string(),
+                recommendation_id: "risk-management".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(first.len(), 1);
+
+        // Next audit run: same source slugs, new cluster id.
+        task_store::upsert_task_artifact(&conn, &parent.id, &rekeyed_strategy_artifact("risk-mgmt-run2"))
+            .unwrap();
+        let second = spawn_tasks_from_selection(
+            &conn,
+            &parent.id,
+            &[CannibalizationSelection {
+                recommendation_type: "merge".to_string(),
+                recommendation_id: "risk-mgmt-run2".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            first[0].id, second[0].id,
+            "same redirect source set must return the existing merge task"
+        );
+    }
+
+    #[test]
+    fn approved_spawn_dedupes_across_shifting_cluster_ids() {
+        let conn = in_memory_db();
+        let project_id = test_project_in(&conn);
+        // The approvals flow parses the typed CannibalizationStrategy, so this
+        // fixture must deserialize strictly (no loose string `risks`).
+        let typed_strategy = TaskArtifact {
+            key: "cannibalization_strategy".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("cannibalization_audit".to_string()),
+            content: Some(
+                serde_json::json!({
+                    "generated_at": "2024-01-01T00:00:00Z",
+                    "merge_recommendations": [{
+                        "cluster_id": "risk-management",
+                        "confidence": "high",
+                        "keep_url": "/blog/risk",
+                        "redirect_urls": ["/blog/risk-old"],
+                        "reason": "Duplicate coverage"
+                    }]
+                })
+                .to_string(),
+            ),
+        };
+        let mut parent = make_task("cannibalization_audit", &project_id);
+        parent.artifacts.push(typed_strategy);
+        task_store::create_task(&conn, &parent).unwrap();
+
+        crate::db::set_strategy_review(
+            &conn,
+            &parent.id,
+            &project_id,
+            "merge",
+            "risk-management",
+            ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .unwrap();
+        let first = spawn_tasks_from_approved(&conn, &parent.id, &project_id).unwrap();
+        assert_eq!(first.len(), 1);
+
+        // Next audit run: same source slugs, new cluster id, newly approved.
+        task_store::upsert_task_artifact(&conn, &parent.id, &rekeyed_strategy_artifact("risk-mgmt-run2"))
+            .unwrap();
+        crate::db::set_strategy_review(
+            &conn,
+            &parent.id,
+            &project_id,
+            "merge",
+            "risk-mgmt-run2",
+            ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .unwrap();
+        let second = spawn_tasks_from_approved(&conn, &parent.id, &project_id).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            first[0], second[0],
+            "same redirect source set must return the existing merge task"
+        );
     }
 }
