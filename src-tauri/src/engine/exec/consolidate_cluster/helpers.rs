@@ -58,50 +58,82 @@ pub(crate) fn load_plan_from_task_or_file(task: &Task, project_path: &str) -> St
 }
 
 /// Find an MDX file in the content directory by its URL slug.
-pub(crate) fn find_file_by_slug(project_path: &str, slug: &str) -> Option<PathBuf> {
+///
+/// Matching is exact/normalized only — never substring — so a bad match can
+/// never patch the wrong live article. Resolution order:
+///   1. Exact filename stem match
+///   2. Normalized stem match via `content::slug::normalize_url_slug`
+///      (covers numeric-prefixed stems like `001_{slug}` and `-`/`_` differences)
+///   3. Frontmatter `url_slug` match (exact or normalized)
+///
+/// Returns `Ok(None)` when nothing matches. Returns `Err` when more than one
+/// file matches — ambiguous cases must fail loudly rather than guess.
+pub(crate) fn find_file_by_slug(
+    project_path: &str,
+    slug: &str,
+) -> std::result::Result<Option<PathBuf>, String> {
     let repo_root = Path::new(project_path);
     let content_resolution = crate::content::locator::resolve(repo_root, None);
-    let content_dir = content_resolution.selected?;
+    let Some(content_dir) = content_resolution.selected else {
+        return Ok(None);
+    };
 
     let files = crate::content::locator::collect_markdown_files(&content_dir);
+    let slug_normalized = crate::content::slug::normalize_url_slug(slug);
 
-    // Normalize slug for matching: kebab-case and snake_case should match
-    let slug_normalized = slug.replace('-', "_");
-
-    for file in files {
-        let name = file.file_stem()?.to_string_lossy().to_string();
-        let name_normalized = name.replace('-', "_");
-
-        // Slug might be in filename like "001_best_stocks_csp" → we look for the slug part
-        if name == slug
-            || name.ends_with(&format!("_{}", slug))
-            || name.contains(slug)
-            || name_normalized == slug_normalized
-            || name_normalized.ends_with(&format!("_{}", slug_normalized))
-            || name_normalized.contains(&slug_normalized)
-        {
-            return Some(file);
+    // Pass 1: filename stem matching (exact or normalized).
+    let mut matches: Vec<PathBuf> = Vec::new();
+    for file in &files {
+        let Some(stem) = file.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+            continue;
+        };
+        let stem_matches = stem == slug
+            || (!slug_normalized.is_empty()
+                && crate::content::slug::normalize_url_slug(&stem) == slug_normalized);
+        if stem_matches {
+            matches.push(file.clone());
         }
-        // Also check frontmatter for url_slug match
-        if let Ok(content) = std::fs::read_to_string(&file) {
+    }
+
+    // Pass 2 (fallback): frontmatter `url_slug` matching.
+    if matches.is_empty() {
+        for file in &files {
+            let Ok(content) = std::fs::read_to_string(file) else {
+                continue;
+            };
             let scalars = crate::content::frontmatter::top_level_scalars(&content);
             for field in scalars {
+                if field.key != "url_slug" {
+                    continue;
+                }
                 let fm_slug = field.raw_value.trim_matches('"').trim_matches('\'');
-                let fm_slug_normalized = fm_slug.replace('-', "_");
-                if field.key == "url_slug"
-                    && (fm_slug == slug || fm_slug_normalized == slug_normalized)
-                {
-                    return Some(file);
+                let fm_matches = fm_slug == slug
+                    || (!slug_normalized.is_empty()
+                        && crate::content::slug::normalize_url_slug(fm_slug) == slug_normalized);
+                if fm_matches {
+                    matches.push(file.clone());
+                    break;
                 }
             }
         }
     }
 
-    None
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.into_iter().next()),
+        _ => Err(format!(
+            "Ambiguous slug '{}': matches multiple files: {}",
+            slug,
+            matches
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 /// Extract headings from markdown body.
-#[allow(dead_code)]
 pub(crate) fn extract_headings(body: &str) -> Vec<ExtractedHeading> {
     const MAX_BODY_LINES: usize = 30;
     let mut headings = Vec::new();
@@ -143,7 +175,6 @@ pub(crate) fn extract_headings(body: &str) -> Vec<ExtractedHeading> {
 }
 
 /// Extract markdown tables from body.
-#[allow(dead_code)]
 pub(crate) fn extract_tables(body: &str) -> Vec<ExtractedTable> {
     let mut tables = Vec::new();
     let lines: Vec<&str> = body.lines().collect();
@@ -168,7 +199,6 @@ pub(crate) fn extract_tables(body: &str) -> Vec<ExtractedTable> {
 }
 
 /// Extract code block examples from body.
-#[allow(dead_code)]
 pub(crate) fn extract_examples(body: &str) -> Vec<ExtractedExample> {
     const MAX_CODE_LINES: usize = 40;
     let mut examples = Vec::new();
@@ -203,7 +233,6 @@ pub(crate) fn extract_examples(body: &str) -> Vec<ExtractedExample> {
 }
 
 /// Extract FAQ-style Q&A from body (lines matching "Q:" / "A:" or "**Q:**" patterns).
-#[allow(dead_code)]
 pub(crate) fn extract_faqs(body: &str) -> Vec<ExtractedFaq> {
     const MAX_ANSWER_LINES: usize = 20;
     let mut faqs = Vec::new();

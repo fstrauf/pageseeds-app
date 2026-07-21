@@ -33,7 +33,16 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
     let keeper_slug = keep_url
         .trim_start_matches("/blog/")
         .trim_start_matches('/');
-    let keeper_file = find_file_by_slug(project_path, keeper_slug);
+    let keeper_file = match find_file_by_slug(project_path, keeper_slug) {
+        Ok(f) => f,
+        Err(e) => {
+            return StepResult {
+                success: false,
+                message: e,
+                output: None,
+            };
+        }
+    };
 
     let mut issues: Vec<String> = Vec::new();
 

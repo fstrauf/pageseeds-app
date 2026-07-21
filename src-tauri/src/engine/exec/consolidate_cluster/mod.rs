@@ -30,6 +30,7 @@ mod rewrite_inbound_links;
 mod validate_output;
 mod sync_articles;
 mod helpers;
+mod merge_context;
 mod tests;
 
 pub(crate) use load_plan::exec_merge_load_plan;
@@ -42,3 +43,4 @@ pub(crate) use rewrite_inbound_links::exec_merge_rewrite_inbound_links;
 pub(crate) use validate_output::exec_merge_validate_output;
 pub(crate) use sync_articles::*;
 pub(crate) use helpers::*;
+pub(crate) use merge_context::*;

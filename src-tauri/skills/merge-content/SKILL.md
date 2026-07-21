@@ -1,38 +1,37 @@
 # Merge Content Skill
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Used by the `merge_draft_patch` agentic step.
 
 ## Goal
 
-Draft a `ContentMergePatch` JSON that merges the most valuable unique content from redirect pages into the keeper article. You are given compact summaries of each redirect page — write new content that captures the unique value from those summaries, adapted to the keeper's tone and structure.
+Draft a `ContentMergePatch` JSON that merges the most valuable unique content from redirect pages into the keeper article. You are given the actual body content of each redirect page's unique sections — preserve that real content (tables, FAQs, examples) in the keeper, adapted to the keeper's tone and structure.
 
 ## Input
 
 Structured JSON containing:
 - **keeper_file**: Path to the keeper MDX file.
-- **keeper_outline**: Array of the keeper's headings (`{ level, text, body }`). Use these to choose insertion points (`after:<heading>` or `before:<heading>`).
-- **keeper_excerpt**: First ~2,500 characters of the keeper article (may be truncated with `[…excerpt truncated…]`). Use this to identify duplicate content and match tone.
-- **redirect_summaries**: Array of compact summary objects, one per redirect page, each with:
+- **keeper_outline**: Array of the keeper's headings (`{ level, text }`). Use these to choose insertion points (`after:<heading>` or `before:<heading>`).
+- **keeper_excerpt**: First ~1,500 characters of the keeper article (may be truncated with `[…excerpt truncated…]`). Use this to identify duplicate content and match tone.
+- **batch_index** / **batch_count**: Large clusters are processed in sequential batches of redirect pages. Draft a patch for THIS batch only; other batches are handled in separate rounds against the same keeper.
+- **redirect_pages**: Array of page objects, one per redirect page in this batch, each with:
   - `file`: Path to the redirect MDX file.
   - `url`: URL slug of the redirect page.
   - `title`: Page title.
   - `word_count`: Approximate word count.
-  - `excerpt`: First ~500 characters of the article body.
-  - `headings`: Array of heading titles (no body content).
-  - `has_tables`: Boolean — true if the article contains markdown tables.
-  - `has_examples`: Boolean — true if the article contains code blocks.
-  - `has_faqs`: Boolean — true if the article contains FAQ sections.
+  - `sections`: Array of heading sections (`{ level, text, body, covered_by_keeper }`). Sections whose heading already exists in the keeper have `covered_by_keeper: true` and an empty `body`; unique sections carry their full body text.
+  - `tables`: Array of markdown tables (`{ markdown }`) extracted from the page.
+  - `examples`: Array of code blocks (`{ language, code }`) extracted from the page.
+  - `faqs`: Array of FAQ pairs (`{ question, answer }`) extracted from the page.
 
 ## Analysis Rules
 
-1. **Identify unique value**: For each redirect summary, decide whether it covers information that is NOT already in the keeper.
-   - If the keeper already has a section with the same heading and similar content, skip it.
+1. **Identify unique value**: For each redirect page, decide what it covers that is NOT already in the keeper.
+   - Sections with `covered_by_keeper: true` are usually redundant — skip them unless the keeper's version is clearly weaker.
    - If a redirect covers a unique sub-topic, data point, or angle that the keeper lacks, propose an addition.
-   - Use `has_tables`, `has_examples`, and `has_faqs` as hints for what kind of content may be worth preserving.
 
-2. **Write original content**: You are given summaries, not full source text. Write fresh content that captures the unique value from each redirect summary. Do not try to copy exact tables or code blocks — write a natural prose summary, explanation, or adapted version that fits the keeper's style.
+2. **Preserve real content**: You are given the actual tables, code examples, and FAQ answers from the redirect pages. Carry them over faithfully — do NOT paraphrase a table into prose, invent replacement data, or regenerate code from memory. Edit only what is needed to fit the keeper's style and flow.
 
 3. **Choose insertion points**: For each addition, specify where it fits in the keeper's flow.
    - Use `"position": "after:<existing_heading>"` to place after a specific section.
@@ -40,7 +39,7 @@ Structured JSON containing:
    - Use `"position": "end"` to append at the end (before any Related Articles section if present).
 
 4. **Write transitions**: If adding sections changes the narrative flow, propose transition edits to existing paragraphs using `TransitionEdit` objects.
-   - `find`: Exact existing text to locate.
+   - `find`: Exact existing text to locate. Only the FIRST occurrence in the keeper is replaced, so make `find` long enough to anchor the intended spot.
    - `replace`: New text that improves flow.
 
 5. **Preserve tone and style**: The added content should match the keeper's writing style. Do not change the keeper's voice.
