@@ -1,0 +1,14 @@
+{
+  "name": "missing-keyword-and-thin-meta",
+  "article_context": {
+    "article_id": 31,
+    "article_title": "Watering Your Balcony Plants Automatically",
+    "article_file": "content/blog/drip-irrigation-balcony.mdx",
+    "url_slug": "drip-irrigation-balcony",
+    "target_keyword": "drip irrigation balcony",
+    "published_date": "2026-03-01",
+    "gsc_snapshot": { "clicks_30d": 4, "impressions_30d": 2100, "ctr": 0.0019, "position": 6.2 },
+    "failed_checks": ["title_keyword", "meta_length", "internal_links"],
+    "source_excerpt": "# Watering Your Balcony Plants Automatically\n\nA drip irrigation kit for balcony planters waters each pot slowly at the root zone, keeping moisture steady while you are away. Kits connect to a tap or a reservoir and use a timer to run on a schedule.\n\n## Components you need\n\nA timer, pressure reducer, main tubing, and adjustable drippers for each pot.\n\n## Reservoir vs tap connection\n\nReservoir kits work where no outdoor tap exists; tap kits avoid refilling."
+  }
+}
