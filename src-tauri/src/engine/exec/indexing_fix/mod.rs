@@ -126,14 +126,10 @@ fn resolve_plan(task: &Task, latest_raw: Option<&str>) -> Result<IndexingFixPlan
             match serde_json::from_str::<IndexingFixPlan>(content) {
                 Ok(p) => return Ok(p),
                 Err(e) => {
-                    return Err(StepResult {
-                        success: false,
-                        message: format!(
+                    return Err(StepResult::fail_with_output(format!(
                             "indexing_fix_plan artifact exists but is invalid JSON: {}",
                             e
-                        ),
-                        output: Some(content.clone()),
-                    })
+                        ), content.clone()))
                 }
             }
         }
@@ -145,13 +141,9 @@ fn resolve_plan(task: &Task, latest_raw: Option<&str>) -> Result<IndexingFixPlan
         }
     }
 
-    Err(StepResult {
-        success: false,
-        message: "No indexing_fix_plan artifact or latest_raw found. \
+    Err(StepResult::fail("No indexing_fix_plan artifact or latest_raw found. \
              Run the generate step first."
-            .to_string(),
-        output: None,
-    })
+            .to_string()))
 }
 
 /// Re-resolve the target MDX file deterministically from the task description
@@ -159,11 +151,7 @@ fn resolve_plan(task: &Task, latest_raw: Option<&str>) -> Result<IndexingFixPlan
 fn resolve_target_file(task: &Task, project_path: &str) -> Result<PathBuf, StepResult> {
     let desc = parse_fix_task_description(task.description.as_deref().unwrap_or(""));
     if desc.url.is_empty() {
-        return Err(StepResult {
-            success: false,
-            message: "Task description missing URL".to_string(),
-            output: None,
-        });
+        return Err(StepResult::fail("Task description missing URL".to_string()));
     }
 
     let paths = ProjectPaths::from_path(project_path);
@@ -174,14 +162,10 @@ fn resolve_target_file(task: &Task, project_path: &str) -> Result<PathBuf, StepR
     let slug = crate::content::slug::extract_slug_from_url(&desc.url);
     match find_mdx_by_slug(&content_dir, &slug) {
         Some(p) => Ok(p),
-        None => Err(StepResult {
-            success: false,
-            message: format!(
+        None => Err(StepResult::fail(format!(
                 "No MDX file found for {} (slug={}). Cannot apply indexing fix.",
                 desc.url, slug
-            ),
-            output: None,
-        }),
+            ))),
     }
 }
 

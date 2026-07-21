@@ -27,11 +27,7 @@ pub(crate) fn exec_ctr_template_detect(
     let audits = match crate::db::list_ctr_rendered_audits(conn, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load rendered audits: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load rendered audits: {}", e));
         }
     };
 
@@ -450,21 +446,13 @@ pub(crate) fn exec_ctr_template_verify_render(
         .unwrap_or_default();
 
     if detection_json.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No ctr_template_detection artifact found".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No ctr_template_detection artifact found".to_string());
     }
 
     let results: Vec<CtrTemplateDetectionResult> = match serde_json::from_str(&detection_json) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to parse detection artifact: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to parse detection artifact: {}", e));
         }
     };
 
@@ -581,11 +569,7 @@ pub(crate) fn exec_ctr_schema_detect(
     let audits = match crate::db::list_ctr_rendered_audits(conn, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load rendered audits: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load rendered audits: {}", e));
         }
     };
 
@@ -640,21 +624,13 @@ pub(crate) fn exec_ctr_schema_verify_render(
         .unwrap_or_default();
 
     if detection_json.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No ctr_schema_detection artifact found".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No ctr_schema_detection artifact found".to_string());
     }
 
     let affected: Vec<serde_json::Value> = match serde_json::from_str(&detection_json) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to parse detection artifact: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to parse detection artifact: {}", e));
         }
     };
 

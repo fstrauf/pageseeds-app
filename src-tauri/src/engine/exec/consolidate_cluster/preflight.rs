@@ -23,11 +23,7 @@ pub(crate) fn exec_merge_preflight(
     let plan: serde_json::Value = match serde_json::from_str(&plan_json) {
         Ok(v) => v,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid merge plan JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid merge plan JSON: {}", e));
         }
     };
 
@@ -46,11 +42,7 @@ pub(crate) fn exec_merge_preflight(
     let keeper_file = match find_file_by_slug(project_path, keeper_slug) {
         Ok(f) => f,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: e,
-                output: None,
-            };
+            return StepResult::fail(e);
         }
     };
     let keeper_exists = keeper_file.as_ref().map(|p| p.exists()).unwrap_or(false);
@@ -77,11 +69,7 @@ pub(crate) fn exec_merge_preflight(
             Ok(Some(p)) if p.exists() => redirect_files_exist.push(url.clone()),
             Ok(_) => redirect_files_missing.push(url.clone()),
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: e,
-                    output: None,
-                };
+                return StepResult::fail(e);
             }
         }
     }

@@ -64,31 +64,19 @@ pub(crate) fn exec_content_quality_context(
     project_path: &str,
 ) -> StepResult {
     let Some(file) = resolve_target_file(task, project_path) else {
-        return StepResult {
-            success: false,
-            message: "Could not resolve the article file to review".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Could not resolve the article file to review".to_string());
     };
 
     let repo_root = Path::new(project_path);
     let Some(full_path) = crate::engine::exec::audit_health::resolve_content_file(repo_root, &file)
     else {
-        return StepResult {
-            success: false,
-            message: format!("Article file not found: {}", file),
-            output: None,
-        };
+        return StepResult::fail(format!("Article file not found: {}", file));
     };
 
     let content = match std::fs::read_to_string(&full_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to read {}: {}", file, e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to read {}: {}", file, e));
         }
     };
 
@@ -142,23 +130,15 @@ pub(crate) async fn exec_content_quality_review(
         match crate::rig::provider::resolve_backend(agent_provider, None, None, None).await {
             Ok(b) => b,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Could not resolve LLM backend: {}", e),
-                    output: None,
-                };
+                return StepResult::fail(format!("Could not resolve LLM backend: {}", e));
             }
         };
 
     match &backend {
         LlmBackend::KimiDirect => {
-            return StepResult {
-                success: false,
-                message: "Structured extraction is not supported with KimiDirect. \
+            return StepResult::fail("Structured extraction is not supported with KimiDirect. \
                  Use Kimi bridge, Claude, OpenAI, or Ollama."
-                    .to_string(),
-                output: None,
-            };
+                    .to_string());
         }
         _ => {}
     }
@@ -171,21 +151,13 @@ pub(crate) async fn exec_content_quality_review(
         .unwrap_or("");
 
     if context_json.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No content_quality_context artifact found on task".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No content_quality_context artifact found on task".to_string());
     }
 
     let prompt = match build_review_prompt(project_path, context_json) {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to build quality review prompt: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to build quality review prompt: {}", e));
         }
     };
 
@@ -203,11 +175,7 @@ pub(crate) async fn exec_content_quality_review(
     {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Structured extraction failed for ContentQualityReview: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Structured extraction failed for ContentQualityReview: {}", e));
         }
     };
 
@@ -219,11 +187,7 @@ pub(crate) async fn exec_content_quality_review(
     let review_json = match serde_json::to_string_pretty(&review) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize ContentQualityReview: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize ContentQualityReview: {}", e));
         }
     };
 

@@ -31,11 +31,7 @@ pub(crate) fn exec_territory_load_recommendation(task: &Task, project_path: &str
         .trim();
 
     if theme.is_empty() {
-        return StepResult {
-            success: false,
-            message: "Cannot determine territory theme from task title".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Cannot determine territory theme from task title".to_string());
     }
 
     let strategy_json = task
@@ -53,21 +49,13 @@ pub(crate) fn exec_territory_load_recommendation(task: &Task, project_path: &str
     };
 
     if strategy_json.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No cannibalization_strategy artifact found".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No cannibalization_strategy artifact found".to_string());
     }
 
     let strategy: serde_json::Value = match serde_json::from_str(&strategy_json) {
         Ok(v) => v,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid strategy JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid strategy JSON: {}", e));
         }
     };
 
@@ -85,11 +73,7 @@ pub(crate) fn exec_territory_load_recommendation(task: &Task, project_path: &str
     let rec = match rec {
         Some(r) => r.clone(),
         None => {
-            return StepResult {
-                success: false,
-                message: format!("No territory recommendation found matching '{}'", theme),
-                output: None,
-            };
+            return StepResult::fail(format!("No territory recommendation found matching '{}'", theme));
         }
     };
 
@@ -128,22 +112,14 @@ pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> S
     let rec_json = match std::fs::read_to_string(&rec_path) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Cannot read territory recommendation: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Cannot read territory recommendation: {}", e));
         }
     };
 
     let rec: TerritoryRecommendation = match serde_json::from_str(&rec_json) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid territory recommendation JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid territory recommendation JSON: {}", e));
         }
     };
 
@@ -151,11 +127,7 @@ pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> S
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to open DB: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to open DB: {}", e));
         }
     };
 
@@ -163,11 +135,7 @@ pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> S
     let articles = match gather_matching_articles(&conn, &task.project_id, &theme_lower) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to query articles: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to query articles: {}", e));
         }
     };
 
@@ -181,11 +149,7 @@ pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> S
     let context_json = match serde_json::to_string_pretty(&context) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize context: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize context: {}", e));
         }
     };
 
@@ -252,11 +216,7 @@ pub(crate) async fn exec_territory_strategy(
             let strategy_json = match serde_json::to_string_pretty(&strategy) {
                 Ok(j) => j,
                 Err(e) => {
-                    return StepResult {
-                        success: false,
-                        message: format!("Failed to serialize strategy: {}", e),
-                        output: None,
-                    };
+                    return StepResult::fail(format!("Failed to serialize strategy: {}", e));
                 }
             };
             StepResult {
@@ -269,11 +229,7 @@ pub(crate) async fn exec_territory_strategy(
                 output: Some(strategy_json),
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Structured extraction failed: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("Structured extraction failed: {}", e)),
     }
 }
 
@@ -291,11 +247,7 @@ pub(crate) fn exec_territory_apply(
     let (strategy, normalized_json, warnings) = match parse_territory_strategy(strategy_json) {
         Ok(parsed) => parsed,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid territory strategy JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid territory strategy JSON: {}", e));
         }
     };
 
@@ -303,11 +255,7 @@ pub(crate) fn exec_territory_apply(
         .automation_dir
         .join(format!("territory_strategy_{}.json", task.id));
     if let Err(e) = std::fs::write(&out_path, &normalized_json) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write territory strategy: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write territory strategy: {}", e));
     }
 
     let warning_suffix = if warnings.is_empty() {

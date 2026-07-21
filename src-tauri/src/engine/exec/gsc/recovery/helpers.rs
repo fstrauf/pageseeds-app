@@ -82,22 +82,15 @@ pub(crate) fn refresh_link_scan(
 }
 
 pub(crate) fn load_articles_map(paths: &ProjectPaths) -> HashMap<String, serde_json::Value> {
-    let articles_path = paths.automation_dir.join("articles.json");
-    std::fs::read_to_string(&articles_path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v["articles"].as_array().cloned())
-        .map(|articles| {
-            articles
-                .into_iter()
-                .filter_map(|a| {
-                    let slug = a["url_slug"].as_str()?;
-                    let normalized = crate::content::slug::normalize_url_slug(slug);
-                    Some((normalized, a))
-                })
-                .collect()
+    crate::engine::exec::common::load_project_articles(paths)
+        .articles
+        .into_iter()
+        .filter_map(|a| {
+            let slug = a["url_slug"].as_str()?;
+            let normalized = crate::content::slug::normalize_url_slug(slug);
+            Some((normalized, a))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// Maximum times a single source page can be used across all targets in one campaign.

@@ -24,20 +24,12 @@ pub fn exec_social_generate_posts(
     let manifest = match discover_sources(Path::new(project_path), &config) {
         Ok(m) => m,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to discover sources: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to discover sources: {}", e));
         }
     };
 
     if manifest.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No content sources found.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No content sources found.".to_string());
     }
 
     let template_ids = super::parse_template_ids_from_task(task);
@@ -47,11 +39,7 @@ pub fn exec_social_generate_posts(
     let templates = match super::load_templates_for_generation(&task.project_id, &template_ids) {
         Ok(t) => t,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load templates: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load templates: {}", e));
         }
     };
 
@@ -149,22 +137,14 @@ pub fn exec_social_generate_posts(
     }
 
     if generated_posts.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No posts were generated. Check agent output.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No posts were generated. Check agent output.".to_string());
     }
 
     // Save generated posts as artifact
     let posts_json = match serde_json::to_string(&generated_posts) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize posts: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize posts: {}", e));
         }
     };
 

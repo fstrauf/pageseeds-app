@@ -316,36 +316,11 @@ pub(crate) async fn exec_content_review_recommend(
     let repo_root = Path::new(project_path);
 
     // Load content audit from DB (new primary storage), fallback to JSON
-    let audit: serde_json::Value = {
-        let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
-            Ok(conn) => conn,
-            Err(e) => {
-                return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: format!("Failed to open app database: {}", e),
-                    output: None,
-                };
-            }
-        };
-        match crate::db::content_audit::get_audit_report_as_json(&db, &task.project_id) {
-            Ok(Some(json)) => json,
-            _ => {
-                let audit_path = paths.automation_dir.join("content_audit.json");
-                match crate::engine::exec::common::read_json(&audit_path, "content_audit.json") {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                }
-            }
-        }
-    };
+    let audit_articles =
+        crate::engine::exec::common::load_audit_snapshot(&task.project_id, &paths).articles;
 
     let mut raw_articles: Vec<serde_json::Value> =
         crate::engine::exec::common::load_project_articles(&paths).articles;
-    let audit_articles = audit
-        .get("articles")
-        .and_then(|v| v.as_array())
-        .map(|a| a.to_vec())
-        .unwrap_or_default();
 
     // ── Filter out articles that Google cannot see (not indexed) ──────────────
     // Load gsc_collection.json to cross-reference indexing status.
@@ -442,11 +417,7 @@ pub(crate) async fn exec_content_review_recommend(
         .collect();
 
     if contexts.is_empty() {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: "Could not read source files for selected articles — check file paths in articles.json".to_string(),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail("Could not read source files for selected articles — check file paths in articles.json".to_string());
     }
 
     // Process articles with bounded concurrency (limit 2 to match provider limits)
@@ -514,11 +485,7 @@ pub(crate) async fn exec_content_review_recommend(
     let rec_value = match serde_json::to_value(&rec) {
         Ok(v) => v,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to serialize recommendations: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to serialize recommendations: {}", e))
         }
     };
 

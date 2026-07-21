@@ -45,15 +45,11 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
-            return Err(StepResult {
-                success: false,
-                message: format!(
+            return Err(StepResult::fail(format!(
                     "manifest.json not found at {} and failed to open DB for fallback: {}",
                     manifest_path.display(),
                     e
-                ),
-                output: None,
-            });
+                )));
         }
     };
 
@@ -65,15 +61,11 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .map(String::from)
-                .ok_or_else(|| StepResult {
-                    success: false,
-                    message: format!(
+                .ok_or_else(|| StepResult::fail(format!(
                         "manifest.json not found at {} and project '{}' has no site_url configured",
                         manifest_path.display(),
                         task.project_id
-                    ),
-                    output: None,
-                })?;
+                    )))?;
             let sitemap_url = project
                 .sitemap_url
                 .as_deref()
@@ -88,15 +80,11 @@ fn resolve_site_config(task: &Task, project_path: &str) -> Result<(String, Strin
                 });
             Ok((site_url, sitemap_url))
         }
-        Err(e) => Err(StepResult {
-            success: false,
-            message: format!(
+        Err(e) => Err(StepResult::fail(format!(
                 "manifest.json not found at {} and failed to load project from DB: {}",
                 manifest_path.display(),
                 e
-            ),
-            output: None,
-        }),
+            ))),
     }
 }
 
@@ -149,12 +137,8 @@ pub(crate) fn exec_collect_gsc(
     {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: "GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets"
-                    .to_string(),
-                output: None,
-            }
+            return StepResult::fail("GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets"
+                    .to_string())
         }
     };
 
@@ -201,24 +185,16 @@ pub(crate) fn exec_collect_gsc(
         Ok(Ok((r, t, n))) => (r, t, n),
         Ok(Err(e)) => {
             let msg = e.to_string();
-            return StepResult {
-                success: false,
-                message: if msg.contains("sitemap") || msg.contains("Sitemap") {
+            return StepResult::fail(if msg.contains("sitemap") || msg.contains("Sitemap") {
                     format!("Failed to fetch sitemap: {}", msg)
                 } else if msg.contains("auth") || msg.contains("token") {
                     format!("GSC auth failed: {}", msg)
                 } else {
                     format!("URL Inspection API failed: {}", msg)
-                },
-                output: None,
-            };
+                });
         }
         Err(_) => {
-            return StepResult {
-                success: false,
-                message: "GSC collection thread panicked".to_string(),
-                output: None,
-            }
+            return StepResult::fail("GSC collection thread panicked".to_string())
         }
     };
 
@@ -253,14 +229,10 @@ pub(crate) fn exec_collect_gsc(
     }
 
     if sample_size > 0 && sample_matches == 0 {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "GSC site URL mismatch: 0/{} inspected URLs match '{}'. Check 'url'/'gsc_site' in manifest.json.",
                 sample_size, site_match_prefix
-            ),
-            output: None,
-        };
+            ));
     }
 
     // 5. Domain validation (normalize for www. comparison)
@@ -272,16 +244,12 @@ pub(crate) fn exec_collect_gsc(
         })
         .count();
     if records.len() > 5 && url_matching < records.len() / 2 {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "GSC site URL mismatch: only {}/{} URLs match '{}'. Check 'url' in manifest.json.",
                 url_matching,
                 records.len(),
                 site_match_prefix
-            ),
-            output: None,
-        };
+            ));
     }
 
     // 6. Build output
@@ -335,11 +303,7 @@ pub(crate) fn exec_collect_gsc(
     // 7. Write gsc_collection.json
     let output_path = paths.automation_dir.join("gsc_collection.json");
     if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to create automation dir: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to create automation dir: {}", e));
     }
     if let Err(e) =
         crate::engine::exec::common::write_json(&output_path, &collection, "gsc_collection.json")
@@ -369,16 +333,12 @@ pub(crate) fn exec_collect_gsc(
         );
         // Fail the step (issue #25): gsc_collection.json is already on disk, so
         // a retry only needs to redo the sync — which is idempotent (DELETE+INSERT).
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "URL inspection succeeded ({} URLs inspected, {} issues found, gsc_collection.json written), but the Search Analytics sync failed: {}. Downstream audits would run on stale metrics. Re-run collect_gsc to retry the sync.",
                 records.len(),
                 issues_found,
                 sync_msg
-            ),
-            output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
-        };
+            ), serde_json::to_string_pretty(&collection).unwrap_or_default());
     }
 
     log::info!("[collect_gsc] analytics sync succeeded: {}", sync_msg);

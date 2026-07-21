@@ -46,11 +46,7 @@ pub async fn exec_research_workflow_step(
         match build_research_prompts(&step.name, task, project_path, &paths, previous_output) {
             Ok(prompts) => prompts,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Failed to build prompts for '{}': {}", step.name, e),
-                    output: None,
-                };
+                return StepResult::fail(format!("Failed to build prompts for '{}': {}", step.name, e));
             }
         };
 
@@ -111,20 +107,12 @@ pub async fn exec_research_workflow_step(
                 Ok(Err(e)) => {
                     log::error!("[research_workflow] '{}' failed: {}", step_name, e);
 
-                    StepResult {
-                        success: false,
-                        message: format!("Research step '{}' failed: {}", step_name, e),
-                        output: None,
-                    }
+                    StepResult::fail(format!("Research step '{}' failed: {}", step_name, e))
                 }
                 Err(e) => {
                     log::error!("[research_workflow] '{}' task failed: {}", step_name, e);
 
-                    StepResult {
-                        success: false,
-                        message: format!("Research step '{}' task failed: {}", step_name, e),
-                        output: None,
-                    }
+                    StepResult::fail(format!("Research step '{}' task failed: {}", step_name, e))
                 }
             }
         }
@@ -151,14 +139,10 @@ where
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
                 Err(e) => {
-                    return StepResult {
-                        success: false,
-                        message: format!(
+                    return StepResult::fail(format!(
                             "Structured extraction for '{}' succeeded but serialization failed: {}",
                             step_name, e
-                        ),
-                        output: None,
-                    };
+                        ));
                 }
             };
             log::info!(
@@ -178,11 +162,7 @@ where
                 step_name,
                 e
             );
-            StepResult {
-                success: false,
-                message: format!("Structured extraction for '{}' failed: {}", step_name, e),
-                output: None,
-            }
+            StepResult::fail(format!("Structured extraction for '{}' failed: {}", step_name, e))
         }
     }
 }

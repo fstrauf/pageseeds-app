@@ -27,11 +27,7 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
     let site_url: String = match resolve_site_url(&paths.automation_dir) {
         Some(u) => u,
         None => {
-            return StepResult {
-                success: false,
-                message: "No site_url in manifest.json — skipping rendered audit".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No site_url in manifest.json — skipping rendered audit".to_string());
         }
     };
 

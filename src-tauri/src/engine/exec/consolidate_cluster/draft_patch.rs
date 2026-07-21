@@ -69,11 +69,7 @@ pub(crate) fn exec_merge_draft_patch(
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to create runtime for merge extraction: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to create runtime for merge extraction: {}", e));
         }
     };
 
@@ -89,16 +85,12 @@ pub(crate) fn exec_merge_draft_patch(
         const HARD_PROMPT_LIMIT_BYTES: usize = 20_000;
         let prompt_bytes = prompt.len();
         if prompt_bytes > HARD_PROMPT_LIMIT_BYTES {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "Merge prompt too large ({} bytes) for batch {}/{}. Limit: {} bytes. \
                      The batch has too much redirect content to fit the Kimi bridge limit. \
                      Consider splitting the cluster into smaller groups or running merge manually.",
                     prompt_bytes, i + 1, batch_contexts.len(), HARD_PROMPT_LIMIT_BYTES
-                ),
-                output: None,
-            };
+                ));
         }
 
         let extract_result = rt.block_on(async {
@@ -115,16 +107,12 @@ pub(crate) fn exec_merge_draft_patch(
         match extract_result {
             Ok(patch) => patches.push(patch),
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "Structured extraction failed for merge patch (batch {}/{}): {}",
                         i + 1,
                         batch_contexts.len(),
                         e
-                    ),
-                    output: None,
-                };
+                    ));
             }
         }
     }
@@ -151,11 +139,7 @@ pub(crate) fn exec_merge_draft_patch(
             ),
             output: Some(j),
         },
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Failed to serialize merge patch: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("Failed to serialize merge patch: {}", e)),
     }
 }
 

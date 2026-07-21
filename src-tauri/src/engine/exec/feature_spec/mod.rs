@@ -38,11 +38,7 @@ pub async fn exec_generate_feature_spec(
     let agent_output = match run_feature_spec_agent(task, project_path, agent_provider).await {
         Ok(output) => output,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Agent investigation failed: {e}"),
-                output: None,
-            };
+            return StepResult::fail(format!("Agent investigation failed: {e}"));
         }
     };
 
@@ -59,11 +55,7 @@ pub async fn exec_generate_feature_spec(
     let verified = match verify_findings(&agent_output.findings, task, project_path).await {
         Ok(v) => v,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Verification failed: {e}"),
-                output: None,
-            };
+            return StepResult::fail(format!("Verification failed: {e}"));
         }
     };
 
@@ -81,29 +73,17 @@ pub async fn exec_generate_feature_spec(
 
     // Validate structure
     if let Err(reason) = validate_spec_content(&spec_content) {
-        return StepResult {
-            success: false,
-            message: format!("Rendered spec failed validation: {reason}"),
-            output: None,
-        };
+        return StepResult::fail(format!("Rendered spec failed validation: {reason}"));
     }
 
     // Write output
     let spec_filename = format!("seo_feature_spec_{}.md", task.id);
     let spec_path = automation_dir.join(&spec_filename);
     if let Err(e) = std::fs::create_dir_all(automation_dir) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to create automation dir: {e}"),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to create automation dir: {e}"));
     }
     if let Err(e) = std::fs::write(&spec_path, &spec_content) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write feature spec: {e}"),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write feature spec: {e}"));
     }
 
     // Stable hard-link for convenience

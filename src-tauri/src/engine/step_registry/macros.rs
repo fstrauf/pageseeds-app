@@ -30,11 +30,7 @@ macro_rules! register_blocking {
                 Box::pin(async move {
                     tokio::task::spawn_blocking(move || $fn(&task, &project_path))
                         .await
-                        .unwrap_or_else(|e| StepResult {
-                            success: false,
-                            message: format!("Step panicked: {}", e),
-                            output: None,
-                        })
+                        .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )
@@ -51,11 +47,7 @@ macro_rules! register_blocking {
                         $fn(&task, &project_path, gsc_token.as_deref())
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )
@@ -72,11 +64,7 @@ macro_rules! register_blocking {
                         $fn(&task, &project_path, context_json.as_deref())
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )
@@ -93,21 +81,13 @@ macro_rules! register_blocking {
                         let conn = match rusqlite::Connection::open(&db_path) {
                             Ok(c) => c,
                             Err(e) => {
-                                return StepResult {
-                                    success: false,
-                                    message: format!("Failed to open DB: {}", e),
-                                    output: None,
-                                }
+                                return StepResult::fail(format!("Failed to open DB: {}", e))
                             }
                         };
                         $fn(&task, &project_path, &conn)
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )
@@ -122,11 +102,7 @@ macro_rules! register_blocking {
                 Box::pin(async move {
                     tokio::task::spawn_blocking(move || $fn(&task, &project_path, &provider))
                         .await
-                        .unwrap_or_else(|e| StepResult {
-                            success: false,
-                            message: format!("Step panicked: {}", e),
-                            output: None,
-                        })
+                        .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )
@@ -144,11 +120,7 @@ macro_rules! register_blocking {
                         $fn(&task, &project_path, &provider, context_json.as_deref())
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )
@@ -166,11 +138,7 @@ macro_rules! register_blocking {
                         $fn(&task, &project_path, &provider, &context_json)
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )
@@ -186,11 +154,7 @@ macro_rules! register_blocking {
                 Box::pin(async move {
                     tokio::task::spawn_blocking(move || $fn(&step, &task, &project_path, &provider))
                         .await
-                        .unwrap_or_else(|e| StepResult {
-                            success: false,
-                            message: format!("Step panicked: {}", e),
-                            output: None,
-                        })
+                        .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         )

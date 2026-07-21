@@ -26,23 +26,15 @@ pub(crate) fn exec_indexing_fix_generate(
         Some(j) => match serde_json::from_str(j) {
             Ok(c) => c,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "indexing_fix_context output is not valid IndexingFixContext JSON: {}",
                         e
-                    ),
-                    output: None,
-                }
+                    ))
             }
         },
         None => {
-            return StepResult {
-                success: false,
-                message: "No context from indexing_fix_context step. Run the context step first."
-                    .to_string(),
-                output: None,
-            }
+            return StepResult::fail("No context from indexing_fix_context step. Run the context step first."
+                    .to_string())
         }
     };
 
@@ -107,46 +99,33 @@ pub(crate) fn exec_indexing_fix_generate(
     ) {
         Ok(output) => output,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Agent failed to generate fix plan: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Agent failed to generate fix plan: {}", e))
         }
     };
 
     let plan: IndexingFixPlan = match crate::engine::text::extract_json_as(&raw) {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail_with_output(format!(
                     "Agent output did not contain a valid IndexingFixPlan JSON: {}",
                     crate::engine::text::char_prefix(&raw, 300)
-                ),
-                output: Some(raw),
-            }
+                ), raw)
         }
     };
 
     if plan.changes.is_empty() {
-        return StepResult {
-            success: false,
-            message: "Agent returned an IndexingFixPlan with no changes. \
+        return StepResult::fail_with_opt_output(
+            "Agent returned an IndexingFixPlan with no changes. \
                  Refusing to report success without any planned edit."
                 .to_string(),
-            output: serde_json::to_string_pretty(&plan).ok(),
-        };
+            serde_json::to_string_pretty(&plan).ok(),
+        );
     }
 
     let plan_json = match serde_json::to_string_pretty(&plan) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize IndexingFixPlan: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to serialize IndexingFixPlan: {}", e))
         }
     };
 

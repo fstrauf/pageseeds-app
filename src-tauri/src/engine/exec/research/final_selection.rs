@@ -374,12 +374,8 @@ pub fn exec_research_final_selection(
     let pipeline_json = match previous_output {
         Some(out) => out,
         None => {
-            return StepResult {
-                success: false,
-                message: "No previous step output found — expected keyword pipeline results"
-                    .to_string(),
-                output: None,
-            };
+            return StepResult::fail("No previous step output found — expected keyword pipeline results"
+                    .to_string());
         }
     };
 
@@ -428,11 +424,7 @@ pub fn exec_research_final_selection(
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
                 Err(e) => {
-                    return StepResult {
-                        success: false,
-                        message: format!("Failed to serialize output: {}", e),
-                        output: None,
-                    };
+                    return StepResult::fail(format!("Failed to serialize output: {}", e));
                 }
             };
 
@@ -459,11 +451,7 @@ pub fn exec_research_final_selection(
                 output: Some(json),
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Keyword selection failed: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("Keyword selection failed: {}", e)),
     }
 }
 
