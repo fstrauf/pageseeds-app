@@ -33,22 +33,6 @@ fn is_content_task(task: &Task) -> bool {
     )
 }
 
-/// New-article task types. Used by `content_directives` to select the
-/// "Publish Date (Required)" variant over "(Preserve)". Whether the builder
-/// runs at all — and the target-path/fallback behavior — is driven by the
-/// step's declared `PromptSection::ContentDirectives { new_article }`, which
-/// `ContentHandler` derives from the same task-type list.
-fn is_new_article(task: &Task) -> bool {
-    matches!(
-        task.task_type.as_str(),
-        "write_article"
-            | "create_content"
-            | "create_hub_page"
-            | "refresh_hub_page"
-            | "create_landing_page"
-    )
-}
-
 /// Derive the filename stem for a new-article task: the target keyword from the
 /// task description when present, otherwise the task title with known
 /// imperative prefixes stripped.
@@ -84,11 +68,17 @@ type ContentDirSnapshot = (
 /// Build the publish-date, file-format, link-format, and filename-convention
 /// directive sections for content tasks. Returns `None` for non-content tasks.
 ///
+/// `new_article` is the flag declared on the step's
+/// `PromptSection::ContentDirectives { new_article }` by the handler; it
+/// selects the "Publish Date (Required)" variant over "(Preserve)". The
+/// task-type list behind it lives exactly once, in `ContentHandler::plan`.
+///
 /// `target` is the deterministic target path for new-article tasks plus whether
 /// the configured provider can write files itself. When present, the directive
 /// names the exact path instead of the approximate numbering hint.
 fn content_directives(
     task: &Task,
+    new_article: bool,
     content_context: &Option<ContentDirSnapshot>,
     next_publish_date: &Option<String>,
     target: Option<(&std::path::Path, bool)>,
@@ -100,7 +90,7 @@ fn content_directives(
     let mut sections = String::new();
 
     if let Some(date) = next_publish_date {
-        if is_new_article(task) {
+        if new_article {
             sections.push_str(&format!(
                 "\n\n## Publish Date (Required)\n\
                  - The frontmatter `date:` field MUST be exactly: `{date}`\n\
@@ -531,9 +521,10 @@ fn assemble_prompt(inputs: &PromptInputs) -> Result<String, StepResult> {
     // 4. Append the prompt sections this step declared, in declaration order.
     for section in &step.prompt_sections {
         match section {
-            PromptSection::ContentDirectives { .. } => {
+            PromptSection::ContentDirectives { new_article } => {
                 if let Some(dirs) = content_directives(
                     task,
+                    *new_article,
                     inputs.content_context,
                     inputs.next_publish_date,
                     inputs.target,
@@ -1006,6 +997,7 @@ mod tests {
         let target = std::path::PathBuf::from("/repo/content/7_gamma_scalping.mdx");
         let out = content_directives(
             &task,
+            true,
             &numbered_ctx(7),
             &Some("2024-01-01".to_string()),
             Some((&target, true)),
@@ -1021,7 +1013,7 @@ mod tests {
         let task = make_task("write_article");
         let target = std::path::PathBuf::from("/repo/content/7_gamma_scalping.mdx");
         let out =
-            content_directives(&task, &numbered_ctx(7), &None, Some((&target, false))).unwrap();
+            content_directives(&task, true, &numbered_ctx(7), &None, Some((&target, false))).unwrap();
         assert!(out.contains("/repo/content/7_gamma_scalping.mdx"));
         assert!(out.contains("You cannot write files"));
         assert!(out.contains("Return ONLY the complete MDX content"));
@@ -1030,13 +1022,13 @@ mod tests {
     #[test]
     fn test_content_directives_approximate_hint_without_target() {
         let task = make_task("optimize_article");
-        let out = content_directives(&task, &numbered_ctx(7), &None, None).unwrap();
+        let out = content_directives(&task, false, &numbered_ctx(7), &None, None).unwrap();
         assert!(out.contains("approximately 7"));
     }
 
     #[test]
     fn test_content_directives_none_for_non_content_task() {
         let task = make_task("content_audit");
-        assert!(content_directives(&task, &None, &None, None).is_none());
+        assert!(content_directives(&task, false, &None, &None, None).is_none());
     }
 }
