@@ -51,6 +51,58 @@ pub struct ReviewSuggestion {
     pub priority: Option<String>,
 }
 
+// ─── Content Review User-Selection Proposals ─────────────────────────────────
+
+/// Artifact key for the validated, selectable proposal list stored on the
+/// content_review / content_audit parent after success. The picker and selection
+/// command both read this key.
+pub const CONTENT_REVIEW_PROPOSALS_KEY: &str = "content_review_proposals";
+
+/// A single validated follow-up proposal the user can select in the picker.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ContentReviewProposal {
+    /// Stable selection id (e.g. `fix_content_article:{article_id}`).
+    pub id: String,
+    pub task_type: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Spawn payload (article_id, article_title, article_file, url_slug,
+    /// target_keyword, suggestions, priority).
+    pub params: serde_json::Value,
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+}
+
+/// A raw proposal that failed validation, with the reason recorded for the UI.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DroppedProposal {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Validated proposal list stored on the parent task after content_review.
+/// Cap of 5 proposals is enforced by `engine::content_review_selection`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[ts(export)]
+pub struct ContentReviewSelectableArtifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub findings_summary: Option<String>,
+    #[serde(default)]
+    pub proposals: Vec<ContentReviewProposal>,
+    #[serde(default)]
+    pub dropped: Vec<DroppedProposal>,
+    /// Source of the proposals: `"recommendations"` | `"investigation"` | etc.
+    #[serde(default)]
+    pub source: String,
+}
+
 // ─── Content Fix Patch (structured replacement values) ───────────────────────
 
 /// The agent returns this instead of raw MDX. Rust applies it deterministically.

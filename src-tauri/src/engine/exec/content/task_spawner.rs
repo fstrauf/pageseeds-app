@@ -102,7 +102,10 @@ fn sync_article_review_state_to_repo(
     Ok(())
 }
 
-fn mark_articles_in_review(
+/// Mark articles as `in_review` and sync the repo projection.
+/// Used by content-review selection (user-picked fix tasks) and the legacy
+/// auto-spawn helper.
+pub(crate) fn mark_articles_in_review(
     conn: &Connection,
     project_id: &str,
     project_path: &str,

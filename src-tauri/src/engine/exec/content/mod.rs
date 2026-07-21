@@ -12,7 +12,7 @@ mod indexing_link;
 ///   - select_priority_articles    (scoring formula)
 ///   - build_review_context        (structured context for LLM)
 ///   - build_review_prompt         (prompt assembly)
-///   - create_fix_content_article_tasks (auto-spawn follow-up task after content_review)
+///   - create_fix_content_article_tasks (legacy helper; selection path is content_review_selection)
 ///   - release_fix_content_article_in_review (reset in_review when a fix fails or is cancelled)
 ///   - create_cluster_and_link_task    (auto-spawn follow-up task after write_article)
 ///   - exec_fix_content_article_context   (deterministic: load recs + file for per-article fix)

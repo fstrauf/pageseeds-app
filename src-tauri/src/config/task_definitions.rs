@@ -92,21 +92,21 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::BackendAuto,
         handler_family: HandlerFamily::Content,
     },
-    // Content Review
+    // Content Review — user selects which fix tasks to spawn (ContentReviewPicker)
     TaskDefinition {
         task_type: "content_review",
         phase: "investigation",
         run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::FollowUpTasks,
-        follow_up_policy: FollowUpPolicy::BackendAuto,
+        review_surface: TaskReviewSurface::ContentReviewPicker,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::ContentReview,
     },
     TaskDefinition {
         task_type: "content_audit",
         phase: "investigation",
         run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::FollowUpTasks,
-        follow_up_policy: FollowUpPolicy::BackendAuto,
+        review_surface: TaskReviewSurface::ContentReviewPicker,
+        follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::ContentReview,
     },
     // Research
@@ -677,14 +677,22 @@ mod tests {
     }
 
     #[test]
-    fn content_review_has_follow_up_tasks_surface() {
+    fn content_review_has_picker_surface_and_user_selection() {
         assert_eq!(
             default_review_surface("content_review"),
-            TaskReviewSurface::FollowUpTasks
+            TaskReviewSurface::ContentReviewPicker
+        );
+        assert_eq!(
+            default_follow_up_policy("content_review"),
+            FollowUpPolicy::UserSelection
         );
         assert_eq!(
             default_review_surface("content_audit"),
-            TaskReviewSurface::FollowUpTasks
+            TaskReviewSurface::ContentReviewPicker
+        );
+        assert_eq!(
+            default_follow_up_policy("content_audit"),
+            FollowUpPolicy::UserSelection
         );
     }
 

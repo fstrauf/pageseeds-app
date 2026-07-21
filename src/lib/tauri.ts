@@ -1018,5 +1018,11 @@ export const createCannibalizationTasksFromSelection = (
 ): Promise<Task[]> =>
   invoke('create_cannibalization_tasks_from_selection', { parentTaskId, selections })
 
+export const selectContentReviewFollowUps = (
+  parentTaskId: string,
+  proposalIds: string[],
+): Promise<Task[]> =>
+  invoke('select_content_review_follow_ups', { parentTaskId, proposalIds })
+
 export const backfillHubPages = (projectId: string): Promise<number> =>
   invoke('backfill_hub_pages', { projectId })

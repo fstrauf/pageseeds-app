@@ -29,6 +29,7 @@ import {
 import { KeywordPicker } from './KeywordPicker'
 import { RedditOpportunityPicker } from './RedditOpportunityPicker'
 import { CannibalizationPicker } from './CannibalizationPicker'
+import { ContentReviewPicker } from './ContentReviewPicker'
 import { ClarityFindingReview } from './ClarityFindingReview'
 import { ErrorExplainer } from './error-explainer'
 
@@ -69,9 +70,7 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
     if (task.review_surface !== 'follow_up_tasks' || task.status !== 'review') return
     listTasks(task.project_id, 'todo')
       .then(all => {
-        // content_review spawns fix_content_article tasks
-        const followUpType = task.type === 'content_review' ? 'fix_content_article' : undefined
-        setSpawnedTasks(followUpType ? all.filter(t => t.type === followUpType) : all)
+        setSpawnedTasks(all)
       })
       .catch(() => setSpawnedTasks([]))
   }, [task.id, task.type, task.status, task.review_surface, task.project_id])
@@ -398,6 +397,30 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
                   Select the recommendations you want to act on, then click "Create Tasks".
                 </p>
                 <CannibalizationPicker
+                  task={task}
+                  onTasksCreated={newTasks => {
+                    onArticleTasksCreated?.(newTasks)
+                    onClose()
+                    getTask(task.id).then(refreshed => onUpdated(refreshed)).catch(() => {})
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Content review picker — user selects which fix_content_article tasks to spawn */}
+          {(task.review_surface === 'content_review_picker' ||
+            task.type === 'content_review' ||
+            task.type === 'content_audit') &&
+            task.status === 'review' && (
+            <>
+              <Separator className="bg-border" />
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground font-medium">Content Review Proposals</div>
+                <p className="text-xs text-muted-foreground">
+                  Select the fixes you want to create, then click "Create Tasks".
+                </p>
+                <ContentReviewPicker
                   task={task}
                   onTasksCreated={newTasks => {
                     onArticleTasksCreated?.(newTasks)
