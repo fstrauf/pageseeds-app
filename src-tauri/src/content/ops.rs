@@ -775,8 +775,9 @@ pub fn build_ctr_health_summary(
             issues.push("snippet_suboptimal".to_string());
             snippet_issues += 1;
         }
+        // FAQ is advisory (dead rich-result tactic since Aug 2023): tracked as a
+        // summary stat only, never as a per-article issue or health blocker.
         if !health.faq_ok {
-            issues.push("missing_faq_schema".to_string());
             faq_issues += 1;
         }
 

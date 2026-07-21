@@ -44,9 +44,12 @@ pub struct ArticleHealth {
     pub title_ok: bool,
     pub meta_ok: bool,
     pub snippet_ok: bool,
+    /// Advisory only: whether FAQ schema/content is present. Never gates `all_ok()`
+    /// and never appears in `issues` (FAQ rich results are dead for normal blogs
+    /// since Google's Aug 2023 restriction).
     pub faq_ok: bool,
     pub file_found: bool,
-    /// List of issue keys for checks that FAILED.
+    /// List of issue keys for core checks that FAILED (file/title/meta/snippet only).
     pub issues: Vec<String>,
     /// Number of words in the first paragraph.
     pub snippet_word_count: usize,
@@ -55,9 +58,13 @@ pub struct ArticleHealth {
 }
 
 impl ArticleHealth {
-    /// True if ALL checks pass (article is healthy).
+    /// True if ALL core checks pass (article is healthy).
+    ///
+    /// Core checks are file/title/meta/snippet. `faq_ok` is advisory only —
+    /// FAQ rich results were restricted by Google in Aug 2023, so a missing
+    /// FAQ never blocks the health gate.
     pub fn all_ok(&self) -> bool {
-        self.file_found && self.title_ok && self.meta_ok && self.snippet_ok && self.faq_ok
+        self.file_found && self.title_ok && self.meta_ok && self.snippet_ok
     }
 
     /// Human-readable summary of which checks failed.
@@ -77,7 +84,7 @@ impl ArticleHealth {
 /// | title_ok         | title.len() <= 55                                |
 /// | meta_ok          | meta.len() >= 130 && meta.len() <= 155           |
 /// | snippet_ok       | word_count >= 40 && word_count <= 60 && (has_keyword \|\| has '?') |
-/// | faq_ok           | has_faq_schema == true                           |
+/// | faq_ok           | has_faq_schema == true (advisory only — not in `issues`, not in `all_ok()`) |
 pub const TITLE_MAX_LEN: usize = 55;
 pub const META_MIN_LEN: usize = 120;
 pub const META_MAX_LEN: usize = 155;
@@ -120,9 +127,7 @@ pub fn check_article_health(
     if !snippet_ok {
         issues.push("snippet_suboptimal".to_string());
     }
-    if !faq_ok {
-        issues.push("missing_faq_schema".to_string());
-    }
+    // NOTE: faq_ok is advisory (see struct docs) — no "missing_faq_schema" issue.
 
     ArticleHealth {
         title_ok,

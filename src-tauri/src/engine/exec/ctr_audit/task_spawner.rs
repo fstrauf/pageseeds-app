@@ -1,6 +1,35 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpawner, TaskSpec};
-use crate::models::task::{Task, TaskArtifact, TaskRunPolicy, TaskStatus};
+use crate::models::task::{Priority, Task, TaskArtifact, TaskRunPolicy, TaskStatus};
+
+/// Derive fix-task priority from an article's clicks_lost rank within the
+/// admitted set (0 = highest clicks_lost).
+///
+/// - top decile by clicks_lost (and clicks_lost > 0) → High
+/// - clicks_lost > 0 below the top decile → Medium
+/// - clicks_lost == 0 (pure format violations) → Low
+pub(crate) fn priority_for_rank(rank: usize, total: usize, clicks_lost: f64) -> Priority {
+    if clicks_lost <= 0.0 {
+        return Priority::Low;
+    }
+    // Top decile, but always at least the single highest-impact article.
+    let high_slots = ((total as f64) * 0.1).ceil().max(1.0) as usize;
+    if rank < high_slots {
+        Priority::High
+    } else {
+        Priority::Medium
+    }
+}
+
+/// True when the article's enriched top queries contain at least one
+/// question-intent query — evidence that FAQ content can win impressions.
+/// Returns false when `top_queries` is absent/null (not enriched).
+fn has_question_intent_query(article: &serde_json::Value) -> bool {
+    article["top_queries"]
+        .as_array()
+        .map(|queries| queries.iter().any(|q| q["intent"].as_str() == Some("question")))
+        .unwrap_or(false)
+}
 
 /// Spawn per-article `fix_ctr_article` tasks based on the ctr_build_context artifact.
 ///
@@ -63,10 +92,24 @@ pub(crate) fn create_ctr_fix_tasks(
     let mut skipped_healthy = 0usize;
     let mut skipped_existing = 0usize;
 
-    for article in articles {
+    // Rank articles by clicks_lost (descending) to derive per-article fix priority.
+    let total = articles.len();
+    let mut clicks_lost_order: Vec<(usize, f64)> = articles
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (i, a["clicks_lost"].as_f64().unwrap_or(0.0)))
+        .collect();
+    clicks_lost_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut rank_of = vec![0usize; total];
+    for (rank, (idx, _)) in clicks_lost_order.iter().enumerate() {
+        rank_of[*idx] = rank;
+    }
+
+    for (idx, article) in articles.iter().enumerate() {
         let id = article["id"].as_i64().unwrap_or(0);
         let url_slug = article["url_slug"].as_str().unwrap_or("");
         let file_ref = article["file"].as_str().unwrap_or("");
+        let clicks_lost = article["clicks_lost"].as_f64().unwrap_or(0.0);
 
         // Skip articles with no detected issues
         let issues = &article["issues_detected"];
@@ -75,8 +118,13 @@ pub(crate) fn create_ctr_fix_tasks(
         // FAQ issue is only a source-level issue when frontmatter FAQ is missing.
         // If frontmatter FAQ exists but rendered schema is missing, that's a render-level
         // issue handled by the schema renderer task, not a per-article fix.
-        let missing_source_faq =
-            issues["missing_faq_schema"].as_bool().unwrap_or(false) && !has_frontmatter_faq;
+        //
+        // Additionally, FAQ fixes require question-intent evidence: FAQ rich results
+        // were restricted by Google in Aug 2023, so a missing FAQ only justifies a
+        // fix when the article actually draws question-intent queries.
+        let missing_source_faq = issues["missing_faq_schema"].as_bool().unwrap_or(false)
+            && !has_frontmatter_faq
+            && has_question_intent_query(article);
 
         let has_issues = issues["file_not_found"].as_bool().unwrap_or(false)
             || issues["title_too_long"].as_bool().unwrap_or(false)
@@ -147,7 +195,7 @@ pub(crate) fn create_ctr_fix_tasks(
             task_type: "fix_ctr_article".to_string(),
             title: Some(format!("CTR fix: {}", url_slug)),
             description: Some(format!("Apply CTR fixes to article {} ({})", id, url_slug)),
-            priority: crate::models::task::Priority::Medium,
+            priority: priority_for_rank(rank_of[idx], total, clicks_lost),
             run_policy: Some(TaskRunPolicy::AutoEnqueue),
             agent_policy: crate::models::task::AgentPolicy::Optional,
             depends_on: vec![parent_task.id.clone()],

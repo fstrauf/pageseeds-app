@@ -284,3 +284,139 @@
         cleanup(&path);
     }
 
+    fn article_json(
+        id: i64,
+        slug: &str,
+        clicks_lost: f64,
+        issues: serde_json::Value,
+        top_queries: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "url_slug": slug,
+            "file": format!("content/{:03}_{}.mdx", id, slug),
+            "content_hash": format!("hash-{}", id),
+            "target_keyword": "test",
+            "clicks_lost": clicks_lost,
+            "has_frontmatter_faq": false,
+            "issues_detected": issues,
+            "top_queries": top_queries,
+        })
+    }
+
+    fn title_issue() -> serde_json::Value {
+        serde_json::json!({
+            "file_not_found": false,
+            "title_too_long": true,
+            "meta_too_short": false,
+            "snippet_suboptimal": false,
+            "missing_faq_schema": false
+        })
+    }
+
+    fn faq_only_issue() -> serde_json::Value {
+        serde_json::json!({
+            "file_not_found": false,
+            "title_too_long": false,
+            "meta_too_short": false,
+            "snippet_suboptimal": false,
+            "missing_faq_schema": true
+        })
+    }
+
+    #[test]
+    fn priority_for_rank_maps_clicks_lost_deciles() {
+        use crate::models::task::Priority;
+
+        // 20 articles → top decile = 2 slots
+        assert_eq!(priority_for_rank(0, 20, 100.0), Priority::High);
+        assert_eq!(priority_for_rank(1, 20, 90.0), Priority::High);
+        assert_eq!(priority_for_rank(2, 20, 80.0), Priority::Medium);
+        assert_eq!(priority_for_rank(19, 20, 0.5), Priority::Medium);
+
+        // Small sets always promote the single highest-impact article
+        assert_eq!(priority_for_rank(0, 3, 10.0), Priority::High);
+        assert_eq!(priority_for_rank(1, 3, 5.0), Priority::Medium);
+
+        // Zero clicks_lost (pure format violations) → Low
+        assert_eq!(priority_for_rank(0, 3, 0.0), Priority::Low);
+        assert_eq!(priority_for_rank(5, 20, 0.0), Priority::Low);
+    }
+
+    #[test]
+    fn create_ctr_fix_tasks_assigns_priority_from_clicks_lost() {
+        use crate::models::task::Priority;
+
+        let path = test_dir();
+        setup_project(&path);
+        let conn = test_db();
+        insert_test_project(&conn, &path);
+
+        let context = serde_json::json!({
+            "total_articles": 3,
+            "articles": [
+                article_json(1, "high-impact", 100.0, title_issue(), serde_json::Value::Null),
+                article_json(2, "mid-impact", 50.0, title_issue(), serde_json::Value::Null),
+                article_json(3, "format-only", 0.0, title_issue(), serde_json::Value::Null),
+            ]
+        });
+        let parent = ctr_parent_task("parent-priority", context);
+        crate::engine::task_store::create_task(&conn, &parent).unwrap();
+
+        let ids = create_ctr_fix_tasks(&conn, &parent, &path);
+        assert_eq!(ids.len(), 3);
+
+        let priority_of = |slug: &str| {
+            crate::engine::task_store::list_tasks(&conn, "proj-test")
+                .unwrap()
+                .into_iter()
+                .find(|t| t.task_type == "fix_ctr_article" && t.title == Some(format!("CTR fix: {}", slug)))
+                .map(|t| t.priority)
+                .unwrap_or_else(|| panic!("no fix task for {}", slug))
+        };
+
+        assert_eq!(priority_of("high-impact"), Priority::High);
+        assert_eq!(priority_of("mid-impact"), Priority::Medium);
+        assert_eq!(priority_of("format-only"), Priority::Low);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn create_ctr_fix_tasks_faq_requires_question_intent() {
+        let path = test_dir();
+        setup_project(&path);
+        let conn = test_db();
+        insert_test_project(&conn, &path);
+
+        let context = serde_json::json!({
+            "total_articles": 3,
+            "articles": [
+                // Only issue is missing FAQ, no query data → NOT spawn-worthy
+                article_json(1, "faq-no-queries", 10.0, faq_only_issue(), serde_json::Value::Null),
+                // Only issue is missing FAQ, non-question queries → NOT spawn-worthy
+                article_json(2, "faq-generic-queries", 10.0, faq_only_issue(), serde_json::json!([
+                    { "query": "option selling", "intent": "generic" }
+                ])),
+                // Only issue is missing FAQ, question-intent query present → spawn-worthy
+                article_json(3, "faq-question-queries", 10.0, faq_only_issue(), serde_json::json!([
+                    { "query": "what is a cash secured put", "intent": "question" }
+                ])),
+            ]
+        });
+        let parent = ctr_parent_task("parent-faq-gate", context);
+        crate::engine::task_store::create_task(&conn, &parent).unwrap();
+
+        let ids = create_ctr_fix_tasks(&conn, &parent, &path);
+        assert_eq!(
+            ids.len(),
+            1,
+            "only the question-intent article should get an FAQ-driven fix task"
+        );
+
+        let task = crate::engine::task_store::get_task(&conn, &ids[0]).unwrap();
+        assert_eq!(task.title.as_deref(), Some("CTR fix: faq-question-queries"));
+
+        cleanup(&path);
+    }
+

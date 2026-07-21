@@ -1,7 +1,8 @@
     use super::*;
 
-    /// When all articles already have good titles, meta, snippets, and FAQ schema,
-    /// the audit should return 0 articles and the analyze step should skip the agent.
+    /// When all articles already have good titles, meta, snippets, and CTR at or
+    /// above the position-expected level, the audit should return 0 articles and
+    /// the analyze step should skip the agent.
     #[test]
     fn test_all_healthy_skips_agent() {
         let path = test_dir();
@@ -21,7 +22,7 @@
                     "title": "Healthy Article",
                     "target_keyword": "healthy article",
                     "file": "content/001_healthy.mdx",
-                    "gsc": { "impressions": 10000.0, "clicks": 10.0, "ctr": 0.001, "avg_position": 8.5 }
+                    "gsc": { "impressions": 10000.0, "clicks": 60.0, "ctr": 0.006, "avg_position": 8.5 }
                 }
             ]
         });
