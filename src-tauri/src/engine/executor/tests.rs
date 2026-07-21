@@ -7,12 +7,11 @@
         TaskStatus,
     };
     use rusqlite::Connection;
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::test_support::ENV_LOCK;
 
     /// Run all schema migrations on an in-memory connection.
     fn in_memory_db() -> Connection {

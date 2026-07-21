@@ -778,9 +778,12 @@ mod tests {
 
     #[test]
     fn test_territory_build_context_finds_articles() {
+        // Mutates process-global env — serialize against other env-mutating tests.
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
         let dir = TempProjectDir::new();
         let project_path = dir.path().to_string_lossy().to_string();
         let db_path = dir.path().join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
         {
             let conn = file_db(&db_path);
             std::env::set_var("PAGESEEDS_DB_PATH", &db_path);
@@ -840,6 +843,10 @@ mod tests {
         };
 
         let result = exec_territory_build_context(&task, &project_path);
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
         assert!(result.success, "Expected success: {}", result.message);
 
         let context: serde_json::Value = serde_json::from_str(&result.output.unwrap()).unwrap();

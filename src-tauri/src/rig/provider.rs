@@ -455,6 +455,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_backend_kimi_bridge_url_env_var() {
+        // Mutates process-global env — serialize against other env-mutating tests.
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
         // Set KIMI_BRIDGE_URL to a fake URL. With mode "bridge", it should use it directly.
         let old = std::env::var("KIMI_BRIDGE_URL").ok();
         std::env::set_var("KIMI_BRIDGE_URL", "http://fake-bridge:9999/v1");

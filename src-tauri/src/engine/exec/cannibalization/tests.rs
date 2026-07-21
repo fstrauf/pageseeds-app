@@ -862,6 +862,8 @@ Some content here.
 
     #[test]
     fn test_can_analyze_fails_loudly_on_stale_url_based_skill() {
+        // Mutates process-global env — serialize against other env-mutating tests.
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
         // A stale project-level skill copy using the old keep_url/redirect_urls
         // contract must fail the analyze step with an actionable message instead
         // of silently zeroing every merge recommendation downstream.
