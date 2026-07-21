@@ -106,13 +106,15 @@ fn build_coverage_summary(coverage: &serde_json::Value) -> String {
 
 /// Build a text summary from the research_shortlist SQLite table.
 /// Shows pending open territories so the LLM can prioritize them.
+/// Depleted themes (health_status = 'depleted') are excluded so the prompt
+/// never tells the LLM to prioritize topics that have stopped producing results.
 fn build_shortlist_summary(project_id: &str) -> String {
     let db_path = crate::db::default_db_path();
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
         Err(_) => return "(shortlist unavailable)".to_string(),
     };
-    let entries = match crate::db::research_shortlist::list_entries(&conn, project_id, Some("pending")) {
+    let entries = match crate::db::research_shortlist::list_pending_excluding_depleted(&conn, project_id) {
         Ok(e) => e,
         Err(_) => return "(shortlist unavailable)".to_string(),
     };
