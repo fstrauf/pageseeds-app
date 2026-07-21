@@ -19,11 +19,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
     let plan: serde_json::Value = match serde_json::from_str(&plan_json) {
         Ok(v) => v,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid merge plan JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid merge plan JSON: {}", e));
         }
     };
 
@@ -41,11 +37,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
     let keeper_file = match find_file_by_slug(project_path, keeper_slug) {
         Ok(f) => f,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: e,
-                output: None,
-            };
+            return StepResult::fail(e);
         }
     };
     let keeper_content = keeper_file
@@ -108,11 +100,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
             Ok(Some(p)) => p,
             Ok(None) => continue,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: e,
-                    output: None,
-                };
+                return StepResult::fail(e);
             }
         };
         let content = match std::fs::read_to_string(&file) {
@@ -201,16 +189,12 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
     let output_json = serde_json::to_string_pretty(&context).unwrap_or_default();
     const MAX_EXTRACT_OUTPUT_BYTES: usize = 250_000;
     if output_json.len() > MAX_EXTRACT_OUTPUT_BYTES {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Merge context too large ({} bytes) after extraction. \
                  The cluster has too much redirect content even after batching. \
                  Try splitting the cluster into smaller groups.",
                 output_json.len()
-            ),
-            output: None,
-        };
+            ));
     }
 
     StepResult {

@@ -38,11 +38,7 @@ pub(crate) fn exec_content_sync(
                 output: Some(output),
             }
         }
-        Err(e) => crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("content_sync failed: {}", e),
-            output: None,
-        },
+        Err(e) => crate::engine::workflows::StepResult::fail(format!("content_sync failed: {}", e)),
     }
 }
 
@@ -66,11 +62,7 @@ pub(crate) fn exec_format_validation(
     let content_dir = match crate::content::locator::resolve(&paths.repo_root, None).selected {
         Some(dir) => dir,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "Could not locate content directory for format validation".to_string(),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail("Could not locate content directory for format validation".to_string())
         }
     };
 
@@ -100,11 +92,7 @@ pub(crate) fn exec_format_validation(
                 ),
             }
         }
-        Err(e) => crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Format validation failed: {}", e),
-            output: None,
-        },
+        Err(e) => crate::engine::workflows::StepResult::fail(format!("Format validation failed: {}", e)),
     }
 }
 
@@ -128,22 +116,14 @@ pub(crate) fn exec_format_fix(
     let content_dir = match crate::content::locator::resolve(&paths.repo_root, None).selected {
         Some(dir) => dir,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "Could not locate content directory for format fix".to_string(),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail("Could not locate content directory for format fix".to_string())
         }
     };
 
     let validation = match validate_project(&paths.repo_root, &content_dir, schema.as_ref()) {
         Ok(v) => v,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Format fix failed during validation: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Format fix failed during validation: {}", e))
         }
     };
 
@@ -172,11 +152,7 @@ pub(crate) fn exec_format_fix(
                 ),
             }
         }
-        Err(e) => crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Format fix failed: {}", e),
-            output: None,
-        },
+        Err(e) => crate::engine::workflows::StepResult::fail(format!("Format fix failed: {}", e)),
     }
 }
 
@@ -200,11 +176,7 @@ pub(crate) fn exec_sanitize_content(
     let content_dir = match crate::content::locator::resolve(&paths.repo_root, None).selected {
         Some(dir) => dir,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "Could not locate content directory for sanitize".to_string(),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail("Could not locate content directory for sanitize".to_string())
         }
     };
 
@@ -215,11 +187,7 @@ pub(crate) fn exec_sanitize_content(
         match crate::content::cleaner::fix_malformed_frontmatter_closers(&content_dir) {
             Ok(v) => v,
             Err(e) => {
-                return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: format!("Sanitize failed during structural fix: {}", e),
-                    output: None,
-                };
+                return crate::engine::workflows::StepResult::fail(format!("Sanitize failed during structural fix: {}", e));
             }
         };
 
@@ -227,11 +195,7 @@ pub(crate) fn exec_sanitize_content(
     let renamed = match rename_md_to_mdx(&content_dir) {
         Ok(v) => v,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Sanitize failed during rename: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Sanitize failed during rename: {}", e))
         }
     };
 

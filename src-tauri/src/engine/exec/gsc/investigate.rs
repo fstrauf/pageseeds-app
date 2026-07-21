@@ -32,11 +32,7 @@ pub(crate) fn exec_gsc_summarise(task: &Task, project_path: &str) -> StepResult 
     let items = match collection.get("items").and_then(|v| v.as_array()) {
         Some(arr) => arr.clone(),
         None => {
-            return StepResult {
-                success: false,
-                message: "gsc_collection.json has no 'items' array".to_string(),
-                output: None,
-            }
+            return StepResult::fail("gsc_collection.json has no 'items' array".to_string())
         }
     };
 
@@ -142,13 +138,8 @@ pub(crate) fn exec_gsc_investigate(
     } else if let Ok(s) = std::fs::read_to_string(&collection_path) {
         (s, "GSC Collection (raw)")
     } else {
-        return StepResult {
-            success: false,
-            message:
-                "Neither gsc_summary.json nor gsc_collection.json found — run collect_gsc first"
-                    .to_string(),
-            output: None,
-        };
+        return StepResult::fail("Neither gsc_summary.json nor gsc_collection.json found — run collect_gsc first"
+                    .to_string());
     };
 
     let context = format!(
@@ -170,10 +161,6 @@ pub(crate) fn exec_gsc_investigate(
             message: format!("GSC investigation complete ({} chars)", output.len()),
             output: Some(output),
         },
-        Err(e) => StepResult {
-            success: false,
-            message: format!("GSC investigation agent failed: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("GSC investigation agent failed: {}", e)),
     }
 }

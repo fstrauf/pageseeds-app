@@ -63,11 +63,7 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
     let url = desc.url.clone();
 
     if url.is_empty() {
-        return StepResult {
-            success: false,
-            message: "Task description missing URL".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Task description missing URL".to_string());
     }
 
     // Resolve content directory
@@ -126,14 +122,10 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
     let output = serde_json::to_string_pretty(&ctx).unwrap_or_default();
 
     if !ctx.exists {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "No MDX file found for {} (slug={}). Cannot fix indexing for a page that has no content file.",
                 url, slug
-            ),
-            output: Some(output),
-        };
+            ), output);
     }
 
     StepResult {

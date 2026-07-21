@@ -26,11 +26,7 @@ pub(crate) fn exec_merge_load_plan(task: &Task, project_path: &str) -> StepResul
         .trim();
 
     if cluster_id.is_empty() {
-        return StepResult {
-            success: false,
-            message: "Cannot determine cluster_id from task title".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Cannot determine cluster_id from task title".to_string());
     }
 
     // Find strategy artifact on task
@@ -50,21 +46,13 @@ pub(crate) fn exec_merge_load_plan(task: &Task, project_path: &str) -> StepResul
     };
 
     if strategy_json.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No cannibalization_strategy artifact found".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No cannibalization_strategy artifact found".to_string());
     }
 
     let strategy: serde_json::Value = match serde_json::from_str(&strategy_json) {
         Ok(v) => v,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid strategy JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid strategy JSON: {}", e));
         }
     };
 
@@ -77,11 +65,7 @@ pub(crate) fn exec_merge_load_plan(task: &Task, project_path: &str) -> StepResul
     let rec = match rec {
         Some(r) => r.clone(),
         None => {
-            return StepResult {
-                success: false,
-                message: format!("No merge recommendation found for cluster '{}'", cluster_id),
-                output: None,
-            };
+            return StepResult::fail(format!("No merge recommendation found for cluster '{}'", cluster_id));
         }
     };
 

@@ -23,23 +23,15 @@ pub(crate) async fn exec_fix_content_article_generate(
         match crate::rig::provider::resolve_backend(agent_provider, None, None, None).await {
             Ok(b) => b,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Could not resolve LLM backend: {}", e),
-                    output: None,
-                };
+                return StepResult::fail(format!("Could not resolve LLM backend: {}", e));
             }
         };
 
     match &backend {
         LlmBackend::KimiDirect => {
-            return StepResult {
-                success: false,
-                message: "Structured extraction is not supported with KimiDirect (CLI fallback). \
+            return StepResult::fail("Structured extraction is not supported with KimiDirect (CLI fallback). \
                  Please ensure the Kimi bridge is running or use another provider."
-                    .to_string(),
-                output: None,
-            };
+                    .to_string());
         }
         _ => {}
     }
@@ -57,22 +49,14 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let context = match extract_context(task) {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return StepResult {
-                success: false,
-                message: "No content_fix_context artifact found on task".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No content_fix_context artifact found on task".to_string());
         }
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "content_fix_context artifact exists but is invalid: {}. \
                      This usually means the context step produced unexpected JSON.",
                     e
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
@@ -81,25 +65,17 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let file_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &context.file) {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "File not found: {}. Run sanitize_content to repair paths.",
                     context.file
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(_e) => {
-            return StepResult {
-                success: false,
-                message: format!("File not found: {}", file_path.display()),
-                output: None,
-            };
+            return StepResult::fail(format!("File not found: {}", file_path.display()));
         }
     };
 
@@ -107,11 +83,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let prompt = match build_fix_prompt(task, project_path, &context, &original_content) {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to build content fix prompt: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to build content fix prompt: {}", e));
         }
     };
 
@@ -131,15 +103,11 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "Structured extraction failed for ContentFixPatch: {}. \
                      If you are using KimiDirect, please switch to a structured-output provider (Kimi bridge, Claude, OpenAI, or Ollama).",
                     e
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
@@ -162,26 +130,18 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
                 let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id, project_path);
 
                 if !repair_errors.is_empty() {
-                    return StepResult {
-                        success: false,
-                        message: format!(
+                    return StepResult::fail(format!(
                             "Content fix patch failed validation after repair: {}. No changes written.",
                             repair_errors.join("; ")
-                        ),
-                        output: None,
-                    };
+                        ));
                 }
                 patch = repaired;
             }
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "Content fix patch repair extraction failed: {}. No changes written.",
                         e
-                    ),
-                    output: None,
-                };
+                    ));
             }
         }
     }
@@ -190,11 +150,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     let patch_json = match serde_json::to_string_pretty(&patch) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize ContentFixPatch: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize ContentFixPatch: {}", e));
         }
     };
 

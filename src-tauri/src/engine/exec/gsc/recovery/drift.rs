@@ -16,11 +16,7 @@ pub(crate) fn exec_gsc_recovery_drift(task: &Task, project_path: &str) -> StepRe
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to create tokio runtime: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to create tokio runtime: {}", e))
         }
     };
 
@@ -29,11 +25,7 @@ pub(crate) fn exec_gsc_recovery_drift(task: &Task, project_path: &str) -> StepRe
     }) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Drift computation failed: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Drift computation failed: {}", e))
         }
     };
 

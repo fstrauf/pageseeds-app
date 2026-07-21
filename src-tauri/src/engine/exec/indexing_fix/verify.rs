@@ -22,30 +22,18 @@ pub(crate) fn exec_indexing_fix_verify(task: &Task, project_path: &str) -> StepR
     let content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to read {}: {}", file_path.display(), e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to read {}: {}", file_path.display(), e))
         }
     };
 
     if let Err(e) = crate::content::cleaner::validate_mdx_structure(&content) {
-        return StepResult {
-            success: false,
-            message: format!("MDX structure invalid after fix: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("MDX structure invalid after fix: {}", e));
     }
 
     let (fm, body) = match crate::content::frontmatter::split_mdx(&content) {
         Some((f, b)) => (f, b),
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not parse frontmatter from MDX file".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Could not parse frontmatter from MDX file".to_string())
         }
     };
 
@@ -125,26 +113,18 @@ pub(crate) fn exec_indexing_fix_verify(task: &Task, project_path: &str) -> StepR
     });
 
     if !failed.is_empty() {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "Fix verification FAILED for {}: {}. The file was not changed as planned.",
                 file_path.display(),
                 failed.join("; ")
-            ),
-            output: Some(report.to_string()),
-        };
+            ), report.to_string());
     }
 
     if verified.is_empty() {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "Fix verification FAILED for {}: plan contained no verifiable changes.",
                 file_path.display()
-            ),
-            output: Some(report.to_string()),
-        };
+            ), report.to_string());
     }
 
     StepResult {

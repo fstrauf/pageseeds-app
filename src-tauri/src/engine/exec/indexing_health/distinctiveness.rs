@@ -74,11 +74,7 @@ pub(crate) fn exec_ihc_distinctiveness_review(
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Failed to create runtime for extraction: {}", e),
-                    output: None,
-                }
+                return StepResult::fail(format!("Failed to create runtime for extraction: {}", e))
             }
         };
 
@@ -136,11 +132,7 @@ pub(crate) fn exec_ihc_distinctiveness_review(
     let verdicts_json = match serde_json::to_string_pretty(&verdicts_doc) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize verdicts: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to serialize verdicts: {}", e))
         }
     };
     let _ = std::fs::write(&verdicts_path, &verdicts_json);

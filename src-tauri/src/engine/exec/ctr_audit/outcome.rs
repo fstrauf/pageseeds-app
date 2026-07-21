@@ -28,11 +28,7 @@ pub(crate) fn exec_ctr_outcome_compare(
     let outcomes = match crate::db::list_ctr_outcomes(conn, &task.project_id) {
         Ok(o) => o,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load outcomes: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load outcomes: {}", e));
         }
     };
 
@@ -238,11 +234,7 @@ pub(crate) fn exec_ctr_outcome_report(
     let outcomes = match crate::db::list_ctr_outcomes(conn, &task.project_id) {
         Ok(o) => o,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load outcomes: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load outcomes: {}", e));
         }
     };
 

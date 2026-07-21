@@ -25,31 +25,19 @@ pub fn exec_content_audit(
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => {
             if let Err(e) = conn.busy_timeout(std::time::Duration::from_secs(10)) {
-                return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: format!("Failed to set busy timeout: {}", e),
-                    output: None,
-                }
+                return crate::engine::workflows::StepResult::fail(format!("Failed to set busy timeout: {}", e))
             }
             conn
         }
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to open app database: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to open app database: {}", e))
         }
     };
 
     let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to load articles from DB: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to load articles from DB: {}", e))
         }
     };
 
@@ -211,11 +199,7 @@ pub fn exec_content_audit(
         &duplicate_groups_json,
         db_articles,
     ) {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Failed to save content audit to database: {}", e),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail(format!("Failed to save content audit to database: {}", e));
     }
 
     // Update content_hash in articles table for each audited article

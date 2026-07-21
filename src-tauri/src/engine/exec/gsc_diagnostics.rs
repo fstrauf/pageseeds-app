@@ -51,11 +51,7 @@ pub(crate) fn exec_indexing_diagnostics(
     {
         Some(u) => u,
         None => {
-            return StepResult {
-                success: false,
-                message: "No 'url' or 'gsc_site' field in manifest.json".to_string(),
-                output: None,
-            }
+            return StepResult::fail("No 'url' or 'gsc_site' field in manifest.json".to_string())
         }
     };
 
@@ -76,12 +72,8 @@ pub(crate) fn exec_indexing_diagnostics(
     {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: "GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets"
-                    .to_string(),
-                output: None,
-            }
+            return StepResult::fail("GSC_SERVICE_ACCOUNT_PATH not configured — add it in Settings → Secrets"
+                    .to_string())
         }
     };
 
@@ -103,38 +95,22 @@ pub(crate) fn exec_indexing_diagnostics(
     let all_urls = match sitemap_result {
         Ok(Ok(u)) => u,
         Ok(Err(e)) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to fetch sitemap: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to fetch sitemap: {}", e))
         }
         Err(_) => {
-            return StepResult {
-                success: false,
-                message: "Sitemap fetch thread panicked".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Sitemap fetch thread panicked".to_string())
         }
     };
 
     if all_urls.is_empty() {
-        return StepResult {
-            success: false,
-            message: format!("Sitemap at '{}' is empty or unreachable", sitemap_url),
-            output: None,
-        };
+        return StepResult::fail(format!("Sitemap at '{}' is empty or unreachable", sitemap_url));
     }
 
     // 4. Load existing statuses and filter URLs to inspect
     let existing_statuses = match db::list_by_project(conn, &task.project_id) {
         Ok(rows) => rows,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load indexing status from DB: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load indexing status from DB: {}", e))
         }
     };
     let status_map: HashMap<String, UrlIndexingStatus> = existing_statuses
@@ -206,18 +182,10 @@ pub(crate) fn exec_indexing_diagnostics(
     let records = match inspect_result {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
-            return StepResult {
-                success: false,
-                message: format!("GSC inspection failed: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("GSC inspection failed: {}", e))
         }
         Err(_) => {
-            return StepResult {
-                success: false,
-                message: "GSC inspection thread panicked".to_string(),
-                output: None,
-            }
+            return StepResult::fail("GSC inspection thread panicked".to_string())
         }
     };
 

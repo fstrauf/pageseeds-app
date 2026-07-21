@@ -28,11 +28,7 @@ pub(crate) fn exec_ctr_fix_apply(
     };
 
     if let Some(error) = patch.error.as_ref() {
-        return StepResult {
-            success: false,
-            message: format!("Agent reported error: {}", error),
-            output: None,
-        };
+        return StepResult::fail(format!("Agent reported error: {}", error));
     }
 
     let repo_root = Path::new(project_path);
@@ -40,25 +36,17 @@ pub(crate) fn exec_ctr_fix_apply(
         match crate::engine::exec::audit_health::resolve_content_file(repo_root, &patch.file) {
             Some(p) => p,
             None => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "File not found: {}. Run sanitize_content to repair paths.",
                         patch.file
-                    ),
-                    output: None,
-                };
+                    ));
             }
         };
 
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(_e) => {
-            return StepResult {
-                success: false,
-                message: format!("File not found: {}", file_path.display()),
-                output: None,
-            };
+            return StepResult::fail(format!("File not found: {}", file_path.display()));
         }
     };
 
@@ -73,24 +61,16 @@ pub(crate) fn exec_ctr_fix_apply(
 
     let validation_errors = super::validate_patch_before_write(&patch, task, &original_content);
     if !validation_errors.is_empty() {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Agent returned invalid CtrFixPatch values: {}. No changes written.",
                 validation_errors.join("; ")
-            ),
-            output: None,
-        };
+            ));
     }
 
     let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
         Some((f, b)) => (f.to_string(), b.to_string()),
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not parse frontmatter from MDX file".to_string(),
-                output: None,
-            };
+            return StepResult::fail("Could not parse frontmatter from MDX file".to_string());
         }
     };
 
@@ -179,22 +159,14 @@ pub(crate) fn exec_ctr_fix_apply(
     // Validate before writing
     if let Err(e) = crate::content::cleaner::validate_mdx_structure(&new_content) {
         // Original is still on disk untouched — nothing to restore.
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "File integrity failed after edit: {}. No changes written.",
                 e
-            ),
-            output: None,
-        };
+            ));
     }
 
     if let Err(e) = std::fs::write(&file_path, &new_content) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write file: {}. No changes written.", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write file: {}. No changes written.", e));
     }
 
     let normalization_suffix = if repair_notes.is_empty() {
@@ -245,11 +217,7 @@ fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<CtrFixPatch, S
     let raw = match latest_raw {
         Some(r) => r,
         None => {
-            return Err(StepResult {
-                success: false,
-                message: "Agent did not return valid CtrFixPatch JSON".to_string(),
-                output: None,
-            });
+            return Err(StepResult::fail("Agent did not return valid CtrFixPatch JSON".to_string()));
         }
     };
 
@@ -258,20 +226,12 @@ fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<CtrFixPatch, S
             Ok(s) => s,
             Err(e) => {
                 log::warn!("[ctr_fix_apply] Failed to serialize extracted JSON: {}", e);
-                return Err(StepResult {
-                    success: false,
-                    message: format!("Agent did not return valid CtrFixPatch JSON: {}", e),
-                    output: None,
-                });
+                return Err(StepResult::fail(format!("Agent did not return valid CtrFixPatch JSON: {}", e)));
             }
         },
         None => {
             log::warn!("[ctr_fix_apply] No JSON found in agent output");
-            return Err(StepResult {
-                success: false,
-                message: "Agent did not return valid CtrFixPatch JSON — no JSON found".to_string(),
-                output: None,
-            });
+            return Err(StepResult::fail("Agent did not return valid CtrFixPatch JSON — no JSON found".to_string()));
         }
     };
 
@@ -282,11 +242,7 @@ fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<CtrFixPatch, S
                 "[ctr_fix_apply] Failed to parse agent output as CtrFixPatch: {}",
                 e
             );
-            Err(StepResult {
-                success: false,
-                message: format!("Agent did not return valid CtrFixPatch JSON: {}", e),
-                output: None,
-            })
+            Err(StepResult::fail(format!("Agent did not return valid CtrFixPatch JSON: {}", e)))
         }
     }
 }
@@ -306,33 +262,21 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
     let rec = match super::extract_recommendation(task) {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return StepResult {
-                success: false,
-                message: "No ctr_recommendations artifact found on task".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No ctr_recommendations artifact found on task".to_string());
         }
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "ctr_recommendations artifact exists but is invalid: {}. \
                      This usually means the agent returned an unexpected JSON shape (e.g. empty recommendations array wrapped in CtrAgentOutput instead of a single CtrRecommendation).",
                     e
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
     let file_ref = &rec.file;
     if file_ref.is_empty() {
-        return StepResult {
-            success: false,
-            message: "Recommendation has no file reference. Run sanitize_content to repair paths."
-                .to_string(),
-            output: None,
-        };
+        return StepResult::fail("Recommendation has no file reference. Run sanitize_content to repair paths."
+                .to_string());
     }
 
     let repo_root = Path::new(project_path);
@@ -340,14 +284,10 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
         match crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref) {
             Some(p) => p,
             None => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "File not found: {}. Run sanitize_content to repair paths.",
                         file_ref
-                    ),
-                    output: None,
-                };
+                    ));
             }
         };
 
@@ -525,11 +465,7 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
     let report_json = match serde_json::to_string_pretty(&report) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize verification report: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize verification report: {}", e));
         }
     };
 
@@ -546,15 +482,11 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
             .filter(|c| c.status == "fail")
             .filter_map(|c| c.detail.clone())
             .collect();
-        StepResult {
-            success: false,
-            message: format!(
+        StepResult::fail_with_output(format!(
                 "CTR verification found issues for {}: {}",
                 file_ref,
                 fail_details.join("; ")
-            ),
-            output: Some(report_json),
-        }
+            ), report_json)
     }
 }
 

@@ -63,11 +63,7 @@ pub(crate) fn exec_ctr_analyze(
     ) {
         Ok(o) => o,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Agent error: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Agent error: {}", e));
         }
     };
 
@@ -117,16 +113,12 @@ pub(crate) fn exec_ctr_analyze(
                 "[ctr_audit] Agent response contained no parseable JSON. Preview: {:?}",
                 preview
             );
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail_with_output(format!(
                     "CTR analysis agent did not return valid JSON. \
                      The prompt asked for a JSON object but the agent responded with non-JSON text. \
                      Preview: {:?}",
                     preview
-                ),
-                output: Some(output),
-            };
+                ), output);
         }
     };
     StepResult {

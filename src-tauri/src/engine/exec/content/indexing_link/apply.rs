@@ -17,21 +17,13 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
     let target_data = match parse_target_artifact(task) {
         Some(t) => t,
         None => {
-            return StepResult {
-                success: false,
-                message: "Missing or invalid indexing_link_target artifact".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Missing or invalid indexing_link_target artifact".to_string())
         }
     };
 
     let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
     if target_article_id == 0 {
-        return StepResult {
-            success: false,
-            message: "Target article_id is 0 — no matching article found in DB".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Target article_id is 0 — no matching article found in DB".to_string());
     }
 
     // The target must be a valid link target: present in the project slug set
@@ -48,14 +40,10 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
     let target_slug = match crate::content::slug::resolve_slug(raw_target_slug, &valid_targets) {
         Some(slug) => slug,
         None => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "Target slug '{}' is not a valid link target (missing from project or redirected away)",
                     raw_target_slug
-                ),
-                output: None,
-            }
+                ))
         }
     };
     let target_title = target_data["target_keyword"]
@@ -93,11 +81,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
     let content_dir = match resolution.selected {
         Some(d) => d,
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not locate content directory".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Could not locate content directory".to_string())
         }
     };
 

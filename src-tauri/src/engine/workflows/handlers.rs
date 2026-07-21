@@ -5,7 +5,7 @@
 ///   - what steps the task needs (`plan`)
 ///
 /// Step execution happens in `executor.rs`; handlers only describe the plan.
-use super::{step_params, StepKind, WorkflowStep};
+use super::{step_params, PromptSection, StepKind, WorkflowStep};
 use crate::models::task::{FollowUpPolicy, Task, TaskReviewSurface};
 
 // ─── Trait ────────────────────────────────────────────────────────────────────
@@ -27,10 +27,7 @@ pub struct CollectionHandler;
 
 impl WorkflowHandler for CollectionHandler {
     fn supports(&self, task: &Task) -> bool {
-        matches!(
-            task_type(task),
-            "collect_gsc" | "collect_posthog" | "collect_clarity"
-        )
+        matches!(task_type(task), "collect_gsc" | "collect_clarity")
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
@@ -43,8 +40,14 @@ impl WorkflowHandler for CollectionHandler {
                 "collect_clarity_export",
                 StepKind::CollectClarity,
             )],
-            // collect_posthog has no CLI implementation yet — fall back to agent.
-            _ => vec![WorkflowStep::new("collect_agent_stage", StepKind::Agentic)],
+            // A collection task without a real data source must not silently
+            // succeed via a generic agentic step (the collect_posthog placebo
+            // from issue #27). Unreachable via `supports`, but fail closed:
+            // a manual step cannot auto-complete as fake work.
+            _ => vec![WorkflowStep::new(
+                &format!("{}_manual", task_type(task)),
+                StepKind::Manual,
+            )],
         }
     }
 }
@@ -57,7 +60,7 @@ impl WorkflowHandler for InvestigationHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "investigate_gsc" | "investigate_posthog" | "investigate_clarity" | "clarity_analytics"
+            "investigate_gsc" | "investigate_clarity" | "clarity_analytics"
         )
     }
 
@@ -96,10 +99,13 @@ impl WorkflowHandler for InvestigationHandler {
                     StepKind::ClarityInvestigateAgentic,
                 ),
             ],
-            // investigate_posthog has no CLI implementation yet — fall back to agent.
+            // An investigation task without collected data must not "analyze"
+            // nothing via a generic agentic step (the investigate_posthog
+            // placebo from issue #27). Unreachable via `supports`, but fail
+            // closed: a manual step cannot auto-complete as fake work.
             _ => vec![WorkflowStep::new(
-                "investigate_agent_stage",
-                StepKind::Agentic,
+                &format!("{}_manual", task_type(task)),
+                StepKind::Manual,
             )],
         }
     }
@@ -225,7 +231,14 @@ impl WorkflowHandler for ContentHandler {
         let has_hub_brief = task.artifacts.iter().any(|a| a.key == "hub_brief");
         let is_hub =
             has_hub_brief || matches!(task_type(task), "create_hub_page" | "refresh_hub_page");
-        let step = WorkflowStep::new("content_write_stage", StepKind::Agentic);
+        let is_new_article = matches!(
+            task_type(task),
+            "write_article"
+                | "create_content"
+                | "create_hub_page"
+                | "refresh_hub_page"
+                | "create_landing_page"
+        );
         // Hub pages use the dedicated hub-write skill; landing pages use the
         // conversion-focused landing-page-write skill; all other content tasks
         // use content-write, which carries tone, differentiation, and E-E-A-T
@@ -238,20 +251,25 @@ impl WorkflowHandler for ContentHandler {
         } else {
             "content-write"
         };
-        let mut steps = vec![step.with_param(step_params::SKILL, skill)];
+        // Declare the prompt sections this step needs (issue #4 stage C).
+        // Order matters: content directives come before hub directives in the
+        // assembled prompt. Previously `exec_agentic` derived all of this from
+        // a boolean lattice over task type and skill name.
+        let mut step = WorkflowStep::new("content_write_stage", StepKind::Agentic)
+            .with_param(step_params::SKILL, skill)
+            .with_prompt_section(PromptSection::ContentDirectives {
+                new_article: is_new_article,
+            });
+        if is_hub {
+            step = step.with_prompt_section(PromptSection::HubDirectives);
+        }
+        let mut steps = vec![step];
         // Step 2 (deterministic, new-article tasks only): verify the write stage
         // actually produced a registered article file. Turns the silent no-op of
         // text-only providers (task Done, zero output, issue #13) into a loud,
         // retryable failure. Optimize tasks modify an existing file, so no new
         // file is expected and this check does not apply to them.
-        if matches!(
-            task_type(task),
-            "write_article"
-                | "create_content"
-                | "create_hub_page"
-                | "refresh_hub_page"
-                | "create_landing_page"
-        ) {
+        if is_new_article {
             steps.push(WorkflowStep::new(
                 "content_write_verify",
                 StepKind::ContentWriteVerify,
@@ -936,6 +954,60 @@ mod registry_tests {
             updated_at: chrono::Utc::now().to_rfc3339(),
             not_before: None,
         }
+    }
+
+    /// The content write stage must declare exactly the prompt sections
+    /// `exec_agentic` previously derived from its boolean lattice, in assembly
+    /// order (content directives before hub directives).
+    #[test]
+    fn content_write_stage_declares_prompt_sections() {
+        let handler = ContentHandler;
+
+        // New article: content directives, new-article variant.
+        let steps = handler.plan(&make_task("write_article"));
+        assert_eq!(
+            steps[0].prompt_sections,
+            vec![PromptSection::ContentDirectives { new_article: true }]
+        );
+
+        // Optimize: content directives, preserve variant.
+        let steps = handler.plan(&make_task("optimize_article"));
+        assert_eq!(
+            steps[0].prompt_sections,
+            vec![PromptSection::ContentDirectives { new_article: false }]
+        );
+
+        // Hub task type: content directives first, hub directives second.
+        let steps = handler.plan(&make_task("create_hub_page"));
+        assert_eq!(
+            steps[0].prompt_sections,
+            vec![
+                PromptSection::ContentDirectives { new_article: true },
+                PromptSection::HubDirectives,
+            ]
+        );
+
+        // write_article carrying a hub_brief artifact also gets hub directives.
+        let mut task = make_task("write_article");
+        task.artifacts.push(crate::models::task::TaskArtifact {
+            key: "hub_brief".to_string(),
+            path: None,
+            artifact_type: None,
+            source: None,
+            content: Some("{}".to_string()),
+        });
+        let steps = handler.plan(&task);
+        assert_eq!(
+            steps[0].prompt_sections,
+            vec![
+                PromptSection::ContentDirectives { new_article: true },
+                PromptSection::HubDirectives,
+            ]
+        );
+
+        // Non-content agentic steps declare no sections.
+        let steps = InvestigationHandler.plan(&make_task("investigate_posthog"));
+        assert!(steps[0].prompt_sections.is_empty());
     }
 
     /// Every task type in task_definitions::all() must match a real handler.

@@ -2,7 +2,13 @@
 import type { DriftUrl } from "./DriftUrl";
 import type { ResubmitCandidate } from "./ResubmitCandidate";
 
-export type GscDriftReport = { site_url: string, sitemap_url: string, checked_at: string, sitemap_total: number, gsc_total: number, indexed_count: number, not_indexed_count: number, in_sitemap_not_in_gsc: Array<DriftUrl>, in_gsc_not_in_sitemap: Array<DriftUrl>, not_indexed: Array<DriftUrl>, resubmit_priority: Array<ResubmitCandidate>, 
+export type GscDriftReport = { site_url: string, sitemap_url: string, checked_at: string, sitemap_total: number, gsc_total: number, indexed_count: number, not_indexed_count: number, in_sitemap_not_in_gsc: Array<DriftUrl>, 
+/**
+ * Sitemap URLs that were never sent to the URL Inspection API because the
+ * collection run hit its inspection cap (issue #26). Informational only —
+ * these are NOT resubmit candidates and do not feed the indexing campaign.
+ */
+coverage_capped_uninspected?: Array<DriftUrl>, in_gsc_not_in_sitemap: Array<DriftUrl>, not_indexed: Array<DriftUrl>, resubmit_priority: Array<ResubmitCandidate>, 
 /**
  * Hours since gsc_collection.json was last written. None if the file does not exist.
  */

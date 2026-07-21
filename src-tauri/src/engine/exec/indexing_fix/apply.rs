@@ -22,13 +22,9 @@ pub(crate) fn exec_indexing_fix_apply(
     };
 
     if plan.changes.is_empty() {
-        return StepResult {
-            success: false,
-            message: "indexing_fix_plan contains no changes — refusing to report success \
+        return StepResult::fail("indexing_fix_plan contains no changes — refusing to report success \
                  without any edit."
-                .to_string(),
-            output: None,
-        };
+                .to_string());
     }
 
     let file_path = match resolve_target_file(task, project_path) {
@@ -39,22 +35,14 @@ pub(crate) fn exec_indexing_fix_apply(
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to read {}: {}", file_path.display(), e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to read {}: {}", file_path.display(), e))
         }
     };
 
     let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
         Some((f, b)) => (f.to_string(), b.to_string()),
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not parse frontmatter from MDX file".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Could not parse frontmatter from MDX file".to_string())
         }
     };
 
@@ -113,15 +101,11 @@ pub(crate) fn exec_indexing_fix_apply(
     let new_content = crate::content::cleaner::rebuild_mdx(&new_fm, &new_body);
 
     if new_fm == fm && new_body == body {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Plan produced no effective change to {} — refusing to report success. \
                  The planned values may already be present, or the plan was empty.",
                 file_path.display()
-            ),
-            output: None,
-        };
+            ));
     }
 
     // Snapshot original
@@ -131,24 +115,16 @@ pub(crate) fn exec_indexing_fix_apply(
     // Write
     if let Err(e) = std::fs::write(&file_path, &new_content) {
         let _ = std::fs::remove_file(&snapshot_path);
-        return StepResult {
-            success: false,
-            message: format!("Failed to write file: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write file: {}", e));
     }
 
     // Validate structure; restore snapshot on corruption
     if let Err(e) = crate::content::cleaner::validate_mdx_structure(&new_content) {
         let _ = std::fs::rename(&snapshot_path, &file_path);
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Applied changes produced invalid MDX structure: {}. Original restored.",
                 e
-            ),
-            output: None,
-        };
+            ));
     }
 
     let _ = std::fs::remove_file(&snapshot_path);

@@ -14,21 +14,13 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
     let target_data = match parse_target_artifact(task) {
         Some(t) => t,
         None => {
-            return StepResult {
-                success: false,
-                message: "Missing or invalid indexing_link_target artifact".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Missing or invalid indexing_link_target artifact".to_string())
         }
     };
 
     let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
     if target_article_id == 0 {
-        return StepResult {
-            success: false,
-            message: "Target article_id is 0 — no matching article found in DB".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Target article_id is 0 — no matching article found in DB".to_string());
     }
 
     let target_slug = crate::content::slug::normalize_url_slug(target_data["slug"].as_str().unwrap_or(""));
@@ -40,11 +32,7 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to open DB for verification: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to open DB for verification: {}", e))
         }
     };
 
@@ -54,33 +42,21 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
             .filter(|a| !a.file.is_empty())
             .collect::<Vec<_>>(),
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load articles: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load articles: {}", e))
         }
     };
 
     let content_dir = match crate::content::locator::resolve(repo_root, None).selected {
         Some(d) => d,
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not locate content directory for verification".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Could not locate content directory for verification".to_string())
         }
     };
 
     let scan_result = match crate::content::linking::scan_links(&content_dir, &articles) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Link scan failed during verification: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Link scan failed during verification: {}", e))
         }
     };
 

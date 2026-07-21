@@ -111,11 +111,7 @@ pub fn exec_reddit_fetch_results(
             ),
             output: Some(json),
         },
-        Err(e) => crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Failed to serialize opportunities: {}", e),
-            output: None,
-        },
+        Err(e) => crate::engine::workflows::StepResult::fail(format!("Failed to serialize opportunities: {}", e)),
     }
 }
 
@@ -139,12 +135,8 @@ pub fn exec_reddit_post_reply(
     let (post_id, reply_text) = match extract_post_details_from_task(task) {
         Some((id, text)) => (id, text),
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "Could not extract post_id and reply_text from task description"
-                    .to_string(),
-                output: None,
-            };
+            return crate::engine::workflows::StepResult::fail("Could not extract post_id and reply_text from task description"
+                    .to_string());
         }
     };
 
@@ -157,11 +149,7 @@ pub fn exec_reddit_post_reply(
     if !base_check.valid {
         let reason = base_check.error.unwrap_or_else(|| "invalid reply".to_string());
         log::warn!("[reddit_post_reply] validation failed: {}", reason);
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Reply validation failed: {}", reason),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail(format!("Reply validation failed: {}", reason));
     }
     let automation_dir = std::path::Path::new(project_path)
         .join(".github")
@@ -172,11 +160,7 @@ pub fn exec_reddit_post_reply(
             .error
             .unwrap_or_else(|| "mention stance violation".to_string());
         log::warn!("[reddit_post_reply] stance validation failed: {}", reason);
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Reply validation failed: {}", reason),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail(format!("Reply validation failed: {}", reason));
     }
 
     // Load Reddit credentials
@@ -185,38 +169,24 @@ pub fn exec_reddit_post_reply(
     let client_id = match resolver.resolve("REDDIT_CLIENT_ID") {
         Some((v, _)) => v,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "REDDIT_CLIENT_ID not set — add it to ~/.config/automation/secrets.env"
-                    .to_string(),
-                output: None,
-            };
+            return crate::engine::workflows::StepResult::fail("REDDIT_CLIENT_ID not set — add it to ~/.config/automation/secrets.env"
+                    .to_string());
         }
     };
 
     let client_secret = match resolver.resolve("REDDIT_CLIENT_SECRET") {
         Some((v, _)) => v,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message:
-                    "REDDIT_CLIENT_SECRET not set — add it to ~/.config/automation/secrets.env"
-                        .to_string(),
-                output: None,
-            };
+            return crate::engine::workflows::StepResult::fail("REDDIT_CLIENT_SECRET not set — add it to ~/.config/automation/secrets.env"
+                        .to_string());
         }
     };
 
     let refresh_token = match resolver.resolve("REDDIT_REFRESH_TOKEN") {
         Some((v, _)) => v,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message:
-                    "REDDIT_REFRESH_TOKEN not set — add it to ~/.config/automation/secrets.env"
-                        .to_string(),
-                output: None,
-            };
+            return crate::engine::workflows::StepResult::fail("REDDIT_REFRESH_TOKEN not set — add it to ~/.config/automation/secrets.env"
+                        .to_string());
         }
     };
 
@@ -224,11 +194,7 @@ pub fn exec_reddit_post_reply(
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to create runtime: {}", e),
-                output: None,
-            };
+            return crate::engine::workflows::StepResult::fail(format!("Failed to create runtime: {}", e));
         }
     };
 
@@ -279,11 +245,7 @@ pub fn exec_reddit_post_reply(
         }
         Err(e) => {
             log::error!("[reddit_post_reply] failed to post: {}", e);
-            crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to post to Reddit: {}", e),
-                output: None,
-            }
+            crate::engine::workflows::StepResult::fail(format!("Failed to post to Reddit: {}", e))
         }
     }
 }

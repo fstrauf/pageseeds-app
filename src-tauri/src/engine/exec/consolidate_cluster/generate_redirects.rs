@@ -21,11 +21,7 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
     let plan: serde_json::Value = match serde_json::from_str(&plan_json) {
         Ok(v) => v,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid merge plan JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid merge plan JSON: {}", e));
         }
     };
 
@@ -78,11 +74,7 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
     }
 
     if let Err(e) = std::fs::write(&csv_path, &csv) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write redirects.csv: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write redirects.csv: {}", e));
     }
 
     let output = serde_json::json!({

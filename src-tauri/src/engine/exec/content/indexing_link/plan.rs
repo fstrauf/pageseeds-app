@@ -22,11 +22,7 @@ pub(crate) fn exec_indexing_link_plan(
     let target_data = match parse_target_artifact(task) {
         Some(t) => t,
         None => {
-            return StepResult {
-                success: false,
-                message: "Missing or invalid indexing_link_target artifact".to_string(),
-                output: None,
-            }
+            return StepResult::fail("Missing or invalid indexing_link_target artifact".to_string())
         }
     };
 
@@ -113,11 +109,7 @@ Requirements:
     let raw_output = match crate::engine::agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(out) => out,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Agent failed: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Agent failed: {}", e))
         }
     };
 
@@ -133,11 +125,7 @@ Requirements:
         .map(|a| a.len())
         .unwrap_or(0);
     if link_count == 0 {
-        return StepResult {
-            success: false,
-            message: "Agent returned no link recommendations".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Agent returned no link recommendations".to_string());
     }
 
     // Persist plan for apply step

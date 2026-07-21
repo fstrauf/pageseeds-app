@@ -171,6 +171,11 @@ pub struct GscDriftReport {
     pub indexed_count: usize,
     pub not_indexed_count: usize,
     pub in_sitemap_not_in_gsc: Vec<DriftUrl>,
+    /// Sitemap URLs that were never sent to the URL Inspection API because the
+    /// collection run hit its inspection cap (issue #26). Informational only —
+    /// these are NOT resubmit candidates and do not feed the indexing campaign.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coverage_capped_uninspected: Vec<DriftUrl>,
     pub in_gsc_not_in_sitemap: Vec<DriftUrl>,
     pub not_indexed: Vec<DriftUrl>,
     pub resubmit_priority: Vec<ResubmitCandidate>,

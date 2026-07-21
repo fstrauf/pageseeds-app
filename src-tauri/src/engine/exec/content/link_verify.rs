@@ -39,40 +39,27 @@ pub(crate) fn exec_link_integrity_verify(task: &Task, project_path: &str) -> Ste
             // A content-write task that produced no file must not pass
             // verification vacuously (issue #13): there is nothing to check,
             // which means the write failed upstream.
-            return StepResult {
-                success: false,
-                message:
-                    "Link verify failed: no written article file found — nothing to verify. \
+            return StepResult::fail("Link verify failed: no written article file found — nothing to verify. \
                      The preceding write step must produce a file before links can be checked."
-                        .to_string(),
-                output: None,
-            }
+                        .to_string())
         }
     };
 
     let content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "Link verify: failed to read {}: {}",
                     file_path.display(),
                     e
-                ),
-                output: None,
-            }
+                ))
         }
     };
 
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Link verify: failed to open app database: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Link verify: failed to open app database: {}", e))
         }
     };
 
@@ -83,11 +70,7 @@ pub(crate) fn exec_link_integrity_verify(task: &Task, project_path: &str) -> Ste
     ) {
         Ok(set) => set,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Link verify: failed to load project slugs: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Link verify: failed to load project slugs: {}", e))
         }
     };
 
@@ -156,16 +139,12 @@ fn verify_links_in_file(
             "file": file_path.to_string_lossy(),
             "unresolved_links": unresolved,
         });
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "Link verify failed for {}: {} unresolvable /blog/ link(s): {}",
                 file_name,
                 unresolved.len(),
                 details
-            ),
-            output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
-        };
+            ), serde_json::to_string_pretty(&report).unwrap_or_default());
     }
 
     if repairs.is_empty() {
@@ -182,15 +161,11 @@ fn verify_links_in_file(
 
     let repaired = crate::content::linking::repair_blog_link_hrefs(content, &repairs);
     if let Err(e) = std::fs::write(file_path, repaired) {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Link verify: failed to write repairs to {}: {}",
                 file_path.display(),
                 e
-            ),
-            output: None,
-        };
+            ));
     }
 
     let report = serde_json::json!({

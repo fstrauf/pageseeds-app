@@ -30,13 +30,9 @@ pub(crate) fn exec_content_write_verify(
     let content_dir = match crate::content::locator::resolve(repo_root, None).selected {
         Some(dir) => dir,
         None => {
-            return StepResult {
-                success: false,
-                message: "Write verify failed: no content directory resolved for this project — \
+            return StepResult::fail("Write verify failed: no content directory resolved for this project — \
                           the write step had nowhere to persist the article."
-                    .to_string(),
-                output: None,
-            }
+                    .to_string())
         }
     };
 
@@ -104,27 +100,19 @@ fn verdict(
             ),
             output: None,
         },
-        (Some(path), false) => StepResult {
-            success: false,
-            message: format!(
+        (Some(path), false) => StepResult::fail(format!(
                 "Write verify failed: {} exists in {} but is not registered in the article index. \
                  Orphan ingestion could not register it — check the file's frontmatter and the \
                  registration logs, then re-enqueue the task.",
                 file_name(path),
                 content_dir.display()
-            ),
-            output: None,
-        },
-        (None, _) => StepResult {
-            success: false,
-            message: format!(
+            )),
+        (None, _) => StepResult::fail(format!(
                 "Write verify failed: content_write_stage completed but no article file exists in {}. \
                  The agent returned without writing a file (a text-only provider may have produced \
                  no parseable MDX, or the write failed). Fix the provider output or re-enqueue the task.",
                 content_dir.display()
-            ),
-            output: None,
-        },
+            )),
     }
 }
 
