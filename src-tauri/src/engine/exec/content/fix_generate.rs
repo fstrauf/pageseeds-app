@@ -87,9 +87,12 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         }
     };
 
-    // 4. Extract structured patch
+    // 4. Extract structured patch — scope agentic backends to the project so
+    // the kimi CLI agent's file tools verify slugs/files against the real
+    // project, not the app process cwd (placeholder work_dir from resolve_backend).
+    let scoped_backend = backend.scoped_to_project(project_path);
     let mut patch = match crate::rig::extraction::extract_with_backend::<ContentFixPatch>(
-        backend,
+        &scoped_backend,
         &prompt,
         Some(
             "You are a content SEO optimization assistant. \
@@ -114,7 +117,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     // 5. Normalize and validate
     let target_kw = context.target_keyword.as_deref();
     let repairs = normalize_patch_before_validation(&mut patch, &original_content);
-    let errors = validate_patch_before_write(&patch, &original_content, target_kw, &task.project_id, project_path);
+    let errors = validate_patch_before_write(&patch, &original_content, target_kw, &task.project_id, project_path, &context.available_link_slugs);
 
     // 6. One repair attempt if needed
     if !errors.is_empty() {
@@ -124,10 +127,10 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
             errors.join("; ")
         );
 
-        match repair_content_fix_patch_with_backend(backend, &prompt, &patch, &errors).await {
+        match repair_content_fix_patch_with_backend(&scoped_backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
                 let _repair_notes = normalize_patch_before_validation(&mut repaired, &original_content);
-                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id, project_path);
+                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id, project_path, &context.available_link_slugs);
 
                 if !repair_errors.is_empty() {
                     return StepResult::fail(format!(
@@ -567,6 +570,7 @@ fn validate_patch_before_write(
     target_keyword: Option<&str>,
     project_id: &str,
     project_path: &str,
+    available_link_slugs: &[String],
 ) -> Vec<String> {
     let mut errors = Vec::new();
     let title_max = crate::engine::exec::audit_health::TITLE_MAX_LEN;
@@ -684,13 +688,17 @@ fn validate_patch_before_write(
     // be redirected away. Exact match first (resolve_slug) so verbatim-existing
     // slugs are never destructively normalized.
     if let Some(ref links) = patch.changes.internal_links {
-        let valid_slugs: std::collections::HashSet<String> =
-            if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
-                crate::engine::task_store::load_valid_link_targets(&db, project_id, project_path)
-                    .unwrap_or_default()
-            } else {
-                std::collections::HashSet::new()
-            };
+        // Enforce the same list the prompt advertised (context artifact) when
+        // available — single source of truth, and independent of the app DB.
+        // Fall back to a live DB lookup for legacy artifacts without the field.
+        let valid_slugs: std::collections::HashSet<String> = if !available_link_slugs.is_empty() {
+            available_link_slugs.iter().cloned().collect()
+        } else if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+            crate::engine::task_store::load_valid_link_targets(&db, project_id, project_path)
+                .unwrap_or_default()
+        } else {
+            std::collections::HashSet::new()
+        };
 
         for (i, link) in links.iter().enumerate() {
             if link.target_slug.is_empty() {

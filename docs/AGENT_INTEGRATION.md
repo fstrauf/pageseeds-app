@@ -284,6 +284,8 @@ They exist to catch **prompt/skill regressions** — run them after editing any
 
 ```
 ./scripts/run-evals.sh          # or: cargo test evals -- --ignored --nocapture
+# also runs as part of: pnpm test:all  (auto-skips when no provider is available;
+# EVALS_REQUIRED=1 turns the skip into a failure)
 ```
 
 Layout:
