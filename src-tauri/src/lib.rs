@@ -147,6 +147,7 @@ pub fn run() {
             commands::create_article_tasks_from_keywords,
             commands::list_articles,
             commands::list_live_site_pages,
+            commands::list_ctr_outcomes,
             commands::get_live_site_audit,
             commands::import_from_repo,
             commands::import_live_site,

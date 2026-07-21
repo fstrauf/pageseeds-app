@@ -738,21 +738,27 @@ fn record_ctr_outcome_baseline(
         })?;
 
     // Look up URL from rendered page audits
-    let url: String = conn
-        .query_row(
-            "SELECT url FROM ctr_rendered_page_audits WHERE project_id = ?1 AND article_id = ?2",
-            rusqlite::params![&task.project_id, article_id],
-            |row| row.get(0),
-        )
-        .map_err(|_| {
-            crate::error::Error::Other(format!("No rendered audit URL for article {}", article_id))
-        })?;
+    let url = crate::engine::exec::ctr_audit::lookup_rendered_audit_url(
+        conn,
+        &task.project_id,
+        article_id,
+    )
+    .ok_or_else(|| {
+        crate::error::Error::Other(format!("No rendered audit URL for article {}", article_id))
+    })?;
 
     // Fetch current GSC metrics as baseline.
     // For live-site projects: read from live_site_pages.
     // For workspace projects: fall back to article_metadata (namespace='gsc').
+    // Shared with the after-metrics fetcher in ctr_audit::outcome so both
+    // sides of the comparison read from the same source.
     let (baseline_clicks, baseline_impressions, baseline_ctr, baseline_position) =
-        fetch_baseline_metrics(conn, &task.project_id, article_id, &url);
+        crate::engine::exec::ctr_audit::fetch_article_gsc_metrics(
+            conn,
+            &task.project_id,
+            article_id,
+            &url,
+        );
 
     let now = chrono::Utc::now();
     let baseline_start = (now - chrono::Duration::days(28)).to_rfc3339();
@@ -788,62 +794,6 @@ fn record_ctr_outcome_baseline(
     );
 
     Ok(())
-}
-
-/// Try live_site_pages first, then article_metadata (workspace projects),
-/// then return zeros.
-fn fetch_baseline_metrics(
-    conn: &Connection,
-    project_id: &str,
-    article_id: i64,
-    url: &str,
-) -> (f64, f64, f64, f64) {
-    // 1. Live-site path lookup
-    let path = url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let path = if let Some(pos) = path.find('/') {
-        &path[pos..]
-    } else {
-        "/"
-    };
-
-    let live_site_result: Result<
-        (Option<f64>, Option<f64>, Option<f64>, Option<f64>),
-        rusqlite::Error,
-    > = conn.query_row(
-        "SELECT gsc_clicks, gsc_impressions, gsc_ctr, gsc_position
-             FROM live_site_pages
-             WHERE project_id = ?1 AND path = ?2",
-        rusqlite::params![project_id, path],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-    );
-
-    if let Ok((Some(clicks), Some(impressions), Some(ctr), Some(position))) = live_site_result {
-        return (clicks, impressions, ctr, position);
-    }
-
-    // 2. Workspace fallback: article_metadata namespace='gsc'
-    let meta_result: Result<String, rusqlite::Error> = conn.query_row(
-        "SELECT payload FROM article_metadata WHERE project_id = ?1 AND article_id = ?2 AND namespace = 'gsc'",
-        rusqlite::params![project_id, article_id],
-        |row| row.get(0),
-    );
-
-    if let Ok(payload) = meta_result {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
-            let clicks = val["clicks"].as_f64().unwrap_or(0.0);
-            let impressions = val["impressions"].as_f64().unwrap_or(0.0);
-            let ctr = val["ctr"].as_f64().unwrap_or(0.0);
-            let position = val["avg_position"].as_f64().unwrap_or(0.0);
-            if clicks > 0.0 || impressions > 0.0 {
-                return (clicks, impressions, ctr, position);
-            }
-        }
-    }
-
-    // 3. Nothing available
-    (0.0, 0.0, 0.0, 0.0)
 }
 
 // ─── Content-task keyword / title helpers ───────────────────────────────────

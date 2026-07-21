@@ -241,10 +241,11 @@ import type {
   PublishResult,
   YearMismatchResolution,
   CtrHealthSummary,
+  CtrOutcome,
   RepairPathResult,
 } from './types'
 // Re-export to keep callers from needing to import from types directly
-export type { PublishPreflightResult, PublishResult, YearMismatchResolution, CtrHealthSummary, RepairPathResult }
+export type { PublishPreflightResult, PublishResult, YearMismatchResolution, CtrHealthSummary, CtrOutcome, RepairPathResult }
 export type { ArticleWithIssue } from './types'
 export type { YearMismatch } from './types'
 
@@ -275,6 +276,9 @@ export const getCtrHealthSummary = (
   projectId: string,
 ): Promise<CtrHealthSummary> =>
   invoke('get_ctr_health_summary', { projectId })
+
+export const listCtrOutcomes = (projectId: string): Promise<CtrOutcome[]> =>
+  invoke('list_ctr_outcomes', { projectId })
 
 export const repairArticlePaths = (
   projectId: string,
