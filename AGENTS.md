@@ -160,7 +160,7 @@ The capabilities surfaced on the Overview screen are **task types**, not functio
 
 Rules:
 - **Start with the umbrella.** Reach for the specific audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped to that domain; otherwise `content_review`.
-- **Collection tasks (`collect_gsc`, `collect_posthog`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually.
+- **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually.
 - **Lifecycle metadata is owned by `config/task_definitions.rs`.** When the Overview UI and Rust disagree, the Rust file wins. Update both together.
 
 ---

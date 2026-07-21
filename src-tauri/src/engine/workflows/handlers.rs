@@ -27,10 +27,7 @@ pub struct CollectionHandler;
 
 impl WorkflowHandler for CollectionHandler {
     fn supports(&self, task: &Task) -> bool {
-        matches!(
-            task_type(task),
-            "collect_gsc" | "collect_posthog" | "collect_clarity"
-        )
+        matches!(task_type(task), "collect_gsc" | "collect_clarity")
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
@@ -43,8 +40,14 @@ impl WorkflowHandler for CollectionHandler {
                 "collect_clarity_export",
                 StepKind::CollectClarity,
             )],
-            // collect_posthog has no CLI implementation yet — fall back to agent.
-            _ => vec![WorkflowStep::new("collect_agent_stage", StepKind::Agentic)],
+            // A collection task without a real data source must not silently
+            // succeed via a generic agentic step (the collect_posthog placebo
+            // from issue #27). Unreachable via `supports`, but fail closed:
+            // a manual step cannot auto-complete as fake work.
+            _ => vec![WorkflowStep::new(
+                &format!("{}_manual", task_type(task)),
+                StepKind::Manual,
+            )],
         }
     }
 }
@@ -57,7 +60,7 @@ impl WorkflowHandler for InvestigationHandler {
     fn supports(&self, task: &Task) -> bool {
         matches!(
             task_type(task),
-            "investigate_gsc" | "investigate_posthog" | "investigate_clarity" | "clarity_analytics"
+            "investigate_gsc" | "investigate_clarity" | "clarity_analytics"
         )
     }
 
@@ -96,10 +99,13 @@ impl WorkflowHandler for InvestigationHandler {
                     StepKind::ClarityInvestigateAgentic,
                 ),
             ],
-            // investigate_posthog has no CLI implementation yet — fall back to agent.
+            // An investigation task without collected data must not "analyze"
+            // nothing via a generic agentic step (the investigate_posthog
+            // placebo from issue #27). Unreachable via `supports`, but fail
+            // closed: a manual step cannot auto-complete as fake work.
             _ => vec![WorkflowStep::new(
-                "investigate_agent_stage",
-                StepKind::Agentic,
+                &format!("{}_manual", task_type(task)),
+                StepKind::Manual,
             )],
         }
     }
