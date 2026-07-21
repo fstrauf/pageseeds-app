@@ -1,6 +1,6 @@
 # CTR Fix Apply Skill
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Used by `fix_ctr_article` agentic steps.
 
@@ -36,9 +36,9 @@ A JSON artifact (`ctr_recommendations`) containing a single article recommendati
 
 ### `meta_description`
 - Return the new meta description text in `changes.description`.
-- **Hard limits: 130–155 characters.** Minimum 130, maximum 155.
-- **Aim for 145–150 characters.** Undershooting 130 is a verification failure.
-- Count characters carefully. Do not return descriptions under 130 chars.
+- **Hard limits: 120–155 characters.** Minimum 120, maximum 155.
+- **Aim for 145–150 characters.** Undershooting 120 is a verification failure.
+- Count characters carefully. Do not return descriptions under 120 chars.
 - If the current description is already good, return `null` for `description`.
 
 ### `faq_schema`

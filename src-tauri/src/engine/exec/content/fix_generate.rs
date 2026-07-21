@@ -271,6 +271,8 @@ fn build_fix_prompt(
     let title_max = crate::engine::exec::audit_health::TITLE_MAX_LEN;
     let meta_min = crate::engine::exec::audit_health::META_MIN_LEN;
     let meta_max = crate::engine::exec::audit_health::META_MAX_LEN;
+    let intro_min = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
+    let intro_max = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
 
     let suggestions_json = serde_json::to_string_pretty(&context.suggestions).map_err(|e| e.to_string())?;
 
@@ -338,7 +340,7 @@ You must produce a ContentFixPatch JSON that addresses every suggestion listed a
 Validation rules (enforced by Rust):
 - title: must be ≤ {title_max} chars if provided
 - description: must be {meta_min}-{meta_max} chars if provided
-- intro: should be 40-60 words if provided
+- intro: should be {intro_min}-{intro_max} words if provided
 - faq_questions: must be 3-5 questions if provided and file has no existing frontmatter FAQ
 
 **CRITICAL — Keyword placement**: The target keyword is "{target_keyword}". Whenever you generate a new title, H1, meta description, or intro, you MUST naturally include the target keyword in the text. This applies to ALL changes in those fields, not just keyword-specific recommendations:
@@ -370,6 +372,8 @@ Only include fields that need to change. Do not include title/description/intro/
         meta_max = meta_max,
         current_first = current_first,
         first_words = crate::content::ops::count_words(&current_first),
+        intro_min = intro_min,
+        intro_max = intro_max,
         has_faq = if has_faq {
             "yes — do NOT generate faq_questions"
         } else {

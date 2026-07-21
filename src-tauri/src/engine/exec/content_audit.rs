@@ -484,7 +484,7 @@ pub fn exec_content_audit(
         "h1_keyword":           check_pass(kw_opt.as_ref().map(|kw| crate::content::keyword_match::keyword_present(&h1.to_lowercase(), kw)), "H1 contains keyword"),
         "meta_desc_present":    check_pass(Some(!meta_description.is_empty()), "Meta description present"),
         "meta_desc_keyword":    check_pass(kw_opt.as_ref().map(|kw| crate::content::keyword_match::keyword_present(&meta_description.to_lowercase(), kw)), "Meta description contains keyword"),
-        "meta_desc_length":     check_val(Some(meta_description.len() >= 50 && meta_description.len() <= 155), serde_json::json!(meta_description.len()), "Meta description length 50–155 chars"),
+        "meta_desc_length":     check_val(Some(meta_description.len() >= crate::engine::exec::audit_health::META_MIN_LEN && meta_description.len() <= crate::engine::exec::audit_health::META_MAX_LEN), serde_json::json!(meta_description.len()), &format!("Meta description length {}–{} chars", crate::engine::exec::audit_health::META_MIN_LEN, crate::engine::exec::audit_health::META_MAX_LEN)),
         "keyword_first_para":   check_pass(kw_opt.as_ref().map(|kw| crate::content::keyword_match::keyword_present(&first_para, kw)), "Keyword in first paragraph"),
         "word_count":           check_val(Some(actual_word_count >= 800), serde_json::json!(actual_word_count), "Word count ≥ 800"),
         "keyword_density":      check_val(kw_opt.as_ref().map(|_| kw_density >= 0.2 && kw_density <= 0.8), serde_json::json!(format!("{:.2}%", kw_density)), "Keyword density 0.2–0.8%"),

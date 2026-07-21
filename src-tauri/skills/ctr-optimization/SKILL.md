@@ -1,6 +1,6 @@
 # CTR Optimization Skill
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Used by the `ctr_analyze` agentic step.
 
@@ -24,7 +24,7 @@ For each article, evaluate the title for CTR issues:
 
 ### 2. Meta Description Analysis
 - **Presence**: Flag if missing entirely.
-- **Length**: Ideal range is 140–155 characters.
+- **Length**: Ideal range is 120–155 characters (aim for 145–150).
 - **Pattern compliance**: Should follow `[Keyword] + [benefit] + [soft CTA]`.
 - **Uniqueness**: Duplicate or near-duplicate descriptions across articles reduce CTR.
 
@@ -113,7 +113,7 @@ Return JSON exactly matching this structure:
 
 - Limit to **top 20 pages** by `clicks_lost`.
 - **Title rewrites**: keep under 55 characters (hard limit: 55), front-load keyword, remove duplication.
-- **Meta descriptions**: 150–155 characters (aim for 150, hard max 155), pattern `[Keyword] + [benefit] + [soft CTA]`. Minimum accepted is 130.
+- **Meta descriptions**: 120–155 characters (aim for 145–150, hard max 155), pattern `[Keyword] + [benefit] + [soft CTA]`. Minimum accepted is 120.
 - **FAQ**: 3–5 questions that reflect real search queries. When `top_queries` is provided, prefer high-impression question/comparison queries from that list. Must be JSON-LD FAQPage schema, not just markdown headings.
 - **Snippet bait**: 40–60 word direct answer. Match article type to the query intent:
   - `question` intent → paragraph direct answer

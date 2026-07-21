@@ -1,6 +1,6 @@
 # Content Fix Apply
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Apply SEO content improvements to a single MDX article based on structured recommendations.
 
@@ -22,7 +22,7 @@ Only include fields that need to change. Do not include a field if the fix is al
 - **title** → Update frontmatter `title:` field. Must be ≤ 60 chars and a complete, grammatically correct phrase. It must NOT end mid-sentence or with dangling words (`a`, `an`, `the`, `and`, `or`, `to`, `for`, `of`, `in`, `on`, `with`, `by`, `from`, `as`, `is`, `are`, `what`, `how`, `when`, `where`, `why`, `which`, `complete`, `guide`, `income`, `without`, `track`, `close`, `compared`) or trailing punctuation (`:`, `,`, `-`). Rewrite rather than truncate.
 - **h1** → Update the first H1 heading in the body. Must match title or be optimized for SEO, and must also be complete.
 - **description** → Update frontmatter `description:` field. Must be 120-155 chars.
-- **intro** → Rewrite the opening paragraph(s). Must be 40-80 words.
+- **intro** → Rewrite the opening paragraph(s). Must be 40-60 words.
 - **internal_links** → Add suggested links at appropriate places in the body.
 - **faq** → Add frontmatter FAQ questions (3-5 questions max). Only if file has no existing FAQ.
 - **eeat** → Add credibility signal (author note, data source, or experience statement).
@@ -33,7 +33,7 @@ Only include fields that need to change. Do not include a field if the fix is al
 
 - title: ≤ 60 chars if provided
 - description: 120-155 chars if provided
-- intro: 40-80 words if provided
+- intro: 40-60 words if provided
 - faq_questions: 3-5 questions if provided and file has no existing FAQ
 - Every proposed change must differ from the current text
 
@@ -48,7 +48,7 @@ Return a `ContentFixPatch` JSON with these fields:
   "changes": {
     "title": "New Title (≤60 chars)",
     "description": "New meta description (120-155 chars)",
-    "intro": "New opening paragraph (40-80 words)",
+    "intro": "New opening paragraph (40-60 words)",
     "h1": "New H1 heading",
     "internal_links": [
       {"anchor_text": "related topic", "target_slug": "related-article"}
