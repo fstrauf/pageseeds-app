@@ -84,7 +84,7 @@ pub(crate) fn spawn_campaign_children(
         // Skip tasks that require a known article but don't have one
         let requires_article = matches!(
             target.recommended_action.as_str(),
-            "fix_content" | "add_links" | "rewrite_title_h1"
+            "fix_content" | "add_links" | "rewrite_title_h1" | "fix_indexing"
         );
         if requires_article {
             match ctx {
@@ -116,13 +116,13 @@ pub(crate) fn spawn_campaign_children(
             "fix_content" => Some(build_fix_content_spec(parent_task, target, ctx, audit_row)),
             "add_links" => Some(build_add_links_spec(parent_task, target, ctx)),
             "rewrite_title_h1" => Some(build_rewrite_spec(parent_task, target, ctx)),
+            "fix_indexing" => build_fix_indexing_fallback_spec(parent_task, target, ctx, audit_row),
             "merge" => {
-                // Merge recommendations require user approval via CannibalizationPicker.
-                // Do NOT auto-spawn. Instead, log for visibility.
-                log::info!(
-                    "[ihc_post_action] merge recommended for {} — awaiting user approval",
-                    target.url
-                );
+                // Merge recommendations require user approval via the cannibalization
+                // review flow. Persist the recommendation into the cannibalization
+                // strategy store so it surfaces in the CannibalizationPicker instead
+                // of being silently dropped. Do NOT auto-spawn consolidate_cluster.
+                persist_merge_recommendation(conn, parent_task, target, ctx);
                 None
             }
             "no_action" | _ => None,
@@ -398,5 +398,129 @@ pub(crate) fn build_rewrite_spec(
         idempotency_key,
         artifacts,
     )
+}
+
+/// Map a fallback `fix_indexing` target to a concrete child task type by reason code.
+///
+/// Discovery-type problems (Google hasn't crawled the page yet) are usually
+/// caused by weak internal linking → spawn `fix_indexing_internal_links`
+/// (same spec as the `add_links` action).
+/// Quality-type problems (crawled but rejected) → spawn `fix_content_article`
+/// (same spec as the `fix_content` action).
+/// Returns None when the reason code does not clearly map.
+pub(crate) fn fallback_spawn_for_reason(reason_code: &str) -> Option<&'static str> {
+    match reason_code {
+        "not_indexed_discovered" | "not_indexed_other" => Some("add_links"),
+        "not_indexed_crawled" => Some("fix_content"),
+        _ => None,
+    }
+}
+
+/// Build a child task spec for a fallback `fix_indexing` target, or None (with
+/// a warning) when the reason code does not clearly map to a fix lane.
+fn build_fix_indexing_fallback_spec(
+    parent: &Task,
+    target: &IndexingTargetPlan,
+    ctx: Option<&IndexingTargetContext>,
+    audit_row: Option<&serde_json::Value>,
+) -> Option<TaskSpec> {
+    match fallback_spawn_for_reason(&target.reason_code) {
+        Some("add_links") => Some(build_add_links_spec(parent, target, ctx)),
+        Some("fix_content") => Some(build_fix_content_spec(parent, target, ctx, audit_row)),
+        _ => {
+            log::warn!(
+                "[ihc_post_action] fix_indexing fallback for {} has unmapped reason_code '{}' — no child task spawned",
+                target.url,
+                target.reason_code
+            );
+            None
+        }
+    }
+}
+
+/// Persist a campaign merge recommendation into the cannibalization strategy
+/// store so it surfaces in the CannibalizationPicker for user approval,
+/// instead of being log-only. Never auto-spawns consolidate_cluster.
+fn persist_merge_recommendation(
+    conn: &Connection,
+    parent: &Task,
+    target: &IndexingTargetPlan,
+    ctx: Option<&IndexingTargetContext>,
+) {
+    let verdict = match &target.distinctiveness_verdict {
+        Some(v) => v,
+        None => {
+            log::warn!(
+                "[ihc_post_action] merge recommended for {} but no distinctiveness verdict attached — skipping",
+                target.url
+            );
+            return;
+        }
+    };
+
+    let slug = crate::content::slug::extract_slug_from_url(&target.url);
+    let blog_link = |url: &str| {
+        crate::content::slug::format_blog_link(&crate::content::slug::extract_slug_from_url(url))
+    };
+
+    let keep_url = verdict
+        .keep_url
+        .as_deref()
+        .map(blog_link)
+        .unwrap_or_else(|| crate::content::slug::format_blog_link(&slug));
+
+    let mut redirect_urls: Vec<String> = verdict
+        .redirect_url
+        .as_deref()
+        .map(blog_link)
+        .into_iter()
+        .collect();
+    if redirect_urls.is_empty() {
+        if let Some(cluster) = ctx.and_then(|c| c.cluster.as_ref()) {
+            redirect_urls = cluster
+                .siblings
+                .iter()
+                .map(|s| blog_link(&s.url))
+                .filter(|u| u != &keep_url)
+                .collect();
+        }
+    }
+
+    let cluster_id = ctx
+        .and_then(|c| c.cluster.as_ref())
+        .map(|c| c.cluster_id.clone())
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| format!("ihc-{}", slug));
+
+    let confidence = match verdict.confidence.as_str() {
+        "high" => crate::models::cannibalization::Confidence::High,
+        "medium" => crate::models::cannibalization::Confidence::Medium,
+        _ => crate::models::cannibalization::Confidence::Low,
+    };
+
+    let rec = crate::models::cannibalization::MergeRecommendation {
+        cluster_id,
+        confidence,
+        keep_url,
+        redirect_urls,
+        reason: format!("indexing_health_campaign: {}", verdict.reason),
+        ..Default::default()
+    };
+
+    match crate::cannibalization::record_merge_recommendation(conn, &parent.project_id, &rec) {
+        Ok(true) => log::info!(
+            "[ihc_post_action] merge recommendation for {} recorded in cannibalization strategy — awaiting user approval",
+            target.url
+        ),
+        Ok(false) => log::info!(
+            "[ihc_post_action] merge recommendation for {} already present in cannibalization strategy",
+            target.url
+        ),
+        Err(e) => log::warn!(
+            "[ihc_post_action] failed to record merge recommendation for {}: {}",
+            target.url,
+            e
+        ),
+    }
 }
 

@@ -441,16 +441,30 @@ impl WorkflowHandler for ImplementationHandler {
             ],
             "fix_indexing" | "fix_technical" => vec![
                 // Step 1 (deterministic): load the target MDX file and extract structured context
-                // (word count, H1, title, internal links, canonical). This is obvious file I/O —
-                // no judgment required — and saves the agent from hunting around the repo.
+                // (word count, H1, title, internal links, canonical) plus the parsed task
+                // description fields (recommended action, suggested title/H1). Obvious file
+                // I/O — no judgment required — and saves the agent from hunting around the repo.
                 WorkflowStep::new("indexing_fix_context", StepKind::IndexingFixContext)
                     .with_latest_raw_policy(
                         crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
                     ),
-                // Step 2 (agentic): apply the fix. The agent gets the GSC issue + structured
-                // context and edits the MDX file directly. Judgment is required because the fix
-                // depends on intent, content quality, and site-specific conventions.
+                // Step 2 (agentic): generate a structured IndexingFixPlan JSON. Judgment is
+                // required because the fix depends on intent, content quality, and
+                // site-specific conventions. The agent returns JSON only — it never edits
+                // files (direct mode has no file I/O on most providers).
+                // Output contract: IndexingFixPlan (see the indexing-fix skill).
+                WorkflowStep::new("indexing_fix_generate", StepKind::IndexingFixGenerate)
+                    .with_latest_raw_policy(
+                        crate::engine::workflows::LatestRawPolicy::ReplaceWithOutput,
+                    )
+                    .with_param(step_params::ARTIFACT_NAME, "indexing_fix_plan"),
+                // Step 3 (deterministic): apply the plan to the MDX file with
+                // snapshot/restore. Fails loudly when the plan produces no effective
+                // change, so the task can never silently succeed without an edit.
                 WorkflowStep::new("indexing_fix_apply", StepKind::IndexingFixApply),
+                // Step 4 (deterministic): re-read the file and verify every planned
+                // change landed. Fails loudly when the file is unchanged.
+                WorkflowStep::new("indexing_fix_verify", StepKind::IndexingFixVerify),
             ],
             "cluster_and_link" | "interlinking" => vec![
                 // Step 1 (deterministic, native Rust): scan all MDX files, build the full link

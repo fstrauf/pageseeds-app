@@ -473,6 +473,74 @@ use std::time::{SystemTime, UNIX_EPOCH};
         assert!(content.contains("article_id"));
     }
 
+    // ─── fix_indexing fallback mapping (issue #35) ─────────────────────────────
+
+    #[test]
+    fn fallback_spawn_maps_discovery_reasons_to_add_links() {
+        assert_eq!(fallback_spawn_for_reason("not_indexed_discovered"), Some("add_links"));
+        assert_eq!(fallback_spawn_for_reason("not_indexed_other"), Some("add_links"));
+    }
+
+    #[test]
+    fn fallback_spawn_maps_crawled_reason_to_fix_content() {
+        assert_eq!(fallback_spawn_for_reason("not_indexed_crawled"), Some("fix_content"));
+    }
+
+    #[test]
+    fn fallback_spawn_returns_none_for_unmapped_reasons() {
+        assert_eq!(fallback_spawn_for_reason("robots_blocked"), None);
+        assert_eq!(fallback_spawn_for_reason("noindex"), None);
+        assert_eq!(fallback_spawn_for_reason("fetch_error"), None);
+        assert_eq!(fallback_spawn_for_reason("canonical_mismatch"), None);
+        assert_eq!(fallback_spawn_for_reason(""), None);
+    }
+
+    // ─── Summary counting: fix_indexing is not swallowed by no_action ─────────
+
+    #[test]
+    fn reduce_plan_counts_fix_indexing_separately() {
+        let dir = unique_temp_dir("ihc_reduce_fixidx");
+        let paths = paths_from_dir(&dir);
+        std::fs::create_dir_all(&paths.automation_dir).unwrap();
+
+        // good health + incoming links + no verdict → determine_action falls back
+        // to "fix_indexing" (previously counted as no_action).
+        let ctx = dummy_target_ctx("good", 5, true, "not_indexed_other");
+        let contexts_doc = serde_json::json!({ "targets": [serde_json::to_value(&ctx).unwrap()] });
+        std::fs::write(
+            paths.automation_dir.join("indexing_target_contexts.json"),
+            serde_json::to_string_pretty(&contexts_doc).unwrap(),
+        )
+        .unwrap();
+
+        let task = dummy_task();
+        let result = exec_ihc_reduce_plan(&task, dir.to_str().unwrap());
+        assert!(result.success, "reduce failed: {}", result.message);
+
+        let plan: IndexingCampaignPlan =
+            serde_json::from_str(&result.output.expect("plan output")).unwrap();
+        assert_eq!(plan.summary.fix_indexing, 1);
+        assert_eq!(plan.summary.no_action, 0);
+        assert_eq!(plan.targets[0].recommended_action, "fix_indexing");
+        assert!(result.message.contains("1 fix_indexing"));
+    }
+
+    #[test]
+    fn summary_deserializes_without_fix_indexing_field() {
+        // Plans written before the fix_indexing field existed must still parse.
+        let legacy = serde_json::json!({
+            "total_targets": 1,
+            "fix_content": 0,
+            "add_links": 0,
+            "merge": 0,
+            "rewrite_title_h1": 0,
+            "no_action": 1
+        });
+        let summary: IndexingCampaignSummary = serde_json::from_value(legacy).unwrap();
+        assert_eq!(summary.fix_indexing, 0);
+        assert_eq!(summary.no_action, 1);
+    }
+
     // ─── PrerequisiteReport serialization tests ─────────────────────────────────
 
     #[test]
@@ -525,6 +593,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
                 add_links: 0,
                 merge: 0,
                 rewrite_title_h1: 1,
+                fix_indexing: 0,
                 no_action: 0,
             },
         };
