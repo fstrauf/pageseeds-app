@@ -15,7 +15,10 @@ use super::*;
 
 #[cfg(test)]
 mod tests {
-    use super::extract_sections::{pack_redirect_batches, MAX_PAGES_PER_BATCH};
+    use super::draft_patch::assemble_merge_prompt;
+    use super::extract_sections::{
+        cap_keeper_outline, merge_batch_byte_budget, pack_redirect_batches, MAX_PAGES_PER_BATCH,
+    };
     use super::*;
 
     #[test]
@@ -352,6 +355,7 @@ A: Because.
             tables: vec![],
             examples: vec![],
             faqs: vec![],
+            truncation_note: None,
         }
     }
 
@@ -361,7 +365,7 @@ A: Because.
             .map(|i| redirect_page(&format!("/blog/page-{}", i), 10, vec![]))
             .collect();
 
-        let batches = pack_redirect_batches(pages);
+        let batches = pack_redirect_batches(pages, 12_000);
 
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].len(), MAX_PAGES_PER_BATCH);
@@ -396,11 +400,198 @@ A: Because.
             })
             .collect();
 
-        let batches = pack_redirect_batches(pages);
+        let batches = pack_redirect_batches(pages, 12_000);
 
-        // Two 7KB pages exceed the 12KB budget → one page per batch.
+        // Two 7KB pages exceed a 12KB budget → one page per batch.
         assert_eq!(batches.len(), 3);
         assert!(batches.iter().all(|b| b.len() == 1));
+    }
+
+    #[test]
+    fn test_merge_batch_byte_budget_accounts_for_overhead() {
+        let target = crate::config::prompt_budget::default_prompt_budget().target;
+        // No content overhead → only the fixed prompt-assembly margin (1_024)
+        // is reserved; the rest of the target budget is available for batches.
+        assert_eq!(merge_batch_byte_budget(0, 0, 0), target - 1_024);
+        // Overhead shrinks the batch budget one-for-one.
+        let budget = merge_batch_byte_budget(5_000, 2_000, 1_500);
+        assert_eq!(budget, target - 5_000 - 2_000 - 1_500 - 1_024);
+        // Absurd overhead hits the floor instead of underflowing to zero.
+        assert_eq!(merge_batch_byte_budget(usize::MAX / 2, 0, 0), 4_000);
+    }
+
+    #[test]
+    fn test_cap_keeper_outline_caps_entries_and_marks_omission() {
+        let outline: Vec<OutlineHeading> = (0..150)
+            .map(|i| OutlineHeading {
+                level: 2,
+                text: format!("Heading {}", i),
+            })
+            .collect();
+
+        let capped = cap_keeper_outline(outline);
+
+        // 100 real headings + one marker.
+        assert_eq!(capped.len(), 101);
+        let marker = &capped[capped.len() - 1];
+        assert!(
+            marker.text.contains("keeper outline truncated: 50 more heading(s) omitted"),
+            "marker must record the omission: {}",
+            marker.text
+        );
+    }
+
+    #[test]
+    fn test_cap_keeper_outline_caps_bytes() {
+        let outline: Vec<OutlineHeading> = (0..50)
+            .map(|i| OutlineHeading {
+                level: 3,
+                text: format!("{:03} {}", i, "x".repeat(200)),
+            })
+            .collect();
+
+        let capped = cap_keeper_outline(outline);
+
+        assert!(capped.len() < 51, "byte cap must drop headings");
+        assert!(capped[capped.len() - 1].text.contains("keeper outline truncated"));
+    }
+
+    #[test]
+    fn test_pack_redirect_batches_truncates_oversized_single_page() {
+        // One page with a giant table plus a long unique section body —
+        // far over any realistic per-page budget on its own.
+        let mut table = String::from("| Col A | Col B |\n|-------|-------|\n");
+        for i in 0..500 {
+            table.push_str(&format!("| row {:04} | value {:04} |\n", i, i));
+        }
+        let mut page = redirect_page(
+            "/blog/huge",
+            5000,
+            vec![MergeSection {
+                level: 2,
+                text: "Deep Dive".to_string(),
+                body: "unique insight ".repeat(500),
+                covered_by_keeper: false,
+            }],
+        );
+        page.tables.push(MergeTable { markdown: table });
+
+        let batches = pack_redirect_batches(vec![page], 4_000);
+
+        assert_eq!(batches.len(), 1);
+        let page = &batches[0][0];
+        let bytes = serde_json::to_string(page).unwrap().len();
+        assert!(
+            bytes <= 4_000,
+            "oversized page must be truncated to fit the budget, got {} bytes",
+            bytes
+        );
+        // Truncation is visible: what was cut and why.
+        let note = page.truncation_note.as_ref().expect("truncation_note must be set");
+        assert!(note.contains("merge batch budget"), "note explains why: {}", note);
+        assert!(note.contains("table row(s)"), "note records cut rows: {}", note);
+        // Table keeps its header verbatim and carries a summary marker.
+        assert!(page.tables[0].markdown.contains("| Col A | Col B |"));
+        assert!(page.tables[0].markdown.contains("[…table truncated:"));
+    }
+
+    #[test]
+    fn test_extract_sections_large_cluster_batches_within_shared_budget() {
+        let project = TempProject::new("extract_large_cluster");
+        project.write_content_file(
+            "001_keeper.mdx",
+            "---\ntitle: Keeper\n---\n\n## Overview\n\nKeeper overview text.\n",
+        );
+        // Six content-rich redirect pages: ~9 KB of unique body each →
+        // ~54 KB of extracted redirect content, well past the old 20 KB guard.
+        let body_9k = "unique analysis paragraph. ".repeat(330); // ~9 KB
+        let mut redirect_urls = Vec::new();
+        for i in 0..6 {
+            let slug = format!("redirect-{}", i);
+            let mdx = format!(
+                "---\ntitle: Redirect {}\n---\n\n## Unique Data {}\n\n{}\n",
+                i, i, body_9k
+            );
+            project.write_content_file(&format!("00{}_{}.mdx", i + 2, slug.replace('-', "_")), &mdx);
+            redirect_urls.push(format!("/blog/{}", slug));
+        }
+
+        let strategy = serde_json::json!({
+            "merge_recommendations": [{
+                "cluster_id": "test",
+                "keep_url": "/blog/keeper",
+                "redirect_urls": redirect_urls
+            }]
+        });
+        let task = Task {
+            title: Some("Merge cluster: test".to_string()),
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "cannibalization_strategy".to_string(),
+                path: None,
+                artifact_type: None,
+                source: None,
+                content: Some(strategy.to_string()),
+            }],
+            ..Task::default()
+        };
+
+        let result = exec_merge_extract_sections(&task, project.path().to_str().unwrap());
+        assert!(result.success, "extract should succeed: {}", result.message);
+        let output = result.output.unwrap();
+
+        let context: MergeContext = serde_json::from_str(&output).unwrap();
+        assert_eq!(context.total_redirects, 6);
+        assert!(
+            context.batch_count >= 2,
+            "40KB+ of redirect content must be split across batches, got {}",
+            context.batch_count
+        );
+        assert_eq!(context.batch_count, context.batches.len());
+        let extracted_bytes: usize = context
+            .batches
+            .iter()
+            .flat_map(|b| b.redirect_pages.iter())
+            .map(|p| serde_json::to_string(p).unwrap().len())
+            .sum();
+        assert!(
+            extracted_bytes > 40_000,
+            "synthetic cluster should exceed 40 KB, got {} bytes",
+            extracted_bytes
+        );
+        // No page needed truncation: pages fit the overhead-aware budget.
+        assert!(
+            context
+                .batches
+                .iter()
+                .flat_map(|b| b.redirect_pages.iter())
+                .all(|p| p.truncation_note.is_none()),
+            "batched pages must not be truncated"
+        );
+
+        // Every assembled round prompt stays under the shared hard budget.
+        let skill = crate::engine::skills::load_skill_or_fail(project.path(), "merge-content")
+            .expect("embedded merge-content skill");
+        let hard = crate::config::prompt_budget::default_prompt_budget().hard;
+        for batch in &context.batches {
+            let round_context = serde_json::to_string(&MergeRoundContext {
+                keeper_file: &context.keeper_file,
+                keeper_outline: &context.keeper_outline,
+                keeper_excerpt: &context.keeper_excerpt,
+                total_redirects: context.total_redirects,
+                batch_count: context.batch_count,
+                batch_index: batch.batch_index,
+                redirect_pages: &batch.redirect_pages,
+            })
+            .unwrap();
+            let prompt = assemble_merge_prompt(&skill.content, &round_context);
+            assert!(
+                prompt.len() <= hard,
+                "batch {} prompt ({} bytes) exceeds shared hard budget ({} bytes)",
+                batch.batch_index,
+                prompt.len(),
+                hard
+            );
+        }
     }
 
     #[test]

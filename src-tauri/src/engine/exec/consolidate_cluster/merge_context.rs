@@ -53,6 +53,11 @@ pub(crate) struct RedirectPage {
     pub tables: Vec<MergeTable>,
     pub examples: Vec<MergeExample>,
     pub faqs: Vec<MergeFaq>,
+    /// Set when the page alone exceeded the merge batch budget and was
+    /// deterministically truncated. Records what was cut and why, so the
+    /// reduction is visible in the merge context the agent receives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation_note: Option<String>,
 }
 
 /// One batch of redirect pages, drafted and applied as a single round.

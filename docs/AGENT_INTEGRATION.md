@@ -50,8 +50,9 @@ The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds
 
 ### Current Providers
 
-- **Kimi Bridge** — HTTP bridge to Kimi (preferred for complex tasks)
+- **Kimi CLI** — native `kimi -p` subprocess (default Kimi backend, no prompt size cap)
 - **Direct providers** — OpenAI, Claude, etc. via Rig
+- **Kimi Bridge** — HTTP bridge to Kimi (legacy, opt-in)
 - **Legacy CLI fallback** — `kimi` / `copilot` binaries via `agent-wrapper` (kept for compatibility)
 
 ### Provider Selection
@@ -64,7 +65,7 @@ Provider is resolved from:
 
 The resolved provider string is passed to `engine::agent::run_agent`.
 
-For Kimi specifically, the global `kimi_backend_mode` setting controls whether the bridge or direct CLI is used.
+For Kimi specifically, the global `kimi_backend_mode` setting controls which backend is used: `"cli"` (the default) spawns `kimi -p` directly and enforces no prompt byte cap; `"bridge"` is legacy/opt-in and its retired 20 KB prompt limit no longer applies anywhere in the live pipeline — prompt sizes are governed by the shared 80 KB target / 90 KB hard budget (`config/prompt_budget.rs`).
 
 ---
 

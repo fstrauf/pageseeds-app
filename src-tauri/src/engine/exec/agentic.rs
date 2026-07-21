@@ -374,19 +374,12 @@ fn kimi_backend_preference_for_step(task: &Task, _step: &WorkflowStep) -> Option
 // Prompt budget preflight
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct PromptBudget {
-    target: usize,
-    hard: usize,
-}
+use crate::config::prompt_budget::{default_prompt_budget, PromptBudget};
 
 fn default_budget_for_backend(_backend_preference: Option<&str>) -> PromptBudget {
-    // Defaults mirror the Kimi bridge limits until health data is wired.
-    // Bridge hard limit is 100 KB based on live evidence (reddit_enrich ~25 KB,
-    // CTR audit ~46 KB). Target leaves headroom for JSON/preamble overhead.
-    PromptBudget {
-        target: 80 * 1024,
-        hard: 90 * 1024,
-    }
+    // Single shared budget (80 KB target / 90 KB hard) until per-backend
+    // health data is wired.
+    default_prompt_budget()
 }
 
 fn estimate_prompt_bytes(prompt: &str) -> usize {
