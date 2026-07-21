@@ -143,7 +143,7 @@ pub fn calculate_fixes(articles: &[Article]) -> DateFixResult {
     }
 
     // Collect occupied dates from articles we're NOT touching
-    let occupied: std::collections::HashSet<NaiveDate> = articles
+    let mut occupied: std::collections::HashSet<NaiveDate> = articles
         .iter()
         .filter(|a| !bad_ids.contains(&a.id))
         .filter_map(|a| a.published_date.as_deref())
@@ -154,13 +154,15 @@ pub fn calculate_fixes(articles: &[Article]) -> DateFixResult {
     // from yesterday.
     let mut cursor = today - Duration::days(1);
     let mut assigned: Vec<(i64, NaiveDate)> = Vec::new();
-
+    // Each assignment is inserted into `occupied` as well, so the walk stays
+    // O(n) without a linear scan of `assigned` per iteration.
     for &id in bad_ids.iter().rev() {
         // Find a free date
-        while occupied.contains(&cursor) || assigned.iter().any(|(_, d)| *d == cursor) {
+        while occupied.contains(&cursor) {
             cursor -= Duration::days(1);
         }
         assigned.push((id, cursor));
+        occupied.insert(cursor);
         cursor -= Duration::days(1);
     }
 
