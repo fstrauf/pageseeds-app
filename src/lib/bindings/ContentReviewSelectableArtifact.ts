@@ -6,4 +6,8 @@ import type { DroppedProposal } from "./DroppedProposal";
  * Validated proposal list stored on the parent task after content_review.
  * Cap of 5 proposals is enforced by `engine::content_review_selection`.
  */
-export type ContentReviewSelectableArtifact = { findings_summary: string | null, proposals: Array<ContentReviewProposal>, dropped: Array<DroppedProposal>, source: string, };
+export type ContentReviewSelectableArtifact = { findings_summary?: string | null, proposals: Array<ContentReviewProposal>, dropped: Array<DroppedProposal>, 
+/**
+ * Source of the proposals: `"recommendations"` | `"investigation"` | etc.
+ */
+source: string, };

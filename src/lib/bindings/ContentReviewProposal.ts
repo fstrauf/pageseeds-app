@@ -4,4 +4,13 @@ import type { JsonValue } from "./serde_json/JsonValue";
 /**
  * A single validated follow-up proposal the user can select in the picker.
  */
-export type ContentReviewProposal = { id: string, task_type: string, title: string, description: string | null, params: JsonValue, idempotency_key: string, priority: string | null, };
+export type ContentReviewProposal = { 
+/**
+ * Stable selection id (e.g. `fix_content_article:{article_id}`).
+ */
+id: string, task_type: string, title: string, description?: string | null, 
+/**
+ * Spawn payload (article_id, article_title, article_file, url_slug,
+ * target_keyword, suggestions, priority).
+ */
+params: JsonValue, idempotency_key: string, priority?: string | null, };

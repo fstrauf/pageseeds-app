@@ -3,4 +3,4 @@
 /**
  * A raw proposal that failed validation, with the reason recorded for the UI.
  */
-export type DroppedProposal = { reason: string, task_type: string | null, detail: string | null, };
+export type DroppedProposal = { reason: string, task_type?: string | null, detail?: string | null, };
