@@ -209,8 +209,30 @@ fn sample_recs(ids: &[i64]) -> ContentReviewRecommendations {
     }
 }
 
-fn persist_parent(conn: &Connection, parent: &Task) {
-    task_store::create_task(conn, parent).unwrap();
+/// Persist a parent fixture via TaskSpawner (canonical create path).
+/// Returns the stored task (new id; status set to match the fixture).
+fn persist_parent(conn: &Connection, parent: &Task) -> Task {
+    use crate::engine::spawner::{TaskSpawner, TaskSpec};
+    let created = TaskSpawner::spawn(
+        conn,
+        TaskSpec {
+            project_id: parent.project_id.clone(),
+            task_type: parent.task_type.clone(),
+            title: parent.title.clone(),
+            description: parent.description.clone(),
+            phase: Some(parent.phase.clone()),
+            run_policy: Some(parent.run_policy),
+            review_surface: Some(parent.review_surface),
+            follow_up_policy: Some(parent.follow_up_policy),
+            priority: parent.priority.clone(),
+            agent_policy: parent.agent_policy.clone(),
+            artifacts: parent.artifacts.clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    task_store::update_task_status(conn, &created.id, parent.status).unwrap();
+    task_store::get_task(conn, &created.id).unwrap()
 }
 
 fn write_recommendations(project_dir: &Path, recommendations: serde_json::Value) {
@@ -242,8 +264,8 @@ fn build_and_spawn_all(
     parent: &Task,
     project_path: &str,
 ) -> Vec<Task> {
-    persist_parent(conn, parent);
-    let art = build_and_store_proposals_artifact(conn, parent, project_path).unwrap();
+    let parent = persist_parent(conn, parent);
+    let art = build_and_store_proposals_artifact(conn, &parent, project_path).unwrap();
     let ids: Vec<String> = art.proposals.iter().map(|p| p.id.clone()).collect();
     if ids.is_empty() {
         return Vec::new();
@@ -413,8 +435,7 @@ fn build_and_store_from_disk_recommendations() {
     )
     .unwrap();
 
-    let parent = make_parent("proj1", vec![]);
-    persist_parent(&conn, &parent);
+    let parent = persist_parent(&conn, &make_parent("proj1", vec![]));
 
     let art = build_and_store_proposals_artifact(&conn, &parent, &path).unwrap();
     assert_eq!(art.proposals.len(), 1);
@@ -447,17 +468,19 @@ fn build_and_store_prefers_step_artifact_over_disk() {
     .unwrap();
 
     let step_recs = sample_recs(&[99]);
-    let parent = make_parent(
-        "proj1",
-        vec![TaskArtifact {
-            key: "content_review_recommend".to_string(),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some("content_review_recommend".to_string()),
-            content: Some(serde_json::to_string(&step_recs).unwrap()),
-        }],
+    let parent = persist_parent(
+        &conn,
+        &make_parent(
+            "proj1",
+            vec![TaskArtifact {
+                key: "content_review_recommend".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("content_review_recommend".to_string()),
+                content: Some(serde_json::to_string(&step_recs).unwrap()),
+            }],
+        ),
     );
-    persist_parent(&conn, &parent);
 
     let art = build_and_store_proposals_artifact(&conn, &parent, &path).unwrap();
     assert_eq!(art.proposals.len(), 1);
@@ -474,17 +497,19 @@ fn selection_rejects_unknown_proposal_id() {
     let recs = sample_recs(&[1]);
     let raw = normalize_recommendations_to_proposals(&recs, "proj1");
     let selectable = validate_proposals(&conn, "proj1", raw, "recommendations", None);
-    let parent = make_parent(
-        "proj1",
-        vec![TaskArtifact {
-            key: CONTENT_REVIEW_PROPOSALS_KEY.to_string(),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some("recommendations".to_string()),
-            content: Some(serde_json::to_string(&selectable).unwrap()),
-        }],
+    let parent = persist_parent(
+        &conn,
+        &make_parent(
+            "proj1",
+            vec![TaskArtifact {
+                key: CONTENT_REVIEW_PROPOSALS_KEY.to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("recommendations".to_string()),
+                content: Some(serde_json::to_string(&selectable).unwrap()),
+            }],
+        ),
     );
-    persist_parent(&conn, &parent);
 
     let err = spawn_from_selection(&conn, &parent.id, &["not-a-real-id".to_string()])
         .unwrap_err();
@@ -505,17 +530,19 @@ fn selection_spawns_and_marks_parent_done() {
     assert_eq!(selectable.proposals.len(), 1);
     let proposal_id = selectable.proposals[0].id.clone();
 
-    let parent = make_parent(
-        "proj1",
-        vec![TaskArtifact {
-            key: CONTENT_REVIEW_PROPOSALS_KEY.to_string(),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some("recommendations".to_string()),
-            content: Some(serde_json::to_string(&selectable).unwrap()),
-        }],
+    let parent = persist_parent(
+        &conn,
+        &make_parent(
+            "proj1",
+            vec![TaskArtifact {
+                key: CONTENT_REVIEW_PROPOSALS_KEY.to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("recommendations".to_string()),
+                content: Some(serde_json::to_string(&selectable).unwrap()),
+            }],
+        ),
     );
-    persist_parent(&conn, &parent);
 
     let created = spawn_from_selection(&conn, &parent.id, &[proposal_id.clone()]).unwrap();
     assert_eq!(created.len(), 1);
@@ -547,17 +574,19 @@ fn selection_is_idempotent_on_rerun() {
     let selectable = validate_proposals(&conn, "proj1", raw, "recommendations", None);
     let proposal_id = selectable.proposals[0].id.clone();
 
-    let parent = make_parent(
-        "proj1",
-        vec![TaskArtifact {
-            key: CONTENT_REVIEW_PROPOSALS_KEY.to_string(),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some("recommendations".to_string()),
-            content: Some(serde_json::to_string(&selectable).unwrap()),
-        }],
+    let parent = persist_parent(
+        &conn,
+        &make_parent(
+            "proj1",
+            vec![TaskArtifact {
+                key: CONTENT_REVIEW_PROPOSALS_KEY.to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("recommendations".to_string()),
+                content: Some(serde_json::to_string(&selectable).unwrap()),
+            }],
+        ),
     );
-    persist_parent(&conn, &parent);
 
     let first = spawn_from_selection(&conn, &parent.id, &[proposal_id.clone()]).unwrap();
     assert_eq!(first.len(), 1);
@@ -596,8 +625,7 @@ fn after_task_success_stores_proposals_without_spawning() {
     )
     .unwrap();
 
-    let parent = make_parent("proj1", vec![]);
-    persist_parent(&conn, &parent);
+    let parent = persist_parent(&conn, &make_parent("proj1", vec![]));
 
     let _follow_ups = crate::engine::post_actions::after_task_success(
         &crate::engine::post_actions::PostTaskContext {
@@ -807,8 +835,7 @@ fn selection_skips_invalid_and_duplicate_article_ids() {
         }),
     );
 
-    let parent = make_parent("proj1", vec![]);
-    persist_parent(&conn, &parent);
+    let parent = persist_parent(&conn, &make_parent("proj1", vec![]));
     let art = build_and_store_proposals_artifact(&conn, &parent, &project_path).unwrap();
     // Missing article_id is skipped at parse; same article_id yields the same
     // proposal id, so the duplicate is dropped as duplicate_id at validate.
