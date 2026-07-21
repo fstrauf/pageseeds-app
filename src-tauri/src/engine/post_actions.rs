@@ -9,7 +9,7 @@ use crate::engine::task_store;
 use crate::engine::workflows::StepResult;
 use crate::engine::workflows::{StepKind, WorkflowStep};
 use crate::models::ctr::CtrOutcome;
-use crate::models::task::Task;
+use crate::models::task::{Task, TaskStatus};
 
 // ─── Post-step context ───────────────────────────────────────────────────────
 
@@ -637,6 +637,62 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
     retry_blocked_ihc_tasks(ctx, &mut follow_up_ids);
 
     follow_up_ids
+}
+
+/// Run domain-specific side effects after a task completes with one or more
+/// failed steps (`all_ok == false`). Symmetric counterpart to
+/// [`after_task_success`]; the executor calls it from the failure branch.
+pub fn after_task_failure(ctx: &PostTaskContext<'_>) {
+    // A failed fix_content_article (soft-failed verification lands the task in
+    // Review, so after_task_success never runs) must release the article's
+    // in_review flag — otherwise the article is permanently excluded from
+    // select_priority_articles and silently leaves the review pipeline.
+    if ctx.task.task_type == "fix_content_article" {
+        if let Err(e) = crate::engine::exec::content::release_fix_content_article_in_review(
+            ctx.conn,
+            ctx.task,
+            ctx.project_path,
+        ) {
+            log::warn!(
+                "[content_review] failed to release article in_review after fix failure: {}",
+                e
+            );
+        }
+    }
+}
+
+/// Cancel a task and run domain-specific cancel side effects.
+///
+/// A cancelled fix_content_article releases the article's in_review flag for
+/// the same reason as [`after_task_failure`]. The release helper is a no-op
+/// when the article is no longer `in_review` (e.g. another fix already
+/// succeeded and marked it `reviewed`).
+pub fn cancel_task(conn: &Connection, task_id: &str) -> crate::error::Result<Task> {
+    let task = task_store::update_task_status(conn, task_id, TaskStatus::Cancelled)?;
+
+    if task.task_type == "fix_content_article" {
+        let project_path: Option<String> = conn
+            .query_row(
+                "SELECT path FROM projects WHERE id = ?1",
+                [&task.project_id],
+                |row| row.get(0),
+            )
+            .ok();
+        if let Some(project_path) = project_path {
+            if let Err(e) = crate::engine::exec::content::release_fix_content_article_in_review(
+                conn,
+                &task,
+                &project_path,
+            ) {
+                log::warn!(
+                    "[content_review] failed to release article in_review after cancel: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    Ok(task)
 }
 
 /// When a helper task (collect_gsc, cluster_and_link, content_audit) completes,
