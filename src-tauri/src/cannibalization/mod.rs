@@ -150,14 +150,11 @@ pub fn record_merge_recommendation(
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_else(|| {
-            serde_json::json!({
-                "generated_at": chrono::Utc::now().to_rfc3339(),
-                "merge_recommendations": [],
-                "hub_recommendations": [],
-                "territory_recommendations": [],
-                "calculator_recommendations": [],
-                "risks": [],
+            serde_json::to_value(CannibalizationStrategy {
+                generated_at: chrono::Utc::now().to_rfc3339(),
+                ..Default::default()
             })
+            .unwrap_or_else(|_| serde_json::json!({}))
         });
 
     // Ensure the merge_recommendations array exists (tolerate missing/invalid).
