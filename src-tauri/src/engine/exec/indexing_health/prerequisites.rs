@@ -145,11 +145,7 @@ pub(crate) fn exec_ihc_check_prerequisites(task: &Task, project_path: &str) -> S
     let output = match serde_json::to_string_pretty(&report) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize prerequisite report: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to serialize prerequisite report: {}", e))
         }
     };
 
@@ -160,14 +156,10 @@ pub(crate) fn exec_ihc_check_prerequisites(task: &Task, project_path: &str) -> S
 
     if !stale_user.is_empty() {
         let names: Vec<String> = stale_user.iter().map(|c| c.artifact.clone()).collect();
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "User action required before campaign can run: {}",
                 names.join(", ")
-            ),
-            output: Some(output),
-        };
+            ), output);
     }
 
     if !helpers.is_empty() {
@@ -175,15 +167,11 @@ pub(crate) fn exec_ihc_check_prerequisites(task: &Task, project_path: &str) -> S
             .iter()
             .map(|(id, ty, status)| format!("  • {} ({}) — status: {}", id, ty, status))
             .collect();
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail_with_output(format!(
                 "Waiting for {} helper task(s) to complete before campaign can run:\n{}",
                 helpers.len(),
                 helper_lines.join("\n")
-            ),
-            output: Some(output),
-        };
+            ), output);
     }
 
     let msg = match cluster_helper {

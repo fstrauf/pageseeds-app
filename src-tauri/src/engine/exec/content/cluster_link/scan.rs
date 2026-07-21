@@ -51,11 +51,7 @@ pub(crate) fn exec_cluster_link_scan(
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to open app database: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to open app database: {}", e))
         }
     };
 
@@ -65,11 +61,7 @@ pub(crate) fn exec_cluster_link_scan(
             .filter(|a| !a.file.is_empty())
             .collect::<Vec<_>>(),
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to load articles from DB: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to load articles from DB: {}", e))
         }
     };
 
@@ -90,12 +82,8 @@ pub(crate) fn exec_cluster_link_scan(
     let content_dir = match resolution.selected {
         Some(d) => d,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "Could not locate content directory — set content_dir in project config"
-                    .to_string(),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail("Could not locate content directory — set content_dir in project config"
+                    .to_string())
         }
     };
 
@@ -142,11 +130,7 @@ pub(crate) fn exec_cluster_link_scan(
                 output: Some(json),
             }
         }
-        Err(e) => crate::engine::workflows::StepResult {
-            success: false,
-            message: format!("Link scan failed: {}", e),
-            output: None,
-        },
+        Err(e) => crate::engine::workflows::StepResult::fail(format!("Link scan failed: {}", e)),
     }
 }
 

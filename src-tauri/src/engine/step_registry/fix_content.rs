@@ -64,11 +64,7 @@ pub(super) fn register(handlers: &mut HashMap<StepKind, HandlerFn>) {
                         )
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         );
@@ -86,11 +82,7 @@ pub(super) fn register(handlers: &mut HashMap<StepKind, HandlerFn>) {
                         )
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         );
@@ -151,11 +143,7 @@ pub(super) fn register(handlers: &mut HashMap<StepKind, HandlerFn>) {
                         )
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         );
@@ -189,11 +177,7 @@ pub(super) fn register(handlers: &mut HashMap<StepKind, HandlerFn>) {
                         )
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         );
@@ -278,11 +262,7 @@ pub(super) fn register(handlers: &mut HashMap<StepKind, HandlerFn>) {
                         )
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         );

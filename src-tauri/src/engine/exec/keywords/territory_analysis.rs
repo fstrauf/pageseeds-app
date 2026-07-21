@@ -33,11 +33,7 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to open DB: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to open DB: {}", e));
         }
     };
 
@@ -45,11 +41,7 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
     let articles = match load_articles_with_gsc(&conn, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load articles: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load articles: {}", e));
         }
     };
 

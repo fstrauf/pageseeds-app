@@ -24,11 +24,7 @@ pub(crate) fn exec_fix_content_article_apply(
     };
 
     if let Some(error) = patch.error.as_ref() {
-        return StepResult {
-            success: false,
-            message: format!("Agent reported error: {}", error),
-            output: None,
-        };
+        return StepResult::fail(format!("Agent reported error: {}", error));
     }
 
     let repo_root = Path::new(project_path);
@@ -36,36 +32,24 @@ pub(crate) fn exec_fix_content_article_apply(
         match crate::engine::exec::audit_health::resolve_content_file(repo_root, &patch.file) {
             Some(p) => p,
             None => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "File not found: {}. Run sanitize_content to repair paths.",
                         patch.file
-                    ),
-                    output: None,
-                };
+                    ));
             }
         };
 
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(_e) => {
-            return StepResult {
-                success: false,
-                message: format!("File not found: {}", file_path.display()),
-                output: None,
-            };
+            return StepResult::fail(format!("File not found: {}", file_path.display()));
         }
     };
 
     let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
         Some((f, b)) => (f.to_string(), b.to_string()),
         None => {
-            return StepResult {
-                success: false,
-                message: "Could not parse frontmatter from MDX file".to_string(),
-                output: None,
-            };
+            return StepResult::fail("Could not parse frontmatter from MDX file".to_string());
         }
     };
 
@@ -170,25 +154,17 @@ pub(crate) fn exec_fix_content_article_apply(
     // Write
     if let Err(e) = std::fs::write(&file_path, &new_content) {
         let _ = std::fs::remove_file(&snapshot_path);
-        return StepResult {
-            success: false,
-            message: format!("Failed to write file: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write file: {}", e));
     }
 
     // Validate
     if let Err(e) = crate::content::cleaner::validate_mdx_structure(&new_content) {
         // Restore snapshot
         let _ = std::fs::rename(&snapshot_path, &file_path);
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Applied changes produced invalid MDX structure: {}. Original restored.",
                 e
-            ),
-            output: None,
-        };
+            ));
     }
 
     // Clean up snapshot on success
@@ -245,14 +221,10 @@ fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<ContentFixPatc
             match serde_json::from_str::<ContentFixPatch>(content) {
                 Ok(p) => return Ok(p),
                 Err(e) => {
-                    return Err(StepResult {
-                        success: false,
-                        message: format!(
+                    return Err(StepResult::fail_with_output(format!(
                             "content_fix_patch artifact exists but is invalid JSON: {}",
                             e
-                        ),
-                        output: Some(content.clone()),
-                    });
+                        ), content.clone()));
                 }
             }
         }
@@ -263,23 +235,15 @@ fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<ContentFixPatc
         match serde_json::from_str::<ContentFixPatch>(raw) {
             Ok(p) => return Ok(p),
             Err(e) => {
-                return Err(StepResult {
-                    success: false,
-                    message: format!(
+                return Err(StepResult::fail_with_output(format!(
                         "latest_raw is not a valid ContentFixPatch JSON: {}",
                         e
-                    ),
-                    output: Some(raw.to_string()),
-                });
+                    ), raw.to_string()));
             }
         }
     }
 
-    Err(StepResult {
-        success: false,
-        message: "No content_fix_patch artifact or latest_raw found. \
+    Err(StepResult::fail("No content_fix_patch artifact or latest_raw found. \
              Run the generate step first."
-            .to_string(),
-        output: None,
-    })
+            .to_string()))
 }

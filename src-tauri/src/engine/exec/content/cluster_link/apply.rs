@@ -61,11 +61,7 @@ pub(crate) fn exec_cluster_link_apply(
     let content_dir = match resolution.selected {
         Some(d) => d,
         None => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: "Could not locate content directory".to_string(),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail("Could not locate content directory".to_string())
         }
     };
 

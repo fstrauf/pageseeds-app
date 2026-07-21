@@ -28,11 +28,7 @@ pub(crate) fn exec_gsc_sync_articles(
         .map(|(v, _)| v)
     {
         Some(p) => p,
-        None => return StepResult {
-            success: false,
-            message: "GSC_SERVICE_ACCOUNT_PATH not configured — add it to ~/.config/automation/secrets.env".to_string(),
-            output: None,
-        },
+        None => return StepResult::fail("GSC_SERVICE_ACCOUNT_PATH not configured — add it to ~/.config/automation/secrets.env".to_string()),
     };
 
     // 2. Token - Always mint fresh from service account when available
@@ -50,18 +46,10 @@ pub(crate) fn exec_gsc_sync_articles(
     let token = match token_result {
         Ok(Ok(t)) => t,
         Ok(Err(e)) => {
-            return StepResult {
-                success: false,
-                message: format!("GSC auth failed: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("GSC auth failed: {}", e))
         }
         Err(_) => {
-            return StepResult {
-                success: false,
-                message: "GSC auth thread panicked".to_string(),
-                output: None,
-            }
+            return StepResult::fail("GSC auth thread panicked".to_string())
         }
     };
 
@@ -69,22 +57,14 @@ pub(crate) fn exec_gsc_sync_articles(
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to open app database: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to open app database: {}", e));
         }
     };
 
     let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load articles from DB: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to load articles from DB: {}", e));
         }
     };
 
@@ -103,12 +83,8 @@ pub(crate) fn exec_gsc_sync_articles(
         match from_manifest {
             Some(u) => u,
             None => {
-                return StepResult {
-                    success: false,
-                    message: "No site_url found in manifest.json — add 'url' or 'gsc_site' field"
-                        .to_string(),
-                    output: None,
-                }
+                return StepResult::fail("No site_url found in manifest.json — add 'url' or 'gsc_site' field"
+                        .to_string())
             }
         }
     };
@@ -159,18 +135,10 @@ pub(crate) fn exec_gsc_sync_articles(
         match fetch_result {
             Ok(Ok((p, q))) => (p, q),
             Ok(Err(e)) => {
-                return StepResult {
-                    success: false,
-                    message: format!("GSC fetch failed: {}", e),
-                    output: None,
-                }
+                return StepResult::fail(format!("GSC fetch failed: {}", e))
             }
             Err(_) => {
-                return StepResult {
-                    success: false,
-                    message: "GSC fetch thread panicked".to_string(),
-                    output: None,
-                }
+                return StepResult::fail("GSC fetch thread panicked".to_string())
             }
         }
     };
@@ -457,11 +425,7 @@ pub(crate) fn exec_gsc_sync_articles(
         &task.project_id,
         std::path::Path::new(project_path),
     ) {
-        return StepResult {
-            success: false,
-            message: format!("GSC sync succeeded but projection export failed: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("GSC sync succeeded but projection export failed: {}", e));
     }
 
     // 10. Write the freshness marker consumed by the indexing-health
@@ -469,15 +433,11 @@ pub(crate) fn exec_gsc_sync_articles(
     // without the marker the gate fails closed and would keep re-spawning
     // collect_gsc forever.
     if let Err(e) = write_metrics_sync_marker(&paths) {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "GSC sync succeeded but failed to write the metrics freshness marker ({}): {}",
                 paths.automation_dir.join(super::GSC_METRICS_SYNC_MARKER).display(),
                 e
-            ),
-            output: None,
-        };
+            ));
     }
 
     let summary = serde_json::json!({

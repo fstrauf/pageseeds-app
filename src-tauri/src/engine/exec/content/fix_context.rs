@@ -22,11 +22,7 @@ pub(crate) fn exec_fix_content_article_context(
     let article_id = match super::fix_content_article_id(task) {
         Some(id) => id,
         None => {
-            return StepResult {
-                success: false,
-                message: "No article_id found in task artifacts".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No article_id found in task artifacts".to_string());
         }
     };
 
@@ -60,14 +56,10 @@ pub(crate) fn exec_fix_content_article_context(
     let article_rec = match article_rec {
         Some(a) => a,
         None => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "Article {} not found in task artifacts or recommendations.json",
                     article_id
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
@@ -90,25 +82,17 @@ pub(crate) fn exec_fix_content_article_context(
     let file_path = match crate::engine::exec::audit_health::resolve_content_file(repo_root, &file) {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "File not found: {}. Run sanitize_content to repair paths.",
                     file
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
     let file_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to read file {}: {}", file_path.display(), e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to read file {}: {}", file_path.display(), e));
         }
     };
 
@@ -124,11 +108,7 @@ pub(crate) fn exec_fix_content_article_context(
     let context_json = match serde_json::to_string_pretty(&context) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize context: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize context: {}", e));
         }
     };
 

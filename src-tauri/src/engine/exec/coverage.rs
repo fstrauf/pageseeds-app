@@ -17,22 +17,14 @@ pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> S
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to open app database: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to open app database: {}", e))
         }
     };
 
     let project = match task_store::get_project(&db, &task.project_id) {
         Ok(project) => project,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load project '{}': {}", task.project_id, e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load project '{}': {}", task.project_id, e))
         }
     };
 
@@ -40,20 +32,12 @@ pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> S
         let pages = match crate::live_site::list_live_site_pages(&db, &task.project_id) {
             Ok(pages) => pages,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Failed to load live-site inventory: {}", e),
-                    output: None,
-                }
+                return StepResult::fail(format!("Failed to load live-site inventory: {}", e))
             }
         };
 
         if pages.is_empty() {
-            return StepResult {
-                success: false,
-                message: "No live-site pages imported yet. Import the site before running coverage analysis.".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No live-site pages imported yet. Import the site before running coverage analysis.".to_string());
         }
 
         let page_summaries: Vec<serde_json::Value> = pages
@@ -92,11 +76,7 @@ pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> S
     let articles = match crate::content::article_index::list_articles(&db, &task.project_id) {
         Ok(a) => a,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load articles from DB: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load articles from DB: {}", e))
         }
     };
 
@@ -364,11 +344,7 @@ pub(crate) fn exec_coverage_cluster_analysis(
         Ok(v) => v,
         Err(e) => {
             log::error!("[coverage_cluster] Failed to parse articles JSON: {}", e);
-            return StepResult {
-                success: false,
-                message: format!("Failed to parse articles JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to parse articles JSON: {}", e));
         }
     };
 
@@ -396,11 +372,7 @@ pub(crate) fn exec_coverage_cluster_analysis(
     let raw_output = match crate::engine::agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(out) => out,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Agent failed: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Agent failed: {}", e))
         }
     };
 
@@ -419,11 +391,7 @@ pub(crate) fn exec_coverage_cluster_analysis(
 
     // Persist to keyword_coverage.json for future reference
     if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to create automation directory: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to create automation directory: {}", e));
     }
 
     let coverage_path = paths.automation_dir.join("keyword_coverage.json");
@@ -552,11 +520,7 @@ pub(crate) fn exec_coverage_save(_task: &Task, project_path: &str) -> StepResult
     let coverage_path = paths.automation_dir.join("keyword_coverage.json");
 
     if !coverage_path.exists() {
-        return StepResult {
-            success: false,
-            message: "keyword_coverage.json was not created".to_string(),
-            output: None,
-        };
+        return StepResult::fail("keyword_coverage.json was not created".to_string());
     }
 
     match std::fs::read_to_string(&coverage_path) {
@@ -593,18 +557,10 @@ pub(crate) fn exec_coverage_save(_task: &Task, project_path: &str) -> StepResult
                         output: Some(content),
                     }
                 }
-                Err(e) => StepResult {
-                    success: false,
-                    message: format!("Invalid JSON in keyword_coverage.json: {}", e),
-                    output: Some(content),
-                },
+                Err(e) => StepResult::fail_with_output(format!("Invalid JSON in keyword_coverage.json: {}", e), content),
             }
         }
-        Err(e) => StepResult {
-            success: false,
-            message: format!("Failed to read keyword_coverage.json: {}", e),
-            output: None,
-        },
+        Err(e) => StepResult::fail(format!("Failed to read keyword_coverage.json: {}", e)),
     }
 }
 

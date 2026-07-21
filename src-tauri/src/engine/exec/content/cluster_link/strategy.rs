@@ -48,11 +48,7 @@ pub(crate) fn exec_cluster_link_strategy(
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to open app database: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to open app database: {}", e))
         }
     };
 
@@ -62,11 +58,7 @@ pub(crate) fn exec_cluster_link_strategy(
             .filter(|a| !a.file.is_empty())
             .collect::<Vec<_>>(),
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to load articles from DB: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to load articles from DB: {}", e))
         }
     };
 
@@ -265,17 +257,13 @@ Requirements:
 
     const PROMPT_HARD_BUDGET: usize = 20_000;
     if prompt.len() > PROMPT_HARD_BUDGET {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!(
+        return crate::engine::workflows::StepResult::fail(format!(
                 "Prompt size ({} bytes) exceeds hard budget ({} bytes) for cluster_link_strategy. \
                  The link graph is too large. Try reducing the number of articles or running \
                  cluster_and_link in smaller batches.",
                 prompt.len(),
                 PROMPT_HARD_BUDGET
-            ),
-            output: None,
-        };
+            ));
     }
 
     // Detailed component-size logging so we can debug prompt bloat precisely.
@@ -327,11 +315,7 @@ Requirements:
     let raw_output = match crate::engine::agent::run_agent(agent_provider, &prompt, repo_root) {
         Ok(out) => out,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Agent failed: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Agent failed: {}", e))
         }
     };
 

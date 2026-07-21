@@ -117,21 +117,13 @@ pub(crate) fn exec_keyword_research_native(
     let db = match rusqlite::Connection::open(crate::db::default_db_path()) {
         Ok(conn) => conn,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to open app database: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to open app database: {}", e))
         }
     };
     let project = match crate::engine::task_store::get_project(&db, &task.project_id) {
         Ok(project) => project,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to load project '{}': {}", task.project_id, e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to load project '{}': {}", task.project_id, e))
         }
     };
     let is_live_site_project = project.project_mode == ProjectMode::LiveSite;
@@ -164,11 +156,7 @@ pub(crate) fn exec_keyword_research_native(
         match env.get("CAPSOLVER_API_KEY").map(|s| s.as_str()) {
             Some(k) if !k.is_empty() => Some(k.to_string()),
             _ => {
-                return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: "CAPSOLVER_API_KEY not set. Add it in Settings → Secrets.".to_string(),
-                    output: None,
-                };
+                return crate::engine::workflows::StepResult::fail("CAPSOLVER_API_KEY not set. Add it in Settings → Secrets.".to_string());
             }
         }
     } else {
@@ -226,16 +214,12 @@ pub(crate) fn exec_keyword_research_native(
     };
 
     if themes.is_empty() {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!(
+        return crate::engine::workflows::StepResult::fail(format!(
                 "No keyword themes found in seed extraction artifact. \
                  Step 1 (research_seed_extraction) must run first. \
                  Expected artifact key: research_seed_extraction. Workspace: {}.",
                 paths.automation_dir.display()
-            ),
-            output: None,
-        };
+            ));
     }
 
     log::info!(
@@ -267,13 +251,8 @@ pub(crate) fn exec_keyword_research_native(
         }
     };
     if !has_articles {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: "Workspace not initialised: no articles found in the app index. \
-                 Run 'Init Workspace' from Project Settings first."
-                .into(),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail("Workspace not initialised: no articles found in the app index. \
+                 Run 'Init Workspace' from Project Settings first.");
     }
 
     // Load existing keywords from SQLite so we can skip already-covered ones.
@@ -281,14 +260,10 @@ pub(crate) fn exec_keyword_research_native(
         match crate::live_site::list_live_site_pages(&db, &task.project_id) {
             Ok(pages) => super::collect_existing_keywords_from_live_site(&pages),
             Err(e) => {
-                return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: format!(
+                return crate::engine::workflows::StepResult::fail(format!(
                         "Failed to load live-site pages for keyword filtering: {}",
                         e
-                    ),
-                    output: None,
-                }
+                    ))
             }
         }
     } else {
@@ -321,15 +296,11 @@ pub(crate) fn exec_keyword_research_native(
     // Note: pending territory shortlist seeds are also not researched in this
     // case — they stay pending until the user refines the brief and re-runs.
     if is_dataforseo && matches!(validated_seeds, ValidatedSeeds::RejectedAll) {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!(
+        return crate::engine::workflows::StepResult::fail(format!(
                 "Seed validation rejected all {} extracted themes as off-domain. \
                  Refine the project brief (project.md) or re-run research with a more specific task description.",
                 themes.len()
-            ),
-            output: None,
-        };
+            ));
     }
 
     // ── Read pending territory shortlist entries ──────────────────────────────
@@ -746,18 +717,10 @@ pub(crate) fn exec_keyword_research_native(
         match thread_result {
             Ok(Ok(result)) => result,
             Ok(Err(e)) => {
-                return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: format!("Keyword research failed: {}", e),
-                    output: None,
-                };
+                return crate::engine::workflows::StepResult::fail(format!("Keyword research failed: {}", e));
             }
             Err(_) => {
-                return crate::engine::workflows::StepResult {
-                    success: false,
-                    message: "Keyword research thread panicked".to_string(),
-                    output: None,
-                };
+                return crate::engine::workflows::StepResult::fail("Keyword research thread panicked".to_string());
             }
         };
 
@@ -772,14 +735,10 @@ pub(crate) fn exec_keyword_research_native(
     }
 
     if total_candidates == 0 {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!(
+        return crate::engine::workflows::StepResult::fail(format!(
                 "No new keyword ideas found for themes: {}. All suggestions may already be covered.",
                 themes.join(", ")
-            ),
-            output: None,
-        };
+            ));
     }
 
     // Present with-data results first, then append no-data results so the

@@ -417,11 +417,7 @@ pub(crate) async fn exec_content_review_recommend(
         .collect();
 
     if contexts.is_empty() {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: "Could not read source files for selected articles — check file paths in articles.json".to_string(),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail("Could not read source files for selected articles — check file paths in articles.json".to_string());
     }
 
     // Process articles with bounded concurrency (limit 2 to match provider limits)
@@ -489,11 +485,7 @@ pub(crate) async fn exec_content_review_recommend(
     let rec_value = match serde_json::to_value(&rec) {
         Ok(v) => v,
         Err(e) => {
-            return crate::engine::workflows::StepResult {
-                success: false,
-                message: format!("Failed to serialize recommendations: {}", e),
-                output: None,
-            }
+            return crate::engine::workflows::StepResult::fail(format!("Failed to serialize recommendations: {}", e))
         }
     };
 

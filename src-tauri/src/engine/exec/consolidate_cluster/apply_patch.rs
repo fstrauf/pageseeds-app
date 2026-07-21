@@ -35,11 +35,7 @@ pub(crate) fn exec_merge_apply_patch(
     let patches: Vec<ContentMergePatch> = match parse_patches(patch_json) {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Invalid ContentMergePatch JSON: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Invalid ContentMergePatch JSON: {}", e));
         }
     };
 
@@ -47,11 +43,7 @@ pub(crate) fn exec_merge_apply_patch(
     let total_transitions: usize = patches.iter().map(|p| p.transitions.len()).sum();
 
     let Some(first_patch) = patches.first() else {
-        return StepResult {
-            success: false,
-            message: "Merge patch contains no rounds to apply.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Merge patch contains no rounds to apply.".to_string());
     };
 
     let keeper_path = Path::new(&first_patch.keeper_file);
@@ -62,21 +54,13 @@ pub(crate) fn exec_merge_apply_patch(
     };
 
     if !keeper_path.exists() {
-        return StepResult {
-            success: false,
-            message: format!("Keeper file not found: {}", keeper_path.display()),
-            output: None,
-        };
+        return StepResult::fail(format!("Keeper file not found: {}", keeper_path.display()));
     }
 
     let original = match std::fs::read_to_string(&keeper_path) {
         Ok(c) => c,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to read keeper file: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to read keeper file: {}", e));
         }
     };
 
@@ -90,38 +74,26 @@ pub(crate) fn exec_merge_apply_patch(
     // Snapshot the original before touching the file on disk.
     let snapshot_path = keeper_path.with_extension("mdx.snapshot");
     if let Err(e) = std::fs::write(&snapshot_path, &original) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write keeper snapshot: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write keeper snapshot: {}", e));
     }
 
     // Validate the accumulated content in memory FIRST — a corrupt patch must
     // never reach the live keeper file.
     if let Err(e) = crate::content::cleaner::validate_mdx_structure(&modified) {
         let _ = std::fs::remove_file(&snapshot_path);
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Patch produced invalid MDX structure: {}. Original keeper left untouched.",
                 e
-            ),
-            output: None,
-        };
+            ));
     }
 
     // Write modified file; restore the snapshot if the write fails.
     if let Err(e) = std::fs::write(&keeper_path, &modified) {
         let _ = std::fs::rename(&snapshot_path, &keeper_path);
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Failed to write modified keeper: {}. Original restored from snapshot.",
                 e
-            ),
-            output: None,
-        };
+            ));
     }
 
     // Clean up snapshot on success.

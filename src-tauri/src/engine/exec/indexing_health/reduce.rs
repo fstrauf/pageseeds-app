@@ -117,11 +117,7 @@ pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResul
     let plan_json = match serde_json::to_string_pretty(&plan) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize campaign plan: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to serialize campaign plan: {}", e))
         }
     };
 

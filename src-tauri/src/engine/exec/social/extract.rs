@@ -15,20 +15,12 @@ pub fn exec_social_extract_article(task: &Task, project_path: &str) -> StepResul
     let manifest = match discover_sources(Path::new(project_path), &config) {
         Ok(m) => m,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to discover article source: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to discover article source: {}", e));
         }
     };
 
     if manifest.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No article source found. Check your source configuration.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No article source found. Check your source configuration.".to_string());
     }
 
     StepResult {
@@ -65,11 +57,7 @@ pub fn exec_social_collect_sources(task: &Task, project_path: &str) -> StepResul
     let manifest = match discover_sources(Path::new(project_path), &config) {
         Ok(m) => m,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to discover sources: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to discover sources: {}", e));
         }
     };
 
@@ -83,11 +71,7 @@ pub fn exec_social_collect_sources(task: &Task, project_path: &str) -> StepResul
     );
 
     if total == 0 {
-        return StepResult {
-            success: false,
-            message: "No content sources found. Check your source configuration.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No content sources found. Check your source configuration.".to_string());
     }
 
     // For now, we don't serialize the full manifest (contains PathBuf)

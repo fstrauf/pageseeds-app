@@ -298,19 +298,11 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
     let contexts_json = match serde_json::to_string_pretty(&contexts_doc) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize target contexts: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to serialize target contexts: {}", e))
         }
     };
     if let Err(e) = std::fs::write(&contexts_path, &contexts_json) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write target contexts: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write target contexts: {}", e));
     }
 
     StepResult {

@@ -587,11 +587,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         )
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         );
@@ -606,11 +602,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         crate::engine::exec::ctr_audit::exec_ctr_verify_fix(&task, &project_path)
                     })
                     .await
-                    .unwrap_or_else(|e| StepResult {
-                        success: false,
-                        message: format!("Step panicked: {}", e),
-                        output: None,
-                    })
+                    .unwrap_or_else(|e| StepResult::fail(format!("Step panicked: {}", e)))
                 })
             }),
         );

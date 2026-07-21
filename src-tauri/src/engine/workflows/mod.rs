@@ -132,6 +132,24 @@ impl StepResult {
         }
     }
 
+    /// Create a failure result with output.
+    pub fn fail_with_output(message: impl Into<String>, output: impl Into<String>) -> Self {
+        StepResult {
+            success: false,
+            message: message.into(),
+            output: Some(output.into()),
+        }
+    }
+
+    /// Create a failure result with an optional output.
+    pub fn fail_with_opt_output(message: impl Into<String>, output: Option<String>) -> Self {
+        StepResult {
+            success: false,
+            message: message.into(),
+            output,
+        }
+    }
+
     /// Create a success result with no output.
     pub fn ok(message: impl Into<String>) -> Self {
         StepResult {

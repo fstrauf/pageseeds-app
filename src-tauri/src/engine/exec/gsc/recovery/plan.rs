@@ -24,19 +24,11 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
         match serde_json::from_str(&raw) {
             Ok(r) => r,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Failed to parse drift report: {}", e),
-                    output: None,
-                }
+                return StepResult::fail(format!("Failed to parse drift report: {}", e))
             }
         }
     } else {
-        return StepResult {
-            success: false,
-            message: "Drift report not found — run gsc_recovery_drift first".to_string(),
-            output: None,
-        };
+        return StepResult::fail("Drift report not found — run gsc_recovery_drift first".to_string());
     };
 
     // 2. Load link scan for incoming link counts
@@ -416,19 +408,11 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
     let plan_json = match serde_json::to_string_pretty(&plan) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize plan: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to serialize plan: {}", e))
         }
     };
     if let Err(e) = std::fs::write(&plan_path, &plan_json) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write plan: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write plan: {}", e));
     }
 
     StepResult {

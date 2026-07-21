@@ -125,21 +125,13 @@ pub(crate) fn exec_content_outcome_compare(
     let target = match target {
         Some(t) => t,
         None => {
-            return StepResult {
-                success: false,
-                message: "No content_outcome_target artifact on review task".to_string(),
-                output: None,
-            }
+            return StepResult::fail("No content_outcome_target artifact on review task".to_string())
         }
     };
 
     let slug = target["slug"].as_str().unwrap_or("").to_string();
     if slug.is_empty() {
-        return StepResult {
-            success: false,
-            message: "content_outcome_target artifact has no slug".to_string(),
-            output: None,
-        };
+        return StepResult::fail("content_outcome_target artifact has no slug".to_string());
     }
     let parent_task_type = target["parent_task_type"]
         .as_str()

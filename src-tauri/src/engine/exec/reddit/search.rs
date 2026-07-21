@@ -72,14 +72,10 @@ pub(crate) async fn exec_reddit_search(
             match std::fs::read_to_string(&config_path) {
                 Ok(config) => parse_config_fallback(&config),
                 Err(e) => {
-                    return crate::engine::workflows::StepResult {
-                        success: false,
-                        message: format!(
+                    return crate::engine::workflows::StepResult::fail(format!(
                             "reddit_config.md not found at {} — create it first: {}",
                             config_path, e
-                        ),
-                        output: None,
-                    }
+                        ))
                 }
             }
         }
@@ -105,11 +101,7 @@ pub(crate) async fn exec_reddit_search(
     );
 
     if queries.is_empty() {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: "No search queries found. The reddit_config_parse_stage should have extracted query_keywords or trigger_topics from reddit_config.md.".to_string(),
-            output: None,
-        };
+        return crate::engine::workflows::StepResult::fail("No search queries found. The reddit_config_parse_stage should have extracted query_keywords or trigger_topics from reddit_config.md.".to_string());
     }
 
     let search_pairs: Vec<(String, String)> = if seed_subs.is_empty() {
@@ -333,14 +325,10 @@ pub(crate) async fn exec_reddit_search(
     );
 
     if all_posts.is_empty() {
-        return crate::engine::workflows::StepResult {
-            success: false,
-            message: format!(
+        return crate::engine::workflows::StepResult::fail(format!(
                 "No Reddit posts found across {} search pairs ({} too old, {} excluded, {} below threshold, {} subreddit-capped)",
                 search_pairs.len(), too_old, excluded_sub_count, below_threshold, subreddit_capped
-            ),
-            output: None,
-        };
+            ));
     }
 
     crate::engine::workflows::StepResult {

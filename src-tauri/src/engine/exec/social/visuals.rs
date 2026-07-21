@@ -14,11 +14,7 @@ pub fn exec_social_build_visuals(task: &Task, project_path: &str) -> StepResult 
     let mut posts = match super::load_posts_from_artifacts(task) {
         Some(p) => p,
         None => {
-            return StepResult {
-                success: false,
-                message: "No generated posts found. Run social_generate_posts first.".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No generated posts found. Run social_generate_posts first.".to_string());
         }
     };
 
@@ -27,11 +23,7 @@ pub fn exec_social_build_visuals(task: &Task, project_path: &str) -> StepResult 
         match crate::social::content::sources::ensure_output_dir(Path::new(project_path)) {
             Ok(d) => d,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Failed to create output directory: {}", e),
-                    output: None,
-                };
+                return StepResult::fail(format!("Failed to create output directory: {}", e));
             }
         };
 
@@ -96,11 +88,7 @@ pub fn exec_social_build_visuals(task: &Task, project_path: &str) -> StepResult 
     let posts_json = match serde_json::to_string(&posts) {
         Ok(j) => j,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize posts: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize posts: {}", e));
         }
     };
 

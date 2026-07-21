@@ -64,21 +64,13 @@ pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection
     let project = match task_store::get_project(conn, &task.project_id) {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load project '{}': {}", task.project_id, e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load project '{}': {}", task.project_id, e))
         }
     };
     let project_id = match project.clarity_project_id.as_deref().filter(|id| !id.is_empty()) {
         Some(id) => id.to_string(),
         None => {
-            return StepResult {
-                success: false,
-                message: "clarity_project_id not set in project settings".to_string(),
-                output: None,
-            }
+            return StepResult::fail("clarity_project_id not set in project settings".to_string())
         }
     };
 
@@ -99,18 +91,10 @@ pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection
     ) {
         Ok(Some(d)) => d,
         Ok(None) => {
-            return StepResult {
-                success: false,
-                message: "No Clarity export data found. Run collect_clarity first.".to_string(),
-                output: None,
-            }
+            return StepResult::fail("No Clarity export data found. Run collect_clarity first.".to_string())
         }
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load Clarity rows: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load Clarity rows: {}", e))
         }
     };
 
@@ -124,20 +108,12 @@ pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection
     ) {
         Ok(r) => r,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to load Clarity rows: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to load Clarity rows: {}", e))
         }
     };
 
     if rows.is_empty() {
-        return StepResult {
-            success: false,
-            message: "No Clarity export data found. Run collect_clarity first.".to_string(),
-            output: None,
-        };
+        return StepResult::fail("No Clarity export data found. Run collect_clarity first.".to_string());
     }
 
     let gsc_context = load_gsc_context(conn, &task.project_id);
@@ -154,11 +130,7 @@ pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection
     };
 
     if let Err(e) = export::write_summary(&paths.automation_dir, &summary) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to write clarity_summary.json: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to write clarity_summary.json: {}", e));
     }
 
     StepResult {
@@ -180,18 +152,10 @@ pub fn exec_clarity_investigate(
     let summary = match export::read_summary(&paths.automation_dir) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return StepResult {
-                success: false,
-                message: "clarity_summary.json not found. Run clarity_summarise first.".to_string(),
-                output: None,
-            }
+            return StepResult::fail("clarity_summary.json not found. Run clarity_summarise first.".to_string())
         }
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to read clarity_summary.json: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Failed to read clarity_summary.json: {}", e))
         }
     };
 
@@ -206,11 +170,7 @@ pub fn exec_clarity_investigate(
     ) {
         Ok(output) => output,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Clarity investigation agent failed: {}", e),
-                output: None,
-            }
+            return StepResult::fail(format!("Clarity investigation agent failed: {}", e))
         }
     };
 
@@ -225,11 +185,7 @@ pub fn exec_clarity_investigate(
                 e,
                 result.len()
             );
-            return StepResult {
-                success: false,
-                message: format!("Failed to parse Clarity investigation output: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to parse Clarity investigation output: {}", e));
         }
     };
 
@@ -237,11 +193,7 @@ pub fn exec_clarity_investigate(
     summary.top_findings = findings;
 
     if let Err(e) = export::write_summary(&paths.automation_dir, &summary) {
-        return StepResult {
-            success: false,
-            message: format!("Failed to update clarity_summary.json: {}", e),
-            output: None,
-        };
+        return StepResult::fail(format!("Failed to update clarity_summary.json: {}", e));
     }
 
     StepResult {

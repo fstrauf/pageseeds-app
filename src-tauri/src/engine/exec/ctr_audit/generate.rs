@@ -24,23 +24,15 @@ pub(crate) async fn exec_ctr_fix_generate(
         match crate::rig::provider::resolve_backend(agent_provider, None, None, None).await {
             Ok(b) => b,
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!("Could not resolve LLM backend: {}", e),
-                    output: None,
-                };
+                return StepResult::fail(format!("Could not resolve LLM backend: {}", e));
             }
         };
 
     match &backend {
         LlmBackend::KimiDirect => {
-            return StepResult {
-                success: false,
-                message: "Structured extraction is not supported with KimiDirect (CLI fallback). \
+            return StepResult::fail("Structured extraction is not supported with KimiDirect (CLI fallback). \
                  Please ensure the Kimi bridge is running or use another provider."
-                    .to_string(),
-                output: None,
-            };
+                    .to_string());
         }
         _ => {}
     }
@@ -58,22 +50,14 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
     let rec = match super::extract_recommendation(task) {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return StepResult {
-                success: false,
-                message: "No ctr_recommendations artifact found on task".to_string(),
-                output: None,
-            };
+            return StepResult::fail("No ctr_recommendations artifact found on task".to_string());
         }
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "ctr_recommendations artifact exists but is invalid: {}. \
                      This usually means the agent returned an unexpected JSON shape.",
                     e
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
@@ -83,25 +67,17 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
         match crate::engine::exec::audit_health::resolve_content_file(repo_root, &rec.file) {
             Some(p) => p,
             None => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "File not found: {}. Run sanitize_content to repair paths.",
                         rec.file
-                    ),
-                    output: None,
-                };
+                    ));
             }
         };
 
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(_e) => {
-            return StepResult {
-                success: false,
-                message: format!("File not found: {}", file_path.display()),
-                output: None,
-            };
+            return StepResult::fail(format!("File not found: {}", file_path.display()));
         }
     };
 
@@ -109,11 +85,7 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
     let prompt = match build_ctr_fix_prompt(task, project_path, &rec, &original_content) {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to build CTR fix prompt: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to build CTR fix prompt: {}", e));
         }
     };
 
@@ -133,15 +105,11 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
     {
         Ok(p) => p,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!(
+            return StepResult::fail(format!(
                     "Structured extraction failed for CtrFixPatch: {}. \
                      If you are using KimiDirect, please switch to a structured-output provider (Kimi bridge, Claude, OpenAI, or Ollama).",
                     e
-                ),
-                output: None,
-            };
+                ));
         }
     };
 
@@ -175,26 +143,18 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
                 repair_errors.extend(consistency_errors2);
 
                 if !repair_errors.is_empty() {
-                    return StepResult {
-                        success: false,
-                        message: format!(
+                    return StepResult::fail(format!(
                             "CTR fix patch failed validation after repair: {}. No changes written.",
                             repair_errors.join("; ")
-                        ),
-                        output: None,
-                    };
+                        ));
                 }
                 patch = repaired;
             }
             Err(e) => {
-                return StepResult {
-                    success: false,
-                    message: format!(
+                return StepResult::fail(format!(
                         "CTR fix patch repair extraction failed: {}. No changes written.",
                         e
-                    ),
-                    output: None,
-                };
+                    ));
             }
         }
     }
@@ -203,11 +163,7 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
     let patch_json = match serde_json::to_string_pretty(&patch) {
         Ok(s) => s,
         Err(e) => {
-            return StepResult {
-                success: false,
-                message: format!("Failed to serialize CtrFixPatch: {}", e),
-                output: None,
-            };
+            return StepResult::fail(format!("Failed to serialize CtrFixPatch: {}", e));
         }
     };
 

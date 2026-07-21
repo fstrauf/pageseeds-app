@@ -434,14 +434,10 @@ fn assemble_prompt(inputs: &PromptInputs) -> Result<String, StepResult> {
         match skills::load_skill(repo_root, name) {
             Some(s) => Some(s),
             None => {
-                return Err(StepResult {
-                    success: false,
-                    message: format!(
+                return Err(StepResult::fail(format!(
                         "Required skill '{}' not found in project repo or app defaults",
                         name
-                    ),
-                    output: None,
-                });
+                    )));
             }
         }
     } else {
@@ -457,11 +453,7 @@ fn assemble_prompt(inputs: &PromptInputs) -> Result<String, StepResult> {
                 artifact_name, content
             ),
             Err(_) => {
-                return Err(StepResult {
-                    success: false,
-                    message: format!("{} not found — run collect_gsc first", artifact_name),
-                    output: None,
-                });
+                return Err(StepResult::fail(format!("{} not found — run collect_gsc first", artifact_name)));
             }
         }
     } else {
@@ -662,15 +654,11 @@ pub async fn exec_agentic(
     let prompt_bytes = estimate_prompt_bytes(&prompt);
     let budget = default_budget_for_backend(backend_preference);
     if prompt_bytes > budget.hard {
-        return StepResult {
-            success: false,
-            message: format!(
+        return StepResult::fail(format!(
                 "Prompt size ({} bytes) exceeds hard budget ({} bytes) for step '{}'. \
                  Trim artifacts, reduce context, or batch the workflow before retrying.",
                 prompt_bytes, budget.hard, step_name
-            ),
-            output: None,
-        };
+            ));
     }
     if prompt_bytes > budget.target {
         log::warn!(
@@ -779,19 +767,11 @@ pub async fn exec_agentic(
         }
         Ok(Err(err)) => {
             log::warn!("[executor] agentic step '{}' failed: {}", step_name, err);
-            StepResult {
-                success: false,
-                message: format!("Agentic step '{}' failed: {}", step_name, err),
-                output: None,
-            }
+            StepResult::fail(format!("Agentic step '{}' failed: {}", step_name, err))
         }
         Err(e) => {
             log::warn!("[executor] agentic step '{}' task failed: {}", step_name, e);
-            StepResult {
-                success: false,
-                message: format!("Agentic step '{}' task failed: {}", step_name, e),
-                output: None,
-            }
+            StepResult::fail(format!("Agentic step '{}' task failed: {}", step_name, e))
         }
     }
 }
