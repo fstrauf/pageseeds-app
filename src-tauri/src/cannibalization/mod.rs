@@ -119,6 +119,91 @@ pub fn load_strategy_json(db: &Connection, strategy_id: &str, project_id: &str) 
     }
 }
 
+/// Persist a merge recommendation produced outside the cannibalization audit
+/// (e.g. the indexing health campaign's distinctiveness review) into the
+/// cannibalization strategy store, so it surfaces in the CannibalizationPicker
+/// for user approval instead of being dropped.
+///
+/// The recommendation is merged into both the `cannibalization_strategy.json`
+/// file store and, when the resolved strategy belongs to a real
+/// `cannibalization_audit` task, that task's `cannibalization_strategy`
+/// artifact (the picker's primary source). Existing unknown fields in the
+/// strategy document are preserved. Deduplicated by `cluster_id`.
+///
+/// Returns `Ok(true)` when the recommendation was added, `Ok(false)` when a
+/// recommendation with the same `cluster_id` already exists.
+pub fn record_merge_recommendation(
+    db: &Connection,
+    project_id: &str,
+    rec: &MergeRecommendation,
+) -> Result<bool> {
+    if rec.cluster_id.is_empty() {
+        return Err(crate::error::Error::Validation(
+            "merge recommendation has empty cluster_id".to_string(),
+        ));
+    }
+
+    let strategy_id = resolve_strategy_id(db, project_id)?;
+    let existing_json = load_strategy_json(db, &strategy_id, project_id).ok();
+
+    let mut strategy: serde_json::Value = existing_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "generated_at": chrono::Utc::now().to_rfc3339(),
+                "merge_recommendations": [],
+                "hub_recommendations": [],
+                "territory_recommendations": [],
+                "calculator_recommendations": [],
+                "risks": [],
+            })
+        });
+
+    // Ensure the merge_recommendations array exists (tolerate missing/invalid).
+    if !strategy.get("merge_recommendations").map(|v| v.is_array()).unwrap_or(false) {
+        strategy["merge_recommendations"] = serde_json::json!([]);
+    }
+    let merges = strategy["merge_recommendations"]
+        .as_array_mut()
+        .ok_or_else(|| crate::error::Error::InvalidJson("merge_recommendations is not an array".to_string()))?;
+
+    if merges.iter().any(|m| {
+        m.get("cluster_id").and_then(|c| c.as_str()) == Some(rec.cluster_id.as_str())
+    }) {
+        return Ok(false);
+    }
+
+    merges.push(serde_json::to_value(rec)?);
+    let merged_json = serde_json::to_string_pretty(&strategy)?;
+
+    // File store — the fallback source for the review UI.
+    let project = task_store::get_project(db, project_id)?;
+    let paths = ProjectPaths::from_project(&project);
+    let strategy_path = paths.automation_dir.join("cannibalization_strategy.json");
+    if let Some(parent) = strategy_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&strategy_path, format!("{}\n", merged_json))?;
+
+    // Task artifact — the CannibalizationPicker's primary source — when the
+    // resolved strategy belongs to a real cannibalization_audit task.
+    if let Ok(task) = task_store::get_task(db, &strategy_id) {
+        if task.task_type == "cannibalization_audit" {
+            let artifact = TaskArtifact {
+                key: "cannibalization_strategy".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("indexing_health_campaign".to_string()),
+                content: Some(merged_json),
+            };
+            task_store::upsert_task_artifact(db, &strategy_id, &artifact)?;
+        }
+    }
+
+    Ok(true)
+}
+
 /// Resolve the strategy ID for a project.
 /// Returns the latest `cannibalization_audit` task ID, or a synthetic file-based ID.
 pub fn resolve_strategy_id(db: &Connection, project_id: &str) -> Result<String> {

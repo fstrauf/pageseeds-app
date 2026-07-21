@@ -202,10 +202,13 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
             .to_string(),
         };
 
-        // Build source candidates for add_links targets
+        // Build source candidates for add_links targets. Also built for weakly
+        // linked targets (< 2 incoming links) so fallback `fix_indexing`
+        // targets mapped to `fix_indexing_internal_links` (spawn.rs) have real
+        // candidates to work with instead of silently no-oping.
         let mut source_candidates: Vec<crate::models::indexing_health::LinkSourceCandidate> =
             Vec::new();
-        if incoming_links == 0 && article_id > 0 {
+        if incoming_links < 2 && article_id > 0 {
             let target_outgoing = outgoing_by_id.get(&article_id);
             for (src_slug, src_art) in article_by_slug {
                 if src_slug == &slug {

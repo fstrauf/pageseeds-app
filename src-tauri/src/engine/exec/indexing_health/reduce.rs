@@ -69,6 +69,7 @@ pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResul
         add_links: 0,
         merge: 0,
         rewrite_title_h1: 0,
+        fix_indexing: 0,
         no_action: 0,
     };
 
@@ -81,6 +82,7 @@ pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResul
             "add_links" => summary.add_links += 1,
             "merge" => summary.merge += 1,
             "rewrite_title_h1" => summary.rewrite_title_h1 += 1,
+            "fix_indexing" => summary.fix_indexing += 1,
             _ => summary.no_action += 1,
         }
 
@@ -102,8 +104,8 @@ pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResul
 
     // Capture summary values before moving summary into plan
     let summary_msg = format!(
-        "Campaign plan: {} fix_content, {} add_links, {} merge, {} rewrite_title_h1, {} no_action",
-        summary.fix_content, summary.add_links, summary.merge, summary.rewrite_title_h1, summary.no_action
+        "Campaign plan: {} fix_content, {} add_links, {} merge, {} rewrite_title_h1, {} fix_indexing, {} no_action",
+        summary.fix_content, summary.add_links, summary.merge, summary.rewrite_title_h1, summary.fix_indexing, summary.no_action
     );
 
     let plan = IndexingCampaignPlan {

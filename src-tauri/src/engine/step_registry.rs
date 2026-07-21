@@ -258,10 +258,23 @@ impl StepRegistry {
 
         register_blocking!(
             handlers,
-            StepKind::IndexingFixApply,
-            crate::engine::exec::indexing_fix::exec_indexing_fix_apply,
+            StepKind::IndexingFixGenerate,
+            crate::engine::exec::indexing_fix::exec_indexing_fix_generate,
             agent_provider,
             optional_context
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IndexingFixApply,
+            crate::engine::exec::indexing_fix::exec_indexing_fix_apply,
+            optional_context
+        );
+
+        register_blocking!(
+            handlers,
+            StepKind::IndexingFixVerify,
+            crate::engine::exec::indexing_fix::exec_indexing_fix_verify
         );
 
         register_blocking!(

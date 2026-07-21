@@ -63,6 +63,9 @@ pub struct IndexingCampaignSummary {
     pub add_links: usize,
     pub merge: usize,
     pub rewrite_title_h1: usize,
+    /// Fallback fix_indexing targets (mapped to concrete child tasks at spawn time)
+    #[serde(default)]
+    pub fix_indexing: usize,
     pub no_action: usize,
 }
 
