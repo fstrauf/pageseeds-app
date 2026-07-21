@@ -219,6 +219,11 @@ struct FixContext {
     pub article_title: String,
     pub target_keyword: Option<String>,
     pub suggestions: Vec<ReviewSuggestion>,
+    /// Deterministic valid internal link targets, enriched by the context
+    /// step from `task_store::load_valid_link_targets`. Empty for historical
+    /// artifacts or when the lookup failed — the prompt then falls back to
+    /// the "do not link when unsure" rule.
+    pub available_link_slugs: Vec<String>,
 }
 
 fn extract_context(task: &Task) -> Result<Option<FixContext>, String> {
@@ -255,12 +260,22 @@ fn extract_context(task: &Task) -> Result<Option<FixContext>, String> {
         .filter_map(|s| serde_json::from_value(s.clone()).ok())
         .collect();
 
+    let available_link_slugs: Vec<String> = value["available_link_slugs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(Some(FixContext {
         article_id,
         file,
         article_title,
         target_keyword,
         suggestions,
+        available_link_slugs,
     }))
 }
 
@@ -303,6 +318,25 @@ fn build_fix_prompt(
 
     let suggestions_json = serde_json::to_string_pretty(&context.suggestions).map_err(|e| e.to_string())?;
 
+    // The valid-target list is guaranteed by Rust context enrichment (same
+    // source as validate_patch_before_write enforces). When it is non-empty
+    // the model may ONLY link from it; when it is empty (historical artifact
+    // or failed lookup) the old "do not link when unsure" rule applies.
+    let (link_targets_section, link_rule) = if context.available_link_slugs.is_empty() {
+        (
+            String::new(),
+            "Only link to articles that actually exist in this project. If you are unsure whether a target exists, do NOT include it.".to_string(),
+        )
+    } else {
+        (
+            format!(
+                "### Valid internal link targets in this project\n```\n{}\n```\n\n",
+                context.available_link_slugs.join("\n")
+            ),
+            "Only link to slugs from the valid internal link target list above — every slug in that list is guaranteed to exist in this project. Never invent a target that is not on the list.".to_string(),
+        )
+    };
+
     let prompt = format!(
         r#"## Skill
 
@@ -330,7 +364,7 @@ fn build_fix_prompt(
 ### Has frontmatter FAQ
 {has_faq}
 
-### Body excerpt
+{link_targets_section}### Body excerpt
 ```
 {body_excerpt}
 ```
@@ -360,7 +394,7 @@ Validation rules (enforced by Rust):
 **CRITICAL — Internal links format**:
 - If you include `internal_links`, each entry must use the bare slug as `target_slug` (e.g., `"my-post"`), NEVER `/blog/my-post` or `blog/my-post`.
 - The Rust code automatically wraps it as `/blog/<slug>` when writing the file.
-- Only link to articles that actually exist in this project. If you are unsure whether a target exists, do NOT include it.
+- {link_rule}
 - Example CORRECT: `{{"anchor_text": "learn more", "target_slug": "options-trading-basics"}}`
 - Example WRONG: `{{"anchor_text": "learn more", "target_slug": "/blog/options-trading-basics"}}`
 
@@ -764,4 +798,113 @@ Fix the patch so it passes all validation rules. Return only the corrected Conte
         None,
     )
     .await
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskArtifact, TaskReviewSurface, TaskRun,
+        TaskRunPolicy, TaskStatus,
+    };
+
+    const SAMPLE_MDX: &str = "---\ntitle: \"Container Gardening Basics\"\ndescription: \"A solid meta description.\"\ndate: \"2026-01-01\"\n---\n\n# Container Gardening Basics\n\nAn intro paragraph about container gardening with enough words to matter.\n";
+
+    fn task_with_context_artifact(context: serde_json::Value) -> Task {
+        let now = chrono::Utc::now().to_rfc3339();
+        Task {
+            id: "task-fix-gen".to_string(),
+            project_id: "p1".to_string(),
+            task_type: "fix_content_article".to_string(),
+            phase: "fix".to_string(),
+            status: TaskStatus::InProgress,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::None,
+            title: Some("Fix article".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![TaskArtifact {
+                key: "content_fix_context".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(context.to_string()),
+            }],
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            not_before: None,
+            updated_at: now,
+        }
+    }
+
+    fn context_json(extra: serde_json::Value) -> serde_json::Value {
+        let mut ctx = serde_json::json!({
+            "article_id": 7,
+            "article_file": "content/blog/slug.mdx",
+            "article_title": "Some Article",
+            "target_keyword": "container gardening",
+            "suggestions": [],
+        });
+        if let serde_json::Value::Object(extra) = extra {
+            for (k, v) in extra {
+                ctx[k] = v;
+            }
+        }
+        ctx
+    }
+
+    fn fix_context(link_slugs: Vec<String>) -> FixContext {
+        FixContext {
+            article_id: 7,
+            file: "content/blog/slug.mdx".to_string(),
+            article_title: "Some Article".to_string(),
+            target_keyword: Some("container gardening".to_string()),
+            suggestions: vec![],
+            available_link_slugs: link_slugs,
+        }
+    }
+
+    #[test]
+    fn extract_context_reads_available_link_slugs() {
+        let task = task_with_context_artifact(context_json(serde_json::json!({
+            "available_link_slugs": ["alpha-post", "beta-post"]
+        })));
+        let ctx = extract_context(&task).unwrap().unwrap();
+        assert_eq!(ctx.available_link_slugs, vec!["alpha-post", "beta-post"]);
+    }
+
+    #[test]
+    fn extract_context_tolerates_missing_link_slugs() {
+        // Historical artifacts predate the enrichment — absence must degrade
+        // to an empty list, not an error.
+        let task = task_with_context_artifact(context_json(serde_json::json!({})));
+        let ctx = extract_context(&task).unwrap().unwrap();
+        assert!(ctx.available_link_slugs.is_empty());
+    }
+
+    #[test]
+    fn prompt_lists_valid_targets_and_list_only_rule() {
+        let task = task_with_context_artifact(context_json(serde_json::json!({})));
+        let ctx = fix_context(vec!["alpha-post".to_string(), "beta-post".to_string()]);
+        let prompt = build_fix_prompt(&task, "/tmp", &ctx, SAMPLE_MDX).unwrap();
+        assert!(prompt.contains("Valid internal link targets in this project"));
+        assert!(prompt.contains("alpha-post"));
+        assert!(prompt.contains("beta-post"));
+        assert!(prompt.contains("Only link to slugs from the valid internal link target list"));
+        assert!(!prompt.contains("If you are unsure whether a target exists"));
+    }
+
+    #[test]
+    fn prompt_without_targets_keeps_unsure_rule() {
+        let task = task_with_context_artifact(context_json(serde_json::json!({})));
+        let ctx = fix_context(vec![]);
+        let prompt = build_fix_prompt(&task, "/tmp", &ctx, SAMPLE_MDX).unwrap();
+        assert!(!prompt.contains("Valid internal link targets in this project"));
+        assert!(prompt.contains("If you are unsure whether a target exists, do NOT include it"));
+    }
 }
