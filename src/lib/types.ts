@@ -135,6 +135,7 @@ export type {
   CtrFixSkipped,
   CtrFixType,
   CtrFixVerificationReport,
+  CtrOutcome,
   CtrRecommendation,
   CtrVerificationReport,
   CtrVerifiedArticle,

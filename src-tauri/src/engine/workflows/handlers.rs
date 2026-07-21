@@ -599,11 +599,17 @@ impl WorkflowHandler for CtrAuditHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "ctr_outcome_review" => vec![
-                // Step 1 (deterministic): load baseline outcomes and fetch after-period GSC metrics.
-                // Compare before/after clicks, CTR, position per article and query.
-                // Output contract: JSON report with improved/regressed/neutral counts.
+                // Step 1 (deterministic): Refresh GSC data so after-metrics are not
+                // compared against stale syncs. Optional — the review still runs on
+                // whatever data exists if the sync fails (e.g. missing credentials).
+                WorkflowStep::new("ctr_gsc_refresh", StepKind::GscSyncArticles).optional(),
+                // Step 2 (deterministic): verify deployment (live title shows the fix),
+                // load baseline outcomes, fetch after-period GSC metrics, and compare
+                // per-day clicks / CTR over explicit baseline/after windows.
+                // Output contract: JSON report with improved/regressed/neutral/
+                // insufficient_data/deployment_unverified counts.
                 WorkflowStep::new("ctr_outcome_compare", StepKind::CtrOutcomeCompare),
-                // Step 2 (deterministic): generate structured report artifact.
+                // Step 3 (deterministic): generate structured report artifact.
                 WorkflowStep::new("ctr_outcome_report", StepKind::CtrOutcomeReport),
             ],
             _ => vec![

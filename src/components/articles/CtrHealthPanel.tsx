@@ -12,8 +12,8 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import { useErrorHandler } from '../../lib/toast-context'
-import { getCtrHealthSummary } from '../../lib/tauri'
-import type { CtrHealthSummary, CtrHealthArticle } from '../../lib/types'
+import { getCtrHealthSummary, listCtrOutcomes } from '../../lib/tauri'
+import type { CtrHealthSummary, CtrHealthArticle, CtrOutcome } from '../../lib/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -65,6 +65,26 @@ const AUDIT_STATUS_BADGE: Record<string, string> = {
   already_healthy: 'bg-secondary text-secondary-foreground border-border',
   healthy: 'bg-secondary text-secondary-foreground border-border',
   regressed: 'bg-rose-50 text-rose-700 border-rose-200',
+}
+
+const OUTCOME_STATUS_LABELS: Record<string, string> = {
+  improved: 'Improved',
+  regressed: 'Regressed',
+  neutral: 'Neutral',
+  insufficient_data: 'Insufficient data',
+  deployment_unverified: 'Deployment unverified',
+  deployed: 'Deployed',
+  pending: 'Pending',
+}
+
+const OUTCOME_STATUS_BADGE: Record<string, string> = {
+  improved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  regressed: 'bg-rose-50 text-rose-700 border-rose-200',
+  neutral: 'bg-secondary text-secondary-foreground border-border',
+  insufficient_data: 'bg-sky-50 text-sky-700 border-sky-200',
+  deployment_unverified: 'bg-amber-50 text-amber-700 border-amber-200',
+  deployed: 'bg-secondary text-secondary-foreground border-border',
+  pending: 'bg-secondary text-secondary-foreground border-border',
 }
 
 function StatCard({
@@ -164,8 +184,63 @@ function ArticleRow({ article }: { article: CtrHealthArticle }) {
   )
 }
 
+function formatCtr(ctr: number): string {
+  return `${(ctr * 100).toFixed(2)}%`
+}
+
+function OutcomeRow({
+  outcome,
+  articles,
+}: {
+  outcome: CtrOutcome
+  articles: CtrHealthArticle[]
+}) {
+  const articleId = Number(outcome.article_id)
+  const article = articles.find((a) => a.id === articleId)
+  const label = article?.title || article?.url_slug || `Article #${articleId}`
+  const reviewed = outcome.outcome_status !== 'pending' && outcome.outcome_status !== 'deployed'
+
+  return (
+    <div className="flex items-start gap-2 py-2">
+      {outcome.outcome_status === 'regressed' ? (
+        <AlertTriangle size={14} className="text-rose-500 mt-0.5 shrink-0" />
+      ) : outcome.outcome_status === 'improved' ? (
+        <CheckCircle2 size={14} className="text-emerald-500 mt-0.5 shrink-0" />
+      ) : (
+        <BarChart3 size={14} className="text-muted-foreground mt-0.5 shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <div className="text-xs text-foreground truncate max-w-full">{label}</div>
+          <Badge
+            variant="outline"
+            className={`text-[10px] px-1 py-0 h-auto ${OUTCOME_STATUS_BADGE[outcome.outcome_status] || 'bg-secondary text-secondary-foreground border-border'}`}
+          >
+            {OUTCOME_STATUS_LABELS[outcome.outcome_status] || outcome.outcome_status}
+          </Badge>
+        </div>
+        <div className="text-[10px] text-muted-foreground mt-0.5">
+          Baseline: {outcome.baseline_clicks} clicks, {formatCtr(outcome.baseline_ctr)} CTR
+          {reviewed && outcome.after_clicks != null && outcome.after_ctr != null && (
+            <>
+              {' → '}
+              {outcome.after_clicks} clicks, {formatCtr(outcome.after_ctr)} CTR
+            </>
+          )}
+        </div>
+        {outcome.reviewed_at && (
+          <div className="text-[10px] text-muted-foreground">
+            Reviewed {new Date(outcome.reviewed_at).toLocaleString()}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function CtrHealthPanel({ projectId, runCompletedTick }: CtrHealthPanelProps) {
   const [summary, setSummary] = useState<CtrHealthSummary | null>(null)
+  const [outcomes, setOutcomes] = useState<CtrOutcome[]>([])
   const [loading, setLoading] = useState(false)
   const { showError } = useErrorHandler()
 
@@ -173,8 +248,12 @@ export function CtrHealthPanel({ projectId, runCompletedTick }: CtrHealthPanelPr
     if (!projectId) return
     setLoading(true)
     try {
-      const result = await getCtrHealthSummary(projectId)
-      setSummary(result)
+      const [summaryResult, outcomesResult] = await Promise.all([
+        getCtrHealthSummary(projectId),
+        listCtrOutcomes(projectId),
+      ])
+      setSummary(summaryResult)
+      setOutcomes(outcomesResult)
     } catch (e: unknown) {
       showError(String(e))
     } finally {
@@ -308,6 +387,26 @@ export function CtrHealthPanel({ projectId, runCompletedTick }: CtrHealthPanelPr
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Fix outcome tracking */}
+              {outcomes.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs font-medium">
+                      Fix outcomes ({outcomes.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-0 space-y-0.5">
+                    {outcomes.map((outcome) => (
+                      <OutcomeRow
+                        key={`${outcome.article_id}-${outcome.fix_task_id}`}
+                        outcome={outcome}
+                        articles={summary?.articles ?? []}
+                      />
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Last audit + action */}
               <div className="flex items-center justify-between text-xs text-muted-foreground">

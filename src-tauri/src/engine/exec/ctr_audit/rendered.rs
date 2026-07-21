@@ -186,8 +186,7 @@ pub fn compare_rendered_titles(project_path: &str, max_pages: usize) -> Result<s
         let page_url = format!("{}{}{}", base_url.trim_end_matches('/'), content_path_prefix, slug);
         match fetch_rendered_title(&page_url) {
             Ok(rendered_title) => {
-                let normalized_rendered = strip_brand_suffix(&rendered_title);
-                let matches = source_title.trim().to_lowercase() == normalized_rendered.trim().to_lowercase();
+                let matches = rendered_title_matches_source(&source_title, &rendered_title);
                 if !matches { mismatches += 1; }
                 let issue = if matches { "none" } else { classify_title_issue(&source_title, &rendered_title) };
                 results.push(serde_json::json!({
@@ -214,8 +213,16 @@ pub fn compare_rendered_titles(project_path: &str, max_pages: usize) -> Result<s
     }))
 }
 
+/// Returns true when the live rendered <title> matches the source title,
+/// tolerating brand suffixes and case (single rule used by both the title
+/// comparison report and the CTR outcome deployment check).
+pub(crate) fn rendered_title_matches_source(source_title: &str, rendered_title: &str) -> bool {
+    source_title.trim().to_lowercase()
+        == strip_brand_suffix(rendered_title).trim().to_lowercase()
+}
+
 /// Fetch just the rendered <title> from a live page URL.
-fn fetch_rendered_title(url: &str) -> Result<String, String> {
+pub(crate) fn fetch_rendered_title(url: &str) -> Result<String, String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {
         let client = reqwest::Client::builder()
