@@ -652,6 +652,11 @@ Helpful, technical, and concise.
             outcome.upserted, 0,
             "upsert must fail against the drifted schema"
         );
+        assert_eq!(
+            outcome.db_failures, 1,
+            "the failed upsert must be counted as a DB failure, not a skip"
+        );
+        assert_eq!(outcome.skipped, 0);
         let err = outcome
             .errors
             .expect("the first DB error must be recorded in the outcome");
@@ -660,5 +665,65 @@ Helpful, technical, and concise.
             "error should name the missing column, got: {}",
             err
         );
+    }
+
+    /// A weekly re-search that only rediscovers already-handled posts
+    /// (reply_status 'posted'/'skipped') must persist cleanly: every post counts
+    /// as an intentional skip, never as a DB failure — the step-failure gate in
+    /// post_actions must not fire on legitimate dedup.
+    #[test]
+    fn persist_only_already_handled_posts_is_clean_dedup() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_dedup_71");
+
+        for (post_id, status) in [("p71_done_a", "posted"), ("p71_done_b", "skipped")] {
+            conn.execute(
+                "INSERT INTO reddit_opportunities \
+                 (post_id, project_id, title, reply_status, created_at, updated_at) \
+                 VALUES (?1, ?2, 'Handled post', ?3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                rusqlite::params![post_id, project_id, status],
+            )
+            .unwrap();
+        }
+
+        let json = serde_json::json!({
+            "posts": [
+                { "post_id": "p71_done_a", "title": "Handled post", "subreddit": "testing" },
+                { "post_id": "p71_done_b", "title": "Handled post", "subreddit": "testing" }
+            ]
+        })
+        .to_string();
+
+        let outcome =
+            crate::engine::exec::reddit::persist_reddit_opportunities(&conn, &project_id, &json)
+                .expect("persist must succeed for pure dedup");
+        assert_eq!(outcome.parsed, 2);
+        assert_eq!(
+            outcome.upserted, 0,
+            "already-handled posts are not re-upserted"
+        );
+        assert_eq!(
+            outcome.skipped, 2,
+            "deduped posts count as intentional skips"
+        );
+        assert_eq!(
+            outcome.db_failures, 0,
+            "no DB error occurred — nothing may fail the step"
+        );
+        assert!(outcome.errors.is_none());
+        assert!(
+            !(outcome.db_failures > 0 && outcome.upserted == 0),
+            "pure dedup must not satisfy the step-failure condition"
+        );
+
+        let handled: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM reddit_opportunities \
+                 WHERE project_id=?1 AND reply_status IN ('posted','skipped')",
+                [&project_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(handled, 2, "history rows must be preserved");
     }
 }

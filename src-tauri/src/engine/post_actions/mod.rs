@@ -51,11 +51,13 @@ pub fn after_step(ctx: &PostStepContext<'_>) -> StepOutcomeOverride {
                 out,
             ) {
                 Ok(outcome) => {
-                    // Success-with-zero-of-N must be impossible (issue #71): when the
-                    // search parsed posts but none landed in the DB, the picker would
-                    // come up empty. Fail the step with the underlying DB error so the
-                    // drift surfaces instead of silently wiping the feed.
-                    if outcome.parsed > 0 && outcome.upserted == 0 {
+                    // Success-with-zero-of-N must be impossible (issue #71): when
+                    // upserts fail for every parsed post, the picker would come up
+                    // empty. Fail the step with the underlying DB error so the
+                    // drift surfaces instead of silently wiping the feed. Pure
+                    // dedup (already posted/skipped rows counted in `skipped`)
+                    // must not fail the step.
+                    if outcome.db_failures > 0 && outcome.upserted == 0 {
                         let detail = outcome
                             .errors
                             .unwrap_or_else(|| "unknown DB error".to_string());

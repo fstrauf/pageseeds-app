@@ -8,17 +8,20 @@ use std::path::Path;
 /// Summary of one `persist_reddit_opportunities` run.
 ///
 /// Callers use this to distinguish "search found nothing" (parsed == 0) from
-/// "search found posts but none landed in the DB" (parsed > 0, upserted == 0) —
+/// "search found posts but every upsert failed" (db_failures > 0, upserted == 0) —
 /// the latter must fail the workflow step instead of silently emptying the picker
-/// (issue #71).
+/// (issue #71). Legitimate dedup (already posted/skipped rows) counts in `skipped`
+/// only and never fails the step.
 #[derive(Debug, Clone, Default)]
 pub struct PersistOutcome {
     /// Post objects parsed from the search output.
     pub parsed: usize,
     /// Rows successfully upserted.
     pub upserted: usize,
-    /// Posts skipped (missing post_id, already posted/skipped, or failed upsert).
+    /// Posts intentionally skipped (missing post_id, or already posted/skipped).
     pub skipped: usize,
+    /// Posts whose upsert failed with a DB error.
+    pub db_failures: usize,
     /// First upsert error message, if any upsert failed.
     pub errors: Option<String>,
 }
@@ -32,7 +35,7 @@ pub struct PersistOutcome {
 /// reply_status='posted' or 'skipped' are preserved for history dedup.
 ///
 /// Returns a `PersistOutcome` with per-run counts and the first DB error, if any.
-/// Individual upsert failures are logged at warn and counted in `skipped`; the
+/// Individual upsert failures are logged at warn and counted in `db_failures`; the
 /// caller decides whether the outcome constitutes step failure.
 pub fn persist_reddit_opportunities(
     conn: &Connection,
@@ -203,7 +206,7 @@ pub fn persist_reddit_opportunities(
                 if outcome.errors.is_none() {
                     outcome.errors = Some(e.to_string());
                 }
-                outcome.skipped += 1;
+                outcome.db_failures += 1;
             }
         }
     }
