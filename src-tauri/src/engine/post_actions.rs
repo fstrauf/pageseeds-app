@@ -547,15 +547,11 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
             depends_on: vec![ctx.task.id.clone()],
             artifacts: ctx.task.artifacts.clone(),
             idempotency_key: Some(idempotency_key),
+            not_before: Some(not_before),
             ..Default::default()
         };
 
         if let Ok(task) = crate::engine::spawner::TaskSpawner::spawn(ctx.conn, spec) {
-            // Set not_before on the spawned task
-            let _ = ctx.conn.execute(
-                "UPDATE tasks SET not_before = ?1 WHERE id = ?2",
-                rusqlite::params![not_before, &task.id],
-            );
             follow_up_ids.push(task.id);
         }
     }
@@ -898,6 +894,9 @@ fn spawn_content_outcome_review(ctx: &PostTaskContext<'_>) -> Option<String> {
         "content_outcome_review:{}:{}:{}",
         ctx.task.project_id, ctx.task.id, slug
     );
+    let not_before = (chrono::Utc::now()
+        + chrono::Duration::days(CONTENT_OUTCOME_REVIEW_DELAY_DAYS))
+    .to_rfc3339();
     let spec = crate::engine::spawner::TaskSpec {
         project_id: ctx.task.project_id.clone(),
         task_type: "content_outcome_review".to_string(),
@@ -912,18 +911,12 @@ fn spawn_content_outcome_review(ctx: &PostTaskContext<'_>) -> Option<String> {
         depends_on: vec![ctx.task.id.clone()],
         artifacts: vec![target_artifact],
         idempotency_key: Some(idempotency_key),
+        not_before: Some(not_before),
         ..Default::default()
     };
 
     match crate::engine::spawner::TaskSpawner::spawn(ctx.conn, spec) {
         Ok(task) => {
-            let not_before = (chrono::Utc::now()
-                + chrono::Duration::days(CONTENT_OUTCOME_REVIEW_DELAY_DAYS))
-            .to_rfc3339();
-            let _ = ctx.conn.execute(
-                "UPDATE tasks SET not_before = ?1 WHERE id = ?2",
-                rusqlite::params![not_before, &task.id],
-            );
             log::info!(
                 "[post_actions] Spawned content_outcome_review {} for slug '{}' (parent {})",
                 task.id,
@@ -953,9 +946,11 @@ fn outcome_review_slug(ctx: &PostTaskContext<'_>) -> Option<String> {
     }
 
     let file = find_written_article_file(ctx)?;
-    let slug = crate::content::ops::slug_from_filename(&file)
-        .to_lowercase()
-        .replace('_', "-");
+    // slug_from_filename already strips numeric prefixes, so normalize_url_slug
+    // composes cleanly on top of it.
+    let slug = crate::content::slug::normalize_url_slug(&crate::content::ops::slug_from_filename(
+        &file,
+    ));
     if slug.is_empty() {
         None
     } else {
@@ -969,13 +964,7 @@ fn outcome_review_slug(ctx: &PostTaskContext<'_>) -> Option<String> {
 /// cluster id in the task title ("Merge cluster: <id>").
 fn merge_keeper_slug(task: &Task) -> Option<String> {
     let slug_from_keep_url = |keep_url: &str| -> Option<String> {
-        let slug = keep_url
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .to_lowercase()
-            .replace('_', "-");
+        let slug = crate::content::slug::extract_slug_from_url(keep_url);
         if slug.is_empty() {
             None
         } else {
@@ -1028,14 +1017,13 @@ fn outcome_baseline_metrics(
     project_id: &str,
     slug: &str,
 ) -> (f64, f64, f64, &'static str) {
-    let normalized = slug.trim_matches('/').to_lowercase().replace('_', "-");
+    let normalized = crate::content::slug::normalize_url_slug(slug);
     let articles = match task_store::list_articles(conn, project_id) {
         Ok(a) => a,
         Err(_) => return (0.0, 0.0, 0.0, "none"),
     };
     let article = articles.iter().find(|a| {
-        let s = a.url_slug.trim_matches('/').to_lowercase().replace('_', "-");
-        s == normalized
+        crate::content::slug::normalize_url_slug(&a.url_slug) == normalized
     });
     let article_id = match article {
         Some(a) => a.id,

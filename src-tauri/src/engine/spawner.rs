@@ -62,6 +62,8 @@ pub struct TaskSpec {
     pub idempotency_key: Option<String>,
     /// How to handle duplicate keys. Defaults to SkipIfActive if a key is provided.
     pub dedup_policy: Option<DeduplicationPolicy>,
+    /// RFC3339 timestamp before which the task must not run (delayed tasks).
+    pub not_before: Option<String>,
 }
 
 impl Default for TaskSpec {
@@ -81,6 +83,7 @@ impl Default for TaskSpec {
             artifacts: vec![],
             idempotency_key: None,
             dedup_policy: None,
+            not_before: None,
         }
     }
 }
@@ -172,7 +175,7 @@ impl TaskSpawner {
             run: TaskRun::default(),
             created_at: now.clone(),
             updated_at: now,
-            not_before: None,
+            not_before: spec.not_before,
         };
 
         // 6. Persist
@@ -455,6 +458,28 @@ mod tests {
         assert_eq!(task.task_type, "test_task");
         assert_eq!(task.status, TaskStatus::Todo);
         assert_eq!(task.project_id, "proj1");
+    }
+
+    #[test]
+    fn spawn_persists_not_before() {
+        let conn = in_memory_db();
+        create_test_project(&conn, "proj1");
+
+        let not_before = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        let task = TaskSpawner::spawn(
+            &conn,
+            TaskSpec {
+                project_id: "proj1".to_string(),
+                task_type: "test_task".to_string(),
+                not_before: Some(not_before.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(task.not_before.as_deref(), Some(not_before.as_str()));
+        let reloaded = task_store::get_task(&conn, &task.id).unwrap();
+        assert_eq!(reloaded.not_before.as_deref(), Some(not_before.as_str()));
     }
 
     #[test]

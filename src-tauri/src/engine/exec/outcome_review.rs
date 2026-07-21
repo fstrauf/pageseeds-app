@@ -92,34 +92,16 @@ pub fn classify_outcome(baseline: &OutcomeWindow, recent: &OutcomeWindow) -> &'s
 
 /// True when a GSC page URL belongs to the given article slug.
 ///
-/// Matches the full normalized path (`/blog/foo` for slug `foo`) or the last
-/// path segment with any numeric prefix stripped (`02_foo.mdx` → `foo`),
-/// mirroring the article↔GSC matching in `exec/gsc/sync.rs`.
+/// Both sides go through the canonical helpers in `content::slug`: the page
+/// URL is reduced to its normalized final path segment (`/blog/02_foo` →
+/// `foo`, numeric prefixes stripped) and compared against the normalized
+/// slug, mirroring the article↔GSC matching in `exec/gsc/sync.rs`.
 pub fn page_matches_slug(page_url: &str, slug: &str) -> bool {
-    let normalized_slug = slug
-        .trim_matches('/')
-        .replace('_', "-")
-        .to_lowercase();
+    let normalized_slug = crate::content::slug::normalize_url_slug(slug);
     if normalized_slug.is_empty() {
         return false;
     }
-
-    let stripped = page_url
-        .strip_prefix("https://")
-        .or_else(|| page_url.strip_prefix("http://"))
-        .unwrap_or(page_url);
-    let path = match stripped.find('/') {
-        Some(pos) => &stripped[pos..],
-        None => "/",
-    };
-    let path = path.trim_end_matches('/').replace('_', "-").to_lowercase();
-
-    if path.trim_start_matches('/') == normalized_slug {
-        return true;
-    }
-
-    let last = path.rsplit('/').next().unwrap_or("");
-    crate::content::slug::strip_numeric_prefix(last) == normalized_slug
+    crate::content::slug::extract_slug_from_url(page_url) == normalized_slug
 }
 
 /// Compare pre/post snapshot windows for a review task's article and persist
