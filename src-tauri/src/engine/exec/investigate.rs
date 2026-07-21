@@ -4,8 +4,14 @@
 //! investigation. The agent has access to GSC, articles, audit data, indexing
 //! status, link graph, framework files, and more. It calls tools freely to
 //! answer the user's question.
+//!
+//! Access mode (tools + catalog) is owned by
+//! [`crate::engine::tools::InvestigationAccess`] via [`investigation_kit`].
+//! Standalone investigate always uses [`InvestigationAccess::Full`].
 
-use crate::engine::tools::{investigation_tools, InvestigationContext};
+use crate::engine::tools::{
+    investigation_kit, InvestigationAccess, InvestigationContext,
+};
 use rig::completion::Prompt;
 
 /// Run a prompt on a tool-equipped agent and return the response string.
@@ -13,98 +19,10 @@ async fn run_tool_agent<A: Prompt + Send>(agent: A, prompt: &str) -> Result<Stri
     agent.prompt(prompt).await.map_err(|e| format!("Agent error: {e}"))
 }
 
-/// Default tool catalog embedded as fallback if the config file is not found.
-const DEFAULT_TOOL_CATALOG: &str = r#"
-# Tool catalog for agentic investigation.
-
-[tools.gsc_performance]
-purpose = "Get GSC page-level performance data (clicks, impressions, CTR, position)"
-when_to_use = "When investigating impression trends, CTR changes, or ranking movements"
-when_not_to_use = "Do not use if GSC is not connected"
-
-[tools.gsc_queries]
-purpose = "Get GSC query-level data: which search queries drive traffic to pages"
-when_to_use = "When investigating what queries bring traffic or low CTR"
-when_not_to_use = "Do not use if GSC is not connected"
-
-[tools.gsc_movers]
-purpose = "Compare GSC performance between two periods"
-when_to_use = "When investigating traffic changes or plateau detection"
-when_not_to_use = "Do not use if GSC is not connected"
-
-[tools.article_list]
-purpose = "List all articles with metadata"
-when_to_use = "When you need to know what content exists"
-when_not_to_use = ""
-
-[tools.article_frontmatter]
-purpose = "Read frontmatter from MDX files for specific articles"
-when_to_use = "When checking individual article metadata"
-when_not_to_use = "Use article_list first"
-
-[tools.article_body_hash]
-purpose = "Hash article bodies to find exact duplicate content"
-when_to_use = "When investigating duplicate content or SSR fallback pages"
-when_not_to_use = ""
-
-[tools.article_title_scan]
-purpose = "Scan all article titles for patterns: duplicated tokens, literal template variables, truncation"
-when_to_use = "When investigating title quality or template bugs"
-when_not_to_use = ""
-
-[tools.content_audit_report]
-purpose = "Return the full content_audit.json with 21 checks per article"
-when_to_use = "When you need comprehensive article health data"
-when_not_to_use = ""
-
-[tools.run_content_audit]
-purpose = "Run the deterministic content audit and write fresh content_audit.json"
-when_to_use = "When you need fresh audit data"
-when_not_to_use = "If recent audit exists, use content_audit_report instead"
-mutates = true
-
-[tools.cannibalization_clusters]
-purpose = "Return cannibalization clusters and merge recommendations"
-when_to_use = "When investigating keyword cannibalization"
-when_not_to_use = ""
-
-[tools.indexing_status]
-purpose = "Return GSC URL indexing status"
-when_to_use = "When investigating indexing problems"
-when_not_to_use = ""
-
-[tools.ctr_health]
-purpose = "Return per-article CTR health summary"
-when_to_use = "When investigating CTR underperformance"
-when_not_to_use = ""
-
-[tools.framework_files]
-purpose = "Read framework config files: layouts, sitemap, robots.txt, redirect rules"
-when_to_use = "When investigating site-wide template bugs"
-when_not_to_use = ""
-
-[tools.article_link_graph]
-purpose = "Return the internal link graph"
-when_to_use = "When investigating linking gaps or site structure"
-when_not_to_use = ""
-
-[tools.create_task]
-purpose = "Create a fix task in PageSeeds to address issues found"
-when_to_use = "ONLY after investigation found specific, actionable issues"
-when_not_to_use = "Do NOT create tasks speculatively. Max 3 per investigation."
-mutates = true
-
-[tools.write_feature_spec]
-purpose = "Write a developer feature spec to the target repo's .github/automation/seo_feature_spec.md"
-when_to_use = "When you find code-level issues that require changes to framework files (templates, redirects, sitemap). Each call appends one issue section with file path, current code, and fixed code."
-when_not_to_use = "Do not use for content-only issues that PageSeeds can auto-fix"
-mutates = true
-"#;
-
 /// Run an agentic investigation with full tool access.
 ///
-/// 1. Builds the agent preamble from the tool catalog
-/// 2. Attaches all investigation tools to the agent
+/// 1. Builds the agent preamble from the full tool catalog
+/// 2. Attaches all investigation tools (including mutators) to the agent
 /// 3. Runs the agent with the user's question
 /// 4. Parses the structured output via rig Extractor
 pub async fn exec_investigate(
@@ -122,7 +40,10 @@ pub async fn exec_investigate(
         db_path: db_path.to_string(),
     };
 
-    let preamble = build_investigation_preamble(&ctx).await;
+    // Standalone investigate always uses Full — tools and catalog from one kit.
+    let kit = investigation_kit(ctx.clone(), InvestigationAccess::Full);
+    let preamble = build_investigation_preamble(&ctx, &kit.catalog).await;
+    let tools = kit.tools;
 
     let prompt = format!(
         "Investigate the following and report your findings:\n\nQuestion: {question}\n\n\
@@ -150,7 +71,7 @@ pub async fn exec_investigate(
             let agent = client
                 .completions_api()
                 .agent(model)
-                .tools(investigation_tools(ctx))
+                .tools(tools)
                 .build();
             run_tool_agent(agent, &full_prompt).await?
         }
@@ -160,7 +81,7 @@ pub async fn exec_investigate(
             let agent = client
                 .agent(model)
                 .preamble(&preamble)
-                .tools(investigation_tools(ctx))
+                .tools(tools)
                 .build();
             run_tool_agent(agent, &prompt).await?
         }
@@ -170,7 +91,7 @@ pub async fn exec_investigate(
             let agent = client
                 .agent(model)
                 .preamble(&preamble)
-                .tools(investigation_tools(ctx))
+                .tools(tools)
                 .build();
             run_tool_agent(agent, &prompt).await?
         }
@@ -184,7 +105,7 @@ pub async fn exec_investigate(
             let agent = client
                 .agent(model)
                 .preamble(&preamble)
-                .tools(investigation_tools(ctx))
+                .tools(tools)
                 .build();
             run_tool_agent(agent, &prompt).await?
         }
@@ -206,11 +127,14 @@ pub async fn exec_investigate(
     Ok(parsed)
 }
 
-/// Build the investigation preamble from the tool catalog.
-/// Uses the bundled tool_catalog.toml embedded at compile time.
-async fn build_investigation_preamble(ctx: &InvestigationContext) -> String {
-    let catalog = DEFAULT_TOOL_CATALOG;
-
+/// Build the investigation preamble from catalog text (from [`investigation_kit`]).
+///
+/// Standalone investigate uses the kit with [`InvestigationAccess::Full`].
+/// In-workflow callers (issue #80) should use [`InvestigationAccess::ReadOnly`].
+pub(crate) async fn build_investigation_preamble(
+    ctx: &InvestigationContext,
+    catalog: &str,
+) -> String {
     // Gather quick project context
     let article_count = match ctx.open_db() {
         Ok(db) => {
@@ -256,4 +180,43 @@ async fn build_investigation_preamble(ctx: &InvestigationContext) -> String {
     );
 
     preamble
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tools::investigation_catalog;
+
+    #[test]
+    fn tool_catalog_read_only_excludes_mutators() {
+        let ro = investigation_catalog(InvestigationAccess::ReadOnly);
+        assert!(
+            ro.contains("get_task_status"),
+            "RO catalog must include get_task_status"
+        );
+        for mutator in [
+            "create_task",
+            "enqueue_task",
+            "run_content_audit",
+            "write_feature_spec",
+        ] {
+            // Match section headers only (tools.NAME)
+            assert!(
+                !ro.contains(&format!("[tools.{mutator}]")),
+                "RO catalog must not contain mutator section [{mutator}]"
+            );
+        }
+        assert!(!ro.contains("mutates = true"));
+    }
+
+    #[test]
+    fn tool_catalog_full_includes_mutators_and_get_task_status() {
+        let full = investigation_catalog(InvestigationAccess::Full);
+        assert!(full.contains("[tools.get_task_status]"));
+        assert!(full.contains("[tools.create_task]"));
+        assert!(full.contains("[tools.enqueue_task]"));
+        assert!(full.contains("[tools.run_content_audit]"));
+        assert!(full.contains("[tools.write_feature_spec]"));
+        assert!(full.contains("mutates = true"));
+    }
 }
