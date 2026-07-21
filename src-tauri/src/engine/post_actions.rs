@@ -663,33 +663,19 @@ pub fn after_task_failure(ctx: &PostTaskContext<'_>) {
 
 /// Cancel a task and run domain-specific cancel side effects.
 ///
-/// A cancelled fix_content_article releases the article's in_review flag for
-/// the same reason as [`after_task_failure`]. The release helper is a no-op
-/// when the article is no longer `in_review` (e.g. another fix already
-/// succeeded and marked it `reviewed`).
+/// Cancellation shares its side effects with [`after_task_failure`] (a
+/// cancelled fix_content_article releases the article's in_review flag), so
+/// future failure-cleanup logic automatically applies to cancellations too.
 pub fn cancel_task(conn: &Connection, task_id: &str) -> crate::error::Result<Task> {
     let task = task_store::update_task_status(conn, task_id, TaskStatus::Cancelled)?;
 
-    if task.task_type == "fix_content_article" {
-        let project_path: Option<String> = conn
-            .query_row(
-                "SELECT path FROM projects WHERE id = ?1",
-                [&task.project_id],
-                |row| row.get(0),
-            )
-            .ok();
-        if let Some(project_path) = project_path {
-            if let Err(e) = crate::engine::exec::content::release_fix_content_article_in_review(
-                conn,
-                &task,
-                &project_path,
-            ) {
-                log::warn!(
-                    "[content_review] failed to release article in_review after cancel: {}",
-                    e
-                );
-            }
-        }
+    if let Ok(project) = task_store::get_project(conn, &task.project_id) {
+        after_task_failure(&PostTaskContext {
+            conn,
+            task: &task,
+            project_path: &project.path,
+            progress: &[],
+        });
     }
 
     Ok(task)

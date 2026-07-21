@@ -95,7 +95,15 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 path TEXT NOT NULL,
-                active INTEGER DEFAULT 1
+                content_dir TEXT,
+                site_url TEXT,
+                site_id TEXT,
+                sitemap_url TEXT,
+                project_mode TEXT NOT NULL DEFAULT 'workspace',
+                active INTEGER DEFAULT 1,
+                agent_provider TEXT,
+                seo_provider TEXT,
+                clarity_project_id TEXT
             );
             CREATE TABLE tasks (
                 id TEXT PRIMARY KEY,
