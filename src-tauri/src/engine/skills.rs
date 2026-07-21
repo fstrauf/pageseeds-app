@@ -430,4 +430,22 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&repo);
     }
+
+    #[test]
+    fn test_load_skill_content_fix_apply_resolves_embedded_without_project_copy() {
+        // Issue #33: `content-fix-apply` must resolve from embedded skills on a
+        // managed repo with no `.github/skills` copy — no one-line fallback.
+        let repo = test_dir();
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(!repo.join(".github").join("skills").exists());
+
+        let skill = load_skill(&repo, "content-fix-apply")
+            .expect("content-fix-apply must resolve from embedded defaults");
+        assert!(skill.content.contains("ContentFixPatch"));
+        assert!(skill.content.contains("40-60"));
+        assert!(skill.content.contains("120-155"));
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }
