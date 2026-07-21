@@ -235,6 +235,9 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `export::write_articles_to_repo()` | `db/export.rs` | Any `fs::write` of `articles.json` |
 | `export::export_articles()` | `db/export.rs` | Manual SQL → JSON serialization |
 | `export::merge_unknown_fields()` | `db/export.rs` | Naive JSON overwrite that drops extra fields |
+| `insert_gsc_page_daily_snapshots()` / `gsc_page_daily_window_metrics()` | `db/mod.rs` | Any write/read of the append-only `gsc_page_daily` snapshot table (never DELETE from it) |
+| `insert_content_outcome_result()` / `list_content_outcome_results()` | `db/mod.rs` | Raw SQL on `content_outcome_results` (outcome history) |
+| `research_shortlist::mark_covered_for_keywords()` | `db/research_shortlist.rs` | Inline shortlist theme/seed matching when keywords become article tasks |
 | `task_store::list_articles()` | `engine/task_store.rs` | Raw SQL `SELECT * FROM articles` |
 | `task_store::load_valid_link_targets()` | `engine/task_store.rs` | Raw `load_project_slug_set()` for link-target checks — redirected slugs are not valid targets |
 

@@ -270,6 +270,50 @@ pub(crate) fn exec_gsc_sync_articles(
         }
     }
 
+    // 7b. Append per-page daily snapshots (issue #23). Best-effort: the
+    // snapshot pull is additive — a failure here must not fail the sync.
+    // Append-only by contract (INSERT OR IGNORE); never deleted on re-sync.
+    let snapshots_written = {
+        let token_daily = token.clone();
+        let site_daily = site_url.clone();
+        let start_daily = start_str.clone();
+        let end_daily = end_str.clone();
+        let daily_result = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async move {
+                crate::gsc::analytics::fetch_page_daily_rows(
+                    &token_daily,
+                    &site_daily,
+                    &start_daily,
+                    &end_daily,
+                    25000,
+                )
+                .await
+            })
+        })
+        .join();
+
+        match daily_result {
+            Ok(Ok(rows)) => {
+                match crate::db::insert_gsc_page_daily_snapshots(&db, &task.project_id, &rows) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        log::warn!("[gsc_sync] Failed to write daily snapshots: {}", e);
+                        0
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                log::warn!("[gsc_sync] Daily snapshot fetch failed (non-fatal): {}", e);
+                0
+            }
+            Err(_) => {
+                log::warn!("[gsc_sync] Daily snapshot fetch thread panicked (non-fatal)");
+                0
+            }
+        }
+    };
+
     // 8. Match query-level data and store in ctr_query_metrics + target_keyword
     let mut queries_by_article: HashMap<i64, Vec<&crate::models::gsc::PageQueryMetrics>> =
         HashMap::new();
@@ -444,6 +488,7 @@ pub(crate) fn exec_gsc_sync_articles(
         "query_rows": query_rows.len(),
         "query_articles": query_matched,
         "target_keywords_updated": target_keyword_updated,
+        "daily_snapshots_written": snapshots_written,
         "site": site_url,
         "period_days": days,
     });

@@ -1438,6 +1438,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 48 {
+        conn.execute_batch(MIGRATION_V48)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (48, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1498,6 +1506,47 @@ CREATE INDEX IF NOT EXISTS idx_article_quality_reviews_file ON article_quality_r
 static MIGRATION_V47: &str = r#"
 -- Persist Reddit post body (selftext) so enrichment/drafting see more than the title
 ALTER TABLE reddit_opportunities ADD COLUMN selftext TEXT;
+"#;
+
+static MIGRATION_V48: &str = r#"
+-- Append-only per-page daily GSC snapshots (issue #23).
+-- NEVER delete from this table: it is the time series behind before/after
+-- outcome measurement. INSERT OR IGNORE on (project_id, page, date) keeps
+-- re-syncs idempotent without destroying history.
+CREATE TABLE IF NOT EXISTS gsc_page_daily (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      TEXT NOT NULL,
+    page            TEXT NOT NULL,
+    date            TEXT NOT NULL,
+    clicks          REAL NOT NULL DEFAULT 0,
+    impressions     REAL NOT NULL DEFAULT 0,
+    ctr             REAL NOT NULL DEFAULT 0,
+    position        REAL NOT NULL DEFAULT 0,
+    fetched_at      TEXT NOT NULL,
+    UNIQUE(project_id, page, date),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_gsc_page_daily_project_page_date
+    ON gsc_page_daily(project_id, page, date);
+
+-- Classification results from content_outcome_review tasks (issue #23).
+-- Append-only outcome history, queryable by research/keeper-selection prompts.
+CREATE TABLE IF NOT EXISTS content_outcome_results (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id        TEXT NOT NULL,
+    slug              TEXT NOT NULL,
+    parent_task_type  TEXT NOT NULL,
+    parent_task_id    TEXT NOT NULL,
+    classification    TEXT NOT NULL,
+    baseline_json     TEXT NOT NULL DEFAULT '{}',
+    recent_json       TEXT NOT NULL DEFAULT '{}',
+    reviewed_at       TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_content_outcome_results_project
+    ON content_outcome_results(project_id, slug);
+CREATE INDEX IF NOT EXISTS idx_content_outcome_results_parent
+    ON content_outcome_results(parent_task_type, classification);
 "#;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1759,6 +1808,173 @@ pub fn ctr_query_metrics_max_fetched_at(
         |row| row.get(0),
     )
     .map_err(Into::into)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GSC Page Daily Snapshots (append-only, issue #23)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Append per-page daily GSC rows to the snapshot table.
+///
+/// Append-only by contract: INSERT OR IGNORE on (project_id, page, date).
+/// There is deliberately no delete/update path — re-syncs must never destroy
+/// history. Returns the number of newly inserted rows.
+pub fn insert_gsc_page_daily_snapshots(
+    conn: &Connection,
+    project_id: &str,
+    rows: &[crate::models::gsc::PageDailyMetrics],
+) -> Result<usize> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut inserted = 0usize;
+    for row in rows {
+        inserted += conn.execute(
+            "INSERT OR IGNORE INTO gsc_page_daily
+             (project_id, page, date, clicks, impressions, ctr, position, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                project_id,
+                row.page,
+                row.date,
+                row.clicks,
+                row.impressions,
+                row.ctr,
+                row.position,
+                now,
+            ],
+        )?;
+    }
+    Ok(inserted)
+}
+
+/// Aggregated snapshot metrics for one page over a date window (inclusive).
+///
+/// `position` is the impressions-weighted average across days with data.
+/// Returns `None` when the page has no snapshot rows in the window.
+pub fn gsc_page_daily_window_metrics(
+    conn: &Connection,
+    project_id: &str,
+    page: &str,
+    start_date: &str,
+    end_date: &str,
+) -> Result<Option<GscDailyWindowMetrics>> {
+    let row = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(clicks), 0), COALESCE(SUM(impressions), 0)
+         FROM gsc_page_daily
+         WHERE project_id = ?1 AND page = ?2 AND date >= ?3 AND date <= ?4",
+        rusqlite::params![project_id, page, start_date, end_date],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?, r.get::<_, f64>(2)?)),
+    )?;
+
+    let (days, clicks, impressions) = row;
+    if days == 0 {
+        return Ok(None);
+    }
+
+    // Impressions-weighted average position across the window's days.
+    let position: f64 = conn.query_row(
+        "SELECT COALESCE(SUM(position * impressions) / NULLIF(SUM(impressions), 0), 0)
+         FROM gsc_page_daily
+         WHERE project_id = ?1 AND page = ?2 AND date >= ?3 AND date <= ?4",
+        rusqlite::params![project_id, page, start_date, end_date],
+        |r| r.get(0),
+    )?;
+
+    Ok(Some(GscDailyWindowMetrics {
+        days_with_data: days,
+        clicks,
+        impressions,
+        position,
+    }))
+}
+
+/// Distinct pages with snapshot rows for a project (used for slug matching).
+pub fn list_gsc_page_daily_pages(conn: &Connection, project_id: &str) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT page FROM gsc_page_daily WHERE project_id = ?1")?;
+    let rows = stmt.query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))?;
+    let mut pages = Vec::new();
+    for row in rows {
+        pages.push(row?);
+    }
+    Ok(pages)
+}
+
+/// Aggregated metrics for one page over a snapshot window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GscDailyWindowMetrics {
+    pub days_with_data: i64,
+    pub clicks: f64,
+    pub impressions: f64,
+    pub position: f64,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Content Outcome Results (issue #23)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// One classified outcome review for an article. Append-only history.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ContentOutcomeResult {
+    pub project_id: String,
+    pub slug: String,
+    pub parent_task_type: String,
+    pub parent_task_id: String,
+    pub classification: String,
+    pub baseline_json: String,
+    pub recent_json: String,
+    pub reviewed_at: String,
+}
+
+/// Persist a content outcome classification. Append-only: each review inserts
+/// a new row so the history of repeated reviews is preserved.
+pub fn insert_content_outcome_result(conn: &Connection, result: &ContentOutcomeResult) -> Result<()> {
+    conn.execute(
+        "INSERT INTO content_outcome_results
+         (project_id, slug, parent_task_type, parent_task_id, classification, baseline_json, recent_json, reviewed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            result.project_id,
+            result.slug,
+            result.parent_task_type,
+            result.parent_task_id,
+            result.classification,
+            result.baseline_json,
+            result.recent_json,
+            result.reviewed_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// List outcome results for a project, newest first. Queryable history for
+/// research/keeper-selection prompts (issue #23).
+pub fn list_content_outcome_results(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<ContentOutcomeResult>> {
+    let mut stmt = conn.prepare(
+        "SELECT project_id, slug, parent_task_type, parent_task_id, classification, baseline_json, recent_json, reviewed_at
+         FROM content_outcome_results
+         WHERE project_id = ?1
+         ORDER BY reviewed_at DESC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![project_id], |row| {
+        Ok(ContentOutcomeResult {
+            project_id: row.get(0)?,
+            slug: row.get(1)?,
+            parent_task_type: row.get(2)?,
+            parent_task_id: row.get(3)?,
+            classification: row.get(4)?,
+            baseline_json: row.get(5)?,
+            recent_json: row.get(6)?,
+            reviewed_at: row.get(7)?,
+        })
+    })?;
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2317,4 +2533,129 @@ pub fn delete_article_metadata(
         rusqlite::params![project_id, article_id, namespace],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES ('proj1', 'Test', '/tmp/test')",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn daily_row(page: &str, date: &str, clicks: f64, impressions: f64) -> crate::models::gsc::PageDailyMetrics {
+        crate::models::gsc::PageDailyMetrics {
+            page: page.to_string(),
+            date: date.to_string(),
+            clicks,
+            impressions,
+            ctr: 0.0,
+            position: 5.0,
+        }
+    }
+
+    #[test]
+    fn gsc_page_daily_insert_is_append_only_and_idempotent() {
+        let conn = in_memory_db();
+        let rows = vec![
+            daily_row("https://example.com/blog/foo", "2026-07-01", 1.0, 10.0),
+            daily_row("https://example.com/blog/foo", "2026-07-02", 2.0, 20.0),
+        ];
+
+        let inserted = insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+        assert_eq!(inserted, 2);
+
+        // Re-inserting the same rows (a re-sync of an overlapping window) must
+        // not duplicate or replace anything — INSERT OR IGNORE.
+        let reinserted = insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+        assert_eq!(reinserted, 0);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM gsc_page_daily", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Original values preserved (first write wins, never updated).
+        let clicks: f64 = conn
+            .query_row(
+                "SELECT clicks FROM gsc_page_daily WHERE page = 'https://example.com/blog/foo' AND date = '2026-07-01'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(clicks, 1.0);
+    }
+
+    #[test]
+    fn gsc_page_daily_window_metrics_aggregates_and_weights_position() {
+        let conn = in_memory_db();
+        let rows = vec![
+            daily_row("https://example.com/blog/foo", "2026-07-01", 1.0, 10.0),
+            daily_row("https://example.com/blog/foo", "2026-07-02", 3.0, 30.0),
+            // Outside the window — must be excluded.
+            daily_row("https://example.com/blog/foo", "2026-06-01", 100.0, 1000.0),
+        ];
+        insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+        let m = gsc_page_daily_window_metrics(
+            &conn,
+            "proj1",
+            "https://example.com/blog/foo",
+            "2026-07-01",
+            "2026-07-31",
+        )
+        .unwrap()
+        .expect("window has data");
+
+        assert_eq!(m.days_with_data, 2);
+        assert_eq!(m.clicks, 4.0);
+        assert_eq!(m.impressions, 40.0);
+        // Both days have position 5.0, so the weighted average is 5.0.
+        assert_eq!(m.position, 5.0);
+
+        // Unknown page → None (no data in window).
+        assert!(gsc_page_daily_window_metrics(
+            &conn,
+            "proj1",
+            "https://example.com/blog/unknown",
+            "2026-07-01",
+            "2026-07-31",
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn content_outcome_results_are_append_only_history() {
+        let conn = in_memory_db();
+        for (i, classification) in ["neutral", "improved"].iter().enumerate() {
+            insert_content_outcome_result(
+                &conn,
+                &ContentOutcomeResult {
+                    project_id: "proj1".to_string(),
+                    slug: "foo".to_string(),
+                    parent_task_type: "fix_content_article".to_string(),
+                    parent_task_id: format!("task-{}", i),
+                    classification: classification.to_string(),
+                    baseline_json: "{}".to_string(),
+                    recent_json: "{}".to_string(),
+                    reviewed_at: format!("2026-07-0{}T00:00:00Z", i + 1),
+                },
+            )
+            .unwrap();
+        }
+
+        let results = list_content_outcome_results(&conn, "proj1").unwrap();
+        assert_eq!(results.len(), 2);
+        // Newest first.
+        assert_eq!(results[0].classification, "improved");
+        assert_eq!(results[1].classification, "neutral");
+    }
 }

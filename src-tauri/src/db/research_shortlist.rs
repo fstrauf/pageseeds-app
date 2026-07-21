@@ -191,6 +191,47 @@ pub fn mark_covered(conn: &Connection, id: i64) -> Result<usize> {
     Ok(affected)
 }
 
+/// Mark shortlist entries as covered when a picked keyword matches the entry's
+/// theme or any of its seeds (normalized via the canonical keyword normalizer,
+/// so stored keywords with quotes/long phrases still match).
+///
+/// Best-effort by contract (issue #23): a keyword that matches nothing is a
+/// no-op, never an error. Returns the number of entries marked.
+pub fn mark_covered_for_keywords(
+    conn: &Connection,
+    project_id: &str,
+    keywords: &[String],
+) -> Result<usize> {
+    use crate::content::keyword_match::normalize_keyword;
+
+    let picked: Vec<String> = keywords
+        .iter()
+        .map(|k| normalize_keyword(k))
+        .filter(|k| !k.is_empty())
+        .collect();
+    if picked.is_empty() {
+        return Ok(0);
+    }
+
+    let entries = list_entries(conn, project_id, None)?;
+    let mut marked = 0usize;
+    for entry in entries {
+        if entry.status == "covered" {
+            continue;
+        }
+        let theme_norm = normalize_keyword(&entry.theme);
+        let matched = picked.iter().any(|k| {
+            *k == theme_norm || entry.seeds.iter().any(|s| normalize_keyword(s) == *k)
+        });
+        if matched {
+            if let Some(id) = entry.id {
+                marked += mark_covered(conn, id)?;
+            }
+        }
+    }
+    Ok(marked)
+}
+
 /// Update topic health for a given theme.
 pub fn update_health(
     conn: &Connection,
@@ -366,5 +407,79 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].seeds.len(), 2);
         assert_eq!(entries[0].health_status, "promising");
+    }
+
+    fn insert_entry_with_seeds(conn: &Connection, theme: &str, seeds: &[&str], status: &str) -> i64 {
+        let seeds_json = serde_json::to_string(&seeds).unwrap();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status, added_at)
+             VALUES ('proj1', ?1, ?2, 'test', ?3, 'medium', 'unproven', ?4)",
+            rusqlite::params![theme, seeds_json, status, chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn mark_covered_for_keywords_matches_theme_and_seeds() {
+        let conn = in_memory_db();
+        insert_entry_with_seeds(&conn, "delta hedging", &["delta hedge", "hedging delta"], "pending");
+        insert_entry_with_seeds(&conn, "theta decay", &["time decay"], "researched");
+        insert_entry_with_seeds(&conn, "gamma scalping", &[], "pending");
+
+        // Match by seed, by theme, and one keyword that matches nothing.
+        let marked = mark_covered_for_keywords(
+            &conn,
+            "proj1",
+            &[
+                "delta hedge".to_string(),
+                "Theta Decay".to_string(),
+                "unrelated keyword".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(marked, 2);
+
+        let entries = list_entries(&conn, "proj1", None).unwrap();
+        let by_theme = |t: &str| entries.iter().find(|e| e.theme == t).unwrap();
+        assert_eq!(by_theme("delta hedging").status, "covered");
+        assert!(by_theme("delta hedging").covered_at.is_some());
+        assert_eq!(by_theme("theta decay").status, "covered");
+        // Unmatched entry stays pending.
+        assert_eq!(by_theme("gamma scalping").status, "pending");
+    }
+
+    #[test]
+    fn mark_covered_for_keywords_is_idempotent_and_never_fails_on_no_match() {
+        let conn = in_memory_db();
+        insert_entry_with_seeds(&conn, "delta hedging", &[], "pending");
+
+        // No match → no-op, Ok(0).
+        let marked =
+            mark_covered_for_keywords(&conn, "proj1", &["something else".to_string()]).unwrap();
+        assert_eq!(marked, 0);
+
+        // Empty keyword list → no-op.
+        let marked = mark_covered_for_keywords(&conn, "proj1", &[]).unwrap();
+        assert_eq!(marked, 0);
+
+        // Mark once, then again — already-covered rows are skipped.
+        let marked = mark_covered_for_keywords(&conn, "proj1", &["delta hedging".to_string()]).unwrap();
+        assert_eq!(marked, 1);
+        let marked = mark_covered_for_keywords(&conn, "proj1", &["delta hedging".to_string()]).unwrap();
+        assert_eq!(marked, 0);
+    }
+
+    #[test]
+    fn mark_covered_for_keywords_normalizes_quotes_and_case() {
+        let conn = in_memory_db();
+        insert_entry_with_seeds(&conn, "delta hedging", &[], "pending");
+
+        // Quoted / differently-cased picked keyword still matches via the
+        // canonical normalizer.
+        let marked =
+            mark_covered_for_keywords(&conn, "proj1", &["\"Delta  Hedging\"".to_string()]).unwrap();
+        assert_eq!(marked, 1);
     }
 }

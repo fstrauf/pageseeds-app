@@ -322,6 +322,18 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
+    // Delayed content outcome review (issue #23): compares pre/post GSC
+    // snapshot windows for an article 30 days after a write_article,
+    // fix_content_article, or consolidate_cluster task succeeded.
+    // Deterministic classification — no agent needed.
+    TaskDefinition {
+        task_type: "content_outcome_review",
+        phase: "verification",
+        run_policy: TaskRunPolicy::UserEnqueue,
+        review_surface: TaskReviewSurface::ArtifactReview,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Implementation,
+    },
     // Interlinking: spawned for not_indexed_other URLs (unknown to Google).
     // Runs the same steps as cluster_and_link — scan link graph, strategize,
     // apply Related Articles sections — to add inbound internal links from

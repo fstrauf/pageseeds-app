@@ -131,6 +131,7 @@ pub fn create_article_tasks_from_keywords(
 
     let brief_ctx = load_content_brief_context(conn, project_id, &research_task);
 
+    let picked_keywords = keywords.clone();
     let specs = build_content_tasks_from_keywords(
         keywords,
         &research_task,
@@ -144,6 +145,22 @@ pub fn create_article_tasks_from_keywords(
         let task = crate::engine::spawner::TaskSpawner::spawn(conn, spec)
             .map_err(|e| e.to_string())?;
         tasks.push(task);
+    }
+
+    // Best-effort coverage feedback (issue #23): mark research_shortlist rows
+    // whose theme/seeds match a picked keyword as covered. A keyword that
+    // matches nothing is a no-op — this must never fail the selection.
+    match crate::db::research_shortlist::mark_covered_for_keywords(conn, project_id, &picked_keywords)
+    {
+        Ok(n) if n > 0 => log::info!(
+            "[keyword_selection] marked {} research_shortlist entrie(s) covered",
+            n
+        ),
+        Ok(_) => {}
+        Err(e) => log::warn!(
+            "[keyword_selection] mark_covered_for_keywords failed (non-fatal): {}",
+            e
+        ),
     }
 
     // Mark the research task done now that keywords have been dispatched.

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::error::{Error, Result};
 use crate::gsc::client::GscClient;
-use crate::models::gsc::{MoverMetrics, PageMetrics, PageQueryMetrics, QueryMetrics};
+use crate::models::gsc::{MoverMetrics, PageDailyMetrics, PageMetrics, PageQueryMetrics, QueryMetrics};
 
 /// Fetch top pages by clicks for a date range.
 pub async fn fetch_page_rows(
@@ -71,6 +71,31 @@ pub async fn fetch_page_query_rows(
     });
     let resp = client.search_analytics_query(site_url, &body).await?;
     parse_page_query_rows(&resp)
+}
+
+/// Fetch per-page daily metrics for a date range.
+///
+/// This is the time-series pull behind append-only snapshots (`gsc_page_daily`)
+/// used for before/after outcome measurement (issue #23). Per-page daily
+/// granularity (decision: not site-wide) so windows are directly comparable
+/// to per-article baselines.
+pub async fn fetch_page_daily_rows(
+    token: &str,
+    site_url: &str,
+    start_date: &str,
+    end_date: &str,
+    row_limit: u32,
+) -> Result<Vec<PageDailyMetrics>> {
+    let client = GscClient::new(token);
+    let body = serde_json::json!({
+        "startDate": start_date,
+        "endDate": end_date,
+        "dimensions": ["page", "date"],
+        "rowLimit": row_limit,
+        "orderBy": [{"fieldName": "clicks", "sortOrder": "DESCENDING"}]
+    });
+    let resp = client.search_analytics_query(site_url, &body).await?;
+    parse_page_daily_rows(&resp)
 }
 
 /// Compute traffic movers by comparing two date periods.
@@ -169,6 +194,34 @@ fn parse_query_rows(resp: &serde_json::Value) -> Result<Vec<QueryMetrics>> {
         .collect()
 }
 
+fn parse_page_daily_rows(resp: &serde_json::Value) -> Result<Vec<PageDailyMetrics>> {
+    let rows = match resp.get("rows").and_then(|r| r.as_array()) {
+        Some(r) => r,
+        None => return Ok(vec![]),
+    };
+
+    rows.iter()
+        .map(|row| {
+            let page = row["keys"][0]
+                .as_str()
+                .ok_or_else(|| Error::Other("Missing page key".to_string()))?
+                .to_string();
+            let date = row["keys"][1]
+                .as_str()
+                .ok_or_else(|| Error::Other("Missing date key".to_string()))?
+                .to_string();
+            Ok(PageDailyMetrics {
+                page,
+                date,
+                clicks: row["clicks"].as_f64().unwrap_or(0.0),
+                impressions: row["impressions"].as_f64().unwrap_or(0.0),
+                ctr: row["ctr"].as_f64().unwrap_or(0.0),
+                position: row["position"].as_f64().unwrap_or(0.0),
+            })
+        })
+        .collect()
+}
+
 fn parse_page_query_rows(resp: &serde_json::Value) -> Result<Vec<PageQueryMetrics>> {
     let rows = match resp.get("rows").and_then(|r| r.as_array()) {
         Some(r) => r,
@@ -195,4 +248,36 @@ fn parse_page_query_rows(resp: &serde_json::Value) -> Result<Vec<PageQueryMetric
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_page_daily_rows_extracts_page_and_date_keys() {
+        let resp = serde_json::json!({
+            "rows": [
+                {
+                    "keys": ["https://example.com/blog/foo", "2026-07-01"],
+                    "clicks": 3.0,
+                    "impressions": 120.0,
+                    "ctr": 0.025,
+                    "position": 8.4
+                }
+            ]
+        });
+        let rows = parse_page_daily_rows(&resp).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].page, "https://example.com/blog/foo");
+        assert_eq!(rows[0].date, "2026-07-01");
+        assert_eq!(rows[0].clicks, 3.0);
+        assert_eq!(rows[0].impressions, 120.0);
+    }
+
+    #[test]
+    fn parse_page_daily_rows_empty_when_no_rows() {
+        let resp = serde_json::json!({});
+        assert!(parse_page_daily_rows(&resp).unwrap().is_empty());
+    }
 }
