@@ -2,6 +2,21 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
+/// Minimum GSC impressions (90-day window, ≈5/day) required before an article
+/// may enter the CTR fix funnel. Below this there is not enough data to judge.
+pub const MIN_IMPRESSIONS_FLOOR: f64 = 450.0;
+
+/// An article underperforms when its actual CTR is below this fraction of the
+/// position-expected target CTR.
+pub const CTR_UNDERPERFORMANCE_RATIO: f64 = 0.5;
+
+/// True when the article's actual CTR is less than half the position-expected
+/// target CTR. Requires a non-zero target (i.e. avg_position within 1-20) —
+/// without a position expectation there is nothing to compare against.
+pub fn ctr_underperforms(ctr: f64, target_ctr: f64) -> bool {
+    target_ctr > 0.0 && ctr < CTR_UNDERPERFORMANCE_RATIO * target_ctr
+}
+
 /// Position-aware target CTR curve.
 ///
 /// | Position Range | Target CTR |
@@ -89,9 +104,16 @@ pub fn classify_query_intent(query: &str) -> &'static str {
 /// Build the CTR audit context by reading articles.json, extracting excerpts,
 /// computing clicks_lost per article, and returning structured JSON.
 ///
+/// Admission into the fix funnel requires BOTH enough data (impressions >=
+/// `MIN_IMPRESSIONS_FLOOR`) AND a detected problem — either a core format
+/// violation (file/title/meta/snippet) or CTR underperformance vs the
+/// position-expected target (`ctr_underperforms`). Each admitted record carries
+/// a `detection_reasons` array documenting why it was admitted.
+///
 /// Uses persistent `article_audit_state` to skip articles that were healthy on the
 /// last audit AND have not changed since. This prevents re-flagging already-fixed
-/// issues across repeated audit runs.
+/// issues across repeated audit runs. The skip is bypassed when fresh GSC data
+/// shows CTR underperformance — the content hash does not cover GSC movement.
 pub(crate) fn exec_ctr_build_context(
     task: &Task,
     project_path: &str,
@@ -129,6 +151,7 @@ pub(crate) fn exec_ctr_build_context(
     let mut article_records: Vec<serde_json::Value> = Vec::new();
     let mut skipped_healthy = 0usize;
     let mut skipped_unchanged = 0usize;
+    let mut skipped_low_impressions = 0usize;
 
     for article in &articles {
         let id = article["id"].as_i64().unwrap_or(0);
@@ -141,6 +164,20 @@ pub(crate) fn exec_ctr_build_context(
         let clicks = gsc["clicks"].as_f64().unwrap_or(0.0);
         let ctr = gsc["ctr"].as_f64().unwrap_or(0.0);
         let avg_position = gsc["avg_position"].as_f64().unwrap_or(0.0);
+
+        // Impressions floor: without enough GSC data there is no basis for a fix,
+        // regardless of linter state.
+        if impressions < MIN_IMPRESSIONS_FLOOR {
+            skipped_low_impressions += 1;
+            continue;
+        }
+
+        // CTR underperformance derives from GSC data only, so it must be evaluated
+        // BEFORE the skip-unchanged cache: `content_hash` covers title/meta/snippet/
+        // FAQ state, not GSC movement. A fresh CTR collapse on an unchanged MDX file
+        // must still re-admit the article.
+        let target_ctr = target_ctr_for_position(avg_position);
+        let ctr_underperforming = ctr_underperforms(ctr, target_ctr);
 
         // Extract current MDX state
         let (current_title, meta_description, first_paragraph, h1, has_faq_schema, file_found) =
@@ -165,17 +202,21 @@ pub(crate) fn exec_ctr_build_context(
             has_faq_schema,
         );
 
-        // Check stored audit state: if hash matches and was healthy, skip
-        if let Ok(Some(stored)) =
-            crate::db::get_article_audit_state(conn, &task.project_id, &file_ref, "ctr_audit")
-        {
-            if stored.content_hash == content_hash && stored.was_healthy {
-                skipped_unchanged += 1;
-                continue;
+        // Check stored audit state: skip only when the hash matches, the article
+        // was healthy, AND CTR still meets the position-expected target. The hash
+        // does not cover GSC movement, so a CTR collapse bypasses the skip.
+        if !ctr_underperforming {
+            if let Ok(Some(stored)) =
+                crate::db::get_article_audit_state(conn, &task.project_id, &file_ref, "ctr_audit")
+            {
+                if stored.content_hash == content_hash && stored.was_healthy {
+                    skipped_unchanged += 1;
+                    continue;
+                }
             }
         }
 
-        // Run deterministic health checks
+        // Run deterministic health checks (core: file/title/meta/snippet; FAQ is advisory)
         let health = crate::engine::exec::audit_health::check_article_health(
             &current_title,
             &meta_description,
@@ -185,25 +226,34 @@ pub(crate) fn exec_ctr_build_context(
             file_found,
         );
 
+        // Compute clicks_lost using position-aware target CTR
+        let clicks_lost = impressions * (target_ctr - ctr).max(0.0);
+
+        // Admission gate: core format violation OR CTR underperformance.
+        let mut detection_reasons: Vec<&str> = Vec::new();
+        if !health.all_ok() {
+            detection_reasons.push("format_violation");
+        }
+        if ctr_underperforming {
+            detection_reasons.push("ctr_underperformance");
+        }
+        let healthy = detection_reasons.is_empty();
+
         // Persist the audit state immediately (healthy or not)
         let _ = crate::db::set_article_audit_state(
             conn,
             &task.project_id,
             &file_ref,
             "ctr_audit",
-            health.all_ok(),
+            healthy,
             &content_hash,
             &health.issues,
         );
 
-        if health.all_ok() {
+        if healthy {
             skipped_healthy += 1;
             continue;
         }
-
-        // Compute clicks_lost using position-aware target CTR
-        let target_ctr = target_ctr_for_position(avg_position);
-        let clicks_lost = impressions * (target_ctr - ctr).max(0.0);
 
         // Load rendered audit data if available
         let rendered_audit = crate::db::get_ctr_rendered_audit(conn, &task.project_id, id)
@@ -244,6 +294,7 @@ pub(crate) fn exec_ctr_build_context(
             },
             "clicks_lost": clicks_lost,
             "target_ctr": target_ctr,
+            "detection_reasons": detection_reasons,
             "issues_detected": {
                 "file_not_found": !health.file_found,
                 "title_too_long": !health.title_ok,
@@ -258,11 +309,12 @@ pub(crate) fn exec_ctr_build_context(
         }));
     }
 
-    if skipped_healthy > 0 || skipped_unchanged > 0 {
+    if skipped_healthy > 0 || skipped_unchanged > 0 || skipped_low_impressions > 0 {
         log::info!(
-            "[ctr_audit] Skipped {} healthy + {} unchanged articles",
+            "[ctr_audit] Skipped {} healthy + {} unchanged + {} low-impressions articles",
             skipped_healthy,
-            skipped_unchanged
+            skipped_unchanged,
+            skipped_low_impressions
         );
     }
 
@@ -318,10 +370,11 @@ pub(crate) fn exec_ctr_build_context(
     };
 
     let mut msg = format!(
-        "CTR context built for {} articles ({} healthy, {} unchanged){}",
+        "CTR context built for {} articles ({} healthy, {} unchanged, {} low-impressions){}",
         article_records.len(),
         skipped_healthy,
         skipped_unchanged,
+        skipped_low_impressions,
         clean_msg
     );
     if query_enriched > 0 {

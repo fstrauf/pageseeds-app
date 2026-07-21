@@ -338,3 +338,264 @@ Q: What?\nA: This.
         cleanup(&path);
     }
 
+    fn test_task(id: &str) -> crate::models::task::Task {
+        crate::models::task::Task {
+            id: id.to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "ctr_audit".to_string(),
+            phase: "investigation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    /// Write a project with a single article + MDX file; returns the temp path.
+    fn setup_single_article_project(
+        slug: &str,
+        title: &str,
+        meta: &str,
+        first_paragraph: &str,
+        gsc: serde_json::Value,
+    ) -> String {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = std::path::Path::new(&path)
+            .join(".github")
+            .join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let content_dir = std::path::Path::new(&path).join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        let articles = serde_json::json!({
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": slug,
+                    "title": title,
+                    "target_keyword": "test keyword",
+                    "file": "content/001_article.mdx",
+                    "gsc": gsc
+                }
+            ]
+        });
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            serde_json::to_string_pretty(&articles).unwrap(),
+        )
+        .unwrap();
+
+        let mdx = format!(
+            "---\ntitle: \"{}\"\ndescription: \"{}\"\ndate: \"2024-01-01\"\n---\n\n# {}\n\n{}\n\n## Section\n\nMore content.\n",
+            title, meta, title, first_paragraph
+        );
+        std::fs::write(content_dir.join("001_article.mdx"), mdx).unwrap();
+        path
+    }
+
+    /// A snippet that passes the linter: 45 words, contains the target keyword.
+    fn good_snippet() -> String {
+        format!("test keyword {}", "filler ".repeat(43))
+    }
+
+    /// A meta description that passes the linter: 130-155 chars.
+    fn good_meta() -> String {
+        "m".repeat(140)
+    }
+
+    #[test]
+    fn test_ctr_underperforms_helper() {
+        // position 8.5 → target 0.008; half of target is 0.004
+        assert!(ctr_underperforms(0.001, 0.008));
+        assert!(!ctr_underperforms(0.004, 0.008));
+        assert!(!ctr_underperforms(0.006, 0.008));
+        // No position expectation (target 0) → never underperforms
+        assert!(!ctr_underperforms(0.0, 0.0));
+    }
+
+    #[test]
+    fn test_well_formatted_article_admitted_on_ctr_underperformance() {
+        let path = setup_single_article_project(
+            "well-formatted",
+            "Good Title",
+            &good_meta(),
+            &good_snippet(),
+            // pos 8.5 → target 0.008; ctr 0.001 << 0.004 → underperforms
+            serde_json::json!({ "impressions": 10000.0, "clicks": 10.0, "ctr": 0.001, "avg_position": 8.5 }),
+        );
+
+        let conn = test_db();
+        let result = exec_ctr_build_context(&test_task("task-ctr"), &path, None, &conn);
+        assert!(result.success, "build_context failed: {}", result.message);
+
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            1,
+            "well-formatted but underperforming article should be admitted"
+        );
+
+        let article = &output["articles"][0];
+        let reasons: Vec<&str> = article["detection_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            reasons,
+            vec!["ctr_underperformance"],
+            "only CTR underperformance should be detected, got {:?}",
+            reasons
+        );
+        assert!(article["clicks_lost"].as_f64().unwrap() > 0.0);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_low_impressions_skipped_even_when_linter_fails() {
+        let path = setup_single_article_project(
+            "low-impressions",
+            "Good Title",
+            "short", // meta linter violation
+            "too short", // snippet linter violation
+            serde_json::json!({ "impressions": 100.0, "clicks": 0.0, "ctr": 0.0, "avg_position": 5.0 }),
+        );
+
+        let conn = test_db();
+        let result = exec_ctr_build_context(&test_task("task-low"), &path, None, &conn);
+        assert!(result.success);
+
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            0,
+            "article below the impressions floor must never enter the funnel"
+        );
+        assert!(
+            result.message.contains("1 low-impressions"),
+            "skip counter should be reported, got: {}",
+            result.message
+        );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_ctr_collapse_bypasses_skip_unchanged() {
+        // Run 1: healthy CTR — article is skipped as healthy and the audit state
+        // (was_healthy + content_hash) is persisted.
+        let path = setup_single_article_project(
+            "skip-bypass",
+            "Good Title",
+            &good_meta(),
+            &good_snippet(),
+            // pos 8.5 → target 0.008; ctr 0.006 >= half of target → healthy
+            serde_json::json!({ "impressions": 10000.0, "clicks": 60.0, "ctr": 0.006, "avg_position": 8.5 }),
+        );
+
+        let conn = test_db();
+        let result = exec_ctr_build_context(&test_task("task-run1"), &path, None, &conn);
+        assert!(result.success, "run 1 failed: {}", result.message);
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            0,
+            "healthy article should not be admitted"
+        );
+
+        // Sanity: an unchanged, still-healthy article hits the skip-unchanged cache.
+        let result = exec_ctr_build_context(&test_task("task-run2"), &path, None, &conn);
+        assert!(result.success);
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            0,
+            "unchanged healthy article should be skipped"
+        );
+
+        // Run 3: same MDX (identical content_hash) but CTR collapsed in fresh GSC
+        // data → the skip must be bypassed and the article re-admitted.
+        let auto_dir = std::path::Path::new(&path)
+            .join(".github")
+            .join("automation");
+        let articles = serde_json::json!({
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "skip-bypass",
+                    "title": "Good Title",
+                    "target_keyword": "test keyword",
+                    "file": "content/001_article.mdx",
+                    "gsc": { "impressions": 10000.0, "clicks": 10.0, "ctr": 0.001, "avg_position": 8.5 }
+                }
+            ]
+        });
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            serde_json::to_string_pretty(&articles).unwrap(),
+        )
+        .unwrap();
+
+        let result = exec_ctr_build_context(&test_task("task-run3"), &path, None, &conn);
+        assert!(result.success, "run 3 failed: {}", result.message);
+        let output: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            output["total_articles"].as_i64().unwrap(),
+            1,
+            "CTR collapse on unchanged content must bypass the skip-unchanged cache"
+        );
+
+        let reasons: Vec<&str> = output["articles"][0]["detection_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            reasons,
+            vec!["ctr_underperformance"],
+            "only CTR underperformance should be detected, got {:?}",
+            reasons
+        );
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_check_article_health_faq_advisory() {
+        let health = crate::engine::exec::audit_health::check_article_health(
+            "Good Title",
+            &good_meta(),
+            &good_snippet(),
+            "test keyword",
+            false, // no FAQ schema
+            true,
+        );
+        assert!(
+            health.all_ok(),
+            "FAQ-less article with passing core checks should be healthy"
+        );
+        assert!(
+            !health.issues.contains(&"missing_faq_schema".to_string()),
+            "missing FAQ must not appear in issues: {:?}",
+            health.issues
+        );
+        assert!(health.issues.is_empty());
+        assert!(!health.faq_ok, "faq_ok field stays computed (advisory)");
+    }
+
