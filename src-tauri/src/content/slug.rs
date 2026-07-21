@@ -85,11 +85,23 @@ impl std::fmt::Display for SlugIssue {
 /// assert_eq!(normalize_url_slug("/blog/my-post"), "my-post");
 /// assert_eq!(normalize_url_slug("001_my_post"), "my-post");
 /// assert_eq!(normalize_url_slug("My_Post"), "my-post");
+/// assert_eq!(normalize_url_slug("my-post.mdx"), "my-post");
+/// assert_eq!(normalize_url_slug("/blog/my-post.md"), "my-post");
 /// ```
 pub fn normalize_url_slug(slug: &str) -> String {
     let slug = slug.trim();
     let slug = slug.trim_start_matches('/').trim_end_matches('/');
     let slug = slug.rsplit('/').next().unwrap_or(slug);
+    // Strip a Markdown extension an agent may have copied from a filename
+    // (`my-post.mdx` → `my-post`) — a URL slug never has one.
+    let lower = slug.to_lowercase();
+    let slug = if lower.ends_with(".mdx") {
+        &slug[..slug.len() - ".mdx".len()]
+    } else if lower.ends_with(".md") {
+        &slug[..slug.len() - ".md".len()]
+    } else {
+        slug
+    };
     // Strip ALL leading numeric prefixes (e.g. 2025-08-01- → "")
     let re = numeric_prefix_re();
     let mut slug = slug.to_string();

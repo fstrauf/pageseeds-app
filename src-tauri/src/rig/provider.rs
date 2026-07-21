@@ -36,6 +36,25 @@ pub enum LlmBackend {
     Ollama { base_url: String, model: String },
 }
 
+impl LlmBackend {
+    /// Return a copy scoped to `project_path` for agentic backends with file
+    /// tools. `resolve_backend` fills `KimiCli.work_dir` with a placeholder
+    /// (the process cwd); `run_agent_with_backend` overrides it per call, but
+    /// structured extraction (`extract_with_backend`) has no such override —
+    /// without this, the kimi agent's file tools inspect the app's launch dir
+    /// instead of the user's project (e.g. it "verifies" link slugs against
+    /// the wrong repo and refuses to link). Non-agentic backends are returned
+    /// unchanged.
+    pub fn scoped_to_project(&self, project_path: &str) -> LlmBackend {
+        match self {
+            LlmBackend::KimiCli { .. } => LlmBackend::KimiCli {
+                work_dir: project_path.to_string(),
+            },
+            other => other.clone(),
+        }
+    }
+}
+
 /// Provider-name-based file-IO capability check — the single source of truth
 /// for whether a provider can read/write files in the project repo itself.
 ///
