@@ -23,7 +23,7 @@ This file is cumulative. Each merge task appends new rules without duplicating e
 
 PageSeeds also:
 - Modifies the keeper MDX file to include merged content
-- Leaves old redirect-target MDX files in place (the repo decides when to remove them)
+- Depublishes old redirect-source pages: sets `status: "redirected"` in their MDX frontmatter and in `articles.json`. Files stay on disk (recovery path); the repo decides when to delete them
 - Syncs article metadata to `articles.json`
 
 ## What the Repo Must Do
@@ -101,13 +101,13 @@ For static generators (Astro, Hugo, etc.), configure redirects at the CDN layer 
 2. **Return 301 status** for permanent redirects. Do not use 302.
 3. **Preserve query strings** if the platform supports it (`destination` with `:path*` or equivalent).
 4. **Do not redirect to 404s.** The destination URL must resolve to a real page.
-5. **Remove or depublish old pages.** After redirects are live, delete the old MDX files or move them out of the content directory. Keeping them risks Google indexing both the redirect and the old content.
+5. **Do not re-publish depublished pages.** PageSeeds marks redirect sources as `status: "redirected"` (frontmatter + `articles.json`). The repo may delete the old MDX files once redirects are live, but must not serve them as live pages while redirects are active.
 
 ## What Not To Do
 
 - Do not ignore `redirects.csv` and leave old URLs returning 200.
 - Do not implement redirects only in client-side JS (React Router, etc.). Search engines need HTTP-level redirects.
-- Do not leave old MDX files in `content/blog/` after their redirects are active.
+- Do not re-publish depublished (`status: "redirected"`) MDX files after their redirects are active.
 - Do not manually hardcode PageSeeds redirects without reading the CSV. The CSV is the source of truth and updates after each merge.
 
 ## Implementation Checklist
@@ -117,7 +117,7 @@ A repo is PageSeeds redirect-compatible when:
 - [ ] `.github/automation/redirects.csv` is read at build time.
 - [ ] Each rule produces an HTTP 301 (or configured status) redirect.
 - [ ] Redirects work for both trailing and non-trailing slash variants if the platform does not normalize them automatically.
-- [ ] Old redirect-target MDX files are removed from the content directory after deploy.
+- [ ] Old redirect-source pages stay depublished (`status: "redirected"`); their MDX files may optionally be removed after deploy.
 - [ ] The build succeeds with an empty or missing `redirects.csv` (no hard dependency).
 - [ ] A deploy-time check confirms at least one redirect from the CSV responds with 301.
 
@@ -129,7 +129,7 @@ When wiring up PageSeeds redirects in this repo:
 2. Add a build-time reader for `.github/automation/redirects.csv`.
 3. Merge PageSeeds redirects with any existing hardcoded redirects.
 4. Ensure 301 status is used for permanent redirects.
-5. Update the build/deploy pipeline to delete old MDX files after redirects are confirmed working.
+5. Verify redirect-source pages are depublished (`status: "redirected"`); optionally delete their MDX files after redirects are confirmed working.
 6. Run the build and verify no errors occur when `redirects.csv` is missing.
 7. Add a test or smoke check that at least one CSV redirect resolves to 301.
 

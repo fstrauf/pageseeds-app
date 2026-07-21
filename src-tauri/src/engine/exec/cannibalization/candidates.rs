@@ -144,7 +144,16 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
                     .sum();
                 ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
             });
-            groups
+            // Splitting by keyword is only useful when every group is mergeable
+            // on its own (≥2 pages). A size-1 group would be dropped below, which
+            // can zero out an entire cluster whose pages all have distinct target
+            // keywords — fall back to one candidate for the whole theme (the pages
+            // were clustered by content similarity in the first place).
+            if groups.iter().any(|g| g.len() < 2) {
+                vec![all_pages.clone()]
+            } else {
+                groups
+            }
         };
 
         for group in groups_to_process {

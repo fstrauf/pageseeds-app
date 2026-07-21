@@ -451,4 +451,155 @@ A: Because.
         assert_eq!(doc["batch_count"].as_u64(), Some(1));
         assert_eq!(doc["total_redirects"].as_u64(), Some(1));
     }
+
+    // ─── depublish redirect sources ──────────────────────────────────────
+
+    struct DepublishFixture {
+        dir: PathBuf,
+        conn: rusqlite::Connection,
+        task: Task,
+    }
+
+    /// Temp project with a published keeper + a published redirect source,
+    /// an in-memory DB with matching rows, and a merge task whose plan
+    /// redirects `/blog/old-post` into `/blog/keeper`.
+    fn depublish_fixture(name: &str) -> DepublishFixture {
+        let dir = std::env::temp_dir().join(format!(
+            "pageseeds_depublish_{}_{}_{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("content")).unwrap();
+        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
+        std::fs::write(
+            dir.join("content").join("001_keeper.mdx"),
+            "---\ntitle: Keeper\nstatus: published\ndate: \"2024-01-01\"\n---\n\nKeeper body.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("content").join("002_old_post.mdx"),
+            "---\ntitle: Old\nstatus: published\ndate: \"2024-01-02\"\n---\n\nOld body.\n",
+        )
+        .unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('p1', 'Test', ?1, 1, 'workspace')",
+            [dir.to_str().unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (id, title, url_slug, file, status, published_date, content_gaps_addressed, project_id)
+             VALUES (1, 'Keeper', 'keeper', './content/001_keeper.mdx', 'published', '2024-01-01', '[]', 'p1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (id, title, url_slug, file, status, published_date, content_gaps_addressed, project_id)
+             VALUES (2, 'Old', 'old-post', './content/002_old_post.mdx', 'published', '2024-01-02', '[]', 'p1')",
+            [],
+        )
+        .unwrap();
+
+        let strategy = serde_json::json!({
+            "merge_recommendations": [{
+                "cluster_id": "test",
+                "keep_url": "/blog/keeper",
+                "redirect_urls": ["/blog/old-post"]
+            }]
+        });
+        let task = Task {
+            project_id: "p1".to_string(),
+            title: Some("Merge cluster: test".to_string()),
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "cannibalization_strategy".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("cannibalization_audit".to_string()),
+                content: Some(strategy.to_string()),
+            }],
+            ..Task::default()
+        };
+
+        DepublishFixture { dir, conn, task }
+    }
+
+    #[test]
+    fn test_depublish_redirect_sources_marks_db_frontmatter_and_articles_json() {
+        let fx = depublish_fixture("marks");
+
+        let depublished =
+            depublish_redirect_sources(&fx.task, fx.dir.to_str().unwrap(), &fx.conn).unwrap();
+        assert_eq!(depublished, 1);
+
+        // Frontmatter status updated; file stays on disk.
+        let source_mdx =
+            std::fs::read_to_string(fx.dir.join("content").join("002_old_post.mdx")).unwrap();
+        assert!(
+            source_mdx.contains("status: \"redirected\""),
+            "frontmatter must be redirected: {}",
+            source_mdx
+        );
+        assert!(source_mdx.contains("Old body."), "content must be kept");
+
+        // SQLite row updated.
+        let db_status: String = fx
+            .conn
+            .query_row("SELECT status FROM articles WHERE id = 2", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(db_status, "redirected");
+
+        // Keeper untouched on disk and in the DB.
+        let keeper_mdx =
+            std::fs::read_to_string(fx.dir.join("content").join("001_keeper.mdx")).unwrap();
+        assert!(keeper_mdx.contains("status: published"));
+        let keeper_status: String = fx
+            .conn
+            .query_row("SELECT status FROM articles WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(keeper_status, "published");
+
+        // articles.json export reflects the new state.
+        crate::db::export::write_articles_to_repo(&fx.conn, "p1", &fx.dir).unwrap();
+        let json = std::fs::read_to_string(
+            fx.dir.join(".github").join("automation").join("articles.json"),
+        )
+        .unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let articles = doc["articles"].as_array().unwrap();
+        let old = articles
+            .iter()
+            .find(|a| a["id"].as_i64() == Some(2))
+            .unwrap();
+        assert_eq!(old["status"].as_str(), Some("redirected"));
+        let keeper = articles
+            .iter()
+            .find(|a| a["id"].as_i64() == Some(1))
+            .unwrap();
+        assert_eq!(keeper["status"].as_str(), Some("published"));
+
+        let _ = std::fs::remove_dir_all(&fx.dir);
+    }
+
+    #[test]
+    fn test_depublish_redirect_sources_fails_loudly_on_missing_file() {
+        let fx = depublish_fixture("missing");
+        std::fs::remove_file(fx.dir.join("content").join("002_old_post.mdx")).unwrap();
+
+        let err = depublish_redirect_sources(&fx.task, fx.dir.to_str().unwrap(), &fx.conn)
+            .unwrap_err();
+        assert!(
+            err.contains("old-post"),
+            "error must name the failing slug: {}",
+            err
+        );
+
+        let _ = std::fs::remove_dir_all(&fx.dir);
+    }
 }

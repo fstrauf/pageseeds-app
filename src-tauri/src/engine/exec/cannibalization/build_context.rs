@@ -40,10 +40,18 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
     }
 
     // ── 1. Build article records with content extraction ──────────────────────
+    // Merged-away pages stay on disk (status `redirected`); their slugs live in
+    // redirects.csv. Exclude them so a completed merge is never re-clustered and
+    // re-recommended by the next audit.
+    let redirected_slugs = crate::content::redirects::load_redirect_source_slugs(project_path);
+
     let mut records: Vec<ArticleRecord> = Vec::new();
     for article in articles.iter() {
         let id = article["id"].as_i64().unwrap_or(0);
         let url_slug = article["url_slug"].as_str().unwrap_or("").to_string();
+        if redirected_slugs.contains(&crate::content::slug::normalize_url_slug(&url_slug)) {
+            continue;
+        }
         let title = article["title"].as_str().unwrap_or("").to_string();
         let target_keyword = article["target_keyword"].as_str().unwrap_or("").to_string();
         let file_ref = article["file"].as_str().unwrap_or("").to_string();
