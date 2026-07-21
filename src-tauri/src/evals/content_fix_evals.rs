@@ -49,15 +49,22 @@ fn check_patch(
         .unwrap_or_default();
 
     if let Some(err) = &patch.error {
-        // A refusal is a CORRECT outcome when the only requested category is
-        // internal_links and the agent declines to add links it cannot verify —
-        // the prompt explicitly instructs this refusal ("If you are unsure whether
-        // a target exists, do NOT include it"). The refusal wording varies, so
-        // match structurally: links-only request + error mentioning links.
-        // Any other agent-reported error fails the case.
+        // A refusal is a CORRECT outcome only when the only requested category
+        // is internal_links AND the context provided no valid link targets
+        // (empty `available_link_slugs`) — then the prompt's "if you are
+        // unsure whether a target exists, do NOT include it" rule applies.
+        // When the context supplies a deterministic target list, the model
+        // has verified slugs and must link from it, so a refusal fails.
+        // The refusal wording varies, so match structurally: links-only
+        // request + error mentioning links. Any other agent-reported error
+        // fails the case.
         let only_links_requested = requested.len() == 1 && requested.contains(&"internal_links");
         let is_link_refusal = err.to_lowercase().contains("link");
-        if !(only_links_requested && is_link_refusal) {
+        let no_targets_provided = context["available_link_slugs"]
+            .as_array()
+            .map(|arr| arr.is_empty())
+            .unwrap_or(true);
+        if !(only_links_requested && is_link_refusal && no_targets_provided) {
             violations.push(format!("patch carries agent-reported error: {}", err));
         }
         return violations;
@@ -183,11 +190,24 @@ fn check_patch(
                     }
                 }
             }
-            // Omission is accepted: the prompt says "if you are unsure whether a
-            // target exists, do NOT include it", and from the eval's temp project
-            // the model cannot verify slugs (its work_dir is the app repo, not the
-            // fixture project). The hallucination guard above is the real contract.
-            None => {}
+            None => {
+                // Omission is accepted only when the context provided no valid
+                // link targets — then the prompt's "if you are unsure whether a
+                // target exists, do NOT include it" rule applies. When the
+                // context supplies a deterministic `available_link_slugs` list,
+                // the model must link from it; silent omission is a failure.
+                let targets_provided = context["available_link_slugs"]
+                    .as_array()
+                    .map(|arr| !arr.is_empty())
+                    .unwrap_or(false);
+                if targets_provided {
+                    violations.push(
+                        "internal_links suggested but patch has no internal_links change \
+                         even though available_link_slugs were provided in the context"
+                            .to_string(),
+                    );
+                }
+            }
         }
     }
 
@@ -304,6 +324,12 @@ mod contract_tests {
         vec!["real-article".to_string(), "another-real-one".to_string()]
     }
 
+    fn context_with_link_targets(categories: &[&str], slugs: &[&str]) -> serde_json::Value {
+        let mut ctx = context(categories);
+        ctx["available_link_slugs"] = serde_json::json!(slugs);
+        ctx
+    }
+
     fn patch(changes: ContentFixChanges) -> ContentFixPatch {
         ContentFixPatch {
             article_id: 7,
@@ -399,6 +425,47 @@ mod contract_tests {
             changes: ContentFixChanges::default(),
         };
         let violations = check_patch(&p, &context(&["title"]), &valid_slugs());
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("agent-reported error"));
+    }
+
+    #[test]
+    fn requires_links_when_targets_provided() {
+        let violations = check_patch(
+            &patch(ContentFixChanges::default()),
+            &context_with_link_targets(&["internal_links"], &["real-article"]),
+            &valid_slugs(),
+        );
+        assert!(
+            violations.iter().any(|v| v.contains("available_link_slugs")),
+            "expected an omission violation, got: {:?}",
+            violations
+        );
+    }
+
+    #[test]
+    fn accepts_omission_when_no_targets_provided() {
+        let violations = check_patch(
+            &patch(ContentFixChanges::default()),
+            &context(&["internal_links"]),
+            &valid_slugs(),
+        );
+        assert!(violations.is_empty(), "unexpected violations: {:?}", violations);
+    }
+
+    #[test]
+    fn rejects_link_refusal_when_targets_provided() {
+        let p = ContentFixPatch {
+            article_id: 7,
+            file: "content/blog/slug.mdx".to_string(),
+            error: Some("could not verify the suggested link targets".to_string()),
+            changes: ContentFixChanges::default(),
+        };
+        let violations = check_patch(
+            &p,
+            &context_with_link_targets(&["internal_links"], &["real-article"]),
+            &valid_slugs(),
+        );
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("agent-reported error"));
     }
