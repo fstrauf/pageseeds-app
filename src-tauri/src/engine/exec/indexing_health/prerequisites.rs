@@ -21,7 +21,7 @@ pub(crate) fn exec_ihc_check_prerequisites(task: &Task, project_path: &str) -> S
     let paths = ProjectPaths::from_path(project_path);
 
     let checks = vec![
-        check_artifact(&paths, "gsc_collection.json", chrono::Duration::days(7)),
+        check_gsc_collection_fresh(&paths),
         check_artifact(&paths, "link_scan.json", chrono::Duration::days(7)),
         check_artifact(&paths, "content_audit.json", chrono::Duration::days(14)),
     ];
@@ -209,6 +209,37 @@ pub(crate) fn artifact_to_task_type(artifact: &str) -> &str {
     }
 }
 
+/// Freshness check for the GSC prerequisite (issue #25).
+///
+/// `gsc_collection.json` (URL Inspection) is only half of `collect_gsc` — the
+/// other half is the Search Analytics sync into `ctr_query_metrics`, which
+/// `ctr_audit` / `cannibalization_audit` / `content_review` read. This check
+/// therefore ALSO requires the `gsc_metrics_synced_at` marker written by the
+/// sync, and fails closed when the marker is missing or older than 7 days,
+/// even if the collection file itself is fresh. The artifact stays
+/// `gsc_collection.json` so the failure action still maps to re-running
+/// `collect_gsc` and the system self-heals.
+pub(crate) fn check_gsc_collection_fresh(paths: &ProjectPaths) -> PrerequisiteCheck {
+    let collection = check_artifact(paths, "gsc_collection.json", chrono::Duration::days(7));
+    if !collection.fresh {
+        return collection;
+    }
+    let marker = check_artifact(
+        paths,
+        crate::engine::exec::gsc::GSC_METRICS_SYNC_MARKER,
+        chrono::Duration::days(crate::engine::exec::common::GSC_METRICS_MAX_AGE_DAYS),
+    );
+    if marker.fresh {
+        return collection;
+    }
+    PrerequisiteCheck {
+        artifact: "gsc_collection.json".to_string(),
+        fresh: false,
+        age_hours: marker.age_hours,
+        action: Some("auto_enqueue_gsc_collection".to_string()),
+    }
+}
+
 pub(crate) fn check_artifact(
     paths: &ProjectPaths,
     filename: &str,
@@ -221,7 +252,7 @@ pub(crate) fn check_artifact(
                 Ok(modified) => match modified.elapsed() {
                     Ok(elapsed) => {
                         let hours = elapsed.as_secs() / 3600;
-                        (hours < max_age.num_seconds() as u64, Some(hours as i64))
+                        (hours < max_age.num_hours() as u64, Some(hours as i64))
                     }
                     Err(_) => (false, None),
                 },

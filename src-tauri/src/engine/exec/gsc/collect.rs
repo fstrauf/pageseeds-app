@@ -342,26 +342,35 @@ pub(crate) fn exec_collect_gsc(
     let sync_result =
         crate::engine::exec::gsc::exec_gsc_sync_articles(task, project_path, gsc_token);
     let (sync_ok, sync_msg) = (sync_result.success, sync_result.message);
-    if sync_ok {
-        log::info!("[collect_gsc] analytics sync succeeded: {}", sync_msg);
-    } else {
+
+    if !sync_ok {
         log::warn!(
-            "[collect_gsc] analytics sync failed — downstream tasks may lack GSC metrics: {}",
+            "[collect_gsc] analytics sync failed — failing the step so the stale-metrics problem is visible: {}",
             sync_msg
         );
+        // Fail the step (issue #25): gsc_collection.json is already on disk, so
+        // a retry only needs to redo the sync — which is idempotent (DELETE+INSERT).
+        return StepResult {
+            success: false,
+            message: format!(
+                "URL inspection succeeded ({} URLs inspected, {} issues found, gsc_collection.json written), but the Search Analytics sync failed: {}. Downstream audits would run on stale metrics. Re-run collect_gsc to retry the sync.",
+                records.len(),
+                issues_found,
+                sync_msg
+            ),
+            output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
+        };
     }
+
+    log::info!("[collect_gsc] analytics sync succeeded: {}", sync_msg);
 
     StepResult {
         success: true,
         message: format!(
-            "{} URLs inspected, {} issues found. {}",
+            "{} URLs inspected, {} issues found. Analytics synced: {}.",
             records.len(),
             issues_found,
-            if sync_ok {
-                format!("Analytics synced: {}.", sync_msg)
-            } else {
-                format!("Analytics sync failed: {}.", sync_msg)
-            }
+            sync_msg
         ),
         output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
     }

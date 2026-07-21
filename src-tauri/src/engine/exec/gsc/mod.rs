@@ -13,6 +13,11 @@ mod recovery;
 mod sync;
 mod task_spawner;
 
+/// Sidecar marker file (in the automation dir) recording when the Search
+/// Analytics sync last succeeded. Written by `sync.rs` on success; read by the
+/// indexing-health prerequisite gate to fail closed on stale/missing metrics.
+pub(crate) const GSC_METRICS_SYNC_MARKER: &str = "gsc_metrics_synced_at";
+
 pub(crate) use collect::*;
 pub(crate) use drift::*;
 pub(crate) use investigate::*;

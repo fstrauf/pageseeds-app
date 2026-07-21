@@ -236,6 +236,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
     }
 
     #[test]
+    fn check_artifact_old_file_is_stale() {
+        let dir = unique_temp_dir("ihc_test");
+        let paths = paths_from_dir(&dir);
+        std::fs::create_dir_all(&paths.automation_dir).unwrap();
+        let file_path = paths.automation_dir.join("old.json");
+        std::fs::write(&file_path, "{}").unwrap();
+        // Backdate mtime to 10 days ago
+        let ten_days_ago = SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&file_path)
+            .unwrap()
+            .set_modified(ten_days_ago)
+            .unwrap();
+
+        let check = check_artifact(&paths, "old.json", chrono::Duration::days(7));
+        assert!(!check.fresh, "10-day-old artifact must be stale under a 7-day gate");
+        assert!(check.age_hours.unwrap() >= 9 * 24);
+        assert_eq!(check.action, Some("auto_enqueue_old".to_string()));
+    }
+
+    #[test]
     fn check_artifact_cannibalization_auto_enqueues() {
         let dir = unique_temp_dir("ihc_test");
         let paths = paths_from_dir(&dir);
@@ -250,6 +272,57 @@ use std::time::{SystemTime, UNIX_EPOCH};
         assert!(check.fresh);
         assert_eq!(check.action, None);
         // The stale action mapping is verified by the prerequisite_report test below.
+    }
+
+    // ─── check_gsc_collection_fresh tests (issue #25) ──────────────────────────
+
+    #[test]
+    fn gsc_check_fails_closed_when_marker_missing() {
+        let dir = unique_temp_dir("ihc_gsc_gate");
+        let paths = paths_from_dir(&dir);
+        std::fs::create_dir_all(&paths.automation_dir).unwrap();
+        // Fresh collection file, but no metrics marker (sync never succeeded)
+        std::fs::write(paths.automation_dir.join("gsc_collection.json"), "{}").unwrap();
+
+        let check = check_gsc_collection_fresh(&paths);
+        assert!(!check.fresh, "gate must fail closed without the metrics marker");
+        // Artifact stays gsc_collection.json so artifact_to_task_type maps the
+        // failure back to re-running collect_gsc (self-healing).
+        assert_eq!(check.artifact, "gsc_collection.json");
+        assert_eq!(
+            check.action,
+            Some("auto_enqueue_gsc_collection".to_string())
+        );
+        assert_eq!(artifact_to_task_type(&check.artifact), "collect_gsc");
+    }
+
+    #[test]
+    fn gsc_check_fresh_when_collection_and_marker_fresh() {
+        let dir = unique_temp_dir("ihc_gsc_gate");
+        let paths = paths_from_dir(&dir);
+        std::fs::create_dir_all(&paths.automation_dir).unwrap();
+        std::fs::write(paths.automation_dir.join("gsc_collection.json"), "{}").unwrap();
+        std::fs::write(
+            paths
+                .automation_dir
+                .join(crate::engine::exec::gsc::GSC_METRICS_SYNC_MARKER),
+            chrono::Utc::now().to_rfc3339(),
+        )
+        .unwrap();
+
+        let check = check_gsc_collection_fresh(&paths);
+        assert!(check.fresh);
+        assert_eq!(check.action, None);
+    }
+
+    #[test]
+    fn gsc_check_not_fresh_when_collection_stale() {
+        let dir = unique_temp_dir("ihc_gsc_gate");
+        let paths = paths_from_dir(&dir);
+        // No collection file at all → stale regardless of marker
+        let check = check_gsc_collection_fresh(&paths);
+        assert!(!check.fresh);
+        assert_eq!(check.artifact, "gsc_collection.json");
     }
 
     // ─── build_rewrite_spec tests ───────────────────────────────────────────────

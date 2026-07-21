@@ -420,6 +420,22 @@ pub(crate) fn exec_gsc_sync_articles(
         };
     }
 
+    // 10. Write the freshness marker consumed by the indexing-health
+    // prerequisite gate (issue #25). Failing here fails the step on purpose:
+    // without the marker the gate fails closed and would keep re-spawning
+    // collect_gsc forever.
+    if let Err(e) = write_metrics_sync_marker(&paths) {
+        return StepResult {
+            success: false,
+            message: format!(
+                "GSC sync succeeded but failed to write the metrics freshness marker ({}): {}",
+                paths.automation_dir.join(super::GSC_METRICS_SYNC_MARKER).display(),
+                e
+            ),
+            output: None,
+        };
+    }
+
     let summary = serde_json::json!({
         "matched": matched,
         "unmatched": unmatched,
@@ -444,5 +460,45 @@ pub(crate) fn exec_gsc_sync_articles(
             target_keyword_updated
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+    }
+}
+
+/// Write the `gsc_metrics_synced_at` marker (RFC3339 timestamp) into the
+/// automation dir. Kept as a standalone sidecar — NOT a field inside
+/// `gsc_collection.json` — because this sync also runs standalone and must not
+/// know about the collection file (issue #25).
+pub(crate) fn write_metrics_sync_marker(paths: &ProjectPaths) -> std::io::Result<()> {
+    std::fs::create_dir_all(&paths.automation_dir)?;
+    let marker_path = paths.automation_dir.join(super::GSC_METRICS_SYNC_MARKER);
+    std::fs::write(marker_path, chrono::Utc::now().to_rfc3339())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{}_{}", prefix, nanos))
+    }
+
+    #[test]
+    fn write_metrics_sync_marker_creates_rfc3339_file() {
+        let dir = unique_temp_dir("gsc_sync_marker");
+        let paths = ProjectPaths::from_path(dir.to_str().unwrap());
+
+        write_metrics_sync_marker(&paths).unwrap();
+
+        let marker_path = paths
+            .automation_dir
+            .join(crate::engine::exec::gsc::GSC_METRICS_SYNC_MARKER);
+        let content = std::fs::read_to_string(&marker_path).unwrap();
+        chrono::DateTime::parse_from_rfc3339(content.trim())
+            .expect("marker content must be a valid RFC3339 timestamp");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

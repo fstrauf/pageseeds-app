@@ -1747,6 +1747,20 @@ pub fn get_ctr_query_metrics(
     Ok(results)
 }
 
+/// Newest `fetched_at` across all of a project's query metrics, or `None` when
+/// the table has no rows for the project. Used for staleness warnings (issue #25).
+pub fn ctr_query_metrics_max_fetched_at(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT MAX(fetched_at) FROM ctr_query_metrics WHERE project_id = ?1",
+        rusqlite::params![project_id],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CTR Rendered Page Audit CRUD
 // ═══════════════════════════════════════════════════════════════════════════════
