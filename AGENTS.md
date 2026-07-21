@@ -333,11 +333,13 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 
 ## Pre-Change Checklist
 
+**Canonical pre-ship gate: `pnpm test:all`.** It runs the Rust suite (via `cargo nextest` with per-test timeouts, falling back to `cargo test`), lint, `tsc -b`, vitest, `check:ipc`, `check:task-store`, `check-bindings`, and a full build. Never improvise an ad-hoc gate command; if the gate is missing a check, add it to the `test:all` script in `package.json`.
+
 ### Rust Backend
 - [ ] Checked for reuse against the DRY catalog above
 - [ ] Task lifecycle contract checked (if creating/queuing/spawning tasks)
 - [ ] `cargo check` passes before touching the frontend
-- [ ] `cargo test` passes — especially `all_task_types_have_non_fallback_handler`
+- [ ] `pnpm run test:rust` passes — especially `all_task_types_have_non_fallback_handler` (uses `cargo nextest` when installed; tests that mutate process env must hold `test_support::ENV_LOCK`)
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] Settings placed correctly: user preferences → `global_settings`; project config → `projects`
 - [ ] No business logic added to `commands/*.rs`

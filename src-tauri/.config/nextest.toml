@@ -1,0 +1,11 @@
+# cargo-nextest configuration.
+#
+# Purpose: a hung test (e.g. a live network read with no timeout) must never
+# stall the suite silently — nextest terminates tests that exceed the slow
+# threshold and reports them by name. Plain `cargo test` has no such guard.
+
+[profile.default]
+# A test is marked slow after 120s and terminated after 2 consecutive slow
+# periods (i.e. ~240s), with 10s to clean up before SIGKILL. Normal tests in
+# this suite complete in well under a minute.
+slow-timeout = { period = "120s", terminate-after = 2, grace-period = "10s" }

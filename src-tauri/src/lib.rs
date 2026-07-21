@@ -20,6 +20,9 @@ mod social;
 #[cfg(test)]
 mod evals;
 
+#[cfg(test)]
+mod test_support;
+
 use commands::{AppState, GscState, SeoState};
 use std::sync::Mutex;
 use tauri::Manager;
