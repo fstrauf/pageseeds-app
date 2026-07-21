@@ -7,12 +7,15 @@
 ///   - A prioritized list of resubmission candidates
 ///
 /// Coverage cap (issue #26): `collect_gsc` inspects at most
-/// `GSC_INSPECTION_CAP` sitemap URLs per run. When the collection meta reports
-/// `truncated: true`, sitemap URLs beyond the inspected set are NOT treated as
-/// "GSC has never inspected it" candidates — they land in the informational
-/// `coverage_capped_uninspected` bucket instead. Collection files written
-/// before this change have no meta; the pre-existing behavior is preserved for
-/// them (re-running `collect_gsc` writes the meta).
+/// `GSC_INSPECTION_CAP` sitemap URLs per run. `inspect_batch` fails the whole
+/// collection run on any inspection error, so every URL sent to the API lands
+/// in `gsc_collection.json`'s `items` — which is what the drift GSC map is
+/// built from. Therefore, when the collection meta reports `truncated: true`,
+/// a sitemap URL missing from the GSC map is definitionally a cap-skipped URL:
+/// it is NOT treated as a "GSC has never inspected it" candidate and lands in
+/// the informational `coverage_capped_uninspected` bucket instead. Collection
+/// files written before this change have no meta; the pre-existing behavior is
+/// preserved for them (re-running `collect_gsc` writes the meta).
 ///
 /// Reads:
 ///   - manifest.json (site_url + sitemap_url)
@@ -20,7 +23,7 @@
 ///   - gsc_collection.json (latest URL inspection results)
 ///   - link_scan.json (internal link graph)
 ///   - articles.json (article metadata for scoring)
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde::Deserialize;
 
@@ -115,15 +118,16 @@ pub(crate) async fn exec_gsc_drift(
     // 7. Compute drift categories
     //
     // Coverage cap (issue #26): when the collection run truncated the sitemap,
-    // only the first `cap` sitemap URLs were sent to the Inspection API. URLs
-    // beyond that set are not evidence that GSC has never inspected them, so
-    // they go into an informational bucket instead of the phantom
+    // every sitemap URL without a GSC record is a cap-skipped URL (inspection
+    // failures abort the whole run, so nothing inspected is missing from the
+    // collection). Those URLs are not evidence that GSC has never inspected
+    // them, so they go into an informational bucket instead of the phantom
     // "never inspected" candidate list.
-    let inspected_set = inspected_sitemap_set(&sitemap_entries, collection_meta.as_ref());
+    let truncated = collection_meta.as_ref().map(|m| m.truncated).unwrap_or(false);
     let buckets = categorize_sitemap_urls(
         &sitemap_map,
         &gsc_map,
-        inspected_set.as_ref(),
+        truncated,
         content_dir.as_deref(),
     );
     let in_sitemap_not_in_gsc = buckets.in_sitemap_not_in_gsc;
@@ -467,34 +471,13 @@ fn file_age_hours(path: &std::path::Path) -> Option<i32> {
     Some((elapsed.as_secs() / 3600) as i32)
 }
 
-/// Build the set of normalized sitemap URLs that were sent to the URL
-/// Inspection API during collection — but only when the collection meta
-/// reports that the sitemap was truncated by the inspection cap (issue #26).
-///
-/// Returns `None` when no truncation was recorded (including old collection
-/// files without meta), in which case every sitemap URL missing from GSC is
-/// treated as genuinely never inspected (legacy behavior).
-fn inspected_sitemap_set(
-    sitemap_entries: &[crate::gsc::sitemap::SitemapEntry],
-    meta: Option<&GscCollectionMeta>,
-) -> Option<HashSet<String>> {
-    let meta = meta.filter(|m| m.truncated)?;
-    let cap = meta.cap.unwrap_or(super::GSC_INSPECTION_CAP);
-    Some(
-        sitemap_entries
-            .iter()
-            .take(cap)
-            .map(|e| crate::engine::exec::gsc::normalize_url_for_comparison(&e.url))
-            .collect(),
-    )
-}
-
 /// Result of categorizing sitemap URLs against GSC inspection records.
 struct DriftBuckets {
     /// In sitemap, no GSC inspection record — genuinely never inspected.
     in_sitemap_not_in_gsc: Vec<DriftUrl>,
-    /// In sitemap, no GSC record, but beyond the coverage-capped inspected
-    /// set. Informational only; never becomes a resubmit candidate.
+    /// In sitemap, no GSC record, but the collection was coverage-capped, so
+    /// the URL was never sent to the Inspection API. Informational only;
+    /// never becomes a resubmit candidate.
     coverage_capped_uninspected: Vec<DriftUrl>,
     /// Inspected by GSC and not indexed.
     not_indexed: Vec<DriftUrl>,
@@ -503,13 +486,15 @@ struct DriftBuckets {
 
 /// Categorize sitemap URLs against the GSC inspection records.
 ///
-/// `inspected_set` is `Some` only when collection was coverage-capped; sitemap
-/// URLs outside that set (and without a GSC record) are coverage-capped rather
-/// than "never inspected".
+/// `truncated` is true only when the collection was coverage-capped (issue
+/// #26). Because inspection failures abort the whole collection run, every
+/// inspected URL has a GSC record — so when `truncated` is true, any sitemap
+/// URL without one was skipped by the cap and is coverage-capped rather than
+/// "never inspected".
 fn categorize_sitemap_urls(
     sitemap_map: &HashMap<String, (String, Option<String>)>,
     gsc_map: &HashMap<String, GscItem>,
-    inspected_set: Option<&HashSet<String>>,
+    truncated: bool,
     content_dir: Option<&std::path::Path>,
 ) -> DriftBuckets {
     let mut buckets = DriftBuckets {
@@ -544,11 +529,10 @@ fn categorize_sitemap_urls(
                 has_content_file: content_file_exists(content_dir, original_url),
                 issues: diagnose_url(content_dir, original_url),
             };
-            match inspected_set {
-                Some(set) if !set.contains(norm) => {
-                    buckets.coverage_capped_uninspected.push(drift_url)
-                }
-                _ => buckets.in_sitemap_not_in_gsc.push(drift_url),
+            if truncated {
+                buckets.coverage_capped_uninspected.push(drift_url)
+            } else {
+                buckets.in_sitemap_not_in_gsc.push(drift_url)
             }
         }
     }
@@ -844,8 +828,7 @@ mod tests {
             truncated: true,
         };
 
-        let inspected_set = inspected_sitemap_set(&entries, Some(&meta));
-        let buckets = categorize_sitemap_urls(&smap, &gmap, inspected_set.as_ref(), None);
+        let buckets = categorize_sitemap_urls(&smap, &gmap, meta.truncated, None);
 
         assert_eq!(
             buckets.in_sitemap_not_in_gsc.len(),
@@ -880,12 +863,8 @@ mod tests {
         let smap = sitemap_map(&entries);
         let gmap = gsc_map(&entries, 200, "indexed_pass");
 
-        assert!(
-            inspected_sitemap_set(&entries, None).is_none(),
-            "no meta → no inspected set"
-        );
-
-        let buckets = categorize_sitemap_urls(&smap, &gmap, None, None);
+        // No meta → not truncated → legacy categorization.
+        let buckets = categorize_sitemap_urls(&smap, &gmap, false, None);
         assert_eq!(buckets.in_sitemap_not_in_gsc.len(), 300);
         assert_eq!(buckets.coverage_capped_uninspected.len(), 0);
 
