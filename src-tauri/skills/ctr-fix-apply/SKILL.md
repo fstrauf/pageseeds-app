@@ -31,9 +31,9 @@ A JSON artifact (`ctr_recommendations`) containing a single article recommendati
 
 ### `title_rewrite`
 - Return the new title text in `changes.title`.
-- Prefer keeping the recommended strategic phrasing (year freshness, head-term inclusion, intent framing) from `recommended`.
-- Do **not** "normalize away" strategic years or head-query phrasing solely to hit 55 characters if that would drop the head query or remove a warranted current-year refresh.
-- Soft length target: ~55 characters. Hard ceiling for apply is still ~55, but if `recommended` is strategically correct and under ~60, use it as given rather than shortening away recovery elements.
+- **Hard max: 55 characters.** Output must stay ≤55 chars — there is no soft ~60 carve-out; the apply pipeline hard-shortens beyond 55.
+- Soft-preserve strategic elements **within** that 55 hard limit: prefer the recommended title's head term and single current year, then compress filler/brand/trailing fluff so the result fits.
+- Do **not** drop the head query or a warranted current-year solely to keep filler or brand; compress non-strategic words first, then brand if needed.
 - If the current title is already good and no strategic recovery is needed, return `null` for `title`.
 
 ### `meta_description`

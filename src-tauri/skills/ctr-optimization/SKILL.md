@@ -28,7 +28,7 @@ Choose the mode from `detection_reasons` (and format flags). Prefer competitive 
 Apply length/format rules (same as historical micro-CTR checklist):
 
 #### 1. Title Analysis
-- **Length**: Must be under 55–60 characters. Longer titles risk truncation in SERPs. Hard recommend under 55.
+- **Length**: **Hard max 55 characters.** Longer titles are truncated by apply/verify and risk SERP cut-off. Never recommend a title over 55.
 - **Brand duplication**: Flag if the brand or site name appears more than once.
 - **Keyword position**: The target keyword should appear near the front (first 2–3 words).
 - **Clarity**: Titles must clearly signal the article's promise; avoid vague or generic phrasing.
@@ -88,9 +88,14 @@ Title/meta may already be length-OK. Do **not** recommend micro-CTR length/forma
 #### Title is the SERP problem → always include title_rewrite
 - When the title is weak (missing head term, dual-year underperformance, intent mismatch, vague promise), **always** include a `title_rewrite` fix, usually with meta as well.
 - **Never meta-only** when the title is the SERP issue.
-- Prefer competitive SERP lift over micro length tweaks.
+- Prefer competitive SERP lift over length-only tweaks — but every recommended title still **must fit in 55 characters**.
 
-If `prompt_hint` is present, treat it as authoritative recovery guidance for that article.
+#### Recovery titles stay ≤55
+- Hard max remains **55** in recovery mode (same as format mode). There is no second ceiling and no permission to exceed 55.
+- Compress filler, secondary benefit phrases, and brand first so **head term + single current year** (when warranted) fit inside 55.
+- Do not drop the head term or warranted current year to keep filler; do not invent dual-year ranges; do not ship titles over 55.
+
+If `prompt_hint` is present, treat it as authoritative recovery guidance for that article (still subject to the 55 hard max).
 
 ### Shared rules (both modes)
 
@@ -157,8 +162,8 @@ Return JSON exactly matching this structure (same fix types as before — no new
 ## Constraints
 
 - Limit to **top 20 pages** by `clicks_lost`.
-- **Title rewrites (format mode)**: keep under 55 characters (hard limit: 55), front-load keyword, remove duplication.
-- **Title rewrites (recovery mode)**: include head query when provided; use single `current_year` when a year is warranted; match intent; do not rewrite only to shorten when already ≤55 and brand-clean. Prefer strategic phrasing; stay near 55 when possible but do not drop the head term solely to hit a micro limit.
+- **Title rewrites (format mode)**: hard max **55** characters, front-load keyword, remove duplication.
+- **Title rewrites (recovery mode)**: hard max remains **55**. Include head query when provided; use single `current_year` when a year is warranted; match intent; do not rewrite only to shorten when already ≤55 and brand-clean. Compress filler/brand so head term + year fit **inside 55** — never exceed 55 and never invent a softer ceiling.
 - **Meta descriptions**: 120–155 characters (aim for 145–150, hard max 155), pattern `[Keyword] + [benefit] + [soft CTA]`. Minimum accepted is 120.
 - **FAQ**: 3–5 questions that reflect real search queries. When `top_queries` is provided, prefer high-impression question/comparison queries from that list. Must be JSON-LD FAQPage schema, not just markdown headings. (Same preservation rules as Format mode.)
 - **Snippet bait**: 40–60 word direct answer. Match article type to the query intent:
