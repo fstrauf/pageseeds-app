@@ -138,6 +138,7 @@ pub(crate) fn exec_indexing_fix_context(task: &Task, project_path: &str) -> Step
             if ctx.exists { "" } else { " (file not found)" }
         ),
         output: Some(output),
+        artifact_key: None,
     }
 }
 

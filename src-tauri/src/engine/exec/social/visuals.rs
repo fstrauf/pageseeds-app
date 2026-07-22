@@ -96,6 +96,7 @@ pub fn exec_social_build_visuals(task: &Task, project_path: &str) -> StepResult 
         success: true,
         message: format!("Built visuals for {} posts", posts.len()),
         output: Some(posts_json),
+        artifact_key: None,
     }
 }
 
@@ -108,5 +109,6 @@ pub fn exec_social_rebuild_visual(_task: &Task, _project_path: &str) -> StepResu
         success: true,
         message: "Visual rebuild complete".to_string(),
         output: None,
+        artifact_key: None,
     }
 }

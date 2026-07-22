@@ -101,6 +101,7 @@ pub(crate) fn exec_merge_preflight(
             )
         },
         output: Some(output),
+        artifact_key: None,
     }
 }
 

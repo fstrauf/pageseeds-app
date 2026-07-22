@@ -113,6 +113,7 @@ pub(crate) fn exec_merge_validate_output(task: &Task, project_path: &str) -> Ste
             format!("Merge validation found {} issues", issues.len())
         },
         output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

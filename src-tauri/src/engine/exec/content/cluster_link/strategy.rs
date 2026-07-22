@@ -159,6 +159,7 @@ pub(crate) fn exec_cluster_link_strategy(
             success: true,
             message: "No under-connected articles found — link graph is healthy".to_string(),
             output: Some(r#"{"generated_at":"","links_to_add":[]}"#.to_string()),
+            artifact_key: None,
         };
     }
 
@@ -395,5 +396,6 @@ Requirements:
             raw_count.saturating_sub(link_count)
         ),
         output: Some(serde_json::to_string_pretty(&links_json).unwrap_or_default()),
+        artifact_key: None,
     }
 }

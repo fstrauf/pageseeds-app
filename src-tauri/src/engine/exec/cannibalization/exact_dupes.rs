@@ -44,6 +44,7 @@ pub(crate) fn exec_can_exact_keyword_dupes(_task: &Task, project_path: &str) -> 
             success: true,
             message: "No articles found — nothing to check for exact duplicates.".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -131,5 +132,6 @@ pub(crate) fn exec_can_exact_keyword_dupes(_task: &Task, project_path: &str) -> 
         success: true,
         message: format!("Found {} exact keyword duplicates", dupes.len()),
         output: Some(serde_json::to_string_pretty(&dupes_doc).unwrap_or_default()),
+        artifact_key: None,
     }
 }

@@ -177,6 +177,7 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
         success: true,
         message: format!("Generated typed CtrFixPatch for {}{}", rec.file, repair_msg),
         output: Some(patch_json),
+        artifact_key: None,
     }
 }
 

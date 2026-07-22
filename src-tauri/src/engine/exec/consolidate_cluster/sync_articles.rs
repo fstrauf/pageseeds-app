@@ -39,6 +39,7 @@ pub(crate) fn exec_merge_sync_articles(task: &Task, project_path: &str) -> StepR
                 success: false,
                 message: e,
                 output: None,
+                artifact_key: None,
             };
         }
     };
@@ -60,6 +61,7 @@ pub(crate) fn exec_merge_sync_articles(task: &Task, project_path: &str) -> StepR
                     success: false,
                     message: format!("Failed to export articles.json after merge: {}", e),
                     output: None,
+                    artifact_key: None,
                 };
             }
             StepResult {
@@ -78,6 +80,7 @@ pub(crate) fn exec_merge_sync_articles(task: &Task, project_path: &str) -> StepR
                     })
                     .to_string(),
                 ),
+                artifact_key: None,
             }
         }
         Err(e) => StepResult::fail(format!("Failed to sync merged articles: {}", e)),

@@ -357,6 +357,7 @@ pub(crate) fn exec_fix_content_article_verify(task: &Task, project_path: &str) -
         success: !has_seo_failures,
         message: summary,
         output: Some(report_json),
+        artifact_key: None,
     }
 }
 

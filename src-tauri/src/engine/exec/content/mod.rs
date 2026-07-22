@@ -6,6 +6,9 @@ mod indexing_link;
 /// Covers:
 ///   - exec_content_sync           (sync articles.json ↔ MDX files)
 ///   - exec_content_review_recommend (select priority articles + run agent)
+///   - exec_content_review_investigate (RO tool-calling investigation + typed findings under
+///     `investigation_findings`; no-tool backends fall back to recommend under
+///     `content_review_recommend`. Tool path does not spawn fixes until #81.)
 ///   - exec_cluster_link_scan      (native Rust internal-link scan for cluster_and_link step 1)
 ///   - exec_cluster_link_strategy  (agentic: interpret scan, recommend links to add, write links_to_add.json)
 ///   - exec_cluster_link_apply     (deterministic: write "Related Articles" sections to MDX files)
@@ -24,6 +27,7 @@ mod fix_apply;
 mod fix_context;
 mod fix_generate;
 mod fix_verify;
+mod investigate;
 mod link_verify;
 mod quality_review;
 mod review;
@@ -37,6 +41,7 @@ pub(crate) use fix_context::*;
 pub(crate) use fix_generate::*;
 pub(crate) use fix_verify::*;
 pub(crate) use indexing_link::*;
+pub(crate) use investigate::*;
 pub(crate) use link_verify::*;
 pub(crate) use quality_review::*;
 pub(crate) use review::*;

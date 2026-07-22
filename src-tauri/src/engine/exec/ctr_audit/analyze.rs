@@ -47,6 +47,7 @@ pub(crate) fn exec_ctr_analyze(
             success: true,
             message: "All articles look healthy — no CTR issues detected.".to_string(),
             output: Some("{\"recommendations\":[],\"summary\":\"All clear – every article passes the current health checks.\"}".to_string()),
+            artifact_key: None,
         };
     }
 
@@ -125,5 +126,6 @@ pub(crate) fn exec_ctr_analyze(
         success: true,
         message: "CTR analysis completed".to_string(),
         output: Some(final_output),
+        artifact_key: None,
     }
 }

@@ -99,6 +99,7 @@ fn verdict(
                 ingest_note
             ),
             output: None,
+            artifact_key: None,
         },
         (Some(path), false) => StepResult::fail(format!(
                 "Write verify failed: {} exists in {} but is not registered in the article index. \

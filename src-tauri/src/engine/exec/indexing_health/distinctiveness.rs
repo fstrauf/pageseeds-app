@@ -51,6 +51,7 @@ pub(crate) fn exec_ihc_distinctiveness_review(
                 message: "No targets with cluster siblings — distinctiveness review skipped."
                     .to_string(),
                 output: Some("[]".to_string()),
+                artifact_key: None,
             }
         }
         t => t,
@@ -145,6 +146,7 @@ pub(crate) fn exec_ihc_distinctiveness_review(
             verdicts.iter().filter(|v| v.verdict == "OVERLAP").count()
         ),
         output: Some(verdicts_json),
+        artifact_key: None,
     }
 }
 

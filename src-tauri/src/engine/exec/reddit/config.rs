@@ -302,6 +302,7 @@ pub fn exec_reddit_config_parse(
                         params.seed_subreddits.len()
                     ),
                     output: Some(serde_json::to_string_pretty(&params).unwrap_or_default()),
+                    artifact_key: None,
                 }
             }
         }

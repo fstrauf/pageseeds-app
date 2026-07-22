@@ -233,10 +233,13 @@ pub async fn execute_task_with_token(
         // in sync for downstream steps, but replace by key so reruns do not
         // accumulate duplicate historical payloads.
         if let Some(ref out) = result.output {
-            let artifact_key = step
-                .params
-                .get(step_params::ARTIFACT_NAME)
-                .cloned()
+            // Precedence: StepResult override → step param ARTIFACT_NAME → step.name.
+            // Path-local keys let one plan step emit different schemas (e.g.
+            // content_review investigate vs recommend fallback).
+            let artifact_key = result
+                .artifact_key
+                .clone()
+                .or_else(|| step.params.get(step_params::ARTIFACT_NAME).cloned())
                 .unwrap_or_else(|| step.name.clone());
             let artifact = TaskArtifact {
                 key: artifact_key,
@@ -437,6 +440,7 @@ async fn run_step(
             success: false,
             message: format!("Unknown step kind '{}'", step.kind),
             output: None,
+            artifact_key: None,
         }
     }
 }

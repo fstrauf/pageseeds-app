@@ -74,6 +74,7 @@ pub(crate) fn exec_merge_load_plan(task: &Task, project_path: &str) -> StepResul
         success: true,
         message: format!("Loaded merge plan for cluster: {}", cluster_id),
         output: Some(output),
+        artifact_key: None,
     }
 }
 

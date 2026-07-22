@@ -217,3 +217,53 @@ pub struct QualityCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
+
+// ─── Investigation Findings (content_review tool-calling path) ───────────────
+
+/// Typed output from the content_review investigate step when the backend
+/// supports tool calling. Stored as the `investigation_findings` artifact.
+/// Does **not** write `recommendations.json` (so fix_content_article spawning
+/// no-ops safely until a later issue wires proposed_tasks).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct InvestigationFindings {
+    /// 1–2 sentence TL;DR of the investigation.
+    pub summary: String,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
+    /// Suggested downstream tasks (not validated or spawned by this step).
+    #[serde(default)]
+    pub proposed_tasks: Vec<ProposedTask>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct Finding {
+    pub title: String,
+    pub description: String,
+    /// Tool-backed evidence supporting this finding.
+    pub evidence: String,
+    /// `critical` | `warning` | `info`
+    pub severity: String,
+    /// `auto_fixable` | `developer_actionable` | `hybrid` | `informational`
+    pub fix_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct ProposedTask {
+    /// Task type string from task_definitions (e.g. `ctr_audit`, `fix_content_article`).
+    pub task_type: String,
+    pub title: String,
+    pub reason: String,
+    /// Opaque task params; empty object when not needed.
+    #[serde(default = "default_empty_object")]
+    pub params: serde_json::Value,
+}
+
+fn default_empty_object() -> serde_json::Value {
+    serde_json::json!({})
+}

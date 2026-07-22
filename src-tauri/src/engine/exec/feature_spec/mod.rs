@@ -47,6 +47,7 @@ pub async fn exec_generate_feature_spec(
             success: true,
             message: "Agent found no actionable infrastructure issues — spec not generated".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -64,6 +65,7 @@ pub async fn exec_generate_feature_spec(
             success: true,
             message: "All agent findings were rejected by source verification — spec not generated".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -102,6 +104,7 @@ pub async fn exec_generate_feature_spec(
             spec_path.display()
         ),
         output: Some(spec_path.to_string_lossy().to_string()),
+        artifact_key: None,
     }
 }
 

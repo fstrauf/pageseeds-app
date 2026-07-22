@@ -144,5 +144,6 @@ pub(crate) fn exec_indexing_fix_apply(
             })
             .to_string(),
         ),
+        artifact_key: None,
     }
 }

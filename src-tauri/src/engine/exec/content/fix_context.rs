@@ -147,6 +147,7 @@ pub(crate) fn exec_fix_content_article_context(
             file_content.len()
         ),
         output: Some(context_json),
+        artifact_key: None,
     }
 }
 

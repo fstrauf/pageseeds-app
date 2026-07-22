@@ -42,6 +42,7 @@ pub(crate) fn exec_merge_rewrite_inbound_links(task: &Task, project_path: &str) 
             success: true,
             message: "No redirect rules in merge plan — nothing to rewrite".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -80,6 +81,7 @@ pub(crate) fn exec_merge_rewrite_inbound_links(task: &Task, project_path: &str) 
                     "No inbound links to redirected slugs found — nothing to rewrite".to_string()
                 },
                 output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+                artifact_key: None,
             }
         }
         Err(e) => StepResult::fail(e),

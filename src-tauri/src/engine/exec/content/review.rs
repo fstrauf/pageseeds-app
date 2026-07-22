@@ -424,6 +424,7 @@ pub(crate) async fn exec_content_review_recommend(
                 success: false,
                 message: format!("Failed to open app database: {}", e),
                 output: None,
+                artifact_key: None,
             };
         }
     };
@@ -494,6 +495,7 @@ pub(crate) async fn exec_content_review_recommend(
                 })
                 .to_string(),
             ),
+            artifact_key: None,
         };
     }
 
@@ -640,6 +642,7 @@ pub(crate) async fn exec_content_review_recommend(
             selected.len()
         ),
         output: Some(rec_str),
+        artifact_key: None,
     }
 }
 

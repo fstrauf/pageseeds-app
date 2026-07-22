@@ -60,6 +60,7 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
                     })
                     .to_string(),
                 ),
+                artifact_key: None,
             }
         }
     };
@@ -104,6 +105,7 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
                     target_url, previous_reason, current_reason
                 ),
                 output: Some(outcome.to_string()),
+                artifact_key: None,
             }
         }
         Err(e) => StepResult::fail(format!("URL Inspection API failed: {}", e)),
@@ -181,6 +183,7 @@ pub(crate) fn exec_gsc_indexing_outcome_report(task: &Task, project_path: &str) 
         success: true,
         message: format!("Outcome report for {}: {}", target_url, outcome_status),
         output: Some(report.to_string()),
+        artifact_key: None,
     }
 }
 

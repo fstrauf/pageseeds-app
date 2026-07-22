@@ -306,9 +306,20 @@ impl WorkflowHandler for ContentReviewHandler {
             WorkflowStep::new("content_review_audit", StepKind::ContentAudit).optional(),
             // Step 3: native sync — validates articles.json ↔ content files, dates.
             WorkflowStep::new("content_review_sync", StepKind::ContentSync).optional(),
-            // Step 4: select priority articles, build structured context, get agent recommendations.
-            // One focused agent call (not N calls). Writes recommendations.json.
-            WorkflowStep::new("content_review_recommend", StepKind::ContentReviewRecommend),
+            // Step 4: tool-calling investigation when backend supports tools; otherwise
+            // falls back to content_review_recommend inside the exec module.
+            //
+            // Artifact keys are path-local (set on StepResult), not fixed here:
+            //   tool path    → investigation_findings (InvestigationFindings)
+            //   fallback     → content_review_recommend (ContentReviewRecommendations)
+            // Tool path intentionally does not write recommendations.json / spawn
+            // fix tasks until issue #81 owns proposed_tasks validation + picker.
+            // Do not re-add ContentReviewRecommend as a plan terminal or change
+            // task_definitions lifecycle metadata in this PR.
+            WorkflowStep::new(
+                "content_review_investigate",
+                StepKind::ContentReviewInvestigate,
+            ),
         ]
     }
 }
@@ -954,6 +965,40 @@ mod registry_tests {
             updated_at: chrono::Utc::now().to_rfc3339(),
             not_before: None,
         }
+    }
+
+    /// content_review final judgment step is investigate (tool-calling path with
+    /// recommend fallback), not the scripted recommend step as the plan terminal.
+    /// Artifact keys are path-local on StepResult — plan must not hardcode
+    /// ARTIFACT_NAME (that forced dual schemas under one key).
+    #[test]
+    fn content_review_plan_ends_with_investigate_not_recommend() {
+        let handler = ContentReviewHandler;
+        let steps = handler.plan(&make_task("content_review"));
+        assert!(
+            steps.len() >= 4,
+            "expected optional prep steps + investigate, got {}",
+            steps.len()
+        );
+        let last = steps.last().expect("plan non-empty");
+        assert_eq!(last.kind, StepKind::ContentReviewInvestigate);
+        assert_eq!(last.name, "content_review_investigate");
+        assert!(
+            !last.params.contains_key(step_params::ARTIFACT_NAME),
+            "plan must not fix ARTIFACT_NAME; path-local keys live on StepResult"
+        );
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.kind != StepKind::ContentReviewRecommend),
+            "plan must not include ContentReviewRecommend as a step; recommend is fallback inside exec"
+        );
+
+        let audit_steps = handler.plan(&make_task("content_audit"));
+        assert_eq!(
+            audit_steps.last().map(|s| s.kind),
+            Some(StepKind::ContentReviewInvestigate)
+        );
     }
 
     /// The content write stage must declare exactly the prompt sections

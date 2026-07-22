@@ -140,6 +140,7 @@ pub fn exec_rank_opportunities(
             doc.opportunities.first().map(|o| o.opportunity_score).unwrap_or(0)
         ),
         output: Some(doc_json),
+        artifact_key: None,
     }
 }
 

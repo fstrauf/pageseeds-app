@@ -155,6 +155,7 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
             audited, failed
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

@@ -69,6 +69,7 @@ pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> S
                 output["article_count"].as_i64().unwrap_or(0)
             ),
             output: Some(output.to_string()),
+            artifact_key: None,
         };
     }
 
@@ -106,6 +107,7 @@ pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> S
             article_summaries.len()
         ),
         output: Some(output.to_string()),
+        artifact_key: None,
     }
 }
 
@@ -357,6 +359,7 @@ pub(crate) fn exec_coverage_cluster_analysis(
             success: true,
             message: "No articles to cluster".to_string(),
             output: Some(articles_json.to_string()),
+            artifact_key: None,
         };
     }
 
@@ -443,6 +446,7 @@ pub(crate) fn exec_coverage_cluster_analysis(
             article_count, cluster_count, summary
         ),
         output: Some(clusters.to_string()),
+        artifact_key: None,
     }
 }
 
@@ -555,6 +559,7 @@ pub(crate) fn exec_coverage_save(_task: &Task, project_path: &str) -> StepResult
                             article_count, cluster_count, names_str
                         ),
                         output: Some(content),
+                        artifact_key: None,
                     }
                 }
                 Err(e) => StepResult::fail_with_output(format!("Invalid JSON in keyword_coverage.json: {}", e), content),
@@ -613,6 +618,7 @@ pub(crate) fn exec_ensure_coverage_fresh(
             success: true,
             message: "Coverage data is fresh (< 7 days)".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 

@@ -73,6 +73,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
             success: true,
             message: "Nothing to apply — plan has no links to add".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -239,6 +240,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
         success,
         message,
         output: Some(summary.to_string()),
+        artifact_key: None,
     }
 }
 

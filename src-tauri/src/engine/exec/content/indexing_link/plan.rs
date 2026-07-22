@@ -60,6 +60,7 @@ pub(crate) fn exec_indexing_link_plan(
             success: true,
             message: "Nothing to do — no source candidates available for this target".to_string(),
             output: Some(serde_json::json!({ "links_to_add": [] }).to_string()),
+            artifact_key: None,
         };
     }
 
@@ -144,6 +145,7 @@ Requirements:
             link_count, target_slug
         ),
         output: Some(plan_json.to_string()),
+        artifact_key: None,
     }
 }
 

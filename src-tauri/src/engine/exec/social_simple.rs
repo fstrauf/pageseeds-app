@@ -93,6 +93,7 @@ pub async fn exec_social_generate_posts(
         success: true,
         message: format!("Generated {} social media posts from {} articles", posts.len(), articles.len()),
         output: Some(posts_json),
+        artifact_key: None,
     }
 }
 

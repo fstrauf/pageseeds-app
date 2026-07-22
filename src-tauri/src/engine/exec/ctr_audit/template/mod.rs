@@ -36,6 +36,7 @@ pub(crate) fn exec_ctr_template_detect(
             success: true,
             message: "No rendered audits available — run ctr_audit first".to_string(),
             output: Some("[]".to_string()),
+            artifact_key: None,
         };
     }
 
@@ -46,6 +47,7 @@ pub(crate) fn exec_ctr_template_detect(
             success: true,
             message: "No site-wide title template patterns detected".to_string(),
             output: Some("[]".to_string()),
+            artifact_key: None,
         };
     }
 
@@ -57,6 +59,7 @@ pub(crate) fn exec_ctr_template_detect(
             results.len()
         ),
         output: Some(output),
+        artifact_key: None,
     }
 }
 
@@ -514,6 +517,7 @@ pub(crate) fn exec_ctr_template_verify_render(
             verified, failed
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 
@@ -607,6 +611,7 @@ pub(crate) fn exec_ctr_schema_detect(
             affected.len()
         ),
         output: Some(output),
+        artifact_key: None,
     }
 }
 
@@ -691,6 +696,7 @@ pub(crate) fn exec_ctr_schema_verify_render(
             verified, failed
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

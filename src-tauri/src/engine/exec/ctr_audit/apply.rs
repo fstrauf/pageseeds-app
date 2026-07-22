@@ -151,6 +151,7 @@ pub(crate) fn exec_ctr_fix_apply(
                 patch.file
             ),
             output: Some(original_content),
+            artifact_key: None,
         };
     }
 
@@ -184,6 +185,7 @@ pub(crate) fn exec_ctr_fix_apply(
             normalization_suffix
         ),
         output: Some(new_content),
+        artifact_key: None,
     }
 }
 
@@ -477,6 +479,7 @@ pub(crate) fn exec_ctr_verify_fix(task: &Task, project_path: &str) -> StepResult
             success: true,
             message: format!("CTR verification passed for {}", file_ref),
             output: Some(report_json),
+            artifact_key: None,
         }
     } else {
         let fail_details: Vec<String> = report

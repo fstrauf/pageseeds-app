@@ -138,6 +138,7 @@ pub(super) fn register(handlers: &mut HashMap<StepKind, HandlerFn>) {
                         success: true,
                         message: "Opportunity review agent placeholder — Phase 2".to_string(),
                         output: None,
+                        artifact_key: None,
                     }
                 })
             }),

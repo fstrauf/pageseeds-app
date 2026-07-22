@@ -385,6 +385,7 @@ pub(crate) fn exec_indexing_diagnostics(
             inspected_count, new_issue_count, regressed_count, resolved_count, spawned_tasks.len()
         ),
         output: Some(serde_json::to_string_pretty(&short_summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

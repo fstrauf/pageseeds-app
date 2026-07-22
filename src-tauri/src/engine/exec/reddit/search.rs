@@ -338,5 +338,6 @@ pub(crate) async fn exec_reddit_search(
             all_posts.len(), subreddit_counts.len(), too_old, excluded_sub_count, below_threshold, history_filtered, subreddit_capped
         ),
         output: Some(serde_json::to_string(&serde_json::json!({"posts": all_posts})).unwrap_or_default()),
+        artifact_key: None,
     }
 }

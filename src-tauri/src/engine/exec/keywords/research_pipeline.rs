@@ -145,6 +145,7 @@ pub(crate) fn exec_keyword_research_native(
                     success: true,
                     message: "Keyword research (cached) — no API calls made".to_string(),
                     output: Some(content.clone()),
+                    artifact_key: None,
                 };
             }
         }
@@ -808,5 +809,6 @@ pub(crate) fn exec_keyword_research_native(
             analyzed_count
         ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
+        artifact_key: None,
     }
 }

@@ -98,5 +98,6 @@ pub(crate) fn exec_gsc_recovery_prepare(
         success: true,
         message: messages.join(". "),
         output: Some(freshness.to_string()),
+        artifact_key: None,
     }
 }

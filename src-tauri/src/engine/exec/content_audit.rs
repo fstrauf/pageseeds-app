@@ -228,6 +228,7 @@ pub fn exec_content_audit(
             }))
             .unwrap_or_default(),
         ),
+        artifact_key: None,
     }
 }
 

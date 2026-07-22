@@ -424,5 +424,6 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
             plan_path.display()
         ),
         output: Some(plan_json),
+        artifact_key: None,
     }
 }

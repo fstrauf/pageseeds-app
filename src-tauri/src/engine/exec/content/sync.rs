@@ -36,6 +36,7 @@ pub(crate) fn exec_content_sync(
                     result.next_action
                 ),
                 output: Some(output),
+                artifact_key: None,
             }
         }
         Err(e) => crate::engine::workflows::StepResult::fail(format!("content_sync failed: {}", e)),
@@ -90,6 +91,7 @@ pub(crate) fn exec_format_validation(
                     }))
                     .unwrap_or_default(),
                 ),
+                artifact_key: None,
             }
         }
         Err(e) => crate::engine::workflows::StepResult::fail(format!("Format validation failed: {}", e)),
@@ -150,6 +152,7 @@ pub(crate) fn exec_format_fix(
                     }))
                     .unwrap_or_default(),
                 ),
+                artifact_key: None,
             }
         }
         Err(e) => crate::engine::workflows::StepResult::fail(format!("Format fix failed: {}", e)),
@@ -255,6 +258,7 @@ pub(crate) fn exec_sanitize_content(
                     structurally_fixed.len(), renamed.len(), repaired, e
                 ),
                 output: None,
+                artifact_key: None,
             };
         }
     };
@@ -302,5 +306,6 @@ pub(crate) fn exec_sanitize_content(
             "info": validation.info_count,
             "issues": validation.issues,
         })).unwrap_or_default()),
+        artifact_key: None,
     }
 }

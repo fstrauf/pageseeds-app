@@ -167,6 +167,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         success: true,
         message: format!("Generated typed ContentFixPatch for {}{}", context.file, repair_msg),
         output: Some(patch_json),
+        artifact_key: None,
     }
 }
 

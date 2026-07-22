@@ -116,6 +116,7 @@ pub(crate) fn exec_merge_apply_patch(
             })
             .to_string(),
         ),
+        artifact_key: None,
     }
 }
 

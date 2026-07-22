@@ -50,6 +50,7 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
             success: true,
             message: "No articles with GSC data found for territory analysis".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -118,6 +119,7 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
             synced
         ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

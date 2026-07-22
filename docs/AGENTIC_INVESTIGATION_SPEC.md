@@ -335,7 +335,14 @@ Added to the Health Dashboard as an "Ask AI" section:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The investigation panel is a **complement** to the dashboard, not a replacement. The dashboard shows recurring monitoring data. The investigation panel answers specific questions.
+The standalone investigation panel remains a free-form complement to the dashboard.
+In addition, **`content_review` embeds the same read-only investigate loop** when
+the configured backend supports tool calling (`ContentReviewInvestigate` step;
+see issue #80). That path uses `InvestigationAccess::ReadOnly` (no create/enqueue
+mutators), extracts typed `InvestigationFindings`, and stores them as the
+`investigation_findings` artifact — it does not write `recommendations.json`.
+When tools are unavailable (e.g. KimiCli), content_review falls back to the
+scripted `content_review_recommend` path.
 
 ## Prevention: When to Use What
 

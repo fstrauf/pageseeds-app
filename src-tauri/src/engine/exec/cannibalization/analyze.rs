@@ -67,6 +67,7 @@ pub(crate) fn exec_can_analyze_candidates(
             success: true,
             message: "No candidates to analyze.".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -350,6 +351,7 @@ pub(crate) fn exec_can_analyze_candidates(
             guard_degraded_count
         ),
         output: Some(serde_json::to_string_pretty(&batch_doc).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

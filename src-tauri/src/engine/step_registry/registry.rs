@@ -41,6 +41,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         success: true,
                         message: format!("Manual step '{}' — requires user action", name),
                         output: None,
+                        artifact_key: None,
                     }
                 })
             }),
@@ -92,6 +93,23 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
             }),
         );
 
+        handlers.insert(
+            StepKind::ContentReviewInvestigate,
+            Box::new(|_step, ctx| {
+                let task = ctx.task.clone();
+                let project_path = ctx.project_path.to_string();
+                let agent_provider = ctx.agent_provider.to_string();
+                Box::pin(async move {
+                    crate::engine::exec::content::exec_content_review_investigate(
+                        &task,
+                        &project_path,
+                        &agent_provider,
+                    )
+                    .await
+                })
+            }),
+        );
+
         register_blocking!(
             handlers,
             StepKind::KeywordResearchNative,
@@ -133,6 +151,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         success: true,
                         message: "Reddit enrichment pass — starting AI scoring loop".to_string(),
                         output: None,
+                        artifact_key: None,
                     }
                 })
             }),
@@ -146,6 +165,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         success: true,
                         message: "Reddit results fetch — starting DB query".to_string(),
                         output: None,
+                        artifact_key: None,
                     }
                 })
             }),

@@ -98,6 +98,7 @@ pub fn exec_reddit_fetch_results(
             message: "No pending Reddit opportunities found. Run the search to find new posts."
                 .to_string(),
             output: Some("[]".to_string()),
+            artifact_key: None,
         };
     }
 
@@ -110,6 +111,7 @@ pub fn exec_reddit_fetch_results(
                 with_replies
             ),
             output: Some(json),
+            artifact_key: None,
         },
         Err(e) => crate::engine::workflows::StepResult::fail(format!("Failed to serialize opportunities: {}", e)),
     }
@@ -241,6 +243,7 @@ pub fn exec_reddit_post_reply(
                     "{{\"comment_id\":\"{}\",\"permalink\":\"{}\"}}",
                     comment_result.comment_id, reply_url
                 )),
+                artifact_key: None,
             }
         }
         Err(e) => {

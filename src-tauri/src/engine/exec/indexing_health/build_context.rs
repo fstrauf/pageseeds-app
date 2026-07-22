@@ -34,6 +34,7 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
             success: true,
             message: "No not-indexed URLs found in drift report.".to_string(),
             output: Some("{\"targets\": []}".to_string()),
+            artifact_key: None,
         };
     }
 
@@ -320,6 +321,7 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
             }))
             .unwrap_or_default(),
         ),
+        artifact_key: None,
     }
 }
 
