@@ -1,4 +1,6 @@
 # Tool catalog for agentic investigation.
+# Authoritative source for preamble text and mutates flags (loaded via include_str!).
+# Runtime tool constructors live in engine/tools/investigate — names must match.
 
 [tools.gsc_performance]
 purpose = "Get GSC page-level performance data (clicks, impressions, CTR, position) for the project"
@@ -22,26 +24,31 @@ mutates = false
 purpose = "List all articles in the project with metadata"
 when_to_use = "When you need to know what content exists or get an overview of the site"
 when_not_to_use = ""
+mutates = false
 
 [tools.article_frontmatter]
 purpose = "Read frontmatter from MDX files for specific articles"
 when_to_use = "When checking individual article metadata or title content"
 when_not_to_use = "Use article_list first to discover what articles exist"
+mutates = false
 
 [tools.article_body_hash]
 purpose = "Compute SHA-256 hashes of all article bodies to find exact duplicate content groups"
 when_to_use = "When investigating duplicate content, SSR fallback pages, or content uniqueness"
 when_not_to_use = ""
+mutates = false
 
 [tools.article_title_scan]
 purpose = "Scan all article titles for patterns: duplicated tokens, literal template variables, missing titles, truncation risk"
 when_to_use = "When investigating title quality, template bugs, or SERP display issues"
 when_not_to_use = ""
+mutates = false
 
 [tools.content_audit_report]
 purpose = "Return the full content_audit.json report with 21 deterministic checks per article"
 when_to_use = "When you need comprehensive article health data"
 when_not_to_use = ""
+mutates = false
 
 [tools.run_content_audit]
 purpose = "Run the deterministic content audit and write fresh content_audit.json"
@@ -53,29 +60,52 @@ mutates = true
 purpose = "Return cannibalization clusters and merge recommendations"
 when_to_use = "When investigating keyword cannibalization or content consolidation"
 when_not_to_use = ""
+mutates = false
 
 [tools.indexing_status]
 purpose = "Return GSC URL indexing status"
 when_to_use = "When investigating indexing problems or sitemap gaps"
 when_not_to_use = ""
+mutates = false
 
 [tools.ctr_health]
 purpose = "Return per-article CTR health summary"
 when_to_use = "When investigating CTR underperformance"
 when_not_to_use = ""
+mutates = false
 
 [tools.framework_files]
 purpose = "Read framework config files: layouts, sitemap config, robots.txt, redirect rules"
 when_to_use = "When investigating site-wide template bugs or framework configuration"
 when_not_to_use = "Only works if the project uses a framework with readable config files"
+mutates = false
 
 [tools.article_link_graph]
 purpose = "Return the internal link graph"
 when_to_use = "When investigating internal linking gaps or site structure issues"
 when_not_to_use = ""
+mutates = false
 
 [tools.create_task]
 purpose = "Create a fix task in PageSeeds to address issues found"
 when_to_use = "ONLY after investigation has found specific, actionable issues. Explain what each task will do and why."
 when_not_to_use = "Do NOT create tasks speculatively. Max 3 tasks per investigation."
+mutates = true
+
+[tools.enqueue_task]
+purpose = "Enqueue an existing task for execution"
+when_to_use = "After create_task, when the task should run immediately"
+when_not_to_use = "Do not enqueue tasks that still need user review"
+mutates = true
+
+[tools.get_task_status]
+purpose = "Get status of a task by ID"
+when_to_use = "When checking whether a previously created task has completed"
+when_not_to_use = ""
+mutates = false
+
+[tools.write_feature_spec]
+purpose = "Write a developer feature spec to the target repo's .github/automation/seo_feature_spec.md"
+when_to_use = "When you find code-level issues that require changes to framework files (templates, redirects, sitemap). Each call appends one issue section with file path, current code, and fixed code."
+when_not_to_use = "Do not use for content-only issues that PageSeeds can auto-fix"
 mutates = true

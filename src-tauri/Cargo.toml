@@ -53,6 +53,7 @@ once_cell = "1"
 scraper = "0.26"
 url = "2"
 base64 = "0.22"
+toml = { version = "0.8", features = ["preserve_order"] }
 
 
 [dev-dependencies]

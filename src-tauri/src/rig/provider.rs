@@ -103,6 +103,130 @@ impl AgentResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tool-equipped multi-turn agents
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Errors from building or running a multi-turn tool-equipped agent.
+///
+/// Callers that can fall back (e.g. content_review_investigate → recommend)
+/// should match on [`ToolAgentError::Unsupported`]. Other failures are
+/// hard errors for the tool path.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolAgentError {
+    #[error("Backend does not support multi-turn tool calling")]
+    Unsupported,
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// Whether this backend can run multi-turn tool calling (investigation, etc.).
+///
+/// Tool-capable: KimiBridge, Claude, OpenAi, Grok, Ollama.
+/// Not supported: KimiCli (print mode has no tool_calls), KimiDirect, others.
+pub fn backend_supports_tool_calling(backend: &LlmBackend) -> bool {
+    matches!(
+        backend,
+        LlmBackend::KimiBridge { .. }
+            | LlmBackend::Claude { .. }
+            | LlmBackend::OpenAi { .. }
+            | LlmBackend::Grok { .. }
+            | LlmBackend::Ollama { .. }
+    )
+}
+
+/// Build a tool-equipped agent for `backend` and run `prompt` (with `preamble`).
+///
+/// Backends without multi-turn tool calling return [`ToolAgentError::Unsupported`]
+/// so callers can choose a fallback path. Construction/runtime failures return
+/// [`ToolAgentError::Failed`].
+///
+/// KimiBridge folds the preamble into the user prompt (bridge completions API
+/// has no separate preamble slot).
+pub async fn run_tool_equipped_agent(
+    backend: &LlmBackend,
+    tools: Vec<Box<dyn rig::tool::ToolDyn>>,
+    preamble: &str,
+    prompt: &str,
+) -> Result<String, ToolAgentError> {
+    async fn run_tool_agent<A: Prompt + Send>(agent: A, prompt: &str) -> Result<String, ToolAgentError> {
+        agent
+            .prompt(prompt)
+            .await
+            .map_err(|e| ToolAgentError::Failed(format!("Agent error: {e}")))
+    }
+
+    match backend {
+        LlmBackend::KimiBridge { base_url, model } => {
+            let client = rig::providers::openai::Client::builder()
+                .base_url(base_url)
+                .api_key("dummy")
+                .build()
+                .map_err(|e| {
+                    ToolAgentError::Failed(format!("Failed to build bridge client: {e}"))
+                })?;
+            // Bridge completions API has no separate preamble slot — fold in.
+            let full_prompt = format!("{preamble}\n\n{prompt}");
+            let agent = client
+                .completions_api()
+                .agent(model)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, &full_prompt).await
+        }
+        LlmBackend::Claude { api_key, model } => {
+            let client = rig::providers::anthropic::Client::new(api_key).map_err(|e| {
+                ToolAgentError::Failed(format!("Failed to build Claude client: {e}"))
+            })?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
+        LlmBackend::OpenAi { api_key, model } => {
+            let client = rig::providers::openai::Client::new(api_key).map_err(|e| {
+                ToolAgentError::Failed(format!("Failed to build OpenAI client: {e}"))
+            })?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
+        LlmBackend::Grok { api_key, model } => {
+            let client = rig::providers::xai::Client::new(api_key).map_err(|e| {
+                ToolAgentError::Failed(format!("Failed to build Grok (xAI) client: {e}"))
+            })?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
+        LlmBackend::Ollama { base_url, model } => {
+            use rig::client::Nothing;
+            let client = rig::providers::ollama::Client::builder()
+                .api_key(Nothing)
+                .base_url(base_url)
+                .build()
+                .map_err(|e| {
+                    ToolAgentError::Failed(format!("Failed to build Ollama client: {e}"))
+                })?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
+        LlmBackend::KimiCli { .. } | LlmBackend::KimiDirect => Err(ToolAgentError::Unsupported),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -653,5 +777,53 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(backend, LlmBackend::KimiDirect));
+    }
+
+    #[test]
+    fn tool_calling_support_matches_known_backends() {
+        assert!(backend_supports_tool_calling(&LlmBackend::KimiBridge {
+            base_url: "http://localhost".into(),
+            model: "kimi".into(),
+        }));
+        assert!(backend_supports_tool_calling(&LlmBackend::Claude {
+            api_key: "k".into(),
+            model: "claude".into(),
+        }));
+        assert!(backend_supports_tool_calling(&LlmBackend::OpenAi {
+            api_key: "k".into(),
+            model: "gpt".into(),
+        }));
+        assert!(backend_supports_tool_calling(&LlmBackend::Grok {
+            api_key: "k".into(),
+            model: rig::providers::xai::GROK_4.into(),
+        }));
+        assert!(backend_supports_tool_calling(&LlmBackend::Ollama {
+            base_url: "http://localhost".into(),
+            model: "llama".into(),
+        }));
+        assert!(!backend_supports_tool_calling(&LlmBackend::KimiCli {
+            work_dir: ".".into(),
+        }));
+        assert!(!backend_supports_tool_calling(&LlmBackend::KimiDirect));
+    }
+
+    #[tokio::test]
+    async fn tool_equipped_agent_unsupported_backend_returns_typed_error() {
+        let err = run_tool_equipped_agent(
+            &LlmBackend::KimiCli {
+                work_dir: ".".into(),
+            },
+            vec![],
+            "preamble",
+            "prompt",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ToolAgentError::Unsupported));
+
+        let err = run_tool_equipped_agent(&LlmBackend::KimiDirect, vec![], "preamble", "prompt")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolAgentError::Unsupported));
     }
 }

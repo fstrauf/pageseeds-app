@@ -69,9 +69,9 @@ InvestigationResult {
 }
 ```
 
-## Tool Catalog (`config/tool_catalog.toml`)
+## Tool Catalog (`src-tauri/config/tool_catalog.toml`)
 
-Bundled into the binary via `include_str!()`. Each tool has a corresponding Rust struct implementing `rig::tool::Tool`.
+Bundled into the binary via `include_str!()` and loaded by `engine/tools/investigate/catalog.rs`. TOML is authoritative for preamble text and `mutates` flags (Full vs ReadOnly is derived from `mutates`). Each tool has a corresponding Rust constructor in `engine/tools/investigate` implementing `rig::tool::Tool`. Multi-turn tool-agent attach runs through `rig::provider::run_tool_equipped_agent` (unsupported backends return typed `ToolAgentError::Unsupported`).
 
 ### Read-Only Data Tools
 
@@ -164,18 +164,13 @@ mutates = true
 Each tool in the catalog maps to a Rust struct implementing `rig::tool::Tool`. The tools are **thin wrappers** around existing Rust module functions — no new business logic.
 
 ```
-src-tauri/src/engine/tools/
-├── mod.rs              # Re-exports, boxed_tool_set for investigation
-├── gsc.rs              # GscPerformanceTool
-├── articles.rs         # ArticleListTool, ArticleFrontmatterTool, ArticleBodyHashTool, ArticleTitleScanTool
-├── audit.rs            # ContentAuditReportTool, RunContentAuditTool
-├── cannibalization.rs  # CannibalizationClustersTool
-├── indexing.rs         # IndexingStatusTool
-├── ctr.rs              # CtrHealthTool
-├── framework.rs        # FrameworkFilesTool
-├── linking.rs          # ArticleLinkGraphTool
-├── task.rs             # CreateTaskTool
-└── catalog.rs          # ToolCatalog — loads tool_catalog.toml, builds agent preamble
+src-tauri/config/tool_catalog.toml          # Authoritative catalog (preamble + mutates)
+src-tauri/src/rig/provider.rs               # run_tool_equipped_agent, backend_supports_tool_calling
+src-tauri/src/engine/tools/investigate/
+├── mod.rs              # Kit API, name→Tool constructors
+├── catalog.rs          # include_str! TOML load, Full/RO catalog text
+├── gsc.rs / articles.rs / audit.rs / project.rs / shared.rs
+└── …
 ```
 
 ### Tool Implementation Pattern
@@ -292,12 +287,11 @@ pub enum FixType {
 
 ```
 1. User enters question → frontend calls investigate(projectId, question)
-2. Backend loads tool_catalog.toml → builds agent preamble
+2. Backend loads embedded tool_catalog.toml → builds agent preamble (Full kit)
 3. Backend gathers static evidence (project config, article count, etc.)
-4. Backend builds Rig agent:
-   - Provider: Kimi bridge (or Claude/OpenAI depending on global settings)
-   - Model: from agent_provider setting
-   - Tools: all read-only tools + run_content_audit + create_task
+4. Backend calls `rig::provider::run_tool_equipped_agent`:
+   - Provider: Kimi bridge / Claude / OpenAI / Ollama (tool-capable only)
+   - Tools: Full investigation set (incl. mutators for standalone)
    - Preamble: tool catalog + usage rules + output contract
 5. Agent runs:
    - Can call tools freely (up to 20 tool calls to prevent runaway)
@@ -362,9 +356,10 @@ scripted `content_review_recommend` path.
 
 | File | Change |
 |------|--------|
-| `config/tool_catalog.toml` | New — tool definitions with purpose/when_to_use |
-| `engine/tools/catalog.rs` | New — loads TOML, builds agent preamble |
-| `engine/tools/mod.rs` | New — re-exports, boxed investigation tool set |
+| `src-tauri/config/tool_catalog.toml` | Tool definitions with purpose/when_to_use/mutates |
+| `engine/tools/investigate/catalog.rs` | Loads TOML via include_str!, builds agent preamble |
+| `rig/provider.rs` | `run_tool_equipped_agent` + `ToolAgentError` |
+| `engine/tools/mod.rs` | Re-exports investigation kit API |
 | `engine/tools/gsc.rs` | New — GscPerformanceTool |
 | `engine/tools/articles.rs` | New — ArticleListTool, ArticleFrontmatterTool, ArticleBodyHashTool, ArticleTitleScanTool |
 | `engine/tools/audit.rs` | New — ContentAuditReportTool, RunContentAuditTool |

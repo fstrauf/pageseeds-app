@@ -251,6 +251,34 @@ pub struct Finding {
     pub fix_type: String,
 }
 
+/// Typed output from the standalone investigate command (`exec_investigate`).
+///
+/// Distinct from workflow [`InvestigationFindings`] (which also carries
+/// `proposed_tasks`). Shared finding shape reuses [`Finding`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct StandaloneInvestigationResult {
+    /// Natural-language synthesis of the investigation.
+    pub answer: String,
+    /// 1–2 sentence TL;DR.
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
+}
+
+impl StandaloneInvestigationResult {
+    /// Soft-fallback when the agent returns pure prose and typed extraction fails.
+    /// Preserves prior investigate command behavior (do not hard-fail).
+    pub fn from_prose(response: impl Into<String>) -> Self {
+        Self {
+            answer: response.into(),
+            summary: String::new(),
+            findings: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
