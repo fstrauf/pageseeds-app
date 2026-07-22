@@ -9,7 +9,7 @@ use rusqlite::Connection;
 
 use crate::content::slug::normalize_url_slug;
 use crate::engine::exec::ctr_audit::{
-    build_standalone_ctr_context, ctr_context_artifact_from_article,
+    build_standalone_ctr_article_record, ctr_context_artifact_from_article,
 };
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
@@ -63,20 +63,10 @@ pub fn spawn_fix_ctr_article_for_slug(
 
     let article = resolve_article_by_slug(conn, project_id, slug)?;
 
-    let context_doc =
-        build_standalone_ctr_context(conn, project_id, project_path, &article)
+    // Bare article record → wrap once at the artifact boundary.
+    let article_record =
+        build_standalone_ctr_article_record(conn, project_id, project_path, &article)
             .map_err(Error::Validation)?;
-
-    let article_record = context_doc
-        .get("articles")
-        .and_then(|a| a.as_array())
-        .and_then(|arr| arr.first())
-        .cloned()
-        .ok_or_else(|| {
-            Error::Validation(
-                "Failed to build ctr_context: empty articles array".to_string(),
-            )
-        })?;
 
     let source = if opts.source.is_empty() {
         "slug_recovery"

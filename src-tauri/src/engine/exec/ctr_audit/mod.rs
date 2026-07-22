@@ -6,6 +6,7 @@
 ///   - create_ctr_fix_tasks     (spawn follow-up fix tasks)
 mod analyze;
 mod apply;
+mod article_record;
 mod context;
 mod generate;
 mod outcome;
@@ -20,6 +21,7 @@ mod tests;
 
 pub(crate) use analyze::*;
 pub(crate) use apply::*;
+pub(crate) use article_record::*;
 pub(crate) use context::*;
 pub(crate) use generate::*;
 pub(crate) use outcome::*;

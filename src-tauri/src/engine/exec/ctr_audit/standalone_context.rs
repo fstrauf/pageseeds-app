@@ -6,12 +6,20 @@
 //! ```json
 //! { "total_articles": 1, "articles": [ <article record> ] }
 //! ```
+//!
+//! The per-article record shape itself is owned by
+//! [`super::article_record::build_ctr_article_record`]. This module owns:
+//! wrap-once artifact construction, audit-slice preference, and
+//! `operator_requested` tagging.
 
 use rusqlite::Connection;
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::models::article::Article;
 use crate::models::task::TaskArtifact;
+
+use super::article_record::{build_ctr_article_record, CtrArticleRecordParams};
+use super::context::{ctr_underperforms, target_ctr_for_position};
 
 /// Wrap a single article record into the standard `ctr_context` document shape.
 pub(crate) fn wrap_single_article_ctr_context(
@@ -26,7 +34,8 @@ pub(crate) fn wrap_single_article_ctr_context(
 /// Build a `ctr_context` [`TaskArtifact`] from a single article record.
 ///
 /// This is the **single writer** of the artifact shape used by audit spawn
-/// and standalone/CLI spawn.
+/// and standalone/CLI spawn. Callers must pass a bare article record (not an
+/// already-wrapped document).
 pub(crate) fn ctr_context_artifact_from_article(
     article_context: serde_json::Value,
     source: &str,
@@ -43,7 +52,7 @@ pub(crate) fn ctr_context_artifact_from_article(
     })
 }
 
-/// Build a full single-article `ctr_context` document for standalone/operator spawn.
+/// Build a bare single-article CTR record for standalone/operator spawn.
 ///
 /// Preference order:
 /// 1. Slice the matching article from the latest project `ctr_audit_context`
@@ -52,7 +61,10 @@ pub(crate) fn ctr_context_artifact_from_article(
 /// 2. Otherwise build a fresh record from the MDX file + article metadata
 ///    (best-effort GSC from `articles.json`), always including
 ///    `"operator_requested"` in `detection_reasons`.
-pub(crate) fn build_standalone_ctr_context(
+///
+/// Returns the **bare article record** (not the `{ total_articles, articles }`
+/// wrap). Callers wrap once via [`ctr_context_artifact_from_article`].
+pub(crate) fn build_standalone_ctr_article_record(
     conn: &Connection,
     project_id: &str,
     project_path: &str,
@@ -62,11 +74,15 @@ pub(crate) fn build_standalone_ctr_context(
         try_slice_from_latest_audit(conn, project_id, project_path, article)
     {
         ensure_operator_requested(&mut record);
-        return Ok(wrap_single_article_ctr_context(record));
+        return Ok(record);
     }
 
-    let record = build_article_record_from_file(conn, project_id, project_path, article);
-    Ok(wrap_single_article_ctr_context(record))
+    Ok(build_article_record_from_file(
+        conn,
+        project_id,
+        project_path,
+        article,
+    ))
 }
 
 /// Ensure `detection_reasons` contains `"operator_requested"`.
@@ -134,7 +150,9 @@ fn try_slice_from_latest_audit(
 
 /// Build one article context record from the live MDX file + best-effort GSC.
 ///
-/// Shape mirrors `context.rs` (~lines 279–309).
+/// Outer orchestration only: file/GSC reads, health, detection reasons
+/// (always includes `operator_requested`), title fallback. Record shape is
+/// assembled via the shared pure builder.
 fn build_article_record_from_file(
     conn: &Connection,
     project_id: &str,
@@ -178,36 +196,20 @@ fn build_article_record_from_file(
     let (impressions, clicks, ctr, avg_position) =
         load_gsc_for_article(project_path, article.id, url_slug);
 
-    let target_ctr = super::context::target_ctr_for_position(avg_position);
+    let target_ctr = target_ctr_for_position(avg_position);
     let clicks_lost = impressions * (target_ctr - ctr).max(0.0);
 
     let mut detection_reasons = vec!["operator_requested".to_string()];
     if !health.all_ok() {
         detection_reasons.push("format_violation".to_string());
     }
-    if super::context::ctr_underperforms(ctr, target_ctr) {
+    if ctr_underperforms(ctr, target_ctr) {
         detection_reasons.push("ctr_underperformance".to_string());
     }
 
     let rendered_audit = crate::db::get_ctr_rendered_audit(conn, project_id, article.id)
         .ok()
         .flatten();
-
-    let rendered_json = match rendered_audit {
-        Some(a) => serde_json::json!({
-            "rendered_title": a.rendered_title,
-            "rendered_title_length": a.rendered_title_length,
-            "title_issue_source": a.title_issue_source,
-            "rendered_description": a.rendered_description,
-            "rendered_h1": a.rendered_h1,
-            "schema_types": a.schema_types,
-            "has_rendered_faq_page": a.has_rendered_faq_page,
-            "snippet_markup": a.snippet_markup,
-            "issues": a.issues,
-            "checked_at": a.checked_at,
-        }),
-        None => serde_json::Value::Null,
-    };
 
     // Prefer live file title; fall back to SQLite article title when file missing.
     let title = if current_title.is_empty() {
@@ -216,36 +218,27 @@ fn build_article_record_from_file(
         current_title
     };
 
-    serde_json::json!({
-        "id": article.id,
-        "url_slug": url_slug,
-        "title": title,
-        "target_keyword": target_keyword,
-        "meta_description": meta_description,
-        "first_paragraph": first_paragraph,
-        "h1": h1,
-        "file": file_ref,
-        "content_hash": content_hash,
-        "gsc": {
-            "impressions": impressions,
-            "clicks": clicks,
-            "ctr": ctr,
-            "avg_position": avg_position,
-        },
-        "clicks_lost": clicks_lost,
-        "target_ctr": target_ctr,
-        "detection_reasons": detection_reasons,
-        "issues_detected": {
-            "file_not_found": !health.file_found,
-            "title_too_long": !health.title_ok,
-            "meta_too_short": !health.meta_ok,
-            "snippet_suboptimal": !health.snippet_ok,
-            "missing_faq_schema": !health.faq_ok,
-        },
-        "has_frontmatter_faq": has_frontmatter_faq,
-        "faq_question_count": faq_question_count,
-        "top_queries": serde_json::Value::Null,
-        "rendered_audit": rendered_json,
+    build_ctr_article_record(CtrArticleRecordParams {
+        id: article.id,
+        url_slug,
+        title: &title,
+        target_keyword: &target_keyword,
+        meta_description: &meta_description,
+        first_paragraph: &first_paragraph,
+        h1: &h1,
+        file: file_ref,
+        content_hash: &content_hash,
+        impressions,
+        clicks,
+        ctr,
+        avg_position,
+        target_ctr,
+        clicks_lost,
+        detection_reasons: &detection_reasons,
+        health: &health,
+        has_frontmatter_faq,
+        faq_question_count,
+        rendered_audit: rendered_audit.as_ref(),
     })
 }
 
@@ -347,10 +340,12 @@ mod tests {
         let conn = test_db();
         // Project row not required for file-based build (rendered audit is best-effort).
         let article = sample_article();
-        let doc = build_standalone_ctr_context(&conn, "proj-test", &path, &article).unwrap();
+        let rec =
+            build_standalone_ctr_article_record(&conn, "proj-test", &path, &article).unwrap();
 
-        assert_eq!(doc["total_articles"], 1);
-        let rec = &doc["articles"][0];
+        // Bare record — no outer wrap
+        assert!(rec.get("total_articles").is_none());
+        assert!(rec.get("articles").is_none());
         assert_eq!(rec["id"], 1);
         assert_eq!(rec["url_slug"], "test-article");
         assert_eq!(rec["file"], "content/001_test_article.mdx");
@@ -368,6 +363,13 @@ mod tests {
 
         // GSC from articles.json fixture
         assert_eq!(rec["gsc"]["impressions"], 10000.0);
+
+        // One wrap at the artifact boundary
+        let art = ctr_context_artifact_from_article(rec, "test").unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(art.content.as_deref().unwrap()).unwrap();
+        assert_eq!(doc["total_articles"], 1);
+        assert_eq!(doc["articles"][0]["id"], 1);
 
         cleanup(&path);
     }
@@ -410,8 +412,8 @@ mod tests {
         .unwrap();
 
         let article = sample_article();
-        let doc = build_standalone_ctr_context(&conn, "proj-test", &path, &article).unwrap();
-        let rec = &doc["articles"][0];
+        let rec =
+            build_standalone_ctr_article_record(&conn, "proj-test", &path, &article).unwrap();
         assert_eq!(rec["title"], "From Audit");
         assert_eq!(rec["gsc"]["impressions"], 999.0);
 

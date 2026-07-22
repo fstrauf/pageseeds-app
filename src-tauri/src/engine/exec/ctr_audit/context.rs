@@ -230,12 +230,12 @@ pub(crate) fn exec_ctr_build_context(
         let clicks_lost = impressions * (target_ctr - ctr).max(0.0);
 
         // Admission gate: core format violation OR CTR underperformance.
-        let mut detection_reasons: Vec<&str> = Vec::new();
+        let mut detection_reasons: Vec<String> = Vec::new();
         if !health.all_ok() {
-            detection_reasons.push("format_violation");
+            detection_reasons.push("format_violation".to_string());
         }
         if ctr_underperforming {
-            detection_reasons.push("ctr_underperformance");
+            detection_reasons.push("ctr_underperformance".to_string());
         }
         let healthy = detection_reasons.is_empty();
 
@@ -260,53 +260,30 @@ pub(crate) fn exec_ctr_build_context(
             .ok()
             .flatten();
 
-        let rendered_json = match rendered_audit {
-            Some(a) => serde_json::json!({
-                "rendered_title": a.rendered_title,
-                "rendered_title_length": a.rendered_title_length,
-                "title_issue_source": a.title_issue_source,
-                "rendered_description": a.rendered_description,
-                "rendered_h1": a.rendered_h1,
-                "schema_types": a.schema_types,
-                "has_rendered_faq_page": a.has_rendered_faq_page,
-                "snippet_markup": a.snippet_markup,
-                "issues": a.issues,
-                "checked_at": a.checked_at,
-            }),
-            None => serde_json::Value::Null,
-        };
-
-        article_records.push(serde_json::json!({
-            "id": id,
-            "url_slug": url_slug,
-            "title": current_title,
-            "target_keyword": target_keyword,
-            "meta_description": meta_description,
-            "first_paragraph": first_paragraph,
-            "h1": h1,
-            "file": file_ref,
-            "content_hash": content_hash,
-            "gsc": {
-                "impressions": impressions,
-                "clicks": clicks,
-                "ctr": ctr,
-                "avg_position": avg_position,
+        article_records.push(super::article_record::build_ctr_article_record(
+            super::article_record::CtrArticleRecordParams {
+                id,
+                url_slug: &url_slug,
+                title: &current_title,
+                target_keyword: &target_keyword,
+                meta_description: &meta_description,
+                first_paragraph: &first_paragraph,
+                h1: &h1,
+                file: &file_ref,
+                content_hash: &content_hash,
+                impressions,
+                clicks,
+                ctr,
+                avg_position,
+                target_ctr,
+                clicks_lost,
+                detection_reasons: &detection_reasons,
+                health: &health,
+                has_frontmatter_faq,
+                faq_question_count,
+                rendered_audit: rendered_audit.as_ref(),
             },
-            "clicks_lost": clicks_lost,
-            "target_ctr": target_ctr,
-            "detection_reasons": detection_reasons,
-            "issues_detected": {
-                "file_not_found": !health.file_found,
-                "title_too_long": !health.title_ok,
-                "meta_too_short": !health.meta_ok,
-                "snippet_suboptimal": !health.snippet_ok,
-                "missing_faq_schema": !health.faq_ok,
-            },
-            "has_frontmatter_faq": has_frontmatter_faq,
-            "faq_question_count": faq_question_count,
-            "top_queries": serde_json::Value::Null,
-            "rendered_audit": rendered_json,
-        }));
+        ));
     }
 
     if skipped_healthy > 0 || skipped_unchanged > 0 || skipped_low_impressions > 0 {
