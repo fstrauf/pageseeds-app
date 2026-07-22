@@ -80,10 +80,6 @@ pub(crate) fn normalize_patch_before_validation(
             repairs.push(format!("trimmed first_paragraph to {} words", max_words));
         }
 
-        if !has_keyword_or_question(first_paragraph, target_keyword) {
-            add_keyword_or_question_marker(first_paragraph, target_keyword);
-            repairs.push("added first_paragraph keyword/question marker".to_string());
-        }
     }
 
     if let Some(questions) = patch.changes.faq_questions.as_mut() {
@@ -98,11 +94,7 @@ pub(crate) fn normalize_patch_before_validation(
                 "faq answer whitespace",
                 &mut repairs,
             );
-            let trimmed = question.question.trim_end();
-            if !trimmed.is_empty() && !trimmed.ends_with('?') {
-                question.question = format!("{}?", trimmed.trim_end_matches(&['.', '!', ':'][..]));
-                repairs.push("added FAQ question mark".to_string());
-            }
+            // Do not force trailing '?'; empty checks stay in validate.
         }
     }
 
@@ -144,15 +136,19 @@ pub(crate) fn prune_invalid_change_fields(
 ) -> Vec<String> {
     let mut notes = Vec::new();
     if patch.changes.title.is_some()
-        && errors
-            .iter()
-            .any(|e| e.starts_with("title is ") || e.starts_with("title is empty"))
+        && errors.iter().any(|e| {
+            e.starts_with("title is ")
+                || e.starts_with("title is empty")
+                || e.starts_with("title contains year")
+        })
     {
         patch.changes.title = None;
         notes.push("dropped invalid title".to_string());
     }
     if patch.changes.description.is_some()
-        && errors.iter().any(|e| e.starts_with("description is "))
+        && errors.iter().any(|e| {
+            e.starts_with("description is ") || e.starts_with("description contains year")
+        })
     {
         patch.changes.description = None;
         notes.push("dropped invalid description".to_string());
@@ -192,6 +188,8 @@ pub(crate) fn validate_patch_before_write(
 ) -> Vec<String> {
     let mut errors = Vec::new();
 
+    let current_year = crate::content::year_policy::current_calendar_year();
+
     if let Some(title) = patch.changes.title.as_deref() {
         let title_len = title.chars().count();
         if title.trim().is_empty() {
@@ -202,6 +200,11 @@ pub(crate) fn validate_patch_before_write(
                 title_len,
                 crate::engine::exec::audit_health::TITLE_MAX_LEN
             ));
+        }
+        if let Some(err) =
+            crate::content::year_policy::non_current_year_error("title", title, current_year)
+        {
+            errors.push(err);
         }
     }
 
@@ -216,6 +219,13 @@ pub(crate) fn validate_patch_before_write(
                 crate::engine::exec::audit_health::META_MIN_LEN,
                 crate::engine::exec::audit_health::META_MAX_LEN
             ));
+        }
+        if let Some(err) = crate::content::year_policy::non_current_year_error(
+            "description",
+            description,
+            current_year,
+        ) {
+            errors.push(err);
         }
     }
 
@@ -237,17 +247,17 @@ pub(crate) fn validate_patch_before_write(
         }
 
         if let Ok(Some(rec)) = extract_recommendation(task) {
-            let keyword_lower = rec.target_keyword.to_lowercase();
-            let has_kw_or_question = keyword_lower.is_empty()
-                || crate::content::keyword_match::keyword_present(
+            // Keyword required when present; no `?` substitute (issue #112).
+            if !rec.target_keyword.trim().is_empty()
+                && !crate::content::keyword_match::keyword_present(
                     &first_paragraph.to_lowercase(),
-                    &keyword_lower,
+                    &rec.target_keyword,
                 )
-                || first_paragraph.contains('?');
-            if !has_kw_or_question {
-                let display_kw = crate::content::keyword_match::normalize_keyword(&rec.target_keyword);
+            {
+                let display_kw =
+                    crate::content::keyword_match::normalize_keyword(&rec.target_keyword);
                 errors.push(format!(
-                    "first_paragraph must contain target keyword '{}' or a question mark",
+                    "first_paragraph must contain target keyword '{}'",
                     if display_kw.is_empty() {
                         rec.target_keyword.clone()
                     } else {
@@ -376,16 +386,13 @@ pub(crate) fn validate_patch_against_recommendation(
     let has_snippet_issue = fixes.contains(&crate::models::ctr::CtrFixType::SnippetBait);
     let has_faq_issue = fixes.contains(&crate::models::ctr::CtrFixType::FaqSchema);
 
-    let (current_title, current_meta, current_first) = parse_content_excerpt(original_content);
+    let (_current_title, current_meta, current_first) = parse_content_excerpt(original_content);
 
-    // Title: if title_rewrite was requested, patch must have title unless current title passes.
+    // Title: if title_rewrite was requested, patch must always include a title (issue #112).
     if has_title_issue && patch.changes.title.is_none() {
-        if current_title.chars().count() > crate::engine::exec::audit_health::TITLE_MAX_LEN {
-            errors.push(
-                "title_rewrite was requested but patch has no title and current title is too long"
-                    .to_string(),
-            );
-        }
+        errors.push(
+            "title_rewrite was requested but patch has no title".to_string(),
+        );
     }
 
     // Meta: if meta_description was requested, patch must have description unless current passes.
@@ -639,42 +646,6 @@ fn shorten_meta_description(value: &str, min_chars: usize, max_chars: usize) -> 
         Some(shortened)
     } else {
         None
-    }
-}
-
-fn has_keyword_or_question(value: &str, target_keyword: &str) -> bool {
-    target_keyword.is_empty()
-        || crate::content::keyword_match::keyword_present(
-            &value.to_lowercase(),
-            &target_keyword.to_lowercase(),
-        )
-        || value.contains('?')
-}
-
-fn add_keyword_or_question_marker(value: &mut String, target_keyword: &str) {
-    // Never append raw quote-glued junk — use the normalized form.
-    let keyword = crate::content::keyword_match::normalize_keyword(target_keyword);
-    let keyword_word_count = keyword.split_whitespace().count();
-    let word_count = crate::content::ops::count_words(value);
-    let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
-    if !keyword.is_empty() && word_count + keyword_word_count <= max_words {
-        if !value.ends_with(' ') {
-            value.push(' ');
-        }
-        value.push_str(&keyword);
-        value.push('?');
-        return;
-    }
-
-    let trimmed = value.trim_end();
-    if trimmed.ends_with('.') || trimmed.ends_with('!') || trimmed.ends_with(':') {
-        let mut chars: Vec<char> = trimmed.chars().collect();
-        if let Some(last) = chars.last_mut() {
-            *last = '?';
-        }
-        *value = chars.into_iter().collect();
-    } else if !trimmed.ends_with('?') {
-        *value = format!("{}?", trimmed);
     }
 }
 

@@ -300,7 +300,7 @@ This is the first paragraph of the test article. It contains some content.
             errors
         );
 
-        // Missing requested title fix
+        // Missing requested title fix — always errors (even if current title were short).
         let patch_missing_title = crate::models::ctr::CtrFixPatch {
             article_id: 1,
             file: "content/test.mdx".to_string(),
@@ -310,8 +310,30 @@ This is the first paragraph of the test article. It contains some content.
         let errors =
             super::patch::validate_patch_against_recommendation(&patch_missing_title, &rec, mdx);
         assert!(
-            errors.iter().any(|e| e.contains("title_rewrite")),
-            "Should error when requested title fix is missing: {:?}",
+            errors.iter().any(|e| e.contains(
+                "title_rewrite was requested but patch has no title"
+            )),
+            "Should always error when title_rewrite requested and patch has no title: {:?}",
+            errors
+        );
+
+        // Same rule with a short current title (no "too long" exception).
+        let mdx_short = r#"---
+title: "Short Title"
+description: "desc"
+date: "2024-01-01"
+---
+
+# Short Title
+
+This is the first paragraph of the test article. It contains some content.
+"#;
+        let errors =
+            super::patch::validate_patch_against_recommendation(&patch_missing_title, &rec, mdx_short);
+        assert!(
+            errors.iter().any(|e| e
+                == "title_rewrite was requested but patch has no title"),
+            "title_rewrite requires title even when current title is short: {:?}",
             errors
         );
 
@@ -333,6 +355,46 @@ This is the first paragraph of the test article. It contains some content.
                 .iter()
                 .any(|e| e.contains("meta_description was not requested")),
             "Should error on unrequested description change: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn validate_patch_before_write_rejects_stale_year_in_title() {
+        let rec = crate::models::ctr::CtrRecommendation {
+            article_id: 1,
+            url_slug: "test".to_string(),
+            file: "content/test.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "wheel strategy".to_string(),
+            fixes: vec![],
+        };
+        let task = task_with_rec(&rec);
+        let mdx = r#"---
+title: "Old"
+description: "desc"
+date: "2024-01-01"
+---
+
+Body.
+"#;
+        let stale_year = crate::content::year_policy::current_calendar_year() - 1;
+        let patch = crate::models::ctr::CtrFixPatch {
+            article_id: 1,
+            file: "content/test.mdx".to_string(),
+            error: None,
+            changes: crate::models::ctr::CtrFixPatchChanges {
+                title: Some(format!("Best Wheel Strategy {}", stale_year)),
+                ..Default::default()
+            },
+        };
+        let errors = super::patch::validate_patch_before_write(&patch, &task, mdx);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("year not equal to current calendar year")),
+            "expected year rail error: {:?}",
             errors
         );
     }

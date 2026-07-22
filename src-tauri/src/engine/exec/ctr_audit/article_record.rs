@@ -68,7 +68,7 @@ pub(crate) fn build_ctr_article_record(p: CtrArticleRecordParams<'_>) -> serde_j
 
     let reason_refs: Vec<&str> = p.detection_reasons.iter().map(|s| s.as_str()).collect();
     let prompt_hint = super::context::recovery_prompt_hint(&reason_refs);
-    let current_year = chrono::Datelike::year(&chrono::Utc::now());
+    let current_year = crate::content::year_policy::current_calendar_year();
 
     serde_json::json!({
         "id": p.id,

@@ -1,8 +1,40 @@
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;
-use crate::models::ctr::CtrRecommendation;
+use crate::models::ctr::{CtrAgentOutput, CtrFixType, CtrRecommendation};
 use crate::models::task::Task;
+
+/// Drop title_rewrite / meta_description fixes whose recommended string contains
+/// a 20xx year not equal to the current calendar year (issue #112 rail A).
+fn drop_year_invalid_title_meta_fixes(rec: &mut CtrRecommendation, current_year: i32) {
+    let before = rec.fixes.len();
+    rec.fixes.retain(|fix| {
+        match fix.fix_type {
+            CtrFixType::TitleRewrite | CtrFixType::MetaDescription => {
+                match fix.recommended.as_str() {
+                    Some(s) if !crate::content::year_policy::years_ok(s, current_year) => {
+                        log::info!(
+                            "[ctr_audit] Dropping {:?} fix for {} — recommended year not equal to {}",
+                            fix.fix_type,
+                            rec.url_slug,
+                            current_year
+                        );
+                        false
+                    }
+                    _ => true,
+                }
+            }
+            _ => true,
+        }
+    });
+    if rec.fixes.len() < before {
+        log::info!(
+            "[ctr_audit] Filtered {} year-invalid title/meta fix(es) for {}",
+            before - rec.fixes.len(),
+            rec.url_slug
+        );
+    }
+}
 
 /// Run the CTR optimization analysis using an LLM agent.
 ///
@@ -98,37 +130,52 @@ pub(crate) fn exec_ctr_analyze(
         Some(ref val) => {
             let articles = context_doc["articles"].as_array();
             let is_single_article = articles.map(|a| a.len()).unwrap_or(0) == 1;
+            let current_year = crate::content::year_policy::current_calendar_year();
             if is_single_article {
-                if let Some(recs) = val["recommendations"].as_array() {
-                    if let Some(first) = recs.first() {
-                        serde_json::to_string_pretty(first)
-                            .unwrap_or_else(|_| output.clone())
+                // Prefer first recommendation from a list, else bare recommendation object.
+                // Empty list → identity rec with empty fixes (still valid for downstream).
+                let mut rec_opt: Option<CtrRecommendation> =
+                    if let Some(recs) = val["recommendations"].as_array() {
+                        if let Some(first) = recs.first() {
+                            serde_json::from_value(first.clone()).ok()
+                        } else {
+                            let article = context_doc["articles"]
+                                .as_array()
+                                .and_then(|a| a.first())
+                                .unwrap_or(&serde_json::Value::Null);
+                            Some(CtrRecommendation {
+                                article_id: article["id"].as_i64().unwrap_or(0),
+                                url_slug: article["url_slug"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                                file: article["file"].as_str().unwrap_or("").to_string(),
+                                target_keyword: article["target_keyword"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                                fixes: vec![],
+                                priority: None,
+                                expected_ctr_improvement: None,
+                            })
+                        }
                     } else {
-                        let article = context_doc["articles"]
-                            .as_array()
-                            .and_then(|a| a.first())
-                            .unwrap_or(&serde_json::Value::Null);
-                        let rec = CtrRecommendation {
-                            article_id: article["id"].as_i64().unwrap_or(0),
-                            url_slug: article["url_slug"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
-                            file: article["file"].as_str().unwrap_or("").to_string(),
-                            target_keyword: article["target_keyword"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
-                            fixes: vec![],
-                            priority: None,
-                            expected_ctr_improvement: None,
-                        };
-                        serde_json::to_string_pretty(&rec)
-                            .unwrap_or_else(|_| output.clone())
-                    }
+                        serde_json::from_value(val.clone()).ok()
+                    };
+
+                if let Some(ref mut rec) = rec_opt {
+                    drop_year_invalid_title_meta_fixes(rec, current_year);
+                    serde_json::to_string_pretty(rec).unwrap_or_else(|_| output.clone())
                 } else {
                     serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
                 }
+            } else if let Ok(mut agent_out) =
+                serde_json::from_value::<CtrAgentOutput>(val.clone())
+            {
+                for rec in &mut agent_out.recommendations {
+                    drop_year_invalid_title_meta_fixes(rec, current_year);
+                }
+                serde_json::to_string_pretty(&agent_out).unwrap_or_else(|_| output.clone())
             } else {
                 serde_json::to_string_pretty(val).unwrap_or_else(|_| output.clone())
             }

@@ -58,13 +58,15 @@
         let path = test_dir();
         setup_project(&path);
 
+        // first_paragraph already contains target keyword (no inject path — issue #112).
+        // Near-miss covers title/meta length repair only.
         let patch = serde_json::json!({
             "article_id": 1,
             "file": "content/001_test_article.mdx",
             "changes": {
                 "title": "Coffee Grind Size Chart: Complete Guide with Micron Ranges",
                 "description": "Coffee grind size chart with exact micron ranges for espresso, pour over, French press, AeroPress, moka pot, and cold brew so you can dial in flavor fast every morning without guessing.",
-                "first_paragraph": "Fresh brewing starts with consistent particles and practical timing. This guide shows the exact texture, common mistakes, and simple adjustment cues that help home brewers match each method with a repeatable grind size for better cups every day at home."
+                "first_paragraph": "A test article on fresh brewing starts with consistent particles and practical timing. This guide shows the exact texture, common mistakes, and simple adjustment cues that help home brewers match each method with a repeatable grind size for better cups every day at home."
             }
         });
 
@@ -142,7 +144,14 @@
             description.chars().count() >= crate::engine::exec::audit_health::META_MIN_LEN
                 && description.chars().count() <= crate::engine::exec::audit_health::META_MAX_LEN
         );
-        assert!(first_paragraph.contains("test article?") || first_paragraph.contains('?'));
+        assert!(
+            crate::content::keyword_match::keyword_present(
+                &first_paragraph.to_lowercase(),
+                "test article"
+            ),
+            "first_paragraph must keep target keyword without inject: {:?}",
+            first_paragraph
+        );
         assert!(
             crate::content::ops::count_words(&first_paragraph)
                 <= crate::engine::exec::audit_health::SNIPPET_MAX_WORDS

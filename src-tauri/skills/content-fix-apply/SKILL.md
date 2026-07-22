@@ -1,6 +1,6 @@
 # Content Fix Apply
 
-<!-- skill-version: 3 -->
+<!-- skill-version: 4 -->
 
 Apply SEO content improvements to a single MDX article based on structured recommendations.
 
@@ -11,6 +11,7 @@ You receive:
 2. A list of structured recommendations (category, current text, proposed text, reason)
 3. Validation rules for each field
 4. Canonical `file` and `article_id` in the context block
+5. `current_year` — UTC calendar year at prompt-build time (number)
 
 ## Your job
 
@@ -31,6 +32,13 @@ Only include fields that need to change. Do not include a field if the fix is al
 - **eeat** → Add credibility signal (author note, data source, or experience statement).
 - **cta** → Add or strengthen call-to-action.
 
+### Year freshness (title / description)
+
+- Prefer `current_year` from context when a year in the title or meta is warranted.
+- If title or description contains **any** 20xx calendar year, **every** such year must equal `current_year`.
+- No dual-year ranges (e.g. "2025-2026", "2024/2025"), no stale years, no non-current years.
+- Use a **single** current year when a year is warranted, or omit years entirely.
+
 
 ## Validation rules (enforced by Rust)
 
@@ -38,6 +46,7 @@ Only include fields that need to change. Do not include a field if the fix is al
 - description: 120-155 chars if provided
 - intro: 40-60 words if provided
 - faq_questions: 3-5 questions if provided and file has no existing FAQ
+- title / description: if any 20xx year is present, every year must equal `current_year` (no dual-year ranges)
 - Every proposed change must differ from the current text
 - Empty `changes: {}` is **not** success when open suggestions still fail content health (title length, meta length, intro word count, missing H1/FAQ)
 
