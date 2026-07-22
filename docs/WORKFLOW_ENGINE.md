@@ -252,6 +252,14 @@ On the **tool** path, `create_fix_content_article_tasks` no-ops (no `recommendat
 
 **Idempotency:** Each fix task uses idempotency key `fix_content_article:{project_id}:{article_id}` to prevent duplicates if the review is re-run.
 
+**Content Review User Selection (`ContentReviewPicker`):**
+When `content_review` / `content_audit` completes successfully, the system does **not** auto-spawn fix tasks. Instead:
+1. Reads recommendations from the `content_review_recommend` step artifact or disk `recommendations.json`
+2. Validates proposals (known task types, required params, active idempotency keys) and caps at 5
+3. Stores a `content_review_proposals` artifact on the parent; parent lands in `review`
+4. User selects proposals in the ContentReviewPicker; `select_content_review_follow_ups` spawns via `TaskSpawner`
+5. Parent transitions `review` → `done`; each fix task is `UserEnqueue` with key `fix_content_article:{project_id}:{article_id}`
+
 ---
 
 ## Content Quality Gate (`review_article_quality`)

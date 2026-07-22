@@ -87,7 +87,7 @@ async fn main() {
         status: TaskStatus::Todo,
         priority: Priority::High,
         run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::FollowUpTasks,
+        review_surface: TaskReviewSurface::ContentReviewPicker,
         follow_up_policy: FollowUpPolicy::BackendAuto,
         agent_policy: AgentPolicy::Required,
         title: Some("Smoke: Content Review".to_string()),

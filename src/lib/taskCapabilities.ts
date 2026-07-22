@@ -37,6 +37,8 @@ export function getReviewLabel(surface: TaskReviewSurface | string): string {
       return 'Select opportunities'
     case 'cannibalization_picker':
       return 'Select recommendations'
+    case 'content_review_picker':
+      return 'Select fixes'
     case 'artifact_review':
       return 'Review results'
     case 'follow_up_tasks':
@@ -54,6 +56,8 @@ export function getReviewSurfaceTitle(surface: TaskReviewSurface): string {
       return 'Reddit Opportunities'
     case 'cannibalization_picker':
       return 'Cannibalization Recommendations'
+    case 'content_review_picker':
+      return 'Content Review Proposals'
     case 'follow_up_tasks':
       return 'Next Steps'
     case 'artifact_review':

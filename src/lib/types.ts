@@ -94,6 +94,9 @@ export type {
   VisualAsset,
   
   // Content Models
+  ContentReviewProposal,
+  ContentReviewSelectableArtifact,
+  DroppedProposal,
   ReadabilityReport,
   CompetitorWordCount,
   CompetitorStructure,

@@ -75,7 +75,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 |---|---|
 | **Does** | Syncs GSC data and generates recommendations for the highest-priority article. |
 | **When** | The umbrella content diagnostic. Start here when "something is underperforming" and the cause is unknown. |
-| **After completion** | `FollowUpTasks` → spawns concrete fix tasks automatically (`BackendAuto`). |
+| **After completion** | `ContentReviewPicker` → user selects proposals → spawns `fix_content_article` children (`UserSelection`). |
 
 | Field | `seo_health_scan` |
 |---|---|
@@ -143,7 +143,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 |---|---|---|---|
 | `research_keywords` | UserEnqueue | KeywordPicker | UserSelection |
 | `research_landing_pages` | UserEnqueue | KeywordPicker | UserSelection |
-| `content_review` | UserEnqueue | FollowUpTasks | BackendAuto |
+| `content_review` | UserEnqueue | ContentReviewPicker | UserSelection |
 | `seo_health_scan` | UserEnqueue | ArtifactReview | UserSelection |
 | `ctr_audit` | AutoEnqueue | None | BackendAuto |
 | `cannibalization_audit` | AutoEnqueue | CannibalizationPicker | UserSelection |
