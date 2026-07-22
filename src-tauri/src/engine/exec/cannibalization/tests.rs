@@ -610,13 +610,21 @@ Some content here.
         let candidates = candidates_doc["candidates"].as_array().unwrap();
         assert!(
             !candidates.is_empty(),
-            "Should produce at least one candidate"
+            "Should produce at least one candidate (fixture has 3 pages with exact keyword 'cash secured puts')"
         );
 
-        // All candidates should be merge candidates with ≤8 pages
+        // Candidates are evidence-lane merge sets: exact-keyword groups and/or high-sim pairs
         for c in candidates {
-            assert_eq!(c["candidate_type"].as_str().unwrap(), "merge_candidate");
-            assert!(c["pages"].as_array().unwrap().len() <= 8);
+            let ctype = c["candidate_type"].as_str().unwrap();
+            assert!(
+                ctype == "merge_candidate" || ctype == "exact_keyword_dupe",
+                "unexpected candidate_type: {}",
+                ctype
+            );
+            assert!(
+                c["pages"].as_array().unwrap().len() <= 4,
+                "candidate page cap is 4"
+            );
             assert!(c["total_impressions"].as_f64().unwrap() >= 0.0);
         }
 
@@ -724,11 +732,11 @@ Some content here.
     }
 
     #[test]
-    fn test_select_candidates_keeps_cluster_with_all_distinct_keywords() {
+    fn test_select_candidates_drops_distinct_keyword_grab_bag() {
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
-        // A semantic cluster whose pages all have distinct target keywords used
-        // to produce zero candidates: every per-keyword group had size 1.
+        // Soft cluster whose pages all have distinct target keywords must NOT
+        // become a whole-theme merge candidate (fail-closed shortlist).
         write_clusters_file(
             &path,
             serde_json::json!([
@@ -740,10 +748,19 @@ Some content here.
 
         let result = exec_can_select_candidates(&audit_task(), &path);
         assert!(result.success, "select_candidates failed: {}", result.message);
+        assert!(
+            result.message.contains("0 merge candidates")
+                || result.message.to_lowercase().contains("no cannibalization"),
+            "empty shortlist should mention no evidence: {}",
+            result.message
+        );
 
         let candidates = read_candidates(&path);
-        assert_eq!(candidates.len(), 1, "theme must fall back to one candidate");
-        assert_eq!(candidates[0]["page_count"].as_i64().unwrap(), 3);
+        assert_eq!(
+            candidates.len(),
+            0,
+            "distinct-keyword soft clusters must not invent grab-bag merge candidates"
+        );
 
         cleanup(&path);
     }
@@ -770,6 +787,164 @@ Some content here.
         assert!(candidates
             .iter()
             .all(|c| c["page_count"].as_i64().unwrap() == 2));
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_select_candidates_emits_high_similarity_pairs() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        // Soft cluster with distinct keywords alone would yield 0 candidates.
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                cluster_page(1, "cold-brew-guide", "cold brew coffee"),
+                cluster_page(2, "portable-brewer", "portable coffee maker"),
+            ]),
+        );
+
+        // Context with a high-sim pair (above PAIR_CANDIDATE_SIMILARITY_THRESHOLD 0.45)
+        // and a low-sim pair that must be ignored.
+        let context = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "cold-brew-guide",
+                    "title": "Cold Brew Guide",
+                    "h1": "Cold Brew Guide",
+                    "target_keyword": "cold brew coffee",
+                    "first_200_words": "how to make cold brew coffee at home",
+                    "gsc": { "impressions": 1000.0, "clicks": 10.0, "avg_position": 5.0 },
+                    "incoming_internal_links": 1,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2024-01-01",
+                    "word_count": 800
+                },
+                {
+                    "id": 2,
+                    "url_slug": "portable-brewer",
+                    "title": "Portable Coffee Maker",
+                    "h1": "Portable Coffee Maker",
+                    "target_keyword": "portable coffee maker",
+                    "first_200_words": "best portable coffee makers for travel",
+                    "gsc": { "impressions": 500.0, "clicks": 5.0, "avg_position": 8.0 },
+                    "incoming_internal_links": 0,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2024-02-01",
+                    "word_count": 600
+                },
+                {
+                    "id": 3,
+                    "url_slug": "moka-pot",
+                    "title": "Moka Pot Guide",
+                    "h1": "Moka Pot Guide",
+                    "target_keyword": "moka pot",
+                    "first_200_words": "using a moka pot on the stove",
+                    "gsc": { "impressions": 200.0, "clicks": 2.0, "avg_position": 12.0 },
+                    "incoming_internal_links": 0,
+                    "outgoing_internal_links": 0,
+                    "published_date": "2024-03-01",
+                    "word_count": 400
+                }
+            ],
+            "similarity_pairs": [
+                {
+                    "article_a_id": 1,
+                    "article_b_id": 2,
+                    "article_a_title": "Cold Brew Guide",
+                    "article_b_title": "Portable Coffee Maker",
+                    "similarity": 0.62
+                },
+                {
+                    "article_a_id": 1,
+                    "article_b_id": 3,
+                    "article_a_title": "Cold Brew Guide",
+                    "article_b_title": "Moka Pot Guide",
+                    "similarity": 0.18
+                }
+            ]
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_audit_context.json"),
+            serde_json::to_string_pretty(&context).unwrap(),
+        )
+        .unwrap();
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(result.success, "select_candidates failed: {}", result.message);
+
+        let candidates = read_candidates(&path);
+        assert_eq!(
+            candidates.len(),
+            1,
+            "only the high-sim pair (≥0.45) should emit a candidate"
+        );
+        assert_eq!(candidates[0]["page_count"].as_i64().unwrap(), 2);
+        assert_eq!(
+            candidates[0]["candidate_type"].as_str().unwrap(),
+            "merge_candidate"
+        );
+        let pair_sim = candidates[0]["pair_similarity"].as_f64().unwrap();
+        assert!(
+            (pair_sim - 0.62).abs() < 0.001,
+            "pair_similarity should be preserved"
+        );
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_select_candidates_empty_shortlist_succeeds() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        // Two-page soft cluster, distinct keywords, no context pairs → empty shortlist.
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                cluster_page(1, "alpha-page", "alpha keyword unique"),
+                cluster_page(2, "beta-page", "beta keyword unique"),
+            ]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(result.success, "empty shortlist must still succeed");
+        let candidates = read_candidates(&path);
+        assert!(candidates.is_empty());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_select_candidates_caps_keyword_group_at_four() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                cluster_page(1, "kw-a", "shared keyword"),
+                cluster_page(2, "kw-b", "shared keyword"),
+                cluster_page(3, "kw-c", "shared keyword"),
+                cluster_page(4, "kw-d", "shared keyword"),
+                cluster_page(5, "kw-e", "shared keyword"),
+                cluster_page(6, "kw-f", "shared keyword"),
+            ]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(result.success, "select_candidates failed: {}", result.message);
+
+        let candidates = read_candidates(&path);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0]["page_count"].as_i64().unwrap(),
+            4,
+            "exact-keyword groups cap at 4 pages"
+        );
 
         cleanup(&path);
     }
