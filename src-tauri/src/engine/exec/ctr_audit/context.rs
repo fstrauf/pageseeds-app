@@ -38,6 +38,52 @@ pub fn target_ctr_for_position(position: f64) -> f64 {
     }
 }
 
+/// Recovery guidance for pure CTR underperformance (format checks passed).
+///
+/// Returns `Some(hint)` when `detection_reasons` contains `ctr_underperformance`
+/// and does **not** contain `format_violation`. Otherwise `None`.
+pub(crate) fn recovery_prompt_hint(reasons: &[&str]) -> Option<String> {
+    let has_ctr = reasons.iter().any(|r| *r == "ctr_underperformance");
+    let has_format = reasons.iter().any(|r| *r == "format_violation");
+    if has_ctr && !has_format {
+        Some(
+            "CTR is below the position-expected target; title/meta pass format checks. \
+             Focus on competitive SERP recovery: include the head query in the title when provided, \
+             refresh year framing to the current year (drop dual-year ranges), match intent, \
+             and write compelling copy — do not rewrite only to shorten."
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+/// Highest-impression query string from a `top_queries` JSON array, if any.
+///
+/// Expects objects with `query` (string) and optional `impressions` (number).
+/// Returns `None` for null, non-arrays, empty arrays, or entries without a query.
+pub(crate) fn head_query_from_top_queries(top_queries: &serde_json::Value) -> Option<String> {
+    let arr = top_queries.as_array()?;
+    let mut best: Option<(f64, String)> = None;
+    for entry in arr {
+        let Some(query) = entry.get("query").and_then(|q| q.as_str()) else {
+            continue;
+        };
+        if query.is_empty() {
+            continue;
+        }
+        let impressions = entry
+            .get("impressions")
+            .and_then(|i| i.as_f64())
+            .unwrap_or(0.0);
+        match &best {
+            Some((best_imp, _)) if impressions <= *best_imp => {}
+            _ => best = Some((impressions, query.to_string())),
+        }
+    }
+    best.map(|(_, q)| q)
+}
+
 /// Classify query intent based on deterministic keyword patterns.
 pub fn classify_query_intent(query: &str) -> &'static str {
     let lower = query.to_lowercase();
@@ -528,7 +574,20 @@ fn enrich_with_query_metrics(
         }
 
         record["top_queries"] = serde_json::json!(query_records);
+        if let Some(hq) = head_query_from_top_queries(&record["top_queries"]) {
+            record["head_query"] = serde_json::Value::String(hq);
+        }
         enriched += 1;
+    }
+
+    // Walk all records (including those beyond the API limit) so head_query is
+    // set whenever top_queries is already populated (e.g. reloaded metrics).
+    for record in article_records.iter_mut() {
+        if record["head_query"].is_null() {
+            if let Some(hq) = head_query_from_top_queries(&record["top_queries"]) {
+                record["head_query"] = serde_json::Value::String(hq);
+            }
+        }
     }
 
     enriched

@@ -1,6 +1,6 @@
 # CTR Fix Apply Skill
 
-<!-- skill-version: 2 -->
+<!-- skill-version: 3 -->
 
 Used by `fix_ctr_article` agentic steps.
 
@@ -31,8 +31,10 @@ A JSON artifact (`ctr_recommendations`) containing a single article recommendati
 
 ### `title_rewrite`
 - Return the new title text in `changes.title`.
-- Hard limit: 55 characters max (not 60).
-- If the current title is already good, return `null` for `title`.
+- **Hard max: 55 characters.** Output must stay ≤55 chars — there is no soft ~60 carve-out; the apply pipeline hard-shortens beyond 55.
+- Soft-preserve strategic elements **within** that 55 hard limit: prefer the recommended title's head term and single current year, then compress filler/brand/trailing fluff so the result fits.
+- Do **not** drop the head query or a warranted current-year solely to keep filler or brand; compress non-strategic words first, then brand if needed.
+- If the current title is already good and no strategic recovery is needed, return `null` for `title`.
 
 ### `meta_description`
 - Return the new meta description text in `changes.description`.

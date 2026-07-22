@@ -56,11 +56,19 @@ pub(crate) fn rendered_audit_to_json(a: &CtrRenderedPageAudit) -> serde_json::Va
 /// This is the **single writer** of the per-article CTR record used by audit
 /// admission and standalone/operator spawn. Callers own detection_reasons
 /// (including `operator_requested`) and any title fallbacks.
+///
+/// Also emits recovery-mode framing fields from #104:
+/// `current_year`, `head_query` (null until query enrichment), and
+/// `prompt_hint` (set for pure CTR underperformance).
 pub(crate) fn build_ctr_article_record(p: CtrArticleRecordParams<'_>) -> serde_json::Value {
     let rendered_json = match p.rendered_audit {
         Some(a) => rendered_audit_to_json(a),
         None => serde_json::Value::Null,
     };
+
+    let reason_refs: Vec<&str> = p.detection_reasons.iter().map(|s| s.as_str()).collect();
+    let prompt_hint = super::context::recovery_prompt_hint(&reason_refs);
+    let current_year = chrono::Datelike::year(&chrono::Utc::now());
 
     serde_json::json!({
         "id": p.id,
@@ -91,6 +99,9 @@ pub(crate) fn build_ctr_article_record(p: CtrArticleRecordParams<'_>) -> serde_j
         "has_frontmatter_faq": p.has_frontmatter_faq,
         "faq_question_count": p.faq_question_count,
         "top_queries": serde_json::Value::Null,
+        "current_year": current_year,
+        "head_query": serde_json::Value::Null,
+        "prompt_hint": prompt_hint,
         "rendered_audit": rendered_json,
     })
 }
@@ -153,5 +164,44 @@ mod tests {
         assert_eq!(rec["content_hash"], "abc");
         assert_eq!(rec["has_frontmatter_faq"], false);
         assert_eq!(rec["faq_question_count"], 0);
+        assert_eq!(
+            rec["current_year"].as_i64().unwrap(),
+            chrono::Datelike::year(&chrono::Utc::now()) as i64
+        );
+        assert!(rec["head_query"].is_null());
+        // format_violation alone → no pure-underperformance prompt_hint
+        assert!(rec["prompt_hint"].is_null());
+    }
+
+    #[test]
+    fn build_record_sets_prompt_hint_for_pure_underperformance() {
+        let health = empty_health();
+        let reasons = vec!["ctr_underperformance".to_string()];
+        let rec = build_ctr_article_record(CtrArticleRecordParams {
+            id: 1,
+            url_slug: "slug",
+            title: "Title",
+            target_keyword: "kw",
+            meta_description: "meta",
+            first_paragraph: "para",
+            h1: "H1",
+            file: "content/x.mdx",
+            content_hash: "abc",
+            impressions: 1000.0,
+            clicks: 10.0,
+            ctr: 0.01,
+            avg_position: 5.0,
+            target_ctr: 0.015,
+            clicks_lost: 5.0,
+            detection_reasons: &reasons,
+            health: &health,
+            has_frontmatter_faq: false,
+            faq_question_count: 0,
+            rendered_audit: None,
+        });
+        let hint = rec["prompt_hint"]
+            .as_str()
+            .expect("prompt_hint for pure underperformance");
+        assert!(!hint.is_empty());
     }
 }

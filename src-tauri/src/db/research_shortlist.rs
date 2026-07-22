@@ -253,6 +253,10 @@ pub fn update_health(
 }
 
 /// List pending shortlist entries for a project, excluding depleted themes.
+///
+/// Prefer `health_status = 'promising'` first so product-adjacent themes that
+/// already show signal surface ahead of unproven high-priority heads when
+/// research feeds the KeywordPicker (issue #99).
 pub fn list_pending_excluding_depleted(
     conn: &Connection,
     project_id: &str,
@@ -260,7 +264,9 @@ pub fn list_pending_excluding_depleted(
     let sql = "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at
          FROM research_shortlist
          WHERE project_id = ?1 AND status = 'pending' AND health_status != 'depleted'
-         ORDER BY priority DESC, total_impressions DESC";
+         ORDER BY CASE WHEN health_status = 'promising' THEN 0 ELSE 1 END,
+                  priority DESC,
+                  total_impressions DESC";
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([project_id], map_row)?;
     let mut entries = Vec::new();
@@ -349,6 +355,33 @@ mod tests {
         conn.last_insert_rowid()
     }
 
+    fn insert_entry_with_priority(
+        conn: &Connection,
+        project_id: &str,
+        theme: &str,
+        status: &str,
+        health_status: &str,
+        priority: &str,
+        impressions: f64,
+    ) -> i64 {
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, total_impressions, health_status, added_at)
+             VALUES (?1, ?2, '[]', 'test', ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                project_id,
+                theme,
+                status,
+                priority,
+                impressions,
+                health_status,
+                chrono::Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
     #[test]
     fn list_pending_excluding_depleted_returns_only_pending_non_depleted_entries() {
         let conn = in_memory_db();
@@ -366,6 +399,30 @@ mod tests {
         assert!(!themes.contains(&"content marketing".to_string()));
         assert!(!themes.contains(&"technical seo".to_string()));
         assert!(!themes.contains(&"link building".to_string()));
+    }
+
+    #[test]
+    fn list_pending_excluding_depleted_prefers_promising_over_higher_priority_unproven() {
+        let conn = in_memory_db();
+        // Unproven with high priority + high impressions must still sort after
+        // promising (even when promising has low priority / low impressions).
+        insert_entry_with_priority(
+            &conn, "proj1", "head term cluster", "pending", "unproven", "high", 50_000.0,
+        );
+        insert_entry_with_priority(
+            &conn, "proj1", "product adjacent long tail", "pending", "promising", "low", 200.0,
+        );
+        insert_entry_with_priority(
+            &conn, "proj1", "another unproven", "pending", "unproven", "high", 10_000.0,
+        );
+
+        let entries = list_pending_excluding_depleted(&conn, "proj1").unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].theme, "product adjacent long tail");
+        assert_eq!(entries[0].health_status, "promising");
+        // Within unproven, impressions DESC (same text priority).
+        assert_eq!(entries[1].theme, "head term cluster");
+        assert_eq!(entries[2].theme, "another unproven");
     }
 
     #[test]

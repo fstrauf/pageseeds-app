@@ -164,6 +164,15 @@ pub struct CtrFixPatchChanges {
     pub snippet_patch: Option<CtrSnippetPatch>,
 }
 
+// NOTE: row-objects are required for provider-safe schemars (no nested
+// array-of-arrays for tool params — OpenAI-shaped providers reject them).
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub struct CtrComparisonTableRow {
+    pub cells: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
 #[ts(export)]
 #[serde(rename_all = "snake_case")]
@@ -175,7 +184,7 @@ pub struct CtrSnippetPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordered_list: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub comparison_table: Option<Vec<Vec<String>>>,
+    pub comparison_table: Option<Vec<CtrComparisonTableRow>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
@@ -400,6 +409,89 @@ mod tests {
         ];
         for (fix, expected) in rec.fixes.iter().zip(expected_types.iter()) {
             assert_eq!(&fix.fix_type, expected, "fix type mismatch");
+        }
+    }
+
+    /// Freezes the provider-safe tool schema for `CtrFixPatch`:
+    /// `comparison_table` must be an array of row objects (`{ cells: string[] }`),
+    /// never a nested array-of-arrays (rejected by OpenAI-shaped providers as
+    /// `invalid_function_parameters`).
+    #[test]
+    fn ctr_fix_patch_schema_comparison_table_is_not_nested_array_of_arrays() {
+        let schema = schemars::schema_for!(CtrFixPatch);
+        let schema_json = serde_json::to_value(&schema).expect("serialize schema");
+
+        // Locate every `comparison_table` property schema and assert its items
+        // are objects (or $ref to objects), not arrays.
+        let mut found = false;
+        walk_comparison_table_schemas(&schema_json, &mut |prop_schema| {
+            found = true;
+            assert_items_not_array(prop_schema);
+        });
+        assert!(
+            found,
+            "expected to find comparison_table in CtrFixPatch schemars output"
+        );
+    }
+
+    fn walk_comparison_table_schemas(value: &serde_json::Value, visit: &mut dyn FnMut(&serde_json::Value)) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(props) = map.get("properties").and_then(|p| p.as_object()) {
+                    if let Some(ct) = props.get("comparison_table") {
+                        visit(ct);
+                    }
+                }
+                for v in map.values() {
+                    walk_comparison_table_schemas(v, visit);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    walk_comparison_table_schemas(v, visit);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_items_not_array(prop_schema: &serde_json::Value) {
+        // Unwrap oneOf/anyOf/allOf wrappers commonly used for Option<T>.
+        let candidates: Vec<&serde_json::Value> = if let Some(arr) = prop_schema
+            .get("oneOf")
+            .or_else(|| prop_schema.get("anyOf"))
+            .or_else(|| prop_schema.get("allOf"))
+            .and_then(|v| v.as_array())
+        {
+            arr.iter().collect()
+        } else {
+            vec![prop_schema]
+        };
+
+        for candidate in candidates {
+            // Skip pure null variants from Option.
+            if candidate.get("type").and_then(|t| t.as_str()) == Some("null") {
+                continue;
+            }
+            if let Some(items) = candidate.get("items") {
+                // Nested array-of-arrays: items.type == "array" (or items is array type)
+                let is_nested_array = items
+                    .get("type")
+                    .map(|t| match t {
+                        serde_json::Value::String(s) => s == "array",
+                        serde_json::Value::Array(types) => {
+                            types.iter().any(|x| x.as_str() == Some("array"))
+                        }
+                        _ => false,
+                    })
+                    .unwrap_or(false);
+                assert!(
+                    !is_nested_array,
+                    "comparison_table must not use nested array-of-arrays in tool schema; got items={}. \
+                     Use Vec<CtrComparisonTableRow> (objects with cells) instead.",
+                    items
+                );
+            }
         }
     }
 }

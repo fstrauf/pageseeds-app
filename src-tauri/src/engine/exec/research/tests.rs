@@ -345,6 +345,7 @@ mod tests {
         let mut output = picker_output(results);
 
         sort_by_winnability(&mut output);
+        apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
         trim_to_final(&mut output, FINAL_RESULTS);
 
         let keywords = result_keywords(&output);
@@ -360,8 +361,120 @@ mod tests {
             selected("avoid keyword", 9000, 5, Some("avoid"), None),
         ]);
         sort_by_winnability(&mut output);
+        apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
         trim_to_final(&mut output, FINAL_RESULTS);
         assert_eq!(result_keywords(&output), vec!["target one", "avoid keyword"]);
+    }
+
+    #[test]
+    fn apply_avoid_policy_hard_drops_when_enough_non_avoid() {
+        // 5 target + 5 avoid: soft trim alone would keep avoids in a mixed
+        // shortlist; hard-drop must remove every avoid when non-avoid ≥ 3.
+        let mut results: Vec<SelectedKeyword> = (0..5)
+            .map(|i| {
+                let name = format!("target {}", i);
+                selected(&name, 1000 - i as i64, 10, Some("target"), None)
+            })
+            .collect();
+        for i in 0..5 {
+            let name = format!("avoid {}", i);
+            results.push(selected(&name, 9000 - i as i64, 5, Some("avoid"), None));
+        }
+        let mut output = picker_output(results);
+
+        sort_by_winnability(&mut output);
+        apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
+        trim_to_final(&mut output, FINAL_RESULTS);
+
+        let keywords = result_keywords(&output);
+        assert_eq!(keywords.len(), 5, "only the five non-avoid rows remain");
+        assert!(
+            keywords.iter().all(|k| k.starts_with("target")),
+            "hard-drop must leave zero avoid rows when enough non-avoid exist: {:?}",
+            keywords
+        );
+    }
+
+    #[test]
+    fn apply_avoid_policy_keeps_residual_avoids_below_threshold() {
+        // Only 1 non-avoid + many avoids; min_non_avoid=3 → do not hard-drop.
+        let mut results = vec![selected("target one", 1000, 10, Some("target"), None)];
+        for i in 0..6 {
+            let name = format!("avoid {}", i);
+            results.push(selected(&name, 9000 - i as i64, 5, Some("avoid"), None));
+        }
+        let mut output = picker_output(results);
+
+        sort_by_winnability(&mut output);
+        apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
+
+        let keywords = result_keywords(&output);
+        assert_eq!(keywords[0], "target one");
+        assert!(
+            keywords.iter().filter(|k| k.starts_with("avoid")).count() == 6,
+            "residual avoids must remain when non-avoid < threshold: {:?}",
+            keywords
+        );
+    }
+
+    #[test]
+    fn apply_avoid_policy_hard_drops_landing_page_avoids() {
+        let mut target = kw("winnable tool", 500, 20.0, "commercial");
+        target.cpc = Some(2.0);
+        let mut target2 = kw("another tool", 400, 15.0, "commercial");
+        target2.cpc = Some(1.5);
+        let mut target3 = kw("niche tool", 300, 10.0, "commercial");
+        target3.cpc = Some(1.0);
+        let mut avoid = kw("authority dominated tool", 5000, 10.0, "commercial");
+        avoid.cpc = Some(9.0);
+        let mut avoid2 = kw("aio blocked tool", 4000, 12.0, "commercial");
+        avoid2.cpc = Some(8.0);
+        let pipeline = build_pipeline(vec![target, target2, target3, avoid, avoid2]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+
+        for c in &mut output.landing_page_candidates {
+            if c.keyword.contains("authority") || c.keyword.contains("aio") {
+                c.winnability = Some("avoid".to_string());
+            } else {
+                c.winnability = Some("target".to_string());
+            }
+        }
+
+        sort_by_winnability(&mut output);
+        apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
+        trim_to_final(&mut output, FINAL_RESULTS);
+
+        assert!(
+            output
+                .landing_page_candidates
+                .iter()
+                .all(|c| c.winnability.as_deref() != Some("avoid")),
+            "landing page shape must hard-drop avoids when enough non-avoid: {:?}",
+            output
+                .landing_page_candidates
+                .iter()
+                .map(|c| (&c.keyword, &c.winnability))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(output.landing_page_candidates.len(), 3);
+    }
+
+    #[test]
+    fn apply_avoid_policy_counts_unscored_as_non_avoid() {
+        // Unscored (None) ranks as non-avoid; 3 unscored → hard-drop avoids.
+        let mut output = picker_output(vec![
+            selected("unscored a", 1000, 10, None, None),
+            selected("unscored b", 900, 10, None, None),
+            selected("unscored c", 800, 10, None, None),
+            selected("avoid head", 9000, 5, Some("avoid"), None),
+        ]);
+        sort_by_winnability(&mut output);
+        apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
+        assert_eq!(
+            result_keywords(&output),
+            vec!["unscored a", "unscored b", "unscored c"]
+        );
     }
 
     #[test]
