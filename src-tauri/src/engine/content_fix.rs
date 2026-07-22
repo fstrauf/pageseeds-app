@@ -15,9 +15,6 @@ use crate::error::{Error, Result};
 use crate::models::content_review::ReviewSuggestion;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskRunPolicy};
 
-/// SERP surface categories required for recovery suggestions.
-const SERP_CATEGORIES: &[&str] = &["title", "description", "h1", "intro"];
-
 /// Options for [`spawn_fix_content_article_for_slug`].
 #[derive(Debug, Clone)]
 pub struct SpawnFixForSlugOpts {
@@ -134,62 +131,19 @@ fn resolve_article_by_slug(
 
 /// Build SERP-category recovery suggestions (title / description / h1 / intro).
 ///
-/// When `reason` is empty, emit the default high-priority SERP template.
-/// When non-empty, split on `|`, `;`, `\n` and assign each fragment a SERP
-/// category (keyword map when the text mentions title/H1/meta/intro, otherwise
-/// round-robin across the four surfaces). Always returns all four SERP
-/// categories at least once so bare recovery is never category `"content"` only.
+/// Always emits the default high-priority SERP template so recovery never invents
+/// rewrite instructions from free-text. When `reason` is non-empty, it is appended
+/// as `Context: …` on each suggestion’s `reason` field only — `proposed` stays the
+/// stable default. Operator context already lives on the task description.
 pub(crate) fn build_serp_recovery_suggestions(reason: &str) -> Vec<ReviewSuggestion> {
-    let fragments: Vec<&str> = reason
-        .split(['|', ';', '\n'])
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if fragments.is_empty() {
-        return default_serp_template();
-    }
-
-    let mut by_category: std::collections::HashMap<&'static str, Vec<String>> =
-        SERP_CATEGORIES.iter().map(|c| (*c, Vec::new())).collect();
-
-    for (i, fragment) in fragments.iter().enumerate() {
-        let cat = infer_serp_category(fragment).unwrap_or_else(|| {
-            SERP_CATEGORIES[i % SERP_CATEGORIES.len()]
-        });
-        by_category.entry(cat).or_default().push((*fragment).to_string());
-    }
-
-    // Ensure every SERP category is present: fill gaps from default template
-    // or from the first reason fragment as context.
-    let defaults = default_serp_template();
-    let first_reason = fragments[0];
-    let mut out = Vec::with_capacity(SERP_CATEGORIES.len());
-    for (idx, cat) in SERP_CATEGORIES.iter().enumerate() {
-        let texts = by_category.get(*cat).cloned().unwrap_or_default();
-        if texts.is_empty() {
-            // Keep full SERP surface even when reason only targeted one category.
-            let def = &defaults[idx];
-            out.push(ReviewSuggestion {
-                category: (*cat).to_string(),
-                current: String::new(),
-                proposed: def.proposed.clone(),
-                reason: format!("{} Context: {}", def.reason, first_reason),
-                priority: Some("high".to_string()),
-            });
-        } else {
-            for text in texts {
-                out.push(ReviewSuggestion {
-                    category: (*cat).to_string(),
-                    current: String::new(),
-                    proposed: text.clone(),
-                    reason: text,
-                    priority: Some("high".to_string()),
-                });
-            }
+    let mut suggestions = default_serp_template();
+    let context = reason.trim();
+    if !context.is_empty() {
+        for s in &mut suggestions {
+            s.reason = format!("{} Context: {}", s.reason, context);
         }
     }
-    out
+    suggestions
 }
 
 fn default_serp_template() -> Vec<ReviewSuggestion> {
@@ -226,34 +180,6 @@ fn default_serp_template() -> Vec<ReviewSuggestion> {
             priority: Some("high".to_string()),
         },
     ]
-}
-
-/// Map free-text reason fragments onto SERP categories when keywords are present.
-fn infer_serp_category(text: &str) -> Option<&'static str> {
-    let lower = text.to_ascii_lowercase();
-    // Order matters: more specific phrases first.
-    if lower.contains("meta")
-        || lower.contains("description")
-        || lower.contains("snippet")
-        || lower.contains("meta description")
-    {
-        return Some("description");
-    }
-    if lower.contains("title") || lower.contains("ctr") {
-        return Some("title");
-    }
-    if lower.contains("h1") || lower.contains("heading") {
-        return Some("h1");
-    }
-    if lower.contains("intro")
-        || lower.contains("introduction")
-        || lower.contains("lead")
-        || lower.contains("opening")
-        || lower.contains("value prop")
-    {
-        return Some("intro");
-    }
-    None
 }
 
 #[cfg(test)]
@@ -296,29 +222,34 @@ mod tests {
         assert_eq!(cats, vec!["title", "description", "h1", "intro"]);
         assert!(suggestions.iter().all(|s| s.priority.as_deref() == Some("high")));
         assert!(!suggestions.iter().any(|s| s.category == "content"));
+        // Stable default proposed text (no free-text protocol).
+        let defaults = default_serp_template();
+        for (got, def) in suggestions.iter().zip(defaults.iter()) {
+            assert_eq!(got.proposed, def.proposed);
+            assert_eq!(got.reason, def.reason);
+        }
     }
 
     #[test]
-    fn build_serp_with_reason_still_covers_serp_categories() {
-        let suggestions = build_serp_recovery_suggestions(
-            "Improve title for CTR | Fix intro value prop",
-        );
-        let cats: std::collections::HashSet<&str> =
-            suggestions.iter().map(|s| s.category.as_str()).collect();
-        for required in SERP_CATEGORIES {
-            assert!(
-                cats.contains(*required),
-                "missing SERP category {required}; got {cats:?}"
+    fn build_serp_with_reason_keeps_default_proposed_and_appends_context() {
+        let reason = "GSC CTR drop 3%→1% | Improve title for CTR";
+        let suggestions = build_serp_recovery_suggestions(reason);
+        let cats: Vec<&str> = suggestions.iter().map(|s| s.category.as_str()).collect();
+        assert_eq!(cats, vec!["title", "description", "h1", "intro"]);
+        assert!(!cats.iter().any(|c| *c == "content"));
+
+        let defaults = default_serp_template();
+        for (got, def) in suggestions.iter().zip(defaults.iter()) {
+            // proposed must never be overwritten by free-text reason fragments
+            assert_eq!(got.proposed, def.proposed);
+            assert_eq!(
+                got.reason,
+                format!("{} Context: {}", def.reason, reason)
             );
+            // Operator metric text must not become a rewrite instruction
+            assert!(!got.proposed.contains("3%"));
+            assert!(!got.proposed.contains("GSC CTR drop"));
         }
-        assert!(!cats.contains("content"));
-        // Keyword map: title fragment → title, intro fragment → intro
-        assert!(suggestions.iter().any(|s| {
-            s.category == "title" && s.proposed.contains("CTR")
-        }));
-        assert!(suggestions.iter().any(|s| {
-            s.category == "intro" && s.proposed.contains("intro")
-        }));
     }
 
     #[test]
