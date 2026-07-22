@@ -136,6 +136,12 @@ pub fn clean_stale_articles(
         }
         if !content_files.contains(basename) {
             removed.push(format!("{} ({})", article.title, article.file));
+            // Explicit evidence purge before article delete (belt-and-suspenders
+            // with V49 ON DELETE CASCADE for soft-clean / FK-off edge cases).
+            let _ = conn.execute(
+                "DELETE FROM article_evidence WHERE article_id = ?1 AND project_id = ?2",
+                rusqlite::params![article.id, project_id],
+            );
             conn.execute(
                 "DELETE FROM articles WHERE id = ?1 AND project_id = ?2",
                 rusqlite::params![article.id, project_id],

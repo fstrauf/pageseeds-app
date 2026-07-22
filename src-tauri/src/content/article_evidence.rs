@@ -133,6 +133,14 @@ pub async fn index_stale_with_backend(
     backend: Option<&EmbeddingBackend>,
 ) -> Result<IndexReport> {
     let embeddings_available = backend.is_some();
+    // Drop any evidence rows whose article was removed outside CASCADE paths.
+    if let Err(e) = purge_orphans(conn, project_id) {
+        log::warn!(
+            "[article_evidence] purge_orphans failed project={}: {}",
+            project_id,
+            e
+        );
+    }
     let articles = load_live_articles(conn, project_id, project_path)?;
     let content_dir = resolve_content_dir(project_path)?;
 
@@ -190,14 +198,15 @@ pub fn maybe_reindex_article(
     }
 }
 
-/// Load one evidence row by slug.
+/// Load one evidence row by slug (only if the article still exists).
 pub fn get_row(conn: &Connection, project_id: &str, slug: &str) -> Result<Option<ArticleEvidence>> {
     let mut stmt = conn.prepare(
-        r#"SELECT project_id, article_id, slug, content_hash, embedding_json, model_name,
-                  outline_text, summary_text, intent_card, word_count, h1, title,
-                  target_keyword, top_queries_json, updated_at
-           FROM article_evidence
-           WHERE project_id = ?1 AND slug = ?2"#,
+        r#"SELECT e.project_id, e.article_id, e.slug, e.content_hash, e.embedding_json, e.model_name,
+                  e.outline_text, e.summary_text, e.intent_card, e.word_count, e.h1, e.title,
+                  e.target_keyword, e.top_queries_json, e.updated_at
+           FROM article_evidence e
+           INNER JOIN articles a ON a.id = e.article_id AND a.project_id = e.project_id
+           WHERE e.project_id = ?1 AND e.slug = ?2"#,
     )?;
     let row = stmt
         .query_row(rusqlite::params![project_id, slug], map_evidence_row)
@@ -205,18 +214,19 @@ pub fn get_row(conn: &Connection, project_id: &str, slug: &str) -> Result<Option
     Ok(row)
 }
 
-/// Load one evidence row by article_id.
+/// Load one evidence row by article_id (only if the article still exists).
 pub fn get_row_by_article_id(
     conn: &Connection,
     project_id: &str,
     article_id: i64,
 ) -> Result<Option<ArticleEvidence>> {
     let mut stmt = conn.prepare(
-        r#"SELECT project_id, article_id, slug, content_hash, embedding_json, model_name,
-                  outline_text, summary_text, intent_card, word_count, h1, title,
-                  target_keyword, top_queries_json, updated_at
-           FROM article_evidence
-           WHERE project_id = ?1 AND article_id = ?2"#,
+        r#"SELECT e.project_id, e.article_id, e.slug, e.content_hash, e.embedding_json, e.model_name,
+                  e.outline_text, e.summary_text, e.intent_card, e.word_count, e.h1, e.title,
+                  e.target_keyword, e.top_queries_json, e.updated_at
+           FROM article_evidence e
+           INNER JOIN articles a ON a.id = e.article_id AND a.project_id = e.project_id
+           WHERE e.project_id = ?1 AND e.article_id = ?2"#,
     )?;
     let row = stmt
         .query_row(rusqlite::params![project_id, article_id], map_evidence_row)
@@ -226,6 +236,7 @@ pub fn get_row_by_article_id(
 
 /// Cosine nearest neighbors using stored embedding vectors (no TF-IDF, no live embed).
 ///
+/// Only considers evidence rows whose article still exists in `articles`.
 /// Returns empty vec if the query article has no embedding or none of the peers do.
 pub fn nearest_neighbors(
     conn: &Connection,
@@ -244,9 +255,10 @@ pub fn nearest_neighbors(
     };
 
     let mut stmt = conn.prepare(
-        r#"SELECT article_id, slug, title, embedding_json
-           FROM article_evidence
-           WHERE project_id = ?1 AND slug != ?2 AND embedding_json IS NOT NULL"#,
+        r#"SELECT e.article_id, e.slug, e.title, e.embedding_json
+           FROM article_evidence e
+           INNER JOIN articles a ON a.id = e.article_id AND a.project_id = e.project_id
+           WHERE e.project_id = ?1 AND e.slug != ?2 AND e.embedding_json IS NOT NULL"#,
     )?;
 
     let rows = stmt.query_map(rusqlite::params![project_id, slug], |row| {
@@ -282,6 +294,24 @@ pub fn nearest_neighbors(
     });
     scored.truncate(limit);
     Ok(scored)
+}
+
+/// Delete evidence rows whose `article_id` no longer exists in live `articles`.
+///
+/// CASCADE on the V49 FK covers hard deletes; this catches orphans from soft-clean
+/// paths or pre-FK data. Returns the number of rows removed.
+pub fn purge_orphans(conn: &Connection, project_id: &str) -> Result<usize> {
+    let n = conn.execute(
+        r#"DELETE FROM article_evidence
+           WHERE project_id = ?1
+             AND NOT EXISTS (
+                 SELECT 1 FROM articles a
+                 WHERE a.id = article_evidence.article_id
+                   AND a.project_id = article_evidence.project_id
+             )"#,
+        [project_id],
+    )?;
+    Ok(n)
 }
 
 /// Coverage of live articles vs the evidence table.
@@ -446,10 +476,7 @@ fn reindex_article_facts(
     project_path: &Path,
     slug: &str,
 ) -> Result<()> {
-    let articles = crate::engine::task_store::list_articles(conn, project_id)?;
-    let article = articles
-        .into_iter()
-        .find(|a| a.url_slug == slug)
+    let article = load_article_by_slug(conn, project_id, slug)?
         .ok_or_else(|| Error::Other(format!("article slug not found: {slug}")))?;
 
     let content_dir = resolve_content_dir(project_path)?;
@@ -483,6 +510,52 @@ fn reindex_article_facts(
         model_name.as_deref(),
     )?;
     Ok(())
+}
+
+/// Single-article lookup by project + slug (avoids list_articles + linear scan).
+fn load_article_by_slug(
+    conn: &Connection,
+    project_id: &str,
+    slug: &str,
+) -> Result<Option<Article>> {
+    let mut stmt = conn.prepare(
+        r#"SELECT id, title, url_slug, file, target_keyword, word_count, status
+           FROM articles
+           WHERE project_id = ?1 AND url_slug = ?2
+           LIMIT 1"#,
+    )?;
+    let row = stmt
+        .query_row(rusqlite::params![project_id, slug], |row| {
+            Ok(Article {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                url_slug: row.get(2)?,
+                file: row.get(3)?,
+                target_keyword: row.get(4)?,
+                keyword_difficulty: None,
+                target_volume: 0,
+                published_date: None,
+                word_count: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                status: row.get(6)?,
+                review_status: None,
+                review_started_at: None,
+                last_reviewed_at: None,
+                review_count: 0,
+                content_gaps_addressed: Vec::new(),
+                estimated_traffic_monthly: None,
+                project_id: project_id.to_string(),
+                quality_score: None,
+                quality_grade: None,
+                quality_rated_at: None,
+                publishing_ready: None,
+                quality_breakdown: None,
+                page_type: None,
+                content_hash: None,
+                last_edited_at: None,
+            })
+        })
+        .optional()?;
+    Ok(row)
 }
 
 fn upsert_evidence(
@@ -543,12 +616,11 @@ async fn embed_text(backend: &EmbeddingBackend, text: &str) -> Result<StoredEmbe
 
 fn extract_facts(raw: &str, article: &Article) -> Result<ArticleFacts> {
     let content_hash = hash_content(raw);
-    let (fm, body) = crate::content::frontmatter::split_mdx(raw)
-        .map(|(f, b)| (Some(f), b))
-        .unwrap_or((None, raw));
+    let body = crate::content::frontmatter::split_mdx(raw)
+        .map(|(_f, b)| b)
+        .unwrap_or(raw);
 
-    let title = fm
-        .and_then(|f| extract_fm_value(f, "title"))
+    let title = crate::content::frontmatter::extract_frontmatter_string(raw, "title")
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| article.title.clone());
 
@@ -659,20 +731,6 @@ fn build_outline(body: &str, max_headings: usize) -> String {
         }
     }
     headings.join("\n")
-}
-
-fn extract_fm_value(frontmatter: &str, key: &str) -> Option<String> {
-    let prefix = format!("{key}:");
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix(&prefix) {
-            let v = rest.trim().trim_matches('"').trim_matches('\'');
-            if !v.is_empty() {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn parse_embedding_vec(json: Option<&str>) -> Option<Vec<f64>> {
@@ -963,6 +1021,73 @@ mod tests {
         let tight = nearest_neighbors(&conn, "p1", "alpha", 5, 0.5).unwrap();
         assert_eq!(tight.len(), 1);
         assert_eq!(tight[0].slug, "beta");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_article_cascades_evidence_and_hides_from_neighbors() {
+        let conn = in_memory_db();
+        let dir = unique_temp_dir("ps_ae_cascade");
+        setup_project(&conn, "p1", &dir);
+        insert_article(&conn, "p1", 1, "alpha", "Alpha", "./content/a.mdx", None);
+        insert_article(&conn, "p1", 2, "beta", "Beta", "./content/b.mdx", None);
+
+        seed_embedding(&conn, "p1", 1, "alpha", "Alpha", "h1", vec![1.0, 0.0], 100);
+        seed_embedding(&conn, "p1", 2, "beta", "Beta", "h2", vec![0.9, 0.1], 100);
+
+        assert_eq!(nearest_neighbors(&conn, "p1", "alpha", 5, 0.0).unwrap().len(), 1);
+
+        // Hard-delete live article — FK CASCADE removes evidence.
+        conn.execute(
+            "DELETE FROM articles WHERE id = 2 AND project_id = 'p1'",
+            [],
+        )
+        .unwrap();
+
+        assert!(get_row(&conn, "p1", "beta").unwrap().is_none());
+        let neighbors = nearest_neighbors(&conn, "p1", "alpha", 5, 0.0).unwrap();
+        assert!(
+            neighbors.is_empty(),
+            "deleted article must not appear as neighbor"
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM article_evidence WHERE project_id = 'p1' AND article_id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "evidence row must cascade-delete with article");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn purge_orphans_removes_evidence_without_live_article() {
+        let conn = in_memory_db();
+        let dir = unique_temp_dir("ps_ae_purge");
+        setup_project(&conn, "p1", &dir);
+        insert_article(&conn, "p1", 1, "alpha", "Alpha", "./content/a.mdx", None);
+
+        seed_embedding(&conn, "p1", 1, "alpha", "Alpha", "h1", vec![1.0, 0.0], 50);
+        // Orphan evidence (article_id never existed) — insert with FK briefly off.
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        seed_embedding(&conn, "p1", 99, "ghost", "Ghost", "hg", vec![0.0, 1.0], 10);
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        let removed = purge_orphans(&conn, "p1").unwrap();
+        assert_eq!(removed, 1);
+        assert!(get_row(&conn, "p1", "alpha").unwrap().is_some());
+        let ghost: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM article_evidence WHERE slug = 'ghost'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ghost, 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

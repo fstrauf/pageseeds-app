@@ -1618,6 +1618,7 @@ static MIGRATION_V49: &str = r#"
 -- Durable per-article evidence catalog (issue #119).
 -- Mirrors skill_embeddings: content_hash skips re-embed; embedding_json is
 -- nullable so Ollama-missing degrades to facts-only (no soft mega-cluster).
+-- article_id FK cascades when the live article row is deleted (clean_stale).
 CREATE TABLE IF NOT EXISTS article_evidence (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id       TEXT NOT NULL,
@@ -1636,7 +1637,8 @@ CREATE TABLE IF NOT EXISTS article_evidence (
     top_queries_json TEXT NOT NULL DEFAULT '[]',
     updated_at       TEXT NOT NULL,
     UNIQUE(project_id, article_id),
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (article_id, project_id) REFERENCES articles(id, project_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_article_evidence_project
     ON article_evidence(project_id);
