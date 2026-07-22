@@ -621,7 +621,7 @@ Some content here.
             "Should produce at least one candidate (fixture has 3 pages with exact keyword 'cash secured puts')"
         );
 
-        // Evidence lanes only: exact_keyword_dupe and/or high-sim merge_candidate
+        // Evidence lanes only: exact_keyword_dupe | shared_query | near_dupe
         let has_exact = candidates
             .iter()
             .any(|c| c["candidate_type"].as_str() == Some("exact_keyword_dupe"));
@@ -632,9 +632,15 @@ Some content here.
         for c in candidates {
             let ctype = c["candidate_type"].as_str().unwrap();
             assert!(
-                ctype == "merge_candidate" || ctype == "exact_keyword_dupe",
+                ctype == "near_dupe" || ctype == "exact_keyword_dupe" || ctype == "shared_query",
                 "unexpected candidate_type: {}",
                 ctype
+            );
+            let lane = c["lane"].as_str().unwrap();
+            assert!(
+                lane == "exact_keyword" || lane == "shared_query" || lane == "near_dupe",
+                "unexpected lane: {}",
+                lane
             );
             assert!(
                 c["pages"].as_array().unwrap().len() <= 4,
@@ -878,6 +884,7 @@ Some content here.
         assert_eq!(candidates.len(), 2, "two exact-keyword groups must each emit");
         assert!(candidates.iter().all(|c| {
             c["candidate_type"].as_str() == Some("exact_keyword_dupe")
+                && c["lane"].as_str() == Some("exact_keyword")
                 && c["page_count"].as_i64().unwrap() == 2
         }));
 
@@ -1026,13 +1033,28 @@ Some content here.
         assert_eq!(candidates[0]["page_count"].as_i64().unwrap(), 2);
         assert_eq!(
             candidates[0]["candidate_type"].as_str().unwrap(),
-            "merge_candidate"
+            "near_dupe"
         );
+        assert_eq!(candidates[0]["lane"].as_str().unwrap(), "near_dupe");
         let pair_sim = candidates[0]["pair_similarity"].as_f64().unwrap();
         assert!(
             (pair_sim - 0.62).abs() < 0.001,
             "pair_similarity should be preserved"
         );
+        assert!(
+            (candidates[0]["max_pairwise_sim"].as_f64().unwrap() - 0.62).abs() < 0.001
+        );
+
+        // #117 evidence shortlist artifact
+        let evidence_path = auto_dir.join("cannibalization_evidence.json");
+        assert!(evidence_path.exists(), "must write cannibalization_evidence.json");
+        let evidence: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&evidence_path).unwrap()).unwrap();
+        let ev = evidence["candidates"].as_array().unwrap();
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0]["lane"].as_str().unwrap(), "near_dupe");
+        assert_eq!(ev[0]["pages"].as_array().unwrap().len(), 2);
+        assert!(ev[0]["pages"][0].is_i64() || ev[0]["pages"][0].is_u64());
 
         cleanup(&path);
     }
@@ -1104,6 +1126,7 @@ Some content here.
             candidates[0]["candidate_type"].as_str().unwrap(),
             "exact_keyword_dupe"
         );
+        assert_eq!(candidates[0]["lane"].as_str().unwrap(), "exact_keyword");
         assert_eq!(
             candidates[0]["page_count"].as_i64().unwrap(),
             4,
@@ -1111,6 +1134,330 @@ Some content here.
         );
 
         cleanup(&path);
+    }
+
+    #[test]
+    fn test_shared_query_group_builder_respects_floor_and_cardinality() {
+        // Pure builder: rows below SHARED_QUERY_MIN_IMPRESSIONS are dropped;
+        // queries need ≥2 distinct article_ids after filtering.
+        let rows = vec![
+            ("best cold brew".into(), 1_i64, 100.0, "/blog/a".into()),
+            ("best cold brew".into(), 2, 50.0, "/blog/b".into()),
+            ("best cold brew".into(), 3, 5.0, "/blog/c".into()), // below floor
+            ("solo query".into(), 1, 200.0, "/blog/a".into()),    // only one page
+            ("monthly sub".into(), 10, 40.0, "/blog/x".into()),
+            ("monthly sub".into(), 11, 30.0, "/blog/y".into()),
+        ];
+        let groups = build_shared_query_groups_from_rows(&rows);
+        assert_eq!(groups.len(), 2, "two queries with ≥2 pages above floor");
+        let cold = groups
+            .iter()
+            .find(|(q, _)| q == "best cold brew")
+            .expect("cold brew group");
+        assert_eq!(
+            cold.1.len(),
+            2,
+            "page below impression floor must be excluded"
+        );
+        assert!(groups.iter().any(|(q, _)| q == "monthly sub"));
+        assert!(!groups.iter().any(|(q, _)| q == "solo query"));
+        assert!(shared_query_min_impressions() >= 10.0);
+    }
+
+    #[test]
+    fn test_select_candidates_emits_shared_query_lane_from_db() {
+        // Mutates PAGESEEDS_DB_PATH — serialize against other env-mutating tests.
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        let db_path = Path::new(&path).join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        let project_id = "proj-test";
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode) VALUES (?1, ?2, ?3, 1, 'workspace')",
+            rusqlite::params![project_id, "Test", &path],
+        )
+        .unwrap();
+
+        // Distinct target keywords — soft cluster alone would yield 0 candidates.
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                cluster_page(1, "cold-brew-guide", "cold brew coffee"),
+                cluster_page(2, "portable-brewer", "portable coffee maker"),
+            ]),
+        );
+
+        // Context so shared_query can package rich pages.
+        let context = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "cold-brew-guide",
+                    "title": "Cold Brew Guide",
+                    "h1": "Cold Brew Guide",
+                    "target_keyword": "cold brew coffee",
+                    "first_200_words": "how to make cold brew coffee at home",
+                    "gsc": { "impressions": 1000.0, "clicks": 10.0, "avg_position": 5.0 },
+                    "incoming_internal_links": 1,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2024-01-01",
+                    "word_count": 800
+                },
+                {
+                    "id": 2,
+                    "url_slug": "portable-brewer",
+                    "title": "Portable Coffee Maker",
+                    "h1": "Portable Coffee Maker",
+                    "target_keyword": "portable coffee maker",
+                    "first_200_words": "best portable coffee makers for travel",
+                    "gsc": { "impressions": 500.0, "clicks": 5.0, "avg_position": 8.0 },
+                    "incoming_internal_links": 0,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2024-02-01",
+                    "word_count": 600
+                }
+            ],
+            "similarity_pairs": []
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_audit_context.json"),
+            serde_json::to_string_pretty(&context).unwrap(),
+        )
+        .unwrap();
+
+        // Shared GSC query above floor on both pages.
+        crate::db::set_ctr_query_metrics(
+            &conn,
+            project_id,
+            1,
+            "/blog/cold-brew-guide",
+            &[("best cold brew coffee maker".into(), 120.0, 2.0, 0.016, 5.0, None)],
+            Some("2026-01-01"),
+            Some("2026-03-31"),
+        )
+        .unwrap();
+        crate::db::set_ctr_query_metrics(
+            &conn,
+            project_id,
+            2,
+            "/blog/portable-brewer",
+            &[("best cold brew coffee maker".into(), 80.0, 1.0, 0.012, 7.0, None)],
+            Some("2026-01-01"),
+            Some("2026-03-31"),
+        )
+        .unwrap();
+        drop(conn);
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+
+        assert!(result.success, "select_candidates failed: {}", result.message);
+        let candidates = read_candidates(&path);
+        let shared: Vec<_> = candidates
+            .iter()
+            .filter(|c| c["candidate_type"].as_str() == Some("shared_query"))
+            .collect();
+        assert_eq!(
+            shared.len(),
+            1,
+            "shared_query lane must emit when ctr_query_metrics has overlapping queries; got {:?}",
+            candidates
+        );
+        assert_eq!(shared[0]["lane"].as_str().unwrap(), "shared_query");
+        assert_eq!(shared[0]["page_count"].as_i64().unwrap(), 2);
+        assert_eq!(shared[0]["shared_query_count"].as_i64().unwrap(), 1);
+        let queries = shared[0]["shared_queries"].as_array().unwrap();
+        assert!(
+            queries
+                .iter()
+                .any(|q| q.as_str() == Some("best cold brew coffee maker"))
+        );
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_product_guard_invalid_lane_and_page_count() {
+        let missing_lane = serde_json::json!({
+            "candidate_id": "x",
+            "pages": [
+                { "id": 1, "target_keyword": "a" },
+                { "id": 2, "target_keyword": "b" }
+            ]
+        });
+        assert!(pre_llm_product_guard_reason(&missing_lane).is_some());
+
+        let bad_lane = serde_json::json!({
+            "candidate_id": "x",
+            "lane": "soft_cluster",
+            "pages": [
+                { "id": 1, "target_keyword": "a" },
+                { "id": 2, "target_keyword": "b" }
+            ]
+        });
+        assert!(pre_llm_product_guard_reason(&bad_lane)
+            .unwrap()
+            .contains("invalid lane"));
+
+        let too_few = serde_json::json!({
+            "candidate_id": "x",
+            "lane": "near_dupe",
+            "pages": [{ "id": 1, "target_keyword": "a" }]
+        });
+        assert!(pre_llm_product_guard_reason(&too_few)
+            .unwrap()
+            .contains("pages"));
+
+        let too_many = serde_json::json!({
+            "candidate_id": "x",
+            "lane": "near_dupe",
+            "pages": [
+                { "id": 1 }, { "id": 2 }, { "id": 3 }, { "id": 4 }, { "id": 5 }
+            ]
+        });
+        assert!(pre_llm_product_guard_reason(&too_many).is_some());
+
+        let ok = serde_json::json!({
+            "candidate_id": "x",
+            "lane": "near_dupe",
+            "pages": [
+                { "id": 1, "target_keyword": "a" },
+                { "id": 2, "target_keyword": "b" }
+            ]
+        });
+        assert!(pre_llm_product_guard_reason(&ok).is_none());
+    }
+
+    #[test]
+    fn test_product_guard_multi_intent_near_dupe_forces_no_action() {
+        let candidate = serde_json::json!({
+            "candidate_id": "near_dupe_x_1",
+            "lane": "near_dupe",
+            "candidate_type": "near_dupe",
+            "shared_query_count": 0,
+            "shared_queries": [],
+            "top_shared_queries": [],
+            "pages": [
+                { "id": 1, "target_keyword": "cold brew coffee" },
+                { "id": 2, "target_keyword": "portable coffee maker" }
+            ]
+        });
+        assert!(is_multi_intent_without_shared_query(&candidate));
+
+        let mut rec = crate::models::cannibalization::CandidateAnalysisOutput {
+            cluster_id: "near_dupe_x_1".into(),
+            keep_id: 1,
+            redirect_ids: vec![2],
+            no_action: false,
+            confidence: "high".into(),
+            reason: "high similarity".into(),
+            ..Default::default()
+        };
+        let reason = apply_post_llm_product_guards(&candidate, &mut rec);
+        assert!(reason.is_some());
+        assert!(rec.no_action);
+        assert_eq!(rec.confidence, "low");
+        assert!(rec.reason.contains("multi-intent"));
+
+        // Shared query present → do not force no_action.
+        let with_shared = serde_json::json!({
+            "lane": "near_dupe",
+            "shared_query_count": 1,
+            "shared_queries": ["best cold brew coffee maker"],
+            "top_shared_queries": ["best cold brew coffee maker"],
+            "pages": [
+                { "id": 1, "target_keyword": "cold brew coffee" },
+                { "id": 2, "target_keyword": "portable coffee maker" }
+            ]
+        });
+        assert!(!is_multi_intent_without_shared_query(&with_shared));
+        let mut rec2 = crate::models::cannibalization::CandidateAnalysisOutput {
+            no_action: false,
+            keep_id: 1,
+            redirect_ids: vec![2],
+            confidence: "medium".into(),
+            ..Default::default()
+        };
+        assert!(apply_post_llm_product_guards(&with_shared, &mut rec2).is_none());
+        assert!(!rec2.no_action);
+    }
+
+    #[test]
+    fn test_enrich_candidate_attaches_outline_and_queries() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        let project_id = "proj-enrich";
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode) VALUES (?1, ?2, ?3, 1, 'workspace')",
+            rusqlite::params![project_id, "Test", "/tmp"],
+        )
+        .unwrap();
+        // articles row required by evidence FK / join
+        conn.execute(
+            "INSERT INTO articles (id, title, url_slug, file, status, content_gaps_addressed, project_id)
+             VALUES (42, 'Alpha Title', 'alpha', 'content/alpha.mdx', 'published', '[]', ?1)",
+            rusqlite::params![project_id],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO article_evidence (
+                project_id, article_id, slug, content_hash, embedding_json, model_name,
+                outline_text, summary_text, intent_card, word_count, h1, title,
+                target_keyword, top_queries_json, updated_at
+            ) VALUES (?1, 42, 'alpha', 'hash', NULL, NULL,
+                '## Intro
+## Details', NULL, NULL, 1500, 'Alpha H1', 'Alpha Title',
+                'alpha keyword', '[{"query":"alpha search","impressions":50}]', '2024-01-01T00:00:00Z')"#,
+            rusqlite::params![project_id],
+        )
+        .unwrap();
+
+        let candidate = serde_json::json!({
+            "candidate_id": "c1",
+            "lane": "near_dupe",
+            "pages": [{
+                "id": 42,
+                "url": "/blog/alpha",
+                "title": "Alpha Title",
+                "target_keyword": "alpha keyword",
+                "word_count": 60,
+                "excerpt": "thin excerpt only"
+            }]
+        });
+
+        let enriched = enrich_candidate_with_packages(Some(&conn), project_id, &candidate);
+        let page = &enriched["pages"][0];
+        assert_eq!(page["word_count"].as_i64().unwrap(), 1500);
+        assert!(
+            page["outline_text"]
+                .as_str()
+                .unwrap()
+                .contains("## Intro"),
+            "outline_text should be attached from evidence"
+        );
+        let queries = page["top_queries"].as_array().unwrap();
+        assert!(!queries.is_empty());
+        assert_eq!(queries[0]["query"].as_str().unwrap(), "alpha search");
+
+        // Prompt should include package fields.
+        let skill = "# Skill\n".to_string();
+        let (prompt, _) = build_merge_prompt(&skill, &enriched);
+        assert!(prompt.contains("outline_text"));
+        assert!(prompt.contains("alpha search"));
+        assert!(prompt.contains("1500"));
     }
 
     #[test]
