@@ -181,29 +181,19 @@ pub(crate) fn create_ctr_fix_tasks(
             article_context["issues_detected"]["ctr_underperformance"] =
                 serde_json::Value::Bool(true);
         }
-        let single_context = serde_json::json!({
-            "total_articles": 1,
-            "articles": [article_context],
-        });
-
-        let context_str = match serde_json::to_string(&single_context) {
-            Ok(s) => s,
+        let artifact = match super::standalone_context::ctr_context_artifact_from_article(
+            article_context,
+            "ctr_audit",
+        ) {
+            Ok(a) => a,
             Err(e) => {
                 log::warn!(
-                    "[ctr_audit] Failed to serialize context for article {}: {}",
+                    "[ctr_audit] Failed to build ctr_context for article {}: {}",
                     id,
                     e
                 );
                 continue;
             }
-        };
-
-        let artifact = TaskArtifact {
-            key: "ctr_context".to_string(),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some("ctr_audit".to_string()),
-            content: Some(context_str),
         };
 
         let issue_signature = ctr_issue_signature(article);

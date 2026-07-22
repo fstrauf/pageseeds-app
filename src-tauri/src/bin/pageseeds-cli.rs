@@ -50,7 +50,7 @@ fn main() {
         // ── Task / queue orchestration ──
         "list-tasks" => list_tasks(&db.to_string_lossy(), &project_id, &args),
         "cancel-tasks" => cancel_tasks(&db.to_string_lossy(), &project_id, &args),
-        "create-task" => create_task(&project_id, &db.to_string_lossy(), &args),
+        "create-task" => create_task(&project_id, &db.to_string_lossy(), &require_project_path(), &args),
         "execute-task" => execute_task(&db.to_string_lossy(), &args),
         "get-task" => get_task(&db.to_string_lossy(), &args),
         "update-task-status" => update_task_status_cmd(&db.to_string_lossy(), &args),
@@ -613,7 +613,12 @@ fn ctr_health(project_id: &str, project_path: &str, db_path: &str) -> Result<ser
     Ok(serde_json::to_value(summary).unwrap_or_default())
 }
 
-fn create_task(project_id: &str, db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+fn create_task(
+    project_id: &str,
+    db_path: &str,
+    project_path: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
     let tt = flag(args, "--task-type", "-t").unwrap_or_default();
     let title = flag(args, "--title", "-T").unwrap_or_default();
     let reason = flag(args, "--reason", "-r").unwrap_or_default();
@@ -645,6 +650,39 @@ fn create_task(project_id: &str, db_path: &str, args: &[String]) -> Result<serde
                 priority: priority_enum,
                 auto_enqueue,
                 source: "pageseeds-cli".to_string(),
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(serde_json::json!({
+            "task_id": task.id,
+            "task_type": tt,
+            "title": task.title,
+            "status": task.status,
+        }));
+    }
+
+    // fix_ctr_article always attaches a single-article ctr_context (GSC + file
+    // excerpt), matching audit-spawned children. Bare TaskSpawner creates omit
+    // the artifact and cause analyze to fail.
+    if tt == "fix_ctr_article" {
+        let slug_val = slug.ok_or_else(|| {
+            "--slug required for fix_ctr_article (url slug of the article to fix)".to_string()
+        })?;
+        let task = pageseeds_lib::engine::ctr_fix::spawn_fix_ctr_article_for_slug(
+            &conn,
+            project_id,
+            project_path,
+            &slug_val,
+            pageseeds_lib::engine::ctr_fix::SpawnFixCtrForSlugOpts {
+                title: if title.is_empty() { None } else { Some(title) },
+                priority: priority_enum,
+                auto_enqueue,
+                source: "pageseeds-cli".to_string(),
+                reason: if reason.is_empty() {
+                    None
+                } else {
+                    Some(reason)
+                },
             },
         )
         .map_err(|e| e.to_string())?;
@@ -820,6 +858,7 @@ Task / queue orchestration:
   cancel-tasks            -i <id> -p <path> -t type [-s status] [--yes]
   create-task             -i <id> -p <path> -t type [-T title] [-r reason] [-a] [-P high|medium|low]
                           fix_content_article also requires -S/--slug <url-slug> (builds recommendations artifact)
+                          fix_ctr_article also requires -S/--slug <url-slug> (builds ctr_context from GSC + file)
   execute-task            -I <task-id>
   get-task                -I <task-id>                          Full task JSON incl. artifacts
   update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks

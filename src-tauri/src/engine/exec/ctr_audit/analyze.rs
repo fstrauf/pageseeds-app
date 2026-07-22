@@ -12,9 +12,11 @@ use crate::models::task::Task;
 /// **Per-article mode:** When called from a `fix_ctr_article` task, `context_json`
 /// is empty (`"{}"`) because there is no upstream step output. In that case the
 /// function reads the single-article context from the task's `ctr_context` artifact.
-/// If the context contains exactly one article, the returned output is the single
-/// `CtrRecommendation` JSON (not wrapped in `CtrAgentOutput`), so downstream
-/// `fix_ctr_article_generate` sees the same format it always has.
+/// Missing / empty `ctr_context` fails fast with a clear message (do not call the
+/// agent with no article data). If the context contains exactly one article, the
+/// returned output is the single `CtrRecommendation` JSON (not wrapped in
+/// `CtrAgentOutput`), so downstream `fix_ctr_article_generate` sees the same format
+/// it always has.
 pub(crate) fn exec_ctr_analyze(
     task: &Task,
     project_path: &str,
@@ -22,7 +24,8 @@ pub(crate) fn exec_ctr_analyze(
     context_json: &str,
 ) -> StepResult {
     // Resolve context: prefer explicit context_json, fall back to ctr_context artifact.
-    let context_json = if context_json.is_empty() || context_json == "{}" {
+    let resolved_from_artifact = context_json.is_empty() || context_json == "{}";
+    let context_json = if resolved_from_artifact {
         task.artifacts
             .iter()
             .find(|a| a.key == "ctr_context")
@@ -49,6 +52,28 @@ pub(crate) fn exec_ctr_analyze(
             output: Some("{\"recommendations\":[],\"summary\":\"All clear – every article passes the current health checks.\"}".to_string()),
             artifact_key: None,
         };
+    }
+
+    // Per-article path (fix_ctr_article) requires a real ctr_context artifact.
+    // Empty `{}` / missing articles array means spawn forgot to attach context
+    // (e.g. bare TaskSpawner create without the shared helper). Fail fast so
+    // the agent is not asked for structured JSON with no article data.
+    // Site-wide audit passes non-empty context_json from the prior build step;
+    // that path is unaffected (resolved_from_artifact is false there).
+    let articles_missing_or_empty = match context_doc.get("articles") {
+        Some(arr) => arr.as_array().map(|a| a.is_empty()).unwrap_or(true),
+        None => true,
+    };
+    if resolved_from_artifact
+        && (context_json == "{}" || articles_missing_or_empty)
+        && task.task_type == "fix_ctr_article"
+    {
+        return StepResult::fail(
+            "fix_ctr_article requires a non-empty ctr_context artifact \
+             (total_articles=1, articles=[...]). Recreate via \
+             create-task -t fix_ctr_article -S <slug> or an audit-spawned child."
+                .to_string(),
+        );
     }
 
     let repo_root = Path::new(project_path);
