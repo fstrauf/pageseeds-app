@@ -50,12 +50,12 @@ The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds
 
 ### Current Providers
 
-- **Kimi CLI** — native `kimi -p` subprocess (default Kimi backend, no prompt size cap)
-- **Claude** — Anthropic API via Rig (`ANTHROPIC_API_KEY`); pure completion, no project file I/O
-- **OpenAI** — OpenAI API via Rig (`OPENAI_API_KEY`); pure completion, no project file I/O
-- **Grok** — xAI Grok via Rig native `rig::providers::xai` (`XAI_API_KEY`); pure completion, no project file I/O — the executor persists MDX like Claude/OpenAI
-- **Ollama** — local Ollama via Rig (not shown in Settings UI by default)
-- **Kimi Bridge** — HTTP bridge to Kimi (legacy, opt-in)
+- **Grok** (default) — xAI Grok via Rig native `rig::providers::xai` (`XAI_API_KEY` in `~/.config/automation/secrets.env`); pure completion, no project file I/O — the executor persists MDX. **Tool-capable** for content_review investigate / multi-turn investigation.
+- **Kimi CLI** — native `kimi -p` subprocess (agentic file tools; no tool-calling for investigate — falls back to scripted recommend)
+- **Claude** — Anthropic API via Rig (`ANTHROPIC_API_KEY`); pure completion, no project file I/O; tool-capable
+- **OpenAI** — OpenAI API via Rig (`OPENAI_API_KEY`); pure completion, no project file I/O; tool-capable
+- **Ollama** — local Ollama via Rig (not shown in Settings UI by default); tool-capable
+- **Kimi Bridge** — HTTP bridge to Kimi (legacy, opt-in); tool-capable
 - **Legacy CLI fallback** — `kimi` / `copilot` binaries via `agent-wrapper` (kept for compatibility)
 
 ### Provider Selection
@@ -63,10 +63,12 @@ The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds
 Provider is resolved from:
 
 1. Task's `agent_policy` field
-2. Project setting
-3. Global setting (`agent_provider` in `global_settings` table, default `"kimi"`)
+2. Project legacy `agent_provider` if set and valid (prefer clear this; global is the intended control)
+3. Global setting (`agent_provider` in `global_settings` table, default `"grok"`)
 
 The resolved provider string is passed to `engine::agent::run_agent`.
+
+API keys for Claude / OpenAI / Grok are loaded via `EnvResolver` (secrets.env → project `.env.local` / `.env` → shell).
 
 For Kimi specifically, the global `kimi_backend_mode` setting controls which backend is used: `"cli"` (the default) spawns `kimi -p` directly and enforces no prompt byte cap; `"bridge"` is legacy/opt-in and its retired 20 KB prompt limit no longer applies anywhere in the live pipeline — prompt sizes are governed by the shared 80 KB target / 90 KB hard budget (`config/prompt_budget.rs`).
 

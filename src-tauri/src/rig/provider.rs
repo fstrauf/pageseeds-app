@@ -381,15 +381,15 @@ pub async fn resolve_backend(
             }
         }
         "claude" => Ok(LlmBackend::Claude {
-            api_key: std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+            api_key: resolve_api_key("ANTHROPIC_API_KEY"),
             model,
         }),
         "openai" => Ok(LlmBackend::OpenAi {
-            api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            api_key: resolve_api_key("OPENAI_API_KEY"),
             model,
         }),
         "grok" => Ok(LlmBackend::Grok {
-            api_key: std::env::var("XAI_API_KEY").unwrap_or_default(),
+            api_key: resolve_api_key("XAI_API_KEY"),
             model,
         }),
         "ollama" => Ok(LlmBackend::Ollama {
@@ -402,6 +402,14 @@ pub async fn resolve_backend(
             crate::db::global_settings::VALID_PROVIDERS.join(", ")
         )),
     }
+}
+
+/// Resolve an LLM API key from secrets.env / .env / shell (same chain as EnvResolver).
+fn resolve_api_key(key: &str) -> String {
+    crate::config::env_resolver::EnvResolver::new(".")
+        .resolve(key)
+        .map(|(v, _)| v)
+        .unwrap_or_default()
 }
 
 pub fn default_model_for_provider(provider: &str) -> String {

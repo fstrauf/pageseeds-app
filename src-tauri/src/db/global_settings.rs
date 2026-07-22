@@ -6,7 +6,11 @@ use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 /// Default agent provider if none is set globally.
-pub const DEFAULT_AGENT_PROVIDER: &str = "kimi";
+///
+/// Grok (xAI API) is tool-capable for content_review investigate; set
+/// `XAI_API_KEY` in `~/.config/automation/secrets.env`. Switch back to `kimi`
+/// in Settings if you need CLI file-tool agentic writes.
+pub const DEFAULT_AGENT_PROVIDER: &str = "grok";
 
 /// Default Kimi backend mode: "cli" spawns `kimi --print` directly via tokio
 /// (no Python bridge, no HTTP layer). Switch to "bridge" or "auto" to fall
