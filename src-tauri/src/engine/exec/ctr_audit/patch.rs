@@ -380,6 +380,96 @@ pub(crate) fn validate_patch_against_recommendation(
     errors
 }
 
+/// Build a validated `CtrFixPatch` from concrete recommendation strings when possible.
+///
+/// Used by generate to short-circuit the LLM when analyze already produced write-ready
+/// values. Returns `None` if any fix cannot be mapped, or if normalize/validate fails —
+/// never soft-succeeds an empty or incomplete patch when open fixes still need changes.
+pub(crate) fn try_patch_from_recommendation(
+    rec: &CtrRecommendation,
+    original_content: &str,
+    task: &Task,
+) -> Option<CtrFixPatch> {
+    use crate::models::ctr::{CtrFixPatchChanges, CtrFixPatchFaqQuestion, CtrFixType};
+
+    let mut changes = CtrFixPatchChanges::default();
+
+    for fix in &rec.fixes {
+        match fix.fix_type {
+            CtrFixType::TitleRewrite => {
+                let recommended = fix.recommended.as_str()?;
+                if recommended.trim().is_empty() {
+                    return None;
+                }
+                changes.title = Some(recommended.to_string());
+            }
+            CtrFixType::MetaDescription => {
+                let recommended = fix.recommended.as_str()?;
+                if recommended.trim().is_empty() {
+                    return None;
+                }
+                changes.description = Some(recommended.to_string());
+            }
+            CtrFixType::SnippetBait => {
+                // String-only first_paragraph mapping; complex objects require the LLM.
+                let recommended = fix.recommended.as_str()?;
+                if recommended.trim().is_empty() {
+                    return None;
+                }
+                changes.first_paragraph = Some(recommended.to_string());
+            }
+            CtrFixType::FaqSchema => {
+                // Only complete FAQ objects with non-empty question + answer.
+                // Questions-only / incomplete FAQ → None (do not invent answers).
+                let items = fix.recommended.as_array()?;
+                if items.is_empty() {
+                    return None;
+                }
+                let mut faq_questions = Vec::with_capacity(items.len());
+                for item in items {
+                    let obj = item.as_object()?;
+                    let question = obj.get("question")?.as_str()?;
+                    let answer = obj.get("answer")?.as_str()?;
+                    if question.trim().is_empty() || answer.trim().is_empty() {
+                        return None;
+                    }
+                    faq_questions.push(CtrFixPatchFaqQuestion {
+                        question: question.to_string(),
+                        answer: answer.to_string(),
+                    });
+                }
+                changes.faq_questions = Some(faq_questions);
+            }
+        }
+    }
+
+    let mut patch = CtrFixPatch {
+        article_id: rec.article_id,
+        file: rec.file.clone(),
+        error: None,
+        changes,
+    };
+
+    let _repairs = normalize_patch_before_validation(&mut patch, task);
+    let mut errors = validate_patch_before_write(&patch, task, original_content);
+    errors.extend(validate_patch_against_recommendation(
+        &patch,
+        rec,
+        original_content,
+    ));
+
+    if !errors.is_empty() {
+        log::info!(
+            "[try_patch_from_recommendation] Deterministic map rejected for {}: {}",
+            rec.file,
+            errors.join("; ")
+        );
+        return None;
+    }
+
+    Some(patch)
+}
+
 /// Extract the single CtrRecommendation from the task's ctr_recommendations artifact.
 pub(crate) fn extract_recommendation(task: &Task) -> Result<Option<CtrRecommendation>, String> {
     let artifact = task

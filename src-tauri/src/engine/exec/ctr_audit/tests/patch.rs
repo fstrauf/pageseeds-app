@@ -336,3 +336,214 @@ This is the first paragraph of the test article. It contains some content.
             errors
         );
     }
+
+    fn task_with_rec(rec: &crate::models::ctr::CtrRecommendation) -> crate::models::task::Task {
+        crate::models::task::Task {
+            id: "task-try-patch".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "fix_ctr_article".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("try patch".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "ctr_recommendations".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("ctr_audit".to_string()),
+                content: Some(serde_json::to_string(rec).unwrap()),
+            }],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn base_mdx_needing_title_meta() -> &'static str {
+        r#"---
+title: "Test Article | Brand | Brand -- Tagline That Makes Title Too Long"
+description: "A short desc"
+date: "2024-01-01"
+---
+
+# Test Article
+
+This is the first paragraph of the test article. It contains some content.
+"#
+    }
+
+    #[test]
+    fn try_patch_from_recommendation_concrete_title_and_meta() {
+        let title = "Best CSP Stocks Guide";
+        // 120–155 chars (META_MIN_LEN..META_MAX_LEN)
+        let meta = "Discover the best cash-secured put stocks for consistent income. \
+Compare risk, premiums, and entry strategies in this practical guide for option sellers.";
+        assert!(
+            (crate::engine::exec::audit_health::META_MIN_LEN
+                ..=crate::engine::exec::audit_health::META_MAX_LEN)
+                .contains(&meta.chars().count()),
+            "test meta length {}",
+            meta.chars().count()
+        );
+        assert!(title.chars().count() <= crate::engine::exec::audit_health::TITLE_MAX_LEN);
+
+        let rec = crate::models::ctr::CtrRecommendation {
+            article_id: 42,
+            url_slug: "best-csp-stocks".to_string(),
+            file: "content/best_csp_stocks.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "csp stocks".to_string(),
+            fixes: vec![
+                crate::models::ctr::CtrFix {
+                    fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
+                    current: Some("Old long title".to_string()),
+                    recommended: serde_json::json!(title),
+                    reason: None,
+                },
+                crate::models::ctr::CtrFix {
+                    fix_type: crate::models::ctr::CtrFixType::MetaDescription,
+                    current: Some("A short desc".to_string()),
+                    recommended: serde_json::json!(meta),
+                    reason: None,
+                },
+            ],
+        };
+        let task = task_with_rec(&rec);
+        let mdx = base_mdx_needing_title_meta();
+
+        let patch = super::patch::try_patch_from_recommendation(&rec, mdx, &task)
+            .expect("concrete title+meta should map deterministically");
+        assert_eq!(patch.article_id, 42);
+        assert_eq!(patch.file, "content/best_csp_stocks.mdx");
+        assert_eq!(patch.changes.title.as_deref(), Some(title));
+        assert_eq!(patch.changes.description.as_deref(), Some(meta));
+        assert!(patch.changes.first_paragraph.is_none());
+        assert!(patch.changes.faq_questions.is_none());
+    }
+
+    #[test]
+    fn try_patch_from_recommendation_guidance_or_invalid_returns_none() {
+        let mdx = base_mdx_needing_title_meta();
+
+        // Non-string recommended for title
+        let rec_non_string = crate::models::ctr::CtrRecommendation {
+            article_id: 1,
+            url_slug: "test".to_string(),
+            file: "content/test.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "test".to_string(),
+            fixes: vec![crate::models::ctr::CtrFix {
+                fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
+                current: Some("Old".to_string()),
+                recommended: serde_json::json!({"instruction": "rewrite for SERP"}),
+                reason: None,
+            }],
+        };
+        let task = task_with_rec(&rec_non_string);
+        assert!(
+            super::patch::try_patch_from_recommendation(&rec_non_string, mdx, &task).is_none(),
+            "non-string recommended must not map"
+        );
+
+        // String that fails validation (meta far too short)
+        let rec_short_meta = crate::models::ctr::CtrRecommendation {
+            article_id: 1,
+            url_slug: "test".to_string(),
+            file: "content/test.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "test".to_string(),
+            fixes: vec![
+                crate::models::ctr::CtrFix {
+                    fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
+                    current: Some("Old".to_string()),
+                    recommended: serde_json::json!("Good Title"),
+                    reason: None,
+                },
+                crate::models::ctr::CtrFix {
+                    fix_type: crate::models::ctr::CtrFixType::MetaDescription,
+                    current: Some("short".to_string()),
+                    recommended: serde_json::json!("Rewrite meta to be more compelling and include the keyword."),
+                    reason: None,
+                },
+            ],
+        };
+        let task = task_with_rec(&rec_short_meta);
+        assert!(
+            super::patch::try_patch_from_recommendation(&rec_short_meta, mdx, &task).is_none(),
+            "guidance/short meta that fails validation must return None"
+        );
+    }
+
+    #[test]
+    fn try_patch_from_recommendation_faq_questions_only_returns_none() {
+        let mdx = r#"---
+title: "Good Enough Title"
+description: "A short desc"
+date: "2024-01-01"
+---
+
+# Heading
+
+Body paragraph here.
+"#;
+
+        // Array of plain strings (questions only)
+        let rec_strings = crate::models::ctr::CtrRecommendation {
+            article_id: 1,
+            url_slug: "test".to_string(),
+            file: "content/test.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "test".to_string(),
+            fixes: vec![crate::models::ctr::CtrFix {
+                fix_type: crate::models::ctr::CtrFixType::FaqSchema,
+                current: None,
+                recommended: serde_json::json!([
+                    "What is cash secured put?",
+                    "How do CSPs work?",
+                    "When should I sell puts?"
+                ]),
+                reason: None,
+            }],
+        };
+        let task = task_with_rec(&rec_strings);
+        assert!(
+            super::patch::try_patch_from_recommendation(&rec_strings, mdx, &task).is_none(),
+            "FAQ questions-only strings must return None"
+        );
+
+        // Objects missing answers
+        let rec_missing_answers = crate::models::ctr::CtrRecommendation {
+            article_id: 1,
+            url_slug: "test".to_string(),
+            file: "content/test.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "test".to_string(),
+            fixes: vec![crate::models::ctr::CtrFix {
+                fix_type: crate::models::ctr::CtrFixType::FaqSchema,
+                current: None,
+                recommended: serde_json::json!([
+                    { "question": "What is cash secured put?" },
+                    { "question": "How do CSPs work?" },
+                    { "question": "When should I sell puts?" }
+                ]),
+                reason: None,
+            }],
+        };
+        let task = task_with_rec(&rec_missing_answers);
+        assert!(
+            super::patch::try_patch_from_recommendation(&rec_missing_answers, mdx, &task).is_none(),
+            "FAQ objects without answers must return None"
+        );
+    }
