@@ -25,11 +25,21 @@ pub fn normalize_keyword(kw: &str) -> String {
         .to_lowercase()
 }
 
-/// Significant tokens of a keyword: alphanumeric, length >= 2, not a stopword.
+/// True for pure 20xx year tokens (optional in keyword matching — issue #112).
+fn is_year_token(token: &str) -> bool {
+    token.len() == 4
+        && token.as_bytes()[0] == b'2'
+        && token.as_bytes()[1] == b'0'
+        && token.as_bytes()[2].is_ascii_digit()
+        && token.as_bytes()[3].is_ascii_digit()
+}
+
+/// Significant tokens of a keyword: alphanumeric, length >= 2, not a stopword,
+/// not a pure 20xx year (years in stored keywords are optional for presence).
 fn significant_tokens(normalized_keyword: &str) -> Vec<String> {
     normalized_keyword
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.len() >= 2 && !STOPWORDS.contains(t))
+        .filter(|t| t.len() >= 2 && !STOPWORDS.contains(t) && !is_year_token(t))
         .map(String::from)
         .collect()
 }
@@ -249,6 +259,25 @@ mod tests {
     fn present_long_phrase_via_tokens() {
         let title = "best stocks for the wheel strategy: 2025-2026 screening";
         assert!(keyword_present(title, "best stocks for wheel strategy 2025 2026"));
+    }
+
+    #[test]
+    fn keyword_years_are_optional_for_presence() {
+        // Stored keyword carries dual years; haystack has only one / different year
+        // — core tokens still match (issue #112 rail B).
+        assert!(keyword_present(
+            "best stocks for the wheel strategy 2026",
+            "best stocks for wheel strategy 2025 2026"
+        ));
+        assert!(keyword_present(
+            "best stocks for the wheel strategy",
+            "best stocks for wheel strategy 2025 2026"
+        ));
+        // Core mismatch still fails even when years would "match".
+        assert!(!keyword_present(
+            "best stocks for iron condors 2025 2026",
+            "best stocks for wheel strategy 2025 2026"
+        ));
     }
 
     #[test]

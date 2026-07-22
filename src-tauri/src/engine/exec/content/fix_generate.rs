@@ -469,30 +469,7 @@ fn normalize_patch_before_validation(
         }
     }
 
-    // Auto-pad description if slightly under minimum (LLMs often undershoot)
-    if let Some(ref mut d) = patch.changes.description {
-        let len = d.chars().count();
-        if len < meta_min && len >= 100 {
-            let padding_needed = meta_min.saturating_sub(len);
-            let suffixes = [
-                " Discover expert tips and practical advice in our complete guide.",
-                " Learn everything you need to know with our detailed breakdown.",
-                " Explore proven strategies and actionable insights inside.",
-            ];
-            for suffix in &suffixes {
-                let candidate = format!("{} {}", d.trim_end_matches('.'), suffix);
-                let candidate_len = candidate.chars().count();
-                if candidate_len >= meta_min && candidate_len <= meta_max {
-                    notes.push(format!(
-                        "description padded from {} to {} chars",
-                        len, candidate_len
-                    ));
-                    *d = candidate;
-                    break;
-                }
-            }
-        }
-    }
+    // Do not inject marketing pad suffixes into short meta (issue #112).
 
     // Normalize internal_links slugs — strip any /blog/ prefix the agent may have included
     if let Some(ref mut links) = patch.changes.internal_links {
@@ -575,16 +552,20 @@ fn prune_invalid_change_fields(patch: &mut ContentFixPatch, errors: &[String]) -
 
     // Match validate_patch_before_write error prefixes exactly.
     if patch.changes.title.is_some()
-        && errors
-            .iter()
-            .any(|e| e.starts_with("title is ") || e.starts_with("title does not contain"))
+        && errors.iter().any(|e| {
+            e.starts_with("title is ")
+                || e.starts_with("title does not contain")
+                || e.starts_with("title contains year")
+        })
     {
         patch.changes.title = None;
         notes.push("dropped invalid title".to_string());
     }
     if patch.changes.description.is_some()
         && errors.iter().any(|e| {
-            e.starts_with("description is ") || e.starts_with("description does not contain")
+            e.starts_with("description is ")
+                || e.starts_with("description does not contain")
+                || e.starts_with("description contains year")
         })
     {
         patch.changes.description = None;
@@ -693,6 +674,8 @@ fn validate_patch_before_write(
     // Pass the original (or normalized) into keyword_present — it re-normalizes.
     let kw_raw = target_keyword.unwrap_or("").trim();
 
+    let current_year = crate::content::year_policy::current_calendar_year();
+
     if let Some(ref t) = patch.changes.title {
         if t.chars().count() > title_max {
             errors.push(format!(
@@ -708,6 +691,11 @@ fn validate_patch_before_write(
                     kw
                 ));
             }
+        }
+        if !crate::content::year_policy::years_ok(t, current_year) {
+            errors.push(
+                "title contains year not equal to current calendar year".to_string(),
+            );
         }
     }
 
@@ -726,6 +714,11 @@ fn validate_patch_before_write(
                     kw
                 ));
             }
+        }
+        if !crate::content::year_policy::years_ok(d, current_year) {
+            errors.push(
+                "description contains year not equal to current calendar year".to_string(),
+            );
         }
     }
 
