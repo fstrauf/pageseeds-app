@@ -15,13 +15,12 @@
 //!   `recommendations.json` and stores output under artifact key
 //!   `content_review_recommend`. BackendAuto still auto-spawns fix tasks as today.
 
-use crate::engine::exec::investigate::{
-    backend_supports_tool_calling, build_investigation_preamble, run_tool_equipped_agent,
-};
+use crate::engine::exec::investigate::build_investigation_preamble;
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::tools::{investigation_kit, InvestigationAccess, InvestigationContext};
 use crate::models::content_review::InvestigationFindings;
 use crate::models::task::Task;
+use crate::rig::provider::{backend_supports_tool_calling, run_tool_equipped_agent};
 
 /// Artifact key for the tool-capable investigate path (`InvestigationFindings`).
 const ARTIFACT_KEY_INVESTIGATION_FINDINGS: &str = "investigation_findings";
@@ -87,6 +86,7 @@ pub(crate) async fn exec_content_review_investigate(
     {
         Ok(text) => text,
         Err(e) => {
+            // Unsupported should be gated above; treat remaining errors as hard fails.
             return crate::engine::workflows::StepResult::fail(format!(
                 "Content review investigation agent failed: {e}"
             ));
@@ -213,8 +213,7 @@ fn build_content_review_investigation_prompt(task: &Task) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::exec::investigate::backend_supports_tool_calling;
-    use crate::rig::provider::LlmBackend;
+    use crate::rig::provider::{backend_supports_tool_calling, LlmBackend};
 
     #[test]
     fn tool_calling_gate_matches_supported_backends() {
