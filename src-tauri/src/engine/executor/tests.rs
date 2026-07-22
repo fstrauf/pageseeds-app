@@ -412,6 +412,31 @@
                 .mount(&mock_server)
                 .await;
 
+            // Final-selection relevance check (batched off-domain filter).
+            // Match on the embedded candidate_relevance prompt so unmatched
+            // chat/completions requests still 404-fail-fast rather than hang.
+            Mock::given(method("POST"))
+                .and(path("/v1/chat/completions"))
+                .and(body_string_contains("Candidate Relevance"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "chatcmpl-relevance",
+                    "object": "chat.completion",
+                    "created": 1677652290,
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "{\"off_domain_keywords\":[]}"
+                            },
+                            "finish_reason": "stop"
+                        }
+                    ]
+                })))
+                .mount(&mock_server)
+                .await;
+
             // CapSolver
             Mock::given(method("POST"))
                 .and(path("/createTask"))
@@ -517,6 +542,9 @@
                 value TEXT NOT NULL
              );
              INSERT OR IGNORE INTO global_settings (key, value) VALUES ('kimi_backend_mode', 'bridge');
+             -- Route LLM steps to the mocked Kimi bridge (default agent is grok CLI,
+             -- which hangs/fails when the binary is missing or waits on a live session).
+             INSERT OR IGNORE INTO global_settings (key, value) VALUES ('agent_provider', 'kimi');
              CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'todo',

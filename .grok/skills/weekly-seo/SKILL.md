@@ -284,6 +284,16 @@ Use these as **priors**, not a required table to walk top-to-bottom:
 (`promising` / `depleted` / `unproven`). Never claim “no gaps found” if research
 did not run — say **skipped** and why + last research date.
 
+When keyword picker / research final selection is **avoid-heavy** (AIO-blocked
+head terms, mostly `winnability: avoid`), prefer the shortlist **promising**
+path rather than rubber-stamping demoted heads:
+- Call `research-shortlist -i <id> -H promising` (CLI health filter) and bias
+  themes/seeds from those rows for a re-run of `research_keywords` /
+  `research_landing_pages` if capacity allows.
+- Or filter/prefer promising themes yourself and re-run research, then pick
+  only `differentiate` / `target` (non-avoid) rows from the picker.
+Soft guidance only — residual avoids as last resort when nothing better exists.
+
 ### Known tool limits — do not dead-end as “caveats for later”
 
 Agents often stop with soft caveats instead of using the rest of the surface.
@@ -364,7 +374,9 @@ pageseeds-cli get-task -I <task-id>
 - **CannibalizationPicker:** high-confidence mechanical merges via
   `select-cannibalization -I <parent> -S merge:<id>,hub:<id>`; escalate ambiguous.  
 - **KeywordPicker:** do **not** rubber-stamp. Check demand/difficulty, no
-  self-competition (`article-list` / `gsc-queries`), intent fit. Then
+  self-competition (`article-list` / `gsc-queries`), intent fit. Prefer
+  non-avoid / `differentiate` / `target` rows when present (skip AIO-blocked
+  `avoid` heads if product-adjacent long-tails are on the list). Then
   `select-keywords -I <id> -K kw1,kw2` — max **3** articles, fewer is better.  
 - **ContentReviewPicker / fix proposals:** `select-content-review -I <parent> -P id1,id2`  
 - **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`  
