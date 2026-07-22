@@ -94,16 +94,8 @@ pub(crate) async fn exec_content_review_investigate(
     };
 
     // Typed extraction only — no prose unwrap_or fallback on this path.
-    let extract_prompt = format!(
-        "Map the following content-review investigation analysis into the \
-         InvestigationFindings schema. Use only evidence present in the analysis; \
-         do not invent findings.\n\n\
-         Analysis:\n{agent_response}"
-    );
-    let extract_preamble = "You extract structured InvestigationFindings from investigation \
-        analysis. Always use the submit tool. severity must be one of: critical, warning, info. \
-        fix_type must be one of: auto_fixable, developer_actionable, hybrid, informational. \
-        proposed_tasks.params must be a JSON object (use {} when empty).";
+    let extract_prompt = build_content_review_investigation_extract_prompt(&agent_response);
+    let extract_preamble = content_review_investigation_extract_preamble();
 
     let findings = match crate::rig::extraction::extract_with_backend::<InvestigationFindings>(
         &backend,
@@ -168,7 +160,9 @@ pub(crate) async fn exec_content_review_investigate(
 ///
 /// Asks for thorough prose analysis for later structured extraction — does **not**
 /// include the standalone freeform JSON output schema.
-fn build_content_review_investigation_preamble(base_preamble: &str) -> String {
+///
+/// `pub(crate)` so live evals can reuse the same framing.
+pub(crate) fn build_content_review_investigation_preamble(base_preamble: &str) -> String {
     format!(
         "{base_preamble}\n\n\
         ---\n\n\
@@ -188,7 +182,7 @@ fn build_content_review_investigation_preamble(base_preamble: &str) -> String {
     )
 }
 
-fn build_content_review_investigation_prompt(task: &Task) -> String {
+pub(crate) fn build_content_review_investigation_prompt(task: &Task) -> String {
     let title = task.title.as_deref().unwrap_or("Content review");
     let description = task.description.as_deref().unwrap_or("");
     format!(
@@ -207,6 +201,24 @@ fn build_content_review_investigation_prompt(task: &Task) -> String {
          6. Limit yourself to at most 20 tool calls total.\n\
          7. End with a clear prose summary of root causes and prioritised findings \
             (structured extraction runs after this step)."
+    )
+}
+
+/// Extract preamble shared by production and live evals (typed InvestigationFindings only).
+pub(crate) fn content_review_investigation_extract_preamble() -> &'static str {
+    "You extract structured InvestigationFindings from investigation \
+     analysis. Always use the submit tool. severity must be one of: critical, warning, info. \
+     fix_type must be one of: auto_fixable, developer_actionable, hybrid, informational. \
+     proposed_tasks.params must be a JSON object (use {} when empty)."
+}
+
+/// Build the extract prompt that maps agent analysis → InvestigationFindings.
+pub(crate) fn build_content_review_investigation_extract_prompt(agent_analysis: &str) -> String {
+    format!(
+        "Map the following content-review investigation analysis into the \
+         InvestigationFindings schema. Use only evidence present in the analysis; \
+         do not invent findings.\n\n\
+         Analysis:\n{agent_analysis}"
     )
 }
 
@@ -261,5 +273,16 @@ mod tests {
             ARTIFACT_KEY_INVESTIGATION_FINDINGS,
             ARTIFACT_KEY_CONTENT_REVIEW_RECOMMEND
         );
+    }
+
+    #[test]
+    fn extract_prompt_embeds_analysis_and_preamble_is_stable() {
+        let prompt = build_content_review_investigation_extract_prompt("sample analysis");
+        assert!(prompt.contains("sample analysis"));
+        assert!(prompt.contains("InvestigationFindings"));
+        let preamble = content_review_investigation_extract_preamble();
+        assert!(preamble.contains("submit tool"));
+        assert!(preamble.contains("critical"));
+        assert!(preamble.contains("auto_fixable"));
     }
 }
