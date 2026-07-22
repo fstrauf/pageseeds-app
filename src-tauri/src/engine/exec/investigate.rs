@@ -35,6 +35,27 @@ pub(crate) fn backend_supports_tool_calling(backend: &LlmBackend) -> bool {
     )
 }
 
+/// Shared tool-agent path for Claude / OpenAI / Grok (and Ollama after client build).
+/// Kimi bridge keeps its own construction (dummy key, base_url, completions_api, preamble fold-in).
+async fn run_native_tool_agent<C>(
+    client: C,
+    model: &str,
+    preamble: &str,
+    prompt: &str,
+    tools: Vec<Box<dyn rig::tool::ToolDyn>>,
+) -> Result<String, String>
+where
+    C: rig::client::CompletionClient,
+    C::CompletionModel: 'static,
+{
+    let agent = client
+        .agent(model)
+        .preamble(preamble)
+        .tools(tools)
+        .build();
+    run_tool_agent(agent, prompt).await
+}
+
 /// Build a tool-equipped agent for `backend` and run `prompt` (with `preamble`).
 ///
 /// Shared by standalone investigate and in-workflow content_review investigate.
@@ -66,32 +87,17 @@ pub(crate) async fn run_tool_equipped_agent(
         LlmBackend::Claude { api_key, model } => {
             let client = rig::providers::anthropic::Client::new(api_key)
                 .map_err(|e| format!("Failed to build Claude client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .preamble(preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, prompt).await
+            run_native_tool_agent(client, model, preamble, prompt, tools).await
         }
         LlmBackend::OpenAi { api_key, model } => {
             let client = rig::providers::openai::Client::new(api_key)
                 .map_err(|e| format!("Failed to build OpenAI client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .preamble(preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, prompt).await
+            run_native_tool_agent(client, model, preamble, prompt, tools).await
         }
         LlmBackend::Grok { api_key, model } => {
             let client = rig::providers::xai::Client::new(api_key)
                 .map_err(|e| format!("Failed to build Grok (xAI) client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .preamble(preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, prompt).await
+            run_native_tool_agent(client, model, preamble, prompt, tools).await
         }
         LlmBackend::Ollama { base_url, model } => {
             use rig::client::Nothing;
@@ -100,12 +106,8 @@ pub(crate) async fn run_tool_equipped_agent(
                 .base_url(base_url)
                 .build()
                 .map_err(|e| format!("Failed to build Ollama client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .preamble(preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, prompt).await
+            // Construction differs; tool-agent path is shared.
+            run_native_tool_agent(client, model, preamble, prompt, tools).await
         }
         _ => Err(
             "Backend does not support tool calling. Use Kimi bridge, Claude, OpenAI, Grok, or Ollama."

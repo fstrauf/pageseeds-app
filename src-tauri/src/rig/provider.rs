@@ -273,8 +273,9 @@ pub async fn resolve_backend(
             model,
         }),
         other => Err(format!(
-            "Unknown provider '{}'. Valid providers: kimi, claude, openai, grok, ollama",
-            other
+            "Unknown provider '{}'. Valid providers: {}",
+            other,
+            crate::db::global_settings::VALID_PROVIDERS.join(", ")
         )),
     }
 }
@@ -347,15 +348,22 @@ fn run_kimi_direct(prompt: &str, _preamble: Option<&str>) -> Result<AgentRespons
     }
 }
 
-async fn run_claude(
-    api_key: &str,
+/// Shared HTTP completion path for providers that share the same
+/// `Client::new` / `.agent(model).preamble(...).build()` / `.prompt().extended_details()` shape.
+///
+/// Used by Claude, OpenAI, and Grok. Ollama uses a different client builder (`Nothing` + base_url)
+/// but reuses this after construction. Kimi (bridge/CLI/direct) stays on its own paths.
+async fn run_native_http_completion<C>(
+    client: C,
+    provider_label: &str,
     model: &str,
     prompt: &str,
     preamble: Option<&str>,
-) -> Result<AgentResponse, String> {
-    let client = rig::providers::anthropic::Client::new(api_key)
-        .map_err(|e| format!("Failed to build Claude client: {}", e))?;
-
+) -> Result<AgentResponse, String>
+where
+    C: CompletionClient,
+    C::CompletionModel: 'static,
+{
     let agent = client
         .agent(model)
         .preamble(preamble.unwrap_or("You are a helpful assistant."))
@@ -365,13 +373,24 @@ async fn run_claude(
         .prompt(prompt)
         .extended_details()
         .await
-        .map_err(|e| format!("Claude prompt failed: {}", e))?;
+        .map_err(|e| format!("{} prompt failed: {}", provider_label, e))?;
 
     Ok(AgentResponse::with_usage(
         resp.output,
         resp.usage.input_tokens,
         resp.usage.output_tokens,
     ))
+}
+
+async fn run_claude(
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+    preamble: Option<&str>,
+) -> Result<AgentResponse, String> {
+    let client = rig::providers::anthropic::Client::new(api_key)
+        .map_err(|e| format!("Failed to build Claude client: {}", e))?;
+    run_native_http_completion(client, "Claude", model, prompt, preamble).await
 }
 
 async fn run_openai(
@@ -382,23 +401,7 @@ async fn run_openai(
 ) -> Result<AgentResponse, String> {
     let client = rig::providers::openai::Client::new(api_key)
         .map_err(|e| format!("Failed to build OpenAI client: {}", e))?;
-
-    let agent = client
-        .agent(model)
-        .preamble(preamble.unwrap_or("You are a helpful assistant."))
-        .build();
-
-    let resp = agent
-        .prompt(prompt)
-        .extended_details()
-        .await
-        .map_err(|e| format!("OpenAI prompt failed: {}", e))?;
-
-    Ok(AgentResponse::with_usage(
-        resp.output,
-        resp.usage.input_tokens,
-        resp.usage.output_tokens,
-    ))
+    run_native_http_completion(client, "OpenAI", model, prompt, preamble).await
 }
 
 async fn run_grok(
@@ -409,23 +412,7 @@ async fn run_grok(
 ) -> Result<AgentResponse, String> {
     let client = rig::providers::xai::Client::new(api_key)
         .map_err(|e| format!("Failed to build Grok (xAI) client: {}", e))?;
-
-    let agent = client
-        .agent(model)
-        .preamble(preamble.unwrap_or("You are a helpful assistant."))
-        .build();
-
-    let resp = agent
-        .prompt(prompt)
-        .extended_details()
-        .await
-        .map_err(|e| format!("Grok prompt failed: {}", e))?;
-
-    Ok(AgentResponse::with_usage(
-        resp.output,
-        resp.usage.input_tokens,
-        resp.usage.output_tokens,
-    ))
+    run_native_http_completion(client, "Grok", model, prompt, preamble).await
 }
 
 async fn run_ollama(
@@ -441,23 +428,8 @@ async fn run_ollama(
         .base_url(base_url)
         .build()
         .map_err(|e| format!("Failed to build Ollama client: {}", e))?;
-
-    let agent = client
-        .agent(model)
-        .preamble(preamble.unwrap_or("You are a helpful assistant."))
-        .build();
-
-    let resp = agent
-        .prompt(prompt)
-        .extended_details()
-        .await
-        .map_err(|e| format!("Ollama prompt failed: {}", e))?;
-
-    Ok(AgentResponse::with_usage(
-        resp.output,
-        resp.usage.input_tokens,
-        resp.usage.output_tokens,
-    ))
+    // Same agent/prompt shape as Claude/OpenAI/Grok after client is built.
+    run_native_http_completion(client, "Ollama", model, prompt, preamble).await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

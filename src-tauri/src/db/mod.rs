@@ -1305,11 +1305,13 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Sanitize: clear invalid legacy agent_provider values from projects so they fall back to global.
+    // Allowlist is derived from VALID_PROVIDERS (single source of truth).
     {
-        let affected = conn.execute(
-            "UPDATE projects SET agent_provider = NULL WHERE agent_provider IS NOT NULL AND agent_provider NOT IN ('kimi', 'claude', 'openai', 'grok', 'ollama')",
-            [],
-        )?;
+        let allowlist = global_settings::valid_providers_sql_list();
+        let sql = format!(
+            "UPDATE projects SET agent_provider = NULL WHERE agent_provider IS NOT NULL AND agent_provider NOT IN ({allowlist})"
+        );
+        let affected = conn.execute(&sql, [])?;
         if affected > 0 {
             log::info!("[db::run_migrations] Cleared invalid agent_provider from {} project(s)", affected);
         }
