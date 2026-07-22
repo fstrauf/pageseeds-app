@@ -43,6 +43,12 @@ pub fn build_site_overview(
     let (recent_start, recent_end) = recent_window(period_days);
     let (prev_start, prev_end) = previous_window(period_days);
 
+    // Two bulk aggregations + pure Rust ranking (not O(articles) SQL).
+    let recent_by_page =
+        db::gsc_page_daily_window_metrics_bulk(conn, project_id, &recent_start, &recent_end)?;
+    let prev_by_page =
+        db::gsc_page_daily_window_metrics_bulk(conn, project_id, &prev_start, &prev_end)?;
+
     let mut total_impressions = 0.0_f64;
     let mut total_clicks = 0.0_f64;
     let mut top_candidates: Vec<TopPage> = Vec::new();
@@ -54,7 +60,7 @@ pub fn build_site_overview(
         let page = resolve_page_url(&page_index, &slug);
         let recent = page
             .as_ref()
-            .and_then(|p| window_metrics(conn, project_id, p, &recent_start, &recent_end));
+            .and_then(|p| recent_by_page.get(p).copied());
         if let Some(m) = recent {
             has_any_gsc = true;
             total_impressions += m.impressions;
@@ -73,9 +79,8 @@ pub fn build_site_overview(
         }
 
         if let Some(p) = page.as_ref() {
-            let prev = window_metrics(conn, project_id, p, &prev_start, &prev_end);
-            let recent_m = recent;
-            if let (Some(r), Some(b)) = (recent_m, prev) {
+            let prev = prev_by_page.get(p).copied();
+            if let (Some(r), Some(b)) = (recent, prev) {
                 has_any_gsc = true;
                 let clicks_delta = r.clicks - b.clicks;
                 let impressions_delta = r.impressions - b.impressions;
@@ -159,6 +164,9 @@ pub fn build_site_overview(
 }
 
 /// Article catalog with GSC rollup; redirected excluded by default.
+///
+/// List path is deliberately cheap: DB fields + bulk GSC join. File/MDX
+/// enrichment is reserved for [`get_article_package`].
 pub fn list_articles_catalog(
     conn: &Connection,
     project_id: &str,
@@ -172,6 +180,8 @@ pub fn list_articles_catalog(
     let page_index = build_page_index(conn, project_id)?;
     let (start, end) = recent_window(period_days);
     let indexing_by_slug = indexing_status_map(conn, project_id);
+    let metrics_by_page =
+        db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)?;
 
     let mut rows: Vec<ArticleCatalogRow> = Vec::new();
     for article in &articles {
@@ -184,19 +194,22 @@ pub fn list_articles_catalog(
             }
         }
 
+        let slug = normalize_url_slug(&article.url_slug);
+        let page = resolve_page_url(&page_index, &slug);
+        let metrics = page
+            .as_ref()
+            .and_then(|p| metrics_by_page.get(p).copied());
+        let top_queries = load_top_queries(conn, project_id, article.id);
+        let indexing_status = indexing_by_slug.get(&slug).cloned();
+
         let row = build_catalog_row(
-            conn,
-            project_id,
-            project_path,
             article,
             period_days,
-            &page_index,
-            &start,
-            &end,
-            &indexing_by_slug,
-            /* include_queries */ true,
-            /* enrich_from_file */ true,
-        )?;
+            metrics.as_ref(),
+            indexing_status,
+            top_queries,
+            None, // list path: DB fields only — no MDX re-parse
+        );
 
         if row.gsc.impressions < filter.min_impressions {
             continue;
@@ -232,6 +245,9 @@ pub fn list_articles_catalog(
 }
 
 /// Full package for one article: catalog + body/outline + queries + neighbors.
+///
+/// MDX source is read/parsed **once**; SERP enrichment and [`ArticleContent`]
+/// are derived from that single materialization.
 pub fn get_article_package(
     conn: &Connection,
     project_id: &str,
@@ -258,31 +274,36 @@ pub fn get_article_package(
     let (start, end) = recent_window(period_days);
     let indexing_by_slug = indexing_status_map(conn, project_id);
 
+    let normalized_slug = normalize_url_slug(&article.url_slug);
+    let page = resolve_page_url(&page_index, &normalized_slug);
+    let metrics = page.as_ref().and_then(|p| {
+        db::gsc_page_daily_window_metrics(conn, project_id, p, &start, &end)
+            .ok()
+            .flatten()
+    });
+    let top_queries = load_top_queries(conn, project_id, article.id);
+    let indexing_status = indexing_by_slug.get(&normalized_slug).cloned();
+
+    // Single MDX materialization → SERP enrichment + content package.
+    let materialized = materialize_article(project_path, article);
     let catalog = build_catalog_row(
-        conn,
-        project_id,
-        project_path,
         article,
         period_days,
-        &page_index,
-        &start,
-        &end,
-        &indexing_by_slug,
-        true,
-        true,
-    )?;
-
-    let content = load_article_content(project_path, article);
-    let queries = catalog.top_queries.clone();
+        metrics.as_ref(),
+        indexing_status,
+        top_queries.clone(),
+        Some(&materialized.enrichment),
+    );
+    let content = materialized.content;
     let query_cannibalization =
-        build_query_cannibalization(conn, project_id, article.id, &articles, &queries)?;
+        build_query_cannibalization(conn, project_id, article.id, &articles, &top_queries)?;
 
     Ok(ArticlePackage {
         article_id: article.id,
         slug: catalog.slug.clone(),
         catalog,
         content,
-        queries,
+        queries: top_queries,
         query_cannibalization,
         neighbors: vec![],
         validation: ValidationStub {
@@ -294,24 +315,30 @@ pub fn get_article_package(
 
 // ── Catalog row builder ──────────────────────────────────────────────────────
 
+/// File-derived SERP/body fields (package path only).
+struct FileEnrichment {
+    serp_title: Option<String>,
+    meta_description: Option<String>,
+    h1: Option<String>,
+    has_faq: bool,
+    body_word_count: i64,
+}
+
+/// One MDX materialization shared by package catalog enrichment + content.
+struct MaterializedArticle {
+    enrichment: FileEnrichment,
+    content: ArticleContent,
+}
+
 fn build_catalog_row(
-    conn: &Connection,
-    project_id: &str,
-    project_path: &str,
     article: &Article,
     period_days: i64,
-    page_index: &[(String, String)],
-    start: &str,
-    end: &str,
-    indexing_by_slug: &HashMap<String, String>,
-    include_queries: bool,
-    enrich_from_file: bool,
-) -> Result<ArticleCatalogRow> {
+    metrics: Option<&GscDailyWindowMetrics>,
+    indexing_status: Option<String>,
+    top_queries: Vec<QueryMetric>,
+    file_enrichment: Option<&FileEnrichment>,
+) -> ArticleCatalogRow {
     let slug = normalize_url_slug(&article.url_slug);
-    let page = resolve_page_url(page_index, &slug);
-    let metrics = page
-        .as_ref()
-        .and_then(|p| window_metrics(conn, project_id, p, start, end));
     let (impressions, clicks, position) = match metrics {
         Some(m) => (m.impressions, m.clicks, m.position),
         None => (0.0, 0.0, 0.0),
@@ -324,46 +351,19 @@ fn build_catalog_row(
     let mut word_count = article.word_count;
     let mut serp_title = article.title.clone();
 
-    if enrich_from_file {
-        if let Some(source) = read_article_source(project_path, article) {
-            let (fm, body) = crate::engine::exec::utils::parse_frontmatter(&source);
-            if let Some(t) = fm.get("title").filter(|s| !s.is_empty()) {
-                serp_title = t.clone();
-            }
-            meta_description = fm
-                .get("description")
-                .cloned()
-                .or_else(|| fm.get("metaDescription").cloned())
-                .filter(|s| !s.is_empty());
-            h1 = extract_h1(&body);
-            has_faq = crate::engine::exec::audit_health::has_faq_schema(&source);
-            let body_wc = count_words(&body) as i64;
-            if body_wc > 0 {
-                word_count = body_wc;
-            }
+    if let Some(enr) = file_enrichment {
+        if let Some(ref t) = enr.serp_title {
+            serp_title = t.clone();
+        }
+        meta_description = enr.meta_description.clone();
+        h1 = enr.h1.clone();
+        has_faq = enr.has_faq;
+        if enr.body_word_count > 0 {
+            word_count = enr.body_word_count;
         }
     }
 
-    let top_queries = if include_queries {
-        db::get_ctr_query_metrics(conn, project_id, article.id)
-            .unwrap_or_default()
-            .into_iter()
-            .take(10)
-            .map(|q| QueryMetric {
-                query: q.query,
-                impressions: q.impressions,
-                clicks: q.clicks,
-                avg_position: q.avg_position,
-                ctr: q.ctr,
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    let indexing_status = indexing_by_slug.get(&slug).cloned();
-
-    Ok(ArticleCatalogRow {
+    ArticleCatalogRow {
         article_id: article.id,
         slug: slug.clone(),
         url: format!("/blog/{slug}"),
@@ -403,21 +403,61 @@ fn build_catalog_row(
             embedding_model: None,
             has_embedding: false,
         },
-    })
+    }
 }
 
-fn load_article_content(project_path: &str, article: &Article) -> ArticleContent {
+/// Read/parse MDX once; derive SERP enrichment + body/outline content.
+fn materialize_article(project_path: &str, article: &Article) -> MaterializedArticle {
     let source = read_article_source(project_path, article).unwrap_or_default();
     let (frontmatter, body) = split_content_parts(&source);
     let outline = extract_outline(&body);
     let body_markdown = cap_body(&body);
 
-    ArticleContent {
-        file: article.file.clone(),
-        frontmatter,
-        body_markdown,
-        outline,
+    let serp_title = frontmatter
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let meta_description = frontmatter
+        .get("description")
+        .or_else(|| frontmatter.get("metaDescription"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let h1 = extract_h1(&body);
+    let has_faq = crate::engine::exec::audit_health::has_faq_schema(&source);
+    let body_word_count = count_words(&body) as i64;
+
+    MaterializedArticle {
+        enrichment: FileEnrichment {
+            serp_title,
+            meta_description,
+            h1,
+            has_faq,
+            body_word_count,
+        },
+        content: ArticleContent {
+            file: article.file.clone(),
+            frontmatter,
+            body_markdown,
+            outline,
+        },
     }
+}
+
+fn load_top_queries(conn: &Connection, project_id: &str, article_id: i64) -> Vec<QueryMetric> {
+    db::get_ctr_query_metrics(conn, project_id, article_id)
+        .unwrap_or_default()
+        .into_iter()
+        .take(10)
+        .map(|q| QueryMetric {
+            query: q.query,
+            impressions: q.impressions,
+            clicks: q.clicks,
+            avg_position: q.avg_position,
+            ctr: q.ctr,
+        })
+        .collect()
 }
 
 fn split_content_parts(source: &str) -> (serde_json::Value, String) {
@@ -565,18 +605,6 @@ fn resolve_page_url(page_index: &[(String, String)], slug: &str) -> Option<Strin
         .iter()
         .find(|(s, page)| s == slug || page_matches_slug(page, slug))
         .map(|(_, page)| page.clone())
-}
-
-fn window_metrics(
-    conn: &Connection,
-    project_id: &str,
-    page: &str,
-    start: &str,
-    end: &str,
-) -> Option<GscDailyWindowMetrics> {
-    db::gsc_page_daily_window_metrics(conn, project_id, page, start, end)
-        .ok()
-        .flatten()
 }
 
 fn recent_window(period_days: i64) -> (String, String) {

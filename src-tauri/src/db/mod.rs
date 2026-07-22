@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::Result;
@@ -1915,26 +1916,25 @@ pub fn gsc_page_daily_window_metrics(
     end_date: &str,
 ) -> Result<Option<GscDailyWindowMetrics>> {
     let row = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(clicks), 0), COALESCE(SUM(impressions), 0)
+        "SELECT COUNT(*), COALESCE(SUM(clicks), 0), COALESCE(SUM(impressions), 0),
+                COALESCE(SUM(position * impressions) / NULLIF(SUM(impressions), 0), 0)
          FROM gsc_page_daily
          WHERE project_id = ?1 AND page = ?2 AND date >= ?3 AND date <= ?4",
         rusqlite::params![project_id, page, start_date, end_date],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?, r.get::<_, f64>(2)?)),
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, f64>(1)?,
+                r.get::<_, f64>(2)?,
+                r.get::<_, f64>(3)?,
+            ))
+        },
     )?;
 
-    let (days, clicks, impressions) = row;
+    let (days, clicks, impressions, position) = row;
     if days == 0 {
         return Ok(None);
     }
-
-    // Impressions-weighted average position across the window's days.
-    let position: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(position * impressions) / NULLIF(SUM(impressions), 0), 0)
-         FROM gsc_page_daily
-         WHERE project_id = ?1 AND page = ?2 AND date >= ?3 AND date <= ?4",
-        rusqlite::params![project_id, page, start_date, end_date],
-        |r| r.get(0),
-    )?;
 
     Ok(Some(GscDailyWindowMetrics {
         days_with_data: days,
@@ -1942,6 +1942,49 @@ pub fn gsc_page_daily_window_metrics(
         impressions,
         position,
     }))
+}
+
+/// Aggregated snapshot metrics for **all** pages over a date window (inclusive).
+///
+/// Same semantics as [`gsc_page_daily_window_metrics`]: position is the
+/// impressions-weighted average. Pages with no rows in the window are omitted.
+/// Prefer this for overview/catalog joins so callers avoid O(pages) SQL round-trips.
+pub fn gsc_page_daily_window_metrics_bulk(
+    conn: &Connection,
+    project_id: &str,
+    start_date: &str,
+    end_date: &str,
+) -> Result<HashMap<String, GscDailyWindowMetrics>> {
+    let mut stmt = conn.prepare(
+        "SELECT page,
+                COUNT(*) AS days_with_data,
+                COALESCE(SUM(clicks), 0),
+                COALESCE(SUM(impressions), 0),
+                COALESCE(SUM(position * impressions) / NULLIF(SUM(impressions), 0), 0)
+         FROM gsc_page_daily
+         WHERE project_id = ?1 AND date >= ?2 AND date <= ?3
+         GROUP BY page",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![project_id, start_date, end_date],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                GscDailyWindowMetrics {
+                    days_with_data: r.get(1)?,
+                    clicks: r.get(2)?,
+                    impressions: r.get(3)?,
+                    position: r.get(4)?,
+                },
+            ))
+        },
+    )?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (page, metrics) = row?;
+        map.insert(page, metrics);
+    }
+    Ok(map)
 }
 
 /// Distinct pages with snapshot rows for a project (used for slug matching).
@@ -2687,6 +2730,58 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+
+    #[test]
+    fn gsc_page_daily_window_metrics_bulk_matches_single_page_semantics() {
+        let conn = in_memory_db();
+        let rows = vec![
+            daily_row("https://example.com/blog/foo", "2026-07-01", 1.0, 10.0),
+            daily_row("https://example.com/blog/foo", "2026-07-02", 3.0, 30.0),
+            daily_row("https://example.com/blog/bar", "2026-07-01", 2.0, 20.0),
+            // Outside the window — must be excluded.
+            daily_row("https://example.com/blog/foo", "2026-06-01", 100.0, 1000.0),
+            daily_row("https://example.com/blog/baz", "2026-06-15", 9.0, 90.0),
+        ];
+        insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+        let bulk = gsc_page_daily_window_metrics_bulk(
+            &conn,
+            "proj1",
+            "2026-07-01",
+            "2026-07-31",
+        )
+        .unwrap();
+
+        assert_eq!(bulk.len(), 2);
+
+        let foo = bulk
+            .get("https://example.com/blog/foo")
+            .expect("foo in bulk");
+        let foo_single = gsc_page_daily_window_metrics(
+            &conn,
+            "proj1",
+            "https://example.com/blog/foo",
+            "2026-07-01",
+            "2026-07-31",
+        )
+        .unwrap()
+        .expect("foo single");
+        assert_eq!(*foo, foo_single);
+        assert_eq!(foo.days_with_data, 2);
+        assert_eq!(foo.clicks, 4.0);
+        assert_eq!(foo.impressions, 40.0);
+        assert_eq!(foo.position, 5.0);
+
+        let bar = bulk
+            .get("https://example.com/blog/bar")
+            .expect("bar in bulk");
+        assert_eq!(bar.days_with_data, 1);
+        assert_eq!(bar.clicks, 2.0);
+        assert_eq!(bar.impressions, 20.0);
+
+        assert!(!bulk.contains_key("https://example.com/blog/baz"));
+        assert!(!bulk.contains_key("https://example.com/blog/unknown"));
     }
 
     #[test]
