@@ -9,9 +9,13 @@
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;
-use crate::models::content_review::{ContentFixPatch, ReviewSuggestion};
+use crate::models::content_review::ContentFixPatch;
 use crate::models::task::Task;
 use crate::rig::provider::LlmBackend;
+
+use super::fix_context::{
+    load_content_fix_context, pin_content_fix_patch_identity, ContentFixContext,
+};
 
 pub(crate) async fn exec_fix_content_article_generate(
     _step: &crate::engine::workflows::WorkflowStep,
@@ -45,8 +49,8 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     project_path: &str,
     backend: &LlmBackend,
 ) -> StepResult {
-    // 1. Load context
-    let context = match extract_context(task) {
+    // 1. Load context (shared typed loader)
+    let context = match load_content_fix_context(task) {
         Ok(Some(c)) => c,
         Ok(None) => {
             return StepResult::fail("No content_fix_context artifact found on task".to_string());
@@ -115,7 +119,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     };
 
     // 5. Pin identity from context (never trust model file/article_id paths)
-    pin_patch_identity(&mut patch, &context);
+    pin_content_fix_patch_identity(&mut patch, &context);
 
     // 6. Normalize and validate
     let target_kw = context.target_keyword.as_deref();
@@ -144,7 +148,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
 
         match repair_content_fix_patch_with_backend(&scoped_backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
-                pin_patch_identity(&mut repaired, &context);
+                pin_content_fix_patch_identity(&mut repaired, &context);
                 let _repair_notes =
                     normalize_patch_before_validation(&mut repaired, &original_content);
                 let mut repair_errors = validate_patch_before_write(
@@ -202,86 +206,12 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     }
 }
 
-// ─── Context loading ──────────────────────────────────────────────────────────
-
-struct FixContext {
-    pub article_id: i64,
-    pub file: String,
-    pub article_title: String,
-    pub target_keyword: Option<String>,
-    pub suggestions: Vec<ReviewSuggestion>,
-    /// Deterministic valid internal link targets, enriched by the context
-    /// step from `task_store::load_valid_link_targets`. Empty for historical
-    /// artifacts or when the lookup failed — the prompt then falls back to
-    /// the "do not link when unsure" rule.
-    pub available_link_slugs: Vec<String>,
-}
-
-/// Force patch identity from context so model-hallucinated paths never win.
-fn pin_patch_identity(patch: &mut ContentFixPatch, context: &FixContext) {
-    patch.file = context.file.clone();
-    patch.article_id = context.article_id;
-}
-
-fn extract_context(task: &Task) -> Result<Option<FixContext>, String> {
-    let context_json = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "content_fix_context")
-        .and_then(|a| a.content.as_deref())
-        .unwrap_or("");
-
-    if context_json.is_empty() {
-        return Ok(None);
-    }
-
-    let value: serde_json::Value = serde_json::from_str(context_json).map_err(|e| e.to_string())?;
-
-    let article_id = value["article_id"].as_i64().unwrap_or(0);
-    let file = value["article_file"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let article_title = value["article_title"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let target_keyword = value["target_keyword"]
-        .as_str()
-        .map(|s| normalize_target_keyword(s, article_id));
-
-    let suggestions: Vec<ReviewSuggestion> = value["suggestions"]
-        .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(|s| serde_json::from_value(s.clone()).ok())
-        .collect();
-
-    let available_link_slugs: Vec<String> = value["available_link_slugs"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(Some(FixContext {
-        article_id,
-        file,
-        article_title,
-        target_keyword,
-        suggestions,
-        available_link_slugs,
-    }))
-}
-
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 
 fn build_fix_prompt(
     _task: &Task,
     project_path: &str,
-    context: &FixContext,
+    context: &ContentFixContext,
     original_content: &str,
 ) -> Result<String, String> {
     let repo_root = Path::new(project_path);
@@ -425,29 +355,6 @@ Only include fields that need to change. Do not include title/description/intro/
     );
 
     Ok(prompt)
-}
-
-// ─── Keyword normalization ────────────────────────────────────────────────────
-
-/// Truncate overly long target keywords (full questions, sentences, paragraphs)
-/// that were mistakenly stored as "target_keyword" instead of a short phrase.
-///
-/// A keyword longer than 100 characters is almost certainly not a keyword — it is
-/// a full question or description that snuck in from the content pipeline. Truncate
-/// it so downstream prompts don't feed 50-word "keywords" to the AI.
-pub(crate) fn normalize_target_keyword(kw: &str, article_id: i64) -> String {
-    const MAX_KEYWORD_CHARS: usize = 100;
-    if kw.len() <= MAX_KEYWORD_CHARS {
-        return kw.trim().to_string();
-    }
-    log::warn!(
-        "[fix_generate] target_keyword for article {} is {} chars (max {}). Truncating.",
-        article_id,
-        kw.len(),
-        MAX_KEYWORD_CHARS
-    );
-    let truncated: String = kw.chars().take(MAX_KEYWORD_CHARS).collect();
-    format!("{}…", truncated.trim_end())
 }
 
 // ─── Patch normalization ─────────────────────────────────────────────────────
@@ -839,8 +746,8 @@ mod tests {
         ctx
     }
 
-    fn fix_context(link_slugs: Vec<String>) -> FixContext {
-        FixContext {
+    fn fix_context(link_slugs: Vec<String>) -> ContentFixContext {
+        ContentFixContext {
             article_id: 7,
             file: "content/blog/slug.mdx".to_string(),
             article_title: "Some Article".to_string(),
@@ -855,7 +762,7 @@ mod tests {
         let task = task_with_context_artifact(context_json(serde_json::json!({
             "available_link_slugs": ["alpha-post", "beta-post"]
         })));
-        let ctx = extract_context(&task).unwrap().unwrap();
+        let ctx = load_content_fix_context(&task).unwrap().unwrap();
         assert_eq!(ctx.available_link_slugs, vec!["alpha-post", "beta-post"]);
     }
 
@@ -864,7 +771,7 @@ mod tests {
         // Historical artifacts predate the enrichment — absence must degrade
         // to an empty list, not an error.
         let task = task_with_context_artifact(context_json(serde_json::json!({})));
-        let ctx = extract_context(&task).unwrap().unwrap();
+        let ctx = load_content_fix_context(&task).unwrap().unwrap();
         assert!(ctx.available_link_slugs.is_empty());
     }
 
@@ -898,7 +805,7 @@ mod tests {
             error: None,
             changes: Default::default(),
         };
-        pin_patch_identity(&mut patch, &ctx);
+        pin_content_fix_patch_identity(&mut patch, &ctx);
         assert_eq!(patch.file, ctx.file);
         assert_eq!(patch.article_id, ctx.article_id);
         assert_eq!(patch.file, "content/blog/slug.mdx");

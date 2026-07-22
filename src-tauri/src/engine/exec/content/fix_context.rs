@@ -4,12 +4,121 @@
 /// 2. Finds the article's recommendations by article_id (from task artifact).
 /// 3. Reads the current MDX file.
 /// 4. Builds a structured context JSON consumed by the generate step.
+///
+/// Also owns the **shared typed loader** for that artifact (`ContentFixContext`
+/// + `load_content_fix_context`) so generate, apply, and pin paths do not
+/// each re-walk the same JSON with ad-hoc `Value` indexing.
 use std::path::Path;
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
+use crate::models::content_review::{ContentFixPatch, ReviewSuggestion};
 use crate::models::task::Task;
-use super::fix_generate::normalize_target_keyword;
+
+// ─── Shared typed context (content_fix_context artifact) ─────────────────────
+
+/// Typed view of the `content_fix_context` artifact produced by this step and
+/// consumed by generate (prompt/pin/validate) and apply (identity pin + empty coverage).
+#[derive(Debug, Clone)]
+pub(crate) struct ContentFixContext {
+    pub article_id: i64,
+    /// Repo-relative path from `article_file` in the artifact.
+    pub file: String,
+    pub article_title: String,
+    pub target_keyword: Option<String>,
+    pub suggestions: Vec<ReviewSuggestion>,
+    /// Deterministic valid internal link targets, enriched by the context
+    /// step from `task_store::load_valid_link_targets`. Empty for historical
+    /// artifacts or when the lookup failed — the prompt then falls back to
+    /// the "do not link when unsure" rule.
+    pub available_link_slugs: Vec<String>,
+}
+
+/// Load and parse the `content_fix_context` task artifact.
+///
+/// Returns `Ok(None)` when the artifact is missing or empty. Returns `Err`
+/// only when JSON is present but unparseable (generate treats that as fail).
+pub(crate) fn load_content_fix_context(task: &Task) -> Result<Option<ContentFixContext>, String> {
+    let context_json = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "content_fix_context")
+        .and_then(|a| a.content.as_deref())
+        .unwrap_or("");
+
+    if context_json.is_empty() {
+        return Ok(None);
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_str(context_json).map_err(|e| e.to_string())?;
+
+    let article_id = value["article_id"].as_i64().unwrap_or(0);
+    let file = value["article_file"].as_str().unwrap_or("").to_string();
+    let article_title = value["article_title"].as_str().unwrap_or("").to_string();
+    let target_keyword = value["target_keyword"]
+        .as_str()
+        .map(|s| normalize_target_keyword(s, article_id));
+
+    let suggestions: Vec<ReviewSuggestion> = value["suggestions"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|s| serde_json::from_value(s.clone()).ok())
+        .collect();
+
+    let available_link_slugs: Vec<String> = value["available_link_slugs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Some(ContentFixContext {
+        article_id,
+        file,
+        article_title,
+        target_keyword,
+        suggestions,
+        available_link_slugs,
+    }))
+}
+
+/// Force patch identity from context so model-hallucinated paths never win.
+pub(crate) fn pin_content_fix_patch_identity(
+    patch: &mut ContentFixPatch,
+    context: &ContentFixContext,
+) {
+    if !context.file.is_empty() {
+        patch.file = context.file.clone();
+    }
+    if context.article_id != 0 {
+        patch.article_id = context.article_id;
+    }
+}
+
+/// Truncate overly long target keywords (full questions, sentences, paragraphs)
+/// that were mistakenly stored as "target_keyword" instead of a short phrase.
+///
+/// A keyword longer than 100 characters is almost certainly not a keyword — it is
+/// a full question or description that snuck in from the content pipeline. Truncate
+/// it so downstream prompts don't feed 50-word "keywords" to the AI.
+pub(crate) fn normalize_target_keyword(kw: &str, article_id: i64) -> String {
+    const MAX_KEYWORD_CHARS: usize = 100;
+    if kw.len() <= MAX_KEYWORD_CHARS {
+        return kw.trim().to_string();
+    }
+    log::warn!(
+        "[content_fix] target_keyword for article {} is {} chars (max {}). Truncating.",
+        article_id,
+        kw.len(),
+        MAX_KEYWORD_CHARS
+    );
+    let truncated: String = kw.chars().take(MAX_KEYWORD_CHARS).collect();
+    format!("{}…", truncated.trim_end())
+}
 
 pub(crate) fn exec_fix_content_article_context(
     task: &Task,
