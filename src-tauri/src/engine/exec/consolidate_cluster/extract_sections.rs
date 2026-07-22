@@ -224,6 +224,7 @@ pub(crate) fn exec_merge_extract_sections(task: &Task, project_path: &str) -> St
             output_json.len(),
         ),
         output: Some(output_json),
+        artifact_key: None,
     }
 }
 

@@ -505,6 +505,7 @@ Helpful, technical, and concise.
                 success: true,
                 message: "Reddit results fetch — starting DB query".to_string(),
                 output: None,
+                artifact_key: None,
             },
             other => panic!(
                 "reddit_fetch_results step kind not recognized, got: {}",

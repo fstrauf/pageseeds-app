@@ -137,6 +137,7 @@ pub fn exec_clarity_summarise(task: &Task, project_path: &str, conn: &Connection
         success: true,
         message: format!("Summarised {} pages into clarity_summary.json", summary.page_scores.len()),
         output: Some(serde_json::to_string(&summary.meta).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 
@@ -203,6 +204,7 @@ pub fn exec_clarity_investigate(
             summary.top_findings.len()
         ),
         output: Some(serde_json::to_string(&summary.top_findings).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

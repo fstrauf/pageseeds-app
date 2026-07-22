@@ -102,6 +102,7 @@ pub async fn exec_research_workflow_step(
                             output.len()
                         ),
                         output: Some(output),
+                        artifact_key: None,
                     }
                 }
                 Ok(Err(e)) => {
@@ -154,6 +155,7 @@ where
                 success: true,
                 message: format!("Structured extraction for '{}' complete", step_name),
                 output: Some(json),
+                artifact_key: None,
             }
         }
         Err(e) => {

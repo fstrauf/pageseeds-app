@@ -449,6 +449,7 @@ pub fn exec_research_final_selection(
                 success: true,
                 message: msg,
                 output: Some(json),
+                artifact_key: None,
             }
         }
         Err(e) => StepResult::fail(format!("Keyword selection failed: {}", e)),

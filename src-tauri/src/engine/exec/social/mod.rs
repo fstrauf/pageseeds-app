@@ -40,6 +40,7 @@ pub fn exec_social_load_templates(task: &Task, _project_path: &str) -> StepResul
         success: true,
         message: format!("Loaded {} template configurations", template_ids.len()),
         output: Some(serde_json::to_string(&template_ids).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 
@@ -109,6 +110,7 @@ pub fn exec_social_save_campaign(
             saved_count,
             posts.len()
         )),
+        artifact_key: None,
     }
 }
 
@@ -138,6 +140,7 @@ pub fn exec_social_regenerate_single(
         success: true,
         message: "Post regeneration initiated".to_string(),
         output: None,
+        artifact_key: None,
     }
 }
 
@@ -146,6 +149,7 @@ pub fn exec_social_update_post(_task: &Task, _project_path: &str) -> StepResult 
         success: true,
         message: "Post updated".to_string(),
         output: None,
+        artifact_key: None,
     }
 }
 

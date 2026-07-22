@@ -491,6 +491,7 @@ pub(crate) fn exec_gsc_sync_articles(
             target_keyword_updated
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

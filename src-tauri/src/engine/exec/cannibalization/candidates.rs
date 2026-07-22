@@ -52,6 +52,7 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
             success: true,
             message: "No clusters found — nothing to select.".to_string(),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -323,5 +324,6 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
             clusters_len
         ),
         output: Some(serde_json::to_string_pretty(&candidates_doc).unwrap_or_default()),
+        artifact_key: None,
     }
 }

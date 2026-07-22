@@ -124,7 +124,12 @@ pub async fn exec_investigate(
 
     // Standalone investigate always uses Full — tools and catalog from one kit.
     let kit = investigation_kit(ctx.clone(), InvestigationAccess::Full);
-    let preamble = build_investigation_preamble(&ctx, &kit.catalog).await;
+    // Core context + catalog, plus standalone freeform JSON output contract.
+    let preamble = format!(
+        "{}\n\n---\n\n{}",
+        build_investigation_preamble(&ctx, &kit.catalog).await,
+        standalone_investigation_output_contract()
+    );
     let tools = kit.tools;
 
     let prompt = format!(
@@ -155,7 +160,12 @@ pub async fn exec_investigate(
     Ok(parsed)
 }
 
-/// Build the investigation preamble from catalog text (from [`investigation_kit`]).
+/// Build the shared investigation core preamble: project context + tool catalog.
+///
+/// Does **not** include an output contract. Callers that need freeform JSON
+/// (standalone [`exec_investigate`]) must append
+/// [`standalone_investigation_output_contract`]. Content-review investigate
+/// layers its own framing and uses a typed Extractor later instead.
 ///
 /// Standalone investigate uses the kit with [`InvestigationAccess::Full`].
 /// In-workflow callers (issue #80) should use [`InvestigationAccess::ReadOnly`].
@@ -187,27 +197,28 @@ pub(crate) async fn build_investigation_preamble(
     );
 
     preamble.push_str(catalog);
-    preamble.push_str("\n\n---\n\n");
-
-    // Output contract
-    preamble.push_str(
-        "Output format — return your findings as valid JSON:\n\
-        {\n\
-          \"answer\": \"Your natural language synthesis of all findings\",\n\
-          \"summary\": \"1-2 sentence TL;DR\",\n\
-          \"findings\": [\n\
-            {\n\
-              \"title\": \"Short issue title\",\n\
-              \"description\": \"What the issue is and why it matters\",\n\
-              \"evidence\": \"What tool data supports this finding\",\n\
-              \"severity\": \"critical\" | \"warning\" | \"info\",\n\
-              \"fix_type\": \"auto_fixable\" | \"developer_actionable\" | \"hybrid\" | \"informational\"\n\
-            }\n\
-          ]\n\
-        }"
-    );
-
     preamble
+}
+
+/// Freeform JSON output contract for standalone [`exec_investigate`] only.
+///
+/// Not used by content-review investigate, which extracts typed
+/// `InvestigationFindings` after a prose analysis turn.
+pub(crate) fn standalone_investigation_output_contract() -> &'static str {
+    "Output format — return your findings as valid JSON:\n\
+    {\n\
+      \"answer\": \"Your natural language synthesis of all findings\",\n\
+      \"summary\": \"1-2 sentence TL;DR\",\n\
+      \"findings\": [\n\
+        {\n\
+          \"title\": \"Short issue title\",\n\
+          \"description\": \"What the issue is and why it matters\",\n\
+          \"evidence\": \"What tool data supports this finding\",\n\
+          \"severity\": \"critical\" | \"warning\" | \"info\",\n\
+          \"fix_type\": \"auto_fixable\" | \"developer_actionable\" | \"hybrid\" | \"informational\"\n\
+        }\n\
+      ]\n\
+    }"
 }
 
 #[cfg(test)]
@@ -246,5 +257,18 @@ mod tests {
         assert!(full.contains("[tools.run_content_audit]"));
         assert!(full.contains("[tools.write_feature_spec]"));
         assert!(full.contains("mutates = true"));
+    }
+
+    #[test]
+    fn core_preamble_excludes_standalone_json_contract() {
+        let catalog = investigation_catalog(InvestigationAccess::ReadOnly);
+        // build_investigation_preamble is async and may open DB; assert the
+        // contract helper is separate and the core path must not embed it.
+        let contract = standalone_investigation_output_contract();
+        assert!(contract.contains("Output format — return your findings as valid JSON"));
+        assert!(contract.contains("\"answer\""));
+        // Core preamble is only context + catalog; contract is appended by
+        // exec_investigate only.
+        assert!(!catalog.contains("Output format — return your findings as valid JSON"));
     }
 }

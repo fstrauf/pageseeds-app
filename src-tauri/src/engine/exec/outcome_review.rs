@@ -277,6 +277,7 @@ pub(crate) fn exec_content_outcome_compare(
         success: true,
         message: format!("Content outcome for {}: {}", slug, classification),
         output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

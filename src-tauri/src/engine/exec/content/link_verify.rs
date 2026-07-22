@@ -95,6 +95,7 @@ fn verify_links_in_file(
             success: true,
             message: format!("Link verify passed: no /blog/ links in {}", file_name),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -156,6 +157,7 @@ fn verify_links_in_file(
                 file_name
             ),
             output: None,
+            artifact_key: None,
         };
     }
 
@@ -184,6 +186,7 @@ fn verify_links_in_file(
             file_name
         ),
         output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

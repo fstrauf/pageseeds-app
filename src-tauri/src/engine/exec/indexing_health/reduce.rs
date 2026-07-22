@@ -137,6 +137,7 @@ pub(crate) fn exec_ihc_reduce_plan(task: &Task, project_path: &str) -> StepResul
         success: true,
         message: summary_msg,
         output: Some(plan_json),
+        artifact_key: None,
     }
 }
 

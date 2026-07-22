@@ -91,6 +91,7 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
             csv_path.display()
         ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

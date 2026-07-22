@@ -96,6 +96,7 @@ pub(crate) fn exec_territory_load_recommendation(task: &Task, project_path: &str
         success: true,
         message: format!("Loaded territory recommendation for theme: {}", theme),
         output: Some(json),
+        artifact_key: None,
     }
 }
 
@@ -160,6 +161,7 @@ pub(crate) fn exec_territory_build_context(task: &Task, project_path: &str) -> S
             articles.as_array().map(|a| a.len()).unwrap_or(0)
         ),
         output: Some(context_json),
+        artifact_key: None,
     }
 }
 
@@ -227,6 +229,7 @@ pub(crate) async fn exec_territory_strategy(
                     strategy.theme
                 ),
                 output: Some(strategy_json),
+                artifact_key: None,
             }
         }
         Err(e) => StepResult::fail(format!("Structured extraction failed: {}", e)),
@@ -273,6 +276,7 @@ pub(crate) fn exec_territory_apply(
             warning_suffix
         ),
         output: Some(normalized_json),
+        artifact_key: None,
     }
 }
 

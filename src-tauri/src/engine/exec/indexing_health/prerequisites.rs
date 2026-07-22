@@ -185,6 +185,7 @@ pub(crate) fn exec_ihc_check_prerequisites(task: &Task, project_path: &str) -> S
         success: true,
         message: msg,
         output: Some(output),
+        artifact_key: None,
     }
 }
 

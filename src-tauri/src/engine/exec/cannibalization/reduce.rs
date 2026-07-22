@@ -217,5 +217,6 @@ pub(crate) fn exec_can_reduce_strategy(_task: &Task, project_path: &str) -> Step
             guard_degraded_count
         ),
         output: Some(serde_json::to_string_pretty(&strategy).unwrap_or_default()),
+        artifact_key: None,
     }
 }

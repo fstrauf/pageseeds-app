@@ -146,5 +146,6 @@ pub fn exec_collect_clarity(task: &Task, project_path: &str, conn: &Connection) 
             requests_made
         ),
         output: Some(serde_json::to_string(&collection.meta).unwrap_or_default()),
+        artifact_key: None,
     }
 }

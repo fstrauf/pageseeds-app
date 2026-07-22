@@ -41,6 +41,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         success: true,
                         message: format!("Manual step '{}' — requires user action", name),
                         output: None,
+                        artifact_key: None,
                     }
                 })
             }),
@@ -150,6 +151,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         success: true,
                         message: "Reddit enrichment pass — starting AI scoring loop".to_string(),
                         output: None,
+                        artifact_key: None,
                     }
                 })
             }),
@@ -163,6 +165,7 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
                         success: true,
                         message: "Reddit results fetch — starting DB query".to_string(),
                         output: None,
+                        artifact_key: None,
                     }
                 })
             }),

@@ -106,6 +106,7 @@ pub(crate) fn exec_gsc_summarise(task: &Task, project_path: &str) -> StepResult 
             by_reason.len()
         ),
         output: Some(summary_str),
+        artifact_key: None,
     }
 }
 
@@ -160,6 +161,7 @@ pub(crate) fn exec_gsc_investigate(
             success: true,
             message: format!("GSC investigation complete ({} chars)", output.len()),
             output: Some(output),
+            artifact_key: None,
         },
         Err(e) => StepResult::fail(format!("GSC investigation agent failed: {}", e)),
     }

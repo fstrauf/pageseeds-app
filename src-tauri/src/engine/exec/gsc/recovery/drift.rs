@@ -50,5 +50,6 @@ pub(crate) fn exec_gsc_recovery_drift(task: &Task, project_path: &str) -> StepRe
                 .count(),
         ),
         output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
+        artifact_key: None,
     }
 }

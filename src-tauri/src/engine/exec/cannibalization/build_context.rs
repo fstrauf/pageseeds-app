@@ -358,5 +358,6 @@ pub(crate) fn exec_can_build_context(task: &Task, project_path: &str) -> StepRes
                 .unwrap_or_default(),
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }

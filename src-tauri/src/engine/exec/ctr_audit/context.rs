@@ -394,6 +394,7 @@ pub(crate) fn exec_ctr_build_context(
         success: true,
         message: msg,
         output: Some(full_str),
+        artifact_key: None,
     }
 }
 

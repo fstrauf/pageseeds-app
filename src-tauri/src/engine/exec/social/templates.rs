@@ -40,6 +40,7 @@ pub fn exec_social_design_template(
                     success: true,
                     message: format!("Template '{}' designed successfully", template.name),
                     output: Some(serde_json::to_string(&template).unwrap_or_default()),
+                    artifact_key: None,
                 }
             }
             Err(e) => StepResult::fail_with_output(format!("Failed to parse template output: {}", e), output),
@@ -53,5 +54,6 @@ pub fn exec_social_save_template(_task: &Task, _project_path: &str) -> StepResul
         success: true,
         message: "Template saved".to_string(),
         output: None,
+        artifact_key: None,
     }
 }

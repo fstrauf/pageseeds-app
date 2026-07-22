@@ -27,6 +27,7 @@ pub fn exec_social_extract_article(task: &Task, project_path: &str) -> StepResul
         success: true,
         message: format!("Extracted {} article sources", manifest.articles.len()),
         output: Some(format!("{{\"article_count\":{}}}", manifest.articles.len())),
+        artifact_key: None,
     }
 }
 
@@ -82,5 +83,6 @@ pub fn exec_social_collect_sources(task: &Task, project_path: &str) -> StepResul
         success: true,
         message: format!("Discovered {} content sources", total),
         output: Some(format!("{{\"total\":{}}}", total)),
+        artifact_key: None,
     }
 }

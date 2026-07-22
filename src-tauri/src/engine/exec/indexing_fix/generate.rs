@@ -133,6 +133,7 @@ pub(crate) fn exec_indexing_fix_generate(
         success: true,
         message: format!("Generated IndexingFixPlan for {}", ctx.url),
         output: Some(plan_json),
+        artifact_key: None,
     }
 }
 

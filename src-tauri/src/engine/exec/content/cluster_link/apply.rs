@@ -33,6 +33,7 @@ pub(crate) fn exec_cluster_link_apply(
             success: true,
             message: "No links to add — strategy found no gaps".to_string(),
             output: Some(r#"{"files_modified":0,"links_added":0,"changes":[]}"#.to_string()),
+            artifact_key: None,
         };
     }
 
@@ -370,5 +371,6 @@ pub(crate) fn exec_cluster_link_apply(
         message: format!("Applied {} links to {} files ({} recommendations, {} skipped)", links_added, files_modified, links_to_add.len(),
             skipped_missing_source + skipped_missing_target + skipped_unknown_slug + skipped_source_not_found + skipped_read_error + skipped_already_linked),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }

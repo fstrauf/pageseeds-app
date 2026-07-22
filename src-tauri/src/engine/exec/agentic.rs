@@ -747,6 +747,7 @@ pub async fn exec_agentic(
                 success: true,
                 message,
                 output: Some(output),
+                artifact_key: None,
             }
         }
         Ok(Err(err)) => {

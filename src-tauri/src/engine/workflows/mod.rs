@@ -120,6 +120,13 @@ pub struct StepResult {
     pub message: String,
     /// Raw stdout/stderr captured from CLI invocations.
     pub output: Option<String>,
+    /// Optional override for the SQLite artifact key when persisting `output`.
+    ///
+    /// When set, takes precedence over step param `ARTIFACT_NAME` and `step.name`.
+    /// Used when a single plan step can produce different schemas (e.g. content
+    /// review investigate vs recommend fallback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_key: Option<String>,
 }
 
 impl StepResult {
@@ -129,6 +136,7 @@ impl StepResult {
             success: false,
             message: message.into(),
             output: None,
+            artifact_key: None,
         }
     }
 
@@ -138,6 +146,7 @@ impl StepResult {
             success: false,
             message: message.into(),
             output: Some(output.into()),
+            artifact_key: None,
         }
     }
 
@@ -147,6 +156,7 @@ impl StepResult {
             success: false,
             message: message.into(),
             output,
+            artifact_key: None,
         }
     }
 
@@ -156,6 +166,7 @@ impl StepResult {
             success: true,
             message: message.into(),
             output: None,
+            artifact_key: None,
         }
     }
 
@@ -165,6 +176,13 @@ impl StepResult {
             success: true,
             message: message.into(),
             output: Some(output.into()),
+            artifact_key: None,
         }
+    }
+
+    /// Override the artifact key used when the executor persists `output`.
+    pub fn with_artifact_key(mut self, key: impl Into<String>) -> Self {
+        self.artifact_key = Some(key.into());
+        self
     }
 }

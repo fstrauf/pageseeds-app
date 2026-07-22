@@ -209,6 +209,7 @@ pub(crate) fn exec_fix_content_article_apply(
             })
             .to_string(),
         ),
+        artifact_key: None,
     }
 }
 

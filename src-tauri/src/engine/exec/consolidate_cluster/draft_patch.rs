@@ -136,6 +136,7 @@ pub(crate) fn exec_merge_draft_patch(
                 total_transitions
             ),
             output: Some(j),
+            artifact_key: None,
         },
         Err(e) => StepResult::fail(format!("Failed to serialize merge patch: {}", e)),
     }

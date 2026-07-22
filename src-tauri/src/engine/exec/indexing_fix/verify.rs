@@ -136,6 +136,7 @@ pub(crate) fn exec_indexing_fix_verify(task: &Task, project_path: &str) -> StepR
             verified.join(", ")
         ),
         output: Some(report.to_string()),
+        artifact_key: None,
     }
 }
 

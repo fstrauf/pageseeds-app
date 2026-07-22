@@ -41,6 +41,7 @@ pub(crate) fn exec_cluster_link_scan(
                             success: true,
                             message: format!("Link scan complete (cached): {}", summary),
                             output: Some(cached),
+                            artifact_key: None,
                         };
                     }
                 }
@@ -73,6 +74,7 @@ pub(crate) fn exec_cluster_link_scan(
                 r#"{"total_articles":0,"total_internal_links":0,"orphan_ids":[],"profiles":[]}"#
                     .to_string(),
             ),
+            artifact_key: None,
         };
     }
 
@@ -128,6 +130,7 @@ pub(crate) fn exec_cluster_link_scan(
                     }
                 ),
                 output: Some(json),
+                artifact_key: None,
             }
         }
         Err(e) => crate::engine::workflows::StepResult::fail(format!("Link scan failed: {}", e)),

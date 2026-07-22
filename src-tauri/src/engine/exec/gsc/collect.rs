@@ -352,5 +352,6 @@ pub(crate) fn exec_collect_gsc(
             sync_msg
         ),
         output: Some(serde_json::to_string_pretty(&collection).unwrap_or_default()),
+        artifact_key: None,
     }
 }

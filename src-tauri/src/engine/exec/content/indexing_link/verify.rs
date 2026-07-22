@@ -128,6 +128,7 @@ pub(crate) fn exec_indexing_link_verify(task: &Task, project_path: &str) -> Step
             )
         },
         output: Some(verification.to_string()),
+        artifact_key: None,
     }
 }
 

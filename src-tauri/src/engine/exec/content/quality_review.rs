@@ -116,6 +116,7 @@ pub(crate) fn exec_content_quality_context(
         success: true,
         message: format!("Loaded quality review context for {}", file),
         output: Some(context.to_string()),
+        artifact_key: None,
     }
 }
 
@@ -203,6 +204,7 @@ pub(crate) async fn exec_content_quality_review(
             review.cluster_fit_score
         ),
         output: Some(review_json),
+        artifact_key: None,
     }
 }
 

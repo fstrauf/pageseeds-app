@@ -160,6 +160,7 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
             sources.len()
         ),
         output: Some(context.to_string()),
+        artifact_key: None,
     }
 }
 

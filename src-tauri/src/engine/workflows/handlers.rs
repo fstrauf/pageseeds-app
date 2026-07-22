@@ -308,12 +308,18 @@ impl WorkflowHandler for ContentReviewHandler {
             WorkflowStep::new("content_review_sync", StepKind::ContentSync).optional(),
             // Step 4: tool-calling investigation when backend supports tools; otherwise
             // falls back to content_review_recommend inside the exec module.
-            // Artifact key is investigation_findings (not recommendations.json).
+            //
+            // Artifact keys are path-local (set on StepResult), not fixed here:
+            //   tool path    → investigation_findings (InvestigationFindings)
+            //   fallback     → content_review_recommend (ContentReviewRecommendations)
+            // Tool path intentionally does not write recommendations.json / spawn
+            // fix tasks until issue #81 owns proposed_tasks validation + picker.
+            // Do not re-add ContentReviewRecommend as a plan terminal or change
+            // task_definitions lifecycle metadata in this PR.
             WorkflowStep::new(
                 "content_review_investigate",
                 StepKind::ContentReviewInvestigate,
-            )
-            .with_param(step_params::ARTIFACT_NAME, "investigation_findings"),
+            ),
         ]
     }
 }
@@ -963,6 +969,8 @@ mod registry_tests {
 
     /// content_review final judgment step is investigate (tool-calling path with
     /// recommend fallback), not the scripted recommend step as the plan terminal.
+    /// Artifact keys are path-local on StepResult — plan must not hardcode
+    /// ARTIFACT_NAME (that forced dual schemas under one key).
     #[test]
     fn content_review_plan_ends_with_investigate_not_recommend() {
         let handler = ContentReviewHandler;
@@ -975,9 +983,9 @@ mod registry_tests {
         let last = steps.last().expect("plan non-empty");
         assert_eq!(last.kind, StepKind::ContentReviewInvestigate);
         assert_eq!(last.name, "content_review_investigate");
-        assert_eq!(
-            last.params.get(step_params::ARTIFACT_NAME).map(String::as_str),
-            Some("investigation_findings")
+        assert!(
+            !last.params.contains_key(step_params::ARTIFACT_NAME),
+            "plan must not fix ARTIFACT_NAME; path-local keys live on StepResult"
         );
         assert!(
             steps

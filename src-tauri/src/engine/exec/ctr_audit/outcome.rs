@@ -37,6 +37,7 @@ pub(crate) fn exec_ctr_outcome_compare(
             success: true,
             message: "No CTR outcomes to review".to_string(),
             output: Some("[]".to_string()),
+            artifact_key: None,
         };
     }
 
@@ -222,6 +223,7 @@ pub(crate) fn exec_ctr_outcome_compare(
             waiting.len()
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 
@@ -288,6 +290,7 @@ pub(crate) fn exec_ctr_outcome_report(
             improved, regressed, neutral, insufficient_data, deployment_unverified, pending
         ),
         output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
+        artifact_key: None,
     }
 }
 

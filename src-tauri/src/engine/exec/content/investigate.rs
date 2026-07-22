@@ -2,9 +2,18 @@
 //! supports tools; falls back to scripted `content_review_recommend` otherwise.
 //!
 //! Uses [`InvestigationAccess::ReadOnly`] only (no create_task / enqueue / audit
-//! mutators). Does **not** write `recommendations.json`, so
-//! `create_fix_content_article_tasks` no-ops safely until proposed tasks are
-//! wired by a later issue.
+//! mutators).
+//!
+//! # Dual path (issue #80 / lifecycle owned by #81)
+//!
+//! - **Tool path:** writes typed [`InvestigationFindings`] under artifact key
+//!   `investigation_findings` and optional `investigation_findings.json`. Does
+//!   **not** write `recommendations.json`, so `create_fix_content_article_tasks`
+//!   no-ops. Empty BackendAuto follow-ups until #81 wires proposed_tasks picker
+//!   is intentional — do not change `task_definitions` lifecycle metadata here.
+//! - **Fallback path:** delegates to `exec_content_review_recommend`, which writes
+//!   `recommendations.json` and stores output under artifact key
+//!   `content_review_recommend`. BackendAuto still auto-spawns fix tasks as today.
 
 use crate::engine::exec::investigate::{
     backend_supports_tool_calling, build_investigation_preamble, run_tool_equipped_agent,
@@ -14,12 +23,19 @@ use crate::engine::tools::{investigation_kit, InvestigationAccess, Investigation
 use crate::models::content_review::InvestigationFindings;
 use crate::models::task::Task;
 
+/// Artifact key for the tool-capable investigate path (`InvestigationFindings`).
+const ARTIFACT_KEY_INVESTIGATION_FINDINGS: &str = "investigation_findings";
+/// Artifact key for the no-tool recommend fallback (`ContentReviewRecommendations`).
+const ARTIFACT_KEY_CONTENT_REVIEW_RECOMMEND: &str = "content_review_recommend";
+
 /// Step runner for `content_review_investigate`.
 ///
 /// 1. Resolve LLM backend
 /// 2. If backend lacks tool calling → fall back to `exec_content_review_recommend`
+///    (artifact key `content_review_recommend`)
 /// 3. Otherwise run a read-only multi-turn tool agent, then typed Extractor
-///    for [`InvestigationFindings`] (no prose-JSON fallback on this path)
+///    for [`InvestigationFindings`] under key `investigation_findings`
+///    (no prose-JSON fallback on this path)
 pub(crate) async fn exec_content_review_investigate(
     task: &Task,
     project_path: &str,
@@ -40,7 +56,12 @@ pub(crate) async fn exec_content_review_investigate(
             "[content_review_investigate] backend does not support tool calling; \
              falling back to content_review_recommend"
         );
-        return super::exec_content_review_recommend(task, project_path, agent_provider).await;
+        // Path-local artifact key: ContentReviewRecommendations schema, not
+        // investigation_findings. Recommend still writes recommendations.json so
+        // post_actions BackendAuto fix spawn continues to work.
+        return super::exec_content_review_recommend(task, project_path, agent_provider)
+            .await
+            .with_artifact_key(ARTIFACT_KEY_CONTENT_REVIEW_RECOMMEND);
     }
 
     let ctx = InvestigationContext {
@@ -50,6 +71,8 @@ pub(crate) async fn exec_content_review_investigate(
     };
 
     let kit = investigation_kit(ctx.clone(), InvestigationAccess::ReadOnly);
+    // Core preamble only (project context + catalog) — no standalone freeform
+    // JSON schema; typed InvestigationFindings is extracted in a later step.
     let base_preamble = build_investigation_preamble(&ctx, &kit.catalog).await;
     let preamble = build_content_review_investigation_preamble(&base_preamble);
 
@@ -109,7 +132,7 @@ pub(crate) async fn exec_content_review_investigate(
     };
 
     // Optional automation-dir snapshot; primary contract is step output → artifact.
-    // Intentionally does NOT write recommendations.json.
+    // Intentionally does NOT write recommendations.json (see module docs / #81).
     let paths = ProjectPaths::from_path(project_path);
     let findings_path = paths.automation_dir.join("investigation_findings.json");
     if let Err(e) = std::fs::create_dir_all(&paths.automation_dir) {
@@ -137,9 +160,14 @@ pub(crate) async fn exec_content_review_investigate(
             findings.proposed_tasks.len()
         ),
         output: Some(findings_str),
+        artifact_key: Some(ARTIFACT_KEY_INVESTIGATION_FINDINGS.to_string()),
     }
 }
 
+/// Content-review framing layered on the shared investigation core preamble.
+///
+/// Asks for thorough prose analysis for later structured extraction — does **not**
+/// include the standalone freeform JSON output schema.
 fn build_content_review_investigation_preamble(base_preamble: &str) -> String {
     format!(
         "{base_preamble}\n\n\
@@ -151,7 +179,11 @@ fn build_content_review_investigation_preamble(base_preamble: &str) -> String {
         and near-duplicates, internal linking, structural title/template bugs, \
         audit health failures, and freshness.\n\
         Read-only tools only — you cannot create tasks, enqueue work, or run mutators. \
-        Propose follow-up task types in proposed_tasks; do not try to execute them.\n\
+        Propose follow-up task types in prose (task type, reason, params); do not try \
+        to execute them.\n\
+        Produce a thorough prose analysis with prioritised findings and evidence \
+        citations. Structured JSON is extracted in a later step — do not emit a freeform \
+        JSON schema block.\n\
         Limit yourself to at most 20 tool calls total."
     )
 }
@@ -167,13 +199,14 @@ fn build_content_review_investigation_prompt(task: &Task) -> String {
          1. Use the available tools to gather evidence. Call tools as needed — do not guess.\n\
          2. For each finding, cite which tool produced the evidence.\n\
          3. Be specific: include file paths, article slugs, counts, and snippets where relevant.\n\
-         4. For actionable issues, set fix_type to auto_fixable, developer_actionable, \
+         4. For actionable issues, note whether they look auto_fixable, developer_actionable, \
             hybrid, or informational.\n\
          5. Propose downstream task types (e.g. ctr_audit, cannibalization_audit, \
             indexing_health_campaign, content_cleanup, fix_content_article) when justified, \
-            with a clear reason and params object.\n\
+            with a clear reason and suggested params.\n\
          6. Limit yourself to at most 20 tool calls total.\n\
-         7. End with a clear summary of root causes and prioritised findings."
+         7. End with a clear prose summary of root causes and prioritised findings \
+            (structured extraction runs after this step)."
     )
 }
 
@@ -214,5 +247,19 @@ mod tests {
         assert!(p.contains("cannibalization"));
         assert!(p.contains("20 tool calls"));
         assert!(p.contains("base catalog"));
+        // Must not re-introduce the standalone freeform JSON contract
+        assert!(
+            !p.contains("Output format — return your findings as valid JSON"),
+            "content-review preamble must not include standalone JSON output contract"
+        );
+        assert!(p.contains("Structured JSON is extracted in a later step"));
+    }
+
+    #[test]
+    fn path_local_artifact_keys_are_distinct() {
+        assert_ne!(
+            ARTIFACT_KEY_INVESTIGATION_FINDINGS,
+            ARTIFACT_KEY_CONTENT_REVIEW_RECOMMEND
+        );
     }
 }
