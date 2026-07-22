@@ -9,14 +9,14 @@
 //!
 //! ## Source of truth
 //!
-//! [`TOOL_INVENTORY`] is the single structured inventory: tool name, `mutates`
-//! flag, catalog section text, and constructor. [`investigation_kit`] filters
-//! that inventory by [`InvestigationAccess`] and returns both the tool vec and
-//! the catalog preamble text so they cannot drift.
+//! [`src-tauri/config/tool_catalog.toml`](../../../../config/tool_catalog.toml)
+//! is authoritative for catalog preamble text and `mutates` flags (loaded via
+//! `include_str!` in [`catalog`]). Full vs ReadOnly tool attachment and catalog
+//! text are both derived from those flags so they cannot drift.
 //!
-//! Full TOML externalization of the catalog is tracked in issue #83. Until then
-//! the embedded inventory here is authoritative; `src-tauri/config/tool_catalog.toml`
-//! is a historical draft and is **not** loaded at runtime.
+//! Runtime constructors are a name→`Tool` match in [`build_tool`]. Adding a
+//! tool: append a TOML entry, add a match arm, implement the `Tool` type.
+//! Alignment is enforced by tests.
 
 use crate::engine::project_paths::ProjectPaths;
 
@@ -25,6 +25,7 @@ use articles::*;
 use audit::*;
 use project::*;
 
+mod catalog;
 
 // ── Shared context passed to all tools ──────────────────────────────────────
 
@@ -81,14 +82,14 @@ pub struct InvestigationKit {
     pub catalog: String,
 }
 
-/// Build tools and catalog from the shared inventory for the given access mode.
+/// Build tools and catalog from the shared TOML catalog for the given access mode.
 pub fn investigation_kit(
     ctx: InvestigationContext,
     access: InvestigationAccess,
 ) -> InvestigationKit {
     InvestigationKit {
         tools: tools_for_access(ctx, access),
-        catalog: catalog_for_access(access),
+        catalog: catalog::catalog_text_for_access(access),
     }
 }
 
@@ -110,195 +111,20 @@ pub fn investigation_read_only_tools(
 
 /// Catalog preamble text for the given access mode (no tools built).
 pub fn investigation_catalog(access: InvestigationAccess) -> String {
-    catalog_for_access(access)
+    catalog::catalog_text_for_access(access)
 }
 
-// ── Structured inventory (single source of truth) ───────────────────────────
-
-/// Metadata for one investigation tool. Constructors live in [`build_tool`].
-struct ToolInventoryEntry {
-    name: &'static str,
-    mutates: bool,
-    purpose: &'static str,
-    when_to_use: &'static str,
-    when_not_to_use: &'static str,
-}
-
-/// Canonical inventory: order, names, mutates flags, and catalog section text.
-///
-/// Adding a tool: append an entry here, add a match arm in [`build_tool`], and
-/// implement the `Tool` type. Full vs ReadOnly tool/catalog sets are derived
-/// by filtering `mutates` — do not maintain parallel lists.
-const TOOL_INVENTORY: &[ToolInventoryEntry] = &[
-    ToolInventoryEntry {
-        name: "gsc_performance",
-        mutates: false,
-        purpose: "Get GSC page-level performance data (clicks, impressions, CTR, position)",
-        when_to_use: "When investigating impression trends, CTR changes, or ranking movements",
-        when_not_to_use: "Do not use if GSC is not connected",
-    },
-    ToolInventoryEntry {
-        name: "gsc_queries",
-        mutates: false,
-        purpose: "Get GSC query-level data: which search queries drive traffic to pages",
-        when_to_use: "When investigating what queries bring traffic or low CTR",
-        when_not_to_use: "Do not use if GSC is not connected",
-    },
-    ToolInventoryEntry {
-        name: "gsc_movers",
-        mutates: false,
-        purpose: "Compare GSC performance between two periods",
-        when_to_use: "When investigating traffic changes or plateau detection",
-        when_not_to_use: "Do not use if GSC is not connected",
-    },
-    ToolInventoryEntry {
-        name: "article_list",
-        mutates: false,
-        purpose: "List all articles with metadata",
-        when_to_use: "When you need to know what content exists",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "article_frontmatter",
-        mutates: false,
-        purpose: "Read frontmatter from MDX files for specific articles",
-        when_to_use: "When checking individual article metadata",
-        when_not_to_use: "Use article_list first",
-    },
-    ToolInventoryEntry {
-        name: "article_body_hash",
-        mutates: false,
-        purpose: "Hash article bodies to find exact duplicate content",
-        when_to_use: "When investigating duplicate content or SSR fallback pages",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "article_title_scan",
-        mutates: false,
-        purpose: "Scan all article titles for patterns: duplicated tokens, literal template variables, truncation",
-        when_to_use: "When investigating title quality or template bugs",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "content_audit_report",
-        mutates: false,
-        purpose: "Return the full content_audit.json with 21 checks per article",
-        when_to_use: "When you need comprehensive article health data",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "run_content_audit",
-        mutates: true,
-        purpose: "Run the deterministic content audit and write fresh content_audit.json",
-        when_to_use: "When you need fresh audit data",
-        when_not_to_use: "If recent audit exists, use content_audit_report instead",
-    },
-    ToolInventoryEntry {
-        name: "cannibalization_clusters",
-        mutates: false,
-        purpose: "Return cannibalization clusters and merge recommendations",
-        when_to_use: "When investigating keyword cannibalization",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "indexing_status",
-        mutates: false,
-        purpose: "Return GSC URL indexing status",
-        when_to_use: "When investigating indexing problems",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "ctr_health",
-        mutates: false,
-        purpose: "Return per-article CTR health summary",
-        when_to_use: "When investigating CTR underperformance",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "framework_files",
-        mutates: false,
-        purpose: "Read framework config files: layouts, sitemap, robots.txt, redirect rules",
-        when_to_use: "When investigating site-wide template bugs",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "article_link_graph",
-        mutates: false,
-        purpose: "Return the internal link graph",
-        when_to_use: "When investigating linking gaps or site structure",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "create_task",
-        mutates: true,
-        purpose: "Create a fix task in PageSeeds to address issues found",
-        when_to_use: "ONLY after investigation found specific, actionable issues",
-        when_not_to_use: "Do NOT create tasks speculatively. Max 3 per investigation.",
-    },
-    ToolInventoryEntry {
-        name: "enqueue_task",
-        mutates: true,
-        purpose: "Enqueue an existing task for execution",
-        when_to_use: "After create_task, when the task should run immediately",
-        when_not_to_use: "Do not enqueue tasks that still need user review",
-    },
-    ToolInventoryEntry {
-        name: "get_task_status",
-        mutates: false,
-        purpose: "Get status of a task by ID",
-        when_to_use: "When checking whether a previously created task has completed",
-        when_not_to_use: "",
-    },
-    ToolInventoryEntry {
-        name: "write_feature_spec",
-        mutates: true,
-        purpose: "Write a developer feature spec to the target repo's .github/automation/seo_feature_spec.md",
-        when_to_use: "When you find code-level issues that require changes to framework files (templates, redirects, sitemap). Each call appends one issue section with file path, current code, and fixed code.",
-        when_not_to_use: "Do not use for content-only issues that PageSeeds can auto-fix",
-    },
-];
-
-fn entry_included(entry: &ToolInventoryEntry, access: InvestigationAccess) -> bool {
-    match access {
-        InvestigationAccess::Full => true,
-        InvestigationAccess::ReadOnly => !entry.mutates,
-    }
-}
+// ── Tool construction (names must match tool_catalog.toml) ──────────────────
 
 fn tools_for_access(
     ctx: InvestigationContext,
     access: InvestigationAccess,
 ) -> Vec<Box<dyn rig::tool::ToolDyn>> {
-    TOOL_INVENTORY
+    catalog::TOOL_CATALOG
         .iter()
-        .filter(|e| entry_included(e, access))
-        .map(|e| build_tool(e.name, ctx.clone()))
+        .filter(|e| catalog::entry_included(e, access))
+        .map(|e| build_tool(&e.name, ctx.clone()))
         .collect()
-}
-
-fn catalog_for_access(access: InvestigationAccess) -> String {
-    let header = match access {
-        InvestigationAccess::Full => "# Tool catalog for agentic investigation.\n",
-        InvestigationAccess::ReadOnly => {
-            "# Tool catalog for agentic investigation (read-only).\n"
-        }
-    };
-    let mut s = String::from(header);
-    for entry in TOOL_INVENTORY.iter().filter(|e| entry_included(e, access)) {
-        s.push_str(&format_catalog_section(entry));
-    }
-    s
-}
-
-fn format_catalog_section(entry: &ToolInventoryEntry) -> String {
-    let mut section = format!(
-        "\n[tools.{}]\npurpose = \"{}\"\nwhen_to_use = \"{}\"\nwhen_not_to_use = \"{}\"\n",
-        entry.name, entry.purpose, entry.when_to_use, entry.when_not_to_use,
-    );
-    if entry.mutates {
-        section.push_str("mutates = true\n");
-    }
-    section
 }
 
 fn build_tool(name: &str, ctx: InvestigationContext) -> Box<dyn rig::tool::ToolDyn> {
@@ -322,7 +148,8 @@ fn build_tool(name: &str, ctx: InvestigationContext) -> Box<dyn rig::tool::ToolD
         "get_task_status" => Box::new(GetTaskStatusTool { ctx }),
         "write_feature_spec" => Box::new(WriteFeatureSpecTool { ctx }),
         other => panic!(
-            "TOOL_INVENTORY entry '{other}' has no build_tool match arm — inventory and constructors drifted"
+            "tool_catalog.toml entry '{other}' has no build_tool match arm — \
+             catalog and constructors drifted"
         ),
     }
 }
@@ -330,11 +157,7 @@ fn build_tool(name: &str, ctx: InvestigationContext) -> Box<dyn rig::tool::ToolD
 /// Inventory names included for an access mode (for tests / alignment checks).
 #[cfg(test)]
 pub(crate) fn inventory_names(access: InvestigationAccess) -> Vec<&'static str> {
-    TOOL_INVENTORY
-        .iter()
-        .filter(|e| entry_included(e, access))
-        .map(|e| e.name)
-        .collect()
+    catalog::catalog_names_for_access(access)
 }
 
 mod gsc;
@@ -350,3 +173,49 @@ pub use shared::{
     list_research_shortlist, list_article_quality_reviews,
 };
 pub use articles::list_articles_json;
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+
+    /// Constructor names in the same order as the TOML catalog.
+    /// Keep in sync with `config/tool_catalog.toml` keys — tests fail on drift.
+    const CONSTRUCTOR_NAMES: &[&str] = &[
+        "gsc_performance",
+        "gsc_queries",
+        "gsc_movers",
+        "article_list",
+        "article_frontmatter",
+        "article_body_hash",
+        "article_title_scan",
+        "content_audit_report",
+        "run_content_audit",
+        "cannibalization_clusters",
+        "indexing_status",
+        "ctr_health",
+        "framework_files",
+        "article_link_graph",
+        "create_task",
+        "enqueue_task",
+        "get_task_status",
+        "write_feature_spec",
+    ];
+
+    #[test]
+    fn constructors_and_toml_names_aligned() {
+        let catalog_names = catalog::all_catalog_names();
+        assert_eq!(
+            catalog_names, CONSTRUCTOR_NAMES,
+            "tool_catalog.toml order/names must match CONSTRUCTOR_NAMES / build_tool"
+        );
+        // Touch build_tool for every catalog name so unknown names panic in tests.
+        let ctx = InvestigationContext {
+            project_id: "align".into(),
+            project_path: ".".into(),
+            db_path: ":memory:".into(),
+        };
+        for name in &catalog_names {
+            let _ = build_tool(name, ctx.clone());
+        }
+    }
+}
