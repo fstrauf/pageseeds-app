@@ -1,17 +1,24 @@
 /// Deterministic application of agent-generated content fix patch.
 ///
 /// 1. Parse ContentFixPatch from content_fix_patch artifact (preferred) or latest_raw (legacy)
-/// 2. Resolve absolute file path from project_path + patch.file
-/// 3. Read original file content
-/// 4. Apply changes deterministically
-/// 5. rebuild_mdx → write file
-/// 6. validate_mdx_structure → if fail, restore snapshot, return failed
-/// 7. Return success with summary
+/// 2. Pin identity from content_fix_context when present (defense-in-depth vs model paths)
+/// 3. Resolve absolute file path from project_path + patch.file
+/// 4. Read original file content
+/// 5. Apply changes in memory; empty/no-op with open unsatisfied suggestions fails **before** any write
+/// 6. rebuild_mdx → write file (only when real mutations remain)
+/// 7. validate_mdx_structure → if fail, restore snapshot, return failed
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;
 use crate::models::content_review::{ContentFixChanges, ContentFixPatch};
 use crate::models::task::Task;
+
+use super::fix_context::{
+    load_content_fix_context, pin_content_fix_patch_identity, ContentFixContext,
+};
+use super::fix_suggestion_coverage::{
+    empty_apply_unsatisfied_message, patch_has_any_changes, unsatisfied_suggestion_fields,
+};
 
 pub(crate) fn exec_fix_content_article_apply(
     task: &Task,
@@ -25,6 +32,12 @@ pub(crate) fn exec_fix_content_article_apply(
 
     if let Some(error) = patch.error.as_ref() {
         return StepResult::fail(format!("Agent reported error: {}", error));
+    }
+
+    // Shared typed loader — pin identity; also used for empty-coverage preflight.
+    let context = load_content_fix_context(task).ok().flatten();
+    if let Some(ref ctx) = context {
+        pin_content_fix_patch_identity(&mut patch, ctx);
     }
 
     let repo_root = Path::new(project_path);
@@ -46,6 +59,17 @@ pub(crate) fn exec_fix_content_article_apply(
         }
     };
 
+    // ── Empty/no-op preflight (before any snapshot/write/DB) ─────────────────
+    // Early gate when the patch declares no change fields at all.
+    // When fields are present but in-memory apply may still yield empty
+    // `applied` (e.g. intro no-op), we compute mutations in memory first and
+    // only enter the write path when real field mutations remain.
+    if let Some(result) =
+        empty_apply_preflight(&context, &patch, &original_content, /*applied*/ None)
+    {
+        return result;
+    }
+
     let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
         Some((f, b)) => (f.to_string(), b.to_string()),
         None => {
@@ -54,14 +78,14 @@ pub(crate) fn exec_fix_content_article_apply(
     };
 
     let ContentFixChanges {
-        title,
-        h1,
-        description,
-        intro,
-        internal_links,
-        faq_questions,
-        eeat_signal,
-        cta,
+        ref title,
+        ref h1,
+        ref description,
+        ref intro,
+        ref internal_links,
+        ref faq_questions,
+        ref eeat_signal,
+        ref cta,
     } = patch.changes;
 
     let mut new_fm = fm;
@@ -69,12 +93,12 @@ pub(crate) fn exec_fix_content_article_apply(
     let mut applied = Vec::new();
 
     if let Some(new_title) = title {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "title", &new_title);
+        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "title", new_title);
         applied.push("title".to_string());
     }
 
     if let Some(new_desc) = description {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", &new_desc);
+        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", new_desc);
         applied.push("description".to_string());
     }
 
@@ -102,7 +126,7 @@ pub(crate) fn exec_fix_content_article_apply(
 
     if let Some(new_intro) = intro {
         let body_before = new_body.clone();
-        new_body = crate::content::cleaner::ensure_first_paragraph(&new_body, &new_intro);
+        new_body = crate::content::cleaner::ensure_first_paragraph(&new_body, new_intro);
         if new_body != body_before {
             applied.push("intro".to_string());
         } else {
@@ -144,6 +168,18 @@ pub(crate) fn exec_fix_content_article_apply(
         applied.push("cta".to_string());
     }
 
+    // Preflight after in-memory apply: never write if applied is empty and
+    // open suggestions remain unsatisfied. Soft-succeed when already healthy.
+    if applied.is_empty() {
+        if let Some(result) =
+            empty_apply_preflight(&context, &patch, &original_content, Some(&applied))
+        {
+            return result;
+        }
+    }
+
+    // ── Write path (only when real field mutations remain) ───────────────────
+
     // Rebuild MDX
     let new_content = crate::content::cleaner::rebuild_mdx(&new_fm, &new_body);
 
@@ -171,16 +207,14 @@ pub(crate) fn exec_fix_content_article_apply(
     let _ = std::fs::remove_file(&snapshot_path);
 
     // Update last_edited_at in articles table
-    if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
-        let now = chrono::Utc::now().to_rfc3339();
-        // Try to resolve article_id from the file path
-        let article_id = task.artifacts.iter().find_map(|a| {
-            a.content.as_deref().and_then(|c| {
-                serde_json::from_str::<serde_json::Value>(c).ok()
-                    .and_then(|v| v["article_id"].as_i64())
-            })
-        });
-        if let Some(id) = article_id {
+    let article_id = context
+        .as_ref()
+        .map(|c| c.article_id)
+        .filter(|id| *id != 0)
+        .or_else(|| (patch.article_id != 0).then_some(patch.article_id));
+    if let Some(id) = article_id {
+        if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+            let now = chrono::Utc::now().to_rfc3339();
             let _ = db.execute(
                 "UPDATE articles SET last_edited_at = ?1 WHERE id = ?2 AND project_id = ?3",
                 rusqlite::params![&now, id, &task.project_id],
@@ -188,16 +222,12 @@ pub(crate) fn exec_fix_content_article_apply(
         }
     }
 
-    let summary = if applied.is_empty() {
-        "No changes applied — patch was empty or already satisfied".to_string()
-    } else {
-        format!(
-            "Applied {} change(s) to {}: {}",
-            applied.len(),
-            patch.file,
-            applied.join(", ")
-        )
-    };
+    let summary = format!(
+        "Applied {} change(s) to {}: {}",
+        applied.len(),
+        patch.file,
+        applied.join(", ")
+    );
 
     StepResult {
         success: true,
@@ -211,6 +241,57 @@ pub(crate) fn exec_fix_content_article_apply(
         ),
         artifact_key: None,
     }
+}
+
+/// Empty/no-op coverage gate. Returns `Some(StepResult)` when the apply should
+/// stop without writing (fail or soft-success). Returns `None` when the caller
+/// should continue (either mutations remain or the preflight is not conclusive).
+///
+/// When `applied` is `Some(&[])` (in-memory apply produced nothing), always
+/// returns a terminal result (fail or soft-success). When `applied` is `None`,
+/// only terminal when `!patch_has_any_changes` (declared empty patch).
+fn empty_apply_preflight(
+    context: &Option<ContentFixContext>,
+    patch: &ContentFixPatch,
+    original_content: &str,
+    applied: Option<&[String]>,
+) -> Option<StepResult> {
+    let is_empty = match applied {
+        Some(a) => a.is_empty(),
+        None => !patch_has_any_changes(&patch.changes),
+    };
+    if !is_empty {
+        return None;
+    }
+
+    let suggestions = context
+        .as_ref()
+        .map(|c| c.suggestions.as_slice())
+        .unwrap_or(&[]);
+    let unsatisfied =
+        unsatisfied_suggestion_fields(suggestions, None, original_content);
+
+    if !unsatisfied.is_empty() {
+        return Some(StepResult::fail(empty_apply_unsatisfied_message(
+            &unsatisfied,
+        )));
+    }
+
+    // Soft success only once we know applied is empty (declared or computed).
+    // For the early `applied == None` path with no unsatisfied fields, return a
+    // soft-success so we never enter the write path for a truly empty patch.
+    Some(StepResult {
+        success: true,
+        message: "No changes applied — patch was empty or already satisfied".to_string(),
+        output: Some(
+            serde_json::json!({
+                "file": patch.file,
+                "applied": [],
+            })
+            .to_string(),
+        ),
+        artifact_key: None,
+    })
 }
 
 // ─── Patch resolution ─────────────────────────────────────────────────────────
@@ -247,4 +328,283 @@ fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<ContentFixPatc
     Err(StepResult::fail("No content_fix_patch artifact or latest_raw found. \
              Run the generate step first."
             .to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::content_review::ContentFixChanges;
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskArtifact, TaskRun, TaskReviewSurface,
+        TaskRunPolicy, TaskStatus,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn sample_task(artifacts: Vec<TaskArtifact>) -> Task {
+        let now = chrono::Utc::now().to_rfc3339();
+        Task {
+            id: "task-fix-apply".to_string(),
+            project_id: "p1".to_string(),
+            task_type: "fix_content_article".to_string(),
+            phase: "fix".to_string(),
+            status: TaskStatus::InProgress,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::None,
+            title: Some("Fix article".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts,
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            not_before: None,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn pin_from_context_overwrites_hallucinated_path() {
+        let task = sample_task(vec![TaskArtifact {
+            key: "content_fix_context".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("fix_content_article".to_string()),
+            content: Some(
+                serde_json::json!({
+                    "article_id": 42,
+                    "article_file": "content/blog/real-slug.mdx",
+                    "suggestions": []
+                })
+                .to_string(),
+            ),
+        }]);
+        let mut patch = ContentFixPatch {
+            article_id: 1,
+            file: "content/001_article.mdx".to_string(),
+            error: None,
+            changes: ContentFixChanges::default(),
+        };
+        let ctx = load_content_fix_context(&task).unwrap().unwrap();
+        pin_content_fix_patch_identity(&mut patch, &ctx);
+        assert_eq!(patch.file, "content/blog/real-slug.mdx");
+        assert_eq!(patch.article_id, 42);
+    }
+
+    #[test]
+    fn empty_apply_fails_when_open_suggestions_unsatisfied() {
+        let dir = std::env::temp_dir().join(format!("pageseeds-fix-apply-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("content/blog")).unwrap();
+        let rel = "content/blog/slug.mdx";
+        let abs: PathBuf = dir.join(rel);
+        let original = "---\ntitle: \"Ok Title\"\ndescription: \"Short.\"\ndate: \"2026-01-01\"\n---\n\n# Ok Title\n\nTiny intro.\n";
+        // Short meta + short intro → description/intro fail health.
+        fs::write(&abs, original).unwrap();
+
+        let patch = ContentFixPatch {
+            article_id: 7,
+            file: "content/001_article.mdx".to_string(), // wrong path — should be pinned
+            error: None,
+            changes: ContentFixChanges::default(),
+        };
+        let task = sample_task(vec![
+            TaskArtifact {
+                key: "content_fix_context".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(
+                    serde_json::json!({
+                        "article_id": 7,
+                        "article_file": rel,
+                        "suggestions": [
+                            {
+                                "category": "description",
+                                "current": "Short.",
+                                "proposed": "A much longer meta description that meets SEO length.",
+                                "reason": "meta too short"
+                            },
+                            {
+                                "category": "title",
+                                "current": "Ok Title",
+                                "proposed": "Better Title",
+                                "reason": "prefer keyword"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ),
+            },
+            TaskArtifact {
+                key: "content_fix_patch".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(serde_json::to_string(&patch).unwrap()),
+            },
+        ]);
+
+        let result = exec_fix_content_article_apply(&task, dir.to_str().unwrap(), None);
+
+        // Atomic preflight: file must be untouched and no snapshot left behind.
+        let after = fs::read_to_string(&abs).unwrap();
+        assert_eq!(after, original, "empty-apply failure must not rewrite the file");
+        assert!(
+            !abs.with_extension("mdx.snapshot").exists(),
+            "empty-apply failure must not leave a snapshot"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            !result.success,
+            "expected fail on empty apply with open suggestions, got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("remain unsatisfied")
+                || result.message.contains("Empty/no-op"),
+            "unexpected message: {}",
+            result.message
+        );
+        // Title is healthy in file → only description should be called out, but either is fine.
+        assert!(
+            result.message.contains("description") || result.message.contains("title"),
+            "message should name fields: {}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn empty_apply_soft_success_when_suggestions_already_healthy() {
+        let dir = std::env::temp_dir().join(format!("pageseeds-fix-apply-ok-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("content/blog")).unwrap();
+        let rel = "content/blog/slug.mdx";
+        let abs: PathBuf = dir.join(rel);
+        let original = "---\ntitle: \"Ok Title\"\ndescription: \"Short.\"\ndate: \"2026-01-01\"\n---\n\n# Ok Title\n\nTiny intro.\n";
+        // Title within limit — only title suggestion, already healthy.
+        fs::write(&abs, original).unwrap();
+
+        let patch = ContentFixPatch {
+            article_id: 7,
+            file: rel.to_string(),
+            error: None,
+            changes: ContentFixChanges::default(),
+        };
+        let task = sample_task(vec![
+            TaskArtifact {
+                key: "content_fix_context".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(
+                    serde_json::json!({
+                        "article_id": 7,
+                        "article_file": rel,
+                        "suggestions": [{
+                            "category": "title",
+                            "current": "Ok Title",
+                            "proposed": "Still Ok",
+                            "reason": "optional"
+                        }]
+                    })
+                    .to_string(),
+                ),
+            },
+            TaskArtifact {
+                key: "content_fix_patch".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(serde_json::to_string(&patch).unwrap()),
+            },
+        ]);
+
+        let result = exec_fix_content_article_apply(&task, dir.to_str().unwrap(), None);
+
+        // Soft success must also leave the file untouched.
+        let after = fs::read_to_string(&abs).unwrap();
+        assert_eq!(after, original, "empty soft-success must not rewrite the file");
+
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            result.success,
+            "empty apply should soft-succeed when open fields are already healthy: {}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn intro_noop_with_unsatisfied_suggestions_fails_without_write() {
+        // Patch declares an intro change that does not mutate the body, while
+        // description remains unsatisfied — must fail before write.
+        let dir =
+            std::env::temp_dir().join(format!("pageseeds-fix-apply-intro-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("content/blog")).unwrap();
+        let rel = "content/blog/slug.mdx";
+        let abs: PathBuf = dir.join(rel);
+        // Body first paragraph already matches the intro we "apply".
+        let original = "---\ntitle: \"Ok Title\"\ndescription: \"Short.\"\ndate: \"2026-01-01\"\n---\n\n# Ok Title\n\nTiny intro.\n";
+        fs::write(&abs, original).unwrap();
+
+        let patch = ContentFixPatch {
+            article_id: 7,
+            file: rel.to_string(),
+            error: None,
+            changes: ContentFixChanges {
+                // Same as existing first paragraph → ensure_first_paragraph no-ops.
+                intro: Some("Tiny intro.".to_string()),
+                ..Default::default()
+            },
+        };
+        let task = sample_task(vec![
+            TaskArtifact {
+                key: "content_fix_context".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(
+                    serde_json::json!({
+                        "article_id": 7,
+                        "article_file": rel,
+                        "suggestions": [{
+                            "category": "description",
+                            "current": "Short.",
+                            "proposed": "A much longer meta description that meets SEO length requirements.",
+                            "reason": "meta too short"
+                        }]
+                    })
+                    .to_string(),
+                ),
+            },
+            TaskArtifact {
+                key: "content_fix_patch".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(serde_json::to_string(&patch).unwrap()),
+            },
+        ]);
+
+        let result = exec_fix_content_article_apply(&task, dir.to_str().unwrap(), None);
+        let after = fs::read_to_string(&abs).unwrap();
+        assert_eq!(after, original, "intro no-op failure must not rewrite the file");
+        assert!(!abs.with_extension("mdx.snapshot").exists());
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            !result.success,
+            "intro no-op with open unsatisfied suggestions must fail: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("description") || result.message.contains("unsatisfied"),
+            "message: {}",
+            result.message
+        );
+    }
 }
