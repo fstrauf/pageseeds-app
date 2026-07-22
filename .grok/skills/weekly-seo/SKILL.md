@@ -147,7 +147,8 @@ These are **not** optional. Breaking them fails the run.
 
 `ctr_audit`, `content_review`, `content_cleanup`, `cannibalization_audit`,
 `indexing_diagnostics`, `indexing_health_campaign`, `fix_indexing_internal_links`,
-`cluster_and_link`, `interlinking`, `fix_content_article`,
+`cluster_and_link`, `interlinking`, `fix_content_article` (**always** requires
+`-S` / `--slug <url-slug>` — never bare; attaches SERP recommendations artifact),
 `update_research_shortlist`, `generate_feature_spec`, `seo_health_scan`,
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `research_keywords`,
 `research_landing_pages`, `reddit_opportunity_search`.
@@ -322,6 +323,18 @@ pageseeds-cli create-task -i <id> -p <path> \
 pageseeds-cli execute-task -I <task-id>
 ```
 
+**`fix_content_article` always requires a slug** — never create it bare:
+
+```bash
+pageseeds-cli create-task -i <id> -p <path> \
+  -t fix_content_article -S <url-slug> \
+  -T "Fix content: <title>" -r "<reason citing evidence>"
+```
+
+Bare `create-task -t fix_content_article` without `-S` / `--slug` is rejected.
+The CLI attaches a full `recommendations_{article_id}` artifact with SERP
+categories (title / description / h1 / intro).
+
 Loop:
 
 1. Execute approved tasks one at a time.  
@@ -339,7 +352,8 @@ Loop:
 ### Quality gate
 
 If `review_article_quality` fails (`overall_pass` false), create
-`fix_content_article` for that file if none exists, then execute (counts toward 15).
+`fix_content_article` **with** `-S <url-slug>` for that file if none exists,
+then execute (counts toward 15). Never bare `fix_content_article`.
 
 ### Review resolution
 

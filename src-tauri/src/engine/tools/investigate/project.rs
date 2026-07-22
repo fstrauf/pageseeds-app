@@ -189,6 +189,11 @@ pub struct CreateTaskArgs {
     pub title: String,
     /// Why this task is needed
     pub reason: String,
+    /// Required when task_type is `fix_content_article`: article url_slug to fix.
+    /// The shared spawn helper resolves the article and attaches a full
+    /// `recommendations_{article_id}` artifact (SERP categories).
+    #[serde(default)]
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -215,6 +220,9 @@ impl Tool for CreateTaskTool {
             description: format!(
                 "Create a task in the PageSeeds task system. \
                 Valid autonomous types: {}. \
+                For fix_content_article you MUST pass slug (article url_slug); \
+                the system attaches a full recommendations artifact with SERP \
+                categories — bare creates without slug are rejected. \
                 DO NOT call this without first explaining what the task will do and why. \
                 After creating a task, call enqueue_task if you want it to run automatically.",
                 valid_list
@@ -224,7 +232,11 @@ impl Tool for CreateTaskTool {
                 "properties": {
                     "task_type": { "type": "string", "description": format!("Task type: {}", valid_list) },
                     "title": { "type": "string", "description": "Human-readable task title" },
-                    "reason": { "type": "string", "description": "Why this task is needed — appears in the task description" }
+                    "reason": { "type": "string", "description": "Why this task is needed — appears in the task description" },
+                    "slug": {
+                        "type": "string",
+                        "description": "Article url_slug. Required for fix_content_article (builds recommendations artifact)."
+                    }
                 },
                 "required": ["task_type", "title", "reason"]
             }),
@@ -239,6 +251,37 @@ impl Tool for CreateTaskTool {
         }
 
         let db = self.ctx.open_db().map_err(|e| InvestigationToolError::Execution(e))?;
+
+        if args.task_type == "fix_content_article" {
+            let slug = args.slug.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or_else(|| InvestigationToolError::Execution(
+                    "fix_content_article requires slug — article url_slug to fix".to_string(),
+                ))?;
+            let task = crate::engine::content_fix::spawn_fix_content_article_for_slug(
+                &db,
+                &self.ctx.project_id,
+                slug,
+                &args.reason,
+                crate::engine::content_fix::SpawnFixForSlugOpts {
+                    title: if args.title.trim().is_empty() {
+                        None
+                    } else {
+                        Some(args.title.clone())
+                    },
+                    priority: crate::models::task::Priority::Medium,
+                    auto_enqueue: false,
+                    source: "create_task_tool".to_string(),
+                },
+            )
+            .map_err(|e| InvestigationToolError::Execution(format!("Failed to create task: {e}")))?;
+
+            return Ok(CreateTaskOutput {
+                task_id: task.id,
+                task_type: args.task_type,
+                title: task.title.unwrap_or(args.title),
+                status: "created".to_string(),
+            });
+        }
 
         let task_id = crate::engine::spawner::TaskSpawner::spawn(
             &db,

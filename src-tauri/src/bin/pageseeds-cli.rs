@@ -629,85 +629,41 @@ fn create_task(project_id: &str, db_path: &str, args: &[String]) -> Result<serde
 
     let conn = open_db(db_path)?;
 
-    // fix_content_article needs a recommendations_{article_id} artifact. When
-    // --slug is provided, resolve the article and build that payload so CLI
-    // runs don't need a parent content_review selection step.
-    let mut artifacts = Vec::new();
-    let mut resolved_title = title.clone();
-    let mut idempotency_key: Option<String> = None;
+    // fix_content_article always goes through the shared slug helper so the
+    // recommendations_{article_id} artifact (SERP categories) is attached.
     if tt == "fix_content_article" {
-        let slug_val = slug.clone().ok_or_else(|| {
+        let slug_val = slug.ok_or_else(|| {
             "--slug required for fix_content_article (url slug of the article to fix)".to_string()
         })?;
-        let slug_norm = pageseeds_lib::content::slug::normalize_url_slug(&slug_val);
-        let article = pageseeds_lib::engine::task_store::list_articles(&conn, project_id)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|a| {
-                a.url_slug == slug_val
-                    || pageseeds_lib::content::slug::normalize_url_slug(&a.url_slug) == slug_norm
-            })
-            .ok_or_else(|| format!("No article found for slug '{slug_val}'"))?;
-
-        if resolved_title.is_empty() {
-            resolved_title = format!("Fix content: {}", article.title);
-        }
-
-        let suggestions = if reason.is_empty() {
-            vec![serde_json::json!({
-                "category": "content",
-                "priority": "high",
-                "proposed": "Improve ranking and CTR for primary search queries while preserving accurate options content.",
-            })]
-        } else {
-            // Split multi-line / multi-sentence reasons into actionable suggestions.
-            reason
-                .split(['|', ';', '\n'])
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    serde_json::json!({
-                        "category": "content",
-                        "priority": "high",
-                        "proposed": s,
-                    })
-                })
-                .collect()
-        };
-
-        let payload = serde_json::json!({
-            "article_id": article.id,
-            "article_title": article.title,
-            "article_file": article.file,
-            "url_slug": article.url_slug,
-            "target_keyword": article.target_keyword,
-            "suggestions": suggestions,
-        });
-        artifacts.push(pageseeds_lib::models::task::TaskArtifact {
-            key: format!("recommendations_{}", article.id),
-            path: None,
-            artifact_type: Some("json".to_string()),
-            source: Some("pageseeds-cli".to_string()),
-            content: Some(payload.to_string()),
-        });
-        idempotency_key = Some(format!("{tt}:{project_id}:{slug_val}"));
+        let task = pageseeds_lib::engine::content_fix::spawn_fix_content_article_for_slug(
+            &conn,
+            project_id,
+            &slug_val,
+            &reason,
+            pageseeds_lib::engine::content_fix::SpawnFixForSlugOpts {
+                title: if title.is_empty() { None } else { Some(title) },
+                priority: priority_enum,
+                auto_enqueue,
+                source: "pageseeds-cli".to_string(),
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(serde_json::json!({
+            "task_id": task.id,
+            "task_type": tt,
+            "title": task.title,
+            "status": task.status,
+        }));
     }
 
     let task = pageseeds_lib::engine::spawner::TaskSpawner::spawn(&conn, pageseeds_lib::engine::spawner::TaskSpec {
         project_id: project_id.to_string(), task_type: tt.clone(),
-        title: Some(resolved_title.clone()), description: Some(reason),
+        title: Some(title.clone()), description: Some(reason),
         priority: priority_enum,
         run_policy: if auto_enqueue { Some(TaskRunPolicy::AutoEnqueue) } else { None },
-        artifacts,
-        agent_policy: if tt == "fix_content_article" {
-            pageseeds_lib::models::task::AgentPolicy::Required
-        } else {
-            Default::default()
-        },
-        idempotency_key,
         ..Default::default()
     }).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"task_id": task.id, "task_type": tt, "title": resolved_title, "status": task.status}))
+    Ok(serde_json::json!({"task_id": task.id, "task_type": tt, "title": title, "status": task.status}))
 }
 
 fn write_spec(project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
