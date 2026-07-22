@@ -371,22 +371,27 @@ mod tests {
     #[test]
     fn test_skill_version_drift_flags_missing_override_version() {
         let embedded = load_embedded_skill("cannibalization-strategy").unwrap();
+        let embedded_version = extract_skill_version(&embedded.content);
         let override_skill = Skill {
             content: "# Stale copy without a version marker\n".to_string(),
             ..embedded.clone()
         };
         let drift = skill_version_drift(&override_skill, "cannibalization-strategy");
-        assert_eq!(drift, Some((None, Some(1))));
+        // Expected baseline is whatever the embedded skill currently declares —
+        // do not hardcode the version so skill bumps stay one-line edits.
+        assert_eq!(drift, Some((None, embedded_version)));
     }
 
     #[test]
     fn test_skill_version_drift_flags_mismatched_version() {
+        let embedded = load_embedded_skill("cannibalization-strategy").unwrap();
+        let embedded_version = extract_skill_version(&embedded.content);
         let override_skill = Skill {
             content: "# Skill\n\n<!-- skill-version: 99 -->\n".to_string(),
             ..Default::default()
         };
         let drift = skill_version_drift(&override_skill, "cannibalization-strategy");
-        assert_eq!(drift, Some((Some(99), Some(1))));
+        assert_eq!(drift, Some((Some(99), embedded_version)));
     }
 
     #[test]

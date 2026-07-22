@@ -386,8 +386,12 @@ Task: consolidate_cluster
   └─ Update internal links
 ```
 
+### Evidence lanes for merge candidates (fail-closed)
+
+Soft TF-IDF clusters (low similarity threshold in build context) are **exploratory only** — they are not merge authority. The shortlist emits candidates only from two evidence lanes: (1) exact same `target_keyword` groups via `exact_keyword_duplicates.json` (`candidate_type: "exact_keyword_dupe"` — single source of truth), and (2) high pairwise similarity pairs (≥0.45) as `merge_candidate` with `pair_similarity`. Soft transitive topical cohesion (e.g. mono-niche theme bags) never becomes a top-N traffic grab-bag merge set. The strategy skill must refuse non-exact candidates by default unless same-intent / same-query evidence is present.
+
 ### Key Files
-- `engine/exec/cannibalization_audit.rs` — detection logic
+- `engine/exec/cannibalization/` — detection logic (build context, candidates, analyze, reduce)
 - `engine/exec/consolidate_cluster.rs` — consolidation execution
 - `components/cannibalization/CannibalizationReview.tsx` — review UI
 

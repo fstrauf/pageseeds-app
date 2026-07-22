@@ -713,9 +713,9 @@ impl WorkflowHandler for CannibalizationAuditHandler {
             // Step 4 (deterministic): Detect exact duplicate target keywords + rank by GSC.
             // Writes exact_keyword_duplicates.json. These are guaranteed overlap cases.
             WorkflowStep::new("can_exact_keyword_dupes", StepKind::CanExactKeywordDupes),
-            // Step 5 (deterministic): Select merge candidates from clusters.
-            // Also injects exact-keyword-duplicate groups as high-priority candidates.
-            // Splits giant components by target keyword, caps pages at 8 per candidate.
+            // Step 5 (deterministic): Select merge candidates from evidence lanes only:
+            // (1) exact_keyword_duplicates.json → exact_keyword_dupe, (2) high-sim pairs
+            // → merge_candidate. Soft clusters are not merge authority. Caps at 4 pages.
             WorkflowStep::new("can_select_candidates", StepKind::CanSelectCandidates),
             // Step 6 (agentic): Analyze individual merge candidates with byte-budgeted prompts.
             // One agent call per candidate to stay under the Kimi bridge limit.
