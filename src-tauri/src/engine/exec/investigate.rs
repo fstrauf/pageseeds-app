@@ -15,21 +15,25 @@
 use crate::engine::tools::{
     investigation_kit, InvestigationAccess, InvestigationContext,
 };
+use crate::models::content_review::StandaloneInvestigationResult;
 use crate::rig::provider::run_tool_equipped_agent;
 
 /// Run an agentic investigation with full tool access.
 ///
-/// 1. Builds the agent preamble from the full tool catalog
+/// 1. Builds the agent preamble from the full tool catalog (+ standalone JSON contract)
 /// 2. Attaches all investigation tools (including mutators) to the agent
 /// 3. Runs the agent with the user's question
-/// 4. Parses the structured output via rig Extractor
+/// 4. Resolves structured output:
+///    a. First-pass typed JSON parse of the agent reply (`StandaloneInvestigationResult`)
+///    b. If that fails, `extract_with_backend::<StandaloneInvestigationResult>` on the prose
+///    c. Soft-fallback: prose as `answer`, empty summary/findings (never hard-fails extraction)
 pub async fn exec_investigate(
     project_id: &str,
     project_path: &str,
     db_path: &str,
     question: &str,
     agent_provider: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<StandaloneInvestigationResult, String> {
     let ctx = InvestigationContext {
         project_id: project_id.to_string(),
         project_path: project_path.to_string(),
@@ -65,15 +69,53 @@ pub async fn exec_investigate(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Try to parse the response as JSON; if the agent returned prose, wrap it
-    let parsed: serde_json::Value = serde_json::from_str(&response)
-        .unwrap_or_else(|_| serde_json::json!({
-            "answer": response,
-            "findings": [],
-            "summary": "Agent returned prose; no structured findings extracted."
-        }));
+    Ok(resolve_standalone_investigation_result(&backend, &response).await)
+}
 
-    Ok(parsed)
+/// Resolve agent text into a typed standalone result.
+///
+/// Order: direct JSON parse → typed Extractor → prose soft-fallback.
+/// Soft-fallback preserves prior command behavior when extraction is unavailable
+/// (e.g. KimiDirect) or the model returns pure prose.
+async fn resolve_standalone_investigation_result(
+    backend: &crate::rig::provider::LlmBackend,
+    response: &str,
+) -> StandaloneInvestigationResult {
+    // a. First-pass: agent was asked for JSON via standalone_investigation_output_contract.
+    if let Ok(parsed) = serde_json::from_str::<StandaloneInvestigationResult>(response) {
+        return parsed;
+    }
+
+    // b. Typed extraction from prose analysis (same helper as content-review path).
+    let extract_prompt = format!(
+        "Map the following investigation analysis into the StandaloneInvestigationResult \
+         schema. Use only evidence present in the analysis; do not invent findings.\n\n\
+         Analysis:\n{response}"
+    );
+    let extract_preamble = "You extract structured StandaloneInvestigationResult from \
+        investigation analysis. Always use the submit tool. \
+        answer is the natural-language synthesis; summary is a 1-2 sentence TL;DR. \
+        severity must be one of: critical, warning, info. \
+        fix_type must be one of: auto_fixable, developer_actionable, hybrid, informational.";
+
+    match crate::rig::extraction::extract_with_backend::<StandaloneInvestigationResult>(
+        backend,
+        &extract_prompt,
+        Some(extract_preamble),
+        Some("direct"),
+        None,
+    )
+    .await
+    {
+        Ok(typed) => typed,
+        // c. Soft-fallback: pure prose as answer (do not hard-fail the investigate command).
+        Err(e) => {
+            log::warn!(
+                "[investigate] typed extraction failed ({e}); soft-falling back to prose answer"
+            );
+            StandaloneInvestigationResult::from_prose(response)
+        }
+    }
 }
 
 /// Build the shared investigation core preamble: project context + tool catalog.
@@ -118,8 +160,10 @@ pub(crate) async fn build_investigation_preamble(
 
 /// Freeform JSON output contract for standalone [`exec_investigate`] only.
 ///
-/// Not used by content-review investigate, which extracts typed
-/// `InvestigationFindings` after a prose analysis turn.
+/// Encourages first-pass structured JSON from the tool agent. Content-review
+/// investigate does not use this contract; it extracts typed
+/// `InvestigationFindings` after a prose analysis turn. Standalone still
+/// soft-falls back to prose if parse + Extractor both fail.
 pub(crate) fn standalone_investigation_output_contract() -> &'static str {
     "Output format — return your findings as valid JSON:\n\
     {\n\
@@ -141,6 +185,7 @@ pub(crate) fn standalone_investigation_output_contract() -> &'static str {
 mod tests {
     use super::*;
     use crate::engine::tools::investigation_catalog;
+    use crate::models::content_review::{Finding, StandaloneInvestigationResult};
 
     #[test]
     fn tool_catalog_read_only_excludes_mutators() {
@@ -186,5 +231,54 @@ mod tests {
         // Core preamble is only context + catalog; contract is appended by
         // exec_investigate only.
         assert!(!catalog.contains("Output format — return your findings as valid JSON"));
+    }
+
+    #[test]
+    fn first_pass_json_parses_as_standalone_result() {
+        let json = r#"{
+            "answer": "Traffic is down on /blog/foo.",
+            "summary": "CTR drop on one page.",
+            "findings": [{
+                "title": "Low CTR",
+                "description": "Title tag mismatch",
+                "evidence": "get_gsc_page_metrics",
+                "severity": "warning",
+                "fix_type": "auto_fixable"
+            }]
+        }"#;
+        let parsed: StandaloneInvestigationResult =
+            serde_json::from_str(json).expect("valid StandaloneInvestigationResult JSON");
+        assert_eq!(parsed.answer, "Traffic is down on /blog/foo.");
+        assert_eq!(parsed.summary, "CTR drop on one page.");
+        assert_eq!(parsed.findings.len(), 1);
+        assert_eq!(parsed.findings[0].severity, "warning");
+    }
+
+    #[test]
+    fn soft_fallback_from_prose_preserves_answer() {
+        let prose = "I looked at GSC and found impressions flatlined after March.";
+        let result = StandaloneInvestigationResult::from_prose(prose);
+        assert_eq!(result.answer, prose);
+        assert!(result.summary.is_empty());
+        assert!(result.findings.is_empty());
+    }
+
+    #[test]
+    fn soft_fallback_serializes_for_command_evidence() {
+        let result = StandaloneInvestigationResult {
+            answer: "full writeup".into(),
+            summary: "tldr".into(),
+            findings: vec![Finding {
+                title: "Issue".into(),
+                description: "Desc".into(),
+                evidence: "tool X".into(),
+                severity: "info".into(),
+                fix_type: "informational".into(),
+            }],
+        };
+        let value = serde_json::to_value(&result).expect("serialize");
+        assert_eq!(value["answer"], "full writeup");
+        assert_eq!(value["summary"], "tldr");
+        assert_eq!(value["findings"][0]["title"], "Issue");
     }
 }

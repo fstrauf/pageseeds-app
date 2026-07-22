@@ -2,16 +2,18 @@ use tauri::State;
 
 use crate::commands::AppState;
 use crate::engine::task_store;
+use crate::models::content_review::Finding;
 
-/// Type for investigation results.
+/// Type for investigation results returned to the frontend.
 #[derive(Debug, serde::Serialize)]
 pub struct InvestigationResult {
     pub id: String,
     pub question: String,
     pub answer: String,
     pub summary: String,
+    /// Full typed investigation payload (answer + summary + findings).
     pub evidence: serde_json::Value,
-    pub findings: Vec<serde_json::Value>,
+    pub findings: Vec<Finding>,
     pub created_at: String,
 }
 
@@ -46,12 +48,21 @@ pub async fn investigate(
     let id = format!("inv-{}", chrono::Utc::now().timestamp_millis());
     let created_at = chrono::Utc::now().to_rfc3339();
 
-    let answer = result["answer"].as_str().unwrap_or("No answer produced.").to_string();
-    let summary = result["summary"].as_str().unwrap_or("").to_string();
-    let findings = result["findings"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let answer = if result.answer.is_empty() {
+        "No answer produced.".to_string()
+    } else {
+        result.answer.clone()
+    };
+    let summary = result.summary.clone();
+    let findings = result.findings.clone();
+
+    let evidence = serde_json::to_value(&result).unwrap_or_else(|_| {
+        serde_json::json!({
+            "answer": &answer,
+            "summary": &summary,
+            "findings": &findings,
+        })
+    });
 
     // Save evidence to automation dir
     let paths = crate::engine::project_paths::ProjectPaths::from_path(&project_path);
@@ -60,7 +71,10 @@ pub async fn investigate(
         log::warn!("[investigate] Failed to create investigation dir: {e}");
     } else {
         let evidence_path = inv_dir.join("evidence.json");
-        if let Err(e) = std::fs::write(&evidence_path, serde_json::to_string_pretty(&result).unwrap_or_default()) {
+        if let Err(e) = std::fs::write(
+            &evidence_path,
+            serde_json::to_string_pretty(&evidence).unwrap_or_default(),
+        ) {
             log::warn!("[investigate] Failed to write evidence: {e}");
         }
         let answer_path = inv_dir.join("answer.md");
@@ -77,7 +91,7 @@ pub async fn investigate(
         question,
         answer,
         summary,
-        evidence: result,
+        evidence,
         findings,
         created_at,
     })
