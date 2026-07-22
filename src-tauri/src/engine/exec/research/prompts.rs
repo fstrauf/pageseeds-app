@@ -125,7 +125,7 @@ fn build_shortlist_summary(project_id: &str) -> String {
 
     let mut lines: Vec<String> = vec![
         "The following themes were identified as open territories (low coverage + high impressions). \
-         Prioritize these in your theme extraction:".to_string(),
+         Prioritize these in your theme extraction (prefer health: promising when present):".to_string(),
     ];
     for entry in entries {
         let seed_hint = if entry.seeds.is_empty() {
@@ -134,10 +134,11 @@ fn build_shortlist_summary(project_id: &str) -> String {
             format!(" → suggested seeds: {}", entry.seeds.join(", "))
         };
         lines.push(format!(
-            "- {} ({} impressions, {} articles){}",
+            "- {} ({} impressions, {} articles, health: {}){}",
             entry.theme,
             entry.total_impressions.map(|i| format!("{:.0}", i)).unwrap_or_else(|| "unknown".to_string()),
             entry.article_count.map(|c| c.to_string()).unwrap_or_else(|| "unknown".to_string()),
+            entry.health_status,
             seed_hint
         ));
     }

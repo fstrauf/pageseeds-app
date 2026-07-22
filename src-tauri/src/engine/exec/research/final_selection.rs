@@ -358,6 +358,16 @@ pub(crate) const FINAL_RESULTS: usize = 10;
 /// How many candidates to select before the relevance check, so off-domain
 /// removals don't shrink the final shortlist below FINAL_RESULTS.
 const RELEVANCE_OVERSHOOT: usize = 15;
+/// Minimum non-avoid candidates required before hard-dropping all `avoid` rows.
+///
+/// Soft demote (sort + trim) alone still leaves avoid head terms in the picker
+/// when the overshoot is mostly AIO-blocked. Once we have at least this many
+/// non-avoid candidates (target / differentiate / unscored), drop avoids
+/// entirely so product-adjacent long-tails surface. Threshold 3 matches a
+/// useful KeywordPicker set and the weekly-seo max of 3 new articles. Below
+/// it residual avoids stay as last resort (non-goal: never hide avoid when
+/// nothing better exists).
+pub(crate) const MIN_NON_AVOID_TO_DROP: usize = 3;
 
 /// Execute the final selection step.
 ///
@@ -413,10 +423,12 @@ pub fn exec_research_final_selection(
             enrich_with_winnability(&mut output, &task.project_id);
 
             // Re-sort by the combined key (winnability bucket, then volume,
-            // KD, gap score) and only then trim: `Avoid` keywords drop out of
-            // the picker whenever enough better candidates exist, and remain
-            // (badged, at the bottom) when they don't.
+            // KD, gap score). Soft demote alone is not enough when the
+            // overshoot is mostly AIO-blocked heads: hard-drop avoids when
+            // enough non-avoid candidates exist, then trim. Residual avoids
+            // remain (badged, at the bottom) only as last resort.
             sort_by_winnability(&mut output);
+            apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
             trim_to_final(&mut output, FINAL_RESULTS);
             let final_count = selected_count(&output);
             output.filtered_out = output.total_candidates.saturating_sub(final_count);
@@ -473,6 +485,61 @@ pub(crate) fn trim_to_final(output: &mut KeywordPickerOutput, max: usize) {
     output.landing_page_candidates.truncate(max);
     if let Some(d) = &mut output.difficulty {
         d.results.truncate(max);
+        d.total = d.results.len();
+        d.successful = d.results.len();
+    }
+}
+
+/// True when the winnability bucket is explicitly `avoid` (AIO / authority
+/// dominated). Missing and unknown buckets count as non-avoid — same as
+/// `winnability_rank` treating them as target-equivalent.
+fn is_avoid_bucket(winnability: Option<&str>) -> bool {
+    matches!(winnability, Some("avoid"))
+}
+
+/// Hard-drop AIO `avoid` rows when enough non-avoid candidates exist.
+///
+/// Soft demote via `sort_by_winnability` + `trim_to_final` only pushes avoids
+/// below the cut line when non-avoids already fill the top N. When the
+/// overshoot is mostly avoid (common for AIO-blocked head terms), product-
+/// adjacent long-tails still lose slots after trim. This policy:
+/// - Counts candidates with `winnability != Some("avoid")` across the active
+///   output shape (missing/unknown = non-avoid).
+/// - If non-avoid count ≥ `min_non_avoid`, removes every avoid row from both
+///   `landing_page_candidates` and `difficulty.results`.
+/// - Else keeps residual avoids (already sorted last) as last resort.
+///
+/// Call after `sort_by_winnability` and before `trim_to_final`.
+pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid: usize) {
+    let non_avoid = if !output.landing_page_candidates.is_empty() {
+        output
+            .landing_page_candidates
+            .iter()
+            .filter(|c| !is_avoid_bucket(c.winnability.as_deref()))
+            .count()
+    } else {
+        output
+            .difficulty
+            .as_ref()
+            .map(|d| {
+                d.results
+                    .iter()
+                    .filter(|k| !is_avoid_bucket(k.winnability.as_deref()))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+
+    if non_avoid < min_non_avoid {
+        return;
+    }
+
+    output
+        .landing_page_candidates
+        .retain(|c| !is_avoid_bucket(c.winnability.as_deref()));
+    if let Some(d) = &mut output.difficulty {
+        d.results
+            .retain(|k| !is_avoid_bucket(k.winnability.as_deref()));
         d.total = d.results.len();
         d.successful = d.results.len();
     }
