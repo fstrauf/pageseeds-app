@@ -593,6 +593,14 @@ Some content here.
         let build_result = exec_can_build_context(&task, &path);
         assert!(build_result.success);
 
+        // Exact-keyword lane is produced by the dedicated step, then injected.
+        let dupes_result = exec_can_exact_keyword_dupes(&task, &path);
+        assert!(
+            dupes_result.success,
+            "exact_keyword_dupes failed: {}",
+            dupes_result.message
+        );
+
         let select_result = exec_can_select_candidates(&task, &path);
         assert!(
             select_result.success,
@@ -613,7 +621,14 @@ Some content here.
             "Should produce at least one candidate (fixture has 3 pages with exact keyword 'cash secured puts')"
         );
 
-        // Candidates are evidence-lane merge sets: exact-keyword groups and/or high-sim pairs
+        // Evidence lanes only: exact_keyword_dupe and/or high-sim merge_candidate
+        let has_exact = candidates
+            .iter()
+            .any(|c| c["candidate_type"].as_str() == Some("exact_keyword_dupe"));
+        assert!(
+            has_exact,
+            "exact_keyword_duplicates injection must emit exact_keyword_dupe"
+        );
         for c in candidates {
             let ctype = c["candidate_type"].as_str().unwrap();
             assert!(
@@ -722,6 +737,42 @@ Some content here.
         })
     }
 
+    /// Context-shaped page for exact_keyword_duplicates.json injection tests.
+    fn dupe_page(id: i64, slug: &str, keyword: &str, impressions: f64) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "url_slug": slug,
+            "title": slug,
+            "h1": slug,
+            "target_keyword": keyword,
+            "first_200_words": "sample excerpt for test page",
+            "gsc": {
+                "impressions": impressions,
+                "clicks": 5.0,
+                "avg_position": 8.0
+            },
+            "word_count": 800,
+            "incoming_internal_links": 1,
+            "outgoing_internal_links": 1,
+            "published_date": "2024-01-01",
+        })
+    }
+
+    fn write_exact_dupes_file(path: &str, duplicates: serde_json::Value) {
+        let auto_dir = Path::new(path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let doc = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "dupe_count": duplicates.as_array().map(|a| a.len()).unwrap_or(0),
+            "duplicates": duplicates,
+        });
+        std::fs::write(
+            auto_dir.join("exact_keyword_duplicates.json"),
+            serde_json::to_string_pretty(&doc).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn read_candidates(path: &str) -> Vec<serde_json::Value> {
         let auto_dir = Path::new(path).join(".github").join("automation");
         let doc: serde_json::Value = serde_json::from_str(
@@ -737,6 +788,7 @@ Some content here.
         let _ = std::fs::remove_dir_all(&path);
         // Soft cluster whose pages all have distinct target keywords must NOT
         // become a whole-theme merge candidate (fail-closed shortlist).
+        // No exact_keyword_duplicates.json and no high-sim pairs → empty shortlist.
         write_clusters_file(
             &path,
             serde_json::json!([
@@ -769,6 +821,7 @@ Some content here.
     fn test_select_candidates_still_splits_when_every_group_has_two_pages() {
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
+        // Soft clusters alone are not merge authority — exact-keyword injection is.
         write_clusters_file(
             &path,
             serde_json::json!([
@@ -778,15 +831,101 @@ Some content here.
                 cluster_page(4, "cc-b", "covered calls"),
             ]),
         );
+        write_exact_dupes_file(
+            &path,
+            serde_json::json!([
+                {
+                    "keyword": "cash secured puts",
+                    "article_count": 2,
+                    "total_impressions": 200.0,
+                    "pages": [
+                        dupe_page(1, "csp-a", "cash secured puts", 100.0),
+                        dupe_page(2, "csp-b", "cash secured puts", 100.0),
+                    ],
+                    "best_performer": {
+                        "id": 1,
+                        "title": "csp-a",
+                        "url": "csp-a",
+                        "impressions": 100.0,
+                        "clicks": 5.0,
+                        "avg_position": 8.0
+                    }
+                },
+                {
+                    "keyword": "covered calls",
+                    "article_count": 2,
+                    "total_impressions": 200.0,
+                    "pages": [
+                        dupe_page(3, "cc-a", "covered calls", 100.0),
+                        dupe_page(4, "cc-b", "covered calls", 100.0),
+                    ],
+                    "best_performer": {
+                        "id": 3,
+                        "title": "cc-a",
+                        "url": "cc-a",
+                        "impressions": 100.0,
+                        "clicks": 5.0,
+                        "avg_position": 8.0
+                    }
+                }
+            ]),
+        );
 
         let result = exec_can_select_candidates(&audit_task(), &path);
         assert!(result.success, "select_candidates failed: {}", result.message);
 
         let candidates = read_candidates(&path);
-        assert_eq!(candidates.len(), 2, "balanced groups must still split");
-        assert!(candidates
-            .iter()
-            .all(|c| c["page_count"].as_i64().unwrap() == 2));
+        assert_eq!(candidates.len(), 2, "two exact-keyword groups must each emit");
+        assert!(candidates.iter().all(|c| {
+            c["candidate_type"].as_str() == Some("exact_keyword_dupe")
+                && c["page_count"].as_i64().unwrap() == 2
+        }));
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_select_candidates_skips_empty_keyword_exact_dupes() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                cluster_page(1, "blank-a", ""),
+                cluster_page(2, "blank-b", ""),
+            ]),
+        );
+        // Empty keyword groups must not become candidates (fail-closed).
+        write_exact_dupes_file(
+            &path,
+            serde_json::json!([
+                {
+                    "keyword": "",
+                    "article_count": 2,
+                    "total_impressions": 200.0,
+                    "pages": [
+                        dupe_page(1, "blank-a", "", 100.0),
+                        dupe_page(2, "blank-b", "", 100.0),
+                    ],
+                    "best_performer": {
+                        "id": 1,
+                        "title": "blank-a",
+                        "url": "blank-a",
+                        "impressions": 100.0,
+                        "clicks": 5.0,
+                        "avg_position": 8.0
+                    }
+                }
+            ]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(result.success, "select_candidates failed: {}", result.message);
+        let candidates = read_candidates(&path);
+        assert!(
+            candidates.is_empty(),
+            "empty target_keyword must not form exact_keyword_dupe candidates"
+        );
 
         cleanup(&path);
     }
@@ -923,16 +1062,37 @@ Some content here.
     fn test_select_candidates_caps_keyword_group_at_four() {
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
+        // Cap is enforced on the exact_keyword_dupe injection lane.
         write_clusters_file(
             &path,
             serde_json::json!([
                 cluster_page(1, "kw-a", "shared keyword"),
                 cluster_page(2, "kw-b", "shared keyword"),
-                cluster_page(3, "kw-c", "shared keyword"),
-                cluster_page(4, "kw-d", "shared keyword"),
-                cluster_page(5, "kw-e", "shared keyword"),
-                cluster_page(6, "kw-f", "shared keyword"),
             ]),
+        );
+        write_exact_dupes_file(
+            &path,
+            serde_json::json!([{
+                "keyword": "shared keyword",
+                "article_count": 6,
+                "total_impressions": 2100.0,
+                "pages": [
+                    dupe_page(1, "kw-a", "shared keyword", 600.0),
+                    dupe_page(2, "kw-b", "shared keyword", 500.0),
+                    dupe_page(3, "kw-c", "shared keyword", 400.0),
+                    dupe_page(4, "kw-d", "shared keyword", 300.0),
+                    dupe_page(5, "kw-e", "shared keyword", 200.0),
+                    dupe_page(6, "kw-f", "shared keyword", 100.0),
+                ],
+                "best_performer": {
+                    "id": 1,
+                    "title": "kw-a",
+                    "url": "kw-a",
+                    "impressions": 600.0,
+                    "clicks": 5.0,
+                    "avg_position": 8.0
+                }
+            }]),
         );
 
         let result = exec_can_select_candidates(&audit_task(), &path);
@@ -940,6 +1100,10 @@ Some content here.
 
         let candidates = read_candidates(&path);
         assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0]["candidate_type"].as_str().unwrap(),
+            "exact_keyword_dupe"
+        );
         assert_eq!(
             candidates[0]["page_count"].as_i64().unwrap(),
             4,

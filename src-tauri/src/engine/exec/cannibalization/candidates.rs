@@ -1,4 +1,4 @@
-//! Step 5: Select merge candidates from clusters.
+//! Step 5: Select merge candidates from evidence lanes.
 
 use super::*;
 
@@ -8,7 +8,7 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
-/// Max pages in any merge candidate (exact-keyword groups and high-sim components).
+/// Max pages in any merge candidate (exact-keyword groups and high-sim pairs).
 const MAX_CANDIDATE_PAGES: usize = 4;
 
 /// Pairwise cosine similarity required to emit a high-sim merge candidate.
@@ -19,19 +19,22 @@ const PAIR_CANDIDATE_SIMILARITY_THRESHOLD: f64 = 0.45;
 // Step 3: Select Candidates
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Deterministic candidate selection from cannibalization cluster artifacts.
+/// Deterministic candidate selection for the cannibalization shortlist.
 ///
-/// Reads `cannibalization_clusters.json` and optional `similarity_pairs` from
-/// `cannibalization_audit_context.json`. Emits candidates only from evidence
-/// lanes: exact same `target_keyword` groups (≥2 pages) and high pairwise
-/// similarity (≥ [`PAIR_CANDIDATE_SIMILARITY_THRESHOLD`]). Soft TF-IDF theme
-/// bags are not merge authority — size-1 keyword groups are dropped, never
-/// re-expanded into a whole-theme grab-bag. Caps pages per candidate at
-/// [`MAX_CANDIDATE_PAGES`]. Writes `cannibalization_candidates.json`.
+/// Soft TF-IDF clusters (from `cannibalization_clusters.json`) are exploratory
+/// only — not merge authority. Emits candidates from two evidence lanes only:
+/// 1. Exact same `target_keyword` groups via `exact_keyword_duplicates.json`
+///    (`candidate_type: "exact_keyword_dupe"`) — single source of truth.
+/// 2. High pairwise similarity pairs (≥ [`PAIR_CANDIDATE_SIMILARITY_THRESHOLD`])
+///    as `merge_candidate` with `pair_similarity`.
+///
+/// Caps pages per candidate at [`MAX_CANDIDATE_PAGES`]. Writes
+/// `cannibalization_candidates.json`.
 pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    // Load clusters from DB (primary) or JSON fallback
+    // Load clusters from DB (primary) or JSON fallback — used for early exit /
+    // messaging counts only. Soft clusters are never merge authority.
     let clusters_doc: serde_json::Value = {
         let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
             .ok()
@@ -73,225 +76,25 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
         };
     }
 
-    // Build candidates from clusters, but merge clusters that share the same theme.
-    // Multiple connected components can have the same theme (e.g., 11 separate
-    // 2-page clusters all about "iron condor"). Without merging, the agent analyzes
-    // each one separately and may return duplicate-looking recommendations.
-    //
-    // Fail-closed: theme bags are only a source of pages. We emit a candidate
-    // only when ≥2 pages share an exact target_keyword. Soft topical cohesion
-    // alone never becomes a merge set.
-    let mut theme_groups: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-    for cluster in &clusters {
-        let pages = cluster["pages"].as_array().cloned().unwrap_or_default();
-        if pages.len() < 2 {
-            continue;
-        }
-        let theme = cluster["theme"]
-            .as_str()
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
-        if theme.is_empty() {
-            continue;
-        }
-        theme_groups.entry(theme).or_default().push(cluster.clone());
-    }
-
     let mut candidates: Vec<serde_json::Value> = Vec::new();
-    // Track URL pairs already covered so high-sim emission can skip duplicates.
+    // Track URL pairs already covered so high-sim emission can skip duplicates
+    // of exact-keyword sets (exact lane runs first and takes priority).
     let mut covered_url_pairs: HashSet<(String, String)> = HashSet::new();
 
-    for (theme, group_clusters) in theme_groups {
-        // Collect all pages from all clusters with this theme
-        let mut all_pages: Vec<serde_json::Value> = Vec::new();
-        let mut top_shared_queries: Vec<String> = Vec::new();
-        let mut shared_query_count: i64 = 0;
-        for cluster in &group_clusters {
-            if let Some(pages) = cluster["pages"].as_array() {
-                all_pages.extend(pages.clone());
-            }
-            if let Some(arr) = cluster["top_shared_queries"].as_array() {
-                for q in arr {
-                    if let Some(s) = q.as_str() {
-                        if !top_shared_queries.contains(&s.to_string()) {
-                            top_shared_queries.push(s.to_string());
-                        }
-                    }
-                }
-            }
-            shared_query_count =
-                shared_query_count.max(cluster["shared_query_count"].as_i64().unwrap_or(0));
-        }
+    // ── Lane 1: exact-keyword duplicates (single source of truth) ─────────────
+    // Guaranteed overlap cases (identical non-empty target_keyword). Empty
+    // keywords are skipped by exact_dupes generation and again here.
+    inject_exact_keyword_dupe_candidates(&paths, &mut candidates, &mut covered_url_pairs);
 
-        if all_pages.len() < 2 {
-            continue;
-        }
-
-        // Deduplicate pages by URL
-        {
-            let mut seen_urls = HashSet::new();
-            all_pages.retain(|p| {
-                let url = p["url"].as_str().unwrap_or("").to_string();
-                if url.is_empty() {
-                    return false;
-                }
-                seen_urls.insert(url)
-            });
-        }
-
-        // Split by target keyword — only groups with ≥2 pages are merge evidence.
-        // Size-1 groups are dropped. Never fall back to the whole soft-theme bag.
-        let mut keyword_groups: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-        for page in &all_pages {
-            let kw = page["target_keyword"]
-                .as_str()
-                .unwrap_or("")
-                .trim()
-                .to_lowercase();
-            keyword_groups.entry(kw).or_default().push(page.clone());
-        }
-
-        let mut groups: Vec<Vec<serde_json::Value>> = keyword_groups
-            .into_values()
-            .filter(|g| g.len() >= 2)
-            .collect();
-        groups.sort_by(|a, b| {
-            let ia: f64 = a
-                .iter()
-                .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
-                .sum();
-            let ib: f64 = b
-                .iter()
-                .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
-                .sum();
-            ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        for group in groups {
-            // Cap at MAX_CANDIDATE_PAGES by impressions
-            let mut group_pages = group;
-            group_pages.sort_by(|a, b| {
-                let ia = b["impressions"].as_f64().unwrap_or(0.0);
-                let ib = a["impressions"].as_f64().unwrap_or(0.0);
-                ia.partial_cmp(&ib).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            let selected_pages: Vec<serde_json::Value> = group_pages
-                .into_iter()
-                .take(MAX_CANDIDATE_PAGES)
-                .collect();
-
-            record_url_pairs(&selected_pages, &mut covered_url_pairs);
-
-            let total_impressions: f64 = selected_pages
-                .iter()
-                .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
-                .sum();
-
-            let candidate_id = format!("{}_{}", slugify(&theme), candidates.len());
-            let page_count = selected_pages.len();
-            let compact_pages = compact_cluster_pages(&selected_pages);
-
-            candidates.push(serde_json::json!({
-                "candidate_id": candidate_id,
-                "candidate_type": "merge_candidate",
-                "theme": theme,
-                "pages": compact_pages,
-                "top_shared_queries": top_shared_queries,
-                "shared_query_count": shared_query_count,
-                "total_impressions": total_impressions,
-                "page_count": page_count,
-            }));
-        }
-    }
-
-    // ── High pairwise similarity candidates ───────────────────────────────────
+    // ── Lane 2: high pairwise similarity ──────────────────────────────────────
     // Soft clustering (threshold 0.15) is exploratory only. Merge candidates
     // require strong pair evidence (≥ 0.45). Emit one 2-page candidate per pair;
-    // never expand into top-N traffic samples from large components.
+    // skip pairs already covered by an exact-keyword set.
     emit_high_similarity_pair_candidates(
         &paths,
         &mut candidates,
         &mut covered_url_pairs,
     );
-
-    // ── Inject exact-keyword-duplicate candidates ─────────────────────────────
-    // These are guaranteed overlap cases (identical target_keyword). They take
-    // priority over cluster-based candidates because the overlap is unambiguous.
-    let dupes_path = paths.automation_dir.join("exact_keyword_duplicates.json");
-    if let Ok(dupes_json) = std::fs::read_to_string(&dupes_path) {
-        if let Ok(dupes_doc) = serde_json::from_str::<serde_json::Value>(&dupes_json) {
-            if let Some(dupes_arr) = dupes_doc["duplicates"].as_array() {
-                for dupe in dupes_arr {
-                    let keyword = dupe["keyword"].as_str().unwrap_or("").to_string();
-                    if keyword.is_empty() {
-                        continue;
-                    }
-                    let pages = dupe["pages"].as_array().cloned().unwrap_or_default();
-                    if pages.len() < 2 {
-                        continue;
-                    }
-
-                    // Cap exact-keyword groups at MAX_CANDIDATE_PAGES as well
-                    let mut pages = pages;
-                    pages.sort_by(|a, b| {
-                        let ia = b["gsc"]["impressions"].as_f64().unwrap_or(0.0);
-                        let ib = a["gsc"]["impressions"].as_f64().unwrap_or(0.0);
-                        ia.partial_cmp(&ib).unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    let pages: Vec<serde_json::Value> =
-                        pages.into_iter().take(MAX_CANDIDATE_PAGES).collect();
-
-                    // Build compact pages in the same shape as cluster candidates
-                    let compact_pages: Vec<serde_json::Value> = pages
-                        .iter()
-                        .map(|p| {
-                            let excerpt = p["first_200_words"].as_str().unwrap_or("");
-                            let excerpt_words: Vec<&str> =
-                                excerpt.split_whitespace().take(60).collect();
-                            serde_json::json!({
-                                "id": p["id"],
-                                "url": crate::content::slug::format_blog_link(p["url_slug"].as_str().unwrap_or("")),
-                                "title": p["title"],
-                                "h1": p["h1"],
-                                "target_keyword": p["target_keyword"],
-                                "impressions": p["gsc"]["impressions"].as_f64().unwrap_or(0.0),
-                                "clicks": p["gsc"]["clicks"].as_f64().unwrap_or(0.0),
-                                "avg_position": p["gsc"]["avg_position"].as_f64().unwrap_or(0.0),
-                                "word_count": p["word_count"],
-                                "incoming_internal_links": p["incoming_internal_links"],
-                                "outgoing_internal_links": p["outgoing_internal_links"],
-                                "published_date": p["published_date"],
-                                "excerpt": excerpt_words.join(" "),
-                            })
-                        })
-                        .collect();
-
-                    record_url_pairs(&compact_pages, &mut covered_url_pairs);
-
-                    let total_impressions: f64 = compact_pages
-                        .iter()
-                        .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
-                        .sum();
-                    let page_count = compact_pages.len();
-
-                    let candidate_id = format!("exact_{}_{}", slugify(&keyword), candidates.len());
-
-                    candidates.push(serde_json::json!({
-                        "candidate_id": candidate_id,
-                        "candidate_type": "exact_keyword_dupe",
-                        "theme": keyword,
-                        "pages": compact_pages,
-                        "top_shared_queries": vec![keyword.clone()],
-                        "shared_query_count": 1,
-                        "total_impressions": total_impressions,
-                        "page_count": page_count,
-                        "best_performer": dupe["best_performer"],
-                    }));
-                }
-            }
-        }
-    }
 
     // Sort candidates by total impressions descending
     candidates.sort_by(|a, b| {
@@ -351,33 +154,70 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
     }
 }
 
-/// Compact cluster-shaped pages into the candidate page payload.
-fn compact_cluster_pages(pages: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    pages
-        .iter()
-        .map(|p| {
-            let excerpt = p["first_200_words"]
-                .as_str()
-                .or_else(|| p["excerpt"].as_str())
-                .unwrap_or("");
-            let excerpt_words: Vec<&str> = excerpt.split_whitespace().take(60).collect();
-            serde_json::json!({
-                "id": p["id"],
-                "url": p["url"],
-                "title": p["title"],
-                "h1": p["h1"],
-                "target_keyword": p["target_keyword"],
-                "impressions": p["impressions"],
-                "clicks": p["clicks"],
-                "avg_position": p["avg_position"],
-                "word_count": p["word_count"],
-                "incoming_internal_links": p["incoming_internal_links"],
-                "outgoing_internal_links": p["outgoing_internal_links"],
-                "published_date": p["published_date"],
-                "excerpt": excerpt_words.join(" "),
-            })
-        })
-        .collect()
+/// Inject `exact_keyword_duplicates.json` groups as typed `exact_keyword_dupe`
+/// candidates. Empty keywords and groups with fewer than 2 pages are skipped.
+fn inject_exact_keyword_dupe_candidates(
+    paths: &ProjectPaths,
+    candidates: &mut Vec<serde_json::Value>,
+    covered_url_pairs: &mut HashSet<(String, String)>,
+) {
+    let dupes_path = paths.automation_dir.join("exact_keyword_duplicates.json");
+    let dupes_json = match std::fs::read_to_string(&dupes_path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let dupes_doc: serde_json::Value = match serde_json::from_str(&dupes_json) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let Some(dupes_arr) = dupes_doc["duplicates"].as_array() else {
+        return;
+    };
+
+    for dupe in dupes_arr {
+        let keyword = dupe["keyword"].as_str().unwrap_or("").trim().to_string();
+        if keyword.is_empty() {
+            continue;
+        }
+        let pages = dupe["pages"].as_array().cloned().unwrap_or_default();
+        if pages.len() < 2 {
+            continue;
+        }
+
+        // Cap exact-keyword groups at MAX_CANDIDATE_PAGES by impressions
+        let mut pages = pages;
+        pages.sort_by(|a, b| {
+            let ia = b["gsc"]["impressions"].as_f64().unwrap_or(0.0);
+            let ib = a["gsc"]["impressions"].as_f64().unwrap_or(0.0);
+            ia.partial_cmp(&ib).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let pages: Vec<serde_json::Value> = pages.into_iter().take(MAX_CANDIDATE_PAGES).collect();
+
+        let compact_pages: Vec<serde_json::Value> =
+            pages.iter().map(compact_context_article).collect();
+
+        record_url_pairs(&compact_pages, covered_url_pairs);
+
+        let total_impressions: f64 = compact_pages
+            .iter()
+            .map(|p| p["impressions"].as_f64().unwrap_or(0.0))
+            .sum();
+        let page_count = compact_pages.len();
+
+        let candidate_id = format!("exact_{}_{}", slugify(&keyword), candidates.len());
+
+        candidates.push(serde_json::json!({
+            "candidate_id": candidate_id,
+            "candidate_type": "exact_keyword_dupe",
+            "theme": keyword,
+            "pages": compact_pages,
+            "top_shared_queries": vec![keyword.clone()],
+            "shared_query_count": 1,
+            "total_impressions": total_impressions,
+            "page_count": page_count,
+            "best_performer": dupe["best_performer"],
+        }));
+    }
 }
 
 fn normalize_url_pair(a: &str, b: &str) -> (String, String) {
@@ -527,6 +367,7 @@ fn emit_high_similarity_pair_candidates(
     }
 }
 
+/// Compact a context-shaped article (url_slug + nested gsc) into a candidate page.
 fn compact_context_article(article: &serde_json::Value) -> serde_json::Value {
     let slug = article["url_slug"].as_str().unwrap_or("");
     let excerpt = article["first_200_words"].as_str().unwrap_or("");
