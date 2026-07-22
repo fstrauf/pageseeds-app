@@ -276,6 +276,7 @@ fn build_fix_prompt(
     let meta_max = crate::engine::exec::audit_health::META_MAX_LEN;
     let intro_min = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
     let intro_max = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
+    let current_year = crate::content::year_policy::current_calendar_year();
 
     let suggestions_json = serde_json::to_string_pretty(&context.suggestions).map_err(|e| e.to_string())?;
 
@@ -309,6 +310,7 @@ fn build_fix_prompt(
 - article_id: {article_id}
 - article_title: {article_title}
 - target_keyword: {target_keyword}
+- current_year: {current_year}
 
 ### Current title
 ```{current_title}```
@@ -345,6 +347,7 @@ Validation rules (enforced by Rust):
 - description: must be {meta_min}-{meta_max} chars if provided
 - intro: should be {intro_min}-{intro_max} words if provided
 - faq_questions: must be 3-5 questions if provided and file has no existing frontmatter FAQ
+- **Year freshness**: `current_year` is {current_year}. If title or description contains any 20xx calendar year, **every** such year must equal {current_year}. No stale years, no dual-year ranges (e.g. "2025-2026"), no future years other than the current calendar year. Prefer a single `{current_year}` when a year is warranted, or omit years entirely.
 
 **CRITICAL — Keyword placement**: The target keyword is "{target_keyword}". Whenever you generate a new title, H1, meta description, or intro, you MUST naturally include the target keyword in the text. This applies to ALL changes in those fields, not just keyword-specific recommendations:
 - If generating a new title: the target keyword must appear in the title
@@ -366,6 +369,7 @@ Only include fields that need to change. Do not include title/description/intro/
         article_id = context.article_id,
         article_title = context.article_title,
         target_keyword = context.target_keyword.as_deref().unwrap_or("(none)"),
+        current_year = current_year,
         current_title = current_title,
         title_len = current_title.chars().count(),
         title_max = title_max,
@@ -692,10 +696,10 @@ fn validate_patch_before_write(
                 ));
             }
         }
-        if !crate::content::year_policy::years_ok(t, current_year) {
-            errors.push(
-                "title contains year not equal to current calendar year".to_string(),
-            );
+        if let Some(err) =
+            crate::content::year_policy::non_current_year_error("title", t, current_year)
+        {
+            errors.push(err);
         }
     }
 
@@ -715,10 +719,10 @@ fn validate_patch_before_write(
                 ));
             }
         }
-        if !crate::content::year_policy::years_ok(d, current_year) {
-            errors.push(
-                "description contains year not equal to current calendar year".to_string(),
-            );
+        if let Some(err) =
+            crate::content::year_policy::non_current_year_error("description", d, current_year)
+        {
+            errors.push(err);
         }
     }
 

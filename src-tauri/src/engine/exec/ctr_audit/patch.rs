@@ -201,10 +201,10 @@ pub(crate) fn validate_patch_before_write(
                 crate::engine::exec::audit_health::TITLE_MAX_LEN
             ));
         }
-        if !crate::content::year_policy::years_ok(title, current_year) {
-            errors.push(
-                "title contains year not equal to current calendar year".to_string(),
-            );
+        if let Some(err) =
+            crate::content::year_policy::non_current_year_error("title", title, current_year)
+        {
+            errors.push(err);
         }
     }
 
@@ -220,10 +220,12 @@ pub(crate) fn validate_patch_before_write(
                 crate::engine::exec::audit_health::META_MAX_LEN
             ));
         }
-        if !crate::content::year_policy::years_ok(description, current_year) {
-            errors.push(
-                "description contains year not equal to current calendar year".to_string(),
-            );
+        if let Some(err) = crate::content::year_policy::non_current_year_error(
+            "description",
+            description,
+            current_year,
+        ) {
+            errors.push(err);
         }
     }
 

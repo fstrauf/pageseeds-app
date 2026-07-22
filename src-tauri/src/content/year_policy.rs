@@ -14,6 +14,18 @@ fn year_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b(20\d{2})\b").expect("year regex"))
 }
 
+/// True when `token` is a pure 20xx calendar year (exactly four digits, 20xx).
+///
+/// Used by keyword matching to treat years as optional, and shared so token
+/// detection and body extraction agree on what counts as a year.
+pub fn is_calendar_year_token(token: &str) -> bool {
+    token.len() == 4
+        && token.as_bytes()[0] == b'2'
+        && token.as_bytes()[1] == b'0'
+        && token.as_bytes()[2].is_ascii_digit()
+        && token.as_bytes()[3].is_ascii_digit()
+}
+
 /// Extract all 20xx calendar years from `text` (order of appearance, duplicates kept).
 pub fn extract_years(text: &str) -> Vec<i32> {
     year_re()
@@ -28,6 +40,20 @@ pub fn years_ok(text: &str, current_year: i32) -> bool {
     years.is_empty() || years.iter().all(|&y| y == current_year)
 }
 
+/// Error when `text` contains any 20xx year that is not `current_year`.
+///
+/// Shared by content-fix and CTR patch validators for title/description.
+/// Returns `None` when years are ok (absent or all equal to current year).
+pub fn non_current_year_error(field: &str, text: &str, current_year: i32) -> Option<String> {
+    if years_ok(text, current_year) {
+        None
+    } else {
+        Some(format!(
+            "{field} contains year not equal to current calendar year"
+        ))
+    }
+}
+
 /// Current calendar year in UTC.
 pub fn current_calendar_year() -> i32 {
     Utc::now().year()
@@ -36,6 +62,17 @@ pub fn current_calendar_year() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_calendar_year_token_accepts_pure_20xx() {
+        assert!(is_calendar_year_token("2024"));
+        assert!(is_calendar_year_token("2026"));
+        assert!(!is_calendar_year_token("1999"));
+        assert!(!is_calendar_year_token("202"));
+        assert!(!is_calendar_year_token("20250"));
+        assert!(!is_calendar_year_token("year"));
+        assert!(!is_calendar_year_token("202a"));
+    }
 
     #[test]
     fn extract_years_finds_20xx_word_boundaries() {
@@ -54,6 +91,17 @@ mod tests {
         assert!(!years_ok("Best stocks 2025", 2026));
         assert!(!years_ok("2025 and 2026 picks", 2026));
         assert!(!years_ok("2024 review", 2026));
+    }
+
+    #[test]
+    fn non_current_year_error_names_field() {
+        assert!(non_current_year_error("title", "No year", 2026).is_none());
+        assert!(non_current_year_error("title", "Best 2026", 2026).is_none());
+        let err = non_current_year_error("title", "Best 2025", 2026).unwrap();
+        assert!(err.contains("title"));
+        assert!(err.contains("year not equal to current calendar year"));
+        let err = non_current_year_error("description", "2025-2026 guide", 2026).unwrap();
+        assert!(err.starts_with("description"));
     }
 
     #[test]
