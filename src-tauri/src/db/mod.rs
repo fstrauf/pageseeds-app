@@ -1307,7 +1307,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     // Sanitize: clear invalid legacy agent_provider values from projects so they fall back to global.
     {
         let affected = conn.execute(
-            "UPDATE projects SET agent_provider = NULL WHERE agent_provider IS NOT NULL AND agent_provider NOT IN ('kimi', 'claude', 'openai', 'ollama')",
+            "UPDATE projects SET agent_provider = NULL WHERE agent_provider IS NOT NULL AND agent_provider NOT IN ('kimi', 'claude', 'openai', 'grok', 'ollama')",
             [],
         )?;
         if affected > 0 {

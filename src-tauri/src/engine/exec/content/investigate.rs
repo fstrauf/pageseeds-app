@@ -230,6 +230,10 @@ mod tests {
             api_key: "k".into(),
             model: "gpt".into(),
         }));
+        assert!(backend_supports_tool_calling(&LlmBackend::Grok {
+            api_key: "k".into(),
+            model: "grok".into(),
+        }));
         assert!(backend_supports_tool_calling(&LlmBackend::Ollama {
             base_url: "http://localhost".into(),
             model: "llama".into(),

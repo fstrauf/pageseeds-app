@@ -22,7 +22,7 @@ async fn run_tool_agent<A: Prompt + Send>(agent: A, prompt: &str) -> Result<Stri
 
 /// Whether this backend can run multi-turn tool calling for investigation.
 ///
-/// Tool-capable: KimiBridge, Claude, OpenAi, Ollama.
+/// Tool-capable: KimiBridge, Claude, OpenAi, Grok, Ollama.
 /// Not supported: KimiCli (print mode has no tool_calls), KimiDirect, others.
 pub(crate) fn backend_supports_tool_calling(backend: &LlmBackend) -> bool {
     matches!(
@@ -30,6 +30,7 @@ pub(crate) fn backend_supports_tool_calling(backend: &LlmBackend) -> bool {
         LlmBackend::KimiBridge { .. }
             | LlmBackend::Claude { .. }
             | LlmBackend::OpenAi { .. }
+            | LlmBackend::Grok { .. }
             | LlmBackend::Ollama { .. }
     )
 }
@@ -82,6 +83,16 @@ pub(crate) async fn run_tool_equipped_agent(
                 .build();
             run_tool_agent(agent, prompt).await
         }
+        LlmBackend::Grok { api_key, model } => {
+            let client = rig::providers::xai::Client::new(api_key)
+                .map_err(|e| format!("Failed to build Grok (xAI) client: {e}"))?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
         LlmBackend::Ollama { base_url, model } => {
             use rig::client::Nothing;
             let client = rig::providers::ollama::Client::builder()
@@ -97,7 +108,7 @@ pub(crate) async fn run_tool_equipped_agent(
             run_tool_agent(agent, prompt).await
         }
         _ => Err(
-            "Backend does not support tool calling. Use Kimi bridge, Claude, OpenAI, or Ollama."
+            "Backend does not support tool calling. Use Kimi bridge, Claude, OpenAI, Grok, or Ollama."
                 .to_string(),
         ),
     }

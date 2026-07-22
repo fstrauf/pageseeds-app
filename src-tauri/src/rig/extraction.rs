@@ -20,7 +20,7 @@ use crate::rig::provider::{resolve_backend, LlmBackend};
 /// * `T` - The target type. Must implement `JsonSchema`, `Deserialize`, and `Serialize`.
 ///
 /// # Arguments
-/// * `provider_name` - The LLM provider (`"kimi"`, `"claude"`, `"openai"`, `"ollama"`)
+/// * `provider_name` - The LLM provider (`"kimi"`, `"claude"`, `"openai"`, `"grok"`, `"ollama"`)
 /// * `prompt` - The user prompt / extraction instruction
 /// * `preamble` - Optional system preamble (added to extractor's built-in preamble)
 /// * `backend_preference` - Kimi bridge routing: `Some("direct")` for fast stateless
@@ -137,6 +137,15 @@ where
         LlmBackend::OpenAi { api_key, model } => {
             let client = rig::providers::openai::Client::new(api_key)
                 .map_err(|e| format!("Failed to build OpenAI client: {}", e))?;
+            let extractor = client
+                .extractor::<T>(model)
+                .preamble(preamble.unwrap_or(default_preamble))
+                .build();
+            extractor.extract(prompt).await.map_err(|e| e.to_string())
+        }
+        LlmBackend::Grok { api_key, model } => {
+            let client = rig::providers::xai::Client::new(api_key)
+                .map_err(|e| format!("Failed to build Grok (xAI) client: {}", e))?;
             let extractor = client
                 .extractor::<T>(model)
                 .preamble(preamble.unwrap_or(default_preamble))

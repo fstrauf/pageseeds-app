@@ -47,7 +47,7 @@ pub fn get_agent_provider(conn: &Connection) -> String {
 }
 
 /// Valid agent providers supported by the backend.
-pub const VALID_PROVIDERS: &[&str] = &["kimi", "claude", "openai", "ollama"];
+pub const VALID_PROVIDERS: &[&str] = &["kimi", "claude", "openai", "grok", "ollama"];
 
 /// Resolve the agent provider for a project.
 /// Uses the project's legacy `agent_provider` if set, non-empty, and valid,

@@ -8,6 +8,7 @@
 //!   - `"direct"` → legacy agent-wrapper subprocess
 //! - `claude`  → Anthropic API via rig native provider
 //! - `openai`  → OpenAI API via rig native provider
+//! - `grok`    → xAI Grok via native rig provider (`rig::providers::xai`)
 //! - `ollama`  → local Ollama via rig native provider
 
 use rig::client::CompletionClient;
@@ -32,6 +33,8 @@ pub enum LlmBackend {
     Claude { api_key: String, model: String },
     /// OpenAI via native API.
     OpenAi { api_key: String, model: String },
+    /// Grok via xAI API (native rig provider).
+    Grok { api_key: String, model: String },
     /// Ollama via OpenAI-compatible endpoint.
     Ollama { base_url: String, model: String },
 }
@@ -60,8 +63,8 @@ impl LlmBackend {
 ///
 /// Agentic CLI / ACP providers (Kimi in any mode) run an agent with file tools
 /// in the repo, so a `write_article` prompt can create the MDX file on disk
-/// itself. The native rig HTTP providers (Claude / OpenAI / Ollama) are pure
-/// prompt→text completions — the executor must persist any returned content
+/// itself. The native rig HTTP providers (Claude / OpenAI / Grok / Ollama) are
+/// pure prompt→text completions — the executor must persist any returned content
 /// to disk itself.
 ///
 /// The executor only carries the configured provider name (backend resolution
@@ -69,7 +72,7 @@ impl LlmBackend {
 /// string-based check. Unknown providers default to file-IO-capable so the
 /// executor does not write agent output over a backend it does not know.
 pub fn provider_supports_file_io(provider: &str) -> bool {
-    !matches!(provider, "claude" | "openai" | "ollama")
+    !matches!(provider, "claude" | "openai" | "ollama" | "grok")
 }
 
 /// Result of an agent run.
@@ -128,6 +131,7 @@ pub async fn run_agent_with_backend(
         LlmBackend::KimiDirect => run_kimi_direct(prompt, preamble),
         LlmBackend::Claude { api_key, model } => run_claude(api_key, model, prompt, preamble).await,
         LlmBackend::OpenAi { api_key, model } => run_openai(api_key, model, prompt, preamble).await,
+        LlmBackend::Grok { api_key, model } => run_grok(api_key, model, prompt, preamble).await,
         LlmBackend::Ollama { base_url, model } => {
             run_ollama(base_url, model, prompt, preamble).await
         }
@@ -260,12 +264,16 @@ pub async fn resolve_backend(
             api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             model,
         }),
+        "grok" => Ok(LlmBackend::Grok {
+            api_key: std::env::var("XAI_API_KEY").unwrap_or_default(),
+            model,
+        }),
         "ollama" => Ok(LlmBackend::Ollama {
             base_url: bridge_url.unwrap_or("http://localhost:11434").to_string(),
             model,
         }),
         other => Err(format!(
-            "Unknown provider '{}'. Valid providers: kimi, claude, openai, ollama",
+            "Unknown provider '{}'. Valid providers: kimi, claude, openai, grok, ollama",
             other
         )),
     }
@@ -276,6 +284,7 @@ pub fn default_model_for_provider(provider: &str) -> String {
         "kimi" => "kimi-k2.5".to_string(),
         "claude" => "claude-sonnet-4-6".to_string(),
         "openai" => "gpt-4o".to_string(),
+        "grok" => rig::providers::xai::GROK_4.to_string(),
         "ollama" => "llama3.2".to_string(),
         _ => "kimi-k2.5".to_string(),
     }
@@ -392,6 +401,33 @@ async fn run_openai(
     ))
 }
 
+async fn run_grok(
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+    preamble: Option<&str>,
+) -> Result<AgentResponse, String> {
+    let client = rig::providers::xai::Client::new(api_key)
+        .map_err(|e| format!("Failed to build Grok (xAI) client: {}", e))?;
+
+    let agent = client
+        .agent(model)
+        .preamble(preamble.unwrap_or("You are a helpful assistant."))
+        .build();
+
+    let resp = agent
+        .prompt(prompt)
+        .extended_details()
+        .await
+        .map_err(|e| format!("Grok prompt failed: {}", e))?;
+
+    Ok(AgentResponse::with_usage(
+        resp.output,
+        resp.usage.input_tokens,
+        resp.usage.output_tokens,
+    ))
+}
+
 async fn run_ollama(
     base_url: &str,
     model: &str,
@@ -439,6 +475,7 @@ mod tests {
         assert_eq!(default_model_for_provider("kimi"), "kimi-k2.5");
         assert_eq!(default_model_for_provider("claude"), "claude-sonnet-4-6");
         assert_eq!(default_model_for_provider("openai"), "gpt-4o");
+        assert_eq!(default_model_for_provider("grok"), rig::providers::xai::GROK_4);
         assert_eq!(default_model_for_provider("ollama"), "llama3.2");
         assert_eq!(default_model_for_provider("unknown"), "kimi-k2.5");
     }
@@ -455,6 +492,12 @@ mod tests {
         let backend = resolve_backend("openai", None, None, None).await.unwrap();
         assert!(matches!(backend, LlmBackend::OpenAi { model, .. } if model == "gpt-4o"));
 
+        // Grok
+        let backend = resolve_backend("grok", None, None, None).await.unwrap();
+        assert!(
+            matches!(backend, LlmBackend::Grok { model, .. } if model == rig::providers::xai::GROK_4)
+        );
+
         // Ollama
         let backend = resolve_backend("ollama", None, None, None).await.unwrap();
         assert!(matches!(backend, LlmBackend::Ollama { model, .. } if model == "llama3.2"));
@@ -469,6 +512,7 @@ mod tests {
         assert!(err.contains("kimi"));
         assert!(err.contains("claude"));
         assert!(err.contains("openai"));
+        assert!(err.contains("grok"));
         assert!(err.contains("ollama"));
     }
 
@@ -498,6 +542,7 @@ mod tests {
         assert!(!provider_supports_file_io("claude"));
         assert!(!provider_supports_file_io("openai"));
         assert!(!provider_supports_file_io("ollama"));
+        assert!(!provider_supports_file_io("grok"));
         // Unknown providers default to file-IO-capable so the executor does
         // not write agent output over a backend it does not know.
         assert!(provider_supports_file_io("unknown"));

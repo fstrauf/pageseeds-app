@@ -51,7 +51,10 @@ The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds
 ### Current Providers
 
 - **Kimi CLI** — native `kimi -p` subprocess (default Kimi backend, no prompt size cap)
-- **Direct providers** — OpenAI, Claude, etc. via Rig
+- **Claude** — Anthropic API via Rig (`ANTHROPIC_API_KEY`); pure completion, no project file I/O
+- **OpenAI** — OpenAI API via Rig (`OPENAI_API_KEY`); pure completion, no project file I/O
+- **Grok** — xAI Grok via Rig native `rig::providers::xai` (`XAI_API_KEY`); pure completion, no project file I/O — the executor persists MDX like Claude/OpenAI
+- **Ollama** — local Ollama via Rig (not shown in Settings UI by default)
 - **Kimi Bridge** — HTTP bridge to Kimi (legacy, opt-in)
 - **Legacy CLI fallback** — `kimi` / `copilot` binaries via `agent-wrapper` (kept for compatibility)
 
