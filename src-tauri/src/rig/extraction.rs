@@ -14,13 +14,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::rig::provider::{resolve_backend, LlmBackend};
 
+/// Shared extractor path for Claude / OpenAI / Grok (and Ollama after client build).
+/// Kimi bridge/CLI stay on their own extraction implementations.
+async fn extract_with_native_client<C, T>(
+    client: C,
+    model: &str,
+    prompt: &str,
+    preamble: &str,
+) -> Result<T, String>
+where
+    C: CompletionClient,
+    C::CompletionModel: 'static,
+    T: JsonSchema + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
+{
+    let extractor = client
+        .extractor::<T>(model)
+        .preamble(preamble)
+        .build();
+    extractor.extract(prompt).await.map_err(|e| e.to_string())
+}
+
 /// Extract structured data from an LLM prompt using rig's `Extractor<T>`.
 ///
 /// # Type Parameters
 /// * `T` - The target type. Must implement `JsonSchema`, `Deserialize`, and `Serialize`.
 ///
 /// # Arguments
-/// * `provider_name` - The LLM provider (`"kimi"`, `"claude"`, `"openai"`, `"ollama"`)
+/// * `provider_name` - The LLM provider (`"kimi"`, `"claude"`, `"openai"`, `"grok"`, `"ollama"`)
 /// * `prompt` - The user prompt / extraction instruction
 /// * `preamble` - Optional system preamble (added to extractor's built-in preamble)
 /// * `backend_preference` - Kimi bridge routing: `Some("direct")` for fast stateless
@@ -128,20 +148,35 @@ where
         LlmBackend::Claude { api_key, model } => {
             let client = rig::providers::anthropic::Client::new(api_key)
                 .map_err(|e| format!("Failed to build Claude client: {}", e))?;
-            let extractor = client
-                .extractor::<T>(model)
-                .preamble(preamble.unwrap_or(default_preamble))
-                .build();
-            extractor.extract(prompt).await.map_err(|e| e.to_string())
+            extract_with_native_client(
+                client,
+                model,
+                prompt,
+                preamble.unwrap_or(default_preamble),
+            )
+            .await
         }
         LlmBackend::OpenAi { api_key, model } => {
             let client = rig::providers::openai::Client::new(api_key)
                 .map_err(|e| format!("Failed to build OpenAI client: {}", e))?;
-            let extractor = client
-                .extractor::<T>(model)
-                .preamble(preamble.unwrap_or(default_preamble))
-                .build();
-            extractor.extract(prompt).await.map_err(|e| e.to_string())
+            extract_with_native_client(
+                client,
+                model,
+                prompt,
+                preamble.unwrap_or(default_preamble),
+            )
+            .await
+        }
+        LlmBackend::Grok { api_key, model } => {
+            let client = rig::providers::xai::Client::new(api_key)
+                .map_err(|e| format!("Failed to build Grok (xAI) client: {}", e))?;
+            extract_with_native_client(
+                client,
+                model,
+                prompt,
+                preamble.unwrap_or(default_preamble),
+            )
+            .await
         }
         LlmBackend::Ollama { base_url, model } => {
             use rig::client::Nothing;
@@ -150,11 +185,14 @@ where
                 .base_url(base_url)
                 .build()
                 .map_err(|e| format!("Failed to build Ollama client: {}", e))?;
-            let extractor = client
-                .extractor::<T>(model)
-                .preamble(preamble.unwrap_or(default_preamble))
-                .build();
-            extractor.extract(prompt).await.map_err(|e| e.to_string())
+            // Construction differs (Nothing + base_url); extractor path is shared.
+            extract_with_native_client(
+                client,
+                model,
+                prompt,
+                preamble.unwrap_or(default_preamble),
+            )
+            .await
         }
         LlmBackend::KimiDirect => {
             // Should never reach here because the caller checks this first.

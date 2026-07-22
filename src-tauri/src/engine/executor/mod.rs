@@ -95,19 +95,9 @@ pub async fn execute_task_with_token(
         use crate::db::global_settings;
         let project = task_store::get_project(conn, &task.project_id).map_err(|e| e.to_string())?;
 
-        // Agent provider is now global (user preference), but check for legacy project-specific setting
-        let agent_provider = if let Some(legacy) = &project.agent_provider {
-            let valid = matches!(legacy.as_str(), "kimi" | "claude" | "openai" | "ollama");
-            if valid {
-                log::debug!("[executor] Using legacy project agent_provider: {}", legacy);
-                legacy.clone()
-            } else {
-                log::warn!("[executor] Invalid legacy project agent_provider '{}', falling back to global", legacy);
-                global_settings::get_agent_provider(conn)
-            }
-        } else {
-            global_settings::get_agent_provider(conn)
-        };
+        // Agent provider is global (user preference); legacy project values still win when valid.
+        let agent_provider =
+            global_settings::resolve_agent_provider(conn, project.agent_provider.as_deref());
 
         (
             project.path.clone(),

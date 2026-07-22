@@ -47,7 +47,20 @@ pub fn get_agent_provider(conn: &Connection) -> String {
 }
 
 /// Valid agent providers supported by the backend.
-pub const VALID_PROVIDERS: &[&str] = &["kimi", "claude", "openai", "ollama"];
+/// Single source of truth for allowlists (settings UI, resolve, migration sanitize).
+pub const VALID_PROVIDERS: &[&str] = &["kimi", "claude", "openai", "grok", "ollama"];
+
+/// SQL `IN (...)` list fragment derived from [`VALID_PROVIDERS`].
+///
+/// Example: `'kimi', 'claude', 'openai', 'grok', 'ollama'`
+/// Use in migration/sanitize SQL so new providers only update the constant.
+pub fn valid_providers_sql_list() -> String {
+    VALID_PROVIDERS
+        .iter()
+        .map(|p| format!("'{p}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Resolve the agent provider for a project.
 /// Uses the project's legacy `agent_provider` if set, non-empty, and valid,
@@ -192,6 +205,59 @@ mod tests {
         // Set another value
         set_agent_provider(&conn, "claude").unwrap();
         assert_eq!(get_agent_provider(&conn), "claude");
+    }
+
+    #[test]
+    fn test_valid_providers_includes_grok() {
+        assert!(VALID_PROVIDERS.contains(&"kimi"));
+        assert!(VALID_PROVIDERS.contains(&"claude"));
+        assert!(VALID_PROVIDERS.contains(&"openai"));
+        assert!(VALID_PROVIDERS.contains(&"grok"));
+        assert!(VALID_PROVIDERS.contains(&"ollama"));
+    }
+
+    #[test]
+    fn test_valid_providers_sql_list_matches_constant() {
+        let list = valid_providers_sql_list();
+        for p in VALID_PROVIDERS {
+            assert!(
+                list.contains(&format!("'{p}'")),
+                "SQL list missing provider {p}: {list}"
+            );
+        }
+        // No hardcoded drift — list is built only from the constant.
+        assert_eq!(
+            list,
+            VALID_PROVIDERS
+                .iter()
+                .map(|p| format!("'{p}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    #[test]
+    fn test_resolve_agent_provider_legacy_and_fallback() {
+        let conn = in_memory_db();
+        set_agent_provider(&conn, "openai").unwrap();
+
+        // Valid legacy wins
+        assert_eq!(
+            resolve_agent_provider(&conn, Some("grok")),
+            "grok"
+        );
+        // Case-insensitive valid legacy
+        assert_eq!(
+            resolve_agent_provider(&conn, Some("Claude")),
+            "Claude"
+        );
+        // Invalid / empty / missing → global
+        assert_eq!(
+            resolve_agent_provider(&conn, Some("copilot")),
+            "openai"
+        );
+        assert_eq!(resolve_agent_provider(&conn, Some("")), "openai");
+        assert_eq!(resolve_agent_provider(&conn, None), "openai");
     }
 
     #[test]

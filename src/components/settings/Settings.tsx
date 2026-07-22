@@ -653,6 +653,7 @@ export function Settings({ projectId }: SettingsProps) {
                         <option value="kimi">kimi</option>
                         <option value="claude">claude</option>
                         <option value="openai">openai</option>
+                        <option value="grok">grok</option>
                       </select>
                       <Button
                         variant="outline"

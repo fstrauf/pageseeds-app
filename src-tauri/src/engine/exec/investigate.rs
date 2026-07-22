@@ -18,6 +18,7 @@ use crate::engine::tools::{
 use crate::models::content_review::StandaloneInvestigationResult;
 use crate::rig::provider::run_tool_equipped_agent;
 
+
 /// Run an agentic investigation with full tool access.
 ///
 /// 1. Builds the agent preamble from the full tool catalog (+ standalone JSON contract)
