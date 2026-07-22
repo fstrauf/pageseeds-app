@@ -14,27 +14,11 @@ use super::{finish_suite, generation_backend, judge_score, list_cases, load_fixt
 use crate::config::task_definitions;
 use crate::engine::exec::content::{
     build_content_review_investigation_extract_prompt,
-    content_review_investigation_extract_preamble, format_tool_evidence_as_analysis,
+    content_review_investigation_extract_preamble,
 };
+use crate::engine::tools::investigate::inventory_names;
+use crate::engine::tools::InvestigationAccess;
 use crate::models::content_review::InvestigationFindings;
-
-/// Read-only investigation tool names (must match TOOL_INVENTORY RO set).
-const RO_INVESTIGATION_TOOLS: &[&str] = &[
-    "gsc_performance",
-    "gsc_queries",
-    "gsc_movers",
-    "article_list",
-    "article_frontmatter",
-    "article_body_hash",
-    "article_title_scan",
-    "content_audit_report",
-    "cannibalization_clusters",
-    "indexing_status",
-    "ctr_health",
-    "framework_files",
-    "article_link_graph",
-    "get_task_status",
-];
 
 const VALID_SEVERITIES: &[&str] = &["critical", "warning", "info"];
 const VALID_FIX_TYPES: &[&str] = &[
@@ -74,6 +58,42 @@ fn default_max_proposals() -> usize {
     5
 }
 
+/// Format a fixture tool-evidence bundle into analysis prose for extract-only evals.
+///
+/// Keys are tool names; values are JSON mimicking real tool outputs. Used when the
+/// multi-turn tool agent is not run (fixtures are not hermetic against a real DB).
+/// Eval-only fixture adaptation — not used on the production investigate path.
+fn format_tool_evidence_as_analysis(tool_evidence: &serde_json::Value) -> String {
+    let mut parts = vec![
+        "Content-review investigation analysis (tool evidence already gathered):\n".to_string(),
+    ];
+    match tool_evidence.as_object() {
+        Some(map) if !map.is_empty() => {
+            for (tool_name, payload) in map {
+                let pretty = serde_json::to_string_pretty(payload)
+                    .unwrap_or_else(|_| payload.to_string());
+                parts.push(format!(
+                    "### Tool: {tool_name}\nEvidence from `{tool_name}`:\n```json\n{pretty}\n```\n"
+                ));
+            }
+        }
+        _ => {
+            parts.push(
+                "No tool evidence was provided. Report that investigation could not proceed."
+                    .to_string(),
+            );
+        }
+    }
+    parts.push(
+        "\nBased on the tool evidence above, prioritise root-cause findings with \
+         severity and fix_type, cite the tool name in each finding's evidence, and \
+         propose downstream task types only when clearly justified. Healthy sites \
+         should yield zero proposed_tasks."
+            .to_string(),
+    );
+    parts.join("\n")
+}
+
 /// Stable identity for duplicate-proposal detection: task_type + title + params.
 fn proposal_identity(task_type: &str, title: &str, params: &serde_json::Value) -> String {
     let params_key = serde_json::to_string(params).unwrap_or_else(|_| "{}".to_string());
@@ -82,7 +102,12 @@ fn proposal_identity(task_type: &str, title: &str, params: &serde_json::Value) -
 
 fn evidence_mentions_known_tool(evidence: &str) -> bool {
     let lower = evidence.to_lowercase();
-    RO_INVESTIGATION_TOOLS
+    let ro_tools = inventory_names(InvestigationAccess::ReadOnly);
+    debug_assert!(
+        !ro_tools.is_empty(),
+        "read-only investigation inventory must be non-empty"
+    );
+    ro_tools
         .iter()
         .any(|t| lower.contains(&t.to_lowercase()))
 }
@@ -428,5 +453,15 @@ mod contract_tests {
         assert!(analysis.contains("indexing_status"));
         assert!(analysis.contains("article_title_scan"));
         assert!(analysis.contains("not_indexed"));
+        assert!(analysis.contains("zero proposed_tasks"));
+    }
+
+    #[test]
+    fn ro_inventory_is_non_empty() {
+        let names = inventory_names(InvestigationAccess::ReadOnly);
+        assert!(
+            !names.is_empty(),
+            "read-only investigation inventory must be non-empty"
+        );
     }
 }

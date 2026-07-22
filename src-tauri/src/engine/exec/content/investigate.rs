@@ -222,41 +222,6 @@ pub(crate) fn build_content_review_investigation_extract_prompt(agent_analysis: 
     )
 }
 
-/// Format a fixture tool-evidence bundle into analysis prose for extract-only evals.
-///
-/// Keys are tool names; values are JSON mimicking real tool outputs. Used when the
-/// multi-turn tool agent is not run (fixtures are not hermetic against a real DB).
-pub(crate) fn format_tool_evidence_as_analysis(tool_evidence: &serde_json::Value) -> String {
-    let mut parts = vec![
-        "Content-review investigation analysis (tool evidence already gathered):\n".to_string(),
-    ];
-    match tool_evidence.as_object() {
-        Some(map) if !map.is_empty() => {
-            for (tool_name, payload) in map {
-                let pretty = serde_json::to_string_pretty(payload)
-                    .unwrap_or_else(|_| payload.to_string());
-                parts.push(format!(
-                    "### Tool: {tool_name}\nEvidence from `{tool_name}`:\n```json\n{pretty}\n```\n"
-                ));
-            }
-        }
-        _ => {
-            parts.push(
-                "No tool evidence was provided. Report that investigation could not proceed."
-                    .to_string(),
-            );
-        }
-    }
-    parts.push(
-        "\nBased on the tool evidence above, prioritise root-cause findings with \
-         severity and fix_type, cite the tool name in each finding's evidence, and \
-         propose downstream task types only when clearly justified. Healthy sites \
-         should yield zero proposed_tasks."
-            .to_string(),
-    );
-    parts.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,18 +284,5 @@ mod tests {
         assert!(preamble.contains("submit tool"));
         assert!(preamble.contains("critical"));
         assert!(preamble.contains("auto_fixable"));
-    }
-
-    #[test]
-    fn format_tool_evidence_labels_tools() {
-        let evidence = serde_json::json!({
-            "indexing_status": { "not_indexed": 5 },
-            "article_title_scan": { "literal_var_titles": 1 }
-        });
-        let analysis = format_tool_evidence_as_analysis(&evidence);
-        assert!(analysis.contains("indexing_status"));
-        assert!(analysis.contains("article_title_scan"));
-        assert!(analysis.contains("not_indexed"));
-        assert!(analysis.contains("zero proposed_tasks"));
     }
 }
