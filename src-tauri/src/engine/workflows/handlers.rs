@@ -306,9 +306,14 @@ impl WorkflowHandler for ContentReviewHandler {
             WorkflowStep::new("content_review_audit", StepKind::ContentAudit).optional(),
             // Step 3: native sync — validates articles.json ↔ content files, dates.
             WorkflowStep::new("content_review_sync", StepKind::ContentSync).optional(),
-            // Step 4: select priority articles, build structured context, get agent recommendations.
-            // One focused agent call (not N calls). Writes recommendations.json.
-            WorkflowStep::new("content_review_recommend", StepKind::ContentReviewRecommend),
+            // Step 4: tool-calling investigation when backend supports tools; otherwise
+            // falls back to content_review_recommend inside the exec module.
+            // Artifact key is investigation_findings (not recommendations.json).
+            WorkflowStep::new(
+                "content_review_investigate",
+                StepKind::ContentReviewInvestigate,
+            )
+            .with_param(step_params::ARTIFACT_NAME, "investigation_findings"),
         ]
     }
 }
@@ -954,6 +959,38 @@ mod registry_tests {
             updated_at: chrono::Utc::now().to_rfc3339(),
             not_before: None,
         }
+    }
+
+    /// content_review final judgment step is investigate (tool-calling path with
+    /// recommend fallback), not the scripted recommend step as the plan terminal.
+    #[test]
+    fn content_review_plan_ends_with_investigate_not_recommend() {
+        let handler = ContentReviewHandler;
+        let steps = handler.plan(&make_task("content_review"));
+        assert!(
+            steps.len() >= 4,
+            "expected optional prep steps + investigate, got {}",
+            steps.len()
+        );
+        let last = steps.last().expect("plan non-empty");
+        assert_eq!(last.kind, StepKind::ContentReviewInvestigate);
+        assert_eq!(last.name, "content_review_investigate");
+        assert_eq!(
+            last.params.get(step_params::ARTIFACT_NAME).map(String::as_str),
+            Some("investigation_findings")
+        );
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.kind != StepKind::ContentReviewRecommend),
+            "plan must not include ContentReviewRecommend as a step; recommend is fallback inside exec"
+        );
+
+        let audit_steps = handler.plan(&make_task("content_audit"));
+        assert_eq!(
+            audit_steps.last().map(|s| s.kind),
+            Some(StepKind::ContentReviewInvestigate)
+        );
     }
 
     /// The content write stage must declare exactly the prompt sections

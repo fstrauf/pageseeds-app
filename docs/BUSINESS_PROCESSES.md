@@ -167,16 +167,19 @@ Step 2: gsc_sync_articles (deterministic)
 Step 3: content_audit (deterministic)
   └─ 21-rule health check → content_audit.json
   ↓
-Step 4: content_review_recommend (agentic)
-  ├─ Score articles: GSC position × impressions × CTR gaps × health × staleness
-  ├─ Select priority articles (top 5-10)
-  ├─ Build context: GSC snapshot + failing checks + source excerpt
-  ├─ Single agent call with structured prompt
-  └─ Output: recommendations.json artifact
+Step 4: content_review_investigate (agentic, tool-calling when supported)
+  ├─ Provider gate: KimiBridge / Claude / OpenAI / Ollama → RO tool investigation
+  │   ├─ investigation_kit(ReadOnly) multi-turn agent (≤20 tool calls)
+  │   ├─ Typed Extractor → InvestigationFindings
+  │   └─ Output: investigation_findings artifact (no recommendations.json)
+  └─ Else (e.g. KimiCli): fall back to content_review_recommend
+      ├─ Score/select priority articles, per-article structured recommendations
+      └─ Output: recommendations.json artifact
   ↓
 Status: done
   ↓
-Auto-spawns: fix_content_article tasks (one per recommended article)
+Auto-spawns (recommend path only): fix_content_article tasks from recommendations.json
+  (investigate path leaves proposed_tasks for a later wiring issue)
   ↓
 Each fix_content_article runs 4-step pipeline:
   1. Context (deterministic) — load recommendations + file content

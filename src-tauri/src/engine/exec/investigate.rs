@@ -12,11 +12,95 @@
 use crate::engine::tools::{
     investigation_kit, InvestigationAccess, InvestigationContext,
 };
+use crate::rig::provider::LlmBackend;
 use rig::completion::Prompt;
 
 /// Run a prompt on a tool-equipped agent and return the response string.
 async fn run_tool_agent<A: Prompt + Send>(agent: A, prompt: &str) -> Result<String, String> {
     agent.prompt(prompt).await.map_err(|e| format!("Agent error: {e}"))
+}
+
+/// Whether this backend can run multi-turn tool calling for investigation.
+///
+/// Tool-capable: KimiBridge, Claude, OpenAi, Ollama.
+/// Not supported: KimiCli (print mode has no tool_calls), KimiDirect, others.
+pub(crate) fn backend_supports_tool_calling(backend: &LlmBackend) -> bool {
+    matches!(
+        backend,
+        LlmBackend::KimiBridge { .. }
+            | LlmBackend::Claude { .. }
+            | LlmBackend::OpenAi { .. }
+            | LlmBackend::Ollama { .. }
+    )
+}
+
+/// Build a tool-equipped agent for `backend` and run `prompt` (with `preamble`).
+///
+/// Shared by standalone investigate and in-workflow content_review investigate.
+/// Callers must gate with [`backend_supports_tool_calling`] first.
+pub(crate) async fn run_tool_equipped_agent(
+    backend: &LlmBackend,
+    tools: Vec<Box<dyn rig::tool::ToolDyn>>,
+    preamble: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    use rig::client::CompletionClient;
+
+    match backend {
+        LlmBackend::KimiBridge { base_url, model } => {
+            let client = rig::providers::openai::Client::builder()
+                .base_url(base_url)
+                .api_key("dummy")
+                .build()
+                .map_err(|e| format!("Failed to build bridge client: {e}"))?;
+            // Bridge completions API has no separate preamble slot — fold in.
+            let full_prompt = format!("{preamble}\n\n{prompt}");
+            let agent = client
+                .completions_api()
+                .agent(model)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, &full_prompt).await
+        }
+        LlmBackend::Claude { api_key, model } => {
+            let client = rig::providers::anthropic::Client::new(api_key)
+                .map_err(|e| format!("Failed to build Claude client: {e}"))?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
+        LlmBackend::OpenAi { api_key, model } => {
+            let client = rig::providers::openai::Client::new(api_key)
+                .map_err(|e| format!("Failed to build OpenAI client: {e}"))?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
+        LlmBackend::Ollama { base_url, model } => {
+            use rig::client::Nothing;
+            let client = rig::providers::ollama::Client::builder()
+                .api_key(Nothing)
+                .base_url(base_url)
+                .build()
+                .map_err(|e| format!("Failed to build Ollama client: {e}"))?;
+            let agent = client
+                .agent(model)
+                .preamble(preamble)
+                .tools(tools)
+                .build();
+            run_tool_agent(agent, prompt).await
+        }
+        _ => Err(
+            "Backend does not support tool calling. Use Kimi bridge, Claude, OpenAI, or Ollama."
+                .to_string(),
+        ),
+    }
 }
 
 /// Run an agentic investigation with full tool access.
@@ -32,8 +116,6 @@ pub async fn exec_investigate(
     question: &str,
     agent_provider: &str,
 ) -> Result<serde_json::Value, String> {
-    use rig::client::CompletionClient;
-
     let ctx = InvestigationContext {
         project_id: project_id.to_string(),
         project_path: project_path.to_string(),
@@ -60,61 +142,7 @@ pub async fn exec_investigate(
     let backend = crate::rig::provider::resolve_backend(agent_provider, None, None, None).await
         .map_err(|e| format!("Provider error: {e}"))?;
 
-    let response = match &backend {
-        crate::rig::provider::LlmBackend::KimiBridge { base_url, model } => {
-            let client = rig::providers::openai::Client::builder()
-                .base_url(base_url)
-                .api_key("dummy")
-                .build()
-                .map_err(|e| format!("Failed to build bridge client: {e}"))?;
-            let full_prompt = format!("{preamble}\n\n{prompt}");
-            let agent = client
-                .completions_api()
-                .agent(model)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, &full_prompt).await?
-        }
-        crate::rig::provider::LlmBackend::Claude { api_key, model } => {
-            let client = rig::providers::anthropic::Client::new(api_key)
-                .map_err(|e| format!("Failed to build Claude client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .preamble(&preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, &prompt).await?
-        }
-        crate::rig::provider::LlmBackend::OpenAi { api_key, model } => {
-            let client = rig::providers::openai::Client::new(api_key)
-                .map_err(|e| format!("Failed to build OpenAI client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .preamble(&preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, &prompt).await?
-        }
-        crate::rig::provider::LlmBackend::Ollama { base_url, model } => {
-            use rig::client::Nothing;
-            let client = rig::providers::ollama::Client::builder()
-                .api_key(Nothing)
-                .base_url(base_url)
-                .build()
-                .map_err(|e| format!("Failed to build Ollama client: {e}"))?;
-            let agent = client
-                .agent(model)
-                .preamble(&preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, &prompt).await?
-        }
-        _ => {
-            return Err(format!(
-                "Backend does not support tool calling. Use Kimi bridge, Claude, OpenAI, or Ollama."
-            ));
-        }
-    };
+    let response = run_tool_equipped_agent(&backend, tools, &preamble, &prompt).await?;
 
     // Try to parse the response as JSON; if the agent returned prose, wrap it
     let parsed: serde_json::Value = serde_json::from_str(&response)

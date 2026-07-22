@@ -91,7 +91,8 @@ pub struct WorkflowStep {
 | `Manual` | Marks user action required | Nothing | Blocks execution |
 | `RedditSearch` | Reddit API + scoring | DB records | Triggers inline enrichment |
 | `RedditEnrich` | AI scoring + reply drafting | Updates DB rows | Requires DB connection |
-| `ContentReviewRecommend` | Article selection + agent | recommendations.json | Hybrid: det + agentic |
+| `ContentReviewInvestigate` | RO tool-calling investigation (falls back to recommend) | `investigation_findings` artifact | Hybrid: tool agent + typed Extractor |
+| `ContentReviewRecommend` | Article selection + agent (fallback / legacy) | recommendations.json | Hybrid: det + agentic |
 
 **Research Workflow Steps (Hybrid Flow):**
 
@@ -192,8 +193,12 @@ Every step must be explicitly one or the other.
 ```
 
 **Example — content_review:**
-- Step 1-3: Deterministic (sync → GSC fetch → audit)
-- Step 4: Agentic (recommendations based on structured audit data)
+- Step 1-3: Deterministic optional (GSC sync → audit → content sync)
+- Step 4: `ContentReviewInvestigate` — multi-turn RO tool agent when the backend
+  supports tools (KimiBridge / Claude / OpenAI / Ollama); otherwise falls back
+  to scripted `content_review_recommend`. Tool path writes typed
+  `InvestigationFindings` as the `investigation_findings` artifact and does
+  **not** write `recommendations.json`.
 
 **External API calls are deterministic** — the API does the computation. The step that *interprets* API results may be agentic.
 
