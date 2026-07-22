@@ -11,6 +11,7 @@ mod generate;
 mod outcome;
 mod patch;
 pub mod rendered;
+mod standalone_context;
 mod task_spawner;
 mod template;
 
@@ -24,5 +25,6 @@ pub(crate) use generate::*;
 pub(crate) use outcome::*;
 pub(crate) use patch::*;
 pub(crate) use rendered::*;
+pub(crate) use standalone_context::*;
 pub(crate) use task_spawner::*;
 pub(crate) use template::*;

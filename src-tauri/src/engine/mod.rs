@@ -3,6 +3,7 @@ pub mod batch;
 pub mod content_brief;
 pub mod content_fix;
 pub mod content_review_selection;
+pub mod ctr_fix;
 pub mod ctr_state;
 pub mod exec;
 pub mod executor;

@@ -95,3 +95,37 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
         cleanup(&path);
     }
 
+    /// Bare fix_ctr_article tasks without ctr_context must fail before the agent
+    /// is invoked (operator should recreate via create-task -S).
+    #[test]
+    fn fix_ctr_article_missing_ctr_context_fails_fast() {
+        let task = crate::models::task::Task {
+            id: "task-no-ctx".to_string(),
+            project_id: "proj-x".to_string(),
+            task_type: "fix_ctr_article".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::Optional,
+            title: Some("CTR fix: orphan".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_analyze(&task, "/tmp", "kimi", "{}");
+        assert!(!result.success, "should fail without ctr_context");
+        assert!(
+            result.message.contains("ctr_context"),
+            "expected ctr_context mention, got: {}",
+            result.message
+        );
+    }
+
