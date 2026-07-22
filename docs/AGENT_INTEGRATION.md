@@ -72,7 +72,7 @@ API keys for Claude / OpenAI are loaded via `EnvResolver` (secrets.env → proje
 
 For Kimi specifically, the global `kimi_backend_mode` setting controls which backend is used: `"cli"` (the default) spawns `kimi -p` directly and enforces no prompt byte cap; `"bridge"` is legacy/opt-in and its retired 20 KB prompt limit no longer applies anywhere in the live pipeline — prompt sizes are governed by the shared 80 KB target / 90 KB hard budget (`config/prompt_budget.rs`).
 
-**content_review agentic RO tool-loop** (PageSeeds investigation tools) requires a Rig tool-capable backend: Claude, OpenAI, Ollama, or Kimi Bridge — not Grok/Kimi CLI.
+**content_review agentic RO tool-loop** (PageSeeds investigation tools) requires a Rig tool-capable backend: Claude, OpenAI, Ollama, or Kimi Bridge — not Grok/Kimi CLI. Tool-equipped agents run through `run_tool_equipped_agent` with an `INVESTIGATION_MAX_TURNS` (20) multi-turn budget (aligned with BUSINESS_PROCESSES ≤20 tool calls); without it, rig-core 0.35 defaults to 0 turns and aborts with `MaxTurnError`.
 
 ---
 

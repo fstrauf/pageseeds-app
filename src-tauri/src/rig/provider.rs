@@ -11,8 +11,9 @@
 //! - `grok`    → native `grok -p` CLI subprocess (same agentic pattern as Kimi CLI)
 //! - `ollama`  → local Ollama via rig native provider
 
+use rig::agent::{Agent, PromptHook};
 use rig::client::CompletionClient;
-use rig::completion::Prompt;
+use rig::completion::{CompletionModel, Prompt};
 
 /// How to reach a given LLM.
 #[derive(Debug, Clone)]
@@ -110,6 +111,13 @@ impl AgentResponse {
 // Tool-equipped multi-turn agents
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Max multi-turn tool rounds for investigation agents (aligned with BUSINESS_PROCESSES ≤20).
+///
+/// rig-core 0.35 defaults `max_turns` to 0 when unset, which aborts the tool
+/// loop immediately with `MaxTurnError`. Always set this via `.max_turns(...)`
+/// in [`run_tool_equipped_agent`].
+pub const INVESTIGATION_MAX_TURNS: usize = 20;
+
 /// Errors from building or running a multi-turn tool-equipped agent.
 ///
 /// Callers that can fall back (e.g. content_review_investigate → recommend)
@@ -152,9 +160,17 @@ pub async fn run_tool_equipped_agent(
     preamble: &str,
     prompt: &str,
 ) -> Result<String, ToolAgentError> {
-    async fn run_tool_agent<A: Prompt + Send>(agent: A, prompt: &str) -> Result<String, ToolAgentError> {
+    // Bound on concrete Agent so `.prompt()` returns PromptRequest (not the
+    // opaque Prompt trait future) and we can set multi-turn depth in one place.
+    // rig-core 0.35 non-streaming API: `.max_turns(n)` (streaming uses `.multi_turn`).
+    async fn run_tool_agent<M, P>(agent: Agent<M, P>, prompt: &str) -> Result<String, ToolAgentError>
+    where
+        M: CompletionModel + 'static,
+        P: PromptHook<M> + 'static,
+    {
         agent
             .prompt(prompt)
+            .max_turns(INVESTIGATION_MAX_TURNS)
             .await
             .map_err(|e| ToolAgentError::Failed(format!("Agent error: {e}")))
     }
@@ -800,6 +816,12 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(backend, LlmBackend::KimiDirect));
+    }
+
+    #[test]
+    fn investigation_max_turns_is_positive_budget() {
+        assert!(INVESTIGATION_MAX_TURNS > 0);
+        assert_eq!(INVESTIGATION_MAX_TURNS, 20);
     }
 
     #[test]
