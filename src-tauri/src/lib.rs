@@ -149,6 +149,8 @@ pub fn run() {
             commands::cancel_task,
             commands::create_article_tasks_from_keywords,
             commands::list_articles,
+            commands::reindex_article_evidence,
+            commands::get_article_evidence_coverage,
             commands::list_live_site_pages,
             commands::list_ctr_outcomes,
             commands::get_live_site_audit,

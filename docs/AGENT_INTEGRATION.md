@@ -387,7 +387,14 @@ Every agentic step must document expected output, either in the skill or in the 
 | Prompt assembly | `src-tauri/src/engine/prompts.rs` |
 | JSON extraction | `src-tauri/src/engine/text.rs` |
 | Skill loading | `src-tauri/src/engine/skills.rs` |
+| Skill embeddings | `src-tauri/src/engine/skills_search.rs` |
+| Article evidence embeddings | `src-tauri/src/content/article_evidence.rs` |
+| Embedding backend (Ollama / OpenAI) | `src-tauri/src/rig/embeddings.rs` |
 | Rig tools | `src-tauri/src/engine/tools/` |
+
+Local article/skill vectors use Ollama `nomic-embed-text` by default. When Ollama
+is missing, article evidence still stores durable facts (`word_count`, `h1`,
+outline, hash) with `embedding_json` NULL — no soft mega-cluster fallback.
 
 ---
 

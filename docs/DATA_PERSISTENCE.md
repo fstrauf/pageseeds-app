@@ -154,6 +154,47 @@ CREATE TABLE task_idempotency_keys (
 CREATE INDEX idx_idempotency_task ON task_idempotency_keys(task_id);
 ```
 
+#### `article_evidence` Table (V49, issue #119)
+
+Durable per-article catalog facts + optional embeddings. Mirrors `skill_embeddings`:
+SHA-256 `content_hash` of full MDX skips re-embed; `word_count` is full-body via
+`content::ops::count_words` (not first-200-words TF-IDF).
+
+```sql
+CREATE TABLE article_evidence (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id       TEXT NOT NULL,
+    article_id       INTEGER NOT NULL,
+    slug             TEXT NOT NULL,
+    content_hash     TEXT NOT NULL,
+    embedding_json   TEXT,              -- nullable: facts-only when Ollama missing
+    model_name       TEXT,
+    outline_text     TEXT,
+    summary_text     TEXT,
+    intent_card      TEXT,              -- nullable in v1 (no LLM extract required)
+    word_count       INTEGER NOT NULL DEFAULT 0,
+    h1               TEXT,
+    title            TEXT,
+    target_keyword   TEXT,
+    top_queries_json TEXT NOT NULL DEFAULT '[]',
+    updated_at       TEXT NOT NULL,
+    UNIQUE(project_id, article_id)
+);
+```
+
+**Invalidation:** re-read MDX → hash → if stored hash matches and embedding exists
+(or embeddings unavailable), skip. Hash change clears/recomputes embedding when
+Ollama is up.
+
+**Degrade behavior:** if Ollama is unavailable, `index_stale` still upserts facts
+with `embedding_json` NULL. There is **no** soft mega-cluster fallback — callers
+must tolerate missing vectors (`nearest_neighbors` returns empty for unembedded
+rows). Re-run `reindex_article_evidence` once Ollama + `nomic-embed-text` are
+available to fill vectors (≥95% live coverage target when backend is up).
+
+Module: `content/article_evidence.rs`. Commands: `reindex_article_evidence`,
+`get_article_evidence_coverage`.
+
 ### Migrations
 
 **Rule:** Never alter existing migration blocks. Always add new `MIGRATION_VN` constants.

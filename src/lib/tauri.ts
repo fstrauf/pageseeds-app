@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog'
 import type {
   Article,
+  ArticleEvidenceCoverageReport,
+  ArticleEvidenceIndexReport,
   ClarityConnectionStatus,
   ClarityFindingPayload,
   ClaritySummaryPayload,
@@ -660,6 +662,18 @@ export const searchSkills = (
   limit?: number,
 ): Promise<ScoredSkill[]> =>
   invoke('search_skills', { projectId, query, limit })
+
+/** Reindex durable article evidence (facts + embeddings). Hash-skip + Ollama degrade. */
+export const reindexArticleEvidence = (
+  projectId: string,
+): Promise<ArticleEvidenceIndexReport> =>
+  invoke('reindex_article_evidence', { projectId })
+
+/** Coverage of live articles vs the article_evidence catalog. */
+export const getArticleEvidenceCoverage = (
+  projectId: string,
+): Promise<ArticleEvidenceCoverageReport> =>
+  invoke('get_article_evidence_coverage', { projectId })
 
 export const buildPromptPreview = (taskId: string, skillName: string): Promise<PromptContext> =>
   invoke('build_prompt_preview', { taskId, skillName })

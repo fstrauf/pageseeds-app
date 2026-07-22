@@ -1,3 +1,4 @@
+pub mod article_evidence;
 pub mod article_index;
 pub mod article_resolver;
 pub mod cleaner;

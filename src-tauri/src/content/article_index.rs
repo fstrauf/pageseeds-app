@@ -136,6 +136,12 @@ pub fn clean_stale_articles(
         }
         if !content_files.contains(basename) {
             removed.push(format!("{} ({})", article.title, article.file));
+            // Explicit evidence purge before article delete (belt-and-suspenders
+            // with V49 ON DELETE CASCADE for soft-clean / FK-off edge cases).
+            let _ = conn.execute(
+                "DELETE FROM article_evidence WHERE article_id = ?1 AND project_id = ?2",
+                rusqlite::params![article.id, project_id],
+            );
             conn.execute(
                 "DELETE FROM articles WHERE id = ?1 AND project_id = ?2",
                 rusqlite::params![article.id, project_id],
@@ -342,6 +348,21 @@ pub fn ingest_orphans(
 
     // Export projection.
     crate::db::export::write_articles_to_repo(conn, project_id, project_path)?;
+
+    // Best-effort evidence facts for newly ingested articles (never fails ingest).
+    for basename in &ingested_files {
+        let stem = std::path::Path::new(basename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(basename);
+        let slug = crate::content::slug::normalize_url_slug(stem);
+        crate::content::article_evidence::maybe_reindex_article(
+            conn,
+            project_id,
+            project_path,
+            &slug,
+        );
+    }
 
     Ok(IngestSummary {
         ingested: ingested_files.len(),

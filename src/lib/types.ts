@@ -608,6 +608,26 @@ export interface ScoredSkill {
   score: number
 }
 
+// ─── Article Evidence Index (issue #119) ──────────────────────────────────────
+
+export interface ArticleEvidenceIndexReport {
+  total_articles: number
+  facts_upserted: number
+  skipped_unchanged: number
+  embedded: number
+  embeddings_available: boolean
+  errors: string[]
+}
+
+export interface ArticleEvidenceCoverageReport {
+  total_live: number
+  indexed: number
+  with_embedding: number
+  missing: number
+  stale: number
+  pct_indexed: number
+}
+
 // ─── Overview ─────────────────────────────────────────────────────────────────
 
 export interface TaskStatusCounts {

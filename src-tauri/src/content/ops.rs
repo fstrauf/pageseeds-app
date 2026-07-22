@@ -258,6 +258,8 @@ pub fn sync_and_validate(
     let mut date_mismatches = Vec::new();
     let mut dates_synced = 0usize;
     let mut fixable_mismatches = 0usize;
+    // Only reindex articles whose files we successfully patched (not every project article).
+    let mut patched_slugs: Vec<String> = Vec::new();
 
     for article in &articles {
         let id = Some(article.id);
@@ -345,6 +347,7 @@ pub fn sync_and_validate(
             if let Ok(patched) = patch_frontmatter_date(&text, &expected_date) {
                 if std::fs::write(file_path, patched).is_ok() {
                     dates_synced += 1;
+                    patched_slugs.push(article.url_slug.clone());
                 }
             }
         }
@@ -364,6 +367,17 @@ pub fn sync_and_validate(
     } else {
         "Index and content are in sync"
     };
+
+    // Best-effort: refresh durable article evidence facts only for articles
+    // whose files we successfully patched. Never fails the parent sync.
+    for slug in &patched_slugs {
+        crate::content::article_evidence::maybe_reindex_article(
+            conn,
+            project_id,
+            repo_root,
+            slug,
+        );
+    }
 
     Ok(SyncValidateResult {
         checked_entries: articles.len(),
