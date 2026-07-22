@@ -260,6 +260,7 @@ pub fn run() {
             commands::get_strategy_reviews,
             commands::create_tasks_from_approved_recommendations,
             commands::create_cannibalization_tasks_from_selection,
+            commands::select_content_review_follow_ups,
             commands::backfill_hub_pages,
             commands::validate_content_format,
             commands::fix_content_format,

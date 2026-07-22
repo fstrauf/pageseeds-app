@@ -294,17 +294,26 @@ pub struct PostTaskContext<'a> {
 pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
     let mut follow_up_ids: Vec<String> = vec![];
 
-    // Content review → individual fix_content_article tasks + topic health reducer
+    // Content review → store selectable proposals artifact (UserSelection).
+    // Disposal is selection-only via ContentReviewPicker — do NOT auto-spawn
+    // fix_content_article children here. Users choose proposals in the picker;
+    // `select_content_review_follow_ups` spawns via TaskSpawner.
     if matches!(
         ctx.task.task_type.as_str(),
         "content_review" | "content_audit"
     ) {
-        let fix_task_ids = crate::engine::exec::content::create_fix_content_article_tasks(
+        // Reload so we see step artifacts written during execution.
+        let parent = task_store::get_task(ctx.conn, &ctx.task.id).unwrap_or_else(|_| ctx.task.clone());
+        if let Err(e) = crate::engine::content_review_selection::build_and_store_proposals_artifact(
             ctx.conn,
-            ctx.task,
+            &parent,
             ctx.project_path,
-        );
-        follow_up_ids.extend(fix_task_ids);
+        ) {
+            log::warn!(
+                "[post_actions] failed to store content_review_proposals: {}",
+                e
+            );
+        }
 
         if let Err(e) = run_topic_health_reducer(ctx) {
             log::warn!("[post_actions] topic health reducer failed: {}", e);

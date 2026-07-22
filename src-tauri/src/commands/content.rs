@@ -386,3 +386,22 @@ pub fn get_ctr_health_summary(
         &project_id,
     ))
 }
+
+/// Create follow-up tasks from user-selected content_review proposals.
+///
+/// Parent must be content_review/content_audit with a `content_review_proposals`
+/// artifact. Spawning uses TaskSpawner + idempotency; parent transitions to Done.
+#[tauri::command]
+pub fn select_content_review_follow_ups(
+    state: State<'_, AppState>,
+    parent_task_id: String,
+    proposal_ids: Vec<String>,
+) -> Result<Vec<crate::models::task::Task>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    crate::engine::content_review_selection::spawn_from_selection(
+        &db,
+        &parent_task_id,
+        &proposal_ids,
+    )
+    .map_err(|e| e.to_string())
+}
