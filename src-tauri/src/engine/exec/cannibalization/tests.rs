@@ -825,8 +825,19 @@ Some content here.
 
     #[test]
     fn test_select_candidates_still_splits_when_every_group_has_two_pages() {
+        // Isolate from ambient PAGESEEDS_DB_PATH so shared_query/embedding
+        // lanes cannot inject extra candidates for project_id "proj-test".
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let db_path = Path::new(&path).join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        drop(conn);
+
         // Soft clusters alone are not merge authority — exact-keyword injection is.
         write_clusters_file(
             &path,
@@ -878,6 +889,12 @@ Some content here.
         );
 
         let result = exec_can_select_candidates(&audit_task(), &path);
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+
         assert!(result.success, "select_candidates failed: {}", result.message);
 
         let candidates = read_candidates(&path);
@@ -1080,6 +1097,141 @@ Some content here.
         cleanup(&path);
     }
 
+    /// Soft clusters must not hard-gate the shortlist: empty `clusters: []`
+    /// still runs evidence lanes (exact_keyword here).
+    #[test]
+    fn test_select_candidates_empty_clusters_still_emits_exact_keyword() {
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let db_path = Path::new(&path).join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        drop(conn);
+
+        // Explicit empty clusters — must not early-return with empty shortlist.
+        let empty_clusters = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "clusters": [],
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_clusters.json"),
+            serde_json::to_string_pretty(&empty_clusters).unwrap(),
+        )
+        .unwrap();
+
+        write_exact_dupes_file(
+            &path,
+            serde_json::json!([{
+                "keyword": "cash secured puts",
+                "article_count": 2,
+                "total_impressions": 200.0,
+                "pages": [
+                    dupe_page(1, "csp-a", "cash secured puts", 100.0),
+                    dupe_page(2, "csp-b", "cash secured puts", 100.0),
+                ],
+                "best_performer": {
+                    "id": 1,
+                    "title": "csp-a",
+                    "url": "csp-a",
+                    "impressions": 100.0,
+                    "clicks": 5.0,
+                    "avg_position": 8.0
+                }
+            }]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+
+        assert!(
+            result.success,
+            "empty clusters must not fail select: {}",
+            result.message
+        );
+        let candidates = read_candidates(&path);
+        assert_eq!(
+            candidates.len(),
+            1,
+            "exact_keyword lane must emit when clusters are empty; got {:?}",
+            candidates
+        );
+        assert_eq!(
+            candidates[0]["lane"].as_str().unwrap(),
+            "exact_keyword"
+        );
+        assert_eq!(
+            candidates[0]["candidate_type"].as_str().unwrap(),
+            "exact_keyword_dupe"
+        );
+
+        cleanup(&path);
+    }
+
+    /// Missing soft-clusters file must not fail the step — lanes still run.
+    #[test]
+    fn test_select_candidates_missing_clusters_file_still_runs_lanes() {
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let db_path = Path::new(&path).join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        drop(conn);
+        // No cannibalization_clusters.json at all.
+
+        write_exact_dupes_file(
+            &path,
+            serde_json::json!([{
+                "keyword": "covered calls",
+                "article_count": 2,
+                "total_impressions": 150.0,
+                "pages": [
+                    dupe_page(10, "cc-a", "covered calls", 90.0),
+                    dupe_page(11, "cc-b", "covered calls", 60.0),
+                ],
+                "best_performer": {
+                    "id": 10,
+                    "title": "cc-a",
+                    "url": "cc-a",
+                    "impressions": 90.0,
+                    "clicks": 4.0,
+                    "avg_position": 6.0
+                }
+            }]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+
+        assert!(
+            result.success,
+            "missing clusters file must not fail: {}",
+            result.message
+        );
+        let candidates = read_candidates(&path);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0]["lane"].as_str().unwrap(), "exact_keyword");
+
+        cleanup(&path);
+    }
+
     #[test]
     fn test_select_candidates_caps_keyword_group_at_four() {
         let path = test_dir();
@@ -1148,7 +1300,7 @@ Some content here.
             ("monthly sub".into(), 10, 40.0, "/blog/x".into()),
             ("monthly sub".into(), 11, 30.0, "/blog/y".into()),
         ];
-        let groups = build_shared_query_groups_from_rows(&rows);
+        let groups = group_shared_query_rows(rows);
         assert_eq!(groups.len(), 2, "two queries with ≥2 pages above floor");
         let cold = groups
             .iter()
@@ -1695,6 +1847,18 @@ Some content here.
         );
         assert!(!trimmed_prompt.contains("excerpt"));
         assert!(full_prompt.contains("excerpt"));
+
+        // Prompts must instruct id selection only — never URLs as model output.
+        for prompt in [&full_prompt, &trimmed_prompt] {
+            assert!(
+                prompt.contains("keep_id") && prompt.contains("redirect_ids"),
+                "prompt must reference keep_id/redirect_ids"
+            );
+            assert!(
+                !prompt.contains("keeper URL") && !prompt.contains("redirect URLs"),
+                "prompt must not instruct the model to emit URLs"
+            );
+        }
     }
 
     #[test]

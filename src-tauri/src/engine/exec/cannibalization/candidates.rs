@@ -22,11 +22,6 @@ const EMBEDDING_NEAR_DUPE_MIN_SIMILARITY: f64 = 0.85;
 /// Min impressions per page for a GSC query to count toward the shared_query lane.
 const SHARED_QUERY_MIN_IMPRESSIONS: f64 = 10.0;
 
-/// Valid evidence lanes (issue #117 / #121). Soft TF-IDF clusters are not lanes.
-const LANE_EXACT_KEYWORD: &str = "exact_keyword";
-const LANE_SHARED_QUERY: &str = "shared_query";
-const LANE_NEAR_DUPE: &str = "near_dupe";
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 3: Select Candidates
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -34,13 +29,14 @@ const LANE_NEAR_DUPE: &str = "near_dupe";
 /// Deterministic candidate selection for the cannibalization shortlist.
 ///
 /// Soft TF-IDF clusters (from `cannibalization_clusters.json`) are exploratory
-/// only — not merge authority. Emits candidates from three evidence lanes only:
+/// only — not merge authority and **not** a precondition. Emits candidates from
+/// three evidence lanes only:
 /// 1. Exact same `target_keyword` groups via `exact_keyword_duplicates.json`
-///    (`lane: "exact_keyword"`, `candidate_type: "exact_keyword_dupe"`).
+///    (`lane: ExactKeyword` → `candidate_type: "exact_keyword_dupe"`).
 /// 2. Same GSC query on ≥2 articles via `ctr_query_metrics`
-///    (`lane: "shared_query"`, `candidate_type: "shared_query"`).
+///    (`lane: SharedQuery` → `candidate_type: "shared_query"`).
 /// 3. High pairwise similarity pairs / small cliques
-///    (`lane: "near_dupe"`, `candidate_type: "near_dupe"`).
+///    (`lane: NearDupe` → `candidate_type: "near_dupe"`).
 ///
 /// Caps pages per candidate at [`MAX_CANDIDATE_PAGES`]. Writes rich
 /// `cannibalization_candidates.json` for analyze and ID-based
@@ -48,48 +44,8 @@ const LANE_NEAR_DUPE: &str = "near_dupe";
 pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    // Load clusters from DB (primary) or JSON fallback — used for early exit /
-    // messaging counts only. Soft clusters are never merge authority.
-    let clusters_doc: serde_json::Value = {
-        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
-            .ok()
-            .and_then(|conn| {
-                crate::db::content_audit::get_latest_audit_artifact(
-                    &conn,
-                    &task.project_id,
-                    "cannibalization_clusters",
-                )
-                .ok()
-                .flatten()
-            });
-        match db_doc {
-            Some(v) => v,
-            None => {
-                let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
-                match crate::engine::exec::common::read_json(
-                    &clusters_path,
-                    "cannibalization_clusters.json",
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return e,
-                }
-            }
-        }
-    };
-
-    let clusters = clusters_doc["clusters"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let clusters_len = clusters.len();
-    if clusters.is_empty() {
-        return StepResult {
-            success: true,
-            message: "No clusters found — nothing to select.".to_string(),
-            output: None,
-            artifact_key: None,
-        };
-    }
+    // Soft clusters are optional messaging only — never gate the shortlist.
+    let clusters_len = load_soft_cluster_count(&paths, &task.project_id);
 
     // Optional shared DB connection for shared_query + embedding near_dupe lanes.
     let db_conn = rusqlite::Connection::open(crate::db::default_db_path()).ok();
@@ -98,7 +54,7 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
     let context_doc = load_audit_context(&paths);
     let articles_by_id = index_context_articles(context_doc.as_ref());
 
-    let mut candidates: Vec<serde_json::Value> = Vec::new();
+    let mut candidates: Vec<MergeCandidate> = Vec::new();
     // Track URL pairs already covered so later lanes skip duplicates of earlier ones.
     // Priority order: exact_keyword → shared_query → near_dupe.
     let mut covered_url_pairs: HashSet<(String, String)> = HashSet::new();
@@ -130,16 +86,18 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
 
     // Sort candidates by total impressions descending
     candidates.sort_by(|a, b| {
-        let ia = a["total_impressions"].as_f64().unwrap_or(0.0);
-        let ib = b["total_impressions"].as_f64().unwrap_or(0.0);
-        ib.partial_cmp(&ia).unwrap_or(std::cmp::Ordering::Equal)
+        b.total_impressions
+            .partial_cmp(&a.total_impressions)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let rich_candidates: Vec<serde_json::Value> =
+        candidates.iter().map(MergeCandidate::to_rich_json).collect();
     let candidates_doc = serde_json::json!({
         "generated_at": &now_iso,
-        "candidate_count": candidates.len(),
-        "candidates": candidates,
+        "candidate_count": rich_candidates.len(),
+        "candidates": rich_candidates,
     });
 
     // #117 ID-based evidence shortlist (contract consumers).
@@ -207,39 +165,47 @@ pub(crate) fn exec_can_select_candidates(task: &Task, project_path: &str) -> Ste
     }
 }
 
-/// Build the #117 ID-based evidence shortlist from rich candidates.
+/// Load soft TF-IDF cluster count for success messaging only.
+/// Missing or empty clusters do not fail the step and do not block lanes.
+fn load_soft_cluster_count(paths: &ProjectPaths, project_id: &str) -> usize {
+    let clusters_doc: Option<serde_json::Value> = {
+        let db_doc = rusqlite::Connection::open(crate::db::default_db_path())
+            .ok()
+            .and_then(|conn| {
+                crate::db::content_audit::get_latest_audit_artifact(
+                    &conn,
+                    project_id,
+                    "cannibalization_clusters",
+                )
+                .ok()
+                .flatten()
+            });
+        match db_doc {
+            Some(v) => Some(v),
+            None => {
+                let clusters_path = paths.automation_dir.join("cannibalization_clusters.json");
+                std::fs::read_to_string(&clusters_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+            }
+        }
+    };
+
+    clusters_doc
+        .as_ref()
+        .and_then(|d| d["clusters"].as_array())
+        .map(|a| a.len())
+        .unwrap_or(0)
+}
+
+/// Build the #117 ID-based evidence shortlist from typed candidates.
 fn build_evidence_shortlist(
     generated_at: &str,
-    candidates: &[serde_json::Value],
+    candidates: &[MergeCandidate],
 ) -> serde_json::Value {
     let evidence_candidates: Vec<serde_json::Value> = candidates
         .iter()
-        .map(|c| {
-            let page_ids: Vec<i64> = c["pages"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|p| p["id"].as_i64())
-                .collect();
-            let shared_queries = c
-                .get("shared_queries")
-                .cloned()
-                .or_else(|| c.get("top_shared_queries").cloned())
-                .unwrap_or_else(|| serde_json::json!([]));
-            let max_pairwise_sim = c
-                .get("max_pairwise_sim")
-                .and_then(|v| v.as_f64())
-                .or_else(|| c.get("pair_similarity").and_then(|v| v.as_f64()))
-                .unwrap_or(0.0);
-            serde_json::json!({
-                "candidate_id": c["candidate_id"],
-                "lane": c["lane"],
-                "pages": page_ids,
-                "shared_queries": shared_queries,
-                "max_pairwise_sim": max_pairwise_sim,
-                "total_impressions": c["total_impressions"].as_f64().unwrap_or(0.0),
-            })
-        })
+        .map(MergeCandidate::to_evidence_json)
         .collect();
 
     serde_json::json!({
@@ -274,11 +240,11 @@ fn index_context_articles(
     articles_by_id
 }
 
-/// Inject `exact_keyword_duplicates.json` groups as typed `exact_keyword_dupe`
+/// Inject `exact_keyword_duplicates.json` groups as typed `ExactKeyword`
 /// candidates. Empty keywords and groups with fewer than 2 pages are skipped.
 fn inject_exact_keyword_dupe_candidates(
     paths: &ProjectPaths,
-    candidates: &mut Vec<serde_json::Value>,
+    candidates: &mut Vec<MergeCandidate>,
     covered_url_pairs: &mut HashSet<(String, String)>,
 ) {
     let dupes_path = paths.automation_dir.join("exact_keyword_duplicates.json");
@@ -330,21 +296,56 @@ fn inject_exact_keyword_dupe_candidates(
             candidates.len() + 1
         );
 
-        candidates.push(serde_json::json!({
-            "candidate_id": candidate_id,
-            "lane": LANE_EXACT_KEYWORD,
-            "candidate_type": "exact_keyword_dupe",
-            "theme": keyword,
-            "pages": compact_pages,
-            "top_shared_queries": vec![keyword.clone()],
-            "shared_queries": vec![keyword.clone()],
-            "shared_query_count": 1,
-            "total_impressions": total_impressions,
-            "page_count": page_count,
-            "max_pairwise_sim": 0.0,
-            "best_performer": dupe["best_performer"],
-        }));
+        candidates.push(MergeCandidate {
+            candidate_id,
+            lane: EvidenceLane::ExactKeyword,
+            theme: keyword.clone(),
+            pages: compact_pages,
+            shared_queries: vec![keyword],
+            total_impressions,
+            page_count,
+            max_pairwise_sim: None,
+            best_performer: dupe.get("best_performer").cloned(),
+        });
     }
+}
+
+/// Pure shared-query grouping used by the emit path and unit tests.
+///
+/// `rows` is `(lowercased_query, article_id, impressions, page_url)`.
+/// Filters rows below [`SHARED_QUERY_MIN_IMPRESSIONS`], dedupes article_ids per
+/// query, requires ≥2 pages, sorts groups by total impressions desc, and caps
+/// each group at [`MAX_CANDIDATE_PAGES`].
+pub(crate) fn group_shared_query_rows(
+    rows: impl IntoIterator<Item = (String, i64, f64, String)>,
+) -> Vec<(String, Vec<(i64, f64, String)>)> {
+    let mut by_query: HashMap<String, Vec<(i64, f64, String)>> = HashMap::new();
+    for (q, article_id, impressions, page_url) in rows {
+        if impressions < SHARED_QUERY_MIN_IMPRESSIONS {
+            continue;
+        }
+        let entry = by_query.entry(q).or_default();
+        if entry.iter().any(|(id, _, _)| *id == article_id) {
+            continue;
+        }
+        entry.push((article_id, impressions, page_url));
+    }
+
+    let mut query_groups: Vec<(String, Vec<(i64, f64, String)>)> = by_query
+        .into_iter()
+        .filter(|(_, pages)| pages.len() >= 2)
+        .collect();
+    query_groups.sort_by(|a, b| {
+        let ta: f64 = a.1.iter().map(|(_, imp, _)| *imp).sum();
+        let tb: f64 = b.1.iter().map(|(_, imp, _)| *imp).sum();
+        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (_, pages) in &mut query_groups {
+        pages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        pages.truncate(MAX_CANDIDATE_PAGES);
+    }
+    query_groups.retain(|(_, pages)| pages.len() >= 2);
+    query_groups
 }
 
 /// Emit shared_query lane candidates from `ctr_query_metrics`.
@@ -356,7 +357,7 @@ fn emit_shared_query_candidates(
     conn: &rusqlite::Connection,
     project_id: &str,
     articles_by_id: &HashMap<i64, serde_json::Value>,
-    candidates: &mut Vec<serde_json::Value>,
+    candidates: &mut Vec<MergeCandidate>,
     covered_url_pairs: &mut HashSet<(String, String)>,
 ) {
     // Efficient single-query aggregation: rows that meet the impression floor.
@@ -397,38 +398,10 @@ fn emit_shared_query_candidates(
         }
     };
 
-    // query → list of (article_id, impressions, page_url) with unique article_ids
-    let mut by_query: HashMap<String, Vec<(i64, f64, String)>> = HashMap::new();
-    for row in rows.flatten() {
-        let (q, article_id, impressions, page_url) = row;
-        let entry = by_query.entry(q).or_default();
-        if entry.iter().any(|(id, _, _)| *id == article_id) {
-            continue;
-        }
-        entry.push((article_id, impressions, page_url));
-    }
+    let collected: Vec<(String, i64, f64, String)> = rows.flatten().collect();
+    let query_groups = group_shared_query_rows(collected);
 
-    // Stable order: highest total impressions first
-    let mut query_groups: Vec<(String, Vec<(i64, f64, String)>)> = by_query
-        .into_iter()
-        .filter(|(_, pages)| pages.len() >= 2)
-        .collect();
-    query_groups.sort_by(|a, b| {
-        let ta: f64 = a.1.iter().map(|(_, imp, _)| *imp).sum();
-        let tb: f64 = b.1.iter().map(|(_, imp, _)| *imp).sum();
-        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    for (query, mut page_rows) in query_groups {
-        // Cap by impressions on that query
-        page_rows.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        page_rows.truncate(MAX_CANDIDATE_PAGES);
-        if page_rows.len() < 2 {
-            continue;
-        }
-
+    for (query, page_rows) in query_groups {
         let compact_pages: Vec<serde_json::Value> = page_rows
             .iter()
             .filter_map(|(id, query_imps, page_url)| {
@@ -500,19 +473,17 @@ fn emit_shared_query_candidates(
         let theme = query.clone();
         let candidate_id = format!("query_{}_{}", slugify(&theme), candidates.len() + 1);
 
-        candidates.push(serde_json::json!({
-            "candidate_id": candidate_id,
-            "lane": LANE_SHARED_QUERY,
-            "candidate_type": "shared_query",
-            "theme": theme,
-            "pages": compact_pages,
-            "top_shared_queries": vec![query.clone()],
-            "shared_queries": vec![query],
-            "shared_query_count": 1,
-            "total_impressions": total_impressions,
-            "page_count": page_count,
-            "max_pairwise_sim": 0.0,
-        }));
+        candidates.push(MergeCandidate {
+            candidate_id,
+            lane: EvidenceLane::SharedQuery,
+            theme,
+            pages: compact_pages,
+            shared_queries: vec![query],
+            total_impressions,
+            page_count,
+            max_pairwise_sim: None,
+            best_performer: None,
+        });
     }
 }
 
@@ -523,13 +494,12 @@ fn emit_near_dupe_candidates(
     project_id: &str,
     articles_by_id: &HashMap<i64, serde_json::Value>,
     context_doc: Option<&serde_json::Value>,
-    candidates: &mut Vec<serde_json::Value>,
+    candidates: &mut Vec<MergeCandidate>,
     covered_url_pairs: &mut HashSet<(String, String)>,
 ) {
     // Prefer embedding neighbors when the evidence index has vectors.
-    let mut used_embeddings = false;
     if let Some(conn) = conn {
-        used_embeddings = emit_embedding_near_dupe_pairs(
+        let _ = emit_embedding_near_dupe_pairs(
             conn,
             project_id,
             articles_by_id,
@@ -538,16 +508,14 @@ fn emit_near_dupe_candidates(
         );
     }
 
-    // TF-IDF high-sim pairs from audit context (always considered as fallback
-    // for pairs not already covered; when embeddings produced candidates we
-    // still fill gaps from similarity_pairs).
+    // TF-IDF high-sim pairs always fill pairs not already covered by earlier
+    // lanes or embedding near_dupes (via covered_url_pairs).
     emit_tfidf_near_dupe_pairs(
         paths,
         context_doc,
         articles_by_id,
         candidates,
         covered_url_pairs,
-        used_embeddings,
     );
 }
 
@@ -557,7 +525,7 @@ fn emit_embedding_near_dupe_pairs(
     conn: &rusqlite::Connection,
     project_id: &str,
     articles_by_id: &HashMap<i64, serde_json::Value>,
-    candidates: &mut Vec<serde_json::Value>,
+    candidates: &mut Vec<MergeCandidate>,
     covered_url_pairs: &mut HashSet<(String, String)>,
 ) -> bool {
     if articles_by_id.is_empty() {
@@ -626,13 +594,16 @@ fn emit_embedding_near_dupe_pairs(
 }
 
 /// Emit near_dupe from high TF-IDF `similarity_pairs` in audit context.
+///
+/// Always fills pairs not already present in `covered_url_pairs` (exact_keyword,
+/// shared_query, or embedding near_dupe). No exclusive-vs-fill policy flag —
+/// TF-IDF is always a gap-filler.
 fn emit_tfidf_near_dupe_pairs(
     paths: &ProjectPaths,
     context_doc: Option<&serde_json::Value>,
     articles_by_id: &HashMap<i64, serde_json::Value>,
-    candidates: &mut Vec<serde_json::Value>,
+    candidates: &mut Vec<MergeCandidate>,
     covered_url_pairs: &mut HashSet<(String, String)>,
-    _embeddings_used: bool,
 ) {
     let context_doc = match context_doc {
         Some(d) => d.clone(),
@@ -695,7 +666,7 @@ fn push_near_dupe_pair(
     id_b: i64,
     sim: f64,
     articles_by_id: &HashMap<i64, serde_json::Value>,
-    candidates: &mut Vec<serde_json::Value>,
+    candidates: &mut Vec<MergeCandidate>,
     covered_url_pairs: &mut HashSet<(String, String)>,
 ) {
     let article_a = match articles_by_id.get(&id_a) {
@@ -753,20 +724,17 @@ fn push_near_dupe_pair(
 
     let candidate_id = format!("near_dupe_{}_{}", slugify(&theme), candidates.len() + 1);
 
-    candidates.push(serde_json::json!({
-        "candidate_id": candidate_id,
-        "lane": LANE_NEAR_DUPE,
-        "candidate_type": "near_dupe",
-        "theme": theme,
-        "pages": selected_pages,
-        "top_shared_queries": [],
-        "shared_queries": [],
-        "shared_query_count": 0,
-        "total_impressions": total_impressions,
-        "page_count": 2,
-        "pair_similarity": sim,
-        "max_pairwise_sim": sim,
-    }));
+    candidates.push(MergeCandidate {
+        candidate_id,
+        lane: EvidenceLane::NearDupe,
+        theme,
+        pages: selected_pages,
+        shared_queries: vec![],
+        total_impressions,
+        page_count: 2,
+        max_pairwise_sim: Some(sim),
+        best_performer: None,
+    });
 }
 
 fn normalize_url_pair(a: &str, b: &str) -> (String, String) {
@@ -848,39 +816,4 @@ fn compact_context_article(article: &serde_json::Value) -> serde_json::Value {
 #[cfg(test)]
 pub(crate) fn shared_query_min_impressions() -> f64 {
     SHARED_QUERY_MIN_IMPRESSIONS
-}
-
-/// Pure shared-query group builder for unit tests (no DB open).
-///
-/// `rows` is `(lowercased_query, article_id, impressions, page_url)`.
-#[cfg(test)]
-pub(crate) fn build_shared_query_groups_from_rows(
-    rows: &[(String, i64, f64, String)],
-) -> Vec<(String, Vec<(i64, f64, String)>)> {
-    let mut by_query: HashMap<String, Vec<(i64, f64, String)>> = HashMap::new();
-    for (q, article_id, impressions, page_url) in rows {
-        if *impressions < SHARED_QUERY_MIN_IMPRESSIONS {
-            continue;
-        }
-        let entry = by_query.entry(q.clone()).or_default();
-        if entry.iter().any(|(id, _, _)| *id == *article_id) {
-            continue;
-        }
-        entry.push((*article_id, *impressions, page_url.clone()));
-    }
-    let mut query_groups: Vec<(String, Vec<(i64, f64, String)>)> = by_query
-        .into_iter()
-        .filter(|(_, pages)| pages.len() >= 2)
-        .collect();
-    query_groups.sort_by(|a, b| {
-        let ta: f64 = a.1.iter().map(|(_, imp, _)| *imp).sum();
-        let tb: f64 = b.1.iter().map(|(_, imp, _)| *imp).sum();
-        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for (_, pages) in &mut query_groups {
-        pages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        pages.truncate(MAX_CANDIDATE_PAGES);
-    }
-    query_groups.retain(|(_, pages)| pages.len() >= 2);
-    query_groups
 }

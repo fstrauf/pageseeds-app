@@ -11,8 +11,6 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
-/// Valid evidence lanes for the #117/#121 shortlist.
-const VALID_LANES: &[&str] = &["exact_keyword", "shared_query", "near_dupe"];
 const MAX_CANDIDATE_PAGES: usize = 4;
 const MIN_CANDIDATE_PAGES: usize = 2;
 
@@ -513,11 +511,15 @@ pub(crate) fn enrich_candidate_with_packages(
 /// Pre-LLM guards that skip the agent entirely (invalid lane / page count).
 /// Returns a human-readable reason when the candidate should be no_action.
 pub(crate) fn pre_llm_product_guard_reason(candidate: &serde_json::Value) -> Option<String> {
-    let lane = candidate["lane"].as_str().unwrap_or("").trim();
-    if lane.is_empty() || !VALID_LANES.contains(&lane) {
+    let raw_lane = candidate["lane"].as_str().unwrap_or("").trim();
+    if EvidenceLane::parse(raw_lane).is_none() {
         return Some(format!(
             "Candidate missing or invalid lane (got {:?}); only exact_keyword, shared_query, near_dupe are allowed.",
-            if lane.is_empty() { "<empty>" } else { lane }
+            if raw_lane.is_empty() {
+                "<empty>"
+            } else {
+                raw_lane
+            }
         ));
     }
 
@@ -546,10 +548,10 @@ pub(crate) fn apply_post_llm_product_guards(
     candidate: &serde_json::Value,
     rec: &mut crate::models::cannibalization::CandidateAnalysisOutput,
 ) -> Option<String> {
-    let lane = candidate["lane"].as_str().unwrap_or("").trim();
+    let lane = EvidenceLane::parse(candidate["lane"].as_str().unwrap_or(""));
 
     // Multi-intent near_dupe without shared queries → force no_action.
-    if lane == "near_dupe" && !rec.no_action {
+    if lane == Some(EvidenceLane::NearDupe) && !rec.no_action {
         if is_multi_intent_without_shared_query(candidate) {
             rec.no_action = true;
             rec.confidence = "low".to_string();
@@ -562,17 +564,11 @@ pub(crate) fn apply_post_llm_product_guards(
 }
 
 /// True when pages have ≥2 distinct non-empty target_keywords AND no shared queries.
+///
+/// Primary field is `shared_queries`; `top_shared_queries` is accepted as a
+/// legacy alias when reading older artifacts.
 pub(crate) fn is_multi_intent_without_shared_query(candidate: &serde_json::Value) -> bool {
-    let shared_count = candidate["shared_query_count"].as_u64().unwrap_or(0);
-    let shared_empty = candidate["shared_queries"]
-        .as_array()
-        .map(|a| a.is_empty())
-        .unwrap_or(true)
-        && candidate["top_shared_queries"]
-            .as_array()
-            .map(|a| a.is_empty())
-            .unwrap_or(true);
-    if shared_count > 0 || !shared_empty {
+    if has_shared_query_evidence(candidate) {
         return false;
     }
 
@@ -592,6 +588,24 @@ pub(crate) fn is_multi_intent_without_shared_query(candidate: &serde_json::Value
     keywords.len() >= 2
 }
 
+fn has_shared_query_evidence(candidate: &serde_json::Value) -> bool {
+    if candidate["shared_query_count"].as_u64().unwrap_or(0) > 0 {
+        return true;
+    }
+    let primary_nonempty = candidate["shared_queries"]
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    if primary_nonempty {
+        return true;
+    }
+    // Legacy alias when primary is missing or empty.
+    candidate["top_shared_queries"]
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false)
+}
+
 /// Build the full merge-analysis prompt for a single candidate.
 pub(crate) fn build_merge_prompt(skill_content: &str, candidate: &serde_json::Value) -> (String, usize) {
     let candidate_json = serde_json::to_string_pretty(candidate).unwrap_or_default();
@@ -599,8 +613,9 @@ pub(crate) fn build_merge_prompt(skill_content: &str, candidate: &serde_json::Va
         + "\n\n---\n\n## Merge Candidate\n\n"
         + &candidate_json
         + "\n\nAnalyze ONLY this candidate cluster. Decide if the pages represent true cannibalization (same search intent competing in SERPs) or just topical similarity.\n\n"
-        + "If true cannibalization: recommend a keeper URL, redirect URLs, and merge instructions.\n"
+        + "If true cannibalization: recommend keep_id (the page id to keep), redirect_ids (page ids to redirect), and merge instructions.\n"
         + "If not: return no_action with a reason.\n\n"
+        + "CRITICAL: Select pages by numeric id only (keep_id / redirect_ids). Never emit URLs — the app resolves ids to canonical URLs.\n"
         + "CRITICAL: Return ONLY a single JSON object matching the Output Contract. Do not include markdown prose outside the JSON.";
     let bytes = prompt.len();
     (prompt, bytes)
@@ -626,8 +641,9 @@ pub(crate) fn build_merge_prompt_trimmed(
         + "\n\n---\n\n## Merge Candidate (Trimmed)\n\n"
         + &candidate_json
         + "\n\nAnalyze ONLY this candidate cluster. Decide if the pages represent true cannibalization (same search intent competing in SERPs) or just topical similarity.\n\n"
-        + "If true cannibalization: recommend a keeper URL, redirect URLs, and merge instructions.\n"
+        + "If true cannibalization: recommend keep_id (the page id to keep), redirect_ids (page ids to redirect), and merge instructions.\n"
         + "If not: return no_action with a reason.\n\n"
+        + "CRITICAL: Select pages by numeric id only (keep_id / redirect_ids). Never emit URLs — the app resolves ids to canonical URLs.\n"
         + "CRITICAL: Return ONLY a single JSON object matching the Output Contract. Do not include markdown prose outside the JSON.";
     let bytes = prompt.len();
     (prompt, bytes)
