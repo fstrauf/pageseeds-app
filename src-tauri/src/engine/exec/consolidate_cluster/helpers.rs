@@ -59,78 +59,12 @@ pub(crate) fn load_plan_from_task_or_file(task: &Task, project_path: &str) -> St
 
 /// Find an MDX file in the content directory by its URL slug.
 ///
-/// Matching is exact/normalized only — never substring — so a bad match can
-/// never patch the wrong live article. Resolution order:
-///   1. Exact filename stem match
-///   2. Normalized stem match via `content::slug::normalize_url_slug`
-///      (covers numeric-prefixed stems like `001_{slug}` and `-`/`_` differences)
-///   3. Frontmatter `url_slug` match (exact or normalized)
-///
-/// Returns `Ok(None)` when nothing matches. Returns `Err` when more than one
-/// file matches — ambiguous cases must fail loudly rather than guess.
+/// Thin wrapper around the canonical [`crate::content::ops::find_file_by_slug`].
 pub(crate) fn find_file_by_slug(
     project_path: &str,
     slug: &str,
 ) -> std::result::Result<Option<PathBuf>, String> {
-    let repo_root = Path::new(project_path);
-    let content_resolution = crate::content::locator::resolve(repo_root, None);
-    let Some(content_dir) = content_resolution.selected else {
-        return Ok(None);
-    };
-
-    let files = crate::content::locator::collect_markdown_files(&content_dir);
-    let slug_normalized = crate::content::slug::normalize_url_slug(slug);
-
-    // Pass 1: filename stem matching (exact or normalized).
-    let mut matches: Vec<PathBuf> = Vec::new();
-    for file in &files {
-        let Some(stem) = file.file_stem().map(|s| s.to_string_lossy().to_string()) else {
-            continue;
-        };
-        let stem_matches = stem == slug
-            || (!slug_normalized.is_empty()
-                && crate::content::slug::normalize_url_slug(&stem) == slug_normalized);
-        if stem_matches {
-            matches.push(file.clone());
-        }
-    }
-
-    // Pass 2 (fallback): frontmatter `url_slug` matching.
-    if matches.is_empty() {
-        for file in &files {
-            let Ok(content) = std::fs::read_to_string(file) else {
-                continue;
-            };
-            let scalars = crate::content::frontmatter::top_level_scalars(&content);
-            for field in scalars {
-                if field.key != "url_slug" {
-                    continue;
-                }
-                let fm_slug = field.raw_value.trim_matches('"').trim_matches('\'');
-                let fm_matches = fm_slug == slug
-                    || (!slug_normalized.is_empty()
-                        && crate::content::slug::normalize_url_slug(fm_slug) == slug_normalized);
-                if fm_matches {
-                    matches.push(file.clone());
-                    break;
-                }
-            }
-        }
-    }
-
-    match matches.len() {
-        0 => Ok(None),
-        1 => Ok(matches.into_iter().next()),
-        _ => Err(format!(
-            "Ambiguous slug '{}': matches multiple files: {}",
-            slug,
-            matches
-                .iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
+    crate::content::ops::find_file_by_slug(Path::new(project_path), slug)
 }
 
 /// Extract headings from markdown body.

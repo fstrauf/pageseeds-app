@@ -145,30 +145,9 @@ impl Tool for ArticleFrontmatterTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let paths = self.ctx.paths();
-        let content_dir = crate::content::ops::resolve_content_dir(&paths.automation_dir, &paths.repo_root)
-            .map_err(|e| InvestigationToolError::NotAvailable(format!("Content dir not found: {e}")))?;
-
-        // Try as file path first, then as slug
-        let file_path = {
-            let direct = paths.repo_root.join(&args.slug_or_file);
-            if direct.exists() {
-                direct
-            } else {
-                // Try .mdx and .md variants
-                let mdx = content_dir.join(format!("{}.mdx", args.slug_or_file));
-                let md = content_dir.join(format!("{}.md", args.slug_or_file));
-                if mdx.exists() { mdx } else if md.exists() { md } else {
-                    // Try with numeric prefix (e.g. "042_my-article")
-                    let slug = args.slug_or_file.trim_start_matches(|c: char| c.is_ascii_digit() || c == '_' || c == '-');
-                    let mdx2 = content_dir.join(format!("{}.mdx", slug));
-                    if mdx2.exists() { mdx2 } else {
-                        return Err(InvestigationToolError::NotAvailable(
-                            format!("Article file not found for: {}", args.slug_or_file)
-                        ));
-                    }
-                }
-            }
-        };
+        // Shared resolver: path as written, then NN_slug.mdx / normalized stem / frontmatter.
+        let file_path = crate::content::ops::resolve_slug_or_path(&paths.repo_root, &args.slug_or_file)
+            .map_err(|e| InvestigationToolError::NotAvailable(e))?;
 
         let meta = crate::content::ops::read_file_metadata(&file_path)
             .map_err(|e| InvestigationToolError::Execution(format!("Failed to read file: {e}")))?;

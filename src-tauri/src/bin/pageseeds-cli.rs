@@ -4,8 +4,10 @@
 /// engine/tools/investigate.rs (the same functions the Rig Tool impls use).
 /// Zero business logic duplication.
 ///
-/// Usage:
-///   cargo run --bin pageseeds-cli -- <tool> -i <project-id> -p <project-path> [args...]
+/// Usage (preferred — installed binary, any cwd):
+///   pageseeds-cli <tool> -i <project-id> -p <project-path> [args...]
+/// Install: ./scripts/install-cli.sh  (from pageseeds-app checkout)
+/// Dev only: cargo run --bin pageseeds-cli -- <tool> ...
 
 use pageseeds_lib::engine::tools::{InvestigationContext, investigate};
 use pageseeds_lib::models::cannibalization::ApprovalStatus;
@@ -36,9 +38,14 @@ fn main() {
 
     let result: Result<serde_json::Value, String> = match tool.as_str() {
         // ── GSC tools (async, kept inline since they need tokio) ──
-        "gsc-performance" => gsc_perf(&project_id, &require_project_path()),
-        "gsc-queries" => gsc_q(&project_id, &require_project_path(), flag(&args, "--page-url", "-u")),
-        "gsc-movers" => gsc_mov(&project_id, &require_project_path()),
+        "gsc-performance" => gsc_perf(&project_id, &require_project_path(), &args),
+        "gsc-queries" => gsc_q(
+            &project_id,
+            &require_project_path(),
+            flag(&args, "--page-url", "-u"),
+            &args,
+        ),
+        "gsc-movers" => gsc_mov(&project_id, &require_project_path(), &args),
 
         // ── Task / queue orchestration ──
         "list-tasks" => list_tasks(&db.to_string_lossy(), &project_id, &args),
@@ -48,6 +55,7 @@ fn main() {
         "get-task" => get_task(&db.to_string_lossy(), &args),
         "update-task-status" => update_task_status_cmd(&db.to_string_lossy(), &args),
         "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
+        "select-content-review" => select_content_review(&db.to_string_lossy(), &args),
         "select-cannibalization" => select_cannibalization(&db.to_string_lossy(), &args),
         "create-articles-from-keywords" => create_articles_from_keywords(&db.to_string_lossy(), &project_id, &args),
         "set-task-status" => set_task_status(&db.to_string_lossy(), &args),
@@ -268,6 +276,38 @@ fn select_keywords(db_path: &str, args: &[String]) -> Result<serde_json::Value, 
         "created": tasks.len(),
         "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
         "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
+    }))
+}
+
+/// Mirror of the `select_content_review_follow_ups` Tauri command:
+/// spawn fix_content_article tasks from selected proposal ids on a content_review
+/// (or content_audit) parent, then mark the parent done.
+fn select_content_review(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let parent_task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let proposal_ids: Vec<String> = flag(args, "--proposals", "-P")
+        .map(|s| {
+            s.split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect()
+        })
+        .unwrap_or_else(|| exit("--proposals required (comma-separated proposal ids)"));
+
+    let conn = open_db(db_path)?;
+    let tasks = pageseeds_lib::engine::content_review_selection::spawn_from_selection(
+        &conn,
+        &parent_task_id,
+        &proposal_ids,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "parent_task_id": parent_task_id,
+        "parent_status": TaskStatus::Done,
+        "created": tasks.len(),
+        "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
+        "types": tasks.iter().map(|t| &t.task_type).collect::<Vec<_>>(),
     }))
 }
 
@@ -533,16 +573,12 @@ fn score_zero_impression_articles(db_path: &str, project_id: &str, project_path:
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn article_frontmatter(project_path: &str, slug: &str) -> Result<serde_json::Value, String> {
-    let paths = pageseeds_lib::engine::project_paths::ProjectPaths::from_path(project_path);
-    let content_dir = pageseeds_lib::content::ops::resolve_content_dir(&paths.automation_dir, &paths.repo_root)
-        .map_err(|e| e.to_string())?;
-    let candidates = [
-        paths.repo_root.join(slug),
-        content_dir.join(format!("{}.mdx", slug)), content_dir.join(format!("{}.md", slug)),
-    ];
-    let fp = candidates.iter().find(|p| p.exists())
-        .ok_or_else(|| format!("File not found for slug: {slug}"))?;
-    let meta = pageseeds_lib::content::ops::read_file_metadata(fp).map_err(|e| e.to_string())?;
+    // Shared resolver: direct path, then NN_slug.mdx / normalized stem / frontmatter.
+    let fp = pageseeds_lib::content::ops::resolve_slug_or_path(
+        std::path::Path::new(project_path),
+        slug,
+    )?;
+    let meta = pageseeds_lib::content::ops::read_file_metadata(&fp).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "slug": meta.url_slug, "file": meta.file_name,
         "title": meta.title, "published_date": meta.published_date,
@@ -583,6 +619,7 @@ fn create_task(project_id: &str, db_path: &str, args: &[String]) -> Result<serde
     let reason = flag(args, "--reason", "-r").unwrap_or_default();
     let priority = flag(args, "--priority", "-P").unwrap_or_else(|| "medium".to_string());
     let auto_enqueue = has_flag(args, "--auto-enqueue", "-a");
+    let slug = flag(args, "--slug", "-S");
 
     let priority_enum = match priority.as_str() {
         "high" => Priority::High,
@@ -591,14 +628,86 @@ fn create_task(project_id: &str, db_path: &str, args: &[String]) -> Result<serde
     };
 
     let conn = open_db(db_path)?;
+
+    // fix_content_article needs a recommendations_{article_id} artifact. When
+    // --slug is provided, resolve the article and build that payload so CLI
+    // runs don't need a parent content_review selection step.
+    let mut artifacts = Vec::new();
+    let mut resolved_title = title.clone();
+    let mut idempotency_key: Option<String> = None;
+    if tt == "fix_content_article" {
+        let slug_val = slug.clone().ok_or_else(|| {
+            "--slug required for fix_content_article (url slug of the article to fix)".to_string()
+        })?;
+        let slug_norm = pageseeds_lib::content::slug::normalize_url_slug(&slug_val);
+        let article = pageseeds_lib::engine::task_store::list_articles(&conn, project_id)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|a| {
+                a.url_slug == slug_val
+                    || pageseeds_lib::content::slug::normalize_url_slug(&a.url_slug) == slug_norm
+            })
+            .ok_or_else(|| format!("No article found for slug '{slug_val}'"))?;
+
+        if resolved_title.is_empty() {
+            resolved_title = format!("Fix content: {}", article.title);
+        }
+
+        let suggestions = if reason.is_empty() {
+            vec![serde_json::json!({
+                "category": "content",
+                "priority": "high",
+                "proposed": "Improve ranking and CTR for primary search queries while preserving accurate options content.",
+            })]
+        } else {
+            // Split multi-line / multi-sentence reasons into actionable suggestions.
+            reason
+                .split(['|', ';', '\n'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    serde_json::json!({
+                        "category": "content",
+                        "priority": "high",
+                        "proposed": s,
+                    })
+                })
+                .collect()
+        };
+
+        let payload = serde_json::json!({
+            "article_id": article.id,
+            "article_title": article.title,
+            "article_file": article.file,
+            "url_slug": article.url_slug,
+            "target_keyword": article.target_keyword,
+            "suggestions": suggestions,
+        });
+        artifacts.push(pageseeds_lib::models::task::TaskArtifact {
+            key: format!("recommendations_{}", article.id),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("pageseeds-cli".to_string()),
+            content: Some(payload.to_string()),
+        });
+        idempotency_key = Some(format!("{tt}:{project_id}:{slug_val}"));
+    }
+
     let task = pageseeds_lib::engine::spawner::TaskSpawner::spawn(&conn, pageseeds_lib::engine::spawner::TaskSpec {
         project_id: project_id.to_string(), task_type: tt.clone(),
-        title: Some(title.clone()), description: Some(reason),
+        title: Some(resolved_title.clone()), description: Some(reason),
         priority: priority_enum,
         run_policy: if auto_enqueue { Some(TaskRunPolicy::AutoEnqueue) } else { None },
+        artifacts,
+        agent_policy: if tt == "fix_content_article" {
+            pageseeds_lib::models::task::AgentPolicy::Required
+        } else {
+            Default::default()
+        },
+        idempotency_key,
         ..Default::default()
     }).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"task_id": task.id, "task_type": tt, "title": title, "status": task.status}))
+    Ok(serde_json::json!({"task_id": task.id, "task_type": tt, "title": resolved_title, "status": task.status}))
 }
 
 fn write_spec(project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
@@ -629,40 +738,65 @@ fn compare_rendered(project_path: &str, args: &[String]) -> Result<serde_json::V
 
 // ── GSC (async — kept inline since they need tokio runtime) ──────────────────
 
-fn gsc_perf(project_id: &str, project_path: &str) -> Result<serde_json::Value, String> {
+fn gsc_limit(args: &[String], default: u32) -> u32 {
+    flag(args, "--limit", "-l")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+        .min(200)
+}
+
+fn gsc_perf(project_id: &str, project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let (site, token) = rt.block_on(gsc_token(project_id, project_path))?;
     let end = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let start = (chrono::Utc::now() - chrono::Duration::days(90)).format("%Y-%m-%d").to_string();
-    let m = rt.block_on(pageseeds_lib::gsc::analytics::fetch_page_rows(&token, &site, &start, &end, 50))
-        .map_err(|e| e.to_string())?;
+    let limit = gsc_limit(args, 50);
+    let m = rt.block_on(pageseeds_lib::gsc::analytics::fetch_page_rows(
+        &token, &site, &start, &end, limit,
+    ))
+    .map_err(|e| e.to_string())?;
     Ok(serde_json::to_value(m).unwrap_or_default())
 }
 
-fn gsc_q(project_id: &str, project_path: &str, page: Option<String>) -> Result<serde_json::Value, String> {
+fn gsc_q(
+    project_id: &str,
+    project_path: &str,
+    page: Option<String>,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let (site, token) = rt.block_on(gsc_token(project_id, project_path))?;
     let end = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let start = (chrono::Utc::now() - chrono::Duration::days(90)).format("%Y-%m-%d").to_string();
+    let limit = gsc_limit(args, 50);
     if let Some(url) = page {
-        let m = rt.block_on(pageseeds_lib::gsc::analytics::fetch_queries_for_page(&token, &site, &url, &start, &end, 50))
-            .map_err(|e| e.to_string())?;
+        let m = rt.block_on(pageseeds_lib::gsc::analytics::fetch_queries_for_page(
+            &token, &site, &url, &start, &end, limit,
+        ))
+        .map_err(|e| e.to_string())?;
         Ok(serde_json::to_value(m).unwrap_or_default())
     } else {
-        let m = rt.block_on(pageseeds_lib::gsc::analytics::fetch_page_query_rows(&token, &site, &start, &end, 50))
-            .map_err(|e| e.to_string())?;
+        let m = rt.block_on(pageseeds_lib::gsc::analytics::fetch_page_query_rows(
+            &token, &site, &start, &end, limit,
+        ))
+        .map_err(|e| e.to_string())?;
         Ok(serde_json::to_value(m).unwrap_or_default())
     }
 }
 
-fn gsc_mov(project_id: &str, project_path: &str) -> Result<serde_json::Value, String> {
+fn gsc_mov(project_id: &str, project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let (site, token) = rt.block_on(gsc_token(project_id, project_path))?;
     let now = chrono::Utc::now();
-    let ce = now.format("%Y-%m-%d").to_string(); let cs = (now - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
-    let pe = (now - chrono::Duration::days(31)).format("%Y-%m-%d").to_string(); let ps = (now - chrono::Duration::days(61)).format("%Y-%m-%d").to_string();
-    let m = rt.block_on(pageseeds_lib::gsc::analytics::compute_movers(&token, &site, &cs, &ce, &ps, &pe, 30))
-        .map_err(|e| e.to_string())?;
+    let ce = now.format("%Y-%m-%d").to_string();
+    let cs = (now - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
+    let pe = (now - chrono::Duration::days(31)).format("%Y-%m-%d").to_string();
+    let ps = (now - chrono::Duration::days(61)).format("%Y-%m-%d").to_string();
+    let limit = gsc_limit(args, 30);
+    let m = rt.block_on(pageseeds_lib::gsc::analytics::compute_movers(
+        &token, &site, &cs, &ce, &ps, &pe, limit,
+    ))
+    .map_err(|e| e.to_string())?;
     Ok(serde_json::to_value(m).unwrap_or_default())
 }
 
@@ -707,15 +841,19 @@ fn expand_tilde(path: &str) -> String {
 fn exit(msg: &str) -> ! { eprintln!("ERROR: {msg}"); std::process::exit(1); }
 
 fn print_help() {
-    eprintln!(r#"pageseeds-cli — individual data tools for KimiCode
+    eprintln!(r#"pageseeds-cli — individual data tools for agents / KimiCode
 
 Each subcommand calls one PageSeeds data function and prints JSON to stdout.
+Uses the same SQLite DB as the desktop app. Prefer the installed binary from
+any directory (do not require opening pageseeds-app source).
 
 Usage:
-  cargo run --bin pageseeds-cli -- <tool> -i <project-id> -p <project-path> [args]
+  pageseeds-cli <tool> -i <project-id> -p <project-path> [args]
+  # install: ./scripts/install-cli.sh  →  ~/.local/bin/pageseeds-cli
 
 Tools:
-  gsc-performance  gsc-queries  gsc-movers
+  gsc-performance  gsc-queries  gsc-movers   [-l/--limit N]  (defaults: perf/queries 50, movers 30; max 200)
+  gsc-queries      also accepts -u/--page-url <url>
   article-list  article-frontmatter  article-body-hash  article-title-scan
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
@@ -725,10 +863,12 @@ Task / queue orchestration:
   list-tasks              -i <id> -p <path> [-t type] [-s status]
   cancel-tasks            -i <id> -p <path> -t type [-s status] [--yes]
   create-task             -i <id> -p <path> -t type [-T title] [-r reason] [-a] [-P high|medium|low]
+                          fix_content_article also requires -S/--slug <url-slug> (builds recommendations artifact)
   execute-task            -I <task-id>
   get-task                -I <task-id>                          Full task JSON incl. artifacts
   update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks
   select-keywords         -I <research-task-id> -K <kw,kw,...>  Create content tasks, mark research done
+  select-content-review   -I <review-task-id> -P <proposal-id,...>  Spawn fix_content_article from content_review
   select-cannibalization  -I <parent-task-id> -S <type:id,...>  Spawn cannibalization fixes, mark parent done
   create-articles-from-keywords -i <id> -I <research-task-id> -k "kw1, kw2, ..."
   set-task-status         -I <task-id> -s <status>              Set any task status

@@ -22,7 +22,8 @@
     "release": "./publish-release.sh",
     "check:ipc": "node scripts/check-ipc-surface.mjs",
     "check:task-store": "./scripts/check-task-store-usage.sh",
-    "check:pre-release": "./scripts/pre-release-checks.sh"
+    "check:pre-release": "./scripts/pre-release-checks.sh",
+    "install:cli": "./scripts/install-cli.sh"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

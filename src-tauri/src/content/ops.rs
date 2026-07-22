@@ -611,6 +611,121 @@ pub fn sync_article_metadata_from_disk(
 
 // ─── Article Analysis Helpers ───────────────────────────────────────────────
 
+/// Find an MDX/MD file in the content directory by URL slug.
+///
+/// Matching is exact/normalized only — never substring — so a bad match can
+/// never open the wrong live article. Resolution order:
+///   1. Exact filename stem match
+///   2. Normalized stem match via [`crate::content::slug::normalize_url_slug`]
+///      (covers numeric-prefixed stems like `001_{slug}` and `-`/`_` differences)
+///   3. Frontmatter `url_slug` match (exact or normalized)
+///
+/// Returns `Ok(None)` when nothing matches. Returns `Err` when more than one
+/// file matches — ambiguous cases must fail loudly rather than guess.
+///
+/// # Examples
+///
+/// - Query `cash-secured-puts` resolves `001_cash_secured_puts.mdx`
+/// - Query `my-post` fails with `Err` if both `001_my_post.mdx` and `002-my-post.mdx` exist
+pub fn find_file_by_slug(
+    project_path: &Path,
+    slug: &str,
+) -> std::result::Result<Option<PathBuf>, String> {
+    let content_resolution = crate::content::locator::resolve(project_path, None);
+    let Some(content_dir) = content_resolution.selected else {
+        return Ok(None);
+    };
+
+    let files = crate::content::locator::collect_markdown_files(&content_dir);
+    let slug_normalized = crate::content::slug::normalize_url_slug(slug);
+
+    // Pass 1: filename stem matching (exact or normalized).
+    let mut matches: Vec<PathBuf> = Vec::new();
+    for file in &files {
+        let Some(stem) = file.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+            continue;
+        };
+        let stem_matches = stem == slug
+            || (!slug_normalized.is_empty()
+                && crate::content::slug::normalize_url_slug(&stem) == slug_normalized);
+        if stem_matches {
+            matches.push(file.clone());
+        }
+    }
+
+    // Pass 2 (fallback): frontmatter `url_slug` matching.
+    if matches.is_empty() {
+        for file in &files {
+            let Ok(content) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            let scalars = crate::content::frontmatter::top_level_scalars(&content);
+            for field in scalars {
+                if field.key != "url_slug" {
+                    continue;
+                }
+                let fm_slug = field.raw_value.trim_matches('"').trim_matches('\'');
+                let fm_matches = fm_slug == slug
+                    || (!slug_normalized.is_empty()
+                        && crate::content::slug::normalize_url_slug(fm_slug) == slug_normalized);
+                if fm_matches {
+                    matches.push(file.clone());
+                    break;
+                }
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.into_iter().next()),
+        _ => Err(format!(
+            "Ambiguous slug '{}': matches multiple files: {}",
+            slug,
+            matches
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// Resolve either a direct file path or a URL slug to an on-disk article file.
+///
+/// Prefer this for tools/CLI that accept `--slug` or a path returned by
+/// `article-list` (`file` field). Order:
+/// 1. Absolute path that exists
+/// 2. Path relative to `project_path` that exists
+/// 3. [`find_file_by_slug`] (handles `NN_slug.mdx` numeric prefixes)
+pub fn resolve_slug_or_path(
+    project_path: &Path,
+    slug_or_file: &str,
+) -> std::result::Result<PathBuf, String> {
+    let trimmed = slug_or_file.trim();
+    if trimmed.is_empty() {
+        return Err("slug_or_file is empty".to_string());
+    }
+
+    let as_path = Path::new(trimmed);
+    if as_path.is_absolute() && as_path.is_file() {
+        return Ok(as_path.to_path_buf());
+    }
+
+    let relative = project_path.join(trimmed);
+    if relative.is_file() {
+        return Ok(relative);
+    }
+
+    // URL slug (or bare `NN_slug.mdx` / stem) → content dir lookup.
+    // normalize_url_slug strips `.mdx` and numeric prefixes, so both
+    // `my-post` and `042_my-post.mdx` resolve the same file.
+    match find_file_by_slug(project_path, trimmed)? {
+        Some(p) => Ok(p),
+        None => Err(format!("File not found for slug: {trimmed}")),
+    }
+}
+
 /// Load an article's raw content by slug.
 ///
 /// Looks up the article in the database, resolves the content directory,
@@ -1054,6 +1169,102 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    // ─── find_file_by_slug / resolve_slug_or_path ─────────────────────────────
+
+    fn write_content_mdx(project: &Path, name: &str, body: &str) -> PathBuf {
+        let content_dir = project.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        let path = content_dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn find_file_by_slug_resolves_numeric_prefix() {
+        let dir = unique_temp_dir("ps_slug_numeric");
+        write_content_mdx(
+            &dir,
+            "042_cash_secured_puts.mdx",
+            "---\ntitle: CSP\n---\n\nBody.\n",
+        );
+        write_content_mdx(
+            &dir,
+            "043_cash_secured_puts_best.mdx",
+            "---\ntitle: Best\n---\n\nBody.\n",
+        );
+
+        // URL slug without prefix → NN_slug.mdx
+        let found = find_file_by_slug(&dir, "cash-secured-puts")
+            .unwrap()
+            .expect("should resolve numeric-prefixed file");
+        assert_eq!(found.file_stem().unwrap(), "042_cash_secured_puts");
+
+        // Underscore form also normalizes
+        let found = find_file_by_slug(&dir, "cash_secured_puts")
+            .unwrap()
+            .expect("underscore slug should resolve");
+        assert_eq!(found.file_stem().unwrap(), "042_cash_secured_puts");
+
+        let found = find_file_by_slug(&dir, "cash-secured-puts-best")
+            .unwrap()
+            .expect("should resolve second file");
+        assert_eq!(found.file_stem().unwrap(), "043_cash_secured_puts_best");
+    }
+
+    #[test]
+    fn find_file_by_slug_ambiguous_fails_loudly() {
+        let dir = unique_temp_dir("ps_slug_ambiguous");
+        write_content_mdx(&dir, "001_my_post.mdx", "---\ntitle: A\n---\n\nA\n");
+        write_content_mdx(&dir, "002-my-post.mdx", "---\ntitle: B\n---\n\nB\n");
+
+        let result = find_file_by_slug(&dir, "my-post");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Ambiguous"));
+    }
+
+    #[test]
+    fn find_file_by_slug_frontmatter_fallback() {
+        let dir = unique_temp_dir("ps_slug_fm");
+        write_content_mdx(
+            &dir,
+            "zzz_random_name.mdx",
+            "---\ntitle: X\nurl_slug: unique-fm-slug\n---\n\nBody\n",
+        );
+
+        let found = find_file_by_slug(&dir, "unique_fm_slug")
+            .unwrap()
+            .expect("frontmatter url_slug should resolve");
+        assert_eq!(found.file_stem().unwrap(), "zzz_random_name");
+
+        assert!(find_file_by_slug(&dir, "no-such-slug").unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_slug_or_path_accepts_path_and_url_slug() {
+        let dir = unique_temp_dir("ps_resolve_slug_path");
+        let mdx = write_content_mdx(
+            &dir,
+            "007_hello_world.mdx",
+            "---\ntitle: Hello\n---\n\nHi\n",
+        );
+
+        // Relative path as written by article-list
+        let via_path = resolve_slug_or_path(&dir, "content/007_hello_world.mdx").unwrap();
+        assert_eq!(via_path, mdx);
+
+        // URL slug (the actual bug report)
+        let via_slug = resolve_slug_or_path(&dir, "hello-world").unwrap();
+        assert_eq!(via_slug, mdx);
+
+        // Absolute path
+        let via_abs = resolve_slug_or_path(&dir, mdx.to_str().unwrap()).unwrap();
+        assert_eq!(via_abs, mdx);
+
+        assert!(resolve_slug_or_path(&dir, "missing-slug")
+            .unwrap_err()
+            .contains("File not found"));
     }
 
     // ─── Regression: clean_stale_articles_json leaves SQLite stale ─────────────
