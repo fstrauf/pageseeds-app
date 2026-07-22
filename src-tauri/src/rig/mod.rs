@@ -7,6 +7,7 @@
 pub mod compat;
 pub mod embeddings;
 pub mod extraction;
+pub mod grok_cli;
 pub mod kimi_bridge;
 pub mod kimi_cli;
 pub mod provider;
