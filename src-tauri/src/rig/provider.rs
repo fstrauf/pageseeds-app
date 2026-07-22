@@ -42,6 +42,19 @@ pub enum LlmBackend {
 }
 
 impl LlmBackend {
+    /// Short stable label for logs and operator-facing extract errors.
+    pub fn label(&self) -> &'static str {
+        match self {
+            LlmBackend::KimiCli { .. } => "KimiCli",
+            LlmBackend::KimiBridge { .. } => "KimiBridge",
+            LlmBackend::KimiDirect => "KimiDirect",
+            LlmBackend::Claude { .. } => "Claude",
+            LlmBackend::OpenAi { .. } => "OpenAi",
+            LlmBackend::GrokCli { .. } => "GrokCli",
+            LlmBackend::Ollama { .. } => "Ollama",
+        }
+    }
+
     /// Return a copy scoped to `project_path` for agentic backends with file
     /// tools. `resolve_backend` fills CLI `work_dir` with a placeholder
     /// (the process cwd); `run_agent_with_backend` overrides it per call, but

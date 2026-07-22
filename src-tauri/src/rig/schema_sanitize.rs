@@ -15,7 +15,21 @@
 //! Call [`sanitize_tool_parameters`] on every schemars schema before attaching
 //! it as `tools[].function.parameters`.
 
+use schemars::JsonSchema;
 use serde_json::{json, Map, Value};
+
+/// Build a provider-safe tool/function `parameters` object for type `T`.
+///
+/// Combines `schemars::schema_for!(T)` with [`sanitize_tool_parameters`] so every
+/// structured-extract path (OpenAI / Claude / Ollama / Kimi / CLI JSON mode)
+/// shares one sanitize boundary. Prefer this over raw `schema_for!` whenever the
+/// schema will be attached as tool parameters or injected into a JSON-mode prompt.
+pub fn schemars_tool_parameters<T: JsonSchema>() -> Result<Value, String> {
+    let schema = schemars::schema_for!(T);
+    let value = serde_json::to_value(&schema)
+        .map_err(|e| format!("Failed to serialize JSON schema: {}", e))?;
+    Ok(sanitize_tool_parameters(value))
+}
 
 /// Sanitize a full schemars schema for use as tool/function parameters.
 pub fn sanitize_tool_parameters(schema: Value) -> Value {
@@ -210,6 +224,20 @@ mod tests {
     use super::*;
     use crate::models::ctr::CtrFixPatch;
     use crate::models::content_review::ContentFixPatch;
+
+    #[test]
+    fn schemars_tool_parameters_ctr_fix_patch_has_no_anyof_or_defs() {
+        let sanitized = schemars_tool_parameters::<CtrFixPatch>().unwrap();
+        let s = sanitized.to_string();
+        assert!(!s.contains("\"anyOf\""), "sanitized still has anyOf: {}", s);
+        assert!(!s.contains("\"oneOf\""), "sanitized still has oneOf: {}", s);
+        assert!(!s.contains("$ref"), "sanitized still has $ref: {}", s);
+        assert!(!s.contains("$defs"), "sanitized still has $defs: {}", s);
+        assert_eq!(
+            sanitized.get("type").and_then(|t| t.as_str()),
+            Some("object")
+        );
+    }
 
     #[test]
     fn ctr_fix_patch_sanitized_has_no_anyof_or_defs() {

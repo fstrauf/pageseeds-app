@@ -318,6 +318,18 @@ plus `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` for the judge. Add a case by dropping 
 
 ## Common Pitfalls
 
+### Structured extract tool schemas must be sanitized
+
+Every structured-extract path must build tool/function parameters with
+`crate::rig::schema_sanitize::schemars_tool_parameters::<T>()` (or
+`sanitize_tool_parameters` on an existing schemars value). Raw schemars
+output for nested `Option<Struct>` uses `anyOf` + `$ref`, which OpenAI-shaped
+providers reject as `invalid_function_parameters` (e.g. `CtrFixPatch`).
+
+**Do not** use unsanitized rig `Extractor<T>` for production patch types on
+Claude / OpenAI / Ollama — `extract_with_backend` routes those providers through
+`rig/openai_compatible_extract.rs` with sanitized schemas instead.
+
 ### 1. Sending Raw SKILL.md as Prompt
 
 **Wrong:**

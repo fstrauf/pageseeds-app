@@ -555,14 +555,9 @@ fn strip_json_fences(text: &str) -> &str {
 /// Convert a schemars schema into function parameters safe for OpenAI-shaped
 /// tool APIs (Kimi bridge, etc.).
 ///
-/// Raw schemars output includes `$schema`, `$defs`/`$ref`, and
-/// `anyOf: [{$ref}, {type:null}]` for `Option<Struct>` — providers reject those
-/// as `invalid_function_parameters`. See `crate::rig::schema_sanitize`.
+/// Delegates to the shared sanitize boundary in `schema_sanitize`.
 fn schema_to_parameters<T: JsonSchema>() -> Result<serde_json::Value, String> {
-    let schema = schemars::schema_for!(T);
-    let value = serde_json::to_value(&schema)
-        .map_err(|e| format!("Failed to serialize JSON schema: {}", e))?;
-    Ok(crate::rig::schema_sanitize::sanitize_tool_parameters(value))
+    crate::rig::schema_sanitize::schemars_tool_parameters::<T>()
 }
 
 async fn send_request(
