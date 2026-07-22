@@ -1,13 +1,12 @@
-/// Typed CTR fix patch generation using Rig structured extraction.
+/// Typed CTR fix patch generation.
 ///
 /// 1. Load CtrRecommendation from task artifacts.
 /// 2. Read the target MDX file.
-/// 3. Build a focused prompt with skill context + recommendation + current content.
-/// 4. Call `rig::extraction::extract_structured::<CtrFixPatch>()`.
-/// 5. Normalize and validate the patch.
-/// 6. If invalid, perform exactly one repair extraction.
-/// 7. Validate patch against recommendation (consistency check).
-/// 8. Return the typed patch JSON as step output.
+/// 3. Prefer a deterministic `CtrFixPatch` when analyze already provided write-ready
+///    recommended strings (validated via normalize + write + consistency checks).
+/// 4. Otherwise build a focused prompt and call Rig structured extraction.
+/// 5. Normalize and validate the patch; one repair extraction if needed.
+/// 6. Return the typed patch JSON as step output.
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;
@@ -20,6 +19,16 @@ pub(crate) async fn exec_ctr_fix_generate(
     project_path: &str,
     agent_provider: &str,
 ) -> StepResult {
+    // Deterministic path first — no LLM backend required.
+    let (rec, original_content) = match load_recommendation_and_content(task, project_path) {
+        Ok(v) => v,
+        Err(result) => return result,
+    };
+
+    if let Some(result) = try_deterministic_generate_result(task, &rec, &original_content) {
+        return result;
+    }
+
     let backend =
         match crate::rig::provider::resolve_backend(agent_provider, None, None, None).await {
             Ok(b) => b,
@@ -37,59 +46,119 @@ pub(crate) async fn exec_ctr_fix_generate(
         _ => {}
     }
 
-    exec_ctr_fix_generate_with_backend(task, project_path, &backend).await
+    exec_ctr_fix_generate_llm(task, project_path, &backend, &rec, &original_content).await
 }
 
 /// Core logic, testable with a mocked backend.
+///
+/// Tries the deterministic recommendation path first (works even with unreachable
+/// backends). Falls back to LLM structured extraction only when recommendations
+/// are not write-ready.
 pub(crate) async fn exec_ctr_fix_generate_with_backend(
     task: &Task,
     project_path: &str,
     backend: &LlmBackend,
 ) -> StepResult {
-    // 1. Load recommendation
+    let (rec, original_content) = match load_recommendation_and_content(task, project_path) {
+        Ok(v) => v,
+        Err(result) => return result,
+    };
+
+    if let Some(result) = try_deterministic_generate_result(task, &rec, &original_content) {
+        return result;
+    }
+
+    exec_ctr_fix_generate_llm(task, project_path, backend, &rec, &original_content).await
+}
+
+fn load_recommendation_and_content(
+    task: &Task,
+    project_path: &str,
+) -> Result<(CtrRecommendation, String), StepResult> {
     let rec = match super::extract_recommendation(task) {
         Ok(Some(r)) => r,
         Ok(None) => {
-            return StepResult::fail("No ctr_recommendations artifact found on task".to_string());
+            return Err(StepResult::fail(
+                "No ctr_recommendations artifact found on task".to_string(),
+            ));
         }
         Err(e) => {
-            return StepResult::fail(format!(
-                    "ctr_recommendations artifact exists but is invalid: {}. \
-                     This usually means the agent returned an unexpected JSON shape.",
-                    e
-                ));
+            return Err(StepResult::fail(format!(
+                "ctr_recommendations artifact exists but is invalid: {}. \
+                 This usually means the agent returned an unexpected JSON shape.",
+                e
+            )));
         }
     };
 
-    // 2. Read file
     let repo_root = Path::new(project_path);
     let file_path =
         match crate::engine::exec::audit_health::resolve_content_file(repo_root, &rec.file) {
             Some(p) => p,
             None => {
-                return StepResult::fail(format!(
-                        "File not found: {}. Run sanitize_content to repair paths.",
-                        rec.file
-                    ));
+                return Err(StepResult::fail(format!(
+                    "File not found: {}. Run sanitize_content to repair paths.",
+                    rec.file
+                )));
             }
         };
 
     let original_content = match std::fs::read_to_string(&file_path) {
         Ok(c) => c,
         Err(_e) => {
-            return StepResult::fail(format!("File not found: {}", file_path.display()));
+            return Err(StepResult::fail(format!(
+                "File not found: {}",
+                file_path.display()
+            )));
         }
     };
 
-    // 3. Build prompt
-    let prompt = match build_ctr_fix_prompt(task, project_path, &rec, &original_content) {
+    Ok((rec, original_content))
+}
+
+fn try_deterministic_generate_result(
+    task: &Task,
+    rec: &CtrRecommendation,
+    original_content: &str,
+) -> Option<StepResult> {
+    let patch = super::try_patch_from_recommendation(rec, original_content, task)?;
+
+    let patch_json = match serde_json::to_string_pretty(&patch) {
+        Ok(s) => s,
+        Err(e) => {
+            return Some(StepResult::fail(format!(
+                "Failed to serialize CtrFixPatch: {}",
+                e
+            )));
+        }
+    };
+
+    Some(StepResult {
+        success: true,
+        message: format!(
+            "Generated typed CtrFixPatch for {} (from recommendation, no LLM)",
+            rec.file
+        ),
+        output: Some(patch_json),
+        artifact_key: None,
+    })
+}
+
+/// LLM structured-extraction path after deterministic short-circuit failed.
+async fn exec_ctr_fix_generate_llm(
+    task: &Task,
+    project_path: &str,
+    backend: &LlmBackend,
+    rec: &CtrRecommendation,
+    original_content: &str,
+) -> StepResult {
+    let prompt = match build_ctr_fix_prompt(task, project_path, rec, original_content) {
         Ok(p) => p,
         Err(e) => {
             return StepResult::fail(format!("Failed to build CTR fix prompt: {}", e));
         }
     };
 
-    // 4. Extract structured patch
     let mut patch = match crate::rig::extraction::extract_with_backend::<CtrFixPatch>(
         backend,
         &prompt,
@@ -113,16 +182,13 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
         }
     };
 
-    // 5. Normalize and validate
     let repairs = super::normalize_patch_before_validation(&mut patch, task);
-    let mut errors = super::validate_patch_before_write(&patch, task, &original_content);
+    let mut errors = super::validate_patch_before_write(&patch, task, original_content);
 
-    // 6. Consistency validation (Phase 6)
     let consistency_errors =
-        super::validate_patch_against_recommendation(&patch, &rec, &original_content);
+        super::validate_patch_against_recommendation(&patch, rec, original_content);
     errors.extend(consistency_errors);
 
-    // 7. One repair attempt if needed
     if !errors.is_empty() {
         log::info!(
             "[ctr_fix_generate] First patch invalid for {}: {}. Attempting repair.",
@@ -134,12 +200,9 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
             Ok(mut repaired) => {
                 let _repair_notes = super::normalize_patch_before_validation(&mut repaired, task);
                 let mut repair_errors =
-                    super::validate_patch_before_write(&repaired, task, &original_content);
-                let consistency_errors2 = super::validate_patch_against_recommendation(
-                    &repaired,
-                    &rec,
-                    &original_content,
-                );
+                    super::validate_patch_before_write(&repaired, task, original_content);
+                let consistency_errors2 =
+                    super::validate_patch_against_recommendation(&repaired, rec, original_content);
                 repair_errors.extend(consistency_errors2);
 
                 if !repair_errors.is_empty() {
@@ -159,7 +222,6 @@ pub(crate) async fn exec_ctr_fix_generate_with_backend(
         }
     }
 
-    // 8. Return patch as JSON
     let patch_json = match serde_json::to_string_pretty(&patch) {
         Ok(s) => s,
         Err(e) => {
@@ -429,6 +491,111 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
             prompt.contains("content/test.mdx"),
             "prompt should include file path"
         );
+    }
+
+    #[tokio::test]
+    async fn exec_ctr_fix_generate_deterministic_no_llm() {
+        // Concrete write-ready recommendations + unreachable backend must succeed
+        // without any network call (proves no LLM path).
+        let backend = crate::rig::provider::LlmBackend::KimiBridge {
+            base_url: "http://127.0.0.1:1/v1".to_string(),
+            model: "unreachable".to_string(),
+        };
+
+        let path = std::env::temp_dir()
+            .join(format!("ctr_gen_deterministic_{}", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_dir_all(&path);
+        let content_dir = std::path::Path::new(&path).join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        let mdx = r#"---
+title: "Test Article | Brand | Brand -- Tagline That Is Too Long For SERP"
+description: "A short desc"
+date: "2024-01-01"
+---
+
+# Test Article
+
+This is the first paragraph of the test article. It contains some content.
+"#;
+        std::fs::write(content_dir.join("001_test_article.mdx"), mdx).unwrap();
+
+        let title = "Best CSP Stocks Guide";
+        let meta = "Discover the best cash-secured put stocks for consistent income. \
+Compare risk, premiums, and entry strategies in this practical guide for option sellers.";
+        assert!(
+            (crate::engine::exec::audit_health::META_MIN_LEN
+                ..=crate::engine::exec::audit_health::META_MAX_LEN)
+                .contains(&meta.chars().count())
+        );
+
+        let rec = CtrRecommendation {
+            article_id: 1,
+            url_slug: "test-article".to_string(),
+            file: "content/001_test_article.mdx".to_string(),
+            priority: None,
+            expected_ctr_improvement: None,
+            target_keyword: "csp stocks".to_string(),
+            fixes: vec![
+                crate::models::ctr::CtrFix {
+                    fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
+                    current: Some("long title".to_string()),
+                    recommended: serde_json::json!(title),
+                    reason: None,
+                },
+                crate::models::ctr::CtrFix {
+                    fix_type: crate::models::ctr::CtrFixType::MetaDescription,
+                    current: Some("A short desc".to_string()),
+                    recommended: serde_json::json!(meta),
+                    reason: None,
+                },
+            ],
+        };
+
+        let task = crate::models::task::Task {
+            id: "task-deterministic".to_string(),
+            project_id: "proj-test".to_string(),
+            task_type: "fix_ctr_article".to_string(),
+            phase: "implementation".to_string(),
+            status: crate::models::task::TaskStatus::InProgress,
+            priority: crate::models::task::Priority::Medium,
+            run_policy: crate::models::task::TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: crate::models::task::AgentPolicy::None,
+            title: Some("Fix test".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![crate::models::task::TaskArtifact {
+                key: "ctr_recommendations".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("ctr_audit".to_string()),
+                content: Some(serde_json::to_string(&rec).unwrap()),
+            }],
+            run: crate::models::task::TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let result = exec_ctr_fix_generate_with_backend(&task, &path, &backend).await;
+        assert!(result.success, "Deterministic generate failed: {}", result.message);
+        assert!(
+            result.message.contains("from recommendation, no LLM"),
+            "Expected deterministic path message, got: {}",
+            result.message
+        );
+
+        let patch: CtrFixPatch = serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(patch.article_id, 1);
+        assert_eq!(patch.file, "content/001_test_article.mdx");
+        assert_eq!(patch.changes.title.as_deref(), Some(title));
+        assert_eq!(patch.changes.description.as_deref(), Some(meta));
+
+        let _ = std::fs::remove_dir_all(&path);
     }
 
     #[tokio::test]

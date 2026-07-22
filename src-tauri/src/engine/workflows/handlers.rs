@@ -410,10 +410,11 @@ impl WorkflowHandler for ImplementationHandler {
                 WorkflowStep::new("ctr_analyze_single", StepKind::CtrAnalyze)
                     .with_param(step_params::SKILL, "ctr-optimization")
                     .with_param(step_params::ARTIFACT_NAME, "ctr_recommendations"),
-                // Step 2 (agentic): read file + recommendations, produce structured CtrFixPatch JSON.
-                // Cannot be deterministic: the agent must read the article and write prose that
-                // satisfies SERP intent, brand voice, and keyword context.
-                // Uses rig structured extraction (CtrFixGenerate) instead of raw agentic text.
+                // Step 2 (prefer-deterministic, agentic fallback): read file + recommendations,
+                // produce structured CtrFixPatch JSON. When analyze already stored write-ready
+                // recommended strings (title/meta/snippet/complete FAQ), map them into a
+                // CtrFixPatch and validate without an LLM. Fall back to Rig structured
+                // extraction only when recommendations are guidance-only or not mappable.
                 // Input contract: single CtrRecommendation artifact + file contents.
                 // Output contract: CtrFixPatch JSON.
                 WorkflowStep::new("fix_ctr_article_generate", StepKind::CtrFixGenerate)
