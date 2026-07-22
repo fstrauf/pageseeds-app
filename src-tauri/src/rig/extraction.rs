@@ -167,14 +167,17 @@ where
             )
             .await
         }
-        LlmBackend::Grok { api_key, model } => {
-            let client = rig::providers::xai::Client::new(api_key)
-                .map_err(|e| format!("Failed to build Grok (xAI) client: {}", e))?;
-            extract_with_native_client(
-                client,
-                model,
+        LlmBackend::GrokCli { work_dir } => {
+            // Same JSON-mode extraction as Kimi CLI (schema in prompt, parse response).
+            let schema = schemars::schema_for!(T);
+            let schema_value = serde_json::to_value(&schema)
+                .map_err(|e| format!("Failed to serialize JSON schema: {}", e))?;
+
+            crate::rig::grok_cli::extract_structured::<T>(
                 prompt,
-                preamble.unwrap_or(default_preamble),
+                preamble,
+                &schema_value,
+                work_dir,
             )
             .await
         }

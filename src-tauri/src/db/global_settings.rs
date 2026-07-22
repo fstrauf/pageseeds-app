@@ -7,9 +7,9 @@ use rusqlite::{Connection, OptionalExtension};
 
 /// Default agent provider if none is set globally.
 ///
-/// Grok (xAI API) is tool-capable for content_review investigate; set
-/// `XAI_API_KEY` in `~/.config/automation/secrets.env`. Switch back to `kimi`
-/// in Settings if you need CLI file-tool agentic writes.
+/// Grok CLI (`grok -p`) — same agentic file-tool pattern as Kimi CLI. Requires
+/// the `grok` binary on PATH. Switch to `claude` / `openai` / `kimi` bridge if
+/// you need Rig multi-turn tool calling for content_review investigate.
 pub const DEFAULT_AGENT_PROVIDER: &str = "grok";
 
 /// Default Kimi backend mode: "cli" spawns `kimi --print` directly via tokio

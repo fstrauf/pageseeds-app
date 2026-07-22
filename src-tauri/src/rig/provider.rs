@@ -8,7 +8,7 @@
 //!   - `"direct"` → legacy agent-wrapper subprocess
 //! - `claude`  → Anthropic API via rig native provider
 //! - `openai`  → OpenAI API via rig native provider
-//! - `grok`    → xAI Grok via native rig provider (`rig::providers::xai`)
+//! - `grok`    → native `grok -p` CLI subprocess (same agentic pattern as Kimi CLI)
 //! - `ollama`  → local Ollama via rig native provider
 
 use rig::client::CompletionClient;
@@ -33,24 +33,28 @@ pub enum LlmBackend {
     Claude { api_key: String, model: String },
     /// OpenAI via native API.
     OpenAi { api_key: String, model: String },
-    /// Grok via xAI API (native rig provider).
-    Grok { api_key: String, model: String },
+    /// Grok via the native CLI — spawns `grok -p` with `--always-approve`.
+    /// Agentic file tools operate in `work_dir` (project repo root).
+    GrokCli { work_dir: String },
     /// Ollama via OpenAI-compatible endpoint.
     Ollama { base_url: String, model: String },
 }
 
 impl LlmBackend {
     /// Return a copy scoped to `project_path` for agentic backends with file
-    /// tools. `resolve_backend` fills `KimiCli.work_dir` with a placeholder
+    /// tools. `resolve_backend` fills CLI `work_dir` with a placeholder
     /// (the process cwd); `run_agent_with_backend` overrides it per call, but
     /// structured extraction (`extract_with_backend`) has no such override —
-    /// without this, the kimi agent's file tools inspect the app's launch dir
+    /// without this, the agent's file tools inspect the app's launch dir
     /// instead of the user's project (e.g. it "verifies" link slugs against
     /// the wrong repo and refuses to link). Non-agentic backends are returned
     /// unchanged.
     pub fn scoped_to_project(&self, project_path: &str) -> LlmBackend {
         match self {
             LlmBackend::KimiCli { .. } => LlmBackend::KimiCli {
+                work_dir: project_path.to_string(),
+            },
+            LlmBackend::GrokCli { .. } => LlmBackend::GrokCli {
                 work_dir: project_path.to_string(),
             },
             other => other.clone(),
@@ -61,9 +65,9 @@ impl LlmBackend {
 /// Provider-name-based file-IO capability check — the single source of truth
 /// for whether a provider can read/write files in the project repo itself.
 ///
-/// Agentic CLI / ACP providers (Kimi in any mode) run an agent with file tools
+/// Agentic CLI / ACP providers (Kimi, Grok CLI) run an agent with file tools
 /// in the repo, so a `write_article` prompt can create the MDX file on disk
-/// itself. The native rig HTTP providers (Claude / OpenAI / Grok / Ollama) are
+/// itself. The native rig HTTP providers (Claude / OpenAI / Ollama) are
 /// pure prompt→text completions — the executor must persist any returned content
 /// to disk itself.
 ///
@@ -72,7 +76,7 @@ impl LlmBackend {
 /// string-based check. Unknown providers default to file-IO-capable so the
 /// executor does not write agent output over a backend it does not know.
 pub fn provider_supports_file_io(provider: &str) -> bool {
-    !matches!(provider, "claude" | "openai" | "ollama" | "grok")
+    !matches!(provider, "claude" | "openai" | "ollama")
 }
 
 /// Result of an agent run.
@@ -121,15 +125,15 @@ pub enum ToolAgentError {
 
 /// Whether this backend can run multi-turn tool calling (investigation, etc.).
 ///
-/// Tool-capable: KimiBridge, Claude, OpenAi, Grok, Ollama.
-/// Not supported: KimiCli (print mode has no tool_calls), KimiDirect, others.
+/// Tool-capable: KimiBridge, Claude, OpenAi, Ollama.
+/// Not supported: KimiCli / GrokCli (CLI agent has its own tools; no Rig
+/// multi-turn tool_calls attach), KimiDirect, others.
 pub fn backend_supports_tool_calling(backend: &LlmBackend) -> bool {
     matches!(
         backend,
         LlmBackend::KimiBridge { .. }
             | LlmBackend::Claude { .. }
             | LlmBackend::OpenAi { .. }
-            | LlmBackend::Grok { .. }
             | LlmBackend::Ollama { .. }
     )
 }
@@ -195,17 +199,6 @@ pub async fn run_tool_equipped_agent(
                 .build();
             run_tool_agent(agent, prompt).await
         }
-        LlmBackend::Grok { api_key, model } => {
-            let client = rig::providers::xai::Client::new(api_key).map_err(|e| {
-                ToolAgentError::Failed(format!("Failed to build Grok (xAI) client: {e}"))
-            })?;
-            let agent = client
-                .agent(model)
-                .preamble(preamble)
-                .tools(tools)
-                .build();
-            run_tool_agent(agent, prompt).await
-        }
         LlmBackend::Ollama { base_url, model } => {
             use rig::client::Nothing;
             let client = rig::providers::ollama::Client::builder()
@@ -222,7 +215,9 @@ pub async fn run_tool_equipped_agent(
                 .build();
             run_tool_agent(agent, prompt).await
         }
-        LlmBackend::KimiCli { .. } | LlmBackend::KimiDirect => Err(ToolAgentError::Unsupported),
+        LlmBackend::KimiCli { .. } | LlmBackend::GrokCli { .. } | LlmBackend::KimiDirect => {
+            Err(ToolAgentError::Unsupported)
+        }
     }
 }
 
@@ -249,13 +244,16 @@ pub async fn run_agent_with_backend(
             let effective_workdir = workdir.unwrap_or(work_dir.as_str());
             run_kimi_cli(prompt, preamble, backend_preference, effective_workdir).await
         }
+        LlmBackend::GrokCli { work_dir } => {
+            let effective_workdir = workdir.unwrap_or(work_dir.as_str());
+            run_grok_cli(prompt, preamble, effective_workdir).await
+        }
         LlmBackend::KimiBridge { base_url, model } => {
             run_kimi_bridge(base_url, model, prompt, preamble, backend_preference, workdir).await
         }
         LlmBackend::KimiDirect => run_kimi_direct(prompt, preamble),
         LlmBackend::Claude { api_key, model } => run_claude(api_key, model, prompt, preamble).await,
         LlmBackend::OpenAi { api_key, model } => run_openai(api_key, model, prompt, preamble).await,
-        LlmBackend::Grok { api_key, model } => run_grok(api_key, model, prompt, preamble).await,
         LlmBackend::Ollama { base_url, model } => {
             run_ollama(base_url, model, prompt, preamble).await
         }
@@ -388,10 +386,21 @@ pub async fn resolve_backend(
             api_key: resolve_api_key("OPENAI_API_KEY"),
             model,
         }),
-        "grok" => Ok(LlmBackend::Grok {
-            api_key: resolve_api_key("XAI_API_KEY"),
-            model,
-        }),
+        "grok" => {
+            if crate::rig::grok_cli::is_grok_available() {
+                log::info!("[provider] Grok CLI available — using GrokCli (native subprocess)");
+                Ok(LlmBackend::GrokCli {
+                    work_dir: std::env::current_dir()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| ".".to_string()),
+                })
+            } else {
+                Err(
+                    "Grok CLI binary 'grok' not found on PATH. Install Grok Build CLI or switch agent_provider."
+                        .to_string(),
+                )
+            }
+        }
         "ollama" => Ok(LlmBackend::Ollama {
             base_url: bridge_url.unwrap_or("http://localhost:11434").to_string(),
             model,
@@ -417,7 +426,8 @@ pub fn default_model_for_provider(provider: &str) -> String {
         "kimi" => "kimi-k2.5".to_string(),
         "claude" => "claude-sonnet-4-6".to_string(),
         "openai" => "gpt-4o".to_string(),
-        "grok" => rig::providers::xai::GROK_4.to_string(),
+        // CLI has no model routing string; kept for logs/UI parity.
+        "grok" => "grok-cli".to_string(),
         "ollama" => "llama3.2".to_string(),
         _ => "kimi-k2.5".to_string(),
     }
@@ -443,6 +453,22 @@ async fn run_kimi_cli(
     crate::rig::kimi_cli::run_prompt(prompt, preamble, work_dir)
         .await
         .map_err(|e| format!("Kimi CLI prompt failed: {}", e))
+}
+
+async fn run_grok_cli(
+    prompt: &str,
+    preamble: Option<&str>,
+    fallback_work_dir: &str,
+) -> Result<AgentResponse, String> {
+    let work_dir = if fallback_work_dir.is_empty() {
+        "."
+    } else {
+        fallback_work_dir
+    };
+
+    crate::rig::grok_cli::run_prompt(prompt, preamble, work_dir)
+        .await
+        .map_err(|e| format!("Grok CLI prompt failed: {}", e))
 }
 
 async fn run_kimi_bridge(
@@ -536,17 +562,6 @@ async fn run_openai(
     run_native_http_completion(client, "OpenAI", model, prompt, preamble).await
 }
 
-async fn run_grok(
-    api_key: &str,
-    model: &str,
-    prompt: &str,
-    preamble: Option<&str>,
-) -> Result<AgentResponse, String> {
-    let client = rig::providers::xai::Client::new(api_key)
-        .map_err(|e| format!("Failed to build Grok (xAI) client: {}", e))?;
-    run_native_http_completion(client, "Grok", model, prompt, preamble).await
-}
-
 async fn run_ollama(
     base_url: &str,
     model: &str,
@@ -579,7 +594,7 @@ mod tests {
         assert_eq!(default_model_for_provider("kimi"), "kimi-k2.5");
         assert_eq!(default_model_for_provider("claude"), "claude-sonnet-4-6");
         assert_eq!(default_model_for_provider("openai"), "gpt-4o");
-        assert_eq!(default_model_for_provider("grok"), rig::providers::xai::GROK_4);
+        assert_eq!(default_model_for_provider("grok"), "grok-cli");
         assert_eq!(default_model_for_provider("ollama"), "llama3.2");
         assert_eq!(default_model_for_provider("unknown"), "kimi-k2.5");
     }
@@ -596,11 +611,11 @@ mod tests {
         let backend = resolve_backend("openai", None, None, None).await.unwrap();
         assert!(matches!(backend, LlmBackend::OpenAi { model, .. } if model == "gpt-4o"));
 
-        // Grok
-        let backend = resolve_backend("grok", None, None, None).await.unwrap();
-        assert!(
-            matches!(backend, LlmBackend::Grok { model, .. } if model == rig::providers::xai::GROK_4)
-        );
+        // Grok CLI (requires `grok` on PATH in this environment)
+        if crate::rig::grok_cli::is_grok_available() {
+            let backend = resolve_backend("grok", None, None, None).await.unwrap();
+            assert!(matches!(backend, LlmBackend::GrokCli { .. }));
+        }
 
         // Ollama
         let backend = resolve_backend("ollama", None, None, None).await.unwrap();
@@ -643,10 +658,10 @@ mod tests {
     #[test]
     fn test_provider_supports_file_io() {
         assert!(provider_supports_file_io("kimi"));
+        assert!(provider_supports_file_io("grok")); // CLI agent has file tools
         assert!(!provider_supports_file_io("claude"));
         assert!(!provider_supports_file_io("openai"));
         assert!(!provider_supports_file_io("ollama"));
-        assert!(!provider_supports_file_io("grok"));
         // Unknown providers default to file-IO-capable so the executor does
         // not write agent output over a backend it does not know.
         assert!(provider_supports_file_io("unknown"));
@@ -801,15 +816,14 @@ mod tests {
             api_key: "k".into(),
             model: "gpt".into(),
         }));
-        assert!(backend_supports_tool_calling(&LlmBackend::Grok {
-            api_key: "k".into(),
-            model: rig::providers::xai::GROK_4.into(),
-        }));
         assert!(backend_supports_tool_calling(&LlmBackend::Ollama {
             base_url: "http://localhost".into(),
             model: "llama".into(),
         }));
         assert!(!backend_supports_tool_calling(&LlmBackend::KimiCli {
+            work_dir: ".".into(),
+        }));
+        assert!(!backend_supports_tool_calling(&LlmBackend::GrokCli {
             work_dir: ".".into(),
         }));
         assert!(!backend_supports_tool_calling(&LlmBackend::KimiDirect));

@@ -50,12 +50,12 @@ The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds
 
 ### Current Providers
 
-- **Grok** (default) — xAI Grok via Rig native `rig::providers::xai` (`XAI_API_KEY` in `~/.config/automation/secrets.env`); pure completion, no project file I/O — the executor persists MDX. **Tool-capable** for content_review investigate / multi-turn investigation.
-- **Kimi CLI** — native `kimi -p` subprocess (agentic file tools; no tool-calling for investigate — falls back to scripted recommend)
-- **Claude** — Anthropic API via Rig (`ANTHROPIC_API_KEY`); pure completion, no project file I/O; tool-capable
-- **OpenAI** — OpenAI API via Rig (`OPENAI_API_KEY`); pure completion, no project file I/O; tool-capable
-- **Ollama** — local Ollama via Rig (not shown in Settings UI by default); tool-capable
-- **Kimi Bridge** — HTTP bridge to Kimi (legacy, opt-in); tool-capable
+- **Grok CLI** (default) — native `grok -p --always-approve` subprocess (`src-tauri/src/rig/grok_cli.rs`). Agentic file tools run with `--cwd` / process CWD = project root. Requires `grok` on PATH. Same shape as Kimi CLI for write_article / agentic steps. **Not** Rig multi-turn tool-capable for PageSeeds investigation tools — `content_review` investigate falls back to scripted recommend (same as Kimi CLI).
+- **Kimi CLI** — native `kimi -p` subprocess (agentic file tools; investigate falls back to scripted recommend)
+- **Claude** — Anthropic API via Rig (`ANTHROPIC_API_KEY`); pure completion, no project file I/O; Rig tool-capable
+- **OpenAI** — OpenAI API via Rig (`OPENAI_API_KEY`); pure completion, no project file I/O; Rig tool-capable
+- **Ollama** — local Ollama via Rig; Rig tool-capable
+- **Kimi Bridge** — HTTP bridge to Kimi (legacy, opt-in); Rig tool-capable
 - **Legacy CLI fallback** — `kimi` / `copilot` binaries via `agent-wrapper` (kept for compatibility)
 
 ### Provider Selection
@@ -68,9 +68,11 @@ Provider is resolved from:
 
 The resolved provider string is passed to `engine::agent::run_agent`.
 
-API keys for Claude / OpenAI / Grok are loaded via `EnvResolver` (secrets.env → project `.env.local` / `.env` → shell).
+API keys for Claude / OpenAI are loaded via `EnvResolver` (secrets.env → project `.env.local` / `.env` → shell). Grok CLI uses the local binary (no `XAI_API_KEY` required for the CLI path).
 
 For Kimi specifically, the global `kimi_backend_mode` setting controls which backend is used: `"cli"` (the default) spawns `kimi -p` directly and enforces no prompt byte cap; `"bridge"` is legacy/opt-in and its retired 20 KB prompt limit no longer applies anywhere in the live pipeline — prompt sizes are governed by the shared 80 KB target / 90 KB hard budget (`config/prompt_budget.rs`).
+
+**content_review agentic RO tool-loop** (PageSeeds investigation tools) requires a Rig tool-capable backend: Claude, OpenAI, Ollama, or Kimi Bridge — not Grok/Kimi CLI.
 
 ---
 
