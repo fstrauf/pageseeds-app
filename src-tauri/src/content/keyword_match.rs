@@ -36,11 +36,15 @@ fn significant_tokens(normalized_keyword: &str) -> Vec<String> {
 
 /// True when `haystack_lower` (already lowercased) covers the keyword.
 ///
-/// Verbatim phrase match on the normalized keyword first. For long keywords
-/// (4+ significant tokens — full sentences or multi-phrase strings that
-/// realistically never occur verbatim), accept all significant tokens being
-/// present anywhere in the haystack instead. Short keywords stay strict:
-/// scattered tokens are not evidence of targeting a 2–3 word phrase.
+/// Matching order:
+/// 1. Verbatim phrase on the quote-stripped, whitespace-collapsed keyword.
+/// 2. **Alternative phrases** — when the stored keyword is multiple quoted
+///    segments (`"iron condor" "close at 50% profit"`) or an explicit
+///    comparison (`"cash-secured put" vs "naked put"`), accept if **any**
+///    phrase is present (verbatim or, for long phrases, via tokens).
+/// 3. For long single phrases (4+ significant tokens), accept all significant
+///    tokens being present anywhere. Short keywords stay strict: scattered
+///    tokens are not evidence of targeting a 2–3 word phrase.
 pub fn keyword_present(haystack_lower: &str, keyword: &str) -> bool {
     let normalized = normalize_keyword(keyword);
     if normalized.is_empty() {
@@ -49,8 +53,88 @@ pub fn keyword_present(haystack_lower: &str, keyword: &str) -> bool {
     if haystack_lower.contains(&normalized) {
         return true;
     }
+
+    // Multi-phrase / comparison keywords: any alternative is enough.
+    // Requiring every token from every phrase (e.g. both "iron condor" *and*
+    // "close at 50% profit") made well-optimized intros fail hard-fail the
+    // whole content/CTR patch.
+    if let Some(phrases) = alternative_phrases(keyword) {
+        if phrases
+            .iter()
+            .any(|phrase| phrase_present(haystack_lower, phrase))
+        {
+            return true;
+        }
+    }
+
     let tokens = significant_tokens(&normalized);
     tokens.len() >= 4 && tokens.iter().all(|t| token_match_count(haystack_lower, t) > 0)
+}
+
+/// Match a single phrase (already a candidate alternative) against haystack.
+fn phrase_present(haystack_lower: &str, phrase: &str) -> bool {
+    let normalized = normalize_keyword(phrase);
+    if normalized.is_empty() {
+        return false;
+    }
+    if haystack_lower.contains(&normalized) {
+        return true;
+    }
+    let tokens = significant_tokens(&normalized);
+    // Allow token fallback for medium phrases too (3+), since alternatives are
+    // themselves intended targets, not junk concatenations.
+    tokens.len() >= 3 && tokens.iter().all(|t| token_match_count(haystack_lower, t) > 0)
+}
+
+/// Split messy stored keywords into alternative target phrases.
+///
+/// Returns `Some` only when there are 2+ real alternatives (quoted segments
+/// or `vs`/`versus` comparisons). Single-phrase keywords return `None` so
+/// the stricter single-phrase path applies.
+fn alternative_phrases(keyword: &str) -> Option<Vec<String>> {
+    let trimmed = keyword.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Prefer explicit quote-delimited segments when 2+ are present.
+    let quoted: Vec<String> = {
+        let mut out = Vec::new();
+        let mut rest = trimmed;
+        while let Some(start) = rest.find(['"', '\'']) {
+            let quote = rest.as_bytes()[start] as char;
+            rest = &rest[start + 1..];
+            if let Some(end) = rest.find(quote) {
+                let inner = rest[..end].trim();
+                if !inner.is_empty() {
+                    out.push(inner.to_string());
+                }
+                rest = &rest[end + 1..];
+            } else {
+                break;
+            }
+        }
+        out
+    };
+    if quoted.len() >= 2 {
+        return Some(quoted);
+    }
+
+    // Comparison form: `cash-secured put vs naked put` (with or without quotes).
+    let lower = trimmed.to_lowercase();
+    for sep in [" vs ", " versus "] {
+        if let Some(idx) = lower.find(sep) {
+            let left = trimmed[..idx].trim();
+            let right = trimmed[idx + sep.len()..].trim();
+            let left_n = normalize_keyword(left);
+            let right_n = normalize_keyword(right);
+            if !left_n.is_empty() && !right_n.is_empty() {
+                return Some(vec![left.to_string(), right.to_string()]);
+            }
+        }
+    }
+
+    None
 }
 
 /// Occurrence count of the keyword in `text_lower` (already lowercased), for
@@ -206,6 +290,46 @@ mod tests {
     fn empty_keyword_never_matches() {
         assert!(!keyword_present("anything", ""));
         assert_eq!(keyword_occurrences("anything", ""), 0);
+    }
+
+    #[test]
+    fn multi_quoted_phrases_match_any_alternative() {
+        // Stored junk: two quoted intents glued together. Intro only covers
+        // the primary phrase — must still pass (used to hard-fail whole patch).
+        let intro = "an iron condor is a defined-risk options spread for income sellers";
+        assert!(keyword_present(
+            intro,
+            "\"iron condor\" \"close at 50% profit\""
+        ));
+        // Secondary phrase alone also counts.
+        let alt = "many traders close at 50% profit before expiration risk grows";
+        assert!(keyword_present(
+            alt,
+            "\"iron condor\" \"close at 50% profit\""
+        ));
+        // Neither phrase / tokens → fail.
+        assert!(!keyword_present(
+            "wheel strategy on blue chip stocks",
+            "\"iron condor\" \"close at 50% profit\""
+        ));
+    }
+
+    #[test]
+    fn vs_comparison_keyword_matches_either_side() {
+        let desc = "learn when a cash-secured put beats a short stock position";
+        assert!(keyword_present(
+            desc,
+            "\"cash-secured put\" vs \"naked put\""
+        ));
+        let desc2 = "a naked put has undefined risk if the underlying collapses";
+        assert!(keyword_present(
+            desc2,
+            "\"cash-secured put\" vs \"naked put\""
+        ));
+        assert!(!keyword_present(
+            "covered call income guide",
+            "\"cash-secured put\" vs \"naked put\""
+        ));
     }
 
     #[test]

@@ -552,13 +552,17 @@ fn strip_json_fences(text: &str) -> &str {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convert a schemars schema into function parameters.
+/// Convert a schemars schema into function parameters safe for OpenAI-shaped
+/// tool APIs (Kimi bridge, etc.).
 ///
-/// The full JSON Schema object is passed through as-is, including `$defs` for
-/// nested types. Stripping `$defs` would leave dangling `$ref` pointers.
+/// Raw schemars output includes `$schema`, `$defs`/`$ref`, and
+/// `anyOf: [{$ref}, {type:null}]` for `Option<Struct>` — providers reject those
+/// as `invalid_function_parameters`. See `crate::rig::schema_sanitize`.
 fn schema_to_parameters<T: JsonSchema>() -> Result<serde_json::Value, String> {
     let schema = schemars::schema_for!(T);
-    serde_json::to_value(&schema).map_err(|e| format!("Failed to serialize JSON schema: {}", e))
+    let value = serde_json::to_value(&schema)
+        .map_err(|e| format!("Failed to serialize JSON schema: {}", e))?;
+    Ok(crate::rig::schema_sanitize::sanitize_tool_parameters(value))
 }
 
 async fn send_request(
@@ -1032,29 +1036,32 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_to_parameters_preserves_defs_for_nested_types() {
+    fn test_schema_to_parameters_inlines_nested_types() {
         let params = schema_to_parameters::<NestedOutput>().unwrap();
-        let obj = params.as_object().unwrap();
+        let pretty = serde_json::to_string_pretty(&params).unwrap();
 
-        // The schema must contain $defs because NestedItem is referenced via $ref.
+        // OpenAI-safe: nested structs are inlined (no $defs / $ref / $schema).
         assert!(
-            obj.contains_key("$defs"),
-            "Schema for nested type must contain $defs, got: {}",
-            serde_json::to_string_pretty(&params).unwrap()
+            !pretty.contains("$defs"),
+            "sanitized schema must not keep $defs: {}",
+            pretty
+        );
+        assert!(
+            !pretty.contains("$ref"),
+            "sanitized schema must not keep $ref: {}",
+            pretty
+        );
+        assert!(
+            !pretty.contains("$schema"),
+            "sanitized schema must not keep $schema: {}",
+            pretty
         );
 
-        // Verify no dangling $ref: every $ref must point into $defs.
-        let defs = obj.get("$defs").unwrap().as_object().unwrap();
-        let refs = collect_refs(&params);
-        for r in refs {
-            let stripped = r.trim_start_matches("#/$defs/");
-            assert!(
-                defs.contains_key(stripped),
-                "Dangling $ref: {} (not found in $defs keys: {:?})",
-                r,
-                defs.keys().collect::<Vec<_>>()
-            );
-        }
+        // NestedItem fields are reachable under items.items.properties.label
+        let label = params
+            .pointer("/properties/items/items/properties/label")
+            .expect("inlined NestedItem.label");
+        assert_eq!(label.get("type").and_then(|t| t.as_str()), Some("string"));
     }
 
     /// Custom wiremock matcher that validates the Kimi extraction request body.

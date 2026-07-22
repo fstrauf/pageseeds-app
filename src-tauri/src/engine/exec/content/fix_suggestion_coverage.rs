@@ -139,18 +139,29 @@ pub(crate) fn validate_patch_against_suggestions(
 
     let mut errors = Vec::new();
     let unsatisfied = unsatisfied_suggestion_fields(suggestions, Some(patch), original_content);
+    let has_any_change = patch_has_any_changes(&patch.changes);
 
     for field in &unsatisfied {
         match field.as_str() {
-            "title" | "description" | "h1" | "intro" | "faq_questions" => {
+            // Hard SERP fields — missing while unhealthy always fails.
+            "title" | "description" | "h1" => {
                 errors.push(format!(
                     "suggestion requested {field} but patch has no {field} and current content fails health for that field"
                 ));
             }
+            // Intro/FAQ often fail field validation (word count, keyword mess).
+            // When the patch still lands other changes, allow partial recovery
+            // instead of discarding title/meta too.
+            "intro" | "faq_questions" => {
+                if !has_any_change {
+                    errors.push(format!(
+                        "suggestion requested {field} but patch has no {field} and current content fails health for that field"
+                    ));
+                }
+            }
             other => {
-                // Soft fields: only fail as part of empty-patch / aggregate messaging unless
-                // we already have SERP errors. Still record when nothing else is present.
-                if !errors.iter().any(|e| e.contains(other)) {
+                // Soft fields: only fail when the patch is empty.
+                if !has_any_change && !errors.iter().any(|e| e.contains(other)) {
                     errors.push(format!(
                         "suggestion requested {other} but patch has no {other}"
                     ));
@@ -159,7 +170,7 @@ pub(crate) fn validate_patch_against_suggestions(
         }
     }
 
-    if !patch_has_any_changes(&patch.changes) && !unsatisfied.is_empty() {
+    if !has_any_change && !unsatisfied.is_empty() {
         let summary = format!(
             "Empty/no-op patch is not success: {} suggestion field(s) remain unsatisfied ({})",
             unsatisfied.len(),
@@ -317,6 +328,28 @@ mod tests {
         assert!(
             errors.is_empty(),
             "existing H1 should satisfy h1 suggestion: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn partial_title_ok_when_intro_still_unsatisfied() {
+        // Title lands; intro suggestion remains open — partial SERP recovery must not
+        // hard-fail the whole patch (intro often fails word-count after LLM).
+        let patch = ContentFixPatch {
+            article_id: 1,
+            file: "content/a.mdx".to_string(),
+            error: None,
+            changes: ContentFixChanges {
+                title: Some("Short Fixed Title Under Limit".to_string()),
+                ..Default::default()
+            },
+        };
+        let suggestions = vec![sug("title"), sug("intro")];
+        let errors = validate_patch_against_suggestions(&patch, &suggestions, BAD_TITLE_NO_H1);
+        assert!(
+            errors.is_empty(),
+            "title-only partial patch should pass when intro still open: {:?}",
             errors
         );
     }

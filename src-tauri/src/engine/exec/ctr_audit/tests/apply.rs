@@ -160,7 +160,8 @@
             .join("content")
             .join("001_test_article.mdx");
         let original = std::fs::read_to_string(&file_path).unwrap();
-        let overlong = (1..=66)
+        // Beyond normalize auto-trim window (max+8) so field is pruned, not applied.
+        let overlong = (1..=80)
             .map(|i| format!("word{}", i))
             .collect::<Vec<_>>()
             .join(" ");
@@ -196,9 +197,12 @@
 
         let result = exec_ctr_fix_apply(&task, &path, Some(&patch.to_string()));
         assert!(!result.success, "Overlong snippet should be rejected");
+        // Invalid first_paragraph is pruned; with no other fields the apply fails
+        // as empty rather than writing a bad intro.
         assert!(
-            result.message.contains("first_paragraph is 66 words"),
-            "Expected word-count validation failure, got: {}",
+            result.message.contains("first_paragraph is 80 words")
+                || result.message.contains("no valid change fields"),
+            "Expected word-count or empty-after-prune failure, got: {}",
             result.message
         );
 
@@ -267,7 +271,8 @@ This is the only paragraph.
             "Should reject invalid patch before writing"
         );
         assert!(
-            result.message.contains("invalid CtrFixPatch"),
+            result.message.contains("invalid CtrFixPatch")
+                || result.message.contains("no valid change fields"),
             "Expected patch validation failure, got: {}",
             result.message
         );

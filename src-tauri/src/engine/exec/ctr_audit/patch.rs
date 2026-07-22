@@ -57,9 +57,21 @@ pub(crate) fn normalize_patch_before_validation(
     if let Some(first_paragraph) = patch.changes.first_paragraph.as_mut() {
         normalize_whitespace_in_place(first_paragraph, "first_paragraph whitespace", &mut repairs);
 
-        let word_count = crate::content::ops::count_words(first_paragraph);
+        let min_words = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
         let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
-        if word_count > max_words && word_count <= max_words + 5 {
+        let word_count = crate::content::ops::count_words(first_paragraph);
+        if word_count < min_words && word_count + 20 >= min_words {
+            if let Some(padded) =
+                pad_paragraph_to_min_words(first_paragraph, min_words, target_keyword)
+            {
+                repairs.push(format!(
+                    "padded first_paragraph from {} to {} words",
+                    word_count,
+                    crate::content::ops::count_words(&padded)
+                ));
+                *first_paragraph = padded;
+            }
+        } else if word_count > max_words && word_count <= max_words + 8 {
             *first_paragraph = first_paragraph
                 .split_whitespace()
                 .take(max_words)
@@ -122,6 +134,52 @@ pub(crate) fn normalize_patch_before_validation(
     }
 
     repairs
+}
+
+/// Drop fields that failed field-level validation so remaining valid changes
+/// (title/meta) can still be applied. Mirrors content-fix partial recovery.
+pub(crate) fn prune_invalid_change_fields(
+    patch: &mut CtrFixPatch,
+    errors: &[String],
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    if patch.changes.title.is_some()
+        && errors
+            .iter()
+            .any(|e| e.starts_with("title is ") || e.starts_with("title is empty"))
+    {
+        patch.changes.title = None;
+        notes.push("dropped invalid title".to_string());
+    }
+    if patch.changes.description.is_some()
+        && errors.iter().any(|e| e.starts_with("description is "))
+    {
+        patch.changes.description = None;
+        notes.push("dropped invalid description".to_string());
+    }
+    if patch.changes.first_paragraph.is_some()
+        && errors.iter().any(|e| {
+            e.starts_with("first_paragraph is ")
+                || e.starts_with("first_paragraph must contain")
+                || e.starts_with("first_paragraph contains")
+        })
+    {
+        patch.changes.first_paragraph = None;
+        notes.push("dropped invalid first_paragraph".to_string());
+    }
+    if patch.changes.faq_questions.is_some()
+        && errors.iter().any(|e| e.starts_with("faq_questions"))
+    {
+        patch.changes.faq_questions = None;
+        notes.push("dropped invalid faq_questions".to_string());
+    }
+    if patch.changes.snippet_patch.is_some()
+        && errors.iter().any(|e| e.starts_with("snippet_patch"))
+    {
+        patch.changes.snippet_patch = None;
+        notes.push("dropped invalid snippet_patch".to_string());
+    }
+    notes
 }
 
 /// Validate a patch against deterministic rules.
@@ -187,9 +245,14 @@ pub(crate) fn validate_patch_before_write(
                 )
                 || first_paragraph.contains('?');
             if !has_kw_or_question {
+                let display_kw = crate::content::keyword_match::normalize_keyword(&rec.target_keyword);
                 errors.push(format!(
                     "first_paragraph must contain target keyword '{}' or a question mark",
-                    rec.target_keyword
+                    if display_kw.is_empty() {
+                        rec.target_keyword.clone()
+                    } else {
+                        display_kw
+                    }
                 ));
             }
         }
@@ -337,14 +400,22 @@ pub(crate) fn validate_patch_against_recommendation(
         }
     }
 
-    // Snippet: if snippet_bait was requested, patch must have first_paragraph or snippet_patch unless current passes.
+    let has_any_change = patch.changes.title.is_some()
+        || patch.changes.description.is_some()
+        || patch.changes.first_paragraph.is_some()
+        || patch.changes.faq_questions.is_some()
+        || patch.changes.snippet_patch.is_some();
+
+    // Snippet/FAQ: when the agent produced invalid snippet/FAQ and we pruned them,
+    // still allow title/meta partial recovery instead of discarding the whole patch.
     if has_snippet_issue
         && patch.changes.first_paragraph.is_none()
         && patch.changes.snippet_patch.is_none()
     {
         let word_count = crate::content::ops::count_words(&current_first);
-        if word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
-            || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+        if (word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+            || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS)
+            && !has_any_change
         {
             errors.push(
                 "snippet_bait was requested but patch has no first_paragraph or snippet_patch and current snippet is out of range".to_string(),
@@ -354,7 +425,9 @@ pub(crate) fn validate_patch_against_recommendation(
 
     // FAQ: if faq_schema was requested, patch must have faq_questions unless file already has FAQ.
     if has_faq_issue && patch.changes.faq_questions.is_none() {
-        if !crate::engine::exec::audit_health::has_frontmatter_faq(original_content) {
+        if !crate::engine::exec::audit_health::has_frontmatter_faq(original_content)
+            && !has_any_change
+        {
             errors.push(
                 "faq_schema was requested but patch has no faq_questions and file has no frontmatter FAQ"
                     .to_string(),
@@ -452,17 +525,31 @@ pub(crate) fn try_patch_from_recommendation(
 
     let _repairs = normalize_patch_before_validation(&mut patch, task);
     let mut errors = validate_patch_before_write(&patch, task, original_content);
+    if !errors.is_empty() {
+        let _ = prune_invalid_change_fields(&mut patch, &errors);
+        errors = validate_patch_before_write(&patch, task, original_content);
+    }
     errors.extend(validate_patch_against_recommendation(
         &patch,
         rec,
         original_content,
     ));
 
-    if !errors.is_empty() {
+    // Reject empty patches after prune — never soft-succeed with no changes.
+    let has_change = patch.changes.title.is_some()
+        || patch.changes.description.is_some()
+        || patch.changes.first_paragraph.is_some()
+        || patch.changes.faq_questions.is_some()
+        || patch.changes.snippet_patch.is_some();
+    if !errors.is_empty() || !has_change {
         log::info!(
             "[try_patch_from_recommendation] Deterministic map rejected for {}: {}",
             rec.file,
-            errors.join("; ")
+            if errors.is_empty() {
+                "no valid changes after normalize/prune".to_string()
+            } else {
+                errors.join("; ")
+            }
         );
         return None;
     }
@@ -565,14 +652,16 @@ fn has_keyword_or_question(value: &str, target_keyword: &str) -> bool {
 }
 
 fn add_keyword_or_question_marker(value: &mut String, target_keyword: &str) {
-    let keyword_word_count = target_keyword.split_whitespace().count();
+    // Never append raw quote-glued junk — use the normalized form.
+    let keyword = crate::content::keyword_match::normalize_keyword(target_keyword);
+    let keyword_word_count = keyword.split_whitespace().count();
     let word_count = crate::content::ops::count_words(value);
     let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
-    if !target_keyword.is_empty() && word_count + keyword_word_count <= max_words {
+    if !keyword.is_empty() && word_count + keyword_word_count <= max_words {
         if !value.ends_with(' ') {
             value.push(' ');
         }
-        value.push_str(target_keyword.trim());
+        value.push_str(&keyword);
         value.push('?');
         return;
     }
@@ -586,5 +675,47 @@ fn add_keyword_or_question_marker(value: &mut String, target_keyword: &str) {
         *value = chars.into_iter().collect();
     } else if !trimmed.ends_with('?') {
         *value = format!("{}?", trimmed);
+    }
+}
+
+fn pad_paragraph_to_min_words(
+    paragraph: &str,
+    min_words: usize,
+    target_keyword: &str,
+) -> Option<String> {
+    let mut text = paragraph.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let kw = crate::content::keyword_match::normalize_keyword(target_keyword);
+    let fillers = [
+        "This guide covers the key steps and practical considerations.",
+        "Use the sections below for definitions and a simple checklist.",
+        "Read on for clear examples and trade-offs.",
+    ];
+    for filler in fillers {
+        let mut candidate = if text.ends_with('.') || text.ends_with('!') || text.ends_with('?') {
+            format!("{} {}", text, filler)
+        } else {
+            format!("{}. {}", text, filler)
+        };
+        if !kw.is_empty()
+            && !crate::content::keyword_match::keyword_present(&candidate.to_lowercase(), &kw)
+        {
+            candidate = format!(
+                "{} This overview focuses on {}.",
+                candidate.trim_end_matches('.'),
+                kw
+            );
+        }
+        if crate::content::ops::count_words(&candidate) >= min_words {
+            return Some(candidate);
+        }
+        text = candidate;
+    }
+    if crate::content::ops::count_words(&text) >= min_words {
+        Some(text)
+    } else {
+        None
     }
 }

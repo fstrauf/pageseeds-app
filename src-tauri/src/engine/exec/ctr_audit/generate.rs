@@ -182,8 +182,15 @@ async fn exec_ctr_fix_generate_llm(
         }
     };
 
-    let repairs = super::normalize_patch_before_validation(&mut patch, task);
+    let mut repairs = super::normalize_patch_before_validation(&mut patch, task);
     let mut errors = super::validate_patch_before_write(&patch, task, original_content);
+    if !errors.is_empty() {
+        let pruned = super::prune_invalid_change_fields(&mut patch, &errors);
+        if !pruned.is_empty() {
+            repairs.extend(pruned);
+            errors = super::validate_patch_before_write(&patch, task, original_content);
+        }
+    }
 
     let consistency_errors =
         super::validate_patch_against_recommendation(&patch, rec, original_content);
@@ -198,9 +205,18 @@ async fn exec_ctr_fix_generate_llm(
 
         match repair_ctr_fix_patch_with_backend(backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
-                let _repair_notes = super::normalize_patch_before_validation(&mut repaired, task);
+                let mut repair_notes =
+                    super::normalize_patch_before_validation(&mut repaired, task);
                 let mut repair_errors =
                     super::validate_patch_before_write(&repaired, task, original_content);
+                if !repair_errors.is_empty() {
+                    let pruned = super::prune_invalid_change_fields(&mut repaired, &repair_errors);
+                    if !pruned.is_empty() {
+                        repair_notes.extend(pruned);
+                        repair_errors =
+                            super::validate_patch_before_write(&repaired, task, original_content);
+                    }
+                }
                 let consistency_errors2 =
                     super::validate_patch_against_recommendation(&repaired, rec, original_content);
                 repair_errors.extend(consistency_errors2);
@@ -211,6 +227,7 @@ async fn exec_ctr_fix_generate_llm(
                             repair_errors.join("; ")
                         ));
                 }
+                repairs.extend(repair_notes);
                 patch = repaired;
             }
             Err(e) => {
@@ -1027,6 +1044,9 @@ More content here.
 "#;
         std::fs::write(content_dir.join("001_test_article.mdx"), mdx).unwrap();
 
+        // Recommended values are intentionally not write-ready (short meta, short
+        // snippet, overlong title) so the deterministic map cannot short-circuit
+        // and the LLM → repair path is actually exercised.
         let rec = CtrRecommendation {
             article_id: 1,
             url_slug: "test-article".to_string(),
@@ -1038,13 +1058,15 @@ More content here.
                 crate::models::ctr::CtrFix {
                     fix_type: crate::models::ctr::CtrFixType::TitleRewrite,
                     current: Some("Test Article | Brand | Brand -- Tagline".to_string()),
-                    recommended: serde_json::json!("Good Title"),
+                    recommended: serde_json::json!(
+                        "This title is deliberately far too long for the 55 character limit and cannot be auto-shortened to a usable value without losing meaning entirely"
+                    ),
                     reason: None,
                 },
                 crate::models::ctr::CtrFix {
                     fix_type: crate::models::ctr::CtrFixType::MetaDescription,
                     current: Some("A short desc".to_string()),
-                    recommended: serde_json::json!("This is a very good meta description that is definitely longer than one hundred and thirty characters so it passes the strict health check."),
+                    recommended: serde_json::json!("Too short"),
                     reason: None,
                 },
                 crate::models::ctr::CtrFix {
@@ -1086,7 +1108,8 @@ More content here.
         let result = exec_ctr_fix_generate_with_backend(&task, &path, &backend).await;
         assert!(
             !result.success,
-            "Should fail when repair also produces invalid patch"
+            "Should fail when repair also produces invalid patch, got success: {}",
+            result.message
         );
         assert!(
             result.message.contains("repair") || result.message.contains("validation after repair"),
