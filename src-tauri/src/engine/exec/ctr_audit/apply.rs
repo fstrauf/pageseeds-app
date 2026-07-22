@@ -128,7 +128,12 @@ pub(crate) fn exec_ctr_fix_apply(
 
     if let Some(snippet) = snippet_patch {
         let list = snippet.ordered_list.as_deref();
-        let table = snippet.comparison_table.as_deref();
+        // Map row-objects → Vec<Vec<String>> for the cleaner API.
+        let table_rows: Option<Vec<Vec<String>>> = snippet
+            .comparison_table
+            .as_ref()
+            .map(|rows| rows.iter().map(|r| r.cells.clone()).collect());
+        let table = table_rows.as_deref();
         new_body = crate::content::cleaner::insert_snippet_section(
             &new_body,
             &snippet.heading,
