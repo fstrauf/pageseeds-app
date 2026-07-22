@@ -1,8 +1,9 @@
 //! Shared harness for live LLM eval regression tests.
 //!
-//! Each pipeline eval (`ctr_fix_evals`, `content_fix_evals`, `content_review_evals`)
-//! runs the real production step against a live backend over committed fixtures in
-//! `fixtures/evals/`, then applies two layers of checks:
+//! Each pipeline eval (`ctr_fix_evals`, `content_fix_evals`, `content_review_evals`,
+//! `content_review_investigate_evals`) runs production helpers / extract against a
+//! live backend over committed fixtures in `fixtures/evals/`, then applies two layers
+//! of checks:
 //!
 //! 1. **Deterministic contract checks** — plain Rust assertions encoding the output
 //!    contract (length limits, keyword presence, no hallucinated link slugs). Free,
@@ -19,6 +20,7 @@
 
 pub mod content_fix_evals;
 pub mod content_review_evals;
+pub mod content_review_investigate_evals;
 pub mod ctr_fix_evals;
 
 use std::path::{Path, PathBuf};

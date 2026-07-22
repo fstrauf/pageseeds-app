@@ -1,0 +1,57 @@
+{
+  "name": "title-template-literal-vars",
+  "tool_evidence": {
+    "article_title_scan": {
+      "total_titles": 32,
+      "missing_titles": 0,
+      "duplicate_token_titles": 2,
+      "literal_var_titles": 14,
+      "long_titles": 3,
+      "examples": [
+        {
+          "title": "Best Soil Mix for Tomatoes | Brand |",
+          "slug": "best-soil-mix-tomatoes",
+          "issue": "Literal template variable '| Brand |'"
+        },
+        {
+          "title": "How to Prune Roses | Brand |",
+          "slug": "how-to-prune-roses",
+          "issue": "Literal template variable '| Brand |'"
+        },
+        {
+          "title": "{{title}} — Garden Tips",
+          "slug": "garden-tips-placeholder",
+          "issue": "Literal template variable '{{title}}'"
+        }
+      ]
+    },
+    "framework_files": {
+      "files": [
+        { "path": "app/layout.tsx", "description": "Next.js app layout", "exists": true },
+        { "path": "pages/_app.tsx", "description": "Next.js pages app", "exists": false }
+      ],
+      "repo_root": "/tmp/eval-project",
+      "layout_snippet": "export const metadata = {\n  title: {\n    template: '%s | Brand |',\n    default: 'Garden Blog',\n  },\n};"
+    },
+    "indexing_status": {
+      "total_urls": 32,
+      "indexed": 30,
+      "not_indexed": 2,
+      "issues_by_reason": [
+        { "reason": "crawled_currently_not_indexed", "count": 2 }
+      ]
+    },
+    "content_audit_report": {
+      "generated_at": "2026-07-01T00:00:00Z",
+      "total_articles": 32,
+      "articles_with_failures": 4,
+      "summary": "Title quality is the standout structural problem; indexing mostly healthy."
+    }
+  },
+  "expect": {
+    "zero_proposals": false,
+    "max_proposals": 5,
+    "required_task_types_any": [],
+    "required_evidence_tools_any": ["article_title_scan", "framework_files"]
+  }
+}
