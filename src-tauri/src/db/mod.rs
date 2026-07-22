@@ -1503,6 +1503,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 49 {
+        conn.execute_batch(MIGRATION_V49)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (49, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1604,6 +1612,38 @@ CREATE INDEX IF NOT EXISTS idx_content_outcome_results_project
     ON content_outcome_results(project_id, slug);
 CREATE INDEX IF NOT EXISTS idx_content_outcome_results_parent
     ON content_outcome_results(parent_task_type, classification);
+"#;
+
+static MIGRATION_V49: &str = r#"
+-- Durable per-article evidence catalog (issue #119).
+-- Mirrors skill_embeddings: content_hash skips re-embed; embedding_json is
+-- nullable so Ollama-missing degrades to facts-only (no soft mega-cluster).
+CREATE TABLE IF NOT EXISTS article_evidence (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id       TEXT NOT NULL,
+    article_id       INTEGER NOT NULL,
+    slug             TEXT NOT NULL,
+    content_hash     TEXT NOT NULL,
+    embedding_json   TEXT,
+    model_name       TEXT,
+    outline_text     TEXT,
+    summary_text     TEXT,
+    intent_card      TEXT,
+    word_count       INTEGER NOT NULL DEFAULT 0,
+    h1               TEXT,
+    title            TEXT,
+    target_keyword   TEXT,
+    top_queries_json TEXT NOT NULL DEFAULT '[]',
+    updated_at       TEXT NOT NULL,
+    UNIQUE(project_id, article_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_article_evidence_project
+    ON article_evidence(project_id);
+CREATE INDEX IF NOT EXISTS idx_article_evidence_project_slug
+    ON article_evidence(project_id, slug);
+CREATE INDEX IF NOT EXISTS idx_article_evidence_project_hash
+    ON article_evidence(project_id, content_hash);
 "#;
 
 // ═══════════════════════════════════════════════════════════════════════════════

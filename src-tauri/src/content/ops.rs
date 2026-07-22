@@ -365,6 +365,19 @@ pub fn sync_and_validate(
         "Index and content are in sync"
     };
 
+    // Best-effort: refresh durable article evidence facts for articles whose
+    // files we touched (date patches). Never fails the parent sync.
+    if apply_sync && dates_synced > 0 {
+        for article in &articles {
+            crate::content::article_evidence::maybe_reindex_article(
+                conn,
+                project_id,
+                repo_root,
+                &article.url_slug,
+            );
+        }
+    }
+
     Ok(SyncValidateResult {
         checked_entries: articles.len(),
         content_files: content_files.len(),

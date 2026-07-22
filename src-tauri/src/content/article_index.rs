@@ -343,6 +343,21 @@ pub fn ingest_orphans(
     // Export projection.
     crate::db::export::write_articles_to_repo(conn, project_id, project_path)?;
 
+    // Best-effort evidence facts for newly ingested articles (never fails ingest).
+    for basename in &ingested_files {
+        let stem = std::path::Path::new(basename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(basename);
+        let slug = crate::content::slug::normalize_url_slug(stem);
+        crate::content::article_evidence::maybe_reindex_article(
+            conn,
+            project_id,
+            project_path,
+            &slug,
+        );
+    }
+
     Ok(IngestSummary {
         ingested: ingested_files.len(),
         files: ingested_files,
