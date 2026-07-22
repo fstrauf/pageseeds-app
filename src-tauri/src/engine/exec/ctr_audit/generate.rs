@@ -175,10 +175,9 @@ async fn exec_ctr_fix_generate_llm(
         Ok(p) => p,
         Err(e) => {
             return StepResult::fail(format!(
-                    "Structured extraction failed for CtrFixPatch: {}. \
-                     If you are using KimiDirect, please switch to a structured-output provider (Kimi bridge, Claude, OpenAI, or Ollama).",
-                    e
-                ));
+                "Structured extraction failed for CtrFixPatch: {}",
+                crate::rig::extraction::format_extract_error(backend.label(), &e)
+            ));
         }
     };
 
@@ -232,9 +231,9 @@ async fn exec_ctr_fix_generate_llm(
             }
             Err(e) => {
                 return StepResult::fail(format!(
-                        "CTR fix patch repair extraction failed: {}. No changes written.",
-                        e
-                    ));
+                    "CTR fix patch repair extraction failed: {}. No changes written.",
+                    crate::rig::extraction::format_extract_error(backend.label(), &e)
+                ));
             }
         }
     }

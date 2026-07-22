@@ -111,10 +111,9 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         Ok(p) => p,
         Err(e) => {
             return StepResult::fail(format!(
-                    "Structured extraction failed for ContentFixPatch: {}. \
-                     If you are using KimiDirect, please switch to a structured-output provider (Kimi bridge, Claude, OpenAI, or Ollama).",
-                    e
-                ));
+                "Structured extraction failed for ContentFixPatch: {}",
+                crate::rig::extraction::format_extract_error(scoped_backend.label(), &e)
+            ));
         }
     };
 
@@ -210,7 +209,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
             Err(e) => {
                 return StepResult::fail(format!(
                         "Content fix patch repair extraction failed: {}. No changes written.",
-                        e
+                        crate::rig::extraction::format_extract_error(scoped_backend.label(), &e)
                     ));
             }
         }

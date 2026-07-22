@@ -1,40 +1,49 @@
-//! Structured output extraction using rig's `Extractor<T>`.
+//! Structured output extraction with provider-safe tool schemas.
 //!
-//! This module provides `extract_structured<T>`, a type-safe way to get
-//! structured JSON output from an LLM using rig's `Extractor<T>`.
+//! All structured-extract paths sanitize schemars output via
+//! [`crate::rig::schema_sanitize::schemars_tool_parameters`] before attaching
+//! it as tool/function parameters or injecting it into a JSON-mode prompt.
 //!
-//! Instead of parsing raw LLM text with heuristics (fenced blocks, bare JSON,
-//! first line), we send the target schema to the model and require it to call
-//! a `submit` tool with structured arguments. Rig handles retries,
-//! deserialization, and error reporting.
+//! Native Claude / OpenAI / Ollama **do not** use rig's raw `Extractor<T>` —
+//! that serializes unsanitized schemas and triggers `invalid_function_parameters`
+//! (e.g. `CtrFixPatch` with nested `Option<Struct>`).
 
-use rig::client::CompletionClient;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::rig::provider::{resolve_backend, LlmBackend};
+use crate::rig::schema_sanitize::schemars_tool_parameters;
 
-/// Shared extractor path for Claude / OpenAI / Grok (and Ollama after client build).
-/// Kimi bridge/CLI stay on their own extraction implementations.
-async fn extract_with_native_client<C, T>(
-    client: C,
-    model: &str,
-    prompt: &str,
-    preamble: &str,
-) -> Result<T, String>
-where
-    C: CompletionClient,
-    C::CompletionModel: 'static,
-    T: JsonSchema + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
-{
-    let extractor = client
-        .extractor::<T>(model)
-        .preamble(preamble)
-        .build();
-    extractor.extract(prompt).await.map_err(|e| e.to_string())
+/// Classify and format a structured-extraction failure for operator-facing logs.
+///
+/// - Labels `invalid_function_parameters` / `Invalid schema for function` as
+///   `provider_schema_error`.
+/// - Mentions `KimiDirect` guidance **only** when `backend_label` is `KimiDirect`.
+pub fn format_extract_error(backend_label: &str, err: &str) -> String {
+    let is_schema = err.contains("invalid_function_parameters")
+        || err.contains("Invalid schema for function")
+        || err.contains("provider_schema_error");
+
+    if is_schema {
+        format!(
+            "backend={} provider_schema_error: {}. \
+             Tool/function parameters must pass schema_sanitize; \
+             unsanitized schemars Option/nested forms are rejected by providers.",
+            backend_label, err
+        )
+    } else if backend_label == "KimiDirect" {
+        format!(
+            "backend={}: {}. \
+             Structured extraction is not supported with KimiDirect (CLI fallback). \
+             Switch to Kimi bridge, Claude, OpenAI, or Ollama.",
+            backend_label, err
+        )
+    } else {
+        format!("backend={}: {}", backend_label, err)
+    }
 }
 
-/// Extract structured data from an LLM prompt using rig's `Extractor<T>`.
+/// Extract structured data from an LLM prompt.
 ///
 /// # Type Parameters
 /// * `T` - The target type. Must implement `JsonSchema`, `Deserialize`, and `Serialize`.
@@ -54,21 +63,6 @@ where
 /// - LLM completion errors
 /// - Deserialization failures after all retries
 /// - Unsupported backend (e.g. `KimiDirect` CLI fallback)
-///
-/// # Example
-/// ```ignore
-/// #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-/// struct SeedExtractionOutput {
-///     themes: Vec<String>,
-/// }
-///
-/// let result = extract_structured::<SeedExtractionOutput>(
-///     "kimi",
-///     "Extract 3 research themes from this brief: ...",
-///     Some("You are a keyword research assistant."),
-///     Some("direct"),
-/// ).await?;
-/// ```
 pub async fn extract_structured<T>(
     provider_name: &str,
     prompt: &str,
@@ -111,15 +105,13 @@ where
     let default_preamble = "Extract structured data from the provided text. \
         Always use the submit tool to return your answer. \
         Fill out every field and do not omit any required information.";
+    let preamble_str = preamble.unwrap_or(default_preamble);
 
     match backend {
         LlmBackend::KimiCli { work_dir } => {
-            // Native CLI provider uses JSON-mode extraction: schema is injected
-            // into the prompt, the model responds with raw JSON, and we parse it.
-            // No tool-calling round-trip (print mode emits text, not tool_calls).
-            let schema = schemars::schema_for!(T);
-            let schema_value = serde_json::to_value(&schema)
-                .map_err(|e| format!("Failed to serialize JSON schema: {}", e))?;
+            // Native CLI provider uses JSON-mode extraction: sanitized schema is
+            // injected into the prompt, the model responds with raw JSON.
+            let schema_value = schemars_tool_parameters::<T>()?;
 
             crate::rig::kimi_cli::extract_structured::<T>(
                 prompt,
@@ -131,10 +123,7 @@ where
         }
         LlmBackend::KimiBridge { base_url, model } => {
             // `backend_preference` is passed as the X-Kimi-Backend header.
-            // - "direct": 120s timeout, fast, stateless. Falls back to JSON mode
-            //   if native tool calls are not supported.
-            // - "acp": 300s timeout, project-aware, may queue behind concurrency limit.
-            // - None: bridge default (usually direct).
+            // Bridge path already sanitizes via schema_sanitize.
             crate::rig::compat::kimi::extract_structured::<T>(
                 base_url,
                 model,
@@ -146,32 +135,28 @@ where
             .await
         }
         LlmBackend::Claude { api_key, model } => {
-            let client = rig::providers::anthropic::Client::new(api_key)
-                .map_err(|e| format!("Failed to build Claude client: {}", e))?;
-            extract_with_native_client(
-                client,
+            crate::rig::openai_compatible_extract::extract_claude::<T>(
+                api_key,
                 model,
                 prompt,
-                preamble.unwrap_or(default_preamble),
+                preamble_str,
+                max_tokens,
             )
             .await
         }
         LlmBackend::OpenAi { api_key, model } => {
-            let client = rig::providers::openai::Client::new(api_key)
-                .map_err(|e| format!("Failed to build OpenAI client: {}", e))?;
-            extract_with_native_client(
-                client,
+            crate::rig::openai_compatible_extract::extract_openai::<T>(
+                api_key,
                 model,
                 prompt,
-                preamble.unwrap_or(default_preamble),
+                preamble_str,
+                max_tokens,
             )
             .await
         }
         LlmBackend::GrokCli { work_dir } => {
-            // Same JSON-mode extraction as Kimi CLI (schema in prompt, parse response).
-            let schema = schemars::schema_for!(T);
-            let schema_value = serde_json::to_value(&schema)
-                .map_err(|e| format!("Failed to serialize JSON schema: {}", e))?;
+            // Same JSON-mode extraction as Kimi CLI (sanitized schema in prompt).
+            let schema_value = schemars_tool_parameters::<T>()?;
 
             crate::rig::grok_cli::extract_structured::<T>(
                 prompt,
@@ -182,18 +167,12 @@ where
             .await
         }
         LlmBackend::Ollama { base_url, model } => {
-            use rig::client::Nothing;
-            let client = rig::providers::ollama::Client::builder()
-                .api_key(Nothing)
-                .base_url(base_url)
-                .build()
-                .map_err(|e| format!("Failed to build Ollama client: {}", e))?;
-            // Construction differs (Nothing + base_url); extractor path is shared.
-            extract_with_native_client(
-                client,
+            crate::rig::openai_compatible_extract::extract_ollama::<T>(
+                base_url,
                 model,
                 prompt,
-                preamble.unwrap_or(default_preamble),
+                preamble_str,
+                max_tokens,
             )
             .await
         }
@@ -211,6 +190,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ctr::CtrFixPatch;
+    use crate::rig::schema_sanitize::schemars_tool_parameters;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -222,7 +203,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_structured_rejects_unknown_provider() {
-        let result = extract_structured::<TestOutput>("unknown_provider", "test", None, None, None).await;
+        let result =
+            extract_structured::<TestOutput>("unknown_provider", "test", None, None, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Unknown provider"));
@@ -232,7 +214,8 @@ mod tests {
     async fn test_extract_with_backend_rejects_kimi_direct() {
         // Test the backend directly — avoids env-var sensitivity from resolve_backend.
         let backend = LlmBackend::KimiDirect;
-        let result: Result<TestOutput, String> = extract_with_backend(&backend, "test", None, None, None).await;
+        let result: Result<TestOutput, String> =
+            extract_with_backend(&backend, "test", None, None, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("KimiDirect"));
@@ -251,12 +234,56 @@ mod tests {
         _assert_bounds::<TestOutput>();
     }
 
+    #[test]
+    fn schemars_tool_parameters_ctr_fix_patch_has_no_hostile_forms() {
+        let params = schemars_tool_parameters::<CtrFixPatch>().unwrap();
+        let s = params.to_string();
+        assert!(!s.contains("\"anyOf\""), "sanitized still has anyOf: {}", s);
+        assert!(!s.contains("\"$ref\""), "sanitized still has $ref: {}", s);
+        assert!(!s.contains("\"$defs\""), "sanitized still has $defs: {}", s);
+        assert_eq!(
+            params.get("type").and_then(|t| t.as_str()),
+            Some("object"),
+            "CtrFixPatch tool parameters must be type object"
+        );
+    }
+
+    #[test]
+    fn format_extract_error_classifies_invalid_function_parameters() {
+        let msg = format_extract_error(
+            "OpenAi",
+            "CompletionError: HttpError: 400 \"Invalid schema for function 'submit'\" code: invalid_function_parameters",
+        );
+        assert!(
+            msg.contains("provider_schema_error"),
+            "expected provider_schema_error label: {}",
+            msg
+        );
+        assert!(msg.contains("backend=OpenAi"), "expected backend label: {}", msg);
+        assert!(
+            !msg.contains("KimiDirect"),
+            "must not mention KimiDirect for OpenAi backend: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn format_extract_error_mentions_kimi_direct_only_for_that_backend() {
+        let msg = format_extract_error("KimiDirect", "not supported");
+        assert!(msg.contains("KimiDirect"));
+        assert!(msg.contains("not supported") || msg.contains("CLI fallback"));
+
+        let other = format_extract_error("Claude", "timeout");
+        assert!(!other.contains("KimiDirect") || other.starts_with("backend=Claude"));
+        assert!(!other.contains("CLI fallback"));
+        assert!(other.contains("backend=Claude"));
+    }
+
     #[tokio::test]
     async fn test_extract_with_backend_mocked() {
         let mock_server = MockServer::start().await;
 
-        // Rig's Extractor<T> sends a POST to /v1/chat/completions with a tool-calling
-        // request and expects a response containing tool_calls.
+        // Kimi bridge extract path posts to /v1/chat/completions with tools.
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
