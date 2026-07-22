@@ -121,9 +121,9 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
     // 5. Pin identity from context (never trust model file/article_id paths)
     pin_content_fix_patch_identity(&mut patch, &context);
 
-    // 6. Normalize and validate
+    // 6. Normalize and validate (prune bad fields → repair LLM → final check)
     let target_kw = context.target_keyword.as_deref();
-    let repairs = normalize_patch_before_validation(&mut patch, &original_content);
+    let mut repairs = normalize_patch_before_validation(&mut patch, &original_content, target_kw);
     let mut errors = validate_patch_before_write(
         &patch,
         &original_content,
@@ -132,6 +132,23 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         project_path,
         &context.available_link_slugs,
     );
+
+    // Prefer partial apply over all-or-nothing: drop fields that still fail
+    // field-level rules (bad intro length, keyword miss) so title/meta can land.
+    if !errors.is_empty() {
+        let pruned = prune_invalid_change_fields(&mut patch, &errors);
+        if !pruned.is_empty() {
+            repairs.extend(pruned);
+            errors = validate_patch_before_write(
+                &patch,
+                &original_content,
+                target_kw,
+                &task.project_id,
+                project_path,
+                &context.available_link_slugs,
+            );
+        }
+    }
     errors.extend(super::fix_suggestion_coverage::validate_patch_against_suggestions(
         &patch,
         &context.suggestions,
@@ -149,8 +166,8 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         match repair_content_fix_patch_with_backend(&scoped_backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
                 pin_content_fix_patch_identity(&mut repaired, &context);
-                let _repair_notes =
-                    normalize_patch_before_validation(&mut repaired, &original_content);
+                let mut repair_notes =
+                    normalize_patch_before_validation(&mut repaired, &original_content, target_kw);
                 let mut repair_errors = validate_patch_before_write(
                     &repaired,
                     &original_content,
@@ -159,6 +176,20 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
                     project_path,
                     &context.available_link_slugs,
                 );
+                if !repair_errors.is_empty() {
+                    let pruned = prune_invalid_change_fields(&mut repaired, &repair_errors);
+                    if !pruned.is_empty() {
+                        repair_notes.extend(pruned);
+                        repair_errors = validate_patch_before_write(
+                            &repaired,
+                            &original_content,
+                            target_kw,
+                            &task.project_id,
+                            project_path,
+                            &context.available_link_slugs,
+                        );
+                    }
+                }
                 repair_errors.extend(
                     super::fix_suggestion_coverage::validate_patch_against_suggestions(
                         &repaired,
@@ -173,6 +204,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
                             repair_errors.join("; ")
                         ));
                 }
+                repairs.extend(repair_notes);
                 patch = repaired;
             }
             Err(e) => {
@@ -359,11 +391,17 @@ Only include fields that need to change. Do not include title/description/intro/
 
 // ─── Patch normalization ─────────────────────────────────────────────────────
 
-fn normalize_patch_before_validation(patch: &mut ContentFixPatch, _original_content: &str) -> Vec<String> {
+fn normalize_patch_before_validation(
+    patch: &mut ContentFixPatch,
+    _original_content: &str,
+    target_keyword: Option<&str>,
+) -> Vec<String> {
     let mut notes = Vec::new();
     let title_max = crate::engine::exec::audit_health::TITLE_MAX_LEN;
     let meta_min = crate::engine::exec::audit_health::META_MIN_LEN;
     let meta_max = crate::engine::exec::audit_health::META_MAX_LEN;
+    let intro_min = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
+    let intro_max = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
 
     // Trim whitespace from string fields
     if let Some(ref mut t) = patch.changes.title {
@@ -377,6 +415,29 @@ fn normalize_patch_before_validation(patch: &mut ContentFixPatch, _original_cont
     }
     if let Some(ref mut h) = patch.changes.h1 {
         *h = h.trim().to_string();
+    }
+
+    // Auto-pad short intros (LLMs routinely return 28–35 words; hard-failing
+    // the whole patch then drops valid title/meta). Slightly-under range only.
+    if let Some(ref mut intro) = patch.changes.intro {
+        let wc = crate::content::ops::count_words(intro);
+        if wc < intro_min && wc + 20 >= intro_min {
+            if let Some(padded) = pad_intro_to_min_words(intro, intro_min, target_keyword) {
+                notes.push(format!(
+                    "intro padded from {} to {} words",
+                    wc,
+                    crate::content::ops::count_words(&padded)
+                ));
+                *intro = padded;
+            }
+        } else if wc > intro_max && wc <= intro_max + 8 {
+            *intro = intro
+                .split_whitespace()
+                .take(intro_max)
+                .collect::<Vec<_>>()
+                .join(" ");
+            notes.push(format!("intro trimmed to {} words", intro_max));
+        }
     }
 
     // Auto-truncate title if over limit (LLMs are bad at exact char counting)
@@ -507,6 +568,103 @@ fn shorten_meta_description(value: &str, min_chars: usize, max_chars: usize) -> 
     }
 }
 
+/// Drop change fields that failed field-level validation so remaining valid
+/// fields (title/meta) can still be applied. Coverage validation runs after.
+fn prune_invalid_change_fields(patch: &mut ContentFixPatch, errors: &[String]) -> Vec<String> {
+    let mut notes = Vec::new();
+
+    // Match validate_patch_before_write error prefixes exactly.
+    if patch.changes.title.is_some()
+        && errors
+            .iter()
+            .any(|e| e.starts_with("title is ") || e.starts_with("title does not contain"))
+    {
+        patch.changes.title = None;
+        notes.push("dropped invalid title".to_string());
+    }
+    if patch.changes.description.is_some()
+        && errors.iter().any(|e| {
+            e.starts_with("description is ") || e.starts_with("description does not contain")
+        })
+    {
+        patch.changes.description = None;
+        notes.push("dropped invalid description".to_string());
+    }
+    if patch.changes.intro.is_some()
+        && errors
+            .iter()
+            .any(|e| e.starts_with("intro is ") || e.starts_with("intro does not contain"))
+    {
+        patch.changes.intro = None;
+        notes.push("dropped invalid intro".to_string());
+    }
+    if patch.changes.faq_questions.is_some()
+        && errors.iter().any(|e| e.starts_with("faq_questions"))
+    {
+        patch.changes.faq_questions = None;
+        notes.push("dropped invalid faq_questions".to_string());
+    }
+    if patch.changes.internal_links.is_some()
+        && errors.iter().any(|e| e.starts_with("internal_links"))
+    {
+        patch.changes.internal_links = None;
+        notes.push("dropped invalid internal_links".to_string());
+    }
+
+    notes
+}
+
+/// Expand a slightly-short intro to the minimum word count with a neutral closer.
+fn pad_intro_to_min_words(
+    intro: &str,
+    min_words: usize,
+    target_keyword: Option<&str>,
+) -> Option<String> {
+    let mut text = intro.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    // Prefer closing with the (normalized) keyword when missing — helps density.
+    let kw = target_keyword
+        .map(crate::content::keyword_match::normalize_keyword)
+        .filter(|k| !k.is_empty());
+    let fillers = [
+        "This guide walks through the key steps and practical considerations.",
+        "Use the sections below to apply the ideas with clear examples.",
+        "Read on for definitions, trade-offs, and a simple checklist.",
+    ];
+    for filler in fillers {
+        let mut candidate = if text.ends_with('.') || text.ends_with('!') || text.ends_with('?') {
+            format!("{} {}", text, filler)
+        } else {
+            format!("{}. {}", text, filler)
+        };
+        if let Some(ref keyword) = kw {
+            if !crate::content::keyword_match::keyword_present(
+                &candidate.to_lowercase(),
+                keyword,
+            ) {
+                candidate = format!(
+                    "{} This overview focuses on {}.",
+                    candidate.trim_end_matches('.'),
+                    keyword
+                );
+            }
+        }
+        if crate::content::ops::count_words(&candidate) >= min_words {
+            // Cap overflow from keyword append by trimming to max+0 later in normalize.
+            return Some(candidate);
+        }
+        text = candidate;
+    }
+    let wc = crate::content::ops::count_words(&text);
+    if wc >= min_words {
+        Some(text)
+    } else {
+        None
+    }
+}
+
 // ─── Patch validation ────────────────────────────────────────────────────────
 
 fn validate_patch_before_write(
@@ -528,9 +686,12 @@ fn validate_patch_before_write(
     // Keywords are normalized to titleable length at the GSC backfill
     // boundary (issue #74), so no length-based skip is needed here — an
     // empty keyword simply disables the keyword placement checks.
+    // Normalize for matching + human-readable errors (strip quote-glued junk).
     let kw_for_check: Option<String> = target_keyword
-        .map(|kw| kw.trim().to_lowercase())
+        .map(crate::content::keyword_match::normalize_keyword)
         .filter(|kw| !kw.is_empty());
+    // Pass the original (or normalized) into keyword_present — it re-normalizes.
+    let kw_raw = target_keyword.unwrap_or("").trim();
 
     if let Some(ref t) = patch.changes.title {
         if t.chars().count() > title_max {
@@ -541,7 +702,7 @@ fn validate_patch_before_write(
             ));
         }
         if let Some(ref kw) = kw_for_check {
-            if !crate::content::keyword_match::keyword_present(&t.to_lowercase(), kw) {
+            if !crate::content::keyword_match::keyword_present(&t.to_lowercase(), kw_raw) {
                 errors.push(format!(
                     "title does not contain target keyword '{}'",
                     kw
@@ -559,7 +720,7 @@ fn validate_patch_before_write(
             ));
         }
         if let Some(ref kw) = kw_for_check {
-            if !crate::content::keyword_match::keyword_present(&d.to_lowercase(), kw) {
+            if !crate::content::keyword_match::keyword_present(&d.to_lowercase(), kw_raw) {
                 errors.push(format!(
                     "description does not contain target keyword '{}'",
                     kw
@@ -577,7 +738,7 @@ fn validate_patch_before_write(
             ));
         }
         if let Some(ref kw) = kw_for_check {
-            if !crate::content::keyword_match::keyword_present(&intro.to_lowercase(), kw) {
+            if !crate::content::keyword_match::keyword_present(&intro.to_lowercase(), kw_raw) {
                 errors.push(format!(
                     "intro does not contain target keyword '{}'",
                     kw
@@ -693,12 +854,48 @@ Fix the patch so it passes all validation rules. Return only the corrected Conte
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::content_review::ContentFixChanges;
     use crate::models::task::{
         AgentPolicy, FollowUpPolicy, Priority, TaskArtifact, TaskReviewSurface, TaskRun,
         TaskRunPolicy, TaskStatus,
     };
 
     const SAMPLE_MDX: &str = "---\ntitle: \"Container Gardening Basics\"\ndescription: \"A solid meta description.\"\ndate: \"2026-01-01\"\n---\n\n# Container Gardening Basics\n\nAn intro paragraph about container gardening with enough words to matter.\n";
+
+    #[test]
+    fn pad_intro_raises_short_paragraph_into_range() {
+        let short = "Wheel strategy uses cash secured puts and covered calls for income.";
+        assert!(crate::content::ops::count_words(short) < 40);
+        let padded = pad_intro_to_min_words(short, 40, Some("wheel strategy")).unwrap();
+        let wc = crate::content::ops::count_words(&padded);
+        assert!(wc >= 40, "expected >=40 words, got {wc}: {padded}");
+        assert!(crate::content::keyword_match::keyword_present(
+            &padded.to_lowercase(),
+            "wheel strategy"
+        ));
+    }
+
+    #[test]
+    fn prune_drops_short_intro_keeps_title() {
+        let mut patch = ContentFixPatch {
+            article_id: 1,
+            file: "content/a.mdx".to_string(),
+            error: None,
+            changes: ContentFixChanges {
+                title: Some("Best Wheel Strategy Guide 2026".to_string()),
+                intro: Some("Too short intro.".to_string()),
+                ..Default::default()
+            },
+        };
+        let errors = vec!["intro is 3 words (expected 40-60)".to_string()];
+        let notes = prune_invalid_change_fields(&mut patch, &errors);
+        assert!(notes.iter().any(|n| n.contains("intro")));
+        assert!(patch.changes.intro.is_none());
+        assert_eq!(
+            patch.changes.title.as_deref(),
+            Some("Best Wheel Strategy Guide 2026")
+        );
+    }
 
     fn task_with_context_artifact(context: serde_json::Value) -> Task {
         let now = chrono::Utc::now().to_rfc3339();

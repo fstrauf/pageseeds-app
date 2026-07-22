@@ -50,7 +50,17 @@ pub(crate) fn exec_ctr_fix_apply(
         }
     };
 
-    let repair_notes = super::normalize_patch_before_validation(&mut patch, task);
+    let mut repair_notes = super::normalize_patch_before_validation(&mut patch, task);
+    let mut validation_errors =
+        super::validate_patch_before_write(&patch, task, &original_content);
+    if !validation_errors.is_empty() {
+        let pruned = super::prune_invalid_change_fields(&mut patch, &validation_errors);
+        if !pruned.is_empty() {
+            repair_notes.extend(pruned);
+            validation_errors =
+                super::validate_patch_before_write(&patch, task, &original_content);
+        }
+    }
     if !repair_notes.is_empty() {
         log::info!(
             "[ctr_fix_apply] Normalized agent patch for {}: {}",
@@ -58,13 +68,23 @@ pub(crate) fn exec_ctr_fix_apply(
             repair_notes.join("; ")
         );
     }
-
-    let validation_errors = super::validate_patch_before_write(&patch, task, &original_content);
     if !validation_errors.is_empty() {
         return StepResult::fail(format!(
                 "Agent returned invalid CtrFixPatch values: {}. No changes written.",
                 validation_errors.join("; ")
             ));
+    }
+    // After prune, ensure something remains to apply.
+    let has_change = patch.changes.title.is_some()
+        || patch.changes.description.is_some()
+        || patch.changes.first_paragraph.is_some()
+        || patch.changes.faq_questions.is_some()
+        || patch.changes.snippet_patch.is_some();
+    if !has_change {
+        return StepResult::fail(
+            "Agent returned CtrFixPatch with no valid change fields after normalization. No changes written."
+                .to_string(),
+        );
     }
 
     let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {

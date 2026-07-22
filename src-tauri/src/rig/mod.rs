@@ -11,4 +11,5 @@ pub mod grok_cli;
 pub mod kimi_bridge;
 pub mod kimi_cli;
 pub mod provider;
+pub mod schema_sanitize;
 pub mod tools;
