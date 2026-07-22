@@ -20,6 +20,24 @@ when_to_use = "When investigating traffic changes over time, plateau detection, 
 when_not_to_use = "Do not use if GSC is not connected"
 mutates = false
 
+[tools.site_overview]
+purpose = "Compact site-wide SEO desk: totals, top pages, movers, indexing sample"
+when_to_use = "Start of weekly SEO exploration or when you need a site health snapshot"
+when_not_to_use = ""
+mutates = false
+
+[tools.articles]
+purpose = "Article catalog with GSC rollup, filters; redirected excluded by default"
+when_to_use = "When you need the full supply inventory or to filter pages by status/impressions"
+when_not_to_use = "Use article for full content of one page"
+mutates = false
+
+[tools.article]
+purpose = "Full package for one article: catalog + body/outline + queries + neighbors"
+when_to_use = "When investigating or fixing a specific page"
+when_not_to_use = ""
+mutates = false
+
 [tools.article_list]
 purpose = "List all articles in the project with metadata"
 when_to_use = "When you need to know what content exists or get an overview of the site"

@@ -24,6 +24,7 @@ use gsc::*;
 use articles::*;
 use audit::*;
 use project::*;
+use site_state::*;
 
 mod catalog;
 
@@ -132,6 +133,9 @@ fn build_tool(name: &str, ctx: InvestigationContext) -> Box<dyn rig::tool::ToolD
         "gsc_performance" => Box::new(GscPerformanceTool { ctx }),
         "gsc_queries" => Box::new(GscQueriesTool { ctx }),
         "gsc_movers" => Box::new(GscMoversTool { ctx }),
+        "site_overview" => Box::new(SiteOverviewTool { ctx }),
+        "articles" => Box::new(ArticlesTool { ctx }),
+        "article" => Box::new(ArticleTool { ctx }),
         "article_list" => Box::new(ArticleListTool { ctx }),
         "article_frontmatter" => Box::new(ArticleFrontmatterTool { ctx }),
         "article_body_hash" => Box::new(ArticleBodyHashTool { ctx }),
@@ -164,6 +168,7 @@ mod gsc;
 mod articles;
 mod audit;
 mod project;
+mod site_state;
 mod shared;
 mod tests;
 
@@ -184,6 +189,9 @@ mod alignment_tests {
         "gsc_performance",
         "gsc_queries",
         "gsc_movers",
+        "site_overview",
+        "articles",
+        "article",
         "article_list",
         "article_frontmatter",
         "article_body_hash",
