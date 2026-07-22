@@ -1,6 +1,6 @@
 # Content Fix Apply
 
-<!-- skill-version: 2 -->
+<!-- skill-version: 3 -->
 
 Apply SEO content improvements to a single MDX article based on structured recommendations.
 
@@ -10,12 +10,15 @@ You receive:
 1. The article's current file contents (frontmatter + body)
 2. A list of structured recommendations (category, current text, proposed text, reason)
 3. Validation rules for each field
+4. Canonical `file` and `article_id` in the context block
 
 ## Your job
 
 Produce a `ContentFixPatch` JSON that addresses every recommendation **unless the current file already satisfies the requirement**.
 
 Only include fields that need to change. Do not include a field if the fix is already satisfied.
+
+**Identity is filled by the system from context.** Do not invent `file` paths or `article_id` values. Prefer omitting them or copying the exact values from the context block — never use placeholders like `content/001_article.mdx`.
 
 ## Categories and rules
 
@@ -36,15 +39,17 @@ Only include fields that need to change. Do not include a field if the fix is al
 - intro: 40-60 words if provided
 - faq_questions: 3-5 questions if provided and file has no existing FAQ
 - Every proposed change must differ from the current text
+- Empty `changes: {}` is **not** success when open suggestions still fail content health (title length, meta length, intro word count, missing H1/FAQ)
+
 
 ## Output contract
 
-Return a `ContentFixPatch` JSON with these fields:
+Return a `ContentFixPatch` JSON with these fields. `article_id` and `file` are set by the system from context — copy context values if required by the schema; do not invent paths:
 
 ```json
 {
-  "article_id": 123,
-  "file": "content/001_article.mdx",
+  "article_id": 0,
+  "file": "",
   "changes": {
     "title": "New Title (≤60 chars)",
     "description": "New meta description (120-155 chars)",

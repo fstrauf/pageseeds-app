@@ -1,16 +1,17 @@
 /// Deterministic application of agent-generated content fix patch.
 ///
 /// 1. Parse ContentFixPatch from content_fix_patch artifact (preferred) or latest_raw (legacy)
-/// 2. Resolve absolute file path from project_path + patch.file
-/// 3. Read original file content
-/// 4. Apply changes deterministically
-/// 5. rebuild_mdx → write file
-/// 6. validate_mdx_structure → if fail, restore snapshot, return failed
-/// 7. Return success with summary
+/// 2. Pin identity from content_fix_context when present (defense-in-depth vs model paths)
+/// 3. Resolve absolute file path from project_path + patch.file
+/// 4. Read original file content
+/// 5. Apply changes deterministically
+/// 6. rebuild_mdx → write file
+/// 7. validate_mdx_structure → if fail, restore snapshot, return failed
+/// 8. Empty apply with open unsatisfied suggestions → fail (not soft success)
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;
-use crate::models::content_review::{ContentFixChanges, ContentFixPatch};
+use crate::models::content_review::{ContentFixChanges, ContentFixPatch, ReviewSuggestion};
 use crate::models::task::Task;
 
 pub(crate) fn exec_fix_content_article_apply(
@@ -26,6 +27,9 @@ pub(crate) fn exec_fix_content_article_apply(
     if let Some(error) = patch.error.as_ref() {
         return StepResult::fail(format!("Agent reported error: {}", error));
     }
+
+    // Defense-in-depth: prefer context path over any model-hallucinated path.
+    pin_patch_from_context_artifact(task, &mut patch);
 
     let repo_root = Path::new(project_path);
     let file_path =
@@ -188,6 +192,20 @@ pub(crate) fn exec_fix_content_article_apply(
         }
     }
 
+    if applied.is_empty() {
+        let suggestions = suggestions_from_context_artifact(task);
+        let unsatisfied = super::fix_suggestion_coverage::unsatisfied_suggestion_fields(
+            &suggestions,
+            None,
+            &original_content,
+        );
+        if !unsatisfied.is_empty() {
+            return StepResult::fail(
+                super::fix_suggestion_coverage::empty_apply_unsatisfied_message(&unsatisfied),
+            );
+        }
+    }
+
     let summary = if applied.is_empty() {
         "No changes applied — patch was empty or already satisfied".to_string()
     } else {
@@ -211,6 +229,56 @@ pub(crate) fn exec_fix_content_article_apply(
         ),
         artifact_key: None,
     }
+}
+
+// ─── Context identity pin (defense-in-depth) ──────────────────────────────────
+
+/// Overwrite `patch.file` / `article_id` from `content_fix_context` when present.
+fn pin_patch_from_context_artifact(task: &Task, patch: &mut ContentFixPatch) {
+    let context_json = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "content_fix_context")
+        .and_then(|a| a.content.as_deref())
+        .unwrap_or("");
+    if context_json.is_empty() {
+        return;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(context_json) else {
+        return;
+    };
+    if let Some(file) = value["article_file"].as_str() {
+        if !file.is_empty() {
+            patch.file = file.to_string();
+        }
+    }
+    if let Some(id) = value["article_id"].as_i64() {
+        // Keep model id only when context has no usable id.
+        if id != 0 {
+            patch.article_id = id;
+        }
+    }
+}
+
+fn suggestions_from_context_artifact(task: &Task) -> Vec<ReviewSuggestion> {
+    let context_json = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "content_fix_context")
+        .and_then(|a| a.content.as_deref())
+        .unwrap_or("");
+    if context_json.is_empty() {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(context_json) else {
+        return Vec::new();
+    };
+    value["suggestions"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|s| serde_json::from_value(s.clone()).ok())
+        .collect()
 }
 
 // ─── Patch resolution ─────────────────────────────────────────────────────────
@@ -247,4 +315,204 @@ fn resolve_patch(task: &Task, latest_raw: Option<&str>) -> Result<ContentFixPatc
     Err(StepResult::fail("No content_fix_patch artifact or latest_raw found. \
              Run the generate step first."
             .to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::content_review::ContentFixChanges;
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskArtifact, TaskRun, TaskReviewSurface,
+        TaskRunPolicy, TaskStatus,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn sample_task(artifacts: Vec<TaskArtifact>) -> Task {
+        let now = chrono::Utc::now().to_rfc3339();
+        Task {
+            id: "task-fix-apply".to_string(),
+            project_id: "p1".to_string(),
+            task_type: "fix_content_article".to_string(),
+            phase: "fix".to_string(),
+            status: TaskStatus::InProgress,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::None,
+            title: Some("Fix article".to_string()),
+            description: None,
+            depends_on: vec![],
+            artifacts,
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            not_before: None,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn pin_from_context_overwrites_hallucinated_path() {
+        let task = sample_task(vec![TaskArtifact {
+            key: "content_fix_context".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: Some("fix_content_article".to_string()),
+            content: Some(
+                serde_json::json!({
+                    "article_id": 42,
+                    "article_file": "content/blog/real-slug.mdx",
+                    "suggestions": []
+                })
+                .to_string(),
+            ),
+        }]);
+        let mut patch = ContentFixPatch {
+            article_id: 1,
+            file: "content/001_article.mdx".to_string(),
+            error: None,
+            changes: ContentFixChanges::default(),
+        };
+        pin_patch_from_context_artifact(&task, &mut patch);
+        assert_eq!(patch.file, "content/blog/real-slug.mdx");
+        assert_eq!(patch.article_id, 42);
+    }
+
+    #[test]
+    fn empty_apply_fails_when_open_suggestions_unsatisfied() {
+        let dir = std::env::temp_dir().join(format!("pageseeds-fix-apply-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("content/blog")).unwrap();
+        let rel = "content/blog/slug.mdx";
+        let abs: PathBuf = dir.join(rel);
+        // Short meta + short intro → description/intro fail health.
+        fs::write(
+            &abs,
+            "---\ntitle: \"Ok Title\"\ndescription: \"Short.\"\ndate: \"2026-01-01\"\n---\n\n# Ok Title\n\nTiny intro.\n",
+        )
+        .unwrap();
+
+        let patch = ContentFixPatch {
+            article_id: 7,
+            file: "content/001_article.mdx".to_string(), // wrong path — should be pinned
+            error: None,
+            changes: ContentFixChanges::default(),
+        };
+        let task = sample_task(vec![
+            TaskArtifact {
+                key: "content_fix_context".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(
+                    serde_json::json!({
+                        "article_id": 7,
+                        "article_file": rel,
+                        "suggestions": [
+                            {
+                                "category": "description",
+                                "current": "Short.",
+                                "proposed": "A much longer meta description that meets SEO length.",
+                                "reason": "meta too short"
+                            },
+                            {
+                                "category": "title",
+                                "current": "Ok Title",
+                                "proposed": "Better Title",
+                                "reason": "prefer keyword"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ),
+            },
+            TaskArtifact {
+                key: "content_fix_patch".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(serde_json::to_string(&patch).unwrap()),
+            },
+        ]);
+
+        let result = exec_fix_content_article_apply(&task, dir.to_str().unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            !result.success,
+            "expected fail on empty apply with open suggestions, got: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("remain unsatisfied")
+                || result.message.contains("Empty/no-op"),
+            "unexpected message: {}",
+            result.message
+        );
+        // Title is healthy in file → only description should be called out, but either is fine.
+        assert!(
+            result.message.contains("description") || result.message.contains("title"),
+            "message should name fields: {}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn empty_apply_soft_success_when_suggestions_already_healthy() {
+        let dir = std::env::temp_dir().join(format!("pageseeds-fix-apply-ok-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("content/blog")).unwrap();
+        let rel = "content/blog/slug.mdx";
+        let abs: PathBuf = dir.join(rel);
+        // Title within limit — only title suggestion, already healthy.
+        fs::write(
+            &abs,
+            "---\ntitle: \"Ok Title\"\ndescription: \"Short.\"\ndate: \"2026-01-01\"\n---\n\n# Ok Title\n\nTiny intro.\n",
+        )
+        .unwrap();
+
+        let patch = ContentFixPatch {
+            article_id: 7,
+            file: rel.to_string(),
+            error: None,
+            changes: ContentFixChanges::default(),
+        };
+        let task = sample_task(vec![
+            TaskArtifact {
+                key: "content_fix_context".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(
+                    serde_json::json!({
+                        "article_id": 7,
+                        "article_file": rel,
+                        "suggestions": [{
+                            "category": "title",
+                            "current": "Ok Title",
+                            "proposed": "Still Ok",
+                            "reason": "optional"
+                        }]
+                    })
+                    .to_string(),
+                ),
+            },
+            TaskArtifact {
+                key: "content_fix_patch".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: Some("fix_content_article".to_string()),
+                content: Some(serde_json::to_string(&patch).unwrap()),
+            },
+        ]);
+
+        let result = exec_fix_content_article_apply(&task, dir.to_str().unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            result.success,
+            "empty apply should soft-succeed when open fields are already healthy: {}",
+            result.message
+        );
+    }
 }

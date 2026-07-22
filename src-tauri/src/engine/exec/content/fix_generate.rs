@@ -114,12 +114,27 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         }
     };
 
-    // 5. Normalize and validate
+    // 5. Pin identity from context (never trust model file/article_id paths)
+    pin_patch_identity(&mut patch, &context);
+
+    // 6. Normalize and validate
     let target_kw = context.target_keyword.as_deref();
     let repairs = normalize_patch_before_validation(&mut patch, &original_content);
-    let errors = validate_patch_before_write(&patch, &original_content, target_kw, &task.project_id, project_path, &context.available_link_slugs);
+    let mut errors = validate_patch_before_write(
+        &patch,
+        &original_content,
+        target_kw,
+        &task.project_id,
+        project_path,
+        &context.available_link_slugs,
+    );
+    errors.extend(super::fix_suggestion_coverage::validate_patch_against_suggestions(
+        &patch,
+        &context.suggestions,
+        &original_content,
+    ));
 
-    // 6. One repair attempt if needed
+    // 7. One repair attempt if needed
     if !errors.is_empty() {
         log::info!(
             "[fix_content_generate] First patch invalid for {}: {}. Attempting repair.",
@@ -129,8 +144,24 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
 
         match repair_content_fix_patch_with_backend(&scoped_backend, &prompt, &patch, &errors).await {
             Ok(mut repaired) => {
-                let _repair_notes = normalize_patch_before_validation(&mut repaired, &original_content);
-                let repair_errors = validate_patch_before_write(&repaired, &original_content, target_kw, &task.project_id, project_path, &context.available_link_slugs);
+                pin_patch_identity(&mut repaired, &context);
+                let _repair_notes =
+                    normalize_patch_before_validation(&mut repaired, &original_content);
+                let mut repair_errors = validate_patch_before_write(
+                    &repaired,
+                    &original_content,
+                    target_kw,
+                    &task.project_id,
+                    project_path,
+                    &context.available_link_slugs,
+                );
+                repair_errors.extend(
+                    super::fix_suggestion_coverage::validate_patch_against_suggestions(
+                        &repaired,
+                        &context.suggestions,
+                        &original_content,
+                    ),
+                );
 
                 if !repair_errors.is_empty() {
                     return StepResult::fail(format!(
@@ -149,7 +180,7 @@ pub(crate) async fn exec_fix_content_article_generate_with_backend(
         }
     }
 
-    // 7. Return patch as JSON
+    // 8. Return patch as JSON
     let patch_json = match serde_json::to_string_pretty(&patch) {
         Ok(s) => s,
         Err(e) => {
@@ -184,6 +215,12 @@ struct FixContext {
     /// artifacts or when the lookup failed — the prompt then falls back to
     /// the "do not link when unsure" rule.
     pub available_link_slugs: Vec<String>,
+}
+
+/// Force patch identity from context so model-hallucinated paths never win.
+fn pin_patch_identity(patch: &mut ContentFixPatch, context: &FixContext) {
+    patch.file = context.file.clone();
+    patch.article_id = context.article_id;
 }
 
 fn extract_context(task: &Task) -> Result<Option<FixContext>, String> {
@@ -850,5 +887,21 @@ mod tests {
         let prompt = build_fix_prompt(&task, "/tmp", &ctx, SAMPLE_MDX).unwrap();
         assert!(!prompt.contains("Valid internal link targets in this project"));
         assert!(prompt.contains("If you are unsure whether a target exists, do NOT include it"));
+    }
+
+    #[test]
+    fn pin_patch_identity_overwrites_model_path() {
+        let ctx = fix_context(vec![]);
+        let mut patch = ContentFixPatch {
+            article_id: 999,
+            file: "content/001_article.mdx".to_string(),
+            error: None,
+            changes: Default::default(),
+        };
+        pin_patch_identity(&mut patch, &ctx);
+        assert_eq!(patch.file, ctx.file);
+        assert_eq!(patch.article_id, ctx.article_id);
+        assert_eq!(patch.file, "content/blog/slug.mdx");
+        assert_eq!(patch.article_id, 7);
     }
 }
