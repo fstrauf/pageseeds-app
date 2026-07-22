@@ -87,9 +87,9 @@ when_not_to_use = ""
 mutates = false
 
 [tools.create_task]
-purpose = "Create a fix task in PageSeeds to address issues found"
-when_to_use = "ONLY after investigation has found specific, actionable issues. Explain what each task will do and why."
-when_not_to_use = "Do NOT create tasks speculatively. Max 3 tasks per investigation."
+purpose = "Create a fix task in PageSeeds to address issues found. For fix_content_article you MUST pass slug (article url_slug); bare creates without slug are rejected."
+when_to_use = "ONLY after investigation has found specific, actionable issues. Explain what each task will do and why. When creating fix_content_article, always include slug."
+when_not_to_use = "Do NOT create tasks speculatively. Max 3 tasks per investigation. Never create fix_content_article without slug."
 mutates = true
 
 [tools.enqueue_task]

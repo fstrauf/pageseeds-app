@@ -233,4 +233,61 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
     }
+
+    #[test]
+    fn create_task_tool_rejects_fix_content_article_without_slug() {
+        let db_path = temp_db_path("create_task_no_slug");
+        let _ = std::fs::remove_file(&db_path);
+        let ctx = InvestigationContext {
+            project_id: "proj1".into(),
+            project_path: ".".into(),
+            db_path: db_path.clone(),
+        };
+        // Open once so the file exists; CreateTaskTool opens its own connection.
+        let _ = ctx.open_db().unwrap();
+
+        let tool = CreateTaskTool { ctx };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(tool.call(CreateTaskArgs {
+                task_type: "fix_content_article".into(),
+                title: "Fix something".into(),
+                reason: "because".into(),
+                slug: None,
+            }))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("requires slug"),
+            "expected slug requirement error, got: {msg}"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn create_task_tool_rejects_fix_content_article_with_empty_slug() {
+        let db_path = temp_db_path("create_task_empty_slug");
+        let _ = std::fs::remove_file(&db_path);
+        let ctx = InvestigationContext {
+            project_id: "proj1".into(),
+            project_path: ".".into(),
+            db_path: db_path.clone(),
+        };
+        let _ = ctx.open_db().unwrap();
+
+        let tool = CreateTaskTool { ctx };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(tool.call(CreateTaskArgs {
+                task_type: "fix_content_article".into(),
+                title: "Fix something".into(),
+                reason: "because".into(),
+                slug: Some("   ".into()),
+            }))
+            .unwrap_err();
+        assert!(err.to_string().contains("requires slug"));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
 }
