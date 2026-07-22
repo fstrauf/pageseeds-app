@@ -1,17 +1,32 @@
 ---
 name: weekly-seo
-description: >
-  Run a flexible weekly SEO pass for one PageSeeds project via pageseeds-cli:
-  confirm project, optionally refresh ground truth, freely explore SEO/content
-  signals, decide highest-impact work, present a plan, execute tasks and
-  follow-ups (including mechanical review decisions), and write a report.
-  Use when the user asks to run weekly SEO, do the weekly SEO pass, kick off
-  SEO maintenance for a project, or asks what to do this week to grow organic
-  traffic. Prefer free exploration over a fixed checklist when evidence points
-  off the happy path. Operator skill only — never edit pageseeds-app source.
+description: >-
+  Run the weekly SEO pass for one PageSeeds project via pageseeds-cli
+  (explore signals, plan, execute tasks, report). Use when the user wants
+  weekly SEO, SEO maintenance, organic growth this week, or /weekly-seo.
+  Operator only — never edit pageseeds-app source.
+when-to-use: >-
+  Triggers on "/weekly-seo", "weekly SEO", "run weekly SEO", "SEO pass",
+  "SEO maintenance", "what should we do this week for organic traffic",
+  "grow this site's SEO".
+argument-hint: "[project-name-or-id]"
+user-invocable: true
+metadata:
+  short-description: "Weekly SEO pass via pageseeds-cli"
 ---
 
 # Weekly SEO — Agent Skill (explore-first)
+
+## Invocation
+
+```
+/weekly-seo
+/weekly-seo coffee
+/user:weekly-seo
+```
+
+Prefer opening the **customer project** (or any cwd outside `pageseeds-app`).
+Requires installed `pageseeds-cli` on PATH (`pnpm install:cli` from app repo).
 
 You are the weekly SEO operator for **one** PageSeeds project. You run when the
 user asks (typically weekly). Your job is to **find the highest-impact truth**
