@@ -343,6 +343,8 @@ if !has_issues && !significant_ctr_opportunity {
 
 When `significant_ctr_opportunity` is true but source-level checks pass, the spawned `fix_ctr_article` task should get an artifact that tells the agent: "CTR is below target; current title/meta are technically valid, so focus on snippet competitiveness, intent match, and compelling copy." This can be done by adding a hint to the `ctr_context` artifact or by adding a new `prompt_hint` field.
 
+**Implementation status (issue #104):** `prompt_hint` is now shipped on each admitted CTR context article record when `detection_reasons` is pure underperformance (`ctr_underperformance` without `format_violation`). Context also includes `current_year` and `head_query` (highest-impression query after GSC enrichment). The `ctr-optimization` skill (v3) uses recovery mode for pure underperformance (year refresh, head-term, intent) rather than micro-CTR length-only rewrites. Residual work in this section (spawn gate relaxation via `clicks_lost` threshold in `task_spawner.rs`) may still apply separately from the analyze/context framing shipped in #104.
+
 ### 4.6 Cross-reference Clarity UX anomalies with CTR opportunity
 
 In `RankOpportunities`, when a URL has both `clicks_lost > 0` and `ux_anomaly_z_score > 2.0`, add a `snippet_mismatch_likely` flag to the opportunity. This tells the user (and the agent) that searchers are landing and immediately bouncing — a strong signal the title/meta promises something the page does not deliver.

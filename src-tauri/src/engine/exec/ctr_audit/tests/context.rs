@@ -461,7 +461,82 @@ Q: What?\nA: This.
             reasons
         );
         assert!(article["clicks_lost"].as_f64().unwrap() > 0.0);
+
+        // #104: recovery-mode framing fields on pure underperformance records
+        let current_year = chrono::Datelike::year(&chrono::Utc::now()) as i64;
+        assert_eq!(
+            article["current_year"].as_i64().unwrap(),
+            current_year,
+            "current_year must equal UTC year at context build"
+        );
+        let hint = article["prompt_hint"]
+            .as_str()
+            .expect("prompt_hint must be a non-empty string for pure underperformance");
+        assert!(!hint.is_empty());
+        let hint_lower = hint.to_lowercase();
+        assert!(
+            hint_lower.contains("ctr")
+                || hint_lower.contains("head query")
+                || hint_lower.contains("year"),
+            "prompt_hint should contain recovery guidance, got: {}",
+            hint
+        );
+        assert!(
+            article["head_query"].is_null(),
+            "head_query is null without GSC query enrichment"
+        );
         cleanup(&path);
+    }
+
+    #[test]
+    fn test_recovery_prompt_hint_pure_underperformance() {
+        let hint = recovery_prompt_hint(&["ctr_underperformance"]);
+        assert!(hint.is_some());
+        let s = hint.unwrap();
+        assert!(s.contains("CTR") || s.contains("head query") || s.contains("year"));
+    }
+
+    #[test]
+    fn test_recovery_prompt_hint_format_or_mixed_is_none() {
+        assert!(recovery_prompt_hint(&["format_violation"]).is_none());
+        assert!(recovery_prompt_hint(&["format_violation", "ctr_underperformance"]).is_none());
+        assert!(recovery_prompt_hint(&[]).is_none());
+    }
+
+    #[test]
+    fn test_head_query_from_top_queries_picks_highest_impressions() {
+        let top = serde_json::json!([
+            {
+                "query": "secondary term",
+                "impressions": 100.0,
+                "clicks": 1.0,
+                "ctr": 0.01,
+                "avg_position": 8.0,
+                "intent": "generic"
+            },
+            {
+                "query": "primary head query",
+                "impressions": 5000.0,
+                "clicks": 10.0,
+                "ctr": 0.002,
+                "avg_position": 9.0,
+                "intent": "best_list"
+            },
+            {
+                "query": "mid term",
+                "impressions": 800.0,
+                "clicks": 2.0,
+                "ctr": 0.0025,
+                "avg_position": 10.0,
+                "intent": "generic"
+            }
+        ]);
+        assert_eq!(
+            head_query_from_top_queries(&top).as_deref(),
+            Some("primary head query")
+        );
+        assert!(head_query_from_top_queries(&serde_json::Value::Null).is_none());
+        assert!(head_query_from_top_queries(&serde_json::json!([])).is_none());
     }
 
     #[test]
