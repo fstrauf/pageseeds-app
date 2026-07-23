@@ -432,6 +432,25 @@ Three managed states declared in `lib.rs`:
 
 ---
 
+## Dual-layer SEO measurement (CTR)
+
+**BUSINESS RULE (issue #152):** closed-loop CTR measurement is two layers, not
+per-fix review tasks.
+
+| Layer | Store | Role |
+|-------|--------|------|
+| **Daily tape** | `gsc_page_daily` (append-only) | Per-page GSC series; 28-day windows for baseline/after metrics |
+| **Change events** | `ctr_outcomes` | Sparse rows when a CTR fix ships (nested `fix_ctr_article` or Path B `fix-submit` kind=ctr) |
+
+- Re-ship for the same article **supersedes** prior open/pending events.
+- `deployed_at` is set only after live title verification, not at ship time.
+- Do **not** spawn `ctr_outcome_review` from `after_task_success` (task type kept
+  for legacy rows / handler registration only).
+- Content outcome reviews (`content_outcome_review`) are a separate path and are
+  not folded into this model.
+
+---
+
 ## See Also
 
 - [Workflow Engine](./WORKFLOW_ENGINE.md) — How tasks use this data

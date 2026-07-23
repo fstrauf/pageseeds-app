@@ -358,6 +358,31 @@ pub fn submit_fix(
 
     if validation.ok {
         touch_last_edited(conn, project_id, package.article_id);
+
+        // Path B CTR ships record a sparse change event (issue #152). Best-effort:
+        // ship success must not fail if measurement row write fails.
+        if kind == FixKind::Ctr {
+            let fix_task_id = crate::engine::post_actions::path_b_ctr_fix_task_id(
+                project_id,
+                package.article_id,
+                &package.slug,
+            );
+            if let Err(e) = crate::engine::post_actions::record_ctr_change_event(
+                conn,
+                project_id,
+                package.article_id,
+                &fix_task_id,
+                None,
+                Some(package.slug.as_str()),
+            ) {
+                log::warn!(
+                    "[fix_package] Failed to record CTR change event for article {} ({}): {}",
+                    package.article_id,
+                    package.slug,
+                    e
+                );
+            }
+        }
     }
 
     let message = if validation.ok {
@@ -907,5 +932,88 @@ Intro paragraph about cold brew makers for home use.
             "short body should still submit ok on fix path: {:?}",
             result.validation
         );
+    }
+
+    /// Issue #152: successful Path B `fix-submit` with `kind=ctr` records a change event.
+    #[test]
+    fn submit_ctr_records_change_event() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            7,
+            "ctr-path-b",
+            "CTR Path B",
+            "content/ctr-path-b.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/ctr-path-b.mdx",
+            &valid_mdx(
+                "CTR Path B Title",
+                "CTR Path B Title",
+                "Body about SERP snippets.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "ctr-path-b",
+            FixKind::Ctr,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        let outcomes = crate::db::list_ctr_outcomes(&conn, "proj1").unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].article_id, 7);
+        assert!(
+            outcomes[0].fix_task_id.starts_with("path_b_fix:"),
+            "synthetic Path B fix id: {}",
+            outcomes[0].fix_task_id
+        );
+        assert_eq!(outcomes[0].outcome_status, "pending");
+        assert!(outcomes[0].deployed_at.is_none());
+    }
+
+    #[test]
+    fn submit_content_does_not_record_ctr_outcome() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            1,
+            "content-only",
+            "Content Only",
+            "content/c.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/c.mdx",
+            &valid_mdx("Content Only", "Content Only", "Body."),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "content-only",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+        assert!(result.ok);
+        assert!(crate::db::list_ctr_outcomes(&conn, "proj1")
+            .unwrap()
+            .is_empty());
     }
 }

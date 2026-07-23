@@ -161,7 +161,7 @@ pub(crate) async fn exec_content_review_investigate(
 /// Asks for thorough prose analysis for later structured extraction — does **not**
 /// include the standalone freeform JSON output schema.
 ///
-/// `pub(crate)` so live evals can reuse the same framing.
+/// `pub(crate)` for reuse by tests and internal callers.
 pub(crate) fn build_content_review_investigation_preamble(base_preamble: &str) -> String {
     format!(
         "{base_preamble}\n\n\
@@ -204,7 +204,7 @@ pub(crate) fn build_content_review_investigation_prompt(task: &Task) -> String {
     )
 }
 
-/// Extract preamble shared by production and live evals (typed InvestigationFindings only).
+/// Extract preamble shared by production paths (typed InvestigationFindings only).
 pub(crate) fn content_review_investigation_extract_preamble() -> &'static str {
     "You extract structured InvestigationFindings from investigation \
      analysis. Always use the submit tool. severity must be one of: critical, warning, info. \

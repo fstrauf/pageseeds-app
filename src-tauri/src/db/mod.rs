@@ -1913,6 +1913,12 @@ pub fn ctr_query_metrics_max_fetched_at(
 // ═══════════════════════════════════════════════════════════════════════════════
 // GSC Page Daily Snapshots (append-only, issue #23)
 // ═══════════════════════════════════════════════════════════════════════════════
+//
+// BUSINESS RULE (issue #152) — dual-layer SEO measurement:
+// - **Daily tape:** `gsc_page_daily` — append-only per-page GSC series (this table).
+// - **Change events:** sparse `ctr_outcomes` rows when a CTR fix ships (Path B or
+//   nested `fix_ctr_article`). No per-fix `ctr_outcome_review` task fan-out.
+// Classification prefers 28d windows from this tape; live_site / metadata are fallbacks.
 
 /// Append per-page daily GSC rows to the snapshot table.
 ///

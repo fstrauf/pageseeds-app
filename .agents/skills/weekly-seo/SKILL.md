@@ -142,6 +142,18 @@ CLI weekly best-path for low CTR is **desk-selected targeted fixes**, not a full
    `ctr_audit` and BackendAuto-spawn children — intentional product path. This
    skill is the **CLI operator best-path**; do not flip lifecycle metadata.
 
+### Measurement stubs ≠ action backlog (issue #152)
+
+- **`ctr_outcome_review` / deferred CTR measurement todos are not weekly action
+  backlog.** Cancel them freely; do not execute them as weekly strategy.
+- Closed-loop measurement = **`gsc_page_daily` tape** + sparse **`ctr_outcomes`
+  change events** recorded when a CTR fix ships (Path B `fix-submit -k ctr` or
+  nested `fix_ctr_article`). No new review-task fan-out.
+- **When to re-check:** after ~14 days, for high-impression ships, re-read desk
+  (`article` / `gsc-performance` / daily windows) — not by running legacy
+  measurement tasks. “Due” means data is ready + high-impr desk priority, not a
+  todo queue item.
+
 ---
 
 

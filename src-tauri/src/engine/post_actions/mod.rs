@@ -25,6 +25,9 @@ use ctr_outcome::record_ctr_outcome_baseline;
 use keyword_meta::find_expected_slug_and_file;
 use outcome_review::spawn_content_outcome_review;
 use topic_health::{find_written_article_file, run_topic_health_reducer};
+
+// Path B / external callers: CTR change-event recorder (no review-task fan-out).
+pub use ctr_outcome::{path_b_ctr_fix_task_id, record_ctr_change_event};
 // ─── Post-step context ───────────────────────────────────────────────────────
 
 pub struct PostStepContext<'a> {
@@ -466,39 +469,18 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         }
     }
 
-    // CTR fix tasks → record baseline outcome + spawn outcome review task
+    // CTR fix tasks → record change event only (issue #152).
+    // No `ctr_outcome_review` fan-out: measurement is gsc_page_daily + sparse
+    // ctr_outcomes rows; deploy verify / classification is on-demand or desk.
     if ctx.task.task_type == "fix_ctr_article" {
         if let Ok(reloaded) = task_store::get_task(ctx.conn, &ctx.task.id) {
             if reloaded.status == crate::models::task::TaskStatus::Done {
-                // Record baseline metrics so the review task has data to compare
                 if let Err(e) = record_ctr_outcome_baseline(ctx.conn, &reloaded, ctx.project_path) {
                     log::warn!(
-                        "[post_actions] Failed to record CTR outcome baseline for {}: {}",
+                        "[post_actions] Failed to record CTR outcome change event for {}: {}",
                         reloaded.id,
                         e
                     );
-                }
-
-                let idempotency_key =
-                    format!("ctr_outcome_review:{}:{}", reloaded.project_id, reloaded.id);
-                let spec = crate::engine::spawner::TaskSpec {
-                    project_id: reloaded.project_id.clone(),
-                    task_type: "ctr_outcome_review".to_string(),
-                    title: Some(format!("CTR outcome review: {}", reloaded.id)),
-                    description: Some(format!(
-                        "Review CTR outcomes for fix task {}. Will wait 14 days post-deployment before comparing metrics.",
-                        reloaded.id
-                    )),
-                    priority: crate::models::task::Priority::Medium,
-                    run_policy: Some(crate::models::task::TaskRunPolicy::UserEnqueue),
-        agent_policy: crate::models::task::AgentPolicy::None,
-                    depends_on: vec![reloaded.id.clone()],
-                    artifacts: vec![],
-                    idempotency_key: Some(idempotency_key),
-                    ..Default::default()
-                };
-                if let Ok(task) = crate::engine::spawner::TaskSpawner::spawn(ctx.conn, spec) {
-                    follow_up_ids.push(task.id);
                 }
             }
         }
