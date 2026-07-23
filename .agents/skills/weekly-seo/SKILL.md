@@ -96,7 +96,7 @@ Breaking these fails the run.
 | 2 | **No product source edits** under `pageseeds-app` / `src-tauri` / product manifests. |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
-| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B uses `write-context` / `write-submit`, not `create-task write_article`. |
+| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
 | 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
@@ -168,6 +168,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `create-task` / `execute-task` | Act within may-create + budgets |
 | Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
 | Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path) |
+| Path B merge | `merge-context` / `merge-submit` — outer-agent merge after approved keep+redirects (preferred CLI path) |
 
 #### Optional / secondary (NOT ground truth, not required path)
 
@@ -260,6 +261,8 @@ leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 - Selection → `write_article` tasks created for provenance — **complete via Path B**
   (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
 - Path B `write-submit` → marks write task done + spawns `cluster_and_link`
+- Approved merge → `consolidate_cluster` tasks for provenance — **complete via Path B merge**
+  (`merge-context` / write merged MDX / `merge-submit`), not `execute-task consolidate_cluster`
 - Desktop nested writer still auto-spawns quality review + cluster link on success
 - `content_review` may spawn fixes / feature-spec (execute what appears)
 
@@ -280,6 +283,8 @@ pageseeds-cli get-task -I <task-id>
 - **CannibalizationPicker:** mechanical high-confidence only —
   `select-cannibalization -I <parent> -S merge:<id>,hub:<id>`; escalate ambiguous.
   Soft clusters are **not** merge authority.
+  **After approved merges, use Path B merge** (below) — do **not**
+  `execute-task` the spawned `consolidate_cluster` tasks on the happy path.
 - **KeywordPicker:** no rubber-stamp. Check demand/difficulty, self-competition
   (`articles` / `gsc-queries`), intent. Prefer non-avoid / `differentiate` /
   `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
@@ -321,6 +326,42 @@ pageseeds-cli write-submit -i <id> -p <path> \
 | **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** instead |
 | **Budget** | Each `write-submit` attempt counts toward the **15** execution budget |
 | **Provenance** | `select-keywords` may still spawn `write_article`; Path B completes them via submit |
+
+### Path B — CLI merge package (happy path after approved consolidate)
+
+`select-cannibalization` / create-from-approved still create `consolidate_cluster`
+tasks for provenance. For **CLI best-path**, complete merges via merge-context +
+session prose + merge-submit — **not** nested `execute-task consolidate_cluster`
+(weak global providers run irreversible nested draft_patch).
+
+```bash
+# 1. Package (deterministic — no LLM)
+pageseeds-cli merge-context -i <id> -p <path> \
+  -I <consolidate-task-id>
+# → JSON: plan, keep + redirects with FULL MDX, outlines, soft GSC,
+#   skill_name + skill_content (merge-content), keeper_file, min 400 words,
+#   requires_human_confirm, instructions
+
+# Or without a task: -K /blog/keep -R /blog/src-a,/blog/src-b
+# Or: --keep-id <id> --redirect-ids <id,id,...>
+
+# 2. Session agent writes complete merged MDX to keeper_file
+#    (preserve unique tables/FAQs/examples from redirects; match keeper tone)
+
+# 3. Submit until ok (high-traffic needs -y)
+pageseeds-cli merge-submit -i <id> -p <path> \
+  -I <consolidate-task-id> [-y]
+# → ok:false + checks → fix keeper and resubmit (no redirects applied yet)
+# → ok:true → redirects.csv, inbound rewrites, sources redirected, task done
+```
+
+| Rule | Path B merge |
+|------|----------------|
+| **Do** | `merge-context` → write MDX to `keeper_file` → `merge-submit` until `ok` |
+| **Ban** | `execute-task consolidate_cluster` on the happy path |
+| **Confirm** | When `requires_human_confirm` (clicks ≥ 50 or impressions ≥ 1000), pass `-y` only after human OK |
+| **Budget** | Each `merge-submit` attempt counts toward the **15** execution budget |
+| **Provenance** | consolidate tasks may still exist; Path B completes them via submit |
 
 ---
 

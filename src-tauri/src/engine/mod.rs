@@ -26,4 +26,6 @@ pub mod task_store;
 pub mod text;
 pub mod tools;
 pub mod workflows;
+pub mod merge_apply;
+pub mod merge_package;
 pub mod write_package;

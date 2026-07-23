@@ -1,11 +1,5 @@
-use std::path::{Path, PathBuf};
-
-use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
-use crate::models::merge_patch::{
-    ContentMergePatch, ExtractedExample, ExtractedFaq, ExtractedHeading, ExtractedTable,
-    MergePreflightReport, MergeValidationReport, RedirectRule, SectionInventory,
-};
+use crate::models::merge_patch::RedirectRule;
 use crate::models::task::Task;
 
 use super::*;
@@ -15,8 +9,6 @@ use super::*;
 
 /// Generate redirect rules as generic CSV.
 pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> StepResult {
-    let paths = ProjectPaths::from_path(project_path);
-
     let plan_json = load_plan_from_task_or_file(task, project_path);
     let plan: serde_json::Value = match serde_json::from_str(&plan_json) {
         Ok(v) => v,
@@ -25,7 +17,7 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
         }
     };
 
-    let keep_url = plan["keep_url"].as_str().unwrap_or("");
+    let keep_url = plan["keep_url"].as_str().unwrap_or("").to_string();
     let redirect_urls: Vec<String> = plan["redirect_urls"]
         .as_array()
         .unwrap_or(&vec![])
@@ -37,45 +29,19 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
         .iter()
         .map(|source| RedirectRule {
             source: source.clone(),
-            destination: keep_url.to_string(),
+            destination: keep_url.clone(),
             status: 301,
         })
         .collect();
 
-    // Merge with existing redirects.csv (append, no duplicates)
-    let csv_path = paths.automation_dir.join("redirects.csv");
-    let mut existing_rules: std::collections::HashMap<String, (String, i32)> =
-        std::collections::HashMap::new();
-
-    if let Ok(existing) = std::fs::read_to_string(&csv_path) {
-        for line in existing.lines().skip(1) {
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() >= 3 {
-                if let Ok(status) = parts[2].trim().parse::<i32>() {
-                    existing_rules.insert(
-                        parts[0].trim().to_string(),
-                        (parts[1].trim().to_string(), status),
-                    );
-                }
-            }
-        }
-    }
-
-    for rule in &rules {
-        existing_rules.insert(
-            rule.source.clone(),
-            (rule.destination.clone(), rule.status as i32),
-        );
-    }
-
-    let mut csv = String::from("source,destination,status\n");
-    for (source, (destination, status)) in &existing_rules {
-        csv.push_str(&format!("{},{},{}\n", source, destination, status));
-    }
-
-    if let Err(e) = std::fs::write(&csv_path, &csv) {
-        return StepResult::fail(format!("Failed to write redirects.csv: {}", e));
-    }
+    let csv_path = match crate::engine::merge_apply::upsert_redirects_csv(
+        std::path::Path::new(project_path),
+        &keep_url,
+        &redirect_urls,
+    ) {
+        Ok(p) => p,
+        Err(e) => return StepResult::fail(e),
+    };
 
     let output = serde_json::json!({
         "rules": rules,
@@ -94,4 +60,3 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
         artifact_key: None,
     }
 }
-
