@@ -75,9 +75,9 @@ when_not_to_use = "If a recent audit exists, use content_audit_report instead"
 mutates = true
 
 [tools.cannibalization_clusters]
-purpose = "Return cannibalization clusters and merge recommendations"
-when_to_use = "When investigating keyword cannibalization or content consolidation"
-when_not_to_use = ""
+purpose = "Return soft TF-IDF cannibalization clusters (exploratory only — not merge authority)"
+when_to_use = "Optional secondary signal after desk reads (site_overview / articles / article / gsc_queries) already suggest same-query or same-intent competition"
+when_not_to_use = "Not ground truth; not merge authority. Prefer gsc_queries (same query on 2+ URLs) and article/catalog neighbors first. Soft clusters fail open on mono-niche sites — never treat as consolidation proof."
 mutates = false
 
 [tools.indexing_status]
@@ -87,9 +87,9 @@ when_not_to_use = ""
 mutates = false
 
 [tools.ctr_health]
-purpose = "Return per-article CTR health summary"
-when_to_use = "When investigating CTR underperformance"
-when_not_to_use = ""
+purpose = "Return productized per-article CTR health summary (composite scores)"
+when_to_use = "Optional after desk metrics when you want a packaged CTR score list"
+when_not_to_use = "Prefer reading impressions/CTR from site_overview, articles, article, and gsc_queries first — those are the primary desk path. Not required for weekly exploration."
 mutates = false
 
 [tools.framework_files]
