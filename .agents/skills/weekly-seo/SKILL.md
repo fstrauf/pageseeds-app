@@ -112,8 +112,35 @@ Breaking these fails the run.
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
 
 **Prefer when desk data already supports the action:** `fix_content_article`,
-`content_review`, `research_keywords`, `research_landing_pages`, indexing tasks.
+`research_keywords`, `research_landing_pages`, indexing tasks.
 Do **not** invent work via soft audits when desk reads suffice.
+
+### Hard ban: `content_review` is not this skill's strategy brain
+
+**Do not** `create-task -t content_review` for weekly explore / strategy /
+"what's wrong with the site" investigation. That nested task is the **desktop
+UI / unattended product umbrella** — on GrokCli/KimiCli backends it falls back
+to scripted recommend and **degrades** strategy vs desk tools.
+
+| Path | Use |
+|------|-----|
+| **Weekly CLI (this skill)** | Desk reads → agent judgment → hard actions |
+| **Desktop / unattended product** | `content_review` remains valid when a nested investigation task is wanted |
+
+**CLI dispose path (UI not required):** when desk evidence is enough, create
+fixes directly:
+
+```bash
+pageseeds-cli create-task -i <id> -p <path> \
+  -t fix_content_article -S <url-slug> \
+  -T "Fix content: <title>" -r "<reason citing desk evidence>"
+pageseeds-cli execute-task -I <task-id>
+```
+
+No ContentReviewPicker, no nested investigate step. Desk → `fix_content_article`
+is a complete weekly path. Optionally use scoped specialist audits
+(`ctr_audit`, `cannibalization_audit`, indexing) when the problem is already
+scoped — still **not** `content_review` as the brain.
 
 ---
 
@@ -193,14 +220,14 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
-| High impressions + low CTR + weak title/meta | `fix_content_article` / `content_review`; optionally `ctr_audit` if you need the pipeline |
+| High impressions + low CTR + weak title/meta | `fix_content_article -S <slug>` from desk evidence; optionally `ctr_audit` if you need that pipeline — **not** `content_review` |
 | Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
 | Many not-indexed | Indexing diagnostics / internal links |
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
-| Structural MDX issues | `content_cleanup` / `content_review` |
+| Structural MDX issues | `content_cleanup` (not strategy; not `content_review`) |
 | Template/title systemic bugs | `generate_feature_spec` + evidence |
 | Quiet site + thin backlog | `research_keywords` / `research_landing_pages` |
-| Desk insufficient across levers | Optional `seo_health_scan` (not default) |
+| Desk insufficient across levers | Optional `seo_health_scan` or scoped specialist audit (not default; **not** nested `content_review`) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
 
 **Research:** generative. Prefer `research-shortlist` health
@@ -261,7 +288,9 @@ leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
   (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
 - Path B `write-submit` → marks write task done + spawns `cluster_and_link`
 - Desktop nested writer still auto-spawns quality review + cluster link on success
-- `content_review` may spawn fixes / feature-spec (execute what appears)
+- If a pre-existing `content_review` is already open (not created by this skill),
+  resolve mechanically via `select-content-review` and execute spawned fixes —
+  still do **not** create new `content_review` as strategy
 
 ### Quality gate
 
@@ -393,6 +422,8 @@ Desk path chased, detours, what you skipped (and why).
 ## Guardrails (summary)
 
 - Desk-first exploration; hard rails **mandatory**.  
+- **Ban** nested `content_review` as weekly strategy brain — desk → hard actions.  
+- CLI dispose: `fix_content_article -S <slug>` when desk evidence is enough (UI not required).  
 - Installed `pageseeds-cli` only — never product `cargo run`.  
 - No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
@@ -405,10 +436,13 @@ Desk path chased, detours, what you skipped (and why).
 
 ## Design note
 
-**Desk model (epic #117):** ~10-tool mental model — Site State reads
-(`site-overview` / `articles` / `article` + GSC) then few hard actions. Soft
-clusters and specialist audits remain available but are **optional**, not the
-weekly spine.
+**Desk model (epic #117 / #139):** ~10-tool mental model — Site State reads
+(`site-overview` / `articles` / `article` + GSC) then few hard actions.
+`content_review` is **not** the weekly CLI brain (degrades under GrokCli/KimiCli
+scripted fallback); keep it for desktop UI / unattended product flows only.
+Soft clusters and specialist audits remain available but are **optional**, not
+the weekly spine. No separate `propose-fixes` CLI — agent judgment + direct
+`create-task -t fix_content_article -S <slug>` is the dispose path.
 
 **Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
 and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both
