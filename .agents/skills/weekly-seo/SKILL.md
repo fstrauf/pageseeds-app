@@ -114,6 +114,29 @@ Breaking these fails the run.
 **Prefer when desk data already supports the action:** `fix_content_article`,
 `content_review`, `research_keywords`, `research_landing_pages`, indexing tasks.
 Do **not** invent work via soft audits when desk reads suffice.
+**Demote for weekly CLI:** `ctr_audit` — see [CTR / content fix policy](#ctr--content-fix-policy).
+
+### CTR / content fix policy
+
+CLI weekly best-path for low CTR is **desk-selected targeted fixes**, not a full
+`ctr_audit` fan-out.
+
+1. **Best path (default):** Identify high-impression / low-CTR URLs from desk —
+   `site-overview` (top_pages + high-impr low-CTR hints), `articles` with min
+   impressions, `gsc-performance`, then `article -S` + `gsc-queries` on
+   candidates. Create **targeted** `fix_content_article` with `-S <slug>` for
+   top waste URLs only (counts toward ≤5 creates). Cite impressions / CTR /
+   position evidence in `-r`.
+2. **Do NOT** enqueue `ctr_audit` as the default weekly action. Full `ctr_audit`
+   has `BackendAuto` and spawns many `fix_ctr_article` children — burns the ≤15
+   execution budget on title-only / no-op work.
+3. **`ctr_audit` is rare/optional:** Only when desk cannot narrow candidates and
+   you explicitly need the productized CTR pipeline (still honor budgets). If
+   you create it, note why and expect many auto-spawned children — prefer fewer
+   pages via desk instead.
+4. **UI vs CLI:** Desktop/UI unattended automation may still AutoEnqueue
+   `ctr_audit` and BackendAuto-spawn children — intentional product path. This
+   skill is the **CLI operator best-path**; do not flip lifecycle metadata.
 
 ---
 
@@ -193,7 +216,7 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
-| High impressions + low CTR + weak title/meta | `fix_content_article` / `content_review`; optionally `ctr_audit` if you need the pipeline |
+| High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; optionally `content_review` for multi-page judgment. **Not** full `ctr_audit` first (see CTR policy) |
 | Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
 | Many not-indexed | Indexing diagnostics / internal links |
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
@@ -396,6 +419,7 @@ Desk path chased, detours, what you skipped (and why).
 - Installed `pageseeds-cli` only — never product `cargo run`.  
 - No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
+- Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
 - Mechanical reviews only; only write the weekly report file.  
@@ -408,7 +432,8 @@ Desk path chased, detours, what you skipped (and why).
 **Desk model (epic #117):** ~10-tool mental model — Site State reads
 (`site-overview` / `articles` / `article` + GSC) then few hard actions. Soft
 clusters and specialist audits remain available but are **optional**, not the
-weekly spine.
+weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
+`ctr_audit` BackendAuto fan-out is the UI/unattended path, not CLI default.
 
 **Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
 and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both

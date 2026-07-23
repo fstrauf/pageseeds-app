@@ -154,7 +154,7 @@ The capabilities surfaced on the Overview screen are **task types**, not functio
 | Need new blog/informational topics | `research_keywords` |
 | Need new conversion/landing pages | `research_landing_pages` |
 | "Something is underperforming" (unknown cause) | Desk reads and/or `content_review` (umbrella) — not every specialist audit |
-| Low click-through rate from search (already scoped) | `ctr_audit` (or desk → `fix_content_article` when evidence is enough) |
+| Low click-through rate from search | Desk → targeted `fix_content_article` (CLI/weekly best-path). Full `ctr_audit` is UI/unattended BackendAuto fan-out — not default for agent/CLI weekly |
 | Your own pages compete for the same query (hard evidence) | `cannibalization_audit` |
 | Pages exist but Google hasn't indexed them | `indexing_health_campaign` |
 | Want UX/behavioral signals (Clarity) | `clarity_analytics` |
@@ -165,6 +165,7 @@ The capabilities surfaced on the Overview screen are **task types**, not functio
 
 Rules:
 - **Desk / umbrella first.** Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped (or desk shows a clear same-query / low-CTR pattern needing that pipeline); otherwise desk reads or `content_review`. Soft clusters are not ground truth.
+- **Low CTR for agent/CLI weekly:** prefer desk-selected `fix_content_article` over enqueueing full `ctr_audit` (BackendAuto spawns many children and burns execution budget). Do not flip AutoEnqueue/BackendAuto defaults — UI unattended path stays.
 - **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually from Overview (CLI weekly path may create+execute when desk data is stale).
 - **Lifecycle metadata is owned by `config/task_definitions.rs`.** When the Overview UI and Rust disagree, the Rust file wins. Update both together.
 

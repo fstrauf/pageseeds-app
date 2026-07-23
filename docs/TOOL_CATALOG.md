@@ -41,8 +41,9 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 │  ├─→ Prefer desk reads (GSC + catalog) and/or content_review (umbrella)
 │  ├─→ indexing_health_campaign     when not-indexed is already clear
 │  ├─→ clarity_analytics            when UX/behavioral signals are the question
-│  ├─→ ctr_audit / cannibalization_audit  only when already scoped or desk
-│  │     shows a clear low-CTR / same-query pattern needing that pipeline
+│  ├─→ Low CTR: desk → targeted fix_content_article (CLI weekly best-path);
+│  │     full ctr_audit is UI/unattended BackendAuto path — not CLI default
+│  ├─→ cannibalization_audit only with hard same-query evidence
 │  └─→ seo_health_scan              optional backlog when desk + content_review
 │        still insufficient (not the default “brain”)
 │
@@ -59,6 +60,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 
 **Disambiguation rules:**
 - **Desk first for exploration.** CTR and cannibalization signals **emerge from** GSC page×query + catalog (`site-overview` / `articles` / `article` / `gsc-queries`). Specialist tasks are for when the problem is already scoped or desk shows a clear pattern that needs that pipeline — not the default weekly checklist.
+- **Low CTR (CLI / weekly-seo):** desk → targeted `fix_content_article` for top waste URLs. Full `ctr_audit` BackendAuto spawn is the **UI/unattended** path, not CLI weekly best-path. Do not change lifecycle defaults.
 - `content_review` is the **umbrella** task investigation. Prefer it (or desk + targeted fixes) over running every specialist audit when the cause is unknown.
 - Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when already scoped to that domain.
 - `seo_health_scan` is an **optional multi-signal backlog**, not a mandatory unified brain. Use when desk reads + `content_review` are insufficient and you want a ranked cross-lever TODO list.
@@ -99,7 +101,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 | Field | `ctr_audit` |
 |---|---|
 | **Does** | Analyzes titles, meta descriptions, and snippet readiness; spawns per-article CTR fixes. |
-| **When** | Problem already scoped to low CTR (impressions ok, clicks low), or desk data already shows that pattern and you need the CTR pipeline. Prefer reading impressions/CTR from Site State first. Runs automatically on `AutoEnqueue`. |
+| **When** | **UI / unattended path:** product AutoEnqueue + BackendAuto fan-out of `fix_ctr_article` children — intentional for desktop automation. **CLI / weekly-seo best-path:** prefer desk reads (`site-overview` top_pages + high-impr low-CTR hints, `articles` + min impressions, `gsc-performance`, `article` + `gsc-queries`) → targeted `fix_content_article` (`-S`) for top waste URLs only. Do **not** enqueue full `ctr_audit` as the default weekly CLI action (burns the ≤15 execution budget on many title-only children). Rarely use the productized CTR pipeline only when desk cannot narrow candidates. Lifecycle (`AutoEnqueue` / `BackendAuto`) stays as-is — do not flip for CLI. |
 | **After completion** | No review surface → spawns `fix_ctr_article` children automatically (`BackendAuto`). |
 
 | Field | `cannibalization_audit` |
