@@ -5,6 +5,17 @@
 /// 3. Re-run the same health checks used by content_audit.
 /// 4. Compare before/after values.
 /// 5. Return a ContentFixVerificationReport.
+///
+/// ## Residual vs write path (issue #122)
+///
+/// Shared structural SEO floors live in [`crate::content::validate_article`].
+/// `content_write_verify` hard-gates on them for new articles. This step does
+/// **not** hard-fail on the full `validate_article` report: partial fixes often
+/// touch only title/meta/H1/intro while leaving pre-existing short body word
+/// counts or meta lengths unchanged, and hard-gating would flip intentional
+/// partial-fix success paths to failure. Patch-scoped checks remain here;
+/// a follow-up may fold shared floors in once fix tasks always own full-file
+/// quality (or only assert floors for categories present on the patch).
 use std::path::Path;
 
 use crate::engine::workflows::StepResult;

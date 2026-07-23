@@ -147,6 +147,16 @@ fn main() {
                 .map_err(|e| e.to_string())
         }
         "article-title-scan" => investigate::scan_article_titles(&ctx).map_err(|e| e.to_string()),
+        "validate-article" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let _ = require_project_path();
+            if project_id.is_empty() {
+                exit("--project-id required");
+            }
+            investigate::validate_article_json(&ctx, &slug)
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+        }
         "content-audit-report" => investigate::read_content_audit_report(&require_project_path()).map_err(|e| e.to_string()),
         "run-content-audit" => run_audit(&project_id, &require_project_path()),
         "cannibalization-clusters" => investigate::read_cannibalization_clusters(&require_project_path()).map_err(|e| e.to_string()),
@@ -913,7 +923,7 @@ Tools:
   site-overview    [-d/--period-days N]                     Site health desk (totals, top pages, movers)
   articles         [-s status] [-m min-impressions] [-R include-redirected] [-l limit] [-d period-days]
   article          -S/--slug <slug> [-d/--period-days N]    Full package for one article
-  article-list  article-frontmatter  article-body-hash  article-title-scan
+  article-list  article-frontmatter  article-body-hash  article-title-scan  validate-article
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
   research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec

@@ -359,3 +359,60 @@ impl Tool for ArticleTitleScanTool {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tool: validate_article
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Standalone: run structural SEO gates (shared by Rig tool + CLI).
+pub fn validate_article_json(
+    ctx: &InvestigationContext,
+    slug: &str,
+) -> Result<crate::content::validate_article::ValidateArticleResult, InvestigationToolError> {
+    let db = ctx
+        .open_db()
+        .map_err(InvestigationToolError::Execution)?;
+    let project_path = std::path::Path::new(&ctx.project_path);
+    crate::content::validate_article::validate_article(&db, &ctx.project_id, project_path, slug)
+        .map_err(|e| InvestigationToolError::Execution(e.to_string()))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValidateArticleArgs {
+    /// Article url_slug (or path resolvable via resolve_slug_or_path)
+    pub slug: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValidateArticleTool {
+    pub(crate) ctx: InvestigationContext,
+}
+
+impl Tool for ValidateArticleTool {
+    const NAME: &'static str = "validate_article";
+    type Error = InvestigationToolError;
+    type Args = ValidateArticleArgs;
+    type Output = crate::content::validate_article::ValidateArticleResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Run deterministic structural SEO quality gates on one article by slug. \
+                Checks MDX structure, H1, frontmatter title, meta description length (120–155), \
+                target keyword in body, internal /blog/ link resolution, and min word count (≥800). \
+                Returns ok + per-check pass/fail. Not for prose/strategy judgments."
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "slug": { "type": "string", "description": "Article url_slug (e.g. best-cold-brew-maker)" }
+                },
+                "required": ["slug"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        validate_article_json(&self.ctx, &args.slug)
+    }
+}
+
