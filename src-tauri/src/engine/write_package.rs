@@ -199,6 +199,9 @@ pub fn build_write_package(
 /// Validate MDX on disk, register the article, complete the write task, spawn
 /// cluster_and_link. On validation failure returns `ok: false` with checks —
 /// the file is left in place for the agent to expand and resubmit.
+///
+/// Success is atomic: write-task Done + follow-ups run only after the article
+/// is registered (`ingested` or already tracked under the content dir).
 pub fn submit_written_article(
     conn: &Connection,
     project_id: &str,
@@ -226,21 +229,9 @@ pub fn submit_written_article(
 
     let slug = extract_slug_from_mdx_or_path(&content, &file_path);
 
-    // Prefer keyword from opts, then write-task description, then frontmatter.
-    let write_task_id = opts
-        .write_task_id
-        .clone()
-        .or_else(|| {
-            opts.keyword
-                .as_ref()
-                .map(|k| normalize_keyword(k))
-                .and_then(|n| find_active_write_task_id(conn, project_id, &n))
-        });
-
-    let write_task: Option<Task> = write_task_id
-        .as_ref()
-        .and_then(|id| crate::engine::task_store::get_task(conn, id).ok())
-        .filter(|t| t.project_id == project_id);
+    // Strict write-task binding: explicit -I validates type/status; keyword
+    // auto-lookup only binds active write_article tasks.
+    let write_task = resolve_bound_write_task(conn, project_id, &opts)?;
 
     let target_keyword = opts
         .keyword
@@ -285,90 +276,58 @@ pub fn submit_written_article(
         });
     }
 
-    // Ensure file is under the project content dir; if agent wrote elsewhere
-    // under the project tree, still ingest from its location when discoverable.
-    // Prefer writing to package target_file; we do not force-move here so agents
-    // keep the path they were given.
-    let content_dir = resolve_content_dir_for_package(conn, project_id, project_path).ok();
-    if let Some(ref dir) = content_dir {
-        if !file_path.starts_with(dir) {
-            log::warn!(
-                "[write_package] submitted file {} is outside content dir {}; ingest may miss it if not under content tree",
-                file_path.display(),
-                dir.display()
-            );
-        }
+    // Hard-require: submitted file must live under the resolved content dir.
+    let content_dir = resolve_content_dir_for_package(conn, project_id, project_path)?;
+    if !path_is_under_dir(&file_path, &content_dir) {
+        return Ok(SubmitResult {
+            ok: false,
+            slug: Some(slug),
+            path: Some(file_path.to_string_lossy().to_string()),
+            validation: Some(validation),
+            checks,
+            ingested: false,
+            write_task_id: write_task.as_ref().map(|t| t.id.clone()),
+            write_task_status: write_task.as_ref().map(|t| t.status.as_str().to_string()),
+            follow_up_task_ids: vec![],
+            message: Some(format!(
+                "Submitted file is outside the project content dir ({}). Write to the package target_file and resubmit.",
+                content_dir.display()
+            )),
+        });
     }
 
-    // Register article: ingest orphans + keyword tag + export.
-    let ingested = if let Some(ref task) = write_task {
-        match crate::engine::post_actions::ingest_content_write_files(conn, task, project_path) {
-            Ok(summary) => {
-                if summary.ingested > 0 {
-                    true
-                } else {
-                    // File may already be registered (resubmit after pass) — still export.
-                    let _ = crate::content::article_index::export_projection(
-                        conn,
-                        project_id,
-                        project_path,
-                    );
-                    // Treat already-tracked file under content dir as success path.
-                    article_tracked(conn, project_id, &file_path)
-                }
-            }
-            Err(e) => {
-                return Err(format!("Article registration failed: {e}"));
-            }
-        }
-    } else {
-        match crate::content::article_index::ingest_orphans(conn, project_id, project_path) {
-            Ok(summary) => {
-                if let Some(ref kw) = target_keyword {
-                    for filename in &summary.files {
-                        let _ = conn.execute(
-                            "UPDATE articles
-                             SET target_keyword=?1, status='draft'
-                             WHERE project_id=?2 AND file LIKE ?3",
-                            rusqlite::params![kw, project_id, format!("%{filename}")],
-                        );
-                    }
-                }
-                let _ =
-                    crate::content::article_index::export_projection(conn, project_id, project_path);
-                if summary.ingested > 0 {
-                    true
-                } else {
-                    article_tracked(conn, project_id, &file_path)
-                }
-            }
-            Err(e) => {
-                return Err(format!("Article registration failed: {e}"));
-            }
-        }
-    };
+    // Single registration path (ingest → keyword meta → export → tracked check).
+    let registered = register_submitted_article(
+        conn,
+        project_id,
+        project_path,
+        &file_path,
+        write_task.as_ref(),
+        target_keyword.as_deref(),
+    )?;
 
-    // Mark write task done so the queue does not re-run the nested writer.
-    let mut write_task_status: Option<String> = None;
-    let mut final_write_task_id = write_task.as_ref().map(|t| t.id.clone());
-    if let Some(ref task) = write_task {
-        match crate::engine::task_store::update_task_status(conn, &task.id, TaskStatus::Done) {
-            Ok(updated) => {
-                write_task_status = Some(updated.status.as_str().to_string());
-                final_write_task_id = Some(updated.id);
-            }
-            Err(e) => {
-                log::warn!(
-                    "[write_package] failed to mark write task {} done: {}",
-                    task.id,
-                    e
-                );
-                write_task_status = Some(task.status.as_str().to_string());
-            }
-        }
+    if !registered {
+        return Ok(SubmitResult {
+            ok: false,
+            slug: Some(slug),
+            path: Some(file_path.to_string_lossy().to_string()),
+            validation: Some(validation),
+            checks,
+            ingested: false,
+            write_task_id: write_task.as_ref().map(|t| t.id.clone()),
+            write_task_status: write_task.as_ref().map(|t| t.status.as_str().to_string()),
+            follow_up_task_ids: vec![],
+            message: Some(
+                "Article validated but registration failed — file was not ingested and is not tracked. Check content dir and resubmit."
+                    .to_string(),
+            ),
+        });
     }
 
-    // Spawn cluster_and_link follow-up.
+    // Write-task completion + follow-ups only after successful registration.
+    let (final_write_task_id, write_task_status) =
+        complete_write_task_if_bound(conn, write_task.as_ref());
+
     let mut follow_up_task_ids = Vec::new();
     if let Some(ref task) = write_task {
         // Reload after status change so create_* sees done parent.
@@ -384,11 +343,10 @@ pub fn submit_written_article(
         ) {
             follow_up_task_ids.push(id);
         }
-    } else {
-        if let Some(id) = spawn_standalone_cluster_and_link(conn, project_id, &slug, &target_keyword)
-        {
-            follow_up_task_ids.push(id);
-        }
+    } else if let Some(id) =
+        spawn_standalone_cluster_and_link(conn, project_id, &slug, &target_keyword)
+    {
+        follow_up_task_ids.push(id);
     }
 
     Ok(SubmitResult {
@@ -397,7 +355,7 @@ pub fn submit_written_article(
         path: Some(file_path.to_string_lossy().to_string()),
         validation: Some(validation),
         checks,
-        ingested,
+        ingested: true,
         write_task_id: final_write_task_id,
         write_task_status,
         follow_up_task_ids,
@@ -449,7 +407,10 @@ fn path_relative_to_project(project_path: &Path, abs: &Path) -> String {
         .unwrap_or_else(|_| abs.to_string_lossy().to_string())
 }
 
-/// Look up an active write_article task via the select-keywords idempotency key.
+/// Look up an *active* write_article task via the select-keywords idempotency key.
+///
+/// Active = todo / queued / in_progress / failed / review.
+/// Never returns Done or Cancelled (auto-bind must not resurrect those).
 fn find_active_write_task_id(
     conn: &Connection,
     project_id: &str,
@@ -467,15 +428,155 @@ fn find_active_write_task_id(
     if task.project_id != project_id || task.task_type != "write_article" {
         return None;
     }
-    // Prefer active tasks; still return done ones so submit can no-op status.
     match task.status {
         TaskStatus::Todo
         | TaskStatus::Queued
         | TaskStatus::InProgress
         | TaskStatus::Review
         | TaskStatus::Failed => Some(task.id),
-        TaskStatus::Done | TaskStatus::Cancelled => Some(task.id),
+        TaskStatus::Done | TaskStatus::Cancelled => None,
     }
+}
+
+/// Resolve write-task binding for submit.
+///
+/// - Explicit `-I`: must be `write_article` on this project; Cancelled errors;
+///   Done is allowed (no-op completion later); wrong type errors.
+/// - Keyword auto-lookup: only active write_article statuses.
+fn resolve_bound_write_task(
+    conn: &Connection,
+    project_id: &str,
+    opts: &SubmitOpts,
+) -> Result<Option<Task>, String> {
+    if let Some(ref id) = opts.write_task_id {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err("write task id is empty".to_string());
+        }
+        let task = crate::engine::task_store::get_task(conn, id)
+            .map_err(|e| format!("Write task not found ({id}): {e}"))?;
+        if task.project_id != project_id {
+            return Err(format!(
+                "Write task {id} does not belong to this project"
+            ));
+        }
+        if task.task_type != "write_article" {
+            return Err(format!(
+                "Task {id} has type '{}', expected write_article — not marking done",
+                task.task_type
+            ));
+        }
+        if task.status == TaskStatus::Cancelled {
+            return Err(format!(
+                "Write task {id} is cancelled and cannot be completed via write-submit"
+            ));
+        }
+        // Done: allow no-op completion; active statuses: complete after register.
+        return Ok(Some(task));
+    }
+
+    if let Some(ref kw) = opts.keyword {
+        let normalized = normalize_keyword(kw);
+        if let Some(id) = find_active_write_task_id(conn, project_id, &normalized) {
+            let task = crate::engine::task_store::get_task(conn, &id).ok();
+            return Ok(task.filter(|t| {
+                t.project_id == project_id && t.task_type == "write_article"
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// Unified article registration for Path B submit.
+///
+/// Always: `ingest_orphans` → keyword meta when known → export → tracked check.
+/// Returns true when the article is newly ingested or already tracked.
+fn register_submitted_article(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &Path,
+    file_path: &Path,
+    write_task: Option<&Task>,
+    target_keyword: Option<&str>,
+) -> Result<bool, String> {
+    let summary = crate::content::article_index::ingest_orphans(conn, project_id, project_path)
+        .map_err(|e| format!("Article registration failed: {e}"))?;
+
+    // Prefer full KD/volume from write-task description; fall back to bare keyword.
+    let (keyword, kd_str, vol) = if let Some(task) = write_task {
+        let (k, kd, v) = crate::engine::post_actions::parse_content_task_keyword_meta(task);
+        if k.is_some() {
+            (k, kd, v)
+        } else if let Some(kw) = target_keyword {
+            (Some(kw.to_string()), kd, v)
+        } else {
+            (None, kd, v)
+        }
+    } else if let Some(kw) = target_keyword {
+        (Some(kw.to_string()), None, 0i64)
+    } else {
+        (None, None, 0i64)
+    };
+
+    if summary.ingested > 0 && (keyword.is_some() || kd_str.is_some() || vol != 0) {
+        for filename in &summary.files {
+            let _ = conn.execute(
+                "UPDATE articles
+                 SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                     status='draft'
+                 WHERE project_id=?4 AND file LIKE ?5",
+                rusqlite::params![
+                    keyword.as_deref(),
+                    kd_str.as_deref(),
+                    vol,
+                    project_id,
+                    format!("%{filename}"),
+                ],
+            );
+        }
+    }
+
+    let _ = crate::content::article_index::export_projection(conn, project_id, project_path);
+
+    Ok(summary.ingested > 0 || article_tracked(conn, project_id, file_path))
+}
+
+/// Mark bound write_article Done after successful registration.
+/// Explicit Done is a no-op (status already done). Never called for Cancelled.
+fn complete_write_task_if_bound(
+    conn: &Connection,
+    write_task: Option<&Task>,
+) -> (Option<String>, Option<String>) {
+    let Some(task) = write_task else {
+        return (None, None);
+    };
+    debug_assert_eq!(task.task_type, "write_article");
+    if task.status == TaskStatus::Done {
+        return (Some(task.id.clone()), Some(TaskStatus::Done.as_str().to_string()));
+    }
+    match crate::engine::task_store::update_task_status(conn, &task.id, TaskStatus::Done) {
+        Ok(updated) => (
+            Some(updated.id),
+            Some(updated.status.as_str().to_string()),
+        ),
+        Err(e) => {
+            log::warn!(
+                "[write_package] failed to mark write task {} done: {}",
+                task.id,
+                e
+            );
+            (
+                Some(task.id.clone()),
+                Some(task.status.as_str().to_string()),
+            )
+        }
+    }
+}
+
+fn path_is_under_dir(file: &Path, dir: &Path) -> bool {
+    let file_c = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+    let dir_c = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    file_c.starts_with(&dir_c)
 }
 
 fn extract_slug_from_mdx_or_path(content: &str, file_path: &Path) -> String {
@@ -1016,5 +1117,181 @@ mod tests {
         assert!(result.ok, "checks={:?}", result.checks);
         assert!(!result.follow_up_task_ids.is_empty());
         assert!(result.write_task_id.is_none());
+    }
+
+    #[test]
+    fn submit_rejects_file_outside_content_dir() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        // Write valid long MDX outside content/blog.
+        let outside = tmp.path().join("elsewhere");
+        fs::create_dir_all(&outside).unwrap();
+        let file = outside.join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx("seo tools")).unwrap();
+
+        let result = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts {
+                keyword: Some("seo tools".into()),
+                ..Default::default()
+            },
+        )
+        .expect("structured failure, not domain Err");
+
+        assert!(!result.ok);
+        assert!(!result.ingested);
+        assert!(result.follow_up_task_ids.is_empty());
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("outside the project content dir"),
+            "message={:?}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn submit_explicit_wrong_task_type_errors_without_marking_done() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let research_id = insert_research_task(&conn);
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx("seo tools")).unwrap();
+
+        let err = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts {
+                write_task_id: Some(research_id.clone()),
+                keyword: Some("seo tools".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("expected write_article"),
+            "err={err}"
+        );
+        let research = crate::engine::task_store::get_task(&conn, &research_id).unwrap();
+        assert_ne!(research.status, TaskStatus::Done);
+    }
+
+    #[test]
+    fn submit_explicit_done_write_task_is_noop_completion() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let research_id = insert_research_task(&conn);
+        let write_tasks = crate::engine::keyword_selection::create_article_tasks_from_keywords(
+            &conn,
+            "proj1",
+            &research_id,
+            vec!["seo tools".into()],
+        )
+        .unwrap();
+        let write_id = write_tasks[0].id.clone();
+        crate::engine::task_store::update_task_status(&conn, &write_id, TaskStatus::Done).unwrap();
+
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx("seo tools")).unwrap();
+
+        let result = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts {
+                write_task_id: Some(write_id.clone()),
+                keyword: Some("seo tools".into()),
+            },
+        )
+        .expect("Done write_article should no-op complete");
+
+        assert!(result.ok, "checks={:?}", result.checks);
+        assert!(result.ingested);
+        assert_eq!(result.write_task_id.as_deref(), Some(write_id.as_str()));
+        assert_eq!(result.write_task_status.as_deref(), Some("done"));
+        let write = crate::engine::task_store::get_task(&conn, &write_id).unwrap();
+        assert_eq!(write.status, TaskStatus::Done);
+    }
+
+    #[test]
+    fn submit_explicit_cancelled_write_task_errors() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let research_id = insert_research_task(&conn);
+        let write_tasks = crate::engine::keyword_selection::create_article_tasks_from_keywords(
+            &conn,
+            "proj1",
+            &research_id,
+            vec!["seo tools".into()],
+        )
+        .unwrap();
+        let write_id = write_tasks[0].id.clone();
+        crate::engine::task_store::update_task_status(&conn, &write_id, TaskStatus::Cancelled)
+            .unwrap();
+
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx("seo tools")).unwrap();
+
+        let err = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts {
+                write_task_id: Some(write_id.clone()),
+                keyword: Some("seo tools".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("cancelled"), "err={err}");
+        let write = crate::engine::task_store::get_task(&conn, &write_id).unwrap();
+        assert_eq!(write.status, TaskStatus::Cancelled);
+    }
+
+    #[test]
+    fn find_active_write_task_skips_done_and_cancelled() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let research_id = insert_research_task(&conn);
+        let write_tasks = crate::engine::keyword_selection::create_article_tasks_from_keywords(
+            &conn,
+            "proj1",
+            &research_id,
+            vec!["seo tools".into()],
+        )
+        .unwrap();
+        let write_id = write_tasks[0].id.clone();
+        let normalized = normalize_keyword("seo tools");
+
+        assert_eq!(
+            find_active_write_task_id(&conn, "proj1", &normalized).as_deref(),
+            Some(write_id.as_str())
+        );
+
+        crate::engine::task_store::update_task_status(&conn, &write_id, TaskStatus::Done).unwrap();
+        assert!(find_active_write_task_id(&conn, "proj1", &normalized).is_none());
+
+        crate::engine::task_store::update_task_status(&conn, &write_id, TaskStatus::Cancelled)
+            .unwrap();
+        assert!(find_active_write_task_id(&conn, "proj1", &normalized).is_none());
     }
 }
