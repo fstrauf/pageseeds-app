@@ -392,7 +392,13 @@ Task: consolidate_cluster
 
 ### Evidence lanes for merge candidates (fail-closed)
 
-Soft TF-IDF clusters (low similarity threshold in build context; CLI `cannibalization-clusters`) are **exploratory only** — they are **not** merge authority and **not** ground truth for weekly SEO. They fail open on mono-niche sites. The shortlist emits candidates only from two evidence lanes: (1) exact same `target_keyword` groups via `exact_keyword_duplicates.json` (`candidate_type: "exact_keyword_dupe"` — single source of truth), and (2) high pairwise similarity pairs (≥0.45) as `merge_candidate` with `pair_similarity`. Soft transitive topical cohesion (e.g. mono-niche theme bags) never becomes a top-N traffic grab-bag merge set. The strategy skill must refuse non-exact candidates by default unless same-intent / same-query evidence is present (prefer hard GSC same-query evidence from desk reads).
+Soft TF-IDF clusters (low similarity threshold in build context; CLI `cannibalization-clusters`) are **exploratory only** — they are **not** merge authority and **not** ground truth for weekly SEO. They fail open on mono-niche sites. The shortlist emits candidates only from three evidence lanes (#117 / #121):
+
+1. **`exact_keyword`** — exact same `target_keyword` groups via `exact_keyword_duplicates.json` (`candidate_type: "exact_keyword_dupe"` — mandatory merge for the strategy skill).
+2. **`shared_query`** — same GSC query on ≥2 article_ids via `ctr_query_metrics` with a per-page impression floor (10); real SERP competition (`candidate_type: "shared_query"`).
+3. **`near_dupe`** — high pairwise similarity only: embedding neighbors (≥0.85) when `article_evidence` has vectors, else TF-IDF pairs (≥0.45). Emitted as `candidate_type: "near_dupe"` (not soft mega-clusters).
+
+Soft transitive topical cohesion (e.g. mono-niche theme bags) never becomes a top-N traffic grab-bag merge set. Analyze enriches each candidate with article-evidence packages (real `word_count`, `outline_text`, `top_queries`) and applies product guards beyond ID resolution (valid lane, 2–4 pages, multi-intent near_dupe without shared queries forced to `no_action`). The strategy skill must refuse near_dupe by default unless same-intent / same-query evidence is present (prefer hard GSC same-query evidence from desk reads). User picker / `review_surface` is unchanged — merges are never auto-approved.
 
 ### Key Files
 - `engine/exec/cannibalization/` — detection logic (build context, candidates, analyze, reduce)
