@@ -1,14 +1,76 @@
 # Merge Content Skill
 
-<!-- skill-version: 2 -->
+<!-- skill-version: 3 -->
 
-Used by the `merge_draft_patch` agentic step.
+Used by:
+- **Path B (CLI happy path):** session agent after `merge-context` — write full merged MDX to `keeper_file`, then `merge-submit`
+- **Desktop nested path:** `merge_draft_patch` agentic step (ContentMergePatch JSON only)
 
 ## Goal
 
-Draft a `ContentMergePatch` JSON that merges the most valuable unique content from redirect pages into the keeper article. You are given the actual body content of each redirect page's unique sections — preserve that real content (tables, FAQs, examples) in the keeper, adapted to the keeper's tone and structure.
+Produce a single authoritative keeper article that absorbs unique value from redirect pages (tables, FAQs, examples, unique sections) without diluting the keeper's structure or tone.
 
-## Input
+---
+
+## Path B — CLI session agent (preferred)
+
+The session agent receives a **MergePackage** from `pageseeds-cli merge-context` (deterministic — no nested LLM).
+
+### Package contents
+
+- `keep` / `redirects`: full MDX bodies (frontmatter + body), outlines, soft GSC metrics
+- `keeper_file` / `keeper_path`: absolute (and relative) path to **overwrite** with the merged article
+- `skill_content`: this skill body
+- `constraints.min_keeper_words` (default 400)
+- `requires_human_confirm`: true when keep has high traffic (clicks ≥ 50 or impressions ≥ 1000 in the GSC window)
+- `instructions`: Path B steps
+
+### Path B steps
+
+```text
+evidence shortlist / approved keep+redirects
+  → merge-context (full packages for keep + sources)
+  → session agent writes merged MDX to keeper_file
+  → merge-submit (validate, apply redirects, rewrite links, sync)
+```
+
+1. Read **full** keep + redirect MDX in the package (not excerpts only).
+2. Write a **complete** merged MDX file to `keeper_file` (overwrite keeper).
+   - Preserve/improve frontmatter (`title`, `description`, `slug`, `date`, `status: published`).
+   - Fold unique tables, FAQs, examples, and sections from redirect pages — do **not** invent data.
+   - Match the keeper's voice; prefer under-merge over dilution.
+3. Meet `constraints.min_keeper_words` and valid MDX structure.
+4. If `requires_human_confirm` is true, obtain human confirmation before submit.
+5. Call `pageseeds-cli merge-submit` (with `-y` / `--confirm` when required).
+   - `ok:false` → fix the keeper file and resubmit (nothing applied until gates pass).
+   - `ok:true` → redirects.csv written, inbound links rewritten, sources depublished, sync done.
+
+**Do not** call nested `extract_structured` / ContentMergePatch draft for Path B.  
+**Do not** `execute-task consolidate_cluster` on the CLI happy path (weak host nested draft).
+
+### CLI
+
+```bash
+# From consolidate task (loads plan from strategy artifact)
+pageseeds-cli merge-context -i <id> -p <path> -I <consolidate-task-id>
+
+# Or explicit URLs / article ids
+pageseeds-cli merge-context -i <id> -p <path> \
+  -K /blog/keep-slug -R /blog/src-a,/blog/src-b
+
+# After writing merged MDX to keeper_file
+pageseeds-cli merge-submit -i <id> -p <path> \
+  -I <consolidate-task-id>   # or -K + -R
+  [-y/--confirm]             # required when package.requires_human_confirm
+```
+
+---
+
+## Nested path — ContentMergePatch (desktop `consolidate_cluster` only)
+
+Used by the `merge_draft_patch` agentic step inside the app executor. Return **JSON patch only** — do not rewrite the whole file.
+
+### Input (nested)
 
 Structured JSON containing:
 - **keeper_file**: Path to the keeper MDX file.
@@ -25,7 +87,7 @@ Structured JSON containing:
   - `examples`: Array of code blocks (`{ language, code }`) extracted from the page.
   - `faqs`: Array of FAQ pairs (`{ question, answer }`) extracted from the page.
 
-## Analysis Rules
+### Analysis Rules (nested)
 
 1. **Identify unique value**: For each redirect page, decide what it covers that is NOT already in the keeper.
    - Sections with `covered_by_keeper: true` are usually redundant — skip them unless the keeper's version is clearly weaker.
@@ -46,7 +108,7 @@ Structured JSON containing:
 
 6. **Be conservative**: Only add content that clearly adds value. It is better to under-merge than to duplicate or dilute the keeper.
 
-## Output Contract
+### Output Contract (nested)
 
 Return JSON exactly matching this structure:
 
@@ -73,7 +135,7 @@ Return JSON exactly matching this structure:
 }
 ```
 
-## Constraints
+### Nested constraints
 
 - Do NOT rewrite the entire keeper article. Only propose targeted additions and transitions.
 - Do NOT add content that is already present in the keeper.

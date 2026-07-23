@@ -55,6 +55,42 @@ fn is_research_step(step: &WorkflowStep) -> bool {
     )
 }
 
+/// Nested content-write agentic steps need a file-IO multi-turn host
+/// (grok/kimi CLI). Text-only providers (openai/claude/ollama) are rejected
+/// so accidental `execute-task write_article` cannot run under a host that
+/// cannot write MDX into the repo. Prefer CLI Path B
+/// (`pageseeds-cli write-context` / `write-submit`) for outer-agent prose.
+///
+/// This is the sole policy for nested content write (issue #143). There is no
+/// executor-write fallback for text-only providers — `content_write_verify`
+/// still fails the task if a file-IO agent produces no file (issue #13
+/// contract: never Done with zero output).
+///
+/// Gate only applies to steps that declare [`PromptSection::ContentDirectives`]
+/// (ContentHandler write/optimize). Structured-extraction paths
+/// (`fix_content_article_generate`, `merge_draft_patch`) correctly use Rig
+/// extractors where openai is fine and are not gated here.
+fn require_file_io_host_for_content_write(
+    step: &WorkflowStep,
+    agent_provider: &str,
+) -> Result<(), String> {
+    let wants_content_write = step
+        .prompt_sections
+        .iter()
+        .any(|s| matches!(s, PromptSection::ContentDirectives { .. }));
+    if !wants_content_write {
+        return Ok(());
+    }
+    if crate::rig::provider::provider_supports_file_io(agent_provider) {
+        return Ok(());
+    }
+    Err(format!(
+        "Nested content write requires a file-IO agent host (grok or kimi), not '{agent_provider}'.\n\
+         For best SEO from an outer agent, use CLI Path B: `pageseeds-cli write-context` then `write-submit`.\n\
+         Or set global agent_provider to grok/kimi for unattended nested execute-task (fallback quality)."
+    ))
+}
+
 // ─── Content-task prompt sections ─────────────────────────────────────────────
 
 /// Snapshot of the resolved content directory taken before the agent runs:
@@ -73,15 +109,15 @@ type ContentDirSnapshot = (
 /// selects the "Publish Date (Required)" variant over "(Preserve)". The
 /// task-type list behind it lives exactly once, in `ContentHandler::plan`.
 ///
-/// `target` is the deterministic target path for new-article tasks plus whether
-/// the configured provider can write files itself. When present, the directive
-/// names the exact path instead of the approximate numbering hint.
+/// `target` is the deterministic target path for new-article tasks. When
+/// present, the directive names the exact path the file-IO host must write
+/// (ContentDirectives steps always require a file-IO host — issue #143).
 fn content_directives(
     task: &Task,
     new_article: bool,
     content_context: &Option<ContentDirSnapshot>,
     next_publish_date: &Option<String>,
-    target: Option<(&std::path::Path, bool)>,
+    target: Option<&std::path::Path>,
 ) -> Option<String> {
     if !is_content_task(task) {
         return None;
@@ -123,22 +159,12 @@ fn content_directives(
     );
 
     match target {
-        Some((path, true)) => {
+        Some(path) => {
             sections.push_str(&format!(
                 "\n\n## Target File (Required)\n\
                  - Write the article to EXACTLY this path: `{}`\n\
                  - Keep the numeric prefix and underscored slug exactly as given.\n\
                  - Do not invent a different filename, directory, or extension.",
-                path.display()
-            ));
-        }
-        Some((path, false)) => {
-            sections.push_str(&format!(
-                "\n\n## Target File (Required)\n\
-                 - The target path for this article is: `{}`\n\
-                 - You cannot write files. Return ONLY the complete MDX content \
-                 (frontmatter + body) — the caller persists it to that exact path.\n\
-                 - No explanations, commentary, or code fences outside the MDX document.",
                 path.display()
             ));
         }
@@ -395,7 +421,8 @@ struct PromptInputs<'a> {
     agent_provider: &'a str,
     content_context: &'a Option<ContentDirSnapshot>,
     next_publish_date: &'a Option<String>,
-    target: Option<(&'a std::path::Path, bool)>,
+    /// Deterministic target path for new-article ContentDirectives steps.
+    target: Option<&'a std::path::Path>,
 }
 
 /// Assemble the full agent prompt: skill body (or fallback task prompt),
@@ -554,9 +581,17 @@ pub async fn exec_agentic(
 
     let repo_root = Path::new(project_path);
 
+    // Nested content write requires a file-IO host (issue #143). Sole policy:
+    // reject openai/claude/ollama early; do not run a text-only agent and
+    // hope the executor can salvage thin MDX. Path B write-context/write-submit
+    // is preferred for outer agents; nested execute-task needs grok/kimi.
+    if let Err(msg) = require_file_io_host_for_content_write(step, agent_provider) {
+        return StepResult::fail(msg);
+    }
+
     // Prompt-assembly policy is declared on the step by its handler (issue #4
-    // stage C). These derived flags also drive the content side-effects below
-    // (file snapshot/rename, executor-write fallback).
+    // stage C). These derived flags also drive content side-effects below
+    // (file snapshot / MD→MDX rename / numbered naming).
     let wants_content_directives = step
         .prompt_sections
         .iter()
@@ -579,17 +614,9 @@ pub async fn exec_agentic(
         None
     };
 
-    // Text-only providers (Claude / OpenAI / Ollama rig backends) are pure
-    // prompt→text completions — they cannot write the article file themselves,
-    // so the executor must persist the returned MDX (see the fallback below).
-    let provider_has_file_io = crate::rig::provider::provider_supports_file_io(agent_provider);
-    // The provider name String below is moved into the blocking closure; keep
-    // the original &str for post-call logging.
-    let provider_name = agent_provider;
-
-    // Deterministic target path for new-article tasks. Passed to the agent as
-    // an exact directive and reused by the executor-write fallback, so prompt
-    // and fallback never disagree on the filename.
+    // Deterministic target path for new-article tasks — exact path the file-IO
+    // agent must write. Missing file after the agent runs is a hard failure
+    // via content_write_verify (issue #13 contract).
     let target_path = if new_article {
         content_context.as_ref().map(|(dir, _, style)| {
             crate::content::naming::next_article_path(dir, *style, &task_topic_stem(task))
@@ -606,7 +633,7 @@ pub async fn exec_agentic(
         agent_provider,
         content_context: &content_context,
         next_publish_date: &next_publish_date,
-        target: target_path.as_deref().map(|p| (p, provider_has_file_io)),
+        target: target_path.as_deref(),
     }) {
         Ok(p) => p,
         Err(result) => return result,
@@ -665,6 +692,9 @@ pub async fn exec_agentic(
                 output.len()
             );
 
+            // File-IO hosts write MDX themselves. Normalize extension/naming
+            // on anything new or modified. A missing article file is a hard
+            // failure reported by content_write_verify (not rewritten here).
             if let Some((content_dir, before, style)) = content_context {
                 let renamed = rename_new_or_modified_md_to_mdx(&content_dir, &before);
                 if !renamed.is_empty() {
@@ -692,52 +722,6 @@ pub async fn exec_agentic(
                                 old.display(),
                                 new.display()
                             );
-                        }
-                    }
-                }
-
-                // Executor-write fallback (issue #13): text-only providers
-                // return the article as chat text and cannot write it. When no
-                // new file appeared, persist the returned MDX to the exact
-                // target path so the downstream ingest/link-verify steps see a
-                // real file. Skipped for file-IO providers — a missing file
-                // there is an agent failure that content_write_verify reports.
-                if !provider_has_file_io && new_article {
-                    let new_file_appeared =
-                        crate::content::locator::collect_markdown_files(&content_dir)
-                            .iter()
-                            .any(|p| !before.contains_key(p));
-                    if !new_file_appeared {
-                        if let Some(target) = &target_path {
-                            match crate::engine::text::extract_mdx_document(&output) {
-                                Some(mdx) => match std::fs::write(target, &mdx) {
-                                    Ok(()) => {
-                                        log::info!(
-                                            "[content_write] provider '{}' returned MDX as text — wrote {} ({} chars)",
-                                            provider_name,
-                                            target.display(),
-                                            mdx.len()
-                                        );
-                                        message.push_str(&format!(
-                                            " · wrote returned MDX to {}",
-                                            target.display()
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        log::warn!(
-                                            "[content_write] failed to write returned MDX to {}: {}",
-                                            target.display(),
-                                            e
-                                        );
-                                    }
-                                },
-                                None => {
-                                    log::warn!(
-                                        "[content_write] provider '{}' produced no file and no parseable MDX document — content_write_verify will fail the task",
-                                        provider_name
-                                    );
-                                }
-                            }
                         }
                     }
                 }
@@ -986,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn test_content_directives_exact_target_for_file_io_provider() {
+    fn test_content_directives_exact_target_path() {
         let task = make_task("write_article");
         let target = std::path::PathBuf::from("/repo/content/7_gamma_scalping.mdx");
         let out = content_directives(
@@ -994,23 +978,14 @@ mod tests {
             true,
             &numbered_ctx(7),
             &Some("2024-01-01".to_string()),
-            Some((&target, true)),
+            Some(&target),
         )
         .unwrap();
         assert!(out.contains("/repo/content/7_gamma_scalping.mdx"));
         assert!(out.contains("EXACTLY"));
         assert!(!out.contains("approximately"));
-    }
-
-    #[test]
-    fn test_content_directives_text_only_provider_returns_mdx() {
-        let task = make_task("write_article");
-        let target = std::path::PathBuf::from("/repo/content/7_gamma_scalping.mdx");
-        let out =
-            content_directives(&task, true, &numbered_ctx(7), &None, Some((&target, false))).unwrap();
-        assert!(out.contains("/repo/content/7_gamma_scalping.mdx"));
-        assert!(out.contains("You cannot write files"));
-        assert!(out.contains("Return ONLY the complete MDX content"));
+        // ContentDirectives always use file-IO wording (host gate is sole policy).
+        assert!(!out.contains("You cannot write files"));
     }
 
     #[test]
@@ -1024,5 +999,85 @@ mod tests {
     fn test_content_directives_none_for_non_content_task() {
         let task = make_task("content_audit");
         assert!(content_directives(&task, false, &None, &None, None).is_none());
+    }
+
+    // ── require_file_io_host_for_content_write (issue #143) ───────────────────
+
+    fn content_write_step(new_article: bool) -> WorkflowStep {
+        WorkflowStep::new("content_write_stage", crate::engine::workflows::StepKind::Agentic)
+            .with_prompt_section(PromptSection::ContentDirectives { new_article })
+    }
+
+    fn research_agentic_step() -> WorkflowStep {
+        WorkflowStep::new(
+            "research_keyword_discovery",
+            crate::engine::workflows::StepKind::Agentic,
+        )
+    }
+
+    #[test]
+    fn test_host_gate_rejects_openai_content_write() {
+        let step = content_write_step(true);
+        let err = require_file_io_host_for_content_write(&step, "openai")
+            .expect_err("openai + ContentDirectives must fail");
+        assert!(
+            err.contains("write-context") && err.contains("Path B"),
+            "error should mention Path B / write-context: {err}"
+        );
+        assert!(
+            err.contains("grok") && err.contains("kimi"),
+            "error should mention grok/kimi: {err}"
+        );
+        assert!(err.contains("openai"), "error should name the provider: {err}");
+    }
+
+    #[test]
+    fn test_host_gate_rejects_claude_and_ollama_content_write() {
+        let step = content_write_step(true);
+        for provider in ["claude", "ollama"] {
+            let err = require_file_io_host_for_content_write(&step, provider)
+                .expect_err(&format!("{provider} + ContentDirectives must fail"));
+            assert!(
+                err.contains("write-context") && err.contains("Path B"),
+                "{provider}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_host_gate_allows_grok_and_kimi_content_write() {
+        let step = content_write_step(true);
+        for provider in ["grok", "kimi"] {
+            require_file_io_host_for_content_write(&step, provider)
+                .unwrap_or_else(|e| panic!("{provider} should be allowed: {e}"));
+        }
+    }
+
+    #[test]
+    fn test_host_gate_allows_research_under_openai() {
+        let step = research_agentic_step();
+        require_file_io_host_for_content_write(&step, "openai")
+            .expect("research/non-content agentic under openai must not be gated");
+    }
+
+    #[test]
+    fn test_host_gate_rejects_optimize_path_under_openai() {
+        let step = content_write_step(false);
+        let err = require_file_io_host_for_content_write(&step, "openai")
+            .expect_err("optimize (new_article: false) must also be gated");
+        assert!(err.contains("write-context") || err.contains("Path B"), "{err}");
+    }
+
+    #[test]
+    fn test_host_gate_allows_agentic_without_content_directives() {
+        // fix_content_article_generate and other structured paths use different
+        // StepKinds and never declare ContentDirectives — plain agentic without
+        // directives must also pass under openai.
+        let step = WorkflowStep::new(
+            "some_agentic_step",
+            crate::engine::workflows::StepKind::Agentic,
+        );
+        require_file_io_host_for_content_write(&step, "openai")
+            .expect("agentic without ContentDirectives must not be gated");
     }
 }

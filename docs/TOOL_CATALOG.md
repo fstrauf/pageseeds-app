@@ -4,7 +4,7 @@ The agent-facing reference for the **user-facing capabilities** surfaced on the 
 
 > **Source of truth:** `src-tauri/src/config/task_definitions.rs` owns lifecycle metadata (`run_policy`, `review_surface`, `follow_up_policy`, `handler_family`). The Overview UI mirrors this in `QUICK_ACTIONS` (`src/components/overview/Overview.tsx`). If the two ever disagree, the Rust file wins.
 
-> **Desk model (epic #117 / #139):** The primary agent path for weekly organic growth is **Site State reads** (`site-overview` / `articles` / `article` + GSC tools via CLI) then a **few hard actions** (`fix_content_article`, research, indexing…). **Do not** default to nested `content_review` as the weekly strategy brain — that task remains the umbrella investigation for **desktop UI / unattended product** flows (tool-capable backends help there). Specialist audits (`ctr_audit`, `cannibalization_audit`, `seo_health_scan`, etc.) remain optional when the problem is already scoped — not the weekly spine. Soft TF-IDF clusters are exploratory only, never merge authority. See the [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md).
+> **Desk model (epic #117):** The primary agent path for weekly organic growth is **Site State reads** (`site-overview` / `articles` / `article` + GSC tools via CLI/investigate) then a **few hard actions**. Specialist audits (`ctr_audit`, `cannibalization_audit`, `seo_health_scan`, etc.) remain available as optional pipelines when the problem is already scoped — they are **not** the default weekly spine. Soft TF-IDF clusters are exploratory only, never merge authority. See the [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md).
 
 ## How to invoke
 
@@ -24,10 +24,10 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 ```
 "What should I do next?"
 │
-├─ Weekly organic growth / explore the site (CLI operator)
-│  └─→ Desk path (epic #117 / #139): site-overview → articles / article / gsc-*
-│       then ≤5 hard actions (fix_content_article -S <slug>, research_*, indexing…)
-│       Do NOT nest content_review as strategy brain. Do NOT default to every specialist audit.
+├─ Weekly organic growth / explore the site
+│  └─→ Desk path (epic #117): site-overview → articles / article / gsc-*
+│       then ≤5 hard actions (fix_content_article, content_review, research_*, indexing…)
+│       Do NOT default to running every specialist audit.
 │
 ├─ No fresh data / it's been a while
 │  └─→ collect_* tasks run automatically (AutoEnqueue). Don't start them manually.
@@ -38,15 +38,14 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 │  └─→ research_landing_pages       (conversion / high-intent pages)
 │
 ├─ Existing content underperforming — cause unknown
-│  ├─→ CLI weekly: desk reads (GSC + catalog) → fix_content_article when evidence is enough
-│  ├─→ Desktop UI / unattended: content_review (umbrella nested investigation) when a
-│  │     task + picker is wanted (tool-capable backends help; not the weekly CLI brain)
+│  ├─→ Prefer desk reads (GSC + catalog) and/or content_review (umbrella)
 │  ├─→ indexing_health_campaign     when not-indexed is already clear
 │  ├─→ clarity_analytics            when UX/behavioral signals are the question
-│  ├─→ ctr_audit / cannibalization_audit  only when already scoped or desk
-│  │     shows a clear low-CTR / same-query pattern needing that pipeline
-│  └─→ seo_health_scan              optional backlog when desk (and UI content_review
-│        if used) still insufficient (not the default “brain”)
+│  ├─→ Low CTR: desk → targeted fix_content_article (CLI weekly best-path);
+│  │     full ctr_audit is UI/unattended BackendAuto path — not CLI default
+│  ├─→ cannibalization_audit only with hard same-query evidence
+│  └─→ seo_health_scan              optional backlog when desk + content_review
+│        still insufficient (not the default “brain”)
 │
 ├─ Need to engage an audience off-site
 │  └─→ reddit_opportunity_search    (find Reddit posts to reply to)
@@ -60,11 +59,11 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 ```
 
 **Disambiguation rules:**
-- **Desk first for exploration (especially CLI weekly).** CTR and cannibalization signals **emerge from** GSC page×query + catalog (`site-overview` / `articles` / `article` / `gsc-queries`). Specialist tasks are for when the problem is already scoped or desk shows a clear pattern that needs that pipeline — not the default weekly checklist.
-- **Weekly CLI dispose path:** when desk evidence is enough, create `fix_content_article` with slug (`create-task -t fix_content_article -S <slug>`) — no picker UI required. No separate propose-fixes CLI.
-- `content_review` is the **umbrella nested investigation for desktop UI / unattended product flows** when a task + ContentReviewPicker is wanted. Prefer desk + targeted `fix_content_article` for CLI weekly operators; do **not** default to `content_review` as the weekly strategy brain.
+- **Desk first for exploration.** CTR and cannibalization signals **emerge from** GSC page×query + catalog (`site-overview` / `articles` / `article` / `gsc-queries`). Specialist tasks are for when the problem is already scoped (e.g. hard same-query evidence for cannibalization); for low CTR prefer desk-selected `fix_content_article` (next rule) — not the default weekly checklist.
+- **Low CTR (CLI / weekly-seo):** desk → targeted `fix_content_article` for top waste URLs. Full `ctr_audit` BackendAuto spawn is the **UI/unattended** path, not CLI weekly best-path. Do not change lifecycle defaults.
+- `content_review` is the **umbrella** task investigation. Prefer it (or desk + targeted fixes) over running every specialist audit when the cause is unknown.
 - Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when already scoped to that domain.
-- `seo_health_scan` is an **optional multi-signal backlog**, not a mandatory unified brain. Use when desk reads (and, if used, UI `content_review`) are insufficient and you want a ranked cross-lever TODO list.
+- `seo_health_scan` is an **optional multi-signal backlog**, not a mandatory unified brain. Use when desk reads + `content_review` are insufficient and you want a ranked cross-lever TODO list.
 - Soft cannibalization clusters (CLI/investigate `cannibalization-clusters`) are **not ground truth** and never merge authority.
 - `content_cleanup` = broken/structural file problems. `sanitize_content` = rename frontmatter fields (`metaDescription` → `description`). Don't use them for prose or strategy fixes.
 - `research_keywords` vs `research_landing_pages`: same picker UX, different intent model. Landing pages are conversion-focused and carry strategic context.
@@ -89,20 +88,20 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 
 | Field | `content_review` |
 |---|---|
-| **Does** | Syncs GSC data and generates recommendations for the highest-priority article (investigate step; scripted recommend fallback on non-tool backends). |
-| **When** | **Desktop UI / unattended product** umbrella when a nested investigation task + picker is wanted. **Not** the weekly CLI strategy brain — CLI operators prefer desk reads → targeted `fix_content_article`. |
+| **Does** | Syncs GSC data and generates recommendations for the highest-priority article. |
+| **When** | The umbrella content diagnostic. Start here when "something is underperforming" and the cause is unknown. |
 | **After completion** | `ContentReviewPicker` → user selects proposals → spawns `fix_content_article` children (`UserSelection`). |
 
 | Field | `seo_health_scan` |
 |---|---|
 | **Does** | Runs content audit, CTR context, cannibalization clusters, indexing contexts, and Clarity summary; scores each article; and writes a ranked `seo_opportunities.json` backlog. |
-| **When** | **Optional** — desk (and UI `content_review` if used) insufficient and you want a single prioritized cross-lever backlog. Not the default weekly spine (epic #117). |
+| **When** | **Optional** — desk + `content_review` insufficient and you want a single prioritized cross-lever backlog. Not the default weekly spine (epic #117). |
 | **After completion** | `ArtifactReview` (Phase 1), followed by user-selected fix tasks (`UserSelection`). |
 
 | Field | `ctr_audit` |
 |---|---|
 | **Does** | Analyzes titles, meta descriptions, and snippet readiness; spawns per-article CTR fixes. |
-| **When** | Problem already scoped to low CTR (impressions ok, clicks low), or desk data already shows that pattern and you need the CTR pipeline. Prefer reading impressions/CTR from Site State first. Runs automatically on `AutoEnqueue`. |
+| **When** | **UI / unattended path:** product AutoEnqueue + BackendAuto fan-out of `fix_ctr_article` children — intentional for desktop automation. **CLI / weekly-seo best-path:** prefer desk reads (`site-overview` top_pages + high-impr low-CTR hints, `articles` + min impressions, `gsc-performance`, `article` + `gsc-queries`) → targeted `fix_content_article` (`-S`) for top waste URLs only. Do **not** enqueue full `ctr_audit` as the default weekly CLI action (burns the ≤15 execution budget on many title-only children). Rarely use the productized CTR pipeline only when desk cannot narrow candidates. Lifecycle (`AutoEnqueue` / `BackendAuto`) stays as-is — do not flip for CLI. |
 | **After completion** | No review surface → spawns `fix_ctr_article` children automatically (`BackendAuto`). |
 
 | Field | `cannibalization_audit` |
