@@ -10,10 +10,14 @@ use std::path::Path;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::exec::audit_health::{META_MAX_LEN, META_MIN_LEN};
 use crate::error::Result;
 
-/// Default minimum body word count (same floor as `content_audit` word_count).
+/// Meta description length floors (SEO structural gate — content domain SoT).
+/// Re-exported from `engine::exec::audit_health` for existing call sites.
+pub const META_MIN_LEN: usize = 120;
+pub const META_MAX_LEN: usize = 155;
+
+/// Default minimum body word count (shared with `content_audit` word_count).
 pub const DEFAULT_MIN_WORD_COUNT: usize = 800;
 
 /// One deterministic check result.
@@ -195,9 +199,10 @@ pub fn validate_article_content(
         Some(targets) => {
             let mut broken: Vec<String> = Vec::new();
             for (_anchor, _href, slug_written) in &links {
-                let normalized = crate::content::slug::normalize_url_slug(slug_written);
-                if !targets.contains(&normalized) {
-                    broken.push(normalized);
+                // Canonical resolution: exact match first, then normalize_url_slug fallback
+                // (protects numeric-leading slugs like `5-best-coffees`).
+                if crate::content::slug::resolve_slug(slug_written, targets).is_none() {
+                    broken.push(slug_written.clone());
                 }
             }
             broken.sort();
@@ -531,5 +536,52 @@ mod tests {
         );
         assert!(check_by_id(&result, "internal_links_resolve").pass);
         assert!(result.ok, "{:?}", result.checks);
+    }
+
+    /// Numeric-leading slug must resolve via exact match first (`resolve_slug`),
+    /// not bare `normalize_url_slug` (which would strip `5-` → `best-coffees`).
+    #[test]
+    fn internal_links_resolve_numeric_leading_exact_match() {
+        let content = format!(
+            "---\ntitle: Title\ndescription: {}\n---\n\n# H1\n\n\
+             See [coffees](/blog/5-best-coffees).\n\n{}",
+            meta_ok(),
+            "word ".repeat(900)
+        );
+        let mut targets = HashSet::new();
+        targets.insert("5-best-coffees".to_string());
+        let input = ValidateArticleInput {
+            valid_link_targets: Some(targets),
+            ..Default::default()
+        };
+        let result = validate_article_content("num-exact", &content, &input);
+        assert!(
+            check_by_id(&result, "internal_links_resolve").pass,
+            "exact-match numeric-leading slug should resolve: {:?}",
+            check_by_id(&result, "internal_links_resolve")
+        );
+    }
+
+    /// Prefixed / underscore form resolves via `normalize_url_slug` fallback.
+    #[test]
+    fn internal_links_resolve_normalized_fallback() {
+        let content = format!(
+            "---\ntitle: Title\ndescription: {}\n---\n\n# H1\n\n\
+             See [profile](/blog/001_roast_profile_management).\n\n{}",
+            meta_ok(),
+            "word ".repeat(900)
+        );
+        let mut targets = HashSet::new();
+        targets.insert("roast-profile-management".to_string());
+        let input = ValidateArticleInput {
+            valid_link_targets: Some(targets),
+            ..Default::default()
+        };
+        let result = validate_article_content("num-fallback", &content, &input);
+        assert!(
+            check_by_id(&result, "internal_links_resolve").pass,
+            "normalized fallback should resolve: {:?}",
+            check_by_id(&result, "internal_links_resolve")
+        );
     }
 }
