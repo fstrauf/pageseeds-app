@@ -55,6 +55,8 @@ fn main() {
         "get-task" => get_task(&db.to_string_lossy(), &args),
         "update-task-status" => update_task_status_cmd(&db.to_string_lossy(), &args),
         "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
+        "write-context" => write_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
+        "write-submit" => write_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "select-content-review" => select_content_review(&db.to_string_lossy(), &args),
         "select-cannibalization" => select_cannibalization(&db.to_string_lossy(), &args),
         "create-articles-from-keywords" => create_articles_from_keywords(&db.to_string_lossy(), &project_id, &args),
@@ -349,6 +351,67 @@ fn select_keywords(db_path: &str, args: &[String]) -> Result<serde_json::Value, 
         "task_ids": tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
         "titles": tasks.iter().map(|t| &t.title).collect::<Vec<_>>(),
     }))
+}
+
+/// Path B: deterministic write package for outer-agent prose (no nested writer).
+/// Requires -i project-id, -p project-path, -I research-task-id, -K keyword.
+fn write_context(
+    db_path: &str,
+    project_id: &str,
+    project_path: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    if project_id.is_empty() {
+        exit("--project-id required");
+    }
+    let research_task_id =
+        flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id (research) required"));
+    let keyword =
+        flag(args, "--keyword", "-K").unwrap_or_else(|| exit("--keyword required"));
+
+    let conn = open_db(db_path)?;
+    let package = pageseeds_lib::engine::write_package::build_write_package(
+        &conn,
+        project_id,
+        std::path::Path::new(project_path),
+        &research_task_id,
+        &keyword,
+    )?;
+    serde_json::to_value(package).map_err(|e| e.to_string())
+}
+
+/// Path B: validate MDX, ingest, mark write_article done, spawn cluster_and_link.
+/// Always prints JSON including ok:false validation failures (exit 0).
+/// Domain errors (missing file, bad project) return Err → exit 1.
+fn write_submit(
+    db_path: &str,
+    project_id: &str,
+    project_path: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    if project_id.is_empty() {
+        exit("--project-id required");
+    }
+    let file = flag(args, "--file", "-f");
+    let slug = flag(args, "--slug", "-S");
+    let path_or_slug = file
+        .or(slug)
+        .unwrap_or_else(|| exit("--file (-f) or --slug (-S) required"));
+    let write_task_id = flag(args, "--task-id", "-I");
+    let keyword = flag(args, "--keyword", "-K");
+
+    let conn = open_db(db_path)?;
+    let result = pageseeds_lib::engine::write_package::submit_written_article(
+        &conn,
+        project_id,
+        std::path::Path::new(project_path),
+        &path_or_slug,
+        pageseeds_lib::engine::write_package::SubmitOpts {
+            write_task_id,
+            keyword,
+        },
+    )?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
 /// Mirror of the `select_content_review_follow_ups` Tauri command:
@@ -938,6 +1001,10 @@ Task / queue orchestration:
   get-task                -I <task-id>                          Full task JSON incl. artifacts
   update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks
   select-keywords         -I <research-task-id> -K <kw,kw,...>  Create content tasks, mark research done
+  write-context           -i <id> -p <path> -I <research-task-id> -K <keyword>
+                          Deterministic write package (brief, target path, skill, floors) — no LLM
+  write-submit            -i <id> -p <path> -f/--file <path> | -S/--slug <slug> [-I write-task-id] [-K keyword]
+                          Validate MDX (≥800 words), ingest, complete write task, spawn cluster_and_link
   select-content-review   -I <review-task-id> -P <proposal-id,...>  Spawn fix_content_article from content_review
   select-cannibalization  -I <parent-task-id> -S <type:id,...>  Spawn cannibalization fixes, mark parent done
   create-articles-from-keywords -i <id> -I <research-task-id> -k "kw1, kw2, ..."

@@ -26,3 +26,4 @@ pub mod task_store;
 pub mod text;
 pub mod tools;
 pub mod workflows;
+pub mod write_package;

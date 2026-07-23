@@ -113,6 +113,8 @@ Creates: write_article tasks for each selected keyword
 
 ### Process Flow
 
+**Desktop / nested path (ContentHandler):**
+
 ```
 Task: write_article
   ↓
@@ -126,9 +128,32 @@ Step Plan:
 Auto-spawns: cluster_and_link task (if successful)
 ```
 
+**CLI Path B (preferred for weekly-seo / outer agents — issue #135):**
+
+```
+select-keywords  →  write_article tasks (provenance only; do not execute-task)
+  ↓
+write-context (-I research-task-id -K keyword)
+  → deterministic package: content_brief, target_file/path, publish_date,
+    content-write skill body, min_words 800 / target_words 1200
+  ↓
+Session agent writes full MDX to target_file (uses package skill + brief)
+  ↓
+write-submit (-f path | -S slug) until validation ok
+  → structural gates (validate_article, ≥800 words)
+  → ingest_orphans + keyword tag + mark write_article done
+  → spawn cluster_and_link
+```
+
+Path B avoids nested `execute-task write_article` under a weak global provider
+(thin single-shot articles). Freeform MDX without submit is not supported —
+submit is the quality gate.
+
 ### Key Files
-- `engine/workflows/handlers.rs` — ContentHandler
-- `engine/agent.rs` — LLM provider calls
+- `engine/workflows/handlers.rs` — ContentHandler (nested path)
+- `engine/write_package.rs` — CLI Path B package + submit
+- `engine/agent.rs` — LLM provider calls (nested path)
+- `content/validate_article.rs` — structural floors (shared)
 - `content/ops.rs` — MDX file operations
 
 ### Output
