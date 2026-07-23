@@ -17,5 +17,6 @@ pub mod readability;
 pub mod redirects;
 pub mod slug;
 pub mod tfidf;
+pub mod validate_article;
 pub mod validator;
 pub mod year_policy;

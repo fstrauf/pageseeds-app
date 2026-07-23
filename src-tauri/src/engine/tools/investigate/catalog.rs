@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn catalog_parses_all_expected_tools() {
         let names = all_catalog_names();
-        assert_eq!(names.len(), 18, "expected 18 tools in catalog, got {names:?}");
+        assert_eq!(names.len(), 19, "expected 19 tools in catalog, got {names:?}");
         for required in [
             "gsc_performance",
             "gsc_queries",
@@ -126,6 +126,7 @@ mod tests {
             "article_frontmatter",
             "article_body_hash",
             "article_title_scan",
+            "validate_article",
             "content_audit_report",
             "run_content_audit",
             "cannibalization_clusters",
@@ -161,10 +162,10 @@ mod tests {
                 "write_feature_spec",
             ]
         );
-        assert_eq!(catalog_names_for_access(InvestigationAccess::Full).len(), 18);
+        assert_eq!(catalog_names_for_access(InvestigationAccess::Full).len(), 19);
         assert_eq!(
             catalog_names_for_access(InvestigationAccess::ReadOnly).len(),
-            14
+            15
         );
     }
 

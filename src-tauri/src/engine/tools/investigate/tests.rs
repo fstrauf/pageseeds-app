@@ -47,7 +47,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let tools = investigation_tools(ctx);
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 19);
 
         // Verify each tool's definition compiles
         for tool in &tools {
@@ -65,10 +65,10 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let full = investigation_tools(ctx.clone());
-        assert_eq!(full.len(), 18, "full set must remain 18 tools");
+        assert_eq!(full.len(), 19, "full set must remain 19 tools");
 
         let ro = investigation_read_only_tools(ctx);
-        assert_eq!(ro.len(), 14, "read-only set must be 14 tools");
+        assert_eq!(ro.len(), 15, "read-only set must be 15 tools");
 
         let names = rt.block_on(tool_names(&ro));
         for mutator in [
@@ -135,8 +135,8 @@ mod tests {
             }
         }
 
-        assert_eq!(inventory_names(InvestigationAccess::Full).len(), 18);
-        assert_eq!(inventory_names(InvestigationAccess::ReadOnly).len(), 14);
+        assert_eq!(inventory_names(InvestigationAccess::Full).len(), 19);
+        assert_eq!(inventory_names(InvestigationAccess::ReadOnly).len(), 15);
     }
 
     #[test]

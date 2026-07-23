@@ -44,6 +44,12 @@ when_to_use = "When investigating title quality, template bugs, or SERP display 
 when_not_to_use = ""
 mutates = false
 
+[tools.validate_article]
+purpose = "Run deterministic structural SEO quality gates on one article by slug"
+when_to_use = "After write/fix, or when checking whether an article meets structural floors (H1, frontmatter, word count, keyword, links)"
+when_not_to_use = "Do not use for strategy/prose quality judgments; this is deterministic only"
+mutates = false
+
 [tools.content_audit_report]
 purpose = "Return the full content_audit.json report with 21 deterministic checks per article"
 when_to_use = "When you need comprehensive article health data"

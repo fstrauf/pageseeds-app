@@ -136,6 +136,7 @@ fn build_tool(name: &str, ctx: InvestigationContext) -> Box<dyn rig::tool::ToolD
         "article_frontmatter" => Box::new(ArticleFrontmatterTool { ctx }),
         "article_body_hash" => Box::new(ArticleBodyHashTool { ctx }),
         "article_title_scan" => Box::new(ArticleTitleScanTool { ctx }),
+        "validate_article" => Box::new(ValidateArticleTool { ctx }),
         "content_audit_report" => Box::new(ContentAuditReportTool { ctx }),
         "run_content_audit" => Box::new(RunContentAuditTool { ctx }),
         "cannibalization_clusters" => Box::new(CannibalizationClustersTool { ctx }),
@@ -172,7 +173,7 @@ pub use shared::{
     read_cannibalization_clusters, get_indexing_status, read_framework_files, scan_link_graph,
     list_research_shortlist, list_article_quality_reviews,
 };
-pub use articles::list_articles_json;
+pub use articles::{list_articles_json, validate_article_json};
 
 #[cfg(test)]
 mod alignment_tests {
@@ -188,6 +189,7 @@ mod alignment_tests {
         "article_frontmatter",
         "article_body_hash",
         "article_title_scan",
+        "validate_article",
         "content_audit_report",
         "run_content_audit",
         "cannibalization_clusters",

@@ -85,6 +85,16 @@ fn main() {
                 .map_err(|e| e.to_string())
         }
         "article-title-scan" => investigate::scan_article_titles(&ctx).map_err(|e| e.to_string()),
+        "validate-article" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let _ = require_project_path();
+            if project_id.is_empty() {
+                exit("--project-id required");
+            }
+            investigate::validate_article_json(&ctx, &slug)
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+        }
         "content-audit-report" => investigate::read_content_audit_report(&require_project_path()).map_err(|e| e.to_string()),
         "run-content-audit" => run_audit(&project_id, &require_project_path()),
         "cannibalization-clusters" => investigate::read_cannibalization_clusters(&require_project_path()).map_err(|e| e.to_string()),
@@ -848,7 +858,7 @@ Usage:
 Tools:
   gsc-performance  gsc-queries  gsc-movers   [-l/--limit N]  (defaults: perf/queries 50, movers 30; max 200)
   gsc-queries      also accepts -u/--page-url <url>
-  article-list  article-frontmatter  article-body-hash  article-title-scan
+  article-list  article-frontmatter  article-body-hash  article-title-scan  validate-article
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
   research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec
