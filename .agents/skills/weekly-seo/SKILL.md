@@ -96,7 +96,7 @@ Breaking these fails the run.
 | 2 | **No product source edits** under `pageseeds-app` / `src-tauri` / product manifests. |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
-| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. |
+| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B uses `write-context` / `write-submit`, not `create-task write_article`. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
 | 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
@@ -167,6 +167,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `list-tasks` / `get-task` | Open work, artifacts, review state |
 | `create-task` / `execute-task` | Act within may-create + budgets |
 | Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
+| Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path) |
 
 #### Optional / secondary (NOT ground truth, not required path)
 
@@ -256,13 +257,19 @@ leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 
 ### Expected auto follow-ups
 
-- Selection → `write_article` / hub / landing → quality review + cluster link  
+- Selection → `write_article` tasks created for provenance — **complete via Path B**
+  (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
+- Path B `write-submit` → marks write task done + spawns `cluster_and_link`
+- Desktop nested writer still auto-spawns quality review + cluster link on success
 - `content_review` may spawn fixes / feature-spec (execute what appears)
 
 ### Quality gate
 
 Failed `review_article_quality` → create `fix_content_article` **with** `-S`
 if none exists, then execute (counts toward 15).
+
+**Do not** use `fix_content_article` to recover Path B min_word_count / thin-body
+failures — expand the draft and re-run `write-submit` instead.
 
 ### Review resolution
 
@@ -276,9 +283,44 @@ pageseeds-cli get-task -I <task-id>
 - **KeywordPicker:** no rubber-stamp. Check demand/difficulty, self-competition
   (`articles` / `gsc-queries`), intent. Prefer non-avoid / `differentiate` /
   `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
+  **After select-keywords, use Path B for articles** (below) — do **not**
+  `execute-task` the spawned `write_article` tasks.
 - **ContentReviewPicker:** `select-content-review -I <parent> -P id1,id2`
 - **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`
 - **ArtifactReview:** summarize; `update-task-status -I <id> -s done`
+
+### Path B — CLI write package (happy path after `select-keywords`)
+
+`select-keywords` still creates `write_article` tasks for provenance / queue
+tracking. For **CLI best-path**, complete those tasks via write-context +
+session prose + write-submit — **not** nested `execute-task write_article`
+(weak global providers produce thin single-shot MDX).
+
+```bash
+# 1. Package (deterministic — no LLM)
+pageseeds-cli write-context -i <id> -p <path> \
+  -I <research-task-id> -K "<keyword>"
+# → JSON: content_brief, target_file, target_path, publish_date,
+#   skill_name + skill_content (content-write craft rules),
+#   min_words 800, target_words 1200, write_task_id (if any)
+
+# 2. Session agent writes full MDX to target_file using skill_content + brief
+#    (min 800 words, proper frontmatter title/description/slug/date, H1, links)
+
+# 3. Submit until ok (or give up within execution budget)
+pageseeds-cli write-submit -i <id> -p <path> \
+  -f <target_file> [-I <write_task_id>] [-K "<keyword>"]
+# → ok:false + checks → expand and resubmit (file kept)
+# → ok:true → article registered; write_article marked done; cluster_and_link spawned
+```
+
+| Rule | Path B |
+|------|--------|
+| **Do** | `write-context` → write MDX to `target_file` → `write-submit` until `ok` |
+| **Ban** | `execute-task write_article` on the happy path |
+| **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** instead |
+| **Budget** | Each `write-submit` attempt counts toward the **15** execution budget |
+| **Provenance** | `select-keywords` may still spawn `write_article`; Path B completes them via submit |
 
 ---
 
