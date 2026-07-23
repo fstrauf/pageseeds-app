@@ -96,7 +96,7 @@ Breaking these fails the run.
 | 2 | **No product source edits** under `pageseeds-app` / `src-tauri` / product manifests. |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
-| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B uses `write-context` / `write-submit`, not `create-task write_article`. |
+| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
 | 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
@@ -112,10 +112,31 @@ Breaking these fails the run.
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
 
 **Prefer when desk data already supports the action:** `fix_content_article`,
-`content_review`, **Path B research** (`research-context` → session seeds →
-`research-pull`) over nested `research_keywords` on CLI, `research_landing_pages`
-when commercial intent, indexing tasks. Do **not** invent work via soft audits
-when desk reads suffice.
+`content_review`, `research_keywords`, `research_landing_pages`, indexing tasks.
+Do **not** invent work via soft audits when desk reads suffice.
+**Demote for weekly CLI:** `ctr_audit` — see [CTR / content fix policy](#ctr--content-fix-policy).
+
+### CTR / content fix policy
+
+CLI weekly best-path for low CTR is **desk-selected targeted fixes**, not a full
+`ctr_audit` fan-out.
+
+1. **Best path (default):** Identify high-impression / low-CTR URLs from desk —
+   `site-overview` (top_pages + high-impr low-CTR hints), `articles` with min
+   impressions, `gsc-performance`, then `article -S` + `gsc-queries` on
+   candidates. Create **targeted** `fix_content_article` with `-S <slug>` for
+   top waste URLs only (counts toward ≤5 creates). Cite impressions / CTR /
+   position evidence in `-r`.
+2. **Do NOT** enqueue `ctr_audit` as the default weekly action. Full `ctr_audit`
+   has `BackendAuto` and spawns many `fix_ctr_article` children — burns the ≤15
+   execution budget on title-only / no-op work.
+3. **`ctr_audit` is rare/optional:** Only when desk cannot narrow candidates and
+   you explicitly need the productized CTR pipeline (still honor budgets). If
+   you create it, note why and expect many auto-spawned children — prefer fewer
+   pages via desk instead.
+4. **UI vs CLI:** Desktop/UI unattended automation may still AutoEnqueue
+   `ctr_audit` and BackendAuto-spawn children — intentional product path. This
+   skill is the **CLI operator best-path**; do not flip lifecycle metadata.
 
 ---
 
@@ -169,8 +190,8 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `list-tasks` / `get-task` | Open work, artifacts, review state |
 | `create-task` / `execute-task` | Act within may-create + budgets |
 | Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
-| Path B research | `research-context` / `research-pull` — session seeds → deterministic pull (preferred CLI research) |
 | Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path) |
+| Path B merge | `merge-context` / `merge-submit` — outer-agent merge after approved keep+redirects (preferred CLI path) |
 
 #### Optional / secondary (NOT ground truth, not required path)
 
@@ -196,47 +217,36 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
-| High impressions + low CTR + weak title/meta | `fix_content_article` / `content_review`; optionally `ctr_audit` if you need the pipeline |
+| High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; optionally `content_review` for multi-page judgment. **Not** full `ctr_audit` first (see CTR policy) |
 | Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
 | Many not-indexed | Indexing diagnostics / internal links |
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
 | Structural MDX issues | `content_cleanup` / `content_review` |
 | Template/title systemic bugs | `generate_feature_spec` + evidence |
-| Quiet site + thin backlog | **Path B research** (`research-context` → seeds → `research-pull`) or desktop `research_keywords` / `research_landing_pages` |
+| Quiet site + thin backlog | `research_keywords` / `research_landing_pages` |
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
 
-**Research (CLI Path B — preferred):** session owns themes; CLI pulls candidates
-deterministically (no nested `research_keywords` theme LLM on this path).
+
+### Research strategy package (#141)
+
+Session owns themes/seeds; CLI owns Ahrefs pull:
 
 ```bash
-# 1. Strategy package (shortlist + health + open research tasks)
-pageseeds-cli research-context -i <id> -p <path>
-
-# 2. Session proposes 2–6 seeds from desk + shortlist + brand (judgment here)
-
-# 3. Deterministic pull → custom_keyword_research (default: create + execute)
-pageseeds-cli research-pull -i <id> -p <path> -K "seed1,seed2,seed3"
-# → task_id, status, selectable_keywords (when execute succeeds)
-
-# 4. Pick ≤3 keywords (same as KeywordPicker path)
-pageseeds-cli select-keywords -I <research-task-id> -K kw1,kw2
-
-# 5. Path B write as today (write-context → MDX → write-submit)
+# Optional: session proposes seeds from desk + research-shortlist
+pageseeds-cli research-pull -i <id> -p <path> --seeds "theme one,theme two" ...
+# → candidates for select-keywords / write Path B
 ```
 
-Prefer `research-context` (packaged) over raw `research-shortlist`. Prefer
-shortlist health `promising` / avoid `depleted`. Prefer `research-pull` over
-`create-task -t research_keywords` on the weekly CLI path — nested seed
-extraction/validation is for desktop/UI. `research_keywords` stays on the
-may-create list as fallback.
+Prefer this over relying solely on nested research_seed_extraction when tools exist.
 
-Never claim “no gaps found” if research did not run — say **skipped** + why +
-last research date.
+**Research:** generative. Prefer `research-shortlist` health
+(`promising` / `depleted` / `unproven`). Never claim “no gaps found” if research
+did not run — say **skipped** + why + last research date.
 
 Avoid-heavy keyword pickers (AIO-blocked heads, mostly `winnability: avoid`):
-prefer shortlist **promising** themes/seeds and re-run via `research-pull`; pick
-only `differentiate` / `target` rows when possible. Residual avoids = last resort.
+prefer shortlist **promising** themes/seeds and re-run research; pick only
+`differentiate` / `target` rows when possible. Residual avoids = last resort.
 
 #### Known limits (branch, don’t dead-end)
 
@@ -287,6 +297,8 @@ leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 - Selection → `write_article` tasks created for provenance — **complete via Path B**
   (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
 - Path B `write-submit` → marks write task done + spawns `cluster_and_link`
+- Approved merge → `consolidate_cluster` tasks for provenance — **complete via Path B merge**
+  (`merge-context` / write merged MDX / `merge-submit`), not `execute-task consolidate_cluster`
 - Desktop nested writer still auto-spawns quality review + cluster link on success
 - `content_review` may spawn fixes / feature-spec (execute what appears)
 
@@ -307,6 +319,8 @@ pageseeds-cli get-task -I <task-id>
 - **CannibalizationPicker:** mechanical high-confidence only —
   `select-cannibalization -I <parent> -S merge:<id>,hub:<id>`; escalate ambiguous.
   Soft clusters are **not** merge authority.
+  **After approved merges, use Path B merge** (below) — do **not**
+  `execute-task` the spawned `consolidate_cluster` tasks on the happy path.
 - **KeywordPicker:** no rubber-stamp. Check demand/difficulty, self-competition
   (`articles` / `gsc-queries`), intent. Prefer non-avoid / `differentiate` /
   `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
@@ -348,6 +362,42 @@ pageseeds-cli write-submit -i <id> -p <path> \
 | **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** instead |
 | **Budget** | Each `write-submit` attempt counts toward the **15** execution budget |
 | **Provenance** | `select-keywords` may still spawn `write_article`; Path B completes them via submit |
+
+### Path B — CLI merge package (happy path after approved consolidate)
+
+`select-cannibalization` / create-from-approved still create `consolidate_cluster`
+tasks for provenance. For **CLI best-path**, complete merges via merge-context +
+session prose + merge-submit — **not** nested `execute-task consolidate_cluster`
+(weak global providers run irreversible nested draft_patch).
+
+```bash
+# 1. Package (deterministic — no LLM)
+pageseeds-cli merge-context -i <id> -p <path> \
+  -I <consolidate-task-id>
+# → JSON: plan, keep + redirects with FULL MDX, outlines, soft GSC,
+#   skill_name + skill_content (merge-content), keeper_file, min 400 words,
+#   requires_human_confirm, instructions
+
+# Or without a task: -K /blog/keep -R /blog/src-a,/blog/src-b
+# Or: --keep-id <id> --redirect-ids <id,id,...>
+
+# 2. Session agent writes complete merged MDX to keeper_file
+#    (preserve unique tables/FAQs/examples from redirects; match keeper tone)
+
+# 3. Submit until ok (high-traffic needs -y)
+pageseeds-cli merge-submit -i <id> -p <path> \
+  -I <consolidate-task-id> [-y]
+# → ok:false + checks → fix keeper and resubmit (no redirects applied yet)
+# → ok:true → redirects.csv, inbound rewrites, sources redirected, task done
+```
+
+| Rule | Path B merge |
+|------|----------------|
+| **Do** | `merge-context` → write MDX to `keeper_file` → `merge-submit` until `ok` |
+| **Ban** | `execute-task consolidate_cluster` on the happy path |
+| **Confirm** | When `requires_human_confirm` (clicks ≥ 50 or impressions ≥ 1000), pass `-y` only after human OK |
+| **Budget** | Each `merge-submit` attempt counts toward the **15** execution budget |
+| **Provenance** | consolidate tasks may still exist; Path B completes them via submit |
 
 ---
 
@@ -423,6 +473,7 @@ Desk path chased, detours, what you skipped (and why).
 - Installed `pageseeds-cli` only — never product `cargo run`.  
 - No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
+- Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
 - Mechanical reviews only; only write the weekly report file.  
@@ -435,7 +486,8 @@ Desk path chased, detours, what you skipped (and why).
 **Desk model (epic #117):** ~10-tool mental model — Site State reads
 (`site-overview` / `articles` / `article` + GSC) then few hard actions. Soft
 clusters and specialist audits remain available but are **optional**, not the
-weekly spine.
+weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
+`ctr_audit` BackendAuto fan-out is the UI/unattended path, not CLI default.
 
 **Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
 and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both

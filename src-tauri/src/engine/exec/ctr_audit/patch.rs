@@ -5,19 +5,26 @@
 use crate::models::ctr::{CtrFixPatch, CtrRecommendation};
 use crate::models::task::Task;
 
-/// Normalize a patch in-place before validation.
-///
-/// Returns a list of human-readable repair notes.
+/// Normalize a patch in-place before validation (task path — resolves keyword from rec).
 pub(crate) fn normalize_patch_before_validation(
     patch: &mut CtrFixPatch,
     task: &Task,
 ) -> Vec<String> {
-    let mut repairs = Vec::new();
     let recommendation = extract_recommendation(task).ok().flatten();
     let target_keyword = recommendation
         .as_ref()
-        .map(|rec| rec.target_keyword.trim())
-        .unwrap_or("");
+        .map(|rec| rec.target_keyword.as_str())
+        .filter(|s| !s.trim().is_empty());
+    normalize_patch_fields(patch, target_keyword)
+}
+
+/// Task-free normalize used by CLI Path B and shared with the task wrapper.
+pub(crate) fn normalize_patch_fields(
+    patch: &mut CtrFixPatch,
+    target_keyword: Option<&str>,
+) -> Vec<String> {
+    let mut repairs = Vec::new();
+    let target_keyword = target_keyword.map(str::trim).unwrap_or("");
 
     if let Some(title) = patch.changes.title.as_mut() {
         normalize_whitespace_in_place(title, "title whitespace", &mut repairs);
@@ -178,12 +185,24 @@ pub(crate) fn prune_invalid_change_fields(
     notes
 }
 
-/// Validate a patch against deterministic rules.
-///
-/// Returns a list of error messages. Empty list means the patch is valid.
+/// Validate a patch against deterministic rules (task path).
 pub(crate) fn validate_patch_before_write(
     patch: &CtrFixPatch,
     task: &Task,
+    original_content: &str,
+) -> Vec<String> {
+    let recommendation = extract_recommendation(task).ok().flatten();
+    let target_keyword = recommendation
+        .as_ref()
+        .map(|rec| rec.target_keyword.as_str())
+        .filter(|s| !s.trim().is_empty());
+    validate_patch_fields(patch, target_keyword, original_content)
+}
+
+/// Task-free validate used by CLI Path B and shared with the task wrapper.
+pub(crate) fn validate_patch_fields(
+    patch: &CtrFixPatch,
+    target_keyword: Option<&str>,
     original_content: &str,
 ) -> Vec<String> {
     let mut errors = Vec::new();
@@ -246,20 +265,17 @@ pub(crate) fn validate_patch_before_write(
             errors.push("first_paragraph contains blank lines".to_string());
         }
 
-        if let Ok(Some(rec)) = extract_recommendation(task) {
+        if let Some(kw) = target_keyword.map(str::trim).filter(|s| !s.is_empty()) {
             // Keyword required when present; no `?` substitute (issue #112).
-            if !rec.target_keyword.trim().is_empty()
-                && !crate::content::keyword_match::keyword_present(
-                    &first_paragraph.to_lowercase(),
-                    &rec.target_keyword,
-                )
-            {
-                let display_kw =
-                    crate::content::keyword_match::normalize_keyword(&rec.target_keyword);
+            if !crate::content::keyword_match::keyword_present(
+                &first_paragraph.to_lowercase(),
+                kw,
+            ) {
+                let display_kw = crate::content::keyword_match::normalize_keyword(kw);
                 errors.push(format!(
                     "first_paragraph must contain target keyword '{}'",
                     if display_kw.is_empty() {
-                        rec.target_keyword.clone()
+                        kw.to_string()
                     } else {
                         display_kw
                     }

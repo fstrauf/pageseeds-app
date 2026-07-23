@@ -226,8 +226,8 @@ fn verdict(
             )),
         (None, _) => StepResult::fail(format!(
                 "Write verify failed: content_write_stage completed but no article file exists in {}. \
-                 The agent returned without writing a file (a text-only provider may have produced \
-                 no parseable MDX, or the write failed). Fix the provider output or re-enqueue the task.",
+                 The file-IO agent returned without writing a file. Fix the provider output or \
+                 re-enqueue the task.",
                 content_dir.display()
             )),
     }

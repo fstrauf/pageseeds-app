@@ -74,6 +74,19 @@ For Kimi specifically, the global `kimi_backend_mode` setting controls which bac
 
 **content_review agentic RO tool-loop** (PageSeeds investigation tools) requires a Rig tool-capable backend: Claude, OpenAI, Ollama, or Kimi Bridge — not Grok/Kimi CLI. Tool-equipped agents run through `run_tool_equipped_agent` with an `INVESTIGATION_MAX_TURNS` (20) multi-turn budget (aligned with BUSINESS_PROCESSES ≤20 tool calls); without it, rig-core 0.35 defaults to 0 turns and aborts with `MaxTurnError`.
 
+### Nested content write vs Path B (issue #143)
+
+Nested `execute-task write_article` / `optimize_article` (ContentHandler → `exec_agentic` with `ContentDirectives`) requires a **file-IO agent host** — `grok` or `kimi` CLI — so the agent can multi-turn write full MDX into the repo.
+
+**Sole policy:** text-only providers (`openai`, `claude`, `ollama`) are **rejected early** with an actionable error pointing at CLI Path B. There is no executor-write fallback that salvages chat-text MDX for ContentDirectives steps. If a file-IO agent runs but writes no file, `content_write_verify` fails the task (issue #13 contract).
+
+| Path | When | Provider |
+|------|------|----------|
+| **CLI Path B** (`write-context` → session agent → `write-submit`) | Preferred for weekly-seo / outer agents | Session agent (quality owner) |
+| **Nested `execute-task`** (ContentHandler) | Unattended fallback when the queue runs write tasks in-app | Must be `grok` or `kimi` |
+
+Structured-extraction fix/merge steps (`fix_content_article_generate`, CTR fix generate, etc.) are **not** gated — they use Rig extractors where OpenAI is fine or preferred. Gate lives in `engine/exec/agentic.rs::require_file_io_host_for_content_write`; capability is `rig/provider.rs::provider_supports_file_io`.
+
 ---
 
 ## Step Types
