@@ -12,10 +12,10 @@ when-to-use: >-
 argument-hint: "[project-name-or-id]"
 user-invocable: true
 metadata:
-  short-description: "Weekly SEO pass via pageseeds-cli (desk-first)"
+  short-description: "Weekly SEO pass via pageseeds-cli (desk-first + Path B)"
 ---
 
-# Weekly SEO — Agent Skill (desk-first)
+# Weekly SEO — CLI Operator Bible (desk-first + Path B)
 
 > **Desk model (epic #117):** explore **Site State** (GSC + catalog) then act.
 > Soft audits are optional — not the weekly spine, not ground truth.
@@ -96,7 +96,7 @@ Breaking these fails the run.
 | 2 | **No product source edits** under `pageseeds-app` / `src-tauri` / product manifests. |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
-| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`. |
+| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`; Path B fix uses `fix-context` / `fix-submit` when available. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
 | 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
@@ -111,8 +111,8 @@ Breaking these fails the run.
 `update_research_shortlist`, `generate_feature_spec`, `seo_health_scan`,
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
 
-**Prefer when desk data already supports the action:** `fix_content_article`,
-`content_review`, `research_keywords`, `research_landing_pages`, indexing tasks.
+**Prefer when desk data already supports the action:** `fix_content_article -S`,
+`research_keywords`, `research_landing_pages`, indexing tasks.
 Do **not** invent work via soft audits when desk reads suffice.
 **Demote for weekly CLI:** `ctr_audit` — see [CTR / content fix policy](#ctr--content-fix-policy).
 
@@ -143,6 +143,19 @@ CLI weekly best-path for low CTR is **desk-selected targeted fixes**, not a full
    skill is the **CLI operator best-path**; do not flip lifecycle metadata.
 
 ---
+
+
+## Explicit bans (CLI best-path)
+
+| Ban | Do instead |
+|-----|------------|
+| Nested weak write: `execute-task write_article` on happy path | Path B: `write-context` → session MDX → `write-submit` |
+| Nested weak merge: `execute-task consolidate_cluster` on happy path | Path B: `merge-context` → session MDX → `merge-submit` |
+| `fix_content_article` for length / min_word_count recovery after Path B write failure | Expand draft + re-run `write-submit` |
+| `content_review` as strategy brain (`create-task content_review` for weekly explore) | Desk → agent judgment → hard actions (#139) |
+| Soft clusters (`cannibalization-clusters`) as truth / merge authority | Hard evidence only (same query on 2+ URLs, exact keyword dupe, etc.) |
+| Full `ctr_audit` spawn by default (#140) | Desk → targeted `fix_content_article -S`; scoped `ctr_audit` only when needed |
+| Nested `execute-task` LLM for write/fix/merge when Path B tools exist | Path B package → session edit → submit |
 
 ## Soft guidance (default path)
 
@@ -221,7 +234,7 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
-| High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; optionally `content_review` for multi-page judgment. **Not** full `ctr_audit` first (see CTR policy) |
+| High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; Path B fix when available. **Not** full `ctr_audit` first (see CTR policy); **not** `content_review` as strategy brain |
 | Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
 | Many not-indexed | Indexing diagnostics / internal links |
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
@@ -317,7 +330,7 @@ pageseeds-cli get-task -I <task-id>
   `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
   **After select-keywords, use Path B for articles** (below) — do **not**
   `execute-task` the spawned `write_article` tasks.
-- **ContentReviewPicker:** `select-content-review -I <parent> -P id1,id2`
+- **ContentReviewPicker:** desktop/unattended only — not weekly strategy. If inherited, dispose mechanically; do not start new `content_review` for weekly explore. `select-content-review -I <parent> -P id1,id2`
 - **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`
 - **ArtifactReview:** summarize; `update-task-status -I <id> -s done`
 
@@ -353,6 +366,20 @@ pageseeds-cli write-submit -i <id> -p <path> \
 | **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** instead |
 | **Budget** | Each `write-submit` attempt counts toward the **15** execution budget |
 | **Provenance** | `select-keywords` may still spawn `write_article`; Path B completes them via submit |
+
+
+### Path B — CLI fix package (when tools available)
+
+Preferred for targeted content/CTR edits with full file context:
+
+```bash
+pageseeds-cli fix-context -i <id> -p <path> -S <slug> -k content|ctr [-g goals]
+# session agent edits full file using package
+pageseeds-cli fix-submit -i <id> -p <path> -S <slug> -k content|ctr [--file mdx]
+```
+
+Until tools land: `create-task fix_content_article -S <slug>` + `execute-task` with desk evidence.
+Do **not** use `content_review` as middleman. Do **not** use fix_content for Path B write length recovery.
 
 ### Path B — CLI merge package (happy path after approved consolidate)
 

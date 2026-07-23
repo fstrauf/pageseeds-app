@@ -6,6 +6,28 @@ For the rules that govern when to use agents vs. deterministic code, see [`AGENT
 
 ---
 
+## Host split (epic #136)
+
+CLI best-path quality depends on **which host** owns judgment. Nested agentic steps under a weak global provider degrade SEO outcomes even when desk data is good.
+
+```
+judgment/prose  →  session agent
+package/gates   →  CLI / Rust
+never nested weak host on CLI best-path
+```
+
+| Host | Role |
+|------|------|
+| **Session agent** (outer Grok/Kimi + `pageseeds-cli`) | Judgment, prose, multi-file reasoning, expand loops |
+| **CLI package/submit** (`write-context` / `write-submit`; `fix-*` / `merge-*` when present) | Deterministic package, validate, ingest, dispose |
+| **Nested `execute-task` agentic** (global `agent_provider`) | Unattended / desktop fallback only — **not** CLI best-path for write/fix/merge |
+
+**Why nested GrokCli/KimiCli content_review degrades:** those providers are not Rig multi-turn tool-capable for PageSeeds investigation tools, so `content_review` falls back to the scripted recommend path (see Provider notes below). On the weekly CLI path, strategy belongs to the session agent + desk reads — not a nested `content_review` as the weekly brain (#139).
+
+Operator SoT: [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) (desk-first #117 + package/submit #136).
+
+---
+
 ## Architecture
 
 ```
