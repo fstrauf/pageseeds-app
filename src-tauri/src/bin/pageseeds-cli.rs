@@ -161,6 +161,69 @@ fn main() {
                 .map(|r| serde_json::to_value(r).unwrap_or_default())
                 .map_err(|e| e.to_string())
         }
+        // ── Path B fix package / submit (no nested generate) ──
+        "fix-context" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr required"));
+            let goals = flag(&args, "--goals", "-g");
+            let period_days: Option<i64> = flag(&args, "--period-days", "-d")
+                .and_then(|s| s.parse().ok());
+            let path = require_project_path();
+            if project_id.is_empty() {
+                exit("--project-id required");
+            }
+            let kind = pageseeds_lib::engine::fix_package::FixKind::parse(&kind_raw)
+                .unwrap_or_else(|e| exit(&e.to_string()));
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_lib::engine::fix_package::build_fix_package(
+                    &conn,
+                    &project_id,
+                    &path,
+                    &slug,
+                    kind,
+                    goals.as_deref(),
+                    period_days,
+                )
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+            })
+        }
+        "fix-submit" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr required"));
+            let path = require_project_path();
+            if project_id.is_empty() {
+                exit("--project-id required");
+            }
+            let kind = pageseeds_lib::engine::fix_package::FixKind::parse(&kind_raw)
+                .unwrap_or_else(|e| exit(&e.to_string()));
+            let file_override = flag(&args, "--file", "-f");
+            let patch_json = match flag(&args, "--patch", "-P") {
+                Some(p) => {
+                    let expanded = expand_tilde(&p);
+                    match std::fs::read_to_string(&expanded) {
+                        Ok(s) => Some(s),
+                        Err(e) => exit(&format!("failed to read patch file {expanded}: {e}")),
+                    }
+                }
+                None => None,
+            };
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_lib::engine::fix_package::submit_fix(
+                    &conn,
+                    &project_id,
+                    &path,
+                    &slug,
+                    kind,
+                    pageseeds_lib::engine::fix_package::FixSubmitOpts {
+                        file_override,
+                        patch_json,
+                    },
+                )
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+            })
+        }
         "content-audit-report" => investigate::read_content_audit_report(&require_project_path()).map_err(|e| e.to_string()),
         "run-content-audit" => run_audit(&project_id, &require_project_path()),
         "cannibalization-clusters" => investigate::read_cannibalization_clusters(&require_project_path()).map_err(|e| e.to_string()),
@@ -1095,6 +1158,10 @@ Tools:
   articles         [-s status] [-m min-impressions] [-R include-redirected] [-l limit] [-d period-days]
   article          -S/--slug <slug> [-d/--period-days N]    Full package for one article
   article-list  article-frontmatter  article-body-hash  article-title-scan  validate-article
+  fix-context      -S/--slug <slug> -k/--kind content|ctr [-g/--goals "..."] [-d period-days]
+                   Path B package (full file path + queries + skill; no nested generate)
+  fix-submit       -S/--slug <slug> -k/--kind content|ctr [--patch <json>] [--file <mdx>]
+                   Apply optional patch and/or validate on-disk MDX (no nested generate)
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
   research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec
