@@ -2,8 +2,8 @@
 name: weekly-seo
 description: >-
   Run the weekly SEO pass for one PageSeeds project via pageseeds-cli
-  (explore signals, plan, execute tasks, report). Use when the user wants
-  weekly SEO, SEO maintenance, organic growth this week, or /weekly-seo.
+  (desk reads → ≤5 actions → report). Use when the user wants weekly SEO,
+  SEO maintenance, organic growth this week, or /weekly-seo.
   Operator only — never edit pageseeds-app source.
 when-to-use: >-
   Triggers on "/weekly-seo", "weekly SEO", "run weekly SEO", "SEO pass",
@@ -12,10 +12,13 @@ when-to-use: >-
 argument-hint: "[project-name-or-id]"
 user-invocable: true
 metadata:
-  short-description: "Weekly SEO pass via pageseeds-cli"
+  short-description: "Weekly SEO pass via pageseeds-cli (desk-first)"
 ---
 
-# Weekly SEO — Agent Skill (explore-first)
+# Weekly SEO — Agent Skill (desk-first)
+
+> **Desk model (epic #117):** explore **Site State** (GSC + catalog) then act.
+> Soft audits are optional — not the weekly spine, not ground truth.
 
 ## Invocation
 
@@ -25,307 +28,211 @@ metadata:
 /user:weekly-seo
 ```
 
-Prefer opening the **customer project** (or any cwd outside `pageseeds-app`).
-Requires installed `pageseeds-cli` on PATH (`pnpm install:cli` from app repo).
+Prefer the **customer project** (cwd outside `pageseeds-app`). Requires
+`pageseeds-cli` on PATH (`pnpm install:cli` / `./scripts/install-cli.sh`).
 
-You are the weekly SEO operator for **one** PageSeeds project. You run when the
-user asks (typically weekly). Your job is to **find the highest-impact truth**
-about organic growth this week, propose a small set of measures, then **execute**
-them through PageSeeds tasks — not by editing content yourself and **not** by
-editing PageSeeds product source.
+You are the weekly SEO operator for **one** project. Find the highest-impact
+organic growth opportunity, propose ≤5 measures, execute via PageSeeds tasks —
+not by editing content or product source yourself.
 
-## Model: tools + skill ≈ MCP + skill
-
-| Layer | What it is here |
-|-------|-----------------|
-| **Capability surface** | Installed `pageseeds-cli` binary — JSON tools (same functions as app/Rig tools). Treat this like an MCP tool list. |
-| **Operator / policy** | This skill — goals, budgets, lifecycle, report, isolation rails. |
-| **Agent loop** | You (Grok/Kimi/etc.) — **choose tools freely** within hard rails. |
-| **Product source** | **Out of scope.** Never open or patch `pageseeds-app` / `src-tauri` during this run. |
-
-Do **not** treat the old 1→8 phase list as a mandatory script. Use **hard rails**
-always; use **soft guidance** when you have no better lead.
+| Layer | Role |
+|-------|------|
+| **Capability** | `pageseeds-cli` JSON tools (≈ MCP surface) |
+| **Policy** | This skill — budgets, lifecycle, report, isolation |
+| **Agent** | You — choose tools within hard rails |
+| **Product source** | **Out of scope** — never patch `pageseeds-app` |
 
 ---
 
 ## When to use
 
-- Weekly per-project SEO maintenance  
-- On-demand: “what should we do this week for this site’s organic traffic?”
+- Weekly per-project SEO maintenance
+- On-demand: “what should we do this week for organic traffic?”
 
 ## Separation of concerns (mandatory)
 
 | Role | Workspace | May write |
 |------|-----------|-----------|
-| **This skill (SEO operator)** | Customer project path, or neutral cwd | Only the weekly report under project automation |
+| **This skill** | Customer project / neutral cwd | Only weekly report under project automation |
 | **pageseeds-cli** | N/A (binary on PATH) | Tasks/DB/content **via tools only** |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs |
 
-**Do not run this skill with `pageseeds-app` as the open workspace.** If the
-session is clearly inside the PageSeeds product repo (e.g. path contains
-`pageseeds-app` and you are editing Rust/TS product files), **stop** and tell
-the user to re-run with only the **customer project** open (or cwd = that
-project). Missing CLI features are product gaps — report them; do not implement
-them mid-run.
+If the session is inside the product repo (`pageseeds-app` + editing Rust/TS),
+**stop** and re-run with only the customer project open. Missing CLI features are
+product gaps — report them; do not implement mid-run.
 
 ---
 
-## Inputs (project context)
-
-Always establish:
+## Inputs
 
 - `-i <project-id>` — PageSeeds project ID  
-- `-p <project-path>` — absolute path to the **customer** project repo  
-
-If the user only names a site:
+- `-p <project-path>` — absolute path to the **customer** repo  
 
 ```bash
 sqlite3 ~/Library/Application\ Support/com.pageseeds.app/pageseeds.db \
   "SELECT id, name, path FROM projects"
 ```
 
-State the chosen `id` / `name` / `path` once at the start. Pass `-i` / `-p` on
-every tool call that needs them. Prefer the absolute `path` from the DB.
-
-### Tool invocation
-
-Use the **installed binary** from **any** directory. Do **not** `cd` into
-`pageseeds-app` or use `cargo run`.
+State `id` / `name` / `path` once. Pass `-i` / `-p` on every tool that needs them.
 
 ```bash
 pageseeds-cli <tool> -i <project-id> -p <project-path> [args...]
 ```
 
-If `pageseeds-cli` is missing from PATH:
+Use the installed binary from any directory. Never `cd` into `pageseeds-app` or
+`cargo run` for this skill. All tools print **JSON**. Never invent numbers.
 
-```bash
-# One-time install (product machine only — not during a weekly SEO pass)
-# From a pageseeds-app checkout:
-./scripts/install-cli.sh
-# installs to ~/.local/bin/pageseeds-cli
-```
-
-Tell the user to install/update the CLI; **do not** build product code as part
-of the SEO run unless the user explicitly asked for a product engineering task.
-
-All tools print **JSON to stdout**. Never invent numbers — cite tool output.
-
-The CLI talks to the same SQLite DB as the desktop app
-(`~/Library/Application Support/com.pageseeds.app/`). The Tauri UI does not need
-to be running.
+CLI → same SQLite as the desktop app. UI need not be running.
 
 ---
 
 ## Hard rails (always)
 
-These are **not** optional. Breaking them fails the run.
+Breaking these fails the run.
 
-1. **Data access only via `pageseeds-cli`** (and the report file). No direct DB
-   writes, no hand-editing project MDX/content. Tasks do content changes.
-2. **No product source edits.** Never modify files under `pageseeds-app`,
-   `src-tauri`, app `Cargo.toml` / `package.json`, or any PageSeeds product
-   tree. Never “add a missing CLI command” or patch the app mid-run.
-3. **Missing capability → escalate, don’t implement.** If a needed subcommand
-   fails or is absent, document the gap in the report / user message and work
-   around with existing tools or stop that branch. Open/file a product issue
-   only if the user wants that — still not by editing app source here.
-4. **Budgets:** max **5** tasks *created* per run; max **15** *executions*
-   (created + follow-ups); max **3** new articles from keyword selection.
-5. **May-create list only** via `create-task` (see below). Never
-   `create-task` for `write_article`, `create_landing_page`, `create_hub_page`,
-   or `consolidate_cluster` — those only come from selection commands after review.
-6. **Evidence:** every task and major finding cites specific tool evidence
-   (counts, slugs, URLs).
-7. **Review points:** resolve only when mechanical; escalate judgment calls
-   (merges of high-traffic pages, strategic keyword choices).
-8. **Report:** write `weekly_seo_{YYYYMMDD_HHMMSS}.md` under
-   `<project-path>/.github/automation/`. **Only** content file you write.
-9. **Missing integrations:** if GSC/Clarity/Reddit fail, degrade and say so —
-   do not fake data.
+| # | Rule |
+|---|------|
+| 1 | **CLI only** for data/tasks (+ the report file). No direct DB writes, no hand-editing MDX. |
+| 2 | **No product source edits** under `pageseeds-app` / `src-tauri` / product manifests. |
+| 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
+| 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
+| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. |
+| 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
+| 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
+| 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
+| 9 | **Missing integrations:** GSC/Clarity/Reddit fail → degrade and say so; never fake data. |
 
 ### May-create via `create-task`
 
-`ctr_audit`, `content_review`, `content_cleanup`, `cannibalization_audit`,
-`indexing_diagnostics`, `indexing_health_campaign`, `fix_indexing_internal_links`,
-`cluster_and_link`, `interlinking`, `fix_content_article` (**always** requires
-`-S` / `--slug <url-slug>` — never bare; attaches SERP recommendations artifact),
+`fix_content_article` (**always** `-S`/`--slug` — never bare), `content_review`,
+`research_keywords`, `research_landing_pages`, `indexing_diagnostics`,
+`indexing_health_campaign`, `fix_indexing_internal_links`, `content_cleanup`,
+`cluster_and_link`, `interlinking`, `ctr_audit`, `cannibalization_audit`,
 `update_research_shortlist`, `generate_feature_spec`, `seo_health_scan`,
-`collect_gsc`, `collect_clarity`, `clarity_analytics`, `research_keywords`,
-`research_landing_pages`, `reddit_opportunity_search`.
+`collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
+
+**Prefer when desk data already supports the action:** `fix_content_article`,
+`content_review`, `research_keywords`, `research_landing_pages`, indexing tasks.
+Do **not** invent work via soft audits when desk reads suffice.
 
 ---
 
-## Soft guidance (default path — abandon when evidence says so)
-
-**Default shape of a good run:**
+## Soft guidance (default path)
 
 ```text
-A. Recency / load check
-B. Ground truth (if needed)
-C. Free exploration  ← primary investigative work
-D. Plan (table) + approval if interactive
-E. Execute + follow-ups + mechanical reviews
-F. Report
+recency → refresh ground truth (if stale) → site-overview
+  → articles / article / gsc-queries → ≤5 actions → report
 ```
 
-You may **reorder, deepen, or skip** B–C pieces when a strong anomaly appears.
-You must still honor hard rails and still produce a plan before mass create
-(interactive: user approval; hands-off: short internal plan then proceed).
+Reorder/deepen when a clear anomaly appears. Still honor hard rails and plan
+before mass create (interactive: approval; hands-off: short plan then go).
 
-### Explicit permission to leave the map
-
-If tool output shows a **clear, high-impact anomaly** (e.g. literal template
-vars in titles, mass not-indexed, one cluster eating the site, brand-token
-catastrophe), you **should**:
-
-1. Stop covering the full evaluate menu.  
-2. Spend more tool calls chasing that thread (related tools, samples, framework).  
-3. Propose fewer, sharper tasks aimed at that root cause.  
-4. In the report **Exploration path** section, say what you followed and what
-   you skipped on purpose.
-
-Do **not** pad the run with low-value checklist tasks after you’ve found the
-real story.
-
----
-
-## A. Recency / load (usually first)
+### A. Recency / load
 
 ```bash
 pageseeds-cli list-tasks -i <id> -p <path>
 ```
 
-- Check latest `weekly_seo_*.md` under automation.  
-- **Skip entire run** only if last weekly was **&lt; 5 days ago** *or* **≥ 5**
-  fix-like tasks still open (`todo` / `queued` / `in_progress`) **and** the user
-  did not force a run. Always state skip reasoning.  
-- User can override: “run anyway” → continue.
+- Latest `weekly_seo_*.md` under automation.
+- **Skip run** only if last weekly **&lt; 5 days** *or* **≥ 5** fix-like tasks
+  open (`todo`/`queued`/`in_progress`) **and** user did not force. State why.
+- Override: “run anyway” → continue.
 
----
+### B. Refresh ground truth (if stale)
 
-## B. Ground truth (when needed, not always every tool)
+There is **no** `refresh_ground_truth` CLI yet (dual-path until it lands).
 
-Live GSC is cheap truth:
+| Need | Do |
+|------|-----|
+| Live demand / deltas | `gsc-performance`, `gsc-movers`, `gsc-queries` (cheap truth) |
+| Stale snapshots / desk cache | `create-task -t collect_gsc` then **`execute-task` this run** if needed |
+| Clarity (if configured) | same pattern with `collect_clarity` |
 
-- `gsc-performance`, `gsc-movers`, optionally `gsc-queries`  
+If GSC disconnected: continue on catalog/indexing tools only; note it.
 
-If snapshots / audit look stale:
+### C. Desk exploration (primary)
 
-```bash
-pageseeds-cli create-task -i <id> -p <path> \
-  -t collect_gsc -T "Weekly GSC refresh" -r "<reason>" --auto-enqueue
-# then execute-task when you need fresh data this run
-```
+**Goal:** *What is the highest-leverage SEO problem/opportunity this week?*
 
-Same idea for Clarity if configured. If GSC is disconnected, continue on
-content/indexing tools only and note it.
+#### Primary desk tools (explore these first)
 
-You do **not** need a full audit every week if last audit is fresh and GSC is
-calm — use judgment.
-
----
-
-## C. Free exploration (primary)
-
-**Goal:** answer *“What is the highest-leverage SEO problem or opportunity this
-week?”* using tools, not a fixed checklist.
-
-### Tool catalog (capability surface)
-
-| Tool | Use when |
-|------|----------|
-| `gsc-performance` | Site/page traffic, CTR, impressions (`-l` limit, default 50, max 200) |
-| `gsc-movers` | Who gained/lost clicks 30d vs prior 30d (`-l` limit, default 30, max 200) |
-| `gsc-queries` | Query-level demand; striking-distance / uncovered queries (`-u` page URL optional; `-l` limit) |
-| `ctr-health` | Per-article CTR / SERP snippet health |
-| `indexing-status` | Not indexed + reasons |
-| `cannibalization-clusters` | Competing pages |
-| `content-audit-report` | Cached multi-check audit (if missing/stale: `run-content-audit`) |
-| `run-content-audit` | Refresh audit snapshot |
-| `article-list` | Inventory / status filter |
-| `article-frontmatter` | One slug’s frontmatter (`--slug`) |
-| `article-body-hash` | Exact duplicate bodies |
-| `article-title-scan` | Title bugs, templates, dup tokens |
-| `article-link-graph` | Orphans / weak internal links |
-| `framework-files` | Layout, sitemap, robots when template-level bug suspected |
-| `research-shortlist` | Theme/keyword backlog + health |
-| `article-quality-reviews` | Recent quality gate failures |
+| Tool | Role |
+|------|------|
+| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints |
+| `articles` | GSC-aware catalog list (filters: status, min impressions, period) |
+| `article` | Full package for one slug: frontmatter, body outline, top queries, neighbors (`-S`/`--slug`) |
+| `gsc-performance` | Site/page traffic, CTR, impressions (`-l`, default 50, max 200) |
+| `gsc-movers` | Gained/lost clicks 30d vs prior (`-l`, default 30, max 200) |
+| `gsc-queries` | Query-level demand; page filter `-u <url>` |
 | `list-tasks` / `get-task` | Open work, artifacts, review state |
-| `score-zero-impression-articles` | Dead-weight / zero-impression candidates |
+| `create-task` / `execute-task` | Act within may-create + budgets |
+| Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
 
-**Exploration budget:** prefer **≤ ~25 tool invocations** before locking a plan
-(not a hard fail — stop earlier if the story is clear; go a bit further if still
-confused). Do not thrash the same tool without a new hypothesis.
+#### Optional / secondary (NOT ground truth, not required path)
 
-### How to explore
+| Tool | Note |
+|------|------|
+| `cannibalization-clusters` | Soft TF-IDF clusters — **fail open** on mono-niche; **not merge authority** |
+| `ctr-health` | Productized composite — prefer impressions/CTR from desk + `gsc-queries` |
+| `seo_health_scan` (task) | Optional backlog only when desk data is insufficient |
+| `content-audit-report` / `run-content-audit` | Optional deep structural checks |
+| `indexing-status`, `article-title-scan`, `article-body-hash`, `article-link-graph`, `framework-files`, `research-shortlist`, `article-quality-reviews`, `score-zero-impression-articles`, `article-list` / `article-frontmatter` | Use when desk points there |
 
-1. Start with **1–3 wide scans** (often movers + performance + one of
-   indexing / title-scan / cannibalization — pick by prior knowledge).  
-2. **Follow the strongest anomaly** 2–4 tools deep.  
-3. Only then sample other areas if budget remains.  
-4. Gap / growth-without-problems: run or schedule `research_keywords` logic
-   (see soft hints below) — evaluative tools alone cannot prove “no gaps.”
+**Exploration budget:** prefer **≤ ~25** tool calls before locking a plan.
+Stop early when the story is clear; do not thrash the same tool without a new hypothesis.
 
-### Soft hints (not a mandatory order)
+#### How to explore
 
-Use these as **priors**, not a required table to walk top-to-bottom:
+1. **Wide:** `site-overview` (+ `gsc-movers` / `gsc-performance` if needed).  
+2. **Catalog:** `articles` for filters (high impressions, low CTR, status).  
+3. **Deep:** `article -S <slug>` + `gsc-queries -u <url>` on top candidates.  
+4. **Act** only with evidence; gap growth → research (below).
 
-- Big click losses / CTR disaster → `ctr_audit` or `content_review`  
-- Many not-indexed → indexing diagnostics / internal links  
-- Clusters → `cannibalization_audit`  
-- Orphans → `cluster_and_link` / `interlinking`  
-- Structural audit pile-up → `content_cleanup` or `content_review`  
-- Template/title systemic bugs → `generate_feature_spec` + evidence  
-- Quiet site + old research → `research_keywords` (generative gap detector)  
-- No single clear signal → `seo_health_scan`  
-- Reddit configured + capacity → `reddit_opportunity_search`  
+#### Soft hints (priors — CTR & cannibalization emerge from desk data)
 
-**Research:** still generative. Prefer `research-shortlist` health
+| Pattern from desk | Action preference |
+|-------------------|-------------------|
+| High impressions + low CTR + weak title/meta | `fix_content_article` / `content_review`; optionally `ctr_audit` if you need the pipeline |
+| Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
+| Many not-indexed | Indexing diagnostics / internal links |
+| Orphans / weak links | `cluster_and_link` / `interlinking` |
+| Structural MDX issues | `content_cleanup` / `content_review` |
+| Template/title systemic bugs | `generate_feature_spec` + evidence |
+| Quiet site + thin backlog | `research_keywords` / `research_landing_pages` |
+| Desk insufficient across levers | Optional `seo_health_scan` (not default) |
+| Reddit configured + capacity | `reddit_opportunity_search` |
+
+**Research:** generative. Prefer `research-shortlist` health
 (`promising` / `depleted` / `unproven`). Never claim “no gaps found” if research
-did not run — say **skipped** and why + last research date.
+did not run — say **skipped** + why + last research date.
 
-When keyword picker / research final selection is **avoid-heavy** (AIO-blocked
-head terms, mostly `winnability: avoid`), prefer the shortlist **promising**
-path rather than rubber-stamping demoted heads:
-- Call `research-shortlist -i <id> -H promising` (CLI health filter) and bias
-  themes/seeds from those rows for a re-run of `research_keywords` /
-  `research_landing_pages` if capacity allows.
-- Or filter/prefer promising themes yourself and re-run research, then pick
-  only `differentiate` / `target` (non-avoid) rows from the picker.
-Soft guidance only — residual avoids as last resort when nothing better exists.
+Avoid-heavy keyword pickers (AIO-blocked heads, mostly `winnability: avoid`):
+prefer shortlist **promising** themes/seeds and re-run research; pick only
+`differentiate` / `target` rows when possible. Residual avoids = last resort.
 
-### Known tool limits — do not dead-end as “caveats for later”
+#### Known limits (branch, don’t dead-end)
 
-Agents often stop with soft caveats instead of using the rest of the surface.
-**Treat limits as branching rules, not conversation enders.**
+| Limit | Do *this run* if budget allows |
+|-------|--------------------------------|
+| `gsc-movers` ~30 rows | Default limit — raise `-l 100`/`200` or cross-check `gsc-performance` |
+| Empty `gsc_page_daily` | Run `collect_gsc` + execute if day-level series needed; movers use live API windows |
+| No SERP scrape tool | Infer from position deltas + query mix only; use research for gaps |
+| Top 3–4 URLs are the problem | Deep-dive each with `article` + `gsc-queries` **now**, then fix tasks |
 
-| Limit you hit | What it means | Do this *in the same run* (if budget allows) |
-|---------------|---------------|-----------------------------------------------|
-| `gsc-movers` only returned ~30 rows | **Default limit**, not “30 pages on the whole property.” Live GSC comparison is ranked; top losses/gains dominate. | If the story is clear from concentration of loss, proceed. If not, re-call `gsc-movers -l 100` (or 200). Cross-check with `gsc-performance -l 100` for absolute traffic ranking (not period delta). |
-| “No daily history / `gsc_page_daily` empty” | Daily series is filled by **`collect_gsc`** / GSC sync (append-only snapshots), not by `gsc-movers`. Movers use live Search Analytics API for two windows. | If you need day-level series or outcome measurement later: `create-task -t collect_gsc …` and **`execute-task` this run** when GSC is connected. Do not only suggest it as a human next step unless budget is exhausted or GSC is disconnected. |
-| “No competitive SERP scrape” | **Out of tool surface** today — there is no SERP competitor tool in pageseeds-cli. | State that once. Infer pressure only from **position deltas + page type + query mix** (`gsc-queries -u <url>`). Do not invent competitor ranks. If competitive content gaps matter, use `research_keywords` / shortlist — not a fake SERP audit. |
-| Story is “top 3–4 URLs are the whole problem” | Deep dive **is** available without a new weekly mode. | For each URL: `gsc-queries -u <url>`, `article-frontmatter --slug <slug>`, optionally title-scan / content-audit / link-graph for that slug. Then propose `ctr_audit`, `content_review`, or `fix_content_article` with evidence. **Do this before** parking work as “if you want a follow-up without weekly SEO.” |
-
-**Anti-pattern:** ending with “if you want a next step, deep-dive top URLs or wire collect_gsc” when those steps are **in your tool list and budgets**. Either do them now or explicitly say which hard rail blocked them (execution budget, user hands-off plan already locked, GSC not connected).
+**Anti-pattern:** parking “deep-dive later” when tools + budgets allow it now.
 
 ---
 
 ## D. Plan
 
-Before creating a batch of tasks, write a short plan:
-
 | Finding | Evidence (tool + numbers/slugs) | Proposed task | Why this week |
 
-- **Interactive:** get user approval once per project.  
-- **Hands-off:** proceed after stating the plan briefly.  
-
-Max **5** creates; prioritize impact.
+- Interactive: one approval per project. Hands-off: state plan, proceed.  
+- Max **5** creates; impact first.
 
 ---
 
 ## E. Execute
-
-Creating ≠ running. Use:
 
 ```bash
 pageseeds-cli create-task -i <id> -p <path> \
@@ -333,7 +240,7 @@ pageseeds-cli create-task -i <id> -p <path> \
 pageseeds-cli execute-task -I <task-id>
 ```
 
-**`fix_content_article` always requires a slug** — never create it bare:
+**`fix_content_article` always needs a slug:**
 
 ```bash
 pageseeds-cli create-task -i <id> -p <path> \
@@ -341,29 +248,21 @@ pageseeds-cli create-task -i <id> -p <path> \
   -T "Fix content: <title>" -r "<reason citing evidence>"
 ```
 
-Bare `create-task -t fix_content_article` without `-S` / `--slug` is rejected.
-The CLI attaches a full `recommendations_{article_id}` artifact with SERP
-categories (title / description / h1 / intro).
+Bare create without `-S` is rejected. CLI attaches `recommendations_{article_id}`
+(SERP categories: title / description / h1 / intro).
 
-Loop:
-
-1. Execute approved tasks one at a time.  
-2. On success, execute `follow_up_tasks` (and theirs) within budget.  
-3. Stop at **15** executions; list leftover IDs under “Queued, not yet run.”  
-4. Fail once → note, continue; at most one retry per task.  
-5. Task lands in `review` → resolve (below).
+Loop: execute one-by-one → follow-ups within budget → stop at **15** → note
+leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 
 ### Expected auto follow-ups
 
-- `write_article` / hub / landing (from selection) → quality review + cluster link  
-- `content_review` / `content_audit` → may spawn fix tasks / feature-spec cooldown  
-  (behavior depends on app version; execute what appears in `follow_up_tasks`)
+- Selection → `write_article` / hub / landing → quality review + cluster link  
+- `content_review` may spawn fixes / feature-spec (execute what appears)
 
 ### Quality gate
 
-If `review_article_quality` fails (`overall_pass` false), create
-`fix_content_article` **with** `-S <url-slug>` for that file if none exists,
-then execute (counts toward 15). Never bare `fix_content_article`.
+Failed `review_article_quality` → create `fix_content_article` **with** `-S`
+if none exists, then execute (counts toward 15).
 
 ### Review resolution
 
@@ -371,24 +270,19 @@ then execute (counts toward 15). Never bare `fix_content_article`.
 pageseeds-cli get-task -I <task-id>
 ```
 
-- **CannibalizationPicker:** high-confidence mechanical merges via
-  `select-cannibalization -I <parent> -S merge:<id>,hub:<id>`; escalate ambiguous.  
-- **KeywordPicker:** do **not** rubber-stamp. Check demand/difficulty, no
-  self-competition (`article-list` / `gsc-queries`), intent fit. Prefer
-  non-avoid / `differentiate` / `target` rows when present (skip AIO-blocked
-  `avoid` heads if product-adjacent long-tails are on the list). Then
-  `select-keywords -I <id> -K kw1,kw2` — max **3** articles, fewer is better.  
-- **ContentReviewPicker / fix proposals:** `select-content-review -I <parent> -P id1,id2`  
-- **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`  
-- **ArtifactReview:** summarize; `update-task-status -I <id> -s done`  
-
-Escalate irreversible or strategic choices.
+- **CannibalizationPicker:** mechanical high-confidence only —
+  `select-cannibalization -I <parent> -S merge:<id>,hub:<id>`; escalate ambiguous.
+  Soft clusters are **not** merge authority.
+- **KeywordPicker:** no rubber-stamp. Check demand/difficulty, self-competition
+  (`articles` / `gsc-queries`), intent. Prefer non-avoid / `differentiate` /
+  `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
+- **ContentReviewPicker:** `select-content-review -I <parent> -P id1,id2`
+- **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`
+- **ArtifactReview:** summarize; `update-task-status -I <id> -s done`
 
 ---
 
 ## F. Report
-
-Write:
 
 `<project-path>/.github/automation/weekly_seo_{YYYYMMDD_HHMMSS}.md`
 
@@ -401,7 +295,7 @@ Write:
 2–3 sentences: biggest finding and what was done.
 
 ## Exploration path
-What you chased first, detours, what you skipped on purpose (and why).
+Desk path chased, detours, what you skipped (and why).
 
 ## Measures taken
 | Measure | Evidence | Task | Outcome |
@@ -422,22 +316,20 @@ What you chased first, detours, what you skipped on purpose (and why).
 - Including research skip vs “not run” honesty rule.
 
 ## Product / CLI gaps (if any)
-- Missing tools or commands that blocked work — for a **separate** product session.
+- e.g. no `refresh_ground_truth` yet — used collect_gsc / live gsc-* dual-path
 
 ## Recommended next actions
 …
 ```
 
-### Final message to the user
-
-Compact, human-readable — no JSON dumps:
+### Final user message (no JSON dumps)
 
 ```
 ## Weekly SEO — {project name} ({date})
 
 **TL;DR:** …
 
-**Exploration:** one line on the path you followed
+**Exploration:** one line (desk path)
 
 **Done**
 - …
@@ -458,23 +350,27 @@ Compact, human-readable — no JSON dumps:
 
 ## Guardrails (summary)
 
-- Free exploration **encouraged**; hard rails **mandatory**.  
-- **Installed `pageseeds-cli` only** — never `cargo run` from app source.  
-- **No pageseeds-app / product source edits** during this skill.  
-- Missing tools → report gap; do not implement product code.  
+- Desk-first exploration; hard rails **mandatory**.  
+- Installed `pageseeds-cli` only — never product `cargo run`.  
+- No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
-- Evidence required; no invented data.  
-- No direct content edits; no illegal task types via `create-task`.  
-- Mechanical reviews only; escalate judgment.  
-- Only write the weekly report file.  
+- Evidence required; no invented data; no illegal create-task types.  
+- Soft clusters **not** ground truth / merge authority.  
+- Mechanical reviews only; only write the weekly report file.  
 - Idempotent re-runs: recency + spawner keys.
 
 ---
 
-## Design note (experiment)
+## Design note
 
-This skill is the **explore-first** experiment (epic #92 option D): same
-`pageseeds-cli` capability surface as a future MCP, skill as operator, product
-repo out of the operator workspace. If runs feel freer *and* still safe, carry
-the pattern into MCP-era skills. If agents thrash or skip real work, tighten
-soft guidance—not hard rails first.
+**Desk model (epic #117):** ~10-tool mental model — Site State reads
+(`site-overview` / `articles` / `article` + GSC) then few hard actions. Soft
+clusters and specialist audits remain available but are **optional**, not the
+weekly spine.
+
+**Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
+and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both
+answer the same question.
+
+**MCP (#92):** mount **desk tools first**; skill = operator policy. Tighten soft
+guidance if agents thrash — not hard rails first.

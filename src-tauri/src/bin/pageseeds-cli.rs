@@ -69,6 +69,68 @@ fn main() {
         // ── Dead-weight remediation (WS4) ──
         "score-zero-impression-articles" => score_zero_impression_articles(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
 
+        // ── Site State desk tools (shared domain builders) ──
+        "site-overview" => {
+            let period_days: Option<i64> = flag(&args, "--period-days", "-d")
+                .and_then(|s| s.parse().ok());
+            let path = require_project_path();
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_lib::engine::site_state::build_site_overview(
+                    &conn,
+                    &project_id,
+                    &path,
+                    period_days,
+                )
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+            })
+        }
+        "articles" => {
+            let period_days: Option<i64> = flag(&args, "--period-days", "-d")
+                .and_then(|s| s.parse().ok());
+            let min_impressions: f64 = flag(&args, "--min-impressions", "-m")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+            let include_redirected = has_flag(&args, "--include-redirected", "-R");
+            let limit: Option<usize> = flag(&args, "--limit", "-l")
+                .and_then(|s| s.parse().ok());
+            let path = require_project_path();
+            let status = flag(&args, "--status", "-s");
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_lib::engine::site_state::list_articles_catalog(
+                    &conn,
+                    &project_id,
+                    &path,
+                    pageseeds_lib::engine::site_state::ArticlesFilter {
+                        status,
+                        min_impressions,
+                        include_redirected,
+                        limit,
+                        period_days,
+                    },
+                )
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+            })
+        }
+        "article" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let period_days: Option<i64> = flag(&args, "--period-days", "-d")
+                .and_then(|s| s.parse().ok());
+            let path = require_project_path();
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_lib::engine::site_state::get_article_package(
+                    &conn,
+                    &project_id,
+                    &path,
+                    &slug,
+                    period_days,
+                )
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+            })
+        }
+
         // ── Shared functions (single source of truth) ──
         "article-list" => {
             investigate::list_articles_json(&ctx, flag(&args, "--status", "-s").as_deref(), 200)
@@ -848,6 +910,9 @@ Usage:
 Tools:
   gsc-performance  gsc-queries  gsc-movers   [-l/--limit N]  (defaults: perf/queries 50, movers 30; max 200)
   gsc-queries      also accepts -u/--page-url <url>
+  site-overview    [-d/--period-days N]                     Site health desk (totals, top pages, movers)
+  articles         [-s status] [-m min-impressions] [-R include-redirected] [-l limit] [-d period-days]
+  article          -S/--slug <slug> [-d/--period-days N]    Full package for one article
   article-list  article-frontmatter  article-body-hash  article-title-scan
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph

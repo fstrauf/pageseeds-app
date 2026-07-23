@@ -67,8 +67,8 @@ impl Tool for ArticleListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List all articles with metadata. Use to discover what content exists, \
-                filter by status, or get an overview of the site's content inventory.".to_string(),
+            description: "Lightweight non-GSC list of articles with basic metadata \
+                (slug, status, title, word_count). Prefer articles for GSC-aware inventory.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -132,7 +132,7 @@ impl Tool for ArticleFrontmatterTool {
             name: Self::NAME.to_string(),
             description: "Read frontmatter from an MDX file by slug or file path. \
                 Returns title, description, date, status, and word count. \
-                Use article_list first to discover slugs.".to_string(),
+                Prefer articles (inventory) or article (full package) to discover slugs.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {

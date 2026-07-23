@@ -226,25 +226,21 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
                 if already_links {
                     continue;
                 }
-                // Simple topical relevance: same cluster or shared keyword
+                // Topical relevance for link sources: shared target keyword only.
+                // Soft TF-IDF cluster membership is exploratory and must not qualify
+                // source candidates as boolean truth (issue #123). Cluster context
+                // remains attached on the target for diagnosis.
                 let src_kw = src_art["target_keyword"].as_str().unwrap_or("");
-                let in_cluster = siblings.iter().any(|s| {
-                    crate::content::slug::extract_slug_from_url(&s.url) == *src_slug
-                });
                 let shares_kw = !target_keyword.is_empty()
                     && !src_kw.is_empty()
                     && target_keyword.to_lowercase() == src_kw.to_lowercase();
-                if in_cluster || shares_kw {
+                if shares_kw {
                     source_candidates.push(crate::models::indexing_health::LinkSourceCandidate {
                         article_id: src_id,
                         slug: src_slug.clone(),
                         title: src_art["title"].as_str().unwrap_or("").to_string(),
                         file: src_art["file"].as_str().unwrap_or("").to_string(),
-                        reason: if in_cluster {
-                            "cluster sibling".to_string()
-                        } else {
-                            "shared target keyword".to_string()
-                        },
+                        reason: "shared target keyword".to_string(),
                     });
                 }
             }

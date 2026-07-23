@@ -764,6 +764,68 @@ Some content here.
         })
     }
 
+    /// Context-shaped article for cannibalization_audit_context.json injection tests.
+    fn context_article(
+        id: i64,
+        slug: &str,
+        keyword: &str,
+        impressions: f64,
+        first_200_words: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "url_slug": slug,
+            "title": slug,
+            "h1": slug,
+            "target_keyword": keyword,
+            "first_200_words": first_200_words,
+            "gsc": {
+                "impressions": impressions,
+                "clicks": 5.0,
+                "avg_position": 8.0
+            },
+            "incoming_internal_links": 1,
+            "outgoing_internal_links": 1,
+            "published_date": "2024-01-01",
+            "word_count": 800
+        })
+    }
+
+    fn sim_pair(
+        a_id: i64,
+        b_id: i64,
+        a_title: &str,
+        b_title: &str,
+        similarity: f64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "article_a_id": a_id,
+            "article_b_id": b_id,
+            "article_a_title": a_title,
+            "article_b_title": b_title,
+            "similarity": similarity,
+        })
+    }
+
+    fn write_context_file(
+        path: &str,
+        articles: serde_json::Value,
+        similarity_pairs: serde_json::Value,
+    ) {
+        let auto_dir = Path::new(path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let doc = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "articles": articles,
+            "similarity_pairs": similarity_pairs,
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_audit_context.json"),
+            serde_json::to_string_pretty(&doc).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn write_exact_dupes_file(path: &str, duplicates: serde_json::Value) {
         let auto_dir = Path::new(path).join(".github").join("automation");
         std::fs::create_dir_all(&auto_dir).unwrap();
@@ -910,8 +972,19 @@ Some content here.
 
     #[test]
     fn test_select_candidates_skips_empty_keyword_exact_dupes() {
+        // Isolate from ambient PAGESEEDS_DB_PATH so shared_query/embedding
+        // lanes cannot inject candidates for project_id "proj-test".
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let db_path = Path::new(&path).join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        drop(conn);
+
         write_clusters_file(
             &path,
             serde_json::json!([
@@ -948,9 +1021,15 @@ Some content here.
         let candidates = read_candidates(&path);
         assert!(
             candidates.is_empty(),
-            "empty target_keyword must not form exact_keyword_dupe candidates"
+            "empty target_keyword must not form exact_keyword_dupe candidates: {:?}",
+            candidates
         );
 
+        if let Some(v) = old_db {
+            std::env::set_var("PAGESEEDS_DB_PATH", v);
+        } else {
+            std::env::remove_var("PAGESEEDS_DB_PATH");
+        }
         cleanup(&path);
     }
 
@@ -958,8 +1037,6 @@ Some content here.
     fn test_select_candidates_emits_high_similarity_pairs() {
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
-        let auto_dir = Path::new(&path).join(".github").join("automation");
-        std::fs::create_dir_all(&auto_dir).unwrap();
 
         // Soft cluster with distinct keywords alone would yield 0 candidates.
         write_clusters_file(
@@ -972,71 +1049,18 @@ Some content here.
 
         // Context with a high-sim pair (above PAIR_CANDIDATE_SIMILARITY_THRESHOLD 0.45)
         // and a low-sim pair that must be ignored.
-        let context = serde_json::json!({
-            "generated_at": "2024-01-01T00:00:00Z",
-            "articles": [
-                {
-                    "id": 1,
-                    "url_slug": "cold-brew-guide",
-                    "title": "Cold Brew Guide",
-                    "h1": "Cold Brew Guide",
-                    "target_keyword": "cold brew coffee",
-                    "first_200_words": "how to make cold brew coffee at home",
-                    "gsc": { "impressions": 1000.0, "clicks": 10.0, "avg_position": 5.0 },
-                    "incoming_internal_links": 1,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2024-01-01",
-                    "word_count": 800
-                },
-                {
-                    "id": 2,
-                    "url_slug": "portable-brewer",
-                    "title": "Portable Coffee Maker",
-                    "h1": "Portable Coffee Maker",
-                    "target_keyword": "portable coffee maker",
-                    "first_200_words": "best portable coffee makers for travel",
-                    "gsc": { "impressions": 500.0, "clicks": 5.0, "avg_position": 8.0 },
-                    "incoming_internal_links": 0,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2024-02-01",
-                    "word_count": 600
-                },
-                {
-                    "id": 3,
-                    "url_slug": "moka-pot",
-                    "title": "Moka Pot Guide",
-                    "h1": "Moka Pot Guide",
-                    "target_keyword": "moka pot",
-                    "first_200_words": "using a moka pot on the stove",
-                    "gsc": { "impressions": 200.0, "clicks": 2.0, "avg_position": 12.0 },
-                    "incoming_internal_links": 0,
-                    "outgoing_internal_links": 0,
-                    "published_date": "2024-03-01",
-                    "word_count": 400
-                }
-            ],
-            "similarity_pairs": [
-                {
-                    "article_a_id": 1,
-                    "article_b_id": 2,
-                    "article_a_title": "Cold Brew Guide",
-                    "article_b_title": "Portable Coffee Maker",
-                    "similarity": 0.62
-                },
-                {
-                    "article_a_id": 1,
-                    "article_b_id": 3,
-                    "article_a_title": "Cold Brew Guide",
-                    "article_b_title": "Moka Pot Guide",
-                    "similarity": 0.18
-                }
-            ]
-        });
-        std::fs::write(
-            auto_dir.join("cannibalization_audit_context.json"),
-            serde_json::to_string_pretty(&context).unwrap(),
-        )
-        .unwrap();
+        write_context_file(
+            &path,
+            serde_json::json!([
+                context_article(1, "cold-brew-guide", "cold brew coffee", 1000.0, "how to make cold brew coffee at home"),
+                context_article(2, "portable-brewer", "portable coffee maker", 500.0, "best portable coffee makers for travel"),
+                context_article(3, "moka-pot", "moka pot", 200.0, "using a moka pot on the stove"),
+            ]),
+            serde_json::json!([
+                sim_pair(1, 2, "cold-brew-guide", "portable-brewer", 0.62),
+                sim_pair(1, 3, "cold-brew-guide", "moka-pot", 0.18),
+            ]),
+        );
 
         let result = exec_can_select_candidates(&audit_task(), &path);
         assert!(result.success, "select_candidates failed: {}", result.message);
@@ -1063,6 +1087,7 @@ Some content here.
         );
 
         // #117 evidence shortlist artifact
+        let auto_dir = Path::new(&path).join(".github").join("automation");
         let evidence_path = auto_dir.join("cannibalization_evidence.json");
         assert!(evidence_path.exists(), "must write cannibalization_evidence.json");
         let evidence: serde_json::Value =
@@ -1285,6 +1310,227 @@ Some content here.
             "exact-keyword groups cap at 4 pages"
         );
 
+        cleanup(&path);
+    }
+
+    /// CI lock for epic #117 / issue #125 (Brewedlate mono-niche regression).
+    ///
+    /// Soft TF-IDF can park many distinct-keyword mono-niche pages in one cluster.
+    /// Pre-#118 that became a whole-theme top-N stranger bag. Evidence lanes only:
+    /// exact keyword dupes + high pairwise similarity — never soft-cluster merge.
+    #[test]
+    fn test_mono_niche_fixture_no_mega_merge_planted_dupes_surface() {
+        // Isolate from ambient PAGESEEDS_DB_PATH (shared_query / embedding lanes).
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let db_path = Path::new(&path).join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        drop(conn);
+
+        // Soft cluster: ≥8 distinct-intent coffee mono-niche pages (high impressions)
+        // plus planted exact-dupe pair. This is the shape that used to become an
+        // 8-stranger top-N bag when soft clusters were merge authority.
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                // Planted exact keyword dupe ("cold brew coffee")
+                cluster_page(1, "cold-brew-a", "cold brew coffee"),
+                cluster_page(2, "cold-brew-b", "cold brew coffee"),
+                // High-sim pair planted via similarity_pairs (distinct keywords)
+                cluster_page(3, "coffee-blooming", "coffee blooming"),
+                cluster_page(4, "coffee-freshness", "coffee freshness"),
+                // Distinct-intent high-traffic mono-niche pages (must not mega-merge)
+                cluster_page(5, "portable-coffee-maker", "portable coffee maker"),
+                cluster_page(6, "moka-pot-guide", "moka pot"),
+                cluster_page(7, "coffee-subscription", "coffee subscription"),
+                cluster_page(8, "cheap-coffee-beans", "cheap coffee beans"),
+                cluster_page(9, "pour-over-guide", "pour over coffee"),
+                cluster_page(10, "specialty-coffee-trends", "specialty coffee trends"),
+                cluster_page(11, "french-press-basics", "french press"),
+            ]),
+        );
+
+        write_exact_dupes_file(
+            &path,
+            serde_json::json!([{
+                "keyword": "cold brew coffee",
+                "article_count": 2,
+                "total_impressions": 15000.0,
+                "pages": [
+                    dupe_page(1, "cold-brew-a", "cold brew coffee", 9000.0),
+                    dupe_page(2, "cold-brew-b", "cold brew coffee", 6000.0),
+                ],
+                "best_performer": {
+                    "id": 1,
+                    "title": "cold-brew-a",
+                    "url": "cold-brew-a",
+                    "impressions": 9000.0,
+                    "clicks": 40.0,
+                    "avg_position": 4.0
+                }
+            }]),
+        );
+
+        // Context: all mono-niche articles + one high-sim pair + low-sim noise.
+        // Planted high-sim: coffee-blooming ↔ coffee-freshness at 0.58 (≥0.45).
+        write_context_file(
+            &path,
+            serde_json::json!([
+                context_article(1, "cold-brew-a", "cold brew coffee", 9000.0, "how to make cold brew coffee at home batch"),
+                context_article(2, "cold-brew-b", "cold brew coffee", 6000.0, "cold brew coffee recipe concentrate ratio"),
+                context_article(3, "coffee-blooming", "coffee blooming", 4200.0, "why coffee blooms during pour over degassing"),
+                context_article(4, "coffee-freshness", "coffee freshness", 3800.0, "how long coffee stays fresh after roast degassing"),
+                context_article(5, "portable-coffee-maker", "portable coffee maker", 12000.0, "best portable coffee makers for travel camping"),
+                context_article(6, "moka-pot-guide", "moka pot", 8000.0, "how to use a moka pot on the stove"),
+                context_article(7, "coffee-subscription", "coffee subscription", 15000.0, "best coffee subscription boxes monthly delivery"),
+                context_article(8, "cheap-coffee-beans", "cheap coffee beans", 7000.0, "affordable specialty coffee beans without sacrificing"),
+                context_article(9, "pour-over-guide", "pour over coffee", 9500.0, "pour over coffee technique v60 ratio"),
+                context_article(10, "specialty-coffee-trends", "specialty coffee trends", 5500.0, "specialty coffee trends processing methods origins"),
+                context_article(11, "french-press-basics", "french press", 11000.0, "french press brew time grind size guide"),
+            ]),
+            serde_json::json!([
+                sim_pair(3, 4, "coffee-blooming", "coffee-freshness", 0.58),
+                // Low-sim noise: distinct intents must not emit candidates
+                sim_pair(7, 5, "coffee-subscription", "portable-coffee-maker", 0.12),
+                sim_pair(6, 11, "moka-pot-guide", "french-press-basics", 0.22),
+                sim_pair(1, 9, "cold-brew-a", "pour-over-guide", 0.19),
+            ]),
+        );
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(
+            result.success,
+            "select_candidates failed: {}",
+            result.message
+        );
+
+        let candidates = read_candidates(&path);
+
+        // ── No soft-cluster mega-merge (Brewedlate stranger bag) ──────────────
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c["page_count"].as_i64().unwrap_or(0) <= 4),
+            "MAX_CANDIDATE_PAGES is 4; stranger bags must not reappear: {:?}",
+            candidates
+                .iter()
+                .map(|c| (
+                    c["candidate_id"].as_str(),
+                    c["page_count"].as_i64(),
+                    c["candidate_type"].as_str()
+                ))
+                .collect::<Vec<_>>()
+        );
+
+        // Evidence-based shortlist only: exact dupe + high-sim pair (not one huge bag)
+        assert_eq!(
+            candidates.len(),
+            2,
+            "mono-niche fixture must emit exactly planted evidence (exact + high-sim), got: {:?}",
+            candidates
+                .iter()
+                .map(|c| (
+                    c["candidate_type"].as_str(),
+                    c["theme"].as_str(),
+                    c["page_count"].as_i64()
+                ))
+                .collect::<Vec<_>>()
+        );
+
+        // ── Planted exact keyword dupe surfaces ───────────────────────────────
+        let exact = candidates.iter().find(|c| {
+            c["candidate_type"].as_str() == Some("exact_keyword_dupe")
+        });
+        let exact = exact.expect("planted exact_keyword_dupe for 'cold brew coffee' must surface");
+        assert_eq!(exact["page_count"].as_i64().unwrap(), 2);
+        assert_eq!(
+            exact["theme"].as_str().unwrap().to_lowercase(),
+            "cold brew coffee"
+        );
+        let exact_slugs: Vec<&str> = exact["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["url"].as_str())
+            .collect();
+        assert!(
+            exact_slugs.iter().any(|u| u.contains("cold-brew-a")),
+            "exact dupe must include cold-brew-a: {:?}",
+            exact_slugs
+        );
+        assert!(
+            exact_slugs.iter().any(|u| u.contains("cold-brew-b")),
+            "exact dupe must include cold-brew-b: {:?}",
+            exact_slugs
+        );
+
+        // ── Planted high-sim pair surfaces ────────────────────────────────────
+        // #121 renames high-sim pairs to candidate_type "near_dupe" (not merge_candidate).
+        let high_sim = candidates.iter().find(|c| {
+            c["candidate_type"].as_str() == Some("near_dupe")
+                || c["lane"].as_str() == Some("near_dupe")
+        });
+        let high_sim =
+            high_sim.expect("planted high-sim near_dupe (blooming↔freshness) must surface");
+        assert_eq!(high_sim["page_count"].as_i64().unwrap(), 2);
+        let pair_sim = high_sim["pair_similarity"].as_f64().unwrap();
+        assert!(
+            (pair_sim - 0.58).abs() < 0.001,
+            "pair_similarity should preserve planted 0.58, got {}",
+            pair_sim
+        );
+        let high_sim_slugs: Vec<&str> = high_sim["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["url"].as_str())
+            .collect();
+        assert!(
+            high_sim_slugs.iter().any(|u| u.contains("coffee-blooming")),
+            "high-sim pair must include coffee-blooming: {:?}",
+            high_sim_slugs
+        );
+        assert!(
+            high_sim_slugs.iter().any(|u| u.contains("coffee-freshness")),
+            "high-sim pair must include coffee-freshness: {:?}",
+            high_sim_slugs
+        );
+
+        // High-impression distinct-intent page must not co-appear with unrelated
+        // strangers in a multi-page merge (subscription is not planted exact/high-sim).
+        for c in &candidates {
+            let urls: Vec<&str> = c["pages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|p| p["url"].as_str())
+                .collect();
+            if urls.iter().any(|u| u.contains("coffee-subscription")) {
+                panic!(
+                    "coffee-subscription must not appear in any multi-page candidate unless planted as exact/high-sim: {:?}",
+                    urls
+                );
+            }
+            // No grab-bag mixing subscription-class traffic with gear/method strangers
+            let has_unrelated_mix = urls.iter().any(|u| u.contains("portable-coffee-maker"))
+                && urls.iter().any(|u| u.contains("moka-pot"));
+            assert!(
+                !has_unrelated_mix,
+                "distinct-intent gear pages must not co-merge as strangers: {:?}",
+                urls
+            );
+        }
+
+        if let Some(v) = old_db {
+            std::env::set_var("PAGESEEDS_DB_PATH", v);
+        } else {
+            std::env::remove_var("PAGESEEDS_DB_PATH");
+        }
         cleanup(&path);
     }
 
