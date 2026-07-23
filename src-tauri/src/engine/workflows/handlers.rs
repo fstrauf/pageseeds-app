@@ -265,10 +265,10 @@ impl WorkflowHandler for ContentHandler {
         }
         let mut steps = vec![step];
         // Step 2 (deterministic, new-article tasks only): verify the write stage
-        // actually produced a registered article file. Turns the silent no-op of
-        // text-only providers (task Done, zero output, issue #13) into a loud,
-        // retryable failure. Optimize tasks modify an existing file, so no new
-        // file is expected and this check does not apply to them.
+        // actually produced a registered article file. If a file-IO agent still
+        // writes nothing, fail loud/retryable (issue #13 contract). Optimize
+        // tasks modify an existing file, so no new file is expected and this
+        // check does not apply to them.
         if is_new_article {
             steps.push(WorkflowStep::new(
                 "content_write_verify",
