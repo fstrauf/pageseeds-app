@@ -12,13 +12,34 @@ when-to-use: >-
 argument-hint: "[project-name-or-id]"
 user-invocable: true
 metadata:
-  short-description: "Weekly SEO pass via pageseeds-cli (desk-first)"
+  short-description: "Weekly SEO pass via pageseeds-cli (desk-first + Path B)"
 ---
 
-# Weekly SEO — Agent Skill (desk-first)
+# Weekly SEO — CLI Operator Bible (desk-first + Path B)
 
 > **Desk model (epic #117):** explore **Site State** (GSC + catalog) then act.
 > Soft audits are optional — not the weekly spine, not ground truth.
+>
+> **Path B (epic #136):** session agent owns judgment/prose; CLI packages/gates.
+> Never nested weak host on CLI best-path.
+
+## Design rule (#136)
+
+```
+judgment/prose  →  session agent (you)
+package/gates   →  CLI / Rust
+never nested weak host on CLI best-path
+```
+
+| Host | Owns |
+|------|------|
+| **Session agent** (outer Grok/Kimi + this skill) | Judgment, strategy, prose, multi-file reasoning, expand loops |
+| **CLI package/submit** | Deterministic package, validate, ingest, dispose |
+| **Nested `execute-task` agentic** (global `agent_provider`) | Unattended / desktop fallback only — **not** CLI best-path for write/fix/merge |
+
+Why: nested GrokCli/KimiCli content_review falls back to scripted recommend; nested write under a weak global provider produces thin single-shot MDX. On the weekly CLI path, **you** write/edit; CLI only packages and gates.
+
+---
 
 ## Invocation
 
@@ -32,8 +53,9 @@ Prefer the **customer project** (cwd outside `pageseeds-app`). Requires
 `pageseeds-cli` on PATH (`pnpm install:cli` / `./scripts/install-cli.sh`).
 
 You are the weekly SEO operator for **one** project. Find the highest-impact
-organic growth opportunity, propose ≤5 measures, execute via PageSeeds tasks —
-not by editing content or product source yourself.
+organic growth opportunity, propose ≤5 measures, execute via PageSeeds tools —
+not by editing content or product source yourself (except Path B MDX writes
+to the CLI-provided `target_file` / keeper path).
 
 | Layer | Role |
 |-------|------|
@@ -53,7 +75,7 @@ not by editing content or product source yourself.
 
 | Role | Workspace | May write |
 |------|-----------|-----------|
-| **This skill** | Customer project / neutral cwd | Only weekly report under project automation |
+| **This skill** | Customer project / neutral cwd | Path B MDX to CLI target paths + weekly report under project automation |
 | **pageseeds-cli** | N/A (binary on PATH) | Tasks/DB/content **via tools only** |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs |
 
@@ -92,28 +114,44 @@ Breaking these fails the run.
 
 | # | Rule |
 |---|------|
-| 1 | **CLI only** for data/tasks (+ the report file). No direct DB writes, no hand-editing MDX. |
+| 1 | **CLI only** for data/tasks (+ Path B MDX to CLI targets + the report file). No direct DB writes. |
 | 2 | **No product source edits** under `pageseeds-app` / `src-tauri` / product manifests. |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
-| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B uses `write-context` / `write-submit`, not `create-task write_article`. |
+| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B uses package/submit tools, not `create-task write_article`. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
-| 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
+| 8 | **Report only freeform file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
 | 9 | **Missing integrations:** GSC/Clarity/Reddit fail → degrade and say so; never fake data. |
 
 ### May-create via `create-task`
 
-`fix_content_article` (**always** `-S`/`--slug` — never bare), `content_review`,
+`fix_content_article` (**always** `-S`/`--slug` — never bare),
 `research_keywords`, `research_landing_pages`, `indexing_diagnostics`,
 `indexing_health_campaign`, `fix_indexing_internal_links`, `content_cleanup`,
 `cluster_and_link`, `interlinking`, `ctr_audit`, `cannibalization_audit`,
 `update_research_shortlist`, `generate_feature_spec`, `seo_health_scan`,
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
 
-**Prefer when desk data already supports the action:** `fix_content_article`,
-`content_review`, `research_keywords`, `research_landing_pages`, indexing tasks.
-Do **not** invent work via soft audits when desk reads suffice.
+**Prefer when desk data already supports the action:** `fix_content_article -S`,
+`research_keywords`, `research_landing_pages`, indexing tasks.
+
+**Not on this list for weekly strategy:** `content_review` — desktop UI /
+unattended product only (#139). Do **not** `create-task content_review` for
+weekly explore/strategy. Desk → your judgment → hard actions.
+
+---
+
+## Explicit bans (CLI best-path)
+
+| Ban | Do instead |
+|-----|------------|
+| Nested weak write: `execute-task write_article` on happy path | Path B: `write-context` → session MDX → `write-submit` |
+| `fix_content_article` for length / min_word_count recovery after Path B write failure | Expand draft + re-run `write-submit` |
+| `content_review` as strategy brain (`create-task content_review` for weekly explore) | Desk → agent judgment → hard actions (#139) |
+| Soft clusters (`cannibalization-clusters`) as truth / merge authority | Hard evidence only (same query on 2+ URLs, exact keyword dupe, etc.) |
+| Full `ctr_audit` spawn by default (#140) | Desk → targeted `fix_content_article -S` when evidence is enough; scoped `ctr_audit` only when already needed |
+| Nested `execute-task` LLM steps for write/fix/merge when Path B package tools exist | Path B package → session edit → submit |
 
 ---
 
@@ -165,9 +203,11 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `gsc-movers` | Gained/lost clicks 30d vs prior (`-l`, default 30, max 200) |
 | `gsc-queries` | Query-level demand; page filter `-u <url>` |
 | `list-tasks` / `get-task` | Open work, artifacts, review state |
-| `create-task` / `execute-task` | Act within may-create + budgets |
-| Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
-| Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path) |
+| `create-task` / `execute-task` | Act within may-create + budgets (not for Path B write/fix/merge when package tools exist) |
+| Selection cmds | `select-keywords`, `select-cannibalization`, `create-reddit-replies`, `update-task-status` |
+| Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (**preferred**) |
+| Path B fix (when available) | `fix-context` / `fix-submit` — see package loops below |
+| Path B merge (when available) | `merge-context` / `merge-submit` — see package loops below |
 
 #### Optional / secondary (NOT ground truth, not required path)
 
@@ -193,11 +233,11 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
-| High impressions + low CTR + weak title/meta | `fix_content_article` / `content_review`; optionally `ctr_audit` if you need the pipeline |
-| Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
+| High impressions + low CTR + weak title/meta | `fix_content_article -S` (or Path B fix when tools exist); optionally scoped `ctr_audit` only if you need that full pipeline |
+| Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Mechanical cannibalization picker on high-confidence only; optionally `cannibalization_audit` **with hard evidence**; never soft clusters as truth |
 | Many not-indexed | Indexing diagnostics / internal links |
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
-| Structural MDX issues | `content_cleanup` / `content_review` |
+| Structural MDX issues | `content_cleanup` |
 | Template/title systemic bugs | `generate_feature_spec` + evidence |
 | Quiet site + thin backlog | `research_keywords` / `research_landing_pages` |
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
@@ -235,13 +275,17 @@ prefer shortlist **promising** themes/seeds and re-run research; pick only
 
 ## E. Execute
 
+### Hard actions (may-create)
+
 ```bash
 pageseeds-cli create-task -i <id> -p <path> \
   -t <task_type> -T "<title>" -r "<reason citing evidence>"
 pageseeds-cli execute-task -I <task-id>
 ```
 
-**`fix_content_article` always needs a slug:**
+**CLI dispose path (UI not required):** desk evidence →
+`fix_content_article -S <slug>` (or Path B fix when available). No
+ContentReviewPicker required.
 
 ```bash
 pageseeds-cli create-task -i <id> -p <path> \
@@ -255,46 +299,13 @@ Bare create without `-S` is rejected. CLI attaches `recommendations_{article_id}
 Loop: execute one-by-one → follow-ups within budget → stop at **15** → note
 leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 
-### Expected auto follow-ups
+### Path B package/submit loops
 
-- Selection → `write_article` tasks created for provenance — **complete via Path B**
-  (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
-- Path B `write-submit` → marks write task done + spawns `cluster_and_link`
-- Desktop nested writer still auto-spawns quality review + cluster link on success
-- `content_review` may spawn fixes / feature-spec (execute what appears)
-
-### Quality gate
-
-Failed `review_article_quality` → create `fix_content_article` **with** `-S`
-if none exists, then execute (counts toward 15).
-
-**Do not** use `fix_content_article` to recover Path B min_word_count / thin-body
-failures — expand the draft and re-run `write-submit` instead.
-
-### Review resolution
-
-```bash
-pageseeds-cli get-task -I <task-id>
-```
-
-- **CannibalizationPicker:** mechanical high-confidence only —
-  `select-cannibalization -I <parent> -S merge:<id>,hub:<id>`; escalate ambiguous.
-  Soft clusters are **not** merge authority.
-- **KeywordPicker:** no rubber-stamp. Check demand/difficulty, self-competition
-  (`articles` / `gsc-queries`), intent. Prefer non-avoid / `differentiate` /
-  `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
-  **After select-keywords, use Path B for articles** (below) — do **not**
-  `execute-task` the spawned `write_article` tasks.
-- **ContentReviewPicker:** `select-content-review -I <parent> -P id1,id2`
-- **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`
-- **ArtifactReview:** summarize; `update-task-status -I <id> -s done`
-
-### Path B — CLI write package (happy path after `select-keywords`)
+#### Write (shipped #135) — happy path after `select-keywords`
 
 `select-keywords` still creates `write_article` tasks for provenance / queue
-tracking. For **CLI best-path**, complete those tasks via write-context +
-session prose + write-submit — **not** nested `execute-task write_article`
-(weak global providers produce thin single-shot MDX).
+tracking. Complete them via write-context + session prose + write-submit —
+**not** nested `execute-task write_article`.
 
 ```bash
 # 1. Package (deterministic — no LLM)
@@ -314,13 +325,91 @@ pageseeds-cli write-submit -i <id> -p <path> \
 # → ok:true → article registered; write_article marked done; cluster_and_link spawned
 ```
 
-| Rule | Path B |
-|------|--------|
+| Rule | Path B write |
+|------|--------------|
 | **Do** | `write-context` → write MDX to `target_file` → `write-submit` until `ok` |
 | **Ban** | `execute-task write_article` on the happy path |
-| **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** instead |
+| **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** |
 | **Budget** | Each `write-submit` attempt counts toward the **15** execution budget |
 | **Provenance** | `select-keywords` may still spawn `write_article`; Path B completes them via submit |
+
+#### Fix (when #137 tools exist)
+
+**Preferred when tools are available:**
+
+```bash
+# 1. Package
+pageseeds-cli fix-context -i <id> -p <path> \
+  -S <slug> -k content|ctr [-g goals] [-d period-days]
+# → JSON package: file path, current MDX, GSC/metrics, goals, skill craft rules
+
+# 2. Session agent edits the full file using the package
+
+# 3. Submit
+pageseeds-cli fix-submit -i <id> -p <path> \
+  -S <slug> -k content|ctr [--file mdx] [--patch json]
+# → gates + apply/verify; resubmit if checks fail
+```
+
+**Until tools land:** prefer
+`create-task fix_content_article -S <slug>` + `execute-task`, citing desk
+evidence. Note product gap if Path B fix is missing (hard rail #3). Do **not**
+use `content_review` as middleman.
+
+#### Merge (when #138 tools exist)
+
+**Preferred when tools are available:**
+
+```bash
+# 1. Package (from consolidate task / article ids / urls)
+pageseeds-cli merge-context -i <id> -p <path> [...]
+# → keeper_file, member packages, redirect plan, craft rules
+
+# 2. Session agent writes merged MDX to keeper_file
+
+# 3. Submit (high-traffic needs --confirm / -y)
+pageseeds-cli merge-submit -i <id> -p <path> [...] [--confirm|-y]
+```
+
+**Until tools land:** mechanical high-confidence cannibalization picker only;
+escalate ambiguous merges; soft clusters are **not** authority. Prefer Path B
+over `execute-task consolidate_cluster` when merge tools exist.
+
+### Expected auto follow-ups
+
+- Selection → `write_article` tasks created for provenance — **complete via Path B**
+  (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
+- Path B `write-submit` → marks write task done + spawns `cluster_and_link`
+- Desktop nested writer still auto-spawns quality review + cluster link on success
+- Nested `content_review` (desktop/unattended only) may spawn fixes — not weekly spine
+
+### Quality gate
+
+Failed `review_article_quality` → create `fix_content_article` **with** `-S`
+if none exists, then execute (counts toward 15).
+
+**Do not** use `fix_content_article` to recover Path B min_word_count / thin-body
+failures — expand the draft and re-run `write-submit` instead.
+
+### Review resolution
+
+```bash
+pageseeds-cli get-task -I <task-id>
+```
+
+- **CannibalizationPicker:** mechanical high-confidence only —
+  `select-cannibalization -I <parent> -S merge:<id>,hub:<id>`; escalate ambiguous.
+  Soft clusters are **not** merge authority. Prefer Path B merge when tools exist.
+- **KeywordPicker:** no rubber-stamp. Check demand/difficulty, self-competition
+  (`articles` / `gsc-queries`), intent. Prefer non-avoid / `differentiate` /
+  `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
+  **After select-keywords, use Path B for articles** — do **not**
+  `execute-task` the spawned `write_article` tasks.
+- **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`
+- **ArtifactReview:** summarize; `update-task-status -I <id> -s done`
+- **ContentReviewPicker:** desktop/unattended product only — not weekly strategy.
+  If one appears from prior work, dispose mechanically or escalate; do not start
+  new `content_review` tasks for weekly explore.
 
 ---
 
@@ -359,6 +448,7 @@ Desk path chased, detours, what you skipped (and why).
 
 ## Product / CLI gaps (if any)
 - e.g. no `refresh_ground_truth` yet — used collect_gsc / live gsc-* dual-path
+- e.g. Path B fix/merge tools not installed yet — used create-task fallback
 
 ## Recommended next actions
 …
@@ -392,14 +482,17 @@ Desk path chased, detours, what you skipped (and why).
 
 ## Guardrails (summary)
 
-- Desk-first exploration; hard rails **mandatory**.  
+- Desk-first exploration (#117); Path B package/submit (#136); hard rails **mandatory**.  
 - Installed `pageseeds-cli` only — never product `cargo run`.  
-- No product source edits. Missing tools → report gap.  
+- No product source edits. Missing tools → report gap (hard rail #3).  
 - Max 5 creates / 15 executions / 3 new articles.  
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
-- Mechanical reviews only; only write the weekly report file.  
-- Idempotent re-runs: recency + spawner keys.
+- No `content_review` as weekly strategy brain; no default `ctr_audit` spine.  
+- No nested weak write/fix/merge when Path B tools exist.  
+- Mechanical reviews only; only freeform write is the weekly report (+ Path B MDX to CLI targets).  
+- Idempotent re-runs: recency + spawner keys.  
+- UI not required for dispose: desk → `fix_content_article -S` (or Path B fix).
 
 ---
 
@@ -409,6 +502,15 @@ Desk path chased, detours, what you skipped (and why).
 (`site-overview` / `articles` / `article` + GSC) then few hard actions. Soft
 clusters and specialist audits remain available but are **optional**, not the
 weekly spine.
+
+**Package/submit (epic #136):** session agent owns judgment/prose; CLI owns
+package, validate, ingest, dispose. Never nested weak host on CLI best-path.
+Write Path B shipped (#135). Fix (#137) / merge (#138) preferred when tools
+exist; until then use may-create fallbacks and note product gaps.
+
+**Bans:** nested weak write; fix-for-length after Path B write failure;
+`content_review` as weekly brain (#139); soft clusters as merge authority;
+default full `ctr_audit` spawn (#140).
 
 **Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
 and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both

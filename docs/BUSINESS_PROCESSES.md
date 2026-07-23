@@ -128,7 +128,10 @@ Step Plan:
 Auto-spawns: cluster_and_link task (if successful)
 ```
 
-**CLI Path B (preferred for weekly-seo / outer agents — issue #135):**
+**CLI Path B (preferred for weekly-seo / outer agents — issues #135 / #136):**
+
+> **Design rule (#136):** judgment/prose → session agent; package/gates → CLI/Rust;
+> never nested weak host on CLI best-path. Operator SoT: [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md).
 
 ```
 select-keywords  →  write_article tasks (provenance only; do not execute-task)
@@ -147,7 +150,8 @@ write-submit (-f path | -S slug) until validation ok
 
 Path B avoids nested `execute-task write_article` under a weak global provider
 (thin single-shot articles). Freeform MDX without submit is not supported —
-submit is the quality gate.
+submit is the quality gate. Do **not** recover thin-body / min_word_count via
+`fix_content_article` — expand and re-submit.
 
 ### Key Files
 - `engine/workflows/handlers.rs` — ContentHandler (nested path)
@@ -168,13 +172,19 @@ submit is the quality gate.
 
 **Business value:** Content decays — competitors improve, information becomes stale, rankings drop. This process continuously finds the highest-impact articles to improve and applies specific, measurable fixes.
 
+> **Design rule (#136) / weekly CLI:** For weekly SEO operators, strategy lives in
+> the session agent + desk reads — not nested `content_review` as a weekly brain
+> (#139). Desktop UI and unattended product may still run `content_review`.
+> Prefer desk evidence → `fix_content_article -S` (or Path B fix when available).
+> Operator SoT: [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md).
+
 ### Two Audit Types
 
 | Audit | Scope | Trigger |
 |-------|-------|---------|
 | `content_audit` | 21-rule deterministic health check | Manual or scheduled |
-| `content_review` | Health check + AI prioritization + recommendations | Manual or scheduled |
-| `ctr_audit` | CTR-focused analysis (titles, meta, snippets) | Manual or scheduled |
+| `content_review` | Health check + AI prioritization + recommendations | Desktop UI / unattended product (not weekly-seo spine) |
+| `ctr_audit` | CTR-focused analysis (titles, meta, snippets) | Manual, scheduled, or scoped when already needed |
 
 ### Process Flow (Content Review)
 
@@ -206,12 +216,29 @@ Status: done
 Auto-spawns (recommend path only): fix_content_article tasks from recommendations.json
   (investigate path leaves proposed_tasks for a later wiring issue)
   ↓
-Each fix_content_article runs 4-step pipeline:
+Each fix_content_article runs 4-step pipeline (nested / desktop):
   1. Context (deterministic) — load recommendations + file content
   2. Generate (agentic) — structured ContentFixPatch extraction
   3. Apply (deterministic) — apply patch with snapshot/restore
   4. Verify (deterministic) — re-run health checks
 ```
+
+**CLI Path B fix (preferred when tools land — issue #137):**
+
+```
+fix-context (-S slug -k content|ctr [-g goals] [-d period-days])
+  → deterministic package: current MDX, metrics, goals, craft rules
+  ↓
+Session agent edits full file using package
+  ↓
+fix-submit (-S slug -k content|ctr [--file mdx] [--patch json])
+  → gates + apply/verify
+```
+
+Until `fix-context` / `fix-submit` ship: weekly CLI uses
+`create-task fix_content_article -S <slug>` + `execute-task` (nested generate is
+fallback). Note the product gap; do not invent tool behavior or route through
+`content_review` as a middleman.
 
 ### Process Flow (CTR Audit)
 
@@ -414,6 +441,23 @@ Task: consolidate_cluster
   ├─ Create redirects from deprecated URLs
   └─ Update internal links
 ```
+
+**CLI Path B merge (preferred when tools land — issue #138):**
+
+```
+merge-context (from consolidate task / article ids / urls)
+  → keeper_file, member packages, redirect plan, craft rules
+  ↓
+Session agent writes merged MDX to keeper_file
+  ↓
+merge-submit (high-traffic needs --confirm / -y)
+  → gates + redirects + link updates
+```
+
+Until `merge-context` / `merge-submit` ship: weekly CLI uses mechanical
+high-confidence cannibalization picker only; escalate ambiguous merges; soft
+clusters are not authority. Prefer Path B over nested `execute-task
+consolidate_cluster` when merge tools exist. Operator SoT: [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md).
 
 ### Evidence lanes for merge candidates (fail-closed)
 
