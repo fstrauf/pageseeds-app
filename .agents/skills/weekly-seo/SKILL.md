@@ -116,6 +116,10 @@ Breaking these fails the run.
 Do **not** invent work via soft audits when desk reads suffice.
 **Demote for weekly CLI:** `ctr_audit` — see [CTR / content fix policy](#ctr--content-fix-policy).
 
+
+**Not for weekly strategy:** `content_review` — desktop UI / unattended only (#139).
+Do **not** `create-task content_review` for weekly explore. Desk → judgment → hard actions.
+
 ### CTR / content fix policy
 
 CLI weekly best-path for low CTR is **desk-selected targeted fixes**, not a full

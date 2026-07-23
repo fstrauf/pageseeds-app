@@ -144,17 +144,18 @@ Before adding or changing anything that creates, queues, reviews, or spawns task
 
 The capabilities surfaced on the Overview screen are **task types**, not function calls — enqueue them via the queue; never execute directly. Full per-tool reference: [`docs/TOOL_CATALOG.md`](./docs/TOOL_CATALOG.md).
 
-> **Desk model (epic #117):** Weekly organic growth uses the [weekly-seo skill](./.agents/skills/weekly-seo/SKILL.md) — Site State reads then few hard actions. Specialist audits below are when **already scoped**; soft audits are optional, not the weekly spine.
+> **Desk model (epic #117 / #139):** Weekly organic growth uses the [weekly-seo skill](./.agents/skills/weekly-seo/SKILL.md) — Site State reads then few hard actions. **Do not** nest `content_review` as the weekly strategy brain. Specialist audits below are when **already scoped**; soft audits are optional, not the weekly spine.
 
 **When to use which (quick guide):**
 
 | Situation | Tool (task type) |
 |---|---|
-| Weekly organic growth / explore then act | weekly-seo skill (desk: site-overview → articles/article + GSC) |
+| Weekly organic growth / explore then act | weekly-seo skill **desk only**: site-overview → articles/article + GSC → hard actions (e.g. `fix_content_article -S`) |
 | Need new blog/informational topics | `research_keywords` |
 | Need new conversion/landing pages | `research_landing_pages` |
-| "Something is underperforming" (unknown cause) | Desk reads and/or `content_review` (umbrella) — not every specialist audit |
+| "Something is underperforming" (unknown cause) | **CLI:** desk reads → targeted `fix_content_article`. **UI/unattended:** `content_review` umbrella when a nested task is wanted — not every specialist audit |
 | Low click-through rate from search | Desk → targeted `fix_content_article` (CLI/weekly best-path). Full `ctr_audit` is UI/unattended BackendAuto fan-out — not default for agent/CLI weekly |
+
 | Your own pages compete for the same query (hard evidence) | `cannibalization_audit` |
 | Pages exist but Google hasn't indexed them | `indexing_health_campaign` |
 | Want UX/behavioral signals (Clarity) | `clarity_analytics` |
@@ -164,8 +165,10 @@ The capabilities surfaced on the Overview screen are **task types**, not functio
 | Plan a feature for this app | `generate_feature_spec` |
 
 Rules:
-- **Desk / umbrella first.** Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped (e.g. hard same-query evidence for cannibalization); for low CTR see the next rule (desk-selected `fix_content_article`). Otherwise desk reads or `content_review`. Soft clusters are not ground truth.
+- **Desk-first for weekly/CLI.** Explore with Site State reads, then hard actions. Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when already scoped (e.g. hard same-query evidence). Soft clusters are not ground truth.
+- **`content_review` is UI/unattended umbrella** when a nested investigation task + picker is desired — not the weekly-seo skill's strategy brain (CLI: desk → `fix_content_article`).
 - **Low CTR for agent/CLI weekly:** prefer desk-selected `fix_content_article` over enqueueing full `ctr_audit` (BackendAuto spawns many children and burns execution budget). Do not flip AutoEnqueue/BackendAuto defaults — UI unattended path stays.
+
 - **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually from Overview (CLI weekly path may create+execute when desk data is stale).
 - **Lifecycle metadata is owned by `config/task_definitions.rs`.** When the Overview UI and Rust disagree, the Rust file wins. Update both together.
 
