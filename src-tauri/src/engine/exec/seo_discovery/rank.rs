@@ -34,9 +34,11 @@ pub(crate) struct ArticleSignals {
 
 /// Build a unified, ranked opportunity list from all available audit artifacts.
 ///
-/// Reads content_audit, ctr_audit_context, cannibalization_clusters,
-/// indexing_target_contexts, and clarity_summary; scores each article;
-/// writes `seo_opportunities.json`; and persists opportunities to SQLite.
+/// Reads content_audit, ctr_audit_context, cannibalization_candidates /
+/// exact_keyword_duplicates (fail-closed cannibalization evidence; soft
+/// clusters are not authority), indexing_target_contexts, and clarity_summary;
+/// scores each article; writes `seo_opportunities.json`; and persists
+/// opportunities to SQLite.
 pub fn exec_rank_opportunities(
     task: &Task,
     project_path: &str,
@@ -49,7 +51,10 @@ pub fn exec_rank_opportunities(
     let audit = crate::engine::exec::common::load_audit_snapshot(&task.project_id, &paths);
 
     let ctr_context = load_ctr_context(conn, &task.project_id, &paths);
-    let cannibalization = load_cannibalization_clusters(conn, &task.project_id, &paths);
+    let candidates = load_cannibalization_candidates(conn, &task.project_id, &paths);
+    let exact_dupes = load_exact_keyword_duplicates(&paths);
+    // Soft clusters: hub_gap only, and only for articles with honest evidence.
+    let soft_clusters = load_soft_cannibalization_clusters(conn, &task.project_id, &paths);
     let indexing = load_indexing_contexts(&paths);
     let clarity = load_clarity_summary(&paths);
 
@@ -60,7 +65,9 @@ pub fn exec_rank_opportunities(
             article,
             &audit,
             &ctr_context,
-            &cannibalization,
+            candidates.as_ref(),
+            exact_dupes.as_ref(),
+            soft_clusters.as_ref(),
             &indexing,
             &clarity,
         );
@@ -164,7 +171,34 @@ fn load_ctr_context(
         })
 }
 
-fn load_cannibalization_clusters(
+/// Evidence shortlist from cannibalization_audit (DB primary, JSON fallback).
+fn load_cannibalization_candidates(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    paths: &ProjectPaths,
+) -> Option<serde_json::Value> {
+    crate::db::content_audit::get_latest_audit_artifact(conn, project_id, "cannibalization_candidates")
+        .ok()
+        .flatten()
+        .or_else(|| {
+            let path = paths.automation_dir.join("cannibalization_candidates.json");
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+        })
+}
+
+/// Exact same-target_keyword groups (≥2 pages). JSON artifact only.
+fn load_exact_keyword_duplicates(paths: &ProjectPaths) -> Option<serde_json::Value> {
+    let path = paths.automation_dir.join("exact_keyword_duplicates.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// Soft TF-IDF clusters — exploratory only. Used solely for hub_gap when the
+/// article already has fail-closed cannibalization evidence.
+fn load_soft_cannibalization_clusters(
     conn: &rusqlite::Connection,
     project_id: &str,
     paths: &ProjectPaths,
@@ -195,6 +229,127 @@ fn load_clarity_summary(paths: &ProjectPaths) -> Option<serde_json::Value> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Fail-closed cannibalization evidence
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Whether a page object (from candidates / exact_keyword_duplicates / clusters)
+/// refers to the given article. Matches by id, `url_slug`, or URL slug extract.
+pub(crate) fn page_matches_article(
+    page: &serde_json::Value,
+    article_id: i64,
+    url_slug: &str,
+) -> bool {
+    if article_id > 0 && page["id"].as_i64() == Some(article_id) {
+        return true;
+    }
+    if url_slug.is_empty() {
+        return false;
+    }
+    let norm_target = crate::content::slug::normalize_url_slug(url_slug);
+    if let Some(slug) = page["url_slug"].as_str() {
+        if slug == url_slug || crate::content::slug::normalize_url_slug(slug) == norm_target {
+            return true;
+        }
+    }
+    if let Some(url) = page["url"].as_str() {
+        let extracted = crate::content::slug::extract_slug_from_url(url);
+        if !extracted.is_empty()
+            && (extracted == url_slug
+                || crate::content::slug::normalize_url_slug(&extracted) == norm_target)
+        {
+            return true;
+        }
+        // Legacy residual: bare equality after strip of scheme/host
+        if normalize_slug(url) == url_slug {
+            return true;
+        }
+    }
+    false
+}
+
+/// Fail-closed cannibalization detection.
+///
+/// Returns true only when the article appears in:
+/// 1. `cannibalization_candidates` pages lists (preferred evidence shortlist), or
+/// 2. `exact_keyword_duplicates` groups with ≥2 pages sharing a non-empty keyword.
+///
+/// Soft TF-IDF `cannibalization_clusters` membership is **not** authority and
+/// must not set the cannibalized flag (issue #123).
+pub(crate) fn is_honestly_cannibalized(
+    article_id: i64,
+    url_slug: &str,
+    candidates: Option<&serde_json::Value>,
+    exact_dupes: Option<&serde_json::Value>,
+) -> bool {
+    // Prefer evidence shortlist (candidates)
+    if let Some(doc) = candidates {
+        if let Some(cands) = doc["candidates"].as_array() {
+            for cand in cands {
+                if let Some(pages) = cand["pages"].as_array() {
+                    if pages.len() >= 2
+                        && pages
+                            .iter()
+                            .any(|p| page_matches_article(p, article_id, url_slug))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: exact keyword duplicate groups
+    if let Some(doc) = exact_dupes {
+        if let Some(dupes) = doc["duplicates"].as_array() {
+            for dupe in dupes {
+                let keyword = dupe["keyword"].as_str().unwrap_or("").trim();
+                if keyword.is_empty() {
+                    continue;
+                }
+                if let Some(pages) = dupe["pages"].as_array() {
+                    if pages.len() >= 2
+                        && pages
+                            .iter()
+                            .any(|p| page_matches_article(p, article_id, url_slug))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Optional hub_gap for an honestly-cannibalized article, from soft clusters.
+/// Soft cluster membership alone never sets cannibalized; hub_gap is only
+/// meaningful once evidence already established cannibalization.
+fn hub_gap_for_article(
+    article_id: i64,
+    url_slug: &str,
+    soft_clusters: Option<&serde_json::Value>,
+) -> bool {
+    let Some(doc) = soft_clusters else {
+        return false;
+    };
+    let Some(clusters) = doc["clusters"].as_array() else {
+        return false;
+    };
+    for cluster in clusters {
+        if let Some(pages) = cluster["pages"].as_array() {
+            if pages
+                .iter()
+                .any(|p| page_matches_article(p, article_id, url_slug))
+            {
+                return !cluster["hub_exists"].as_bool().unwrap_or(true);
+            }
+        }
+    }
+    false
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Signal building
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -202,7 +357,9 @@ fn build_signals(
     article: &serde_json::Value,
     audit: &crate::engine::exec::common::AuditSnapshot,
     ctr_context: &Option<serde_json::Value>,
-    cannibalization: &Option<serde_json::Value>,
+    candidates: Option<&serde_json::Value>,
+    exact_dupes: Option<&serde_json::Value>,
+    soft_clusters: Option<&serde_json::Value>,
     indexing: &Option<serde_json::Value>,
     clarity: &Option<serde_json::Value>,
 ) -> ArticleSignals {
@@ -267,22 +424,15 @@ fn build_signals(
         }
     }
 
-    // Cannibalization
-    if let Some(can) = cannibalization {
-        if let Some(clusters) = can["clusters"].as_array() {
-            for cluster in clusters {
-                if let Some(pages) = cluster["pages"].as_array() {
-                    if pages.iter().any(|p| {
-                        p["id"].as_i64() == Some(article_id)
-                            || normalize_slug(p["url"].as_str().unwrap_or("")) == signals.url_slug
-                    }) {
-                        signals.cannibalized = true;
-                        signals.hub_gap = !cluster["hub_exists"].as_bool().unwrap_or(true);
-                        break;
-                    }
-                }
-            }
-        }
+    // Cannibalization — fail-closed evidence only (not soft TF-IDF clusters)
+    signals.cannibalized = is_honestly_cannibalized(
+        article_id,
+        &signals.url_slug,
+        candidates,
+        exact_dupes,
+    );
+    if signals.cannibalized {
+        signals.hub_gap = hub_gap_for_article(article_id, &signals.url_slug, soft_clusters);
     }
 
     // Indexing

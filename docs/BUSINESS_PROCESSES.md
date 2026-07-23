@@ -323,6 +323,8 @@ Auto-spawns fix tasks (up to 20):
 
 **Business value:** Higher CTR = more traffic without ranking improvements. A page ranking #5 with a compelling title can out-click a bland #4 result. This process systematically identifies and fixes underperforming snippets.
 
+> **Agent desk model (epic #117):** Low-CTR patterns **emerge from Site State** (GSC impressions/CTR + catalog title/meta via `site-overview` / `articles` / `article` / `gsc-queries`). The `ctr_audit` pipeline below remains available when the problem is already scoped or desk data clearly warrants the specialist path — it is **not** a required weekly spine. Prefer targeted `fix_content_article` / `content_review` when desk evidence is enough.
+
 ### Process Flow
 
 ```
@@ -361,6 +363,8 @@ Auto-spawns: fix_ctr_article tasks for site-wide template issues
 
 **Business value:** Cannibalization dilutes ranking signals and confuses search engines. Consolidating overlapping content into authoritative pages typically results in stronger rankings and cleaner site architecture.
 
+> **Agent desk model (epic #117):** Same-query / same-intent competition **emerges from Site State** (`gsc-queries` page×query, catalog neighbors). Soft TF-IDF clusters are exploratory only. The `cannibalization_audit` pipeline remains available when hard evidence warrants it — it is **not** the required weekly spine. Never treat soft clusters as merge authority.
+
 ### Process Flow
 
 ```
@@ -388,7 +392,7 @@ Task: consolidate_cluster
 
 ### Evidence lanes for merge candidates (fail-closed)
 
-Soft TF-IDF clusters (low similarity threshold in build context) are **exploratory only** — they are not merge authority. The shortlist emits candidates only from two evidence lanes: (1) exact same `target_keyword` groups via `exact_keyword_duplicates.json` (`candidate_type: "exact_keyword_dupe"` — single source of truth), and (2) high pairwise similarity pairs (≥0.45) as `merge_candidate` with `pair_similarity`. Soft transitive topical cohesion (e.g. mono-niche theme bags) never becomes a top-N traffic grab-bag merge set. The strategy skill must refuse non-exact candidates by default unless same-intent / same-query evidence is present.
+Soft TF-IDF clusters (low similarity threshold in build context; CLI `cannibalization-clusters`) are **exploratory only** — they are **not** merge authority and **not** ground truth for weekly SEO. They fail open on mono-niche sites. The shortlist emits candidates only from two evidence lanes: (1) exact same `target_keyword` groups via `exact_keyword_duplicates.json` (`candidate_type: "exact_keyword_dupe"` — single source of truth), and (2) high pairwise similarity pairs (≥0.45) as `merge_candidate` with `pair_similarity`. Soft transitive topical cohesion (e.g. mono-niche theme bags) never becomes a top-N traffic grab-bag merge set. The strategy skill must refuse non-exact candidates by default unless same-intent / same-query evidence is present (prefer hard GSC same-query evidence from desk reads).
 
 ### Key Files
 - `engine/exec/cannibalization/` — detection logic (build context, candidates, analyze, reduce)
@@ -562,15 +566,20 @@ Saved to: .github/automation/investigations/{id}/
 ```
 
 ### Available Tools
-- `gsc_performance` — GSC page/query data
-- `article_list` / `article_frontmatter` / `article_body_hash` / `article_title_scan` — Content inventory
-- `content_audit_report` — Full health check data
-- `cannibalization_clusters` — Cannibalization data
+
+**Desk / Site State first (epic #117):**
+- `site_overview` — Compact site health desk (totals, top pages, movers, hints)
+- `articles` / `article` — GSC-aware catalog list and full per-slug package
+- `gsc_performance` / `gsc_movers` / `gsc_queries` — Demand and deltas
+
+**Optional / secondary (not ground truth):**
+- `article_list` / `article_frontmatter` / `article_body_hash` / `article_title_scan` — Lightweight / deep content inventory
+- `content_audit_report` / `run_content_audit` — Full health check data (optional deep)
+- `cannibalization_clusters` — Soft clusters only; not merge authority
 - `indexing_status` — GSC indexing status
-- `ctr_health` — CTR health summary
+- `ctr_health` — Productized CTR composite; prefer desk GSC metrics when possible
 - `framework_files` — Next.js config, sitemap, robots.txt
 - `article_link_graph` — Internal linking structure
-- `run_content_audit` — Trigger fresh audit
 - `create_task` — Create fix tasks from findings
 
 ### Key Files

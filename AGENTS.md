@@ -24,7 +24,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 | If you need to... | Use this path | Do NOT |
 |---|---|---|
 | **Adjust how an AI writes/reviews content** | Edit the embedded skill in `src-tauri/skills/{skill}/SKILL.md` — it is the single source of truth for app-default skills (registered in `engine/skills.rs`). Project-level `.github/skills/{skill}/SKILL.md` overrides still work for per-project customization, but trigger a drift warning at load time when an embedded counterpart exists and its version marker differs. Test with `build_prompt_preview` before touching executor logic; run the live eval suites (`./scripts/run-evals.sh`) after skill changes to catch prompt regressions. | Add a new task type or handler just to change the prompt |
-| **Run the weekly SEO pass on a project** | Invoke the `weekly-seo` skill (`.agents/skills/weekly-seo/SKILL.md`, discoverable by Kimi Code) — it drives `pageseeds-cli` tools to check recency, evaluate signals, execute tasks and their follow-ups, resolve mechanical review decisions, and report measures taken. The skill is the workflow; judgment lives in the agent. | Build a Rust orchestrator, scheduler, or cross-project runner |
+| **Run the weekly SEO pass on a project** | Invoke the `weekly-seo` skill (`.agents/skills/weekly-seo/SKILL.md`, discoverable by Kimi Code) — **desk-first** (epic #117): refresh if stale → `site-overview` → `articles`/`article`/`gsc-queries` → ≤5 actions → report. Soft audits optional, not ground truth. Skill is the workflow; judgment lives in the agent. | Build a Rust orchestrator, scheduler, or cross-project runner; treat soft clusters as merge authority |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
 | **Add or change task lifecycle behavior** | Follow the [Task Lifecycle Contract](#task-lifecycle-contract), then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
 | **Attach tasks to execution** | Use backend queue commands through `tauri.ts` (`enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`). | Call `executeTask` directly from components |
@@ -34,6 +34,8 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 | **Sync article state to repo JSON** | Use `db::export::write_articles_to_repo()` or `content::ops::sync_and_validate()`. | Write raw SQL + manual `fs::write` of `articles.json` |
 | **Add a new workflow step** | Add `StepKind` variant → register in `step_registry.rs` → add match arm in `executor.rs` → implement in `engine/exec/`. | Put business logic in `commands/` or the handler |
 | **Add frontend UI around backend data** | Add command wrapper in `tauri.ts` → add type in `types.ts` → build component in `src/components/`. | Call `invoke()` inline in components |
+
+> **weekly-seo skill source of truth:** Canonical path is `.agents/skills/weekly-seo/SKILL.md`. `.grok/skills/weekly-seo/SKILL.md` is a symlink for Grok discovery — edit only the `.agents` file.
 
 **Golden rules:**
 1. A new skill file is ~20 lines. A new task type + handler + exec module is ~200+ lines. **Prefer the skill.**
@@ -142,15 +144,18 @@ Before adding or changing anything that creates, queues, reviews, or spawns task
 
 The capabilities surfaced on the Overview screen are **task types**, not function calls — enqueue them via the queue; never execute directly. Full per-tool reference: [`docs/TOOL_CATALOG.md`](./docs/TOOL_CATALOG.md).
 
+> **Desk model (epic #117):** Weekly organic growth uses the [weekly-seo skill](./.agents/skills/weekly-seo/SKILL.md) — Site State reads then few hard actions. Specialist audits below are when **already scoped**; soft audits are optional, not the weekly spine.
+
 **When to use which (quick guide):**
 
 | Situation | Tool (task type) |
 |---|---|
+| Weekly organic growth / explore then act | weekly-seo skill (desk: site-overview → articles/article + GSC) |
 | Need new blog/informational topics | `research_keywords` |
 | Need new conversion/landing pages | `research_landing_pages` |
-| "Something is underperforming" (unknown cause) | `content_review` (umbrella) |
-| Low click-through rate from search | `ctr_audit` |
-| Your own pages compete for the same query | `cannibalization_audit` |
+| "Something is underperforming" (unknown cause) | Desk reads and/or `content_review` (umbrella) — not every specialist audit |
+| Low click-through rate from search (already scoped) | `ctr_audit` (or desk → `fix_content_article` when evidence is enough) |
+| Your own pages compete for the same query (hard evidence) | `cannibalization_audit` |
 | Pages exist but Google hasn't indexed them | `indexing_health_campaign` |
 | Want UX/behavioral signals (Clarity) | `clarity_analytics` |
 | Weekly Reddit audience engagement | `reddit_opportunity_search` |
@@ -159,8 +164,8 @@ The capabilities surfaced on the Overview screen are **task types**, not functio
 | Plan a feature for this app | `generate_feature_spec` |
 
 Rules:
-- **Start with the umbrella.** Reach for the specific audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped to that domain; otherwise `content_review`.
-- **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually.
+- **Desk / umbrella first.** Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped (or desk shows a clear same-query / low-CTR pattern needing that pipeline); otherwise desk reads or `content_review`. Soft clusters are not ground truth.
+- **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually from Overview (CLI weekly path may create+execute when desk data is stale).
 - **Lifecycle metadata is owned by `config/task_definitions.rs`.** When the Overview UI and Rust disagree, the Rust file wins. Update both together.
 
 ---
