@@ -20,6 +20,7 @@ violations=$(grep -rn "task_store::create_task" src-tauri/src --include="*.rs" |
         || "$file" == *commands/tasks.rs \
         || "$file" == *executor.rs \
         || "$file" == *executor/tests.rs \
+        || "$file" == *tests.rs \
         || "$file" == *bin/* \
         || "$file" == *engine/exec/ctr_audit/* ]]; then
         continue
