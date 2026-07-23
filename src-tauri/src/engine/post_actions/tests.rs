@@ -127,3 +127,85 @@ use super::topic_health::classify_topic_health;
         );
         assert_eq!(strip_content_task_title_prefix("plain title"), "plain title");
     }
+
+    /// Issue #152: successful `fix_ctr_article` records a change event and must
+    /// not spawn `ctr_outcome_review`.
+    #[test]
+    fn fix_ctr_article_records_change_event_without_outcome_review_spawn() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('proj1', 'Test', '/tmp/pa_ctr', 1, 'workspace')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash
+             ) VALUES (9, 'proj1', 'CTR Article', 'ctr-article', 'content/ctr.mdx',
+                       'published', 'kw', '[]', 0, 100, 0, 'h')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ctr_rendered_page_audits (project_id, article_id, url, file, checked_at)
+             VALUES ('proj1', 9, 'https://example.com/blog/ctr-article', 'content/ctr.mdx',
+                     '2026-07-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let mut task = make_task();
+        task.id = "fix-ctr-1".to_string();
+        task.task_type = "fix_ctr_article".to_string();
+        task.project_id = "proj1".to_string();
+        task.status = TaskStatus::Done;
+        task.artifacts = vec![crate::models::task::TaskArtifact {
+            key: "ctr_context".to_string(),
+            path: None,
+            artifact_type: Some("json".to_string()),
+            source: None,
+            content: Some(
+                serde_json::json!({
+                    "articles": [{ "id": 9, "url_slug": "ctr-article" }]
+                })
+                .to_string(),
+            ),
+        }];
+        crate::engine::task_store::create_task(&conn, &task).unwrap();
+
+        let follow_ups = after_task_success(&PostTaskContext {
+            conn: &conn,
+            task: &task,
+            project_path: "/tmp/pa_ctr",
+            progress: &[],
+        });
+
+        assert!(
+            follow_ups.is_empty()
+                || !follow_ups.iter().any(|id| {
+                    crate::engine::task_store::get_task(&conn, id)
+                        .map(|t| t.task_type == "ctr_outcome_review")
+                        .unwrap_or(false)
+                }),
+            "must not spawn ctr_outcome_review follow-ups: {:?}",
+            follow_ups
+        );
+        let tasks = crate::engine::task_store::list_tasks(&conn, "proj1").unwrap();
+        assert!(
+            !tasks.iter().any(|t| t.task_type == "ctr_outcome_review"),
+            "no ctr_outcome_review tasks should exist"
+        );
+
+        let outcomes = crate::db::list_ctr_outcomes(&conn, "proj1").unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].article_id, 9);
+        assert_eq!(outcomes[0].fix_task_id, "fix-ctr-1");
+        assert_eq!(outcomes[0].outcome_status, "pending");
+        assert!(
+            outcomes[0].deployed_at.is_none(),
+            "deployed_at null until verify"
+        );
+    }

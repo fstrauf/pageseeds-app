@@ -378,43 +378,53 @@ fn fetch_after_metrics(
     }
 }
 
-/// Fetch current GSC metrics for an article: `live_site_pages` first
-/// (LiveSite projects), then `article_metadata` namespace='gsc' (workspace
-/// projects), else zeros. Shared by the baseline recorder
-/// (`engine::post_actions`) and the after-metrics fetcher so both sides of
-/// the comparison read from the same source.
+/// Fetch GSC metrics for an article for CTR change-event baselines / after windows.
+///
+/// Prefer **28-day aggregates from `gsc_page_daily`** (ending yesterday) when the
+/// page maps to daily rows. Fall back to point-in-time `live_site_pages`, then
+/// `article_metadata` namespace='gsc', else zeros.
+///
+/// Shared by the change-event recorder (`engine::post_actions`) and the
+/// after-metrics fetcher so both sides of the comparison read from the same source.
 pub(crate) fn fetch_article_gsc_metrics(
     conn: &rusqlite::Connection,
     project_id: &str,
     article_id: i64,
     url: &str,
 ) -> (f64, f64, f64, f64) {
-    // 1. Live-site path lookup
-    let path = url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let path = if let Some(pos) = path.find('/') {
-        &path[pos..]
-    } else {
-        "/"
-    };
-
-    let live_site_result: Result<
-        (Option<f64>, Option<f64>, Option<f64>, Option<f64>),
-        rusqlite::Error,
-    > = conn.query_row(
-        "SELECT gsc_clicks, gsc_impressions, gsc_ctr, gsc_position
-             FROM live_site_pages
-             WHERE project_id = ?1 AND path = ?2",
-        rusqlite::params![project_id, path],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-    );
-
-    if let Ok((Some(clicks), Some(impressions), Some(ctr), Some(position))) = live_site_result {
-        return (clicks, impressions, ctr, position);
+    // 1. Daily tape (source of truth for classification windows)
+    if let Some(m) = metrics_from_gsc_page_daily(conn, project_id, article_id, url) {
+        return m;
     }
 
-    // 2. Workspace fallback: article_metadata namespace='gsc'
+    // 2. Live-site path lookup (point-in-time)
+    if !url.is_empty() {
+        let path = url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        let path = if let Some(pos) = path.find('/') {
+            &path[pos..]
+        } else {
+            "/"
+        };
+
+        let live_site_result: Result<
+            (Option<f64>, Option<f64>, Option<f64>, Option<f64>),
+            rusqlite::Error,
+        > = conn.query_row(
+            "SELECT gsc_clicks, gsc_impressions, gsc_ctr, gsc_position
+                 FROM live_site_pages
+                 WHERE project_id = ?1 AND path = ?2",
+            rusqlite::params![project_id, path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        );
+
+        if let Ok((Some(clicks), Some(impressions), Some(ctr), Some(position))) = live_site_result {
+            return (clicks, impressions, ctr, position);
+        }
+    }
+
+    // 3. Workspace fallback: article_metadata namespace='gsc'
     let meta_result: Result<String, rusqlite::Error> = conn.query_row(
         "SELECT payload FROM article_metadata WHERE project_id = ?1 AND article_id = ?2 AND namespace = 'gsc'",
         rusqlite::params![project_id, article_id],
@@ -433,8 +443,73 @@ pub(crate) fn fetch_article_gsc_metrics(
         }
     }
 
-    // 3. Nothing available
+    // 4. Nothing available
     (0.0, 0.0, 0.0, 0.0)
+}
+
+/// 28-day inclusive window ending yesterday from `gsc_page_daily`, when rows exist.
+fn metrics_from_gsc_page_daily(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    article_id: i64,
+    url: &str,
+) -> Option<(f64, f64, f64, f64)> {
+    let page = resolve_gsc_daily_page(conn, project_id, article_id, url)?;
+    let end = chrono::Utc::now().date_naive() - chrono::Duration::days(1);
+    let start = end - chrono::Duration::days(27);
+    let start_s = start.format("%Y-%m-%d").to_string();
+    let end_s = end.format("%Y-%m-%d").to_string();
+    let m = crate::db::gsc_page_daily_window_metrics(conn, project_id, &page, &start_s, &end_s)
+        .ok()
+        .flatten()?;
+    let ctr = if m.impressions > 0.0 {
+        m.clicks / m.impressions
+    } else {
+        0.0
+    };
+    Some((m.clicks, m.impressions, ctr, m.position))
+}
+
+/// Map article → `gsc_page_daily.page` key (exact URL or slug match).
+fn resolve_gsc_daily_page(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    article_id: i64,
+    url: &str,
+) -> Option<String> {
+    let pages = crate::db::list_gsc_page_daily_pages(conn, project_id).ok()?;
+    if pages.is_empty() {
+        return None;
+    }
+
+    if !url.is_empty() {
+        if pages.iter().any(|p| p == url) {
+            return Some(url.to_string());
+        }
+        // Trailing-slash / http(s) variants: match by slug extracted from URL.
+        let slug = crate::content::slug::extract_slug_from_url(url);
+        if !slug.is_empty() {
+            if let Some(p) = pages
+                .iter()
+                .find(|p| crate::engine::exec::outcome_review::page_matches_slug(p, &slug))
+            {
+                return Some(p.clone());
+            }
+        }
+    }
+
+    let slug: String = conn
+        .query_row(
+            "SELECT url_slug FROM articles WHERE project_id = ?1 AND id = ?2",
+            rusqlite::params![project_id, article_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .filter(|s: &String| !s.is_empty())?;
+
+    pages
+        .into_iter()
+        .find(|p| crate::engine::exec::outcome_review::page_matches_slug(p, &slug))
 }
 
 #[cfg(test)]
@@ -458,8 +533,48 @@ mod tests {
         .unwrap();
     }
 
-    /// Workspace fallback: no live_site_pages row, metrics come from
-    /// article_metadata (namespace='gsc') — mirrors the baseline recorder.
+    fn seed_article_row(conn: &rusqlite::Connection, article_id: i64, slug: &str) {
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash
+             ) VALUES (?1, 'proj-test', 'T', ?2, 'content/t.mdx', 'published', 'kw',
+                       '[]', 0, 100, 0, 'h')",
+            rusqlite::params![article_id, slug],
+        )
+        .unwrap();
+    }
+
+    fn seed_daily_window(
+        conn: &rusqlite::Connection,
+        page: &str,
+        clicks: f64,
+        impressions: f64,
+    ) {
+        let end = chrono::Utc::now().date_naive() - chrono::Duration::days(1);
+        let start = end - chrono::Duration::days(2);
+        let rows = vec![
+            crate::models::gsc::PageDailyMetrics {
+                page: page.to_string(),
+                date: start.format("%Y-%m-%d").to_string(),
+                clicks: clicks / 2.0,
+                impressions: impressions / 2.0,
+                ctr: 0.0,
+                position: 10.0,
+            },
+            crate::models::gsc::PageDailyMetrics {
+                page: page.to_string(),
+                date: end.format("%Y-%m-%d").to_string(),
+                clicks: clicks / 2.0,
+                impressions: impressions / 2.0,
+                ctr: 0.0,
+                position: 6.0,
+            },
+        ];
+        crate::db::insert_gsc_page_daily_snapshots(conn, "proj-test", &rows).unwrap();
+    }
+
+    /// Workspace fallback: no daily / live_site rows → article_metadata.
     #[test]
     fn fetch_after_metrics_falls_back_to_article_metadata() {
         let conn = test_conn();
@@ -480,9 +595,9 @@ mod tests {
         assert_eq!(position, 9.5);
     }
 
-    /// live_site_pages wins when it has a row (LiveSite projects).
+    /// live_site_pages when no daily tape rows exist.
     #[test]
-    fn fetch_after_metrics_prefers_live_site_pages() {
+    fn fetch_after_metrics_prefers_live_site_pages_without_daily() {
         let conn = test_conn();
         seed_rendered_audit_url(&conn, 1, "https://example.com/blog/test-article");
         conn.execute(
@@ -503,6 +618,38 @@ mod tests {
         let (clicks, impressions, _, _) = fetch_after_metrics(&conn, "proj-test", 1);
         assert_eq!(clicks, 7.0);
         assert_eq!(impressions, 900.0);
+    }
+
+    /// `gsc_page_daily` window aggregates beat live_site / metadata point-in-time.
+    #[test]
+    fn fetch_article_gsc_metrics_prefers_daily_window() {
+        let conn = test_conn();
+        seed_article_row(&conn, 1, "test-article");
+        let page = "https://example.com/blog/test-article";
+        seed_rendered_audit_url(&conn, 1, page);
+        seed_daily_window(&conn, page, 40.0, 2000.0);
+        conn.execute(
+            "INSERT INTO live_site_pages (project_id, url, path, gsc_clicks, gsc_impressions, gsc_ctr, gsc_position, last_crawled_at)
+             VALUES ('proj-test', ?1, '/blog/test-article', 7.0, 900.0, 0.0078, 5.0, '2026-07-01T00:00:00Z')",
+            rusqlite::params![page],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO article_metadata (project_id, article_id, namespace, payload, updated_at)
+             VALUES ('proj-test', 1, 'gsc', ?1, '2026-07-01T00:00:00Z')",
+            rusqlite::params![serde_json::json!({
+                "clicks": 12.0, "impressions": 4000.0, "ctr": 0.003, "avg_position": 9.5
+            }).to_string()],
+        )
+        .unwrap();
+
+        let (clicks, impressions, ctr, position) =
+            fetch_article_gsc_metrics(&conn, "proj-test", 1, page);
+        assert_eq!(clicks, 40.0);
+        assert_eq!(impressions, 2000.0);
+        assert!((ctr - 0.02).abs() < 1e-9);
+        // Impressions-weighted position: equal impr → (10+6)/2 = 8
+        assert!((position - 8.0).abs() < 1e-9);
     }
 
     /// No data anywhere → zeros (which classify as insufficient_data).

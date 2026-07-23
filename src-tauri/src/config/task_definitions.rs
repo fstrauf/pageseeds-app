@@ -361,6 +361,10 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Implementation,
     },
+    // Deprecated (issue #152): do not spawn. Measurement is dual-layer
+    // (`gsc_page_daily` tape + sparse `ctr_outcomes` change events). Definition
+    // + handler remain so existing rows and
+    // `all_task_types_have_non_fallback_handler` stay valid.
     TaskDefinition {
         task_type: "ctr_outcome_review",
         phase: "investigation",
