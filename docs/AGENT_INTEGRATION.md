@@ -318,36 +318,13 @@ fn test_reddit_config_parsing_with_real_kimi() {
 }
 ```
 
-### Eval Regression Tests (live, `rig::evals`)
+### Live LLM evals (removed)
 
-Live eval suites regression-test the core agentic steps against committed fixtures.
-They exist to catch **prompt/skill regressions** — run them after editing any
-`src-tauri/skills/**/SKILL.md` or a prompt builder (`build_ctr_fix_prompt`,
-`build_fix_prompt`, `build_single_article_prompt`).
-
-```
-./scripts/run-evals.sh          # or: cargo test evals -- --ignored --nocapture
-# also runs as part of: pnpm test:all  (auto-skips when no provider is available;
-# EVALS_REQUIRED=1 turns the skip into a failure)
-```
-
-Layout:
-
-- `src-tauri/src/evals/` — harness + one suite per pipeline (`ctr_fix`, `content_fix`,
-  `content_review`). Test-only (`#[cfg(test)]`), nothing ships in the binary.
-- `src-tauri/fixtures/evals/<pipeline>/case-*.json` — hand-authored cases: realistic
-  input (recommendation/context + article MDX) plus the slugs the model may link to.
-
-Each case runs the real production step against a live backend, then two check layers:
-
-1. **Deterministic contract checks** — length limits, keyword presence, echo of article
-   identity, no hallucinated internal-link slugs. Free, reproducible, always gating.
-2. **LLM judge** — `rig::evals::LlmScoreMetric` (0–1, threshold 0.7) for quality.
-   Skipped when no judge key is set; deterministic checks still gate.
-
-Env config: `EVAL_PROVIDER` (generation, default `kimi` via the CLI connector), `EVAL_JUDGE_PROVIDER`
-plus `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` for the judge. Add a case by dropping a new
-`case-*.json` into the pipeline's fixture dir — no code changes needed.
+Live nested-generate eval suites (`src-tauri/src/evals/`, `fixtures/evals/`,
+`scripts/run-evals.sh`) were removed: they gated the ship path on flaky host-LLM
+output for a path Path B (session agent + package/submit) has superseded for
+operator SEO. Prefer deterministic unit tests and Path B validation floors.
+`pnpm test:all` no longer runs live evals.
 
 ---
 
