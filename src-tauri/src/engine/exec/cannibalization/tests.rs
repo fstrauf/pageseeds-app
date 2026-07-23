@@ -1113,6 +1113,380 @@ Some content here.
         cleanup(&path);
     }
 
+    /// CI lock for epic #117 / issue #125 (Brewedlate mono-niche regression).
+    ///
+    /// Soft TF-IDF can park many distinct-keyword mono-niche pages in one cluster.
+    /// Pre-#118 that became a whole-theme top-N stranger bag. Evidence lanes only:
+    /// exact keyword dupes + high pairwise similarity — never soft-cluster merge.
+    #[test]
+    fn test_mono_niche_fixture_no_mega_merge_planted_dupes_surface() {
+        let path = test_dir();
+        let _ = std::fs::remove_dir_all(&path);
+        let auto_dir = Path::new(&path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        // Soft cluster: ≥8 distinct-intent coffee mono-niche pages (high impressions)
+        // plus planted exact-dupe pair. This is the shape that used to become an
+        // 8-stranger top-N bag when soft clusters were merge authority.
+        write_clusters_file(
+            &path,
+            serde_json::json!([
+                // Planted exact keyword dupe ("cold brew coffee")
+                cluster_page(1, "cold-brew-a", "cold brew coffee"),
+                cluster_page(2, "cold-brew-b", "cold brew coffee"),
+                // High-sim pair planted via similarity_pairs (distinct keywords)
+                cluster_page(3, "coffee-blooming", "coffee blooming"),
+                cluster_page(4, "coffee-freshness", "coffee freshness"),
+                // Distinct-intent high-traffic mono-niche pages (must not mega-merge)
+                cluster_page(5, "portable-coffee-maker", "portable coffee maker"),
+                cluster_page(6, "moka-pot-guide", "moka pot"),
+                cluster_page(7, "coffee-subscription", "coffee subscription"),
+                cluster_page(8, "cheap-coffee-beans", "cheap coffee beans"),
+                cluster_page(9, "pour-over-guide", "pour over coffee"),
+                cluster_page(10, "specialty-coffee-trends", "specialty coffee trends"),
+                cluster_page(11, "french-press-basics", "french press"),
+            ]),
+        );
+
+        write_exact_dupes_file(
+            &path,
+            serde_json::json!([{
+                "keyword": "cold brew coffee",
+                "article_count": 2,
+                "total_impressions": 15000.0,
+                "pages": [
+                    dupe_page(1, "cold-brew-a", "cold brew coffee", 9000.0),
+                    dupe_page(2, "cold-brew-b", "cold brew coffee", 6000.0),
+                ],
+                "best_performer": {
+                    "id": 1,
+                    "title": "cold-brew-a",
+                    "url": "cold-brew-a",
+                    "impressions": 9000.0,
+                    "clicks": 40.0,
+                    "avg_position": 4.0
+                }
+            }]),
+        );
+
+        // Context: all mono-niche articles + one high-sim pair + low-sim noise.
+        // Planted high-sim: coffee-blooming ↔ coffee-freshness at 0.58 (≥0.45).
+        let context = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "articles": [
+                {
+                    "id": 1,
+                    "url_slug": "cold-brew-a",
+                    "title": "Cold Brew A",
+                    "h1": "Cold Brew A",
+                    "target_keyword": "cold brew coffee",
+                    "first_200_words": "how to make cold brew coffee at home batch",
+                    "gsc": { "impressions": 9000.0, "clicks": 40.0, "avg_position": 4.0 },
+                    "incoming_internal_links": 3,
+                    "outgoing_internal_links": 2,
+                    "published_date": "2023-01-01",
+                    "word_count": 1200
+                },
+                {
+                    "id": 2,
+                    "url_slug": "cold-brew-b",
+                    "title": "Cold Brew B",
+                    "h1": "Cold Brew B",
+                    "target_keyword": "cold brew coffee",
+                    "first_200_words": "cold brew coffee recipe concentrate ratio",
+                    "gsc": { "impressions": 6000.0, "clicks": 20.0, "avg_position": 7.0 },
+                    "incoming_internal_links": 1,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2023-06-01",
+                    "word_count": 900
+                },
+                {
+                    "id": 3,
+                    "url_slug": "coffee-blooming",
+                    "title": "Coffee Blooming",
+                    "h1": "Coffee Blooming",
+                    "target_keyword": "coffee blooming",
+                    "first_200_words": "why coffee blooms during pour over degassing",
+                    "gsc": { "impressions": 4200.0, "clicks": 15.0, "avg_position": 6.0 },
+                    "incoming_internal_links": 2,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2023-03-01",
+                    "word_count": 800
+                },
+                {
+                    "id": 4,
+                    "url_slug": "coffee-freshness",
+                    "title": "Coffee Freshness",
+                    "h1": "Coffee Freshness",
+                    "target_keyword": "coffee freshness",
+                    "first_200_words": "how long coffee stays fresh after roast degassing",
+                    "gsc": { "impressions": 3800.0, "clicks": 12.0, "avg_position": 8.0 },
+                    "incoming_internal_links": 1,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2023-04-01",
+                    "word_count": 750
+                },
+                {
+                    "id": 5,
+                    "url_slug": "portable-coffee-maker",
+                    "title": "Portable Coffee Maker",
+                    "h1": "Portable Coffee Maker",
+                    "target_keyword": "portable coffee maker",
+                    "first_200_words": "best portable coffee makers for travel camping",
+                    "gsc": { "impressions": 12000.0, "clicks": 50.0, "avg_position": 5.0 },
+                    "incoming_internal_links": 2,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2023-02-01",
+                    "word_count": 1100
+                },
+                {
+                    "id": 6,
+                    "url_slug": "moka-pot-guide",
+                    "title": "Moka Pot Guide",
+                    "h1": "Moka Pot Guide",
+                    "target_keyword": "moka pot",
+                    "first_200_words": "how to use a moka pot on the stove",
+                    "gsc": { "impressions": 8000.0, "clicks": 30.0, "avg_position": 6.0 },
+                    "incoming_internal_links": 1,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2023-05-01",
+                    "word_count": 950
+                },
+                {
+                    "id": 7,
+                    "url_slug": "coffee-subscription",
+                    "title": "Coffee Subscription",
+                    "h1": "Coffee Subscription",
+                    "target_keyword": "coffee subscription",
+                    "first_200_words": "best coffee subscription boxes monthly delivery",
+                    "gsc": { "impressions": 15000.0, "clicks": 80.0, "avg_position": 3.0 },
+                    "incoming_internal_links": 4,
+                    "outgoing_internal_links": 2,
+                    "published_date": "2023-01-15",
+                    "word_count": 1400
+                },
+                {
+                    "id": 8,
+                    "url_slug": "cheap-coffee-beans",
+                    "title": "Cheap Coffee Beans",
+                    "h1": "Cheap Coffee Beans",
+                    "target_keyword": "cheap coffee beans",
+                    "first_200_words": "affordable specialty coffee beans without sacrificing",
+                    "gsc": { "impressions": 7000.0, "clicks": 25.0, "avg_position": 9.0 },
+                    "incoming_internal_links": 0,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2023-07-01",
+                    "word_count": 700
+                },
+                {
+                    "id": 9,
+                    "url_slug": "pour-over-guide",
+                    "title": "Pour Over Guide",
+                    "h1": "Pour Over Guide",
+                    "target_keyword": "pour over coffee",
+                    "first_200_words": "pour over coffee technique v60 ratio",
+                    "gsc": { "impressions": 9500.0, "clicks": 35.0, "avg_position": 5.5 },
+                    "incoming_internal_links": 2,
+                    "outgoing_internal_links": 2,
+                    "published_date": "2023-08-01",
+                    "word_count": 1000
+                },
+                {
+                    "id": 10,
+                    "url_slug": "specialty-coffee-trends",
+                    "title": "Specialty Coffee Trends",
+                    "h1": "Specialty Coffee Trends",
+                    "target_keyword": "specialty coffee trends",
+                    "first_200_words": "specialty coffee trends processing methods origins",
+                    "gsc": { "impressions": 5500.0, "clicks": 18.0, "avg_position": 10.0 },
+                    "incoming_internal_links": 1,
+                    "outgoing_internal_links": 0,
+                    "published_date": "2023-09-01",
+                    "word_count": 850
+                },
+                {
+                    "id": 11,
+                    "url_slug": "french-press-basics",
+                    "title": "French Press Basics",
+                    "h1": "French Press Basics",
+                    "target_keyword": "french press",
+                    "first_200_words": "french press brew time grind size guide",
+                    "gsc": { "impressions": 11000.0, "clicks": 45.0, "avg_position": 4.5 },
+                    "incoming_internal_links": 2,
+                    "outgoing_internal_links": 1,
+                    "published_date": "2023-02-15",
+                    "word_count": 900
+                }
+            ],
+            "similarity_pairs": [
+                {
+                    "article_a_id": 3,
+                    "article_b_id": 4,
+                    "article_a_title": "Coffee Blooming",
+                    "article_b_title": "Coffee Freshness",
+                    "similarity": 0.58
+                },
+                // Low-sim noise: distinct intents must not emit candidates
+                {
+                    "article_a_id": 7,
+                    "article_b_id": 5,
+                    "article_a_title": "Coffee Subscription",
+                    "article_b_title": "Portable Coffee Maker",
+                    "similarity": 0.12
+                },
+                {
+                    "article_a_id": 6,
+                    "article_b_id": 11,
+                    "article_a_title": "Moka Pot Guide",
+                    "article_b_title": "French Press Basics",
+                    "similarity": 0.22
+                },
+                {
+                    "article_a_id": 1,
+                    "article_b_id": 9,
+                    "article_a_title": "Cold Brew A",
+                    "article_b_title": "Pour Over Guide",
+                    "similarity": 0.19
+                }
+            ]
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_audit_context.json"),
+            serde_json::to_string_pretty(&context).unwrap(),
+        )
+        .unwrap();
+
+        let result = exec_can_select_candidates(&audit_task(), &path);
+        assert!(
+            result.success,
+            "select_candidates failed: {}",
+            result.message
+        );
+
+        let candidates = read_candidates(&path);
+
+        // ── No soft-cluster mega-merge (Brewedlate stranger bag) ──────────────
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c["page_count"].as_i64().unwrap_or(0) < 5),
+            "no candidate may have page_count >= 5 (mega-merge / top-N stranger bag): {:?}",
+            candidates
+                .iter()
+                .map(|c| (
+                    c["candidate_id"].as_str(),
+                    c["page_count"].as_i64(),
+                    c["candidate_type"].as_str()
+                ))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c["page_count"].as_i64().unwrap_or(0) <= 4),
+            "MAX_CANDIDATE_PAGES is 4; stranger bags must not reappear"
+        );
+
+        // Evidence-based shortlist only: exact dupe + high-sim pair (not one huge bag)
+        assert_eq!(
+            candidates.len(),
+            2,
+            "mono-niche fixture must emit exactly planted evidence (exact + high-sim), got: {:?}",
+            candidates
+                .iter()
+                .map(|c| (
+                    c["candidate_type"].as_str(),
+                    c["theme"].as_str(),
+                    c["page_count"].as_i64()
+                ))
+                .collect::<Vec<_>>()
+        );
+
+        // ── Planted exact keyword dupe surfaces ───────────────────────────────
+        let exact = candidates.iter().find(|c| {
+            c["candidate_type"].as_str() == Some("exact_keyword_dupe")
+        });
+        let exact = exact.expect("planted exact_keyword_dupe for 'cold brew coffee' must surface");
+        assert_eq!(exact["page_count"].as_i64().unwrap(), 2);
+        assert_eq!(
+            exact["theme"].as_str().unwrap().to_lowercase(),
+            "cold brew coffee"
+        );
+        let exact_slugs: Vec<&str> = exact["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["url"].as_str())
+            .collect();
+        assert!(
+            exact_slugs.iter().any(|u| u.contains("cold-brew-a")),
+            "exact dupe must include cold-brew-a: {:?}",
+            exact_slugs
+        );
+        assert!(
+            exact_slugs.iter().any(|u| u.contains("cold-brew-b")),
+            "exact dupe must include cold-brew-b: {:?}",
+            exact_slugs
+        );
+
+        // ── Planted high-sim pair surfaces ────────────────────────────────────
+        let high_sim = candidates.iter().find(|c| {
+            c["candidate_type"].as_str() == Some("merge_candidate")
+        });
+        let high_sim =
+            high_sim.expect("planted high-sim merge_candidate (blooming↔freshness) must surface");
+        assert_eq!(high_sim["page_count"].as_i64().unwrap(), 2);
+        let pair_sim = high_sim["pair_similarity"].as_f64().unwrap();
+        assert!(
+            (pair_sim - 0.58).abs() < 0.001,
+            "pair_similarity should preserve planted 0.58, got {}",
+            pair_sim
+        );
+        let high_sim_slugs: Vec<&str> = high_sim["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["url"].as_str())
+            .collect();
+        assert!(
+            high_sim_slugs.iter().any(|u| u.contains("coffee-blooming")),
+            "high-sim pair must include coffee-blooming: {:?}",
+            high_sim_slugs
+        );
+        assert!(
+            high_sim_slugs.iter().any(|u| u.contains("coffee-freshness")),
+            "high-sim pair must include coffee-freshness: {:?}",
+            high_sim_slugs
+        );
+
+        // High-impression distinct-intent page must not co-appear with unrelated
+        // strangers in a multi-page merge (subscription is not planted exact/high-sim).
+        for c in &candidates {
+            let urls: Vec<&str> = c["pages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|p| p["url"].as_str())
+                .collect();
+            if urls.iter().any(|u| u.contains("coffee-subscription")) {
+                panic!(
+                    "coffee-subscription must not appear in any multi-page candidate unless planted as exact/high-sim: {:?}",
+                    urls
+                );
+            }
+            // No grab-bag mixing subscription-class traffic with gear/method strangers
+            let has_unrelated_mix = urls.iter().any(|u| u.contains("portable-coffee-maker"))
+                && urls.iter().any(|u| u.contains("moka-pot"));
+            assert!(
+                !has_unrelated_mix,
+                "distinct-intent gear pages must not co-merge as strangers: {:?}",
+                urls
+            );
+        }
+
+        cleanup(&path);
+    }
+
     #[test]
     fn test_can_reduce_strategy_merges_batch_outputs() {
         let path = test_dir();
