@@ -55,6 +55,38 @@ fn is_research_step(step: &WorkflowStep) -> bool {
     )
 }
 
+/// Nested content-write agentic steps need a file-IO multi-turn host
+/// (grok/kimi CLI). Text-only providers (openai/claude/ollama) are rejected
+/// so accidental `execute-task write_article` cannot produce thin MDX via the
+/// issue #13 executor-write fallback. Prefer CLI Path B
+/// (`pageseeds-cli write-context` / `write-submit`) for outer-agent prose.
+///
+/// Gate only applies to steps that declare [`PromptSection::ContentDirectives`]
+/// (ContentHandler write/optimize). Structured-extraction paths
+/// (`fix_content_article_generate`, `merge_draft_patch`) correctly use Rig
+/// extractors where openai is fine and are not gated here (issue #143).
+fn require_file_io_host_for_content_write(
+    _task: &Task,
+    step: &WorkflowStep,
+    agent_provider: &str,
+) -> Result<(), String> {
+    let wants_content_write = step
+        .prompt_sections
+        .iter()
+        .any(|s| matches!(s, PromptSection::ContentDirectives { .. }));
+    if !wants_content_write {
+        return Ok(());
+    }
+    if crate::rig::provider::provider_supports_file_io(agent_provider) {
+        return Ok(());
+    }
+    Err(format!(
+        "Nested content write requires a file-IO agent host (grok or kimi), not '{agent_provider}'.\n\
+         For best SEO from an outer agent, use CLI Path B: `pageseeds-cli write-context` then `write-submit`.\n\
+         Or set global agent_provider to grok/kimi for unattended nested execute-task (fallback quality)."
+    ))
+}
+
 // ─── Content-task prompt sections ─────────────────────────────────────────────
 
 /// Snapshot of the resolved content directory taken before the agent runs:
@@ -554,6 +586,14 @@ pub async fn exec_agentic(
 
     let repo_root = Path::new(project_path);
 
+    // Nested content write under a text-only provider (openai/claude/ollama)
+    // produces thin MDX via the executor-write fallback. Fail loud instead
+    // (issue #143). Path B write-context/write-submit is preferred for outer
+    // agents; nested execute-task is the unattended fallback and needs grok/kimi.
+    if let Err(msg) = require_file_io_host_for_content_write(task, step, agent_provider) {
+        return StepResult::fail(msg);
+    }
+
     // Prompt-assembly policy is declared on the step by its handler (issue #4
     // stage C). These derived flags also drive the content side-effects below
     // (file snapshot/rename, executor-write fallback).
@@ -702,6 +742,11 @@ pub async fn exec_agentic(
                 // target path so the downstream ingest/link-verify steps see a
                 // real file. Skipped for file-IO providers — a missing file
                 // there is an agent failure that content_write_verify reports.
+                //
+                // Primary policy for nested content write is the host gate
+                // (issue #143): ContentDirectives steps under openai/claude/
+                // ollama fail before the agent runs. This branch remains as a
+                // safety net for edge cases that bypass that gate.
                 if !provider_has_file_io && new_article {
                     let new_file_appeared =
                         crate::content::locator::collect_markdown_files(&content_dir)
@@ -1024,5 +1069,91 @@ mod tests {
     fn test_content_directives_none_for_non_content_task() {
         let task = make_task("content_audit");
         assert!(content_directives(&task, false, &None, &None, None).is_none());
+    }
+
+    // ── require_file_io_host_for_content_write (issue #143) ───────────────────
+
+    fn content_write_step(new_article: bool) -> WorkflowStep {
+        WorkflowStep::new("content_write_stage", crate::engine::workflows::StepKind::Agentic)
+            .with_prompt_section(PromptSection::ContentDirectives { new_article })
+    }
+
+    fn research_agentic_step() -> WorkflowStep {
+        WorkflowStep::new(
+            "research_keyword_discovery",
+            crate::engine::workflows::StepKind::Agentic,
+        )
+    }
+
+    #[test]
+    fn test_host_gate_rejects_openai_content_write() {
+        let task = make_task("write_article");
+        let step = content_write_step(true);
+        let err = require_file_io_host_for_content_write(&task, &step, "openai")
+            .expect_err("openai + ContentDirectives must fail");
+        assert!(
+            err.contains("write-context") && err.contains("Path B"),
+            "error should mention Path B / write-context: {err}"
+        );
+        assert!(
+            err.contains("grok") && err.contains("kimi"),
+            "error should mention grok/kimi: {err}"
+        );
+        assert!(err.contains("openai"), "error should name the provider: {err}");
+    }
+
+    #[test]
+    fn test_host_gate_rejects_claude_and_ollama_content_write() {
+        let task = make_task("write_article");
+        let step = content_write_step(true);
+        for provider in ["claude", "ollama"] {
+            let err = require_file_io_host_for_content_write(&task, &step, provider)
+                .expect_err(&format!("{provider} + ContentDirectives must fail"));
+            assert!(
+                err.contains("write-context") && err.contains("Path B"),
+                "{provider}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_host_gate_allows_grok_and_kimi_content_write() {
+        let task = make_task("write_article");
+        let step = content_write_step(true);
+        for provider in ["grok", "kimi"] {
+            require_file_io_host_for_content_write(&task, &step, provider)
+                .unwrap_or_else(|e| panic!("{provider} should be allowed: {e}"));
+        }
+    }
+
+    #[test]
+    fn test_host_gate_allows_research_under_openai() {
+        let task = make_task("research_keywords");
+        let step = research_agentic_step();
+        require_file_io_host_for_content_write(&task, &step, "openai")
+            .expect("research/non-content agentic under openai must not be gated");
+    }
+
+    #[test]
+    fn test_host_gate_rejects_optimize_path_under_openai() {
+        let task = make_task("optimize_article");
+        let step = content_write_step(false);
+        let err = require_file_io_host_for_content_write(&task, &step, "openai")
+            .expect_err("optimize (new_article: false) must also be gated");
+        assert!(err.contains("write-context") || err.contains("Path B"), "{err}");
+    }
+
+    #[test]
+    fn test_host_gate_allows_agentic_without_content_directives() {
+        // fix_content_article_generate and other structured paths use different
+        // StepKinds and never declare ContentDirectives — plain agentic without
+        // directives must also pass under openai.
+        let task = make_task("fix_content_article");
+        let step = WorkflowStep::new(
+            "some_agentic_step",
+            crate::engine::workflows::StepKind::Agentic,
+        );
+        require_file_io_host_for_content_write(&task, &step, "openai")
+            .expect("agentic without ContentDirectives must not be gated");
     }
 }

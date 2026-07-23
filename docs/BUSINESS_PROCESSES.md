@@ -149,6 +149,13 @@ Path B avoids nested `execute-task write_article` under a weak global provider
 (thin single-shot articles). Freeform MDX without submit is not supported —
 submit is the quality gate.
 
+**Nested path host policy (issue #143):** if you do run nested `execute-task`
+write/optimize, `agent_provider` must be `grok` or `kimi` (file-IO hosts).
+Under `openai`/`claude`/`ollama` the nested write fails loud with a Path B
+pointer instead of producing thin MDX via the text-only executor-write fallback.
+Nested execute-task is the unattended fallback; Path B remains preferred for
+outer-agent prose quality.
+
 ### Key Files
 - `engine/workflows/handlers.rs` — ContentHandler (nested path)
 - `engine/write_package.rs` — CLI Path B package + submit
