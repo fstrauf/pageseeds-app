@@ -57,6 +57,8 @@ fn main() {
         "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
         "write-context" => write_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "write-submit" => write_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
+        "merge-context" => merge_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
+        "merge-submit" => merge_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "select-content-review" => select_content_review(&db.to_string_lossy(), &args),
         "select-cannibalization" => select_cannibalization(&db.to_string_lossy(), &args),
         "create-articles-from-keywords" => create_articles_from_keywords(&db.to_string_lossy(), &project_id, &args),
@@ -158,6 +160,69 @@ fn main() {
             investigate::validate_article_json(&ctx, &slug)
                 .map(|r| serde_json::to_value(r).unwrap_or_default())
                 .map_err(|e| e.to_string())
+        }
+        // ── Path B fix package / submit (no nested generate) ──
+        "fix-context" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr required"));
+            let goals = flag(&args, "--goals", "-g");
+            let period_days: Option<i64> = flag(&args, "--period-days", "-d")
+                .and_then(|s| s.parse().ok());
+            let path = require_project_path();
+            if project_id.is_empty() {
+                exit("--project-id required");
+            }
+            let kind = pageseeds_lib::engine::fix_package::FixKind::parse(&kind_raw)
+                .unwrap_or_else(|e| exit(&e.to_string()));
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_lib::engine::fix_package::build_fix_package(
+                    &conn,
+                    &project_id,
+                    &path,
+                    &slug,
+                    kind,
+                    goals.as_deref(),
+                    period_days,
+                )
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+            })
+        }
+        "fix-submit" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr required"));
+            let path = require_project_path();
+            if project_id.is_empty() {
+                exit("--project-id required");
+            }
+            let kind = pageseeds_lib::engine::fix_package::FixKind::parse(&kind_raw)
+                .unwrap_or_else(|e| exit(&e.to_string()));
+            let file_override = flag(&args, "--file", "-f");
+            let patch_json = match flag(&args, "--patch", "-P") {
+                Some(p) => {
+                    let expanded = expand_tilde(&p);
+                    match std::fs::read_to_string(&expanded) {
+                        Ok(s) => Some(s),
+                        Err(e) => exit(&format!("failed to read patch file {expanded}: {e}")),
+                    }
+                }
+                None => None,
+            };
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_lib::engine::fix_package::submit_fix(
+                    &conn,
+                    &project_id,
+                    &path,
+                    &slug,
+                    kind,
+                    pageseeds_lib::engine::fix_package::FixSubmitOpts {
+                        file_override,
+                        patch_json,
+                    },
+                )
+                .map(|r| serde_json::to_value(r).unwrap_or_default())
+                .map_err(|e| e.to_string())
+            })
         }
         "content-audit-report" => investigate::read_content_audit_report(&require_project_path()).map_err(|e| e.to_string()),
         "run-content-audit" => run_audit(&project_id, &require_project_path()),
@@ -409,6 +474,112 @@ fn write_submit(
         pageseeds_lib::engine::write_package::SubmitOpts {
             write_task_id,
             keyword,
+        },
+    )?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+/// Path B merge: deterministic package with full MDX bodies (no nested draft_patch).
+/// Modes: -I consolidate-task-id | --keep-id + --redirect-ids | -K keep-url + -R redirect-urls.
+fn merge_context(
+    db_path: &str,
+    project_id: &str,
+    project_path: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    if project_id.is_empty() {
+        exit("--project-id required");
+    }
+
+    use pageseeds_lib::engine::merge_package::MergeContextSource;
+
+    let source = if let Some(task_id) = flag(args, "--task-id", "-I") {
+        MergeContextSource::ConsolidateTask { task_id }
+    } else if let Some(keep_id_s) = flag(args, "--keep-id", "") {
+        let keep_id: i64 = keep_id_s
+            .parse()
+            .map_err(|_| format!("invalid --keep-id: {keep_id_s}"))?;
+        let redirect_ids: Vec<i64> = flag(args, "--redirect-ids", "")
+            .map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.parse::<i64>().map_err(|_| format!("invalid redirect id: {p}")))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_else(|| exit("--redirect-ids required with --keep-id"));
+        if redirect_ids.is_empty() {
+            exit("--redirect-ids must not be empty");
+        }
+        MergeContextSource::ArticleIds {
+            keep_id,
+            redirect_ids,
+        }
+    } else if let Some(keep_url) = flag(args, "--keep-url", "-K") {
+        let redirect_urls: Vec<String> = flag(args, "--redirect-urls", "-R")
+            .map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect()
+            })
+            .unwrap_or_else(|| exit("--redirect-urls (-R) required with --keep-url"));
+        if redirect_urls.is_empty() {
+            exit("--redirect-urls must not be empty");
+        }
+        MergeContextSource::Urls {
+            keep_url,
+            redirect_urls,
+        }
+    } else {
+        exit(
+            "merge-context requires -I <consolidate-task-id> OR --keep-id + --redirect-ids OR -K/--keep-url + -R/--redirect-urls",
+        );
+    };
+
+    let conn = open_db(db_path)?;
+    let package = pageseeds_lib::engine::merge_package::build_merge_package(
+        &conn,
+        project_id,
+        std::path::Path::new(project_path),
+        source,
+    )?;
+    serde_json::to_value(package).map_err(|e| e.to_string())
+}
+
+/// Path B merge submit: validate keeper MDX, apply redirects/links/depublish/sync.
+/// Validation failures → ok:false JSON (exit 0). Domain errors → Err (exit 1).
+fn merge_submit(
+    db_path: &str,
+    project_id: &str,
+    project_path: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    if project_id.is_empty() {
+        exit("--project-id required");
+    }
+
+    let consolidate_task_id = flag(args, "--task-id", "-I");
+    let keep_url = flag(args, "--keep-url", "-K");
+    let redirect_urls = flag(args, "--redirect-urls", "-R").map(|s| {
+        s.split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let confirmed = has_flag(args, "--confirm", "-y");
+
+    let conn = open_db(db_path)?;
+    let result = pageseeds_lib::engine::merge_package::submit_merge(
+        &conn,
+        project_id,
+        std::path::Path::new(project_path),
+        pageseeds_lib::engine::merge_package::MergeSubmitOpts {
+            consolidate_task_id,
+            keep_url,
+            redirect_urls,
+            confirmed,
         },
     )?;
     serde_json::to_value(result).map_err(|e| e.to_string())
@@ -987,6 +1158,10 @@ Tools:
   articles         [-s status] [-m min-impressions] [-R include-redirected] [-l limit] [-d period-days]
   article          -S/--slug <slug> [-d/--period-days N]    Full package for one article
   article-list  article-frontmatter  article-body-hash  article-title-scan  validate-article
+  fix-context      -S/--slug <slug> -k/--kind content|ctr [-g/--goals "..."] [-d period-days]
+                   Path B package (full file path + queries + skill; no nested generate)
+  fix-submit       -S/--slug <slug> -k/--kind content|ctr [--patch <json>] [--file <mdx>]
+                   Apply optional patch and/or validate on-disk MDX (no nested generate)
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
   research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec
@@ -1005,6 +1180,14 @@ Task / queue orchestration:
                           Deterministic write package (brief, target path, skill, floors) — no LLM
   write-submit            -i <id> -p <path> -f/--file <path> | -S/--slug <slug> [-I write-task-id] [-K keyword]
                           Validate MDX (≥800 words), ingest, complete write task, spawn cluster_and_link
+  merge-context           -i <id> -p <path>
+                          Modes: -I <consolidate-task-id>
+                                 OR --keep-id <id> --redirect-ids <id,id,...>
+                                 OR -K/--keep-url <url> -R/--redirect-urls <url,url,...>
+                          Deterministic merge package (full MDX bodies, skill, floors) — no LLM
+  merge-submit            -i <id> -p <path>
+                          -I <consolidate-task-id> OR -K keep-url -R redirect-urls [-y/--confirm]
+                          Validate keeper MDX (≥400 words), redirects.csv, rewrite links, depublish, sync
   select-content-review   -I <review-task-id> -P <proposal-id,...>  Spawn fix_content_article from content_review
   select-cannibalization  -I <parent-task-id> -S <type:id,...>  Spawn cannibalization fixes, mark parent done
   create-articles-from-keywords -i <id> -I <research-task-id> -k "kw1, kw2, ..."

@@ -1,11 +1,5 @@
-use std::path::{Path, PathBuf};
-
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
-use crate::models::merge_patch::{
-    ContentMergePatch, ExtractedExample, ExtractedFaq, ExtractedHeading, ExtractedTable,
-    MergePreflightReport, MergeValidationReport, RedirectRule, SectionInventory,
-};
 use crate::models::task::Task;
 
 use super::*;
@@ -89,16 +83,9 @@ pub(crate) fn exec_merge_sync_articles(task: &Task, project_path: &str) -> StepR
 
 /// Depublish every redirect source from the merge plan.
 ///
-/// For each slug in the plan's `redirect_urls` (the same source
-/// `merge_validate_output` uses):
-///   1. MDX frontmatter `status` is set to `redirected` via
-///      `frontmatter::replace_scalar` (file stays on disk).
-///   2. The matching SQLite `articles` row is set to `status = 'redirected'`.
-///
-/// Frontmatter is patched first because `sync_article_metadata_from_disk`
-/// copies frontmatter status into the DB — both must agree or a later sync
-/// would resurrect `published`. Any failure (missing file, missing DB row,
-/// ambiguous slug) fails the step loudly rather than leaving a zombie page.
+/// Thin wrapper: loads the plan, then calls the shared
+/// [`crate::engine::merge_apply::depublish_redirect_slugs`] primitive
+/// (also used by Path B `submit_merge`).
 ///
 /// Returns the number of depublished sources.
 pub(crate) fn depublish_redirect_sources(
@@ -112,59 +99,25 @@ pub(crate) fn depublish_redirect_sources(
 
     let keeper_slug =
         crate::content::slug::normalize_url_slug(plan["keep_url"].as_str().unwrap_or(""));
-    let redirect_urls: Vec<&str> = plan["redirect_urls"]
+    let redirect_slugs: Vec<String> = plan["redirect_urls"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| crate::content::slug::normalize_url_slug(s))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
-    if redirect_urls.is_empty() {
+    if redirect_slugs.is_empty() {
         return Ok(0);
     }
 
-    let articles = crate::engine::task_store::list_articles(conn, &task.project_id)
-        .map_err(|e| format!("Failed to list articles for depublish: {}", e))?;
-
-    let mut depublished = 0usize;
-    for url in redirect_urls {
-        let slug = crate::content::slug::normalize_url_slug(url);
-        if slug.is_empty() || slug == keeper_slug {
-            continue;
-        }
-
-        // 1. Frontmatter status → redirected.
-        let file = find_file_by_slug(project_path, &slug)?
-            .ok_or_else(|| format!("Cannot depublish '{}': no content file matches", slug))?;
-        let content = std::fs::read_to_string(&file)
-            .map_err(|e| format!("Cannot depublish '{}': read failed: {}", slug, e))?;
-        let (fm, body) = crate::content::frontmatter::split_mdx(&content).ok_or_else(|| {
-            format!(
-                "Cannot depublish '{}': no frontmatter in {}",
-                slug,
-                file.display()
-            )
-        })?;
-        let new_fm = crate::content::frontmatter::replace_scalar(fm, "status", "redirected");
-        std::fs::write(&file, crate::content::cleaner::rebuild_mdx(&new_fm, body))
-            .map_err(|e| format!("Cannot depublish '{}': write failed: {}", slug, e))?;
-
-        // 2. SQLite articles row → redirected.
-        let article = articles
-            .iter()
-            .find(|a| {
-                a.url_slug == slug
-                    || crate::content::slug::normalize_url_slug(&a.url_slug) == slug
-            })
-            .ok_or_else(|| {
-                format!("Cannot depublish '{}': no articles row matches the slug", slug)
-            })?;
-        conn.execute(
-            "UPDATE articles SET status = 'redirected' WHERE id = ?1 AND project_id = ?2",
-            rusqlite::params![article.id, task.project_id],
-        )
-        .map_err(|e| format!("Cannot depublish '{}': DB update failed: {}", slug, e))?;
-
-        depublished += 1;
-    }
-
-    Ok(depublished)
+    crate::engine::merge_apply::depublish_redirect_slugs(
+        conn,
+        &task.project_id,
+        std::path::Path::new(project_path),
+        &keeper_slug,
+        &redirect_slugs,
+    )
 }
-

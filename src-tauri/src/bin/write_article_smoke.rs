@@ -9,15 +9,15 @@
 ///   3. Creates a `write_article` task for TARGET_KEYWORD
 ///   4. Executes the task directly through executor::execute_task
 ///   5. Prints the generated MDX so you can review content quality
-///   6. Asserts the issue #13 contract per provider:
+///   6. Asserts the issue #13 contract:
 ///      - success ⟹ a new .mdx file exists AND is registered as a draft row
 ///      - no output ⟹ the task fails loudly (never Done with zero files)
 ///
 /// This exercises the full ContentHandler → content-write skill → exec_agentic
 /// path without the Tauri app, queue, or IPC. Use it to iterate on the
-/// content-write skill and review output quality before shipping. Run it with
-/// different `agent_provider` global settings (kimi vs claude/openai/ollama)
-/// to cover both the file-IO and the executor-write fallback paths.
+/// content-write skill and review output quality before shipping. Nested write
+/// requires a file-IO host (`grok`/`kimi`, issue #143); text-only providers
+/// fail the host gate before the agent runs.
 use pageseeds_lib::{
     db,
     engine::{executor, task_store},
@@ -69,7 +69,7 @@ async fn main() {
         if provider_supports_file_io(&provider) {
             "file-IO capable — agent writes the file itself"
         } else {
-            "text-only — executor-write fallback must persist the returned MDX"
+            "text-only — nested content write will fail the #143 host gate"
         }
     );
 

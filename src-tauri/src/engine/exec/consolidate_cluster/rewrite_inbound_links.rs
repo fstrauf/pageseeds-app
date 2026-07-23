@@ -1,6 +1,3 @@
-use std::collections::HashSet;
-use std::path::Path;
-
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
@@ -46,25 +43,21 @@ pub(crate) fn exec_merge_rewrite_inbound_links(task: &Task, project_path: &str) 
         };
     }
 
-    let destination = crate::content::slug::format_blog_link(keep_url);
-    let source_slugs: HashSet<String> = redirect_urls
+    let redirect_slugs: Vec<String> = redirect_urls
         .iter()
         .map(|s| crate::content::slug::normalize_url_slug(s))
         .collect();
 
-    let content_dir = match crate::content::locator::resolve(Path::new(project_path), None).selected
-    {
-        Some(d) => d,
-        None => {
-            return StepResult::fail("Could not locate content directory".to_string())
-        }
-    };
-
-    match rewrite_links_to_redirected_slugs(&content_dir, &source_slugs, &destination) {
+    match crate::engine::merge_apply::rewrite_inbound_links_to_keeper(
+        std::path::Path::new(project_path),
+        keep_url,
+        &redirect_slugs,
+    ) {
         Ok((total, files)) => {
+            let destination = crate::content::slug::format_blog_link(keep_url);
             let summary = serde_json::json!({
                 "destination": destination,
-                "source_slugs": source_slugs.iter().collect::<Vec<_>>(),
+                "source_slugs": redirect_slugs,
                 "total_rewrites": total,
                 "files": files,
             });
@@ -88,58 +81,10 @@ pub(crate) fn exec_merge_rewrite_inbound_links(task: &Task, project_path: &str) 
     }
 }
 
-/// Core rewrite loop, split out for unit testing.
-///
-/// Returns `(total_rewrites, per-file summaries)`. Counts distinct rewritten
-/// hrefs per file (every occurrence of each href is replaced).
-fn rewrite_links_to_redirected_slugs(
-    content_dir: &Path,
-    source_slugs: &HashSet<String>,
-    destination: &str,
-) -> Result<(usize, Vec<serde_json::Value>), String> {
-    let matches = crate::content::linking::find_links_to_slugs(content_dir, source_slugs);
-
-    // Group matched hrefs into per-file repair maps, preserving traversal
-    // order (matches for one file are consecutive).
-    let mut per_file: Vec<(std::path::PathBuf, std::collections::HashMap<String, String>)> =
-        Vec::new();
-    for m in matches {
-        match per_file.last_mut() {
-            Some((file, repairs)) if *file == m.file => {
-                repairs.insert(m.raw_href, destination.to_string());
-            }
-            _ => per_file.push((
-                m.file,
-                [(m.raw_href, destination.to_string())].into_iter().collect(),
-            )),
-        }
-    }
-
-    let mut total = 0usize;
-    let mut files: Vec<serde_json::Value> = Vec::new();
-
-    for (file, repairs) in per_file {
-        let Ok(content) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-
-        let repaired = crate::content::linking::repair_blog_link_hrefs(&content, &repairs);
-        std::fs::write(&file, repaired)
-            .map_err(|e| format!("Failed to write {}: {}", file.display(), e))?;
-
-        total += repairs.len();
-        files.push(serde_json::json!({
-            "file": file.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-            "rewrites": repairs.len(),
-        }));
-    }
-
-    Ok((total, files))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     fn temp_project() -> PathBuf {
@@ -171,7 +116,7 @@ mod tests {
         )
         .unwrap();
 
-        let (total, files) = rewrite_links_to_redirected_slugs(
+        let (total, files) = crate::engine::merge_apply::rewrite_links_to_redirected_slugs(
             &content_dir,
             &sources(&["old-post"]),
             "/blog/hub-coffee",
@@ -198,7 +143,7 @@ mod tests {
         let original = "[a](/blog/some-post)\n";
         std::fs::write(content_dir.join("1_post.mdx"), original).unwrap();
 
-        let (total, files) = rewrite_links_to_redirected_slugs(
+        let (total, files) = crate::engine::merge_apply::rewrite_links_to_redirected_slugs(
             &content_dir,
             &sources(&["old-post"]),
             "/blog/hub-coffee",

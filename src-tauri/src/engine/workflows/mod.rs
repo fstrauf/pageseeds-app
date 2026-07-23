@@ -44,8 +44,8 @@ pub enum PromptSection {
     /// Publish-date, file-format, link-format, and target-file directives for
     /// content tasks. `new_article` selects the "required date + exact target
     /// path" variant (new articles) over the "preserve date + approximate
-    /// filename hint" variant (optimize/fix tasks), and also drives the
-    /// executor-write fallback for text-only providers.
+    /// filename hint" variant (optimize/fix tasks). Steps that declare this
+    /// section require a file-IO host (`grok`/`kimi`) — see issue #143.
     ContentDirectives { new_article: bool },
     /// Hub spoke context (briefs gathered from SQLite) plus the hub page
     /// requirements block. Also suppresses the bulky `cannibalization_strategy`
