@@ -152,7 +152,7 @@ submit is the quality gate.
 **Nested path host policy (issue #143):** if you do run nested `execute-task`
 write/optimize, `agent_provider` must be `grok` or `kimi` (file-IO hosts).
 Under `openai`/`claude`/`ollama` the nested write fails loud with a Path B
-pointer instead of producing thin MDX via the text-only executor-write fallback.
+pointer. There is no executor-write fallback for text-only providers.
 Nested execute-task is the unattended fallback; Path B remains preferred for
 outer-agent prose quality.
 

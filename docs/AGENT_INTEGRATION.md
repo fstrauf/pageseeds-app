@@ -78,7 +78,7 @@ For Kimi specifically, the global `kimi_backend_mode` setting controls which bac
 
 Nested `execute-task write_article` / `optimize_article` (ContentHandler → `exec_agentic` with `ContentDirectives`) requires a **file-IO agent host** — `grok` or `kimi` CLI — so the agent can multi-turn write full MDX into the repo.
 
-Text-only providers (`openai`, `claude`, `ollama`) are **rejected early** with an actionable error pointing at CLI Path B. They must not silently fall through to the issue #13 executor-write path (thin single-shot prose).
+**Sole policy:** text-only providers (`openai`, `claude`, `ollama`) are **rejected early** with an actionable error pointing at CLI Path B. There is no executor-write fallback that salvages chat-text MDX for ContentDirectives steps. If a file-IO agent runs but writes no file, `content_write_verify` fails the task (issue #13 contract).
 
 | Path | When | Provider |
 |------|------|----------|
