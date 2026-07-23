@@ -758,6 +758,68 @@ Some content here.
         })
     }
 
+    /// Context-shaped article for cannibalization_audit_context.json injection tests.
+    fn context_article(
+        id: i64,
+        slug: &str,
+        keyword: &str,
+        impressions: f64,
+        first_200_words: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "url_slug": slug,
+            "title": slug,
+            "h1": slug,
+            "target_keyword": keyword,
+            "first_200_words": first_200_words,
+            "gsc": {
+                "impressions": impressions,
+                "clicks": 5.0,
+                "avg_position": 8.0
+            },
+            "incoming_internal_links": 1,
+            "outgoing_internal_links": 1,
+            "published_date": "2024-01-01",
+            "word_count": 800
+        })
+    }
+
+    fn sim_pair(
+        a_id: i64,
+        b_id: i64,
+        a_title: &str,
+        b_title: &str,
+        similarity: f64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "article_a_id": a_id,
+            "article_b_id": b_id,
+            "article_a_title": a_title,
+            "article_b_title": b_title,
+            "similarity": similarity,
+        })
+    }
+
+    fn write_context_file(
+        path: &str,
+        articles: serde_json::Value,
+        similarity_pairs: serde_json::Value,
+    ) {
+        let auto_dir = Path::new(path).join(".github").join("automation");
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        let doc = serde_json::json!({
+            "generated_at": "2024-01-01T00:00:00Z",
+            "articles": articles,
+            "similarity_pairs": similarity_pairs,
+        });
+        std::fs::write(
+            auto_dir.join("cannibalization_audit_context.json"),
+            serde_json::to_string_pretty(&doc).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn write_exact_dupes_file(path: &str, duplicates: serde_json::Value) {
         let auto_dir = Path::new(path).join(".github").join("automation");
         std::fs::create_dir_all(&auto_dir).unwrap();
@@ -934,8 +996,6 @@ Some content here.
     fn test_select_candidates_emits_high_similarity_pairs() {
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
-        let auto_dir = Path::new(&path).join(".github").join("automation");
-        std::fs::create_dir_all(&auto_dir).unwrap();
 
         // Soft cluster with distinct keywords alone would yield 0 candidates.
         write_clusters_file(
@@ -948,71 +1008,18 @@ Some content here.
 
         // Context with a high-sim pair (above PAIR_CANDIDATE_SIMILARITY_THRESHOLD 0.45)
         // and a low-sim pair that must be ignored.
-        let context = serde_json::json!({
-            "generated_at": "2024-01-01T00:00:00Z",
-            "articles": [
-                {
-                    "id": 1,
-                    "url_slug": "cold-brew-guide",
-                    "title": "Cold Brew Guide",
-                    "h1": "Cold Brew Guide",
-                    "target_keyword": "cold brew coffee",
-                    "first_200_words": "how to make cold brew coffee at home",
-                    "gsc": { "impressions": 1000.0, "clicks": 10.0, "avg_position": 5.0 },
-                    "incoming_internal_links": 1,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2024-01-01",
-                    "word_count": 800
-                },
-                {
-                    "id": 2,
-                    "url_slug": "portable-brewer",
-                    "title": "Portable Coffee Maker",
-                    "h1": "Portable Coffee Maker",
-                    "target_keyword": "portable coffee maker",
-                    "first_200_words": "best portable coffee makers for travel",
-                    "gsc": { "impressions": 500.0, "clicks": 5.0, "avg_position": 8.0 },
-                    "incoming_internal_links": 0,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2024-02-01",
-                    "word_count": 600
-                },
-                {
-                    "id": 3,
-                    "url_slug": "moka-pot",
-                    "title": "Moka Pot Guide",
-                    "h1": "Moka Pot Guide",
-                    "target_keyword": "moka pot",
-                    "first_200_words": "using a moka pot on the stove",
-                    "gsc": { "impressions": 200.0, "clicks": 2.0, "avg_position": 12.0 },
-                    "incoming_internal_links": 0,
-                    "outgoing_internal_links": 0,
-                    "published_date": "2024-03-01",
-                    "word_count": 400
-                }
-            ],
-            "similarity_pairs": [
-                {
-                    "article_a_id": 1,
-                    "article_b_id": 2,
-                    "article_a_title": "Cold Brew Guide",
-                    "article_b_title": "Portable Coffee Maker",
-                    "similarity": 0.62
-                },
-                {
-                    "article_a_id": 1,
-                    "article_b_id": 3,
-                    "article_a_title": "Cold Brew Guide",
-                    "article_b_title": "Moka Pot Guide",
-                    "similarity": 0.18
-                }
-            ]
-        });
-        std::fs::write(
-            auto_dir.join("cannibalization_audit_context.json"),
-            serde_json::to_string_pretty(&context).unwrap(),
-        )
-        .unwrap();
+        write_context_file(
+            &path,
+            serde_json::json!([
+                context_article(1, "cold-brew-guide", "cold brew coffee", 1000.0, "how to make cold brew coffee at home"),
+                context_article(2, "portable-brewer", "portable coffee maker", 500.0, "best portable coffee makers for travel"),
+                context_article(3, "moka-pot", "moka pot", 200.0, "using a moka pot on the stove"),
+            ]),
+            serde_json::json!([
+                sim_pair(1, 2, "cold-brew-guide", "portable-brewer", 0.62),
+                sim_pair(1, 3, "cold-brew-guide", "moka-pot", 0.18),
+            ]),
+        );
 
         let result = exec_can_select_candidates(&audit_task(), &path);
         assert!(result.success, "select_candidates failed: {}", result.message);
@@ -1122,8 +1129,6 @@ Some content here.
     fn test_mono_niche_fixture_no_mega_merge_planted_dupes_surface() {
         let path = test_dir();
         let _ = std::fs::remove_dir_all(&path);
-        let auto_dir = Path::new(&path).join(".github").join("automation");
-        std::fs::create_dir_all(&auto_dir).unwrap();
 
         // Soft cluster: ≥8 distinct-intent coffee mono-niche pages (high impressions)
         // plus planted exact-dupe pair. This is the shape that used to become an
@@ -1171,190 +1176,29 @@ Some content here.
 
         // Context: all mono-niche articles + one high-sim pair + low-sim noise.
         // Planted high-sim: coffee-blooming ↔ coffee-freshness at 0.58 (≥0.45).
-        let context = serde_json::json!({
-            "generated_at": "2024-01-01T00:00:00Z",
-            "articles": [
-                {
-                    "id": 1,
-                    "url_slug": "cold-brew-a",
-                    "title": "Cold Brew A",
-                    "h1": "Cold Brew A",
-                    "target_keyword": "cold brew coffee",
-                    "first_200_words": "how to make cold brew coffee at home batch",
-                    "gsc": { "impressions": 9000.0, "clicks": 40.0, "avg_position": 4.0 },
-                    "incoming_internal_links": 3,
-                    "outgoing_internal_links": 2,
-                    "published_date": "2023-01-01",
-                    "word_count": 1200
-                },
-                {
-                    "id": 2,
-                    "url_slug": "cold-brew-b",
-                    "title": "Cold Brew B",
-                    "h1": "Cold Brew B",
-                    "target_keyword": "cold brew coffee",
-                    "first_200_words": "cold brew coffee recipe concentrate ratio",
-                    "gsc": { "impressions": 6000.0, "clicks": 20.0, "avg_position": 7.0 },
-                    "incoming_internal_links": 1,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2023-06-01",
-                    "word_count": 900
-                },
-                {
-                    "id": 3,
-                    "url_slug": "coffee-blooming",
-                    "title": "Coffee Blooming",
-                    "h1": "Coffee Blooming",
-                    "target_keyword": "coffee blooming",
-                    "first_200_words": "why coffee blooms during pour over degassing",
-                    "gsc": { "impressions": 4200.0, "clicks": 15.0, "avg_position": 6.0 },
-                    "incoming_internal_links": 2,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2023-03-01",
-                    "word_count": 800
-                },
-                {
-                    "id": 4,
-                    "url_slug": "coffee-freshness",
-                    "title": "Coffee Freshness",
-                    "h1": "Coffee Freshness",
-                    "target_keyword": "coffee freshness",
-                    "first_200_words": "how long coffee stays fresh after roast degassing",
-                    "gsc": { "impressions": 3800.0, "clicks": 12.0, "avg_position": 8.0 },
-                    "incoming_internal_links": 1,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2023-04-01",
-                    "word_count": 750
-                },
-                {
-                    "id": 5,
-                    "url_slug": "portable-coffee-maker",
-                    "title": "Portable Coffee Maker",
-                    "h1": "Portable Coffee Maker",
-                    "target_keyword": "portable coffee maker",
-                    "first_200_words": "best portable coffee makers for travel camping",
-                    "gsc": { "impressions": 12000.0, "clicks": 50.0, "avg_position": 5.0 },
-                    "incoming_internal_links": 2,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2023-02-01",
-                    "word_count": 1100
-                },
-                {
-                    "id": 6,
-                    "url_slug": "moka-pot-guide",
-                    "title": "Moka Pot Guide",
-                    "h1": "Moka Pot Guide",
-                    "target_keyword": "moka pot",
-                    "first_200_words": "how to use a moka pot on the stove",
-                    "gsc": { "impressions": 8000.0, "clicks": 30.0, "avg_position": 6.0 },
-                    "incoming_internal_links": 1,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2023-05-01",
-                    "word_count": 950
-                },
-                {
-                    "id": 7,
-                    "url_slug": "coffee-subscription",
-                    "title": "Coffee Subscription",
-                    "h1": "Coffee Subscription",
-                    "target_keyword": "coffee subscription",
-                    "first_200_words": "best coffee subscription boxes monthly delivery",
-                    "gsc": { "impressions": 15000.0, "clicks": 80.0, "avg_position": 3.0 },
-                    "incoming_internal_links": 4,
-                    "outgoing_internal_links": 2,
-                    "published_date": "2023-01-15",
-                    "word_count": 1400
-                },
-                {
-                    "id": 8,
-                    "url_slug": "cheap-coffee-beans",
-                    "title": "Cheap Coffee Beans",
-                    "h1": "Cheap Coffee Beans",
-                    "target_keyword": "cheap coffee beans",
-                    "first_200_words": "affordable specialty coffee beans without sacrificing",
-                    "gsc": { "impressions": 7000.0, "clicks": 25.0, "avg_position": 9.0 },
-                    "incoming_internal_links": 0,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2023-07-01",
-                    "word_count": 700
-                },
-                {
-                    "id": 9,
-                    "url_slug": "pour-over-guide",
-                    "title": "Pour Over Guide",
-                    "h1": "Pour Over Guide",
-                    "target_keyword": "pour over coffee",
-                    "first_200_words": "pour over coffee technique v60 ratio",
-                    "gsc": { "impressions": 9500.0, "clicks": 35.0, "avg_position": 5.5 },
-                    "incoming_internal_links": 2,
-                    "outgoing_internal_links": 2,
-                    "published_date": "2023-08-01",
-                    "word_count": 1000
-                },
-                {
-                    "id": 10,
-                    "url_slug": "specialty-coffee-trends",
-                    "title": "Specialty Coffee Trends",
-                    "h1": "Specialty Coffee Trends",
-                    "target_keyword": "specialty coffee trends",
-                    "first_200_words": "specialty coffee trends processing methods origins",
-                    "gsc": { "impressions": 5500.0, "clicks": 18.0, "avg_position": 10.0 },
-                    "incoming_internal_links": 1,
-                    "outgoing_internal_links": 0,
-                    "published_date": "2023-09-01",
-                    "word_count": 850
-                },
-                {
-                    "id": 11,
-                    "url_slug": "french-press-basics",
-                    "title": "French Press Basics",
-                    "h1": "French Press Basics",
-                    "target_keyword": "french press",
-                    "first_200_words": "french press brew time grind size guide",
-                    "gsc": { "impressions": 11000.0, "clicks": 45.0, "avg_position": 4.5 },
-                    "incoming_internal_links": 2,
-                    "outgoing_internal_links": 1,
-                    "published_date": "2023-02-15",
-                    "word_count": 900
-                }
-            ],
-            "similarity_pairs": [
-                {
-                    "article_a_id": 3,
-                    "article_b_id": 4,
-                    "article_a_title": "Coffee Blooming",
-                    "article_b_title": "Coffee Freshness",
-                    "similarity": 0.58
-                },
+        write_context_file(
+            &path,
+            serde_json::json!([
+                context_article(1, "cold-brew-a", "cold brew coffee", 9000.0, "how to make cold brew coffee at home batch"),
+                context_article(2, "cold-brew-b", "cold brew coffee", 6000.0, "cold brew coffee recipe concentrate ratio"),
+                context_article(3, "coffee-blooming", "coffee blooming", 4200.0, "why coffee blooms during pour over degassing"),
+                context_article(4, "coffee-freshness", "coffee freshness", 3800.0, "how long coffee stays fresh after roast degassing"),
+                context_article(5, "portable-coffee-maker", "portable coffee maker", 12000.0, "best portable coffee makers for travel camping"),
+                context_article(6, "moka-pot-guide", "moka pot", 8000.0, "how to use a moka pot on the stove"),
+                context_article(7, "coffee-subscription", "coffee subscription", 15000.0, "best coffee subscription boxes monthly delivery"),
+                context_article(8, "cheap-coffee-beans", "cheap coffee beans", 7000.0, "affordable specialty coffee beans without sacrificing"),
+                context_article(9, "pour-over-guide", "pour over coffee", 9500.0, "pour over coffee technique v60 ratio"),
+                context_article(10, "specialty-coffee-trends", "specialty coffee trends", 5500.0, "specialty coffee trends processing methods origins"),
+                context_article(11, "french-press-basics", "french press", 11000.0, "french press brew time grind size guide"),
+            ]),
+            serde_json::json!([
+                sim_pair(3, 4, "coffee-blooming", "coffee-freshness", 0.58),
                 // Low-sim noise: distinct intents must not emit candidates
-                {
-                    "article_a_id": 7,
-                    "article_b_id": 5,
-                    "article_a_title": "Coffee Subscription",
-                    "article_b_title": "Portable Coffee Maker",
-                    "similarity": 0.12
-                },
-                {
-                    "article_a_id": 6,
-                    "article_b_id": 11,
-                    "article_a_title": "Moka Pot Guide",
-                    "article_b_title": "French Press Basics",
-                    "similarity": 0.22
-                },
-                {
-                    "article_a_id": 1,
-                    "article_b_id": 9,
-                    "article_a_title": "Cold Brew A",
-                    "article_b_title": "Pour Over Guide",
-                    "similarity": 0.19
-                }
-            ]
-        });
-        std::fs::write(
-            auto_dir.join("cannibalization_audit_context.json"),
-            serde_json::to_string_pretty(&context).unwrap(),
-        )
-        .unwrap();
+                sim_pair(7, 5, "coffee-subscription", "portable-coffee-maker", 0.12),
+                sim_pair(6, 11, "moka-pot-guide", "french-press-basics", 0.22),
+                sim_pair(1, 9, "cold-brew-a", "pour-over-guide", 0.19),
+            ]),
+        );
 
         let result = exec_can_select_candidates(&audit_task(), &path);
         assert!(
@@ -1369,8 +1213,8 @@ Some content here.
         assert!(
             candidates
                 .iter()
-                .all(|c| c["page_count"].as_i64().unwrap_or(0) < 5),
-            "no candidate may have page_count >= 5 (mega-merge / top-N stranger bag): {:?}",
+                .all(|c| c["page_count"].as_i64().unwrap_or(0) <= 4),
+            "MAX_CANDIDATE_PAGES is 4; stranger bags must not reappear: {:?}",
             candidates
                 .iter()
                 .map(|c| (
@@ -1379,12 +1223,6 @@ Some content here.
                     c["candidate_type"].as_str()
                 ))
                 .collect::<Vec<_>>()
-        );
-        assert!(
-            candidates
-                .iter()
-                .all(|c| c["page_count"].as_i64().unwrap_or(0) <= 4),
-            "MAX_CANDIDATE_PAGES is 4; stranger bags must not reappear"
         );
 
         // Evidence-based shortlist only: exact dupe + high-sim pair (not one huge bag)
