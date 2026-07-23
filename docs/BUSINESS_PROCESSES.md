@@ -375,7 +375,7 @@ Auto-spawns fix tasks (up to 20):
 
 **Business value:** Higher CTR = more traffic without ranking improvements. A page ranking #5 with a compelling title can out-click a bland #4 result. This process systematically identifies and fixes underperforming snippets.
 
-> **Agent desk model (epic #117):** Low-CTR patterns **emerge from Site State** (GSC impressions/CTR + catalog title/meta via `site-overview` / `articles` / `article` / `gsc-queries`). The `ctr_audit` pipeline below remains available when the problem is already scoped or desk data clearly warrants the specialist path — it is **not** a required weekly spine. Prefer targeted `fix_content_article` / `content_review` when desk evidence is enough.
+> **Agent desk model (epic #117) / weekly CLI (#136/#139):** Low-CTR patterns **emerge from Site State** (GSC impressions/CTR + catalog title/meta via `site-overview` / `articles` / `article` / `gsc-queries`). Prefer desk evidence → targeted `fix_content_article -S` (or Path B fix when present). Keep full `ctr_audit` only when the problem is already scoped or desk data clearly warrants the specialist path — it is **not** a required weekly spine. Reserve `content_review` for desktop UI / unattended product; do **not** use it as the CLI weekly best-path (same policy as §3).
 
 ### Process Flow
 
