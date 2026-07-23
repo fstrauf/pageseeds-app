@@ -35,6 +35,8 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 | **Add a new workflow step** | Add `StepKind` variant → register in `step_registry.rs` → add match arm in `executor.rs` → implement in `engine/exec/`. | Put business logic in `commands/` or the handler |
 | **Add frontend UI around backend data** | Add command wrapper in `tauri.ts` → add type in `types.ts` → build component in `src/components/`. | Call `invoke()` inline in components |
 
+> **weekly-seo skill source of truth:** Canonical path is `.agents/skills/weekly-seo/SKILL.md`. `.grok/skills/weekly-seo/SKILL.md` is a symlink for Grok discovery — edit only the `.agents` file.
+
 **Golden rules:**
 1. A new skill file is ~20 lines. A new task type + handler + exec module is ~200+ lines. **Prefer the skill.**
 2. When the output is an MDX article, reuse `write_article` with a different skill — do not build a new pipeline.
