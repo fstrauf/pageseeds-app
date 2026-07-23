@@ -41,53 +41,57 @@ Each process represents a user-facing capability with a defined input, transform
 
 **Business value:** Eliminates guesswork in content planning. Instead of "what should we write about?", you get a validated shortlist of keywords your domain can realistically rank for.
 
-### Two Research Modes
+### Research Modes
 
 | Mode | Task Type | Intent | Output |
 |------|-----------|--------|--------|
 | **Informational** | `research_keywords` | Blog articles (how-to, guides, tutorials) | Curated keyword shortlist |
 | **Commercial** | `research_landing_pages` | Landing pages (best, vs, alternative, software) | Landing page candidates |
-| **Custom** | `custom_keyword_research` | User-provided themes | Validated keyword list |
+| **Custom / Path B** | `custom_keyword_research` | Session- or user-provided seeds | Validated keyword list |
 
 ### Process Flow
 
+**Desktop / nested theme agent** (`research_keywords` / `research_landing_pages`):
+
 ```
-Task: research_keywords / research_landing_pages / custom_keyword_research
+Task: research_keywords / research_landing_pages
   ↓
 Handler: ResearchHandler
   ↓
-Step 1: research_theme_selection_agent (agentic) — IF no explicit themes
-  ├─ Reads project brief and context
-  ├─ Extracts 3-4 focused themes to research
-  └─ Output: {"themes": [...]}
+Step 1–2: agentic seed extraction + validation (nested theme LLM)
   ↓
-Step 2: research_seed_validation (agentic)
-  ├─ Validates themes for domain relevance
-  ├─ Proposes 1-3 seed phrasings per on-topic theme
-  └─ Output: Validated seeds
+Step 3: keyword_research_native (deterministic Ahrefs/DataForSEO)
   ↓
-Step 3: keyword_research_native (deterministic)
-  ├─ Ahrefs API: keyword ideas + difficulty scores
-  ├─ Iterates until 10+ qualified keywords found
-  └─ Output: {"difficulty": {"results": [...]}}
+Step 4: research_final_selection
   ↓
-Step 4: research_final_selection (deterministic)
-  ├─ Filters by volume, KD, intent
-  ├─ Deduplicates against existing content
-  └─ Output: Final selection JSON
-  ↓
-Status: review (user must select keywords)
-  ↓
-User selects → create_article_tasks_from_keywords command
-  ↓
-Creates: write_article tasks for each selected keyword
+Status: review → KeywordPicker / select-keywords → write_article
 ```
+
+**CLI Path B research (issue #141 — preferred for weekly-seo):** session owns
+themes; CLI runs deterministic pull without nested seed LLM.
+
+```
+research-context  → shortlist + health + open research tasks
+  ↓
+Session proposes seeds (desk + shortlist + brand)
+  ↓
+research-pull -K "seed1,seed2,..."  → custom_keyword_research
+  (description = seeds one per line; plan skips seed extraction/validation)
+  ↓
+select-keywords -I <task> -K kw1,kw2  (max 3)
+  ↓
+write Path B (write-context → MDX → write-submit)
+```
+
+`custom_keyword_research` plan: `ensure_coverage_fresh` → `research_ahrefs_pipeline`
+→ `research_final_selection` only (no `research_seed_extraction` / validation).
 
 ### Key Files
 - `engine/workflows/handlers.rs` — workflow definition
+- `engine/research_package.rs` — CLI Path B strategy package + research-pull
 - `engine/exec/keywords.rs` — research execution
 - `seo/keywords.rs` — Ahrefs API integration
-- `components/tasks/KeywordPicker.tsx` — selection UI
+- `components/tasks/KeywordPicker.tsx` — selection UI (desktop)
 
 ### Tools Required
 - `CAPSOLVER_API_KEY` + Ahrefs credentials in Settings → Secrets

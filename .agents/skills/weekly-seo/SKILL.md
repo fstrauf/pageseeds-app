@@ -112,8 +112,10 @@ Breaking these fails the run.
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
 
 **Prefer when desk data already supports the action:** `fix_content_article`,
-`content_review`, `research_keywords`, `research_landing_pages`, indexing tasks.
-Do **not** invent work via soft audits when desk reads suffice.
+`content_review`, **Path B research** (`research-context` → session seeds →
+`research-pull`) over nested `research_keywords` on CLI, `research_landing_pages`
+when commercial intent, indexing tasks. Do **not** invent work via soft audits
+when desk reads suffice.
 
 ---
 
@@ -167,6 +169,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `list-tasks` / `get-task` | Open work, artifacts, review state |
 | `create-task` / `execute-task` | Act within may-create + budgets |
 | Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
+| Path B research | `research-context` / `research-pull` — session seeds → deterministic pull (preferred CLI research) |
 | Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path) |
 
 #### Optional / secondary (NOT ground truth, not required path)
@@ -199,17 +202,41 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
 | Structural MDX issues | `content_cleanup` / `content_review` |
 | Template/title systemic bugs | `generate_feature_spec` + evidence |
-| Quiet site + thin backlog | `research_keywords` / `research_landing_pages` |
+| Quiet site + thin backlog | **Path B research** (`research-context` → seeds → `research-pull`) or desktop `research_keywords` / `research_landing_pages` |
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
 
-**Research:** generative. Prefer `research-shortlist` health
-(`promising` / `depleted` / `unproven`). Never claim “no gaps found” if research
-did not run — say **skipped** + why + last research date.
+**Research (CLI Path B — preferred):** session owns themes; CLI pulls candidates
+deterministically (no nested `research_keywords` theme LLM on this path).
+
+```bash
+# 1. Strategy package (shortlist + health + open research tasks)
+pageseeds-cli research-context -i <id> -p <path>
+
+# 2. Session proposes 2–6 seeds from desk + shortlist + brand (judgment here)
+
+# 3. Deterministic pull → custom_keyword_research (default: create + execute)
+pageseeds-cli research-pull -i <id> -p <path> -K "seed1,seed2,seed3"
+# → task_id, status, selectable_keywords (when execute succeeds)
+
+# 4. Pick ≤3 keywords (same as KeywordPicker path)
+pageseeds-cli select-keywords -I <research-task-id> -K kw1,kw2
+
+# 5. Path B write as today (write-context → MDX → write-submit)
+```
+
+Prefer `research-context` (packaged) over raw `research-shortlist`. Prefer
+shortlist health `promising` / avoid `depleted`. Prefer `research-pull` over
+`create-task -t research_keywords` on the weekly CLI path — nested seed
+extraction/validation is for desktop/UI. `research_keywords` stays on the
+may-create list as fallback.
+
+Never claim “no gaps found” if research did not run — say **skipped** + why +
+last research date.
 
 Avoid-heavy keyword pickers (AIO-blocked heads, mostly `winnability: avoid`):
-prefer shortlist **promising** themes/seeds and re-run research; pick only
-`differentiate` / `target` rows when possible. Residual avoids = last resort.
+prefer shortlist **promising** themes/seeds and re-run via `research-pull`; pick
+only `differentiate` / `target` rows when possible. Residual avoids = last resort.
 
 #### Known limits (branch, don’t dead-end)
 

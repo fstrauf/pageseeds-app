@@ -34,7 +34,9 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 │       (CLI/agent weekly path may create+execute collect_gsc when desk data is stale.)
 │
 ├─ Need NEW content topics to write about
-│  ├─→ research_keywords            (blog / informational long-tail)
+│  ├─→ CLI Path B: research-context → session seeds → research-pull
+│  │     (custom_keyword_research; no nested theme LLM) then select-keywords
+│  ├─→ research_keywords            (desktop/UI nested theme agent; informational)
 │  └─→ research_landing_pages       (conversion / high-intent pages)
 │
 ├─ Existing content underperforming — cause unknown
@@ -70,10 +72,16 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 
 ### Research — find new work to do
 
+| Field | CLI Path B (`research-context` / `research-pull`) |
+|---|---|
+| **Does** | Packages shortlist/health for session strategy; pulls keyword candidates from **explicit seeds** via `custom_keyword_research` (no nested seed extraction/validation LLM). |
+| **When** | Weekly CLI / outer-agent path when desk shows gap growth. Session proposes seeds; CLI runs deterministic Ahrefs/DataForSEO pipeline. |
+| **After completion** | Same `KeywordPicker` artifacts → `select-keywords` → write Path B. |
+
 | Field | `research_keywords` |
 |---|---|
-| **Does** | Finds new long-tail keyword opportunities via Ahrefs, then presents a picker so the user selects which to write about. |
-| **When** | Monthly, or whenever the editorial backlog is thin. Blog/informational intent. |
+| **Does** | Finds new long-tail keyword opportunities via Ahrefs, then presents a picker so the user selects which to write about. Nested agentic seed extraction/validation. |
+| **When** | Desktop/UI, or monthly when the editorial backlog is thin. Blog/informational intent. Prefer `research-pull` on CLI weekly path. |
 | **After completion** | `KeywordPicker` review surface → user selects → spawns `write_article` children (`UserSelection`). |
 
 | Field | `research_landing_pages` |
