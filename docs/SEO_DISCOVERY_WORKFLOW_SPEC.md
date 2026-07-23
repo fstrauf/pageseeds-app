@@ -147,7 +147,9 @@ Implement in a new file `src-tauri/src/engine/exec/seo_discovery/rank.rs`.
 
 - `content_audit` DB snapshot or `content_audit.json`
 - `ctr_audit_context.json` (DB key `ctr_audit_context`)
-- `cannibalization_clusters.json`
+- `cannibalization_candidates.json` (DB key `cannibalization_candidates`) — primary cannibalization evidence
+- `exact_keyword_duplicates.json` — fallback exact-keyword dupe evidence
+- `cannibalization_clusters.json` — soft TF-IDF clusters; **hub_gap only** for evidence-matched articles, not authority for `cannibalized`
 - `indexing_target_contexts.json`
 - `clarity_summary.json`
 - `articles.json`
@@ -164,8 +166,8 @@ For every article in `articles.json`, compute:
 | `clicks_lost` | CTR context | `impressions * max(0, target_ctr - actual_ctr)` |
 | `ctr_opportunity` | CTR context | boolean: `clicks_lost > 10` and `avg_position <= 20` |
 | `indexing_status` | GSC collection / indexing contexts | `"indexed"`, `"not_indexed_crawled"`, `"not_indexed_other"`, `"unknown"` |
-| `cannibalized` | cannibalization clusters | boolean: article belongs to a cluster with ≥2 pages |
-| `hub_gap` | hub_gaps.json | boolean: cluster has no hub page |
+| `cannibalized` | cannibalization_candidates / exact_keyword_duplicates | boolean: fail-closed evidence only — article appears in the evidence shortlist (`cannibalization_candidates`) or an exact-keyword dupe group (`exact_keyword_duplicates`, non-empty shared target_keyword, ≥2 pages). Soft TF-IDF `cannibalization_clusters` membership is **not** authority and must not set this flag. |
+| `hub_gap` | soft clusters (only if `cannibalized`) | boolean: matching soft cluster has no hub page — only evaluated after honest cannibalization evidence is present; soft cluster alone never implies cannibalized |
 | `ux_anomaly` | clarity_summary | z-score for this URL, if present |
 | `internal_links` | content audit | count |
 | `word_count` | content audit | count |
