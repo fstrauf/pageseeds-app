@@ -244,6 +244,19 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
 
+
+### Research strategy package (#141)
+
+Session owns themes/seeds; CLI owns Ahrefs pull:
+
+```bash
+# Optional: session proposes seeds from desk + research-shortlist
+pageseeds-cli research-pull -i <id> -p <path> --seeds "theme one,theme two" ...
+# → candidates for select-keywords / write Path B
+```
+
+Prefer this over relying solely on nested research_seed_extraction when tools exist.
+
 **Research:** generative. Prefer `research-shortlist` health
 (`promising` / `depleted` / `unproven`). Never claim “no gaps found” if research
 did not run — say **skipped** + why + last research date.

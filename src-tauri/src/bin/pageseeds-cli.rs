@@ -57,6 +57,8 @@ fn main() {
         "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
         "write-context" => write_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "write-submit" => write_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
+        "research-context" => research_context(&db.to_string_lossy(), &project_id),
+        "research-pull" => research_pull(&db.to_string_lossy(), &project_id, &args),
         "merge-context" => merge_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "merge-submit" => merge_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "select-content-review" => select_content_review(&db.to_string_lossy(), &args),
@@ -582,6 +584,69 @@ fn merge_submit(
             confirmed,
         },
     )?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+/// Path B research strategy package: shortlist + health + open research tasks.
+/// No side effects. Prefer over raw research-shortlist for session seed planning.
+fn research_context(db_path: &str, project_id: &str) -> Result<serde_json::Value, String> {
+    if project_id.is_empty() {
+        exit("--project-id required");
+    }
+    let conn = open_db(db_path)?;
+    let package = pageseeds_lib::engine::research_package::build_research_strategy_package(
+        &conn,
+        project_id,
+    )?;
+    serde_json::to_value(package).map_err(|e| e.to_string())
+}
+
+/// Path B research pull: session-owned seeds → custom_keyword_research (no nested theme LLM).
+/// Default: create + execute. `--no-execute` only creates the task.
+/// Seeds: `-K seed1,seed2,...` (comma-separated).
+fn research_pull(
+    db_path: &str,
+    project_id: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    if project_id.is_empty() {
+        exit("--project-id required");
+    }
+    let seeds: Vec<String> = flag(args, "--keywords", "-K")
+        .map(|s| {
+            s.split(',')
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+                .collect()
+        })
+        .unwrap_or_else(|| exit("--keywords (-K) required (comma-separated seeds)"));
+    let title = flag(args, "--title", "-T");
+    // Default execute=true; --no-execute creates only. --execute is explicit opt-in alias.
+    let execute = !has_flag(args, "--no-execute", "--no-execute");
+    let priority = match flag(args, "--priority", "-P")
+        .unwrap_or_else(|| "medium".to_string())
+        .as_str()
+    {
+        "high" => Priority::High,
+        "low" => Priority::Low,
+        _ => Priority::Medium,
+    };
+
+    let conn = open_db(db_path)?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let result = rt.block_on(async {
+        pageseeds_lib::engine::research_package::research_pull(
+            &conn,
+            project_id,
+            pageseeds_lib::engine::research_package::ResearchPullOpts {
+                seeds,
+                title,
+                execute,
+                priority,
+            },
+        )
+        .await
+    })?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
