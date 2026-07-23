@@ -164,7 +164,7 @@ The capabilities surfaced on the Overview screen are **task types**, not functio
 | Plan a feature for this app | `generate_feature_spec` |
 
 Rules:
-- **Desk / umbrella first.** Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped (or desk shows a clear same-query / low-CTR pattern needing that pipeline); otherwise desk reads or `content_review`. Soft clusters are not ground truth.
+- **Desk / umbrella first.** Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when the problem is already scoped (e.g. hard same-query evidence for cannibalization); for low CTR see the next rule (desk-selected `fix_content_article`). Otherwise desk reads or `content_review`. Soft clusters are not ground truth.
 - **Low CTR for agent/CLI weekly:** prefer desk-selected `fix_content_article` over enqueueing full `ctr_audit` (BackendAuto spawns many children and burns execution budget). Do not flip AutoEnqueue/BackendAuto defaults — UI unattended path stays.
 - **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually from Overview (CLI weekly path may create+execute when desk data is stale).
 - **Lifecycle metadata is owned by `config/task_definitions.rs`.** When the Overview UI and Rust disagree, the Rust file wins. Update both together.

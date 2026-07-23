@@ -59,7 +59,7 @@ See the [Task Lifecycle Contract](../AGENTS.md#task-lifecycle-contract) for whic
 ```
 
 **Disambiguation rules:**
-- **Desk first for exploration.** CTR and cannibalization signals **emerge from** GSC page×query + catalog (`site-overview` / `articles` / `article` / `gsc-queries`). Specialist tasks are for when the problem is already scoped or desk shows a clear pattern that needs that pipeline — not the default weekly checklist.
+- **Desk first for exploration.** CTR and cannibalization signals **emerge from** GSC page×query + catalog (`site-overview` / `articles` / `article` / `gsc-queries`). Specialist tasks are for when the problem is already scoped (e.g. hard same-query evidence for cannibalization); for low CTR prefer desk-selected `fix_content_article` (next rule) — not the default weekly checklist.
 - **Low CTR (CLI / weekly-seo):** desk → targeted `fix_content_article` for top waste URLs. Full `ctr_audit` BackendAuto spawn is the **UI/unattended** path, not CLI weekly best-path. Do not change lifecycle defaults.
 - `content_review` is the **umbrella** task investigation. Prefer it (or desk + targeted fixes) over running every specialist audit when the cause is unknown.
 - Specialist audits (`ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`, `clarity_analytics`) only when already scoped to that domain.
