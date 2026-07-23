@@ -104,12 +104,14 @@ Breaking these fails the run.
 
 ### May-create via `create-task`
 
-`fix_content_article` (**always** `-S`/`--slug` — never bare), `content_review`,
+`fix_content_article` (**always** `-S`/`--slug` — never bare),
 `research_keywords`, `research_landing_pages`, `indexing_diagnostics`,
 `indexing_health_campaign`, `fix_indexing_internal_links`, `content_cleanup`,
 `cluster_and_link`, `interlinking`, `ctr_audit`, `cannibalization_audit`,
 `update_research_shortlist`, `generate_feature_spec`, `seo_health_scan`,
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
+
+`content_review` not on may-create — UI/unattended only; never create from this skill.
 
 **Prefer when desk data already supports the action:** `fix_content_article`,
 `research_keywords`, `research_landing_pages`, indexing tasks.
