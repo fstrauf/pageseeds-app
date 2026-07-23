@@ -7,6 +7,7 @@ pub mod ctr_fix;
 pub mod ctr_state;
 pub mod exec;
 pub mod executor;
+pub mod fix_package;
 pub mod keyword_selection;
 pub mod ledger;
 pub mod post_actions;
