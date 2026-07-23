@@ -13,6 +13,11 @@ use crate::content::validate_article::{
     validate_article_content, ArticleCheck, ValidateArticleInput, META_MAX_LEN, META_MIN_LEN,
 };
 use crate::engine::exec::audit_health::{resolve_content_file, TITLE_MAX_LEN};
+use crate::engine::exec::content::materialize_content_fix_changes;
+use crate::engine::exec::ctr_audit::{
+    materialize_ctr_fix_changes, normalize_patch_fields, prune_invalid_change_fields,
+    validate_patch_fields,
+};
 use crate::engine::site_state::{
     get_article_package, QueryMetric, BODY_SIZE_CAP, BODY_TRUNCATION_NOTE, DEFAULT_PERIOD_DAYS,
 };
@@ -338,6 +343,7 @@ pub fn submit_fix(
                 &file_path,
                 package.article_id,
                 &package.file,
+                package.target_keyword.as_deref(),
                 patch_json,
             )?,
         };
@@ -438,7 +444,7 @@ fn touch_last_edited(conn: &Connection, project_id: &str, article_id: i64) {
     );
 }
 
-// ─── Deterministic patch apply (no Task / no LLM) ────────────────────────────
+// ─── Deterministic patch apply via shared materializers (no Task / no LLM) ───
 
 fn apply_content_patch(
     file_path: &Path,
@@ -464,77 +470,16 @@ fn apply_content_patch(
     let original = std::fs::read_to_string(file_path)
         .map_err(|e| Error::Other(format!("read {}: {e}", file_path.display())))?;
 
-    let (fm, body) = crate::content::frontmatter::split_mdx(&original).ok_or_else(|| {
-        Error::Validation("Could not parse frontmatter from MDX file".into())
-    })?;
-
-    let mut new_fm = fm.to_string();
-    let mut new_body = body.to_string();
-    let mut applied = Vec::new();
-
-    let ch = &patch.changes;
-    if let Some(ref title) = ch.title {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "title", title);
-        applied.push("title".into());
-    }
-    if let Some(ref desc) = ch.description {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", desc);
-        applied.push("description".into());
-    }
-    if let Some(ref h1) = ch.h1 {
-        let lines: Vec<String> = new_body.lines().map(|s| s.to_string()).collect();
-        let mut new_lines = Vec::new();
-        let mut replaced = false;
-        for line in lines {
-            if !replaced && line.trim_start().starts_with("# ") {
-                new_lines.push(format!("# {h1}"));
-                replaced = true;
-            } else {
-                new_lines.push(line);
-            }
-        }
-        if !replaced {
-            new_lines.insert(0, format!("# {h1}"));
-        }
-        new_body = new_lines.join("\n");
-        applied.push("h1".into());
-    }
-    if let Some(ref intro) = ch.intro {
-        let before = new_body.clone();
-        new_body = crate::content::cleaner::ensure_first_paragraph(&new_body, intro);
-        if new_body != before {
-            applied.push("intro".into());
-        }
-    }
-    if let Some(ref links) = ch.internal_links {
-        for link in links {
-            let blog_link = crate::content::slug::format_blog_link(&link.target_slug);
-            new_body.push_str(&format!("\n\n[{}]({})", link.anchor_text, blog_link));
-        }
-        applied.push(format!("internal_links ({})", links.len()));
-    }
-    if let Some(ref faqs) = ch.faq_questions {
-        let pairs: Vec<(String, String)> = faqs
-            .iter()
-            .map(|f| (f.question.clone(), f.answer.clone()))
-            .collect();
-        new_fm = crate::content::frontmatter::replace_faq_block(&new_fm, &pairs);
-        applied.push(format!("faq ({} questions)", faqs.len()));
-    }
-    if let Some(ref eeat) = ch.eeat_signal {
-        new_body.push_str(&format!("\n\n> **Expertise:** {eeat}\n"));
-        applied.push("eeat".into());
-    }
-    if let Some(ref cta) = ch.cta {
-        new_body.push_str(&format!("\n\n---\n\n{cta}"));
-        applied.push("cta".into());
-    }
+    let (new_content, applied) = materialize_content_fix_changes(&original, &patch.changes)
+        .map_err(Error::Validation)?;
 
     if applied.is_empty() {
         return Ok(applied);
     }
 
-    write_validated_mdx(file_path, &original, &new_fm, &new_body)?;
+    std::fs::write(file_path, &new_content).map_err(|e| {
+        Error::Other(format!("Failed to write {}: {e}", file_path.display()))
+    })?;
     Ok(applied)
 }
 
@@ -542,6 +487,7 @@ fn apply_ctr_patch(
     file_path: &Path,
     article_id: i64,
     package_file: &str,
+    target_keyword: Option<&str>,
     patch_json: &str,
 ) -> Result<Vec<String>> {
     let mut patch: CtrFixPatch = serde_json::from_str(patch_json)
@@ -561,94 +507,42 @@ fn apply_ctr_patch(
     let original = std::fs::read_to_string(file_path)
         .map_err(|e| Error::Other(format!("read {}: {e}", file_path.display())))?;
 
-    let (fm, body) = crate::content::frontmatter::split_mdx(&original).ok_or_else(|| {
-        Error::Validation("Could not parse frontmatter from MDX file".into())
-    })?;
-
-    let mut new_fm = fm.to_string();
-    let mut new_body = body.to_string();
-    let mut applied = Vec::new();
-
-    let ch = patch.changes;
-    if let Some(title) = ch.title {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "title", &title);
-        applied.push("title".into());
-    }
-    if let Some(desc) = ch.description {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", &desc);
-        applied.push("description".into());
-    }
-    if let Some(para) = ch.first_paragraph {
-        new_body = crate::content::cleaner::replace_first_paragraph(&new_body, &para);
-        applied.push("first_paragraph".into());
-    }
-    if let Some(questions) = ch.faq_questions {
-        let file_has_faq = crate::engine::exec::audit_health::has_frontmatter_faq(&original);
-        if file_has_faq {
-            applied.push("faq_frontmatter (skipped — existing preserved)".into());
-        } else {
-            let qa: Vec<(String, String)> = questions
-                .into_iter()
-                .map(|q| (q.question, q.answer))
-                .collect();
-            let n = qa.len();
-            new_fm = crate::content::frontmatter::replace_faq_block(&new_fm, &qa);
-            applied.push(format!("faq_frontmatter ({n} questions)"));
+    // Same safety boundary as the queue/task CTR apply path.
+    let mut repair_notes = normalize_patch_fields(&mut patch, target_keyword);
+    let mut validation_errors = validate_patch_fields(&patch, target_keyword, &original);
+    if !validation_errors.is_empty() {
+        let pruned = prune_invalid_change_fields(&mut patch, &validation_errors);
+        if !pruned.is_empty() {
+            repair_notes.extend(pruned);
+            validation_errors = validate_patch_fields(&patch, target_keyword, &original);
         }
     }
-    if let Some(snippet) = ch.snippet_patch {
-        let list = snippet.ordered_list.as_deref();
-        let table_rows: Option<Vec<Vec<String>>> = snippet
-            .comparison_table
-            .as_ref()
-            .map(|rows| rows.iter().map(|r| r.cells.clone()).collect());
-        let table = table_rows.as_deref();
-        new_body = crate::content::cleaner::insert_snippet_section(
-            &new_body,
-            &snippet.heading,
-            &snippet.answer_paragraph,
-            list,
-            table,
-        );
-        applied.push(format!(
-            "snippet_patch ({})",
-            format!("{:?}", snippet.format).to_lowercase()
-        ));
+    if !validation_errors.is_empty() {
+        return Err(Error::Validation(format!(
+            "invalid CtrFixPatch values: {}. No changes written.",
+            validation_errors.join("; ")
+        )));
     }
+
+    let (new_content, applied) = materialize_ctr_fix_changes(&original, &patch.changes)
+        .map_err(Error::Validation)?;
 
     if applied.is_empty() {
         return Ok(applied);
     }
 
-    write_validated_mdx(file_path, &original, &new_fm, &new_body)?;
+    std::fs::write(file_path, &new_content).map_err(|e| {
+        Error::Other(format!("Failed to write {}: {e}", file_path.display()))
+    })?;
+
+    if !repair_notes.is_empty() {
+        log::info!(
+            "[fix_package] CTR patch normalized for {}: {}",
+            package_file,
+            repair_notes.join("; ")
+        );
+    }
     Ok(applied)
-}
-
-fn write_validated_mdx(
-    file_path: &Path,
-    original: &str,
-    new_fm: &str,
-    new_body: &str,
-) -> Result<()> {
-    let new_content = crate::content::cleaner::rebuild_mdx(new_fm, new_body);
-    if let Err(e) = crate::content::cleaner::validate_mdx_structure(&new_content) {
-        return Err(Error::Validation(format!(
-            "Applied changes produced invalid MDX structure: {e}. No changes written."
-        )));
-    }
-
-    let snapshot = file_path.with_extension("mdx.snapshot");
-    let _ = std::fs::write(&snapshot, original);
-    if let Err(e) = std::fs::write(file_path, &new_content) {
-        let _ = std::fs::remove_file(&snapshot);
-        return Err(Error::Other(format!(
-            "Failed to write {}: {e}",
-            file_path.display()
-        )));
-    }
-    // Re-check on disk content path is already validated in-memory.
-    let _ = std::fs::remove_file(&snapshot);
-    Ok(())
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

@@ -87,85 +87,11 @@ pub(crate) fn exec_ctr_fix_apply(
         );
     }
 
-    let (fm, body) = match crate::content::frontmatter::split_mdx(&original_content) {
-        Some((f, b)) => (f.to_string(), b.to_string()),
-        None => {
-            return StepResult::fail("Could not parse frontmatter from MDX file".to_string());
-        }
-    };
-
-    let CtrFixPatchChanges {
-        title,
-        description,
-        first_paragraph,
-        faq_questions,
-        snippet_patch,
-    } = patch.changes;
-
-    let mut new_fm = fm;
-    let mut new_body = body;
-    let mut applied = Vec::new();
-
-    if let Some(new_title) = title {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "title", &new_title);
-        applied.push("title".to_string());
-    }
-
-    if let Some(new_desc) = description {
-        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", &new_desc);
-        applied.push("description".to_string());
-    }
-
-    if let Some(new_para) = first_paragraph {
-        new_body = crate::content::cleaner::replace_first_paragraph(&new_body, &new_para);
-        applied.push("first_paragraph".to_string());
-    }
-
-    if let Some(questions) = faq_questions {
-        // Phase 1 safety net: do not overwrite existing frontmatter FAQ.
-        // If the file already has valid frontmatter `faq:`, skip the FAQ patch
-        // even if the agent generated one. This prevents quality regression
-        // where rich existing FAQ gets replaced with generic generated answers.
-        let file_has_frontmatter_faq =
-            crate::engine::exec::audit_health::has_frontmatter_faq(&original_content);
-        if file_has_frontmatter_faq {
-            log::info!(
-                "[ctr_fix_apply] Skipping FAQ patch for {} — file already has frontmatter FAQ. \
-                 If the existing FAQ needs improvement, handle it manually.",
-                patch.file
-            );
-            applied
-                .push("faq_frontmatter (skipped — existing frontmatter FAQ preserved)".to_string());
-        } else {
-            let qa: Vec<(String, String)> = questions
-                .into_iter()
-                .map(|q| (q.question, q.answer))
-                .collect();
-            new_fm = crate::content::frontmatter::replace_faq_block(&new_fm, &qa);
-            applied.push(format!("faq_frontmatter ({} questions)", qa.len()));
-        }
-    }
-
-    if let Some(snippet) = snippet_patch {
-        let list = snippet.ordered_list.as_deref();
-        // Map row-objects → Vec<Vec<String>> for the cleaner API.
-        let table_rows: Option<Vec<Vec<String>>> = snippet
-            .comparison_table
-            .as_ref()
-            .map(|rows| rows.iter().map(|r| r.cells.clone()).collect());
-        let table = table_rows.as_deref();
-        new_body = crate::content::cleaner::insert_snippet_section(
-            &new_body,
-            &snippet.heading,
-            &snippet.answer_paragraph,
-            list,
-            table,
-        );
-        applied.push(format!(
-            "snippet_patch ({})",
-            format!("{:?}", snippet.format).to_lowercase()
-        ));
-    }
+    let (new_content, applied) =
+        match materialize_ctr_fix_changes(&original_content, &patch.changes) {
+            Ok(v) => v,
+            Err(e) => return StepResult::fail(e),
+        };
 
     // Short-circuit: agent returned a valid patch struct but with no actual changes.
     if applied.is_empty() {
@@ -178,17 +104,6 @@ pub(crate) fn exec_ctr_fix_apply(
             output: Some(original_content),
             artifact_key: None,
         };
-    }
-
-    let new_content = crate::content::cleaner::rebuild_mdx(&new_fm, &new_body);
-
-    // Validate before writing
-    if let Err(e) = crate::content::cleaner::validate_mdx_structure(&new_content) {
-        // Original is still on disk untouched — nothing to restore.
-        return StepResult::fail(format!(
-                "File integrity failed after edit: {}. No changes written.",
-                e
-            ));
     }
 
     if let Err(e) = std::fs::write(&file_path, &new_content) {
@@ -212,6 +127,90 @@ pub(crate) fn exec_ctr_fix_apply(
         output: Some(new_content),
         artifact_key: None,
     }
+}
+
+/// Pure MDX mutation for a CTR fix patch. Shared by the task apply step and
+/// CLI Path B submit — single ownership of field application rules (including
+/// the “preserve existing frontmatter FAQ” safety net).
+///
+/// Returns `(new_mdx, applied_field_labels)`. Does not write to disk.
+pub(crate) fn materialize_ctr_fix_changes(
+    original_content: &str,
+    changes: &CtrFixPatchChanges,
+) -> Result<(String, Vec<String>), String> {
+    let (fm, body) = match crate::content::frontmatter::split_mdx(original_content) {
+        Some((f, b)) => (f.to_string(), b.to_string()),
+        None => return Err("Could not parse frontmatter from MDX file".to_string()),
+    };
+
+    let mut new_fm = fm;
+    let mut new_body = body;
+    let mut applied = Vec::new();
+
+    if let Some(ref new_title) = changes.title {
+        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "title", new_title);
+        applied.push("title".to_string());
+    }
+
+    if let Some(ref new_desc) = changes.description {
+        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", new_desc);
+        applied.push("description".to_string());
+    }
+
+    if let Some(ref new_para) = changes.first_paragraph {
+        new_body = crate::content::cleaner::replace_first_paragraph(&new_body, new_para);
+        applied.push("first_paragraph".to_string());
+    }
+
+    if let Some(ref questions) = changes.faq_questions {
+        // Phase 1 safety net: do not overwrite existing frontmatter FAQ.
+        let file_has_frontmatter_faq =
+            crate::engine::exec::audit_health::has_frontmatter_faq(original_content);
+        if file_has_frontmatter_faq {
+            applied
+                .push("faq_frontmatter (skipped — existing frontmatter FAQ preserved)".to_string());
+        } else {
+            let qa: Vec<(String, String)> = questions
+                .iter()
+                .map(|q| (q.question.clone(), q.answer.clone()))
+                .collect();
+            let n = qa.len();
+            new_fm = crate::content::frontmatter::replace_faq_block(&new_fm, &qa);
+            applied.push(format!("faq_frontmatter ({n} questions)"));
+        }
+    }
+
+    if let Some(ref snippet) = changes.snippet_patch {
+        let list = snippet.ordered_list.as_deref();
+        let table_rows: Option<Vec<Vec<String>>> = snippet
+            .comparison_table
+            .as_ref()
+            .map(|rows| rows.iter().map(|r| r.cells.clone()).collect());
+        let table = table_rows.as_deref();
+        new_body = crate::content::cleaner::insert_snippet_section(
+            &new_body,
+            &snippet.heading,
+            &snippet.answer_paragraph,
+            list,
+            table,
+        );
+        applied.push(format!(
+            "snippet_patch ({})",
+            format!("{:?}", snippet.format).to_lowercase()
+        ));
+    }
+
+    if applied.is_empty() {
+        return Ok((original_content.to_string(), applied));
+    }
+
+    let new_content = crate::content::cleaner::rebuild_mdx(&new_fm, &new_body);
+    if let Err(e) = crate::content::cleaner::validate_mdx_structure(&new_content) {
+        return Err(format!(
+            "File integrity failed after edit: {e}. No changes written."
+        ));
+    }
+    Ok((new_content, applied))
 }
 
 /// Resolve a CtrFixPatch from the task artifact (preferred) or legacy raw output.
