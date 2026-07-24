@@ -18,16 +18,13 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
         }
     };
 
-    let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
+    let target_article_id = target_data.article_id;
     if target_article_id == 0 {
         return StepResult::fail("Target article_id is 0 — no matching article found in DB".to_string());
     }
 
-    let target_slug = crate::content::slug::normalize_url_slug(target_data["slug"].as_str().unwrap_or(""));
-    let target_keyword = target_data["target_keyword"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let target_slug = crate::content::slug::normalize_url_slug(&target_data.slug);
+    let target_keyword = target_data.target_keyword.clone();
 
     // Load link scan — trigger fresh scan if missing or stale (>1 hour)
     let link_scan_path = paths.automation_dir.join("link_scan.json");
@@ -97,17 +94,13 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
         .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
         .unwrap_or_default();
 
-    // Build source context from source_candidates in the artifact
-    let source_candidates = target_data["source_candidates"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    // Build source context from typed source_candidates
     let mut sources: Vec<serde_json::Value> = Vec::new();
 
-    for candidate in &source_candidates {
-        let source_id = candidate["article_id"].as_i64().unwrap_or(0);
-        let source_slug = candidate["slug"].as_str().unwrap_or("").to_string();
-        let source_file = candidate["file"].as_str().unwrap_or("").to_string();
+    for candidate in &target_data.source_candidates {
+        let source_id = candidate.article_id;
+        let source_slug = candidate.slug.clone();
+        let source_file = candidate.file.clone();
 
         // Check if already links to target (outgoing_ids is Vec<i64>)
         let already_links = link_scan
@@ -129,11 +122,10 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
 
         sources.push(serde_json::json!({
             "article_id": source_id,
-            "title": candidate["title"],
+            "title": candidate.title,
             "slug": source_slug,
             "file": source_file,
-            "gsc_impressions": candidate["gsc_impressions"],
-            "score": candidate["score"],
+            "reason": candidate.reason,
             "already_links_to_target": already_links,
         }));
     }
@@ -141,9 +133,8 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
     let context = serde_json::json!({
         "target": {
             "article_id": target_article_id,
-            "title": target_data["title"],
             "slug": target_slug,
-            "url": target_data["url"],
+            "url": target_data.url,
             "target_keyword": target_keyword,
             "current_incoming_ids": current_incoming_ids,
             "current_outgoing_ids": current_outgoing_ids,
@@ -163,4 +154,3 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
         artifact_key: None,
     }
 }
-

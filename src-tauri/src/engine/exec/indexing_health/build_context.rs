@@ -207,46 +207,39 @@ pub(crate) fn exec_ihc_build_target_context(task: &Task, project_path: &str) -> 
         // linked targets (< 2 incoming links) so fallback `fix_indexing`
         // targets mapped to `fix_indexing_internal_links` (spawn.rs) have real
         // candidates to work with instead of silently no-oping.
-        let mut source_candidates: Vec<crate::models::indexing_health::LinkSourceCandidate> =
-            Vec::new();
-        if incoming_links < 2 && article_id > 0 {
-            let target_outgoing = outgoing_by_id.get(&article_id);
-            for (src_slug, src_art) in article_by_slug {
-                if src_slug == &slug {
-                    continue;
-                }
-                let src_id = src_art["id"].as_i64().unwrap_or(0);
-                if src_id == 0 || src_id == article_id {
-                    continue;
-                }
-                // Skip if already links to target
-                let already_links = target_outgoing
-                    .map(|out| out.contains(&src_id))
-                    .unwrap_or(false);
-                if already_links {
-                    continue;
-                }
-                // Topical relevance for link sources: shared target keyword only.
-                // Soft TF-IDF cluster membership is exploratory and must not qualify
-                // source candidates as boolean truth (issue #123). Cluster context
-                // remains attached on the target for diagnosis.
-                let src_kw = src_art["target_keyword"].as_str().unwrap_or("");
-                let shares_kw = !target_keyword.is_empty()
-                    && !src_kw.is_empty()
-                    && target_keyword.to_lowercase() == src_kw.to_lowercase();
-                if shares_kw {
-                    source_candidates.push(crate::models::indexing_health::LinkSourceCandidate {
-                        article_id: src_id,
+        //
+        // Shared shortlist: exact target_keyword, skip self / already-linking, cap 8
+        // (same helper as operator slug spawn — issue #163 review).
+        let source_candidates = if incoming_links < 2 && article_id > 0 {
+            let already_linking: std::collections::HashSet<i64> = outgoing_by_id
+                .iter()
+                .filter_map(|(src_id, outgoing)| {
+                    if outgoing.contains(&article_id) {
+                        Some(*src_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            crate::engine::indexing_link_fix::shortlist_shared_keyword_source_candidates(
+                article_id,
+                &target_keyword,
+                article_by_slug.iter().map(|(src_slug, src_art)| {
+                    crate::engine::indexing_link_fix::SharedKeywordArticleRef {
+                        article_id: src_art["id"].as_i64().unwrap_or(0),
                         slug: src_slug.clone(),
                         title: src_art["title"].as_str().unwrap_or("").to_string(),
                         file: src_art["file"].as_str().unwrap_or("").to_string(),
-                        reason: "shared target keyword".to_string(),
-                    });
-                }
-            }
-            // Limit to top 8 candidates
-            source_candidates.truncate(8);
-        }
+                        target_keyword: src_art["target_keyword"]
+                            .as_str()
+                            .map(|s| s.to_string()),
+                    }
+                }),
+                &already_linking,
+            )
+        } else {
+            Vec::new()
+        };
 
         targets.push(IndexingTargetContext {
             target: crate::models::indexing_health::TargetArticleSummary {

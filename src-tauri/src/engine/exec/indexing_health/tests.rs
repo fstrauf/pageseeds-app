@@ -471,6 +471,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
         assert!(content.contains("campaign_task_id"));
         assert!(content.contains("test-article"));
         assert!(content.contains("article_id"));
+        // Typed artifact must deserialize via shared parse helper.
+        let mut task = dummy_task();
+        task.artifacts = spec.artifacts.clone();
+        let parsed = crate::engine::exec::content::parse_target_artifact(&task)
+            .expect("typed indexing_link_target");
+        assert_eq!(parsed.article_id, 42);
+        assert_eq!(parsed.slug, "test-article");
+    }
+
+    #[test]
+    fn build_add_links_spec_uses_article_scoped_idempotency_key() {
+        let parent = dummy_task();
+        let target = dummy_target_plan("add_links");
+        let ctx = dummy_target_ctx("good", 0, true, "not_indexed_other");
+        let spec = build_add_links_spec(&parent, &target, Some(&ctx));
+        assert_eq!(
+            spec.idempotency_key.as_deref(),
+            Some("fix_indexing_internal_links:proj-abc:42")
+        );
     }
 
     // ─── fix_indexing fallback mapping (issue #35) ─────────────────────────────

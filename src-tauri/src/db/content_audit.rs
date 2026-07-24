@@ -341,10 +341,11 @@ pub fn get_health_snapshot(conn: &Connection, project_id: &str) -> Result<Health
 
     // Cooldown: count active idempotency keys for this project across all fix types.
     // fix_content_article keys are shared between content_review and indexing_health_campaign.
-    // ihc-add-links and ihc-rewrite keys are indexing-campaign-specific.
+    // fix_indexing_internal_links keys are shared across IHC, GSC recovery, and operator spawn.
+    // ihc-rewrite remains indexing-campaign-specific.
     let now_rfc3339 = chrono::Utc::now().to_rfc3339();
     let content_prefix = format!("fix_content_article:{}:", project_id);
-    let add_links_prefix = format!("ihc-add-links:{}:", project_id);
+    let add_links_prefix = format!("fix_indexing_internal_links:{}:", project_id);
     let rewrite_prefix = format!("ihc-rewrite:{}:", project_id);
     snap.fix_on_cooldown = conn.query_row(
         "SELECT COUNT(*) FROM task_idempotency_keys

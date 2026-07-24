@@ -1,9 +1,15 @@
-//! Shared slug → `fix_indexing_internal_links` spawn path.
+//! Shared slug → `fix_indexing_internal_links` spawn path + artifact contract.
 //!
 //! CLI `create-task -t fix_indexing_internal_links -S <slug>` and the investigate
 //! `CreateTaskTool` both route here so every bare create attaches a valid
 //! `indexing_link_target` artifact (IHC child shape). Never spawn this task type
 //! without that artifact — execute fails at context/plan/apply/verify.
+//!
+//! Also owns:
+//! - typed `indexing_link_target` artifact builder (IHC + operator + GSC recovery)
+//! - shared-keyword source shortlist (exact match, skip self / already-linking, cap 8)
+
+use std::collections::HashSet;
 
 use rusqlite::Connection;
 
@@ -12,7 +18,129 @@ use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::error::{Error, Result};
+use crate::models::indexing_health::{
+    IndexingLinkTarget, IndexingLinkTargetArtifact, LinkSourceCandidate,
+};
 use crate::models::task::{AgentPolicy, Priority, Task, TaskArtifact, TaskRunPolicy};
+
+/// Article-scoped idempotency key for all `fix_indexing_internal_links` spawn paths.
+pub fn fix_indexing_internal_links_idempotency_key(project_id: &str, article_id: i64) -> String {
+    format!("fix_indexing_internal_links:{project_id}:{article_id}")
+}
+
+/// Build the durable `indexing_link_target` task artifact (IHC child shape).
+///
+/// Used by operator slug spawn, IHC `build_add_links_spec`, and GSC recovery.
+pub fn indexing_link_target_artifact(
+    campaign_task_id: Option<String>,
+    target: IndexingLinkTarget,
+    source: &str,
+) -> TaskArtifact {
+    let doc = IndexingLinkTargetArtifact {
+        campaign_task_id,
+        target,
+    };
+    TaskArtifact {
+        key: "indexing_link_target".to_string(),
+        path: None,
+        artifact_type: Some("indexing_link_target".to_string()),
+        source: Some(source.to_string()),
+        content: Some(serde_json::to_string(&doc).unwrap_or_else(|_| {
+            r#"{"target":{"url":"","slug":"","article_id":0,"file":"","reason_code":"","incoming_link_count_before":0,"target_keyword":"","source_candidates":[]}}"#.to_string()
+        })),
+    }
+}
+
+/// Input row for [`shortlist_shared_keyword_source_candidates`].
+///
+/// Owned fields so both `Article` slices and IHC JSON maps can build rows without
+/// temporary-borrow lifetime issues.
+#[derive(Debug, Clone)]
+pub struct SharedKeywordArticleRef {
+    pub article_id: i64,
+    pub slug: String,
+    pub title: String,
+    pub file: String,
+    pub target_keyword: Option<String>,
+}
+
+/// Shared-keyword source shortlist for indexing internal-link fixes.
+///
+/// Rules (single ranking algorithm for IHC build_context and operator spawn):
+/// - exact case-insensitive `target_keyword` match
+/// - skip self (`article_id == target_article_id` or id 0)
+/// - skip sources already linking to the target
+/// - cap 8
+///
+/// Empty shortlist is OK (target has no keyword, or no matching sources).
+pub fn shortlist_shared_keyword_source_candidates(
+    target_article_id: i64,
+    target_keyword: &str,
+    articles: impl IntoIterator<Item = SharedKeywordArticleRef>,
+    already_linking_source_ids: &HashSet<i64>,
+) -> Vec<LinkSourceCandidate> {
+    let target_keyword = target_keyword.trim();
+    if target_keyword.is_empty() {
+        return Vec::new();
+    }
+    let target_kw_lower = target_keyword.to_lowercase();
+    let mut candidates: Vec<LinkSourceCandidate> = Vec::new();
+
+    for src in articles {
+        if src.article_id == 0 || src.article_id == target_article_id {
+            continue;
+        }
+        if already_linking_source_ids.contains(&src.article_id) {
+            continue;
+        }
+        let src_kw = src.target_keyword.as_deref().unwrap_or("").trim();
+        if src_kw.is_empty() {
+            continue;
+        }
+        if src_kw.to_lowercase() != target_kw_lower {
+            continue;
+        }
+        candidates.push(LinkSourceCandidate {
+            article_id: src.article_id,
+            slug: src.slug,
+            title: src.title,
+            file: src.file,
+            reason: "shared target keyword".to_string(),
+        });
+        if candidates.len() >= 8 {
+            break;
+        }
+    }
+
+    candidates
+}
+
+/// Source article IDs whose `outgoing_ids` already include the target.
+pub fn already_linking_source_ids_from_scan(
+    link_scan: Option<&serde_json::Value>,
+    target_article_id: i64,
+) -> HashSet<i64> {
+    link_scan
+        .and_then(|v| v["profiles"].as_array())
+        .map(|profiles| {
+            profiles
+                .iter()
+                .filter_map(|p| {
+                    let source_id = p["id"].as_i64()?;
+                    let outgoing = p["outgoing_ids"].as_array()?;
+                    let links = outgoing
+                        .iter()
+                        .any(|o| o.as_i64() == Some(target_article_id));
+                    if links {
+                        Some(source_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Options for [`spawn_fix_indexing_internal_links_for_slug`].
 #[derive(Debug, Clone)]
@@ -72,45 +200,42 @@ pub fn spawn_fix_indexing_internal_links_for_slug(
     let link_scan = load_link_scan(&paths);
 
     let incoming_before = incoming_count_from_scan(link_scan.as_ref(), article.id);
-    let source_candidates = build_shared_keyword_source_candidates(
-        &article,
-        &articles,
-        link_scan.as_ref(),
+    let already_linked = already_linking_source_ids_from_scan(link_scan.as_ref(), article.id);
+    let target_keyword = article.target_keyword.clone().unwrap_or_default();
+    let source_candidates = shortlist_shared_keyword_source_candidates(
+        article.id,
+        &target_keyword,
+        articles.iter().map(|a| SharedKeywordArticleRef {
+            article_id: a.id,
+            slug: a.url_slug.clone(),
+            title: a.title.clone(),
+            file: a.file.clone(),
+            target_keyword: a.target_keyword.clone(),
+        }),
+        &already_linked,
     );
 
     let url = build_article_url(conn, project_id, &article.url_slug);
-    let target_keyword = article
-        .target_keyword
-        .clone()
-        .unwrap_or_default();
-
-    let artifact_content = serde_json::json!({
-        "campaign_task_id": null,
-        "target": {
-            "url": url,
-            "slug": article.url_slug,
-            "article_id": article.id,
-            "file": article.file,
-            "reason_code": "operator_scoped",
-            "incoming_link_count_before": incoming_before,
-            "target_keyword": target_keyword,
-            "source_candidates": source_candidates,
-        }
-    });
-
     let source = if opts.source.is_empty() {
         "slug_recovery"
     } else {
         opts.source.as_str()
     };
 
-    let artifact = TaskArtifact {
-        key: "indexing_link_target".to_string(),
-        path: None,
-        artifact_type: Some("indexing_link_target".to_string()),
-        source: Some(source.to_string()),
-        content: Some(artifact_content.to_string()),
-    };
+    let artifact = indexing_link_target_artifact(
+        None,
+        IndexingLinkTarget {
+            url,
+            slug: article.url_slug.clone(),
+            article_id: article.id,
+            file: article.file.clone(),
+            reason_code: "operator_scoped".to_string(),
+            incoming_link_count_before: incoming_before,
+            target_keyword,
+            source_candidates,
+        },
+        source,
+    );
 
     let title = opts
         .title
@@ -140,9 +265,8 @@ pub fn spawn_fix_indexing_internal_links_for_slug(
         },
         agent_policy: AgentPolicy::Required,
         artifacts: vec![artifact],
-        idempotency_key: Some(format!(
-            "fix_indexing_internal_links:{}:{}",
-            project_id, article.id
+        idempotency_key: Some(fix_indexing_internal_links_idempotency_key(
+            project_id, article.id,
         )),
         dedup_policy: Some(DeduplicationPolicy::SkipIfActive),
         ..Default::default()
@@ -195,83 +319,6 @@ fn incoming_count_from_scan(link_scan: Option<&serde_json::Value>, article_id: i
                 .map(|arr| arr.len())
         })
         .unwrap_or(0)
-}
-
-/// IHC shared-keyword shortlist (build_context.rs): exact target_keyword match,
-/// skip self, skip already-linking sources, cap 8. Empty shortlist is OK.
-fn build_shared_keyword_source_candidates(
-    target: &crate::models::article::Article,
-    articles: &[crate::models::article::Article],
-    link_scan: Option<&serde_json::Value>,
-) -> Vec<serde_json::Value> {
-    let target_keyword = target
-        .target_keyword
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if target_keyword.is_empty() {
-        return Vec::new();
-    }
-
-    let already_linked_ids = already_linking_source_ids(link_scan, target.id);
-    let target_kw_lower = target_keyword.to_lowercase();
-    let mut candidates: Vec<serde_json::Value> = Vec::new();
-
-    for src in articles {
-        if src.id == 0 || src.id == target.id {
-            continue;
-        }
-        if already_linked_ids.contains(&src.id) {
-            continue;
-        }
-        let src_kw = src.target_keyword.as_deref().unwrap_or("").trim();
-        if src_kw.is_empty() {
-            continue;
-        }
-        if src_kw.to_lowercase() != target_kw_lower {
-            continue;
-        }
-        candidates.push(serde_json::json!({
-            "article_id": src.id,
-            "slug": src.url_slug,
-            "title": src.title,
-            "file": src.file,
-            "reason": "shared target keyword",
-        }));
-        if candidates.len() >= 8 {
-            break;
-        }
-    }
-
-    candidates
-}
-
-/// Source article IDs whose `outgoing_ids` already include the target.
-fn already_linking_source_ids(
-    link_scan: Option<&serde_json::Value>,
-    target_article_id: i64,
-) -> std::collections::HashSet<i64> {
-    link_scan
-        .and_then(|v| v["profiles"].as_array())
-        .map(|profiles| {
-            profiles
-                .iter()
-                .filter_map(|p| {
-                    let source_id = p["id"].as_i64()?;
-                    let outgoing = p["outgoing_ids"].as_array()?;
-                    let links = outgoing
-                        .iter()
-                        .any(|o| o.as_i64() == Some(target_article_id));
-                    if links {
-                        Some(source_id)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -357,6 +404,45 @@ mod tests {
     }
 
     #[test]
+    fn shortlist_exact_keyword_skip_self_and_cap() {
+        let articles = [
+            SharedKeywordArticleRef {
+                article_id: 1,
+                slug: "self".into(),
+                title: "Self".into(),
+                file: "self.mdx".into(),
+                target_keyword: Some("kw".into()),
+            },
+            SharedKeywordArticleRef {
+                article_id: 2,
+                slug: "a".into(),
+                title: "A".into(),
+                file: "a.mdx".into(),
+                target_keyword: Some("kw".into()),
+            },
+            SharedKeywordArticleRef {
+                article_id: 3,
+                slug: "b".into(),
+                title: "B".into(),
+                file: "b.mdx".into(),
+                target_keyword: Some("other".into()),
+            },
+            SharedKeywordArticleRef {
+                article_id: 4,
+                slug: "c".into(),
+                title: "C".into(),
+                file: "c.mdx".into(),
+                target_keyword: Some("KW".into()), // case-insensitive match but already linked
+            },
+        ];
+        let already = HashSet::from([4i64]);
+        let out = shortlist_shared_keyword_source_candidates(1, "kw", articles, &already);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].article_id, 2);
+        assert_eq!(out[0].reason, "shared target keyword");
+    }
+
+    #[test]
     fn spawn_attaches_indexing_link_target_with_article_id() {
         let (path, conn) = setup_project();
 
@@ -388,18 +474,14 @@ mod tests {
 
         let parsed = crate::engine::exec::content::parse_target_artifact(&task)
             .expect("parse_target_artifact should succeed");
-        assert_eq!(parsed["article_id"].as_i64(), Some(42));
-        assert_eq!(parsed["slug"].as_str(), Some("my-orphan-page"));
-        assert_eq!(parsed["file"].as_str(), Some("content/my_orphan_page.mdx"));
-        assert_eq!(parsed["reason_code"].as_str(), Some("operator_scoped"));
-        assert_eq!(
-            parsed["target_keyword"].as_str(),
-            Some("machine learning")
-        );
-        assert!(parsed["url"].as_str().unwrap_or("").contains("my-orphan-page"));
-        assert!(parsed["source_candidates"].as_array().is_some());
+        assert_eq!(parsed.article_id, 42);
+        assert_eq!(parsed.slug, "my-orphan-page");
+        assert_eq!(parsed.file, "content/my_orphan_page.mdx");
+        assert_eq!(parsed.reason_code, "operator_scoped");
+        assert_eq!(parsed.target_keyword, "machine learning");
+        assert!(parsed.url.contains("my-orphan-page"));
         // No other articles with shared keyword → empty shortlist is OK
-        assert_eq!(parsed["source_candidates"].as_array().unwrap().len(), 0);
+        assert!(parsed.source_candidates.is_empty());
 
         let _ = std::fs::remove_dir_all(&path);
     }
@@ -439,13 +521,12 @@ mod tests {
         .unwrap();
 
         let target = crate::engine::exec::content::parse_target_artifact(&task).unwrap();
-        let candidates = target["source_candidates"].as_array().unwrap();
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0]["article_id"].as_i64(), Some(7));
-        assert_eq!(candidates[0]["slug"].as_str(), Some("source-a"));
+        assert_eq!(target.source_candidates.len(), 1);
+        assert_eq!(target.source_candidates[0].article_id, 7);
+        assert_eq!(target.source_candidates[0].slug, "source-a");
         assert_eq!(
-            candidates[0]["reason"].as_str(),
-            Some("shared target keyword")
+            target.source_candidates[0].reason,
+            "shared target keyword"
         );
 
         let _ = std::fs::remove_dir_all(&path);
@@ -577,12 +658,9 @@ mod tests {
         assert_eq!(task.run_policy, TaskRunPolicy::AutoEnqueue);
 
         let target = crate::engine::exec::content::parse_target_artifact(&task).unwrap();
-        assert_eq!(
-            target["url"].as_str(),
-            Some("https://example.com/blog/my-post")
-        );
+        assert_eq!(target.url, "https://example.com/blog/my-post");
         // No keyword → empty candidates still valid artifact
-        assert_eq!(target["source_candidates"].as_array().unwrap().len(), 0);
+        assert!(target.source_candidates.is_empty());
 
         let _ = std::fs::remove_dir_all(&path);
     }

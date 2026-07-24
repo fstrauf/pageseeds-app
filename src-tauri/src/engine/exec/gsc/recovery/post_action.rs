@@ -37,33 +37,39 @@ pub(crate) fn spawn_recovery_child_tasks(
     let mut created_ids: Vec<String> = Vec::new();
 
     for target in &plan.targets {
-        let idempotency_key = format!(
-            "gsc-indexing-recovery:{}:{}:{}",
-            parent_task.project_id, target.reason_code, target.url
-        );
+        // Article-scoped key — same as IHC and operator slug spawn so all paths dedupe.
+        let idempotency_key =
+            crate::engine::indexing_link_fix::fix_indexing_internal_links_idempotency_key(
+                &parent_task.project_id,
+                target.article_id,
+            );
 
-        let target_artifact = crate::models::task::TaskArtifact {
-            key: "indexing_link_target".to_string(),
-            path: None,
-            artifact_type: Some("indexing_link_target".to_string()),
-            source: Some("gsc_recovery_plan".to_string()),
-            content: Some(
-                serde_json::json!({
-                    "campaign_task_id": parent_task.id,
-                    "target": {
-                        "url": &target.url,
-                        "slug": &target.slug,
-                        "article_id": target.article_id,
-                        "file": &target.file,
-                        "reason_code": &target.reason_code,
-                        "incoming_link_count_before": target.incoming_link_count_before,
-                        "target_keyword": &target.target_keyword,
-                        "source_candidates": target.source_candidates,
-                    }
-                })
-                .to_string(),
-            ),
-        };
+        let source_candidates = target
+            .source_candidates
+            .iter()
+            .map(|s| crate::models::indexing_health::LinkSourceCandidate {
+                article_id: s.article_id,
+                slug: s.slug.clone(),
+                title: s.title.clone(),
+                file: s.file.clone(),
+                reason: s.reason.clone(),
+            })
+            .collect();
+
+        let target_artifact = crate::engine::indexing_link_fix::indexing_link_target_artifact(
+            Some(parent_task.id.clone()),
+            crate::models::indexing_health::IndexingLinkTarget {
+                url: target.url.clone(),
+                slug: target.slug.clone(),
+                article_id: target.article_id,
+                file: target.file.clone(),
+                reason_code: target.reason_code.clone(),
+                incoming_link_count_before: target.incoming_link_count_before,
+                target_keyword: target.target_keyword.clone(),
+                source_candidates,
+            },
+            "gsc_recovery_plan",
+        );
 
         let priority = if target.priority_score >= 100 {
             Priority::High
