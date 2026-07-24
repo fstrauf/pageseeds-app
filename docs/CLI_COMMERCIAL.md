@@ -27,15 +27,18 @@ Owner decision 2026-07-25. Do not re-open in docs-only or gate PRs without a pro
 
 ---
 
-## Free (no license) — 22 tools
+## Free (no license) — 25 tools (+ meta)
 
-Meta entries below are **not** match arms in `pageseeds-cli.rs`; they stay free when present.
+Meta help/version/license stay free. Setup/list/create are match-arm free tools (no paid gate, no `-i`/`-p` required up front).
 
 ### Meta
 
 - `--help` / `-h` / bare `help` / no args
 - `license activate|status|deactivate`
 - `--version` / `-V`
+- `list-projects` — JSON of registered projects (same DB as desktop; no sqlite recipe)
+- `create-project` — register workspace project via shared create helper (`--path`, `--name`, optional `--site-url`)
+- `setup` — idempotent onboarding: link/create, write config defaults, optional license (`--license` / `PAGESEEDS_LICENSE`), first-win desk read (`--skip-first-win`, `--status`, `--yes`, `--json`)
 
 ### Desk / article reads
 
@@ -74,8 +77,8 @@ Meta entries below are **not** match arms in `pageseeds-cli.rs`; they stay free 
 | `get-task` | Get one task |
 | `validate-article` | Validate article structure |
 
-**Free tool names (22):**  
-`site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `list-tasks`, `get-task`, `validate-article`
+**Free tool names (25):**  
+`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `list-tasks`, `get-task`, `validate-article`
 
 ---
 

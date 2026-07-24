@@ -12,6 +12,7 @@ pub mod indexing_link_fix;
 pub mod keyword_selection;
 pub mod ledger;
 pub mod post_actions;
+pub mod project_create;
 pub mod project_paths;
 pub mod prompts;
 pub mod queue;
