@@ -13,7 +13,10 @@ use rusqlite::Connection;
 use crate::content::ops::count_words;
 use crate::content::redirects::load_redirect_source_slugs;
 use crate::content::slug::normalize_url_slug;
-use crate::db::{self, GscDailyWindowMetrics};
+use crate::db::{
+    self, build_page_index, pages_for_slug, previous_window, recent_window, rollup_for_slug,
+    GscDailyWindowMetrics,
+};
 use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::article::Article;
@@ -588,98 +591,8 @@ fn build_query_cannibalization(
     Ok(out)
 }
 
-// ── GSC / page helpers ───────────────────────────────────────────────────────
-
-/// Normalized slug → all GSC page URLs that extract to that slug.
-///
-/// Built once per desk read; O(1) lookup replaces a linear scan over inventory.
-fn build_page_index(conn: &Connection, project_id: &str) -> Result<HashMap<String, Vec<String>>> {
-    let pages = db::list_gsc_page_daily_pages(conn, project_id)?;
-    let mut index: HashMap<String, Vec<String>> = HashMap::new();
-    for page in pages {
-        let slug = crate::content::slug::extract_slug_from_url(&page);
-        if slug.is_empty() {
-            continue;
-        }
-        index.entry(slug).or_default().push(page);
-    }
-    Ok(index)
-}
-
-/// Page URLs for a catalog slug (empty slice = no GSC inventory).
-fn pages_for_slug<'a>(page_index: &'a HashMap<String, Vec<String>>, slug: &str) -> &'a [String] {
-    page_index.get(slug).map(Vec::as_slice).unwrap_or(&[])
-}
-
-/// Merge bulk window metrics for every GSC page URL that maps to `slug`.
-///
-/// Returns `(metrics, url_variants)` where `url_variants` is the page count when
-/// any metrics exist, else 0. Desk must **sum all page keys that normalize to the
-/// catalog slug** so first-only matching does not undercount when GSC stores
-/// underscore vs hyphen or trailing-slash URL variants as separate pages.
-fn rollup_for_slug(
-    page_index: &HashMap<String, Vec<String>>,
-    metrics_by_page: &HashMap<String, GscDailyWindowMetrics>,
-    slug: &str,
-) -> (Option<GscDailyWindowMetrics>, usize) {
-    let pages = pages_for_slug(page_index, slug);
-    let metrics = merge_window_metrics(pages.iter().filter_map(|p| metrics_by_page.get(p).copied()));
-    let url_variants = if metrics.is_some() { pages.len() } else { 0 };
-    (metrics, url_variants)
-}
-
-/// Merge window metrics from multiple GSC page keys into one rollup.
-fn merge_window_metrics(
-    iter: impl IntoIterator<Item = GscDailyWindowMetrics>,
-) -> Option<GscDailyWindowMetrics> {
-    let mut clicks = 0.0_f64;
-    let mut impressions = 0.0_f64;
-    let mut position_weight = 0.0_f64;
-    let mut days_with_data = 0_i64;
-    let mut any = false;
-
-    for m in iter {
-        any = true;
-        clicks += m.clicks;
-        impressions += m.impressions;
-        position_weight += m.position * m.impressions;
-        days_with_data = days_with_data.max(m.days_with_data);
-    }
-
-    if !any {
-        return None;
-    }
-
-    let position = if impressions > 0.0 {
-        position_weight / impressions
-    } else {
-        0.0
-    };
-
-    Some(GscDailyWindowMetrics {
-        days_with_data,
-        clicks,
-        impressions,
-        position,
-    })
-}
-
-fn recent_window(period_days: i64) -> (String, String) {
-    let end = Utc::now().date_naive() - Duration::days(1);
-    let start = end - Duration::days(period_days - 1);
-    (start.format("%Y-%m-%d").to_string(), end.format("%Y-%m-%d").to_string())
-}
-
-fn previous_window(period_days: i64) -> (String, String) {
-    let recent_end = Utc::now().date_naive() - Duration::days(1);
-    let recent_start = recent_end - Duration::days(period_days - 1);
-    let prev_end = recent_start - Duration::days(1);
-    let prev_start = prev_end - Duration::days(period_days - 1);
-    (
-        prev_start.format("%Y-%m-%d").to_string(),
-        prev_end.format("%Y-%m-%d").to_string(),
-    )
-}
+// GSC page-index / window / rollup helpers live in `db::gsc_join` (shared with
+// territory analysis — single SoT, issue #167 / PR #176).
 
 /// Desk GSC tape freshness from `gsc_page_daily` only (issue #164).
 ///

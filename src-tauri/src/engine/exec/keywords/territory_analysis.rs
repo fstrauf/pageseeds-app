@@ -14,12 +14,13 @@
 /// by the keyword research pipeline.
 use std::collections::{HashMap, HashSet};
 
-use chrono::{Duration, Utc};
 use rusqlite::Connection;
 
-use crate::content::slug::{extract_slug_from_url, normalize_url_slug};
+use crate::content::slug::normalize_url_slug;
 use crate::db::research_shortlist::{upsert_entry, ResearchShortlistEntry};
-use crate::db::GscDailyWindowMetrics;
+use crate::db::{
+    build_page_index, recent_window, rollup_impressions_for_slug,
+};
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
@@ -27,7 +28,7 @@ const OPEN_TERRITORY_IMPRESSION_THRESHOLD: f64 = 5000.0;
 const SATURATION_THRESHOLD: usize = 5;
 const MAX_OPEN_TERRITORIES: usize = 10;
 const MAX_MID_COVERAGE_THEMES: usize = 10;
-/// Desk recent window: 28 days ending yesterday (matches site_state).
+/// Desk recent window: 28 days ending yesterday (matches site_state / `db::recent_window`).
 const GSC_WINDOW_DAYS: i64 = 28;
 
 /// A lightweight article record for territory analysis.
@@ -127,68 +128,37 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
 
     let mut synced = 0usize;
     for territory in &open_territories {
-        let theme = territory.theme.clone();
-        let seeds = territory.source_keywords.clone();
-        let entry = ResearchShortlistEntry::new(
+        if sync_theme_to_shortlist(
+            &conn,
             &task.project_id,
-            &theme,
-            seeds,
-            "territory_analysis",
+            territory,
             "high",
-            Some(territory.article_count as i64),
-            Some(territory.total_impressions),
-        );
-        match upsert_entry(&conn, &entry) {
-            Ok(_) => synced += 1,
-            Err(e) => log::warn!(
-                "[territory_analysis] Failed to upsert shortlist entry for '{}': {}",
-                theme,
-                e
-            ),
+            "pending",
+        ) {
+            synced += 1;
         }
     }
-
     for theme in &mid_coverage_themes {
-        let entry = ResearchShortlistEntry::new(
+        if sync_theme_to_shortlist(
+            &conn,
             &task.project_id,
-            &theme.theme,
-            theme.source_keywords.clone(),
-            "territory_analysis",
+            theme,
             "medium",
-            Some(theme.article_count as i64),
-            Some(theme.total_impressions),
-        );
-        // health_status defaults to unproven via ResearchShortlistEntry::new
-        match upsert_entry(&conn, &entry) {
-            Ok(_) => synced += 1,
-            Err(e) => log::warn!(
-                "[territory_analysis] Failed to upsert mid-coverage theme '{}': {}",
-                theme.theme,
-                e
-            ),
+            "pending",
+        ) {
+            synced += 1;
         }
     }
-
     for theme in &saturated_themes {
-        let entry = ResearchShortlistEntry::new(
-            &task.project_id,
-            &theme.theme,
-            theme.source_keywords.clone(),
-            "territory_analysis",
-            "medium",
-            Some(theme.article_count as i64),
-            Some(theme.total_impressions),
-        );
         // Saturated themes get a special status so keyword research can deprioritize them
-        let mut saturated_entry = entry;
-        saturated_entry.status = "saturated".to_string();
-        match upsert_entry(&conn, &saturated_entry) {
-            Ok(_) => synced += 1,
-            Err(e) => log::warn!(
-                "[territory_analysis] Failed to upsert saturated theme '{}': {}",
-                theme.theme,
-                e
-            ),
+        if sync_theme_to_shortlist(
+            &conn,
+            &task.project_id,
+            theme,
+            "medium",
+            "saturated",
+        ) {
+            synced += 1;
         }
     }
 
@@ -321,52 +291,36 @@ fn build_skip_reasons(
 // Data loading
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// 28-day window ending yesterday — same shape as desk `recent_window`.
-fn recent_window_dates(period_days: i64) -> (String, String) {
-    let end = Utc::now().date_naive() - Duration::days(1);
-    let start = end - Duration::days(period_days - 1);
-    (
-        start.format("%Y-%m-%d").to_string(),
-        end.format("%Y-%m-%d").to_string(),
-    )
-}
-
-/// Normalized slug → all GSC page URLs that extract to that slug.
-fn build_page_index(
+/// Upsert one territory theme into the research shortlist.
+/// Returns true when the row was written successfully.
+fn sync_theme_to_shortlist(
     conn: &Connection,
     project_id: &str,
-) -> crate::error::Result<HashMap<String, Vec<String>>> {
-    let pages = crate::db::list_gsc_page_daily_pages(conn, project_id)?;
-    let mut index: HashMap<String, Vec<String>> = HashMap::new();
-    for page in pages {
-        let slug = extract_slug_from_url(&page);
-        if slug.is_empty() {
-            continue;
+    theme: &TerritoryTheme,
+    priority: &str,
+    status: &str,
+) -> bool {
+    let mut entry = ResearchShortlistEntry::new(
+        project_id,
+        &theme.theme,
+        theme.source_keywords.clone(),
+        "territory_analysis",
+        priority,
+        Some(theme.article_count as i64),
+        Some(theme.total_impressions),
+    );
+    entry.status = status.to_string();
+    match upsert_entry(conn, &entry) {
+        Ok(_) => true,
+        Err(e) => {
+            log::warn!(
+                "[territory_analysis] Failed to upsert shortlist entry for '{}' (status={}): {}",
+                theme.theme,
+                status,
+                e
+            );
+            false
         }
-        index.entry(slug).or_default().push(page);
-    }
-    Ok(index)
-}
-
-/// Sum impressions across all GSC page URL variants for a catalog slug.
-fn rollup_impressions_for_slug(
-    page_index: &HashMap<String, Vec<String>>,
-    metrics_by_page: &HashMap<String, GscDailyWindowMetrics>,
-    slug: &str,
-) -> Option<f64> {
-    let pages = page_index.get(slug)?;
-    let mut total = 0.0_f64;
-    let mut any = false;
-    for page in pages {
-        if let Some(m) = metrics_by_page.get(page) {
-            total += m.impressions;
-            any = true;
-        }
-    }
-    if any {
-        Some(total)
-    } else {
-        None
     }
 }
 
@@ -376,15 +330,15 @@ fn load_articles_with_gsc(
 ) -> crate::error::Result<LoadResult> {
     let articles = crate::engine::task_store::list_articles(conn, project_id)?;
 
-    // Desk SoT: 28-day daily tape rollup by page, joined via slug.
-    let page_index = build_page_index(conn, project_id).unwrap_or_default();
-    let (start, end) = recent_window_dates(GSC_WINDOW_DAYS);
+    // Desk SoT: 28-day daily tape rollup by page, joined via shared slug helpers.
+    // DB failures propagate — only empty data yields gsc_source=none.
+    let page_index = build_page_index(conn, project_id)?;
+    let (start, end) = recent_window(GSC_WINDOW_DAYS);
     let metrics_by_page =
-        crate::db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)
-            .unwrap_or_default();
+        crate::db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)?;
 
     // Fallback: article_metadata namespace gsc (legacy / when tape has no row).
-    let metadata = crate::db::list_project_metadata(conn, project_id).unwrap_or_default();
+    let metadata = crate::db::list_project_metadata(conn, project_id)?;
     let mut gsc_meta_by_article: HashMap<i64, serde_json::Value> = HashMap::new();
     for (article_id, namespace, payload) in metadata {
         if namespace == "gsc" {
@@ -766,5 +720,129 @@ mod tests {
             "expected thin/skip reason, got {:?}",
             reasons
         );
+    }
+
+    // ── Load-path fixture (gsc_page_daily SoT, empty article_metadata) ──────
+
+    fn load_fixture_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
+    fn insert_project(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, 'Test', '/tmp/territory-test', 1, 'workspace')",
+            rusqlite::params![id],
+        )
+        .unwrap();
+    }
+
+    fn insert_article(
+        conn: &Connection,
+        project_id: &str,
+        id: i64,
+        slug: &str,
+        keyword: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'published', ?6, '[]', 0, 100, 0, 'hash')",
+            rusqlite::params![
+                id,
+                project_id,
+                format!("Title {id}"),
+                slug,
+                format!("content/{slug}.mdx"),
+                keyword
+            ],
+        )
+        .unwrap();
+    }
+
+    fn daily_row(
+        page: &str,
+        date: &str,
+        impressions: f64,
+    ) -> crate::models::gsc::PageDailyMetrics {
+        crate::models::gsc::PageDailyMetrics {
+            page: page.to_string(),
+            date: date.to_string(),
+            clicks: 1.0,
+            impressions,
+            ctr: if impressions > 0.0 {
+                1.0 / impressions
+            } else {
+                0.0
+            },
+            position: 8.0,
+        }
+    }
+
+    #[test]
+    fn load_articles_with_gsc_uses_daily_tape_when_metadata_empty() {
+        use chrono::{Duration, Utc};
+
+        let conn = load_fixture_db();
+        insert_project(&conn, "proj1");
+        // Open: 1 article, high impressions via tape only.
+        insert_article(&conn, "proj1", 1, "open-post", "open territory kw");
+        // Mid: 3 articles, modest impressions.
+        insert_article(&conn, "proj1", 2, "mid-a", "mid theme kw");
+        insert_article(&conn, "proj1", 3, "mid-b", "mid theme kw");
+        insert_article(&conn, "proj1", 4, "mid-c", "mid theme kw");
+
+        let end = Utc::now().date_naive() - Duration::days(1);
+        let d1 = (end - Duration::days(3)).format("%Y-%m-%d").to_string();
+        let d2 = end.format("%Y-%m-%d").to_string();
+        let rows = vec![
+            // Two URL variants for open-post should sum.
+            daily_row("https://example.com/blog/open-post", &d1, 3000.0),
+            daily_row("https://example.com/blog/open-post/", &d2, 2500.0),
+            daily_row("https://example.com/blog/mid-a", &d1, 100.0),
+            daily_row("https://example.com/blog/mid-b", &d1, 150.0),
+            daily_row("https://example.com/blog/mid-c", &d2, 200.0),
+        ];
+        crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+        // No article_metadata gsc rows — tape must be the sole source.
+        let load = load_articles_with_gsc(&conn, "proj1").unwrap();
+        assert_eq!(load.gsc_source, GscSource::GscPageDaily);
+        assert_eq!(load.articles.len(), 4);
+
+        let open = load
+            .articles
+            .iter()
+            .find(|a| a.url_slug == "open-post")
+            .expect("open-post present");
+        assert!(
+            open.gsc_impressions > 0.0,
+            "tape join must yield non-zero impressions, got {}",
+            open.gsc_impressions
+        );
+        assert_eq!(
+            open.gsc_impressions, 5500.0,
+            "URL variants must sum (3000+2500)"
+        );
+
+        let analysis = analyze_territories(&load.articles);
+        assert_eq!(
+            analysis.open_territories.len(),
+            1,
+            "1 article + ≥5k impressions → open; got {:?}",
+            analysis.open_territories
+        );
+        assert_eq!(analysis.open_territories[0].theme, "open territory kw");
+        assert_eq!(
+            analysis.mid_coverage_themes.len(),
+            1,
+            "3 articles → mid; got {:?}",
+            analysis.mid_coverage_themes
+        );
+        assert_eq!(analysis.mid_coverage_themes[0].theme, "mid theme kw");
+        assert!(analysis.saturated_themes.is_empty());
     }
 }
