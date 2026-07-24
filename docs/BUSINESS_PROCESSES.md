@@ -636,7 +636,7 @@ Saved to: .github/automation/investigations/{id}/
 
 **Desk / Site State first (epic #117):**
 - `site_overview` — Compact site health desk (totals, top pages, movers, hints)
-- `articles` / `article` — GSC-aware catalog list and full per-slug package
+- `articles` / `article` — GSC-aware catalog list and full per-slug package (desk rolls up all GSC page URL variants per normalized slug)
 - `gsc_performance` / `gsc_movers` / `gsc_queries` — Demand and deltas
 
 **Optional / secondary (not ground truth):**
