@@ -106,12 +106,12 @@ pub(crate) fn exec_fix_content_article_apply(
                 rusqlite::params![&now, id, &task.project_id],
             );
             if let Some(ref kw) = patch.changes.target_keyword {
-                let _ = crate::engine::fix_package::apply_catalog_target_keyword(
+                let _ = crate::content::article_index::apply_catalog_target_keyword(
                     &db,
                     &task.project_id,
                     id,
                     kw,
-                    project_path,
+                    Path::new(project_path),
                 );
             }
         }

@@ -366,12 +366,12 @@ pub fn submit_fix(
         // Catalog keyword SoT: only when explicit -K or content-patch field (issue #165).
         // Runs after validation success so an old catalog keyword never hard-fails submit.
         if let Some(kw) = resolve_fix_submit_target_keyword(&opts, kind) {
-            if apply_catalog_target_keyword(
+            if crate::content::article_index::apply_catalog_target_keyword(
                 conn,
                 project_id,
                 package.article_id,
                 &kw,
-                project_path,
+                Path::new(project_path),
             ) && !applied.iter().any(|a| a == "target_keyword")
             {
                 applied.push("target_keyword".to_string());
@@ -513,42 +513,6 @@ fn resolve_fix_submit_target_keyword(opts: &FixSubmitOpts, kind: FixKind) -> Opt
     } else {
         Some(t.to_string())
     }
-}
-
-/// Update `articles.target_keyword` and re-export the catalog projection.
-///
-/// Uses [`crate::content::keyword_match::normalize_keyword`] (not GSC's 5-word
-/// backfill normalizer). Empty after normalize is a no-op — does not clear the
-/// existing catalog value. Returns whether a row was written.
-pub(crate) fn apply_catalog_target_keyword(
-    conn: &Connection,
-    project_id: &str,
-    article_id: i64,
-    keyword: &str,
-    project_path: &str,
-) -> bool {
-    if article_id == 0 {
-        return false;
-    }
-    let normalized = crate::content::keyword_match::normalize_keyword(keyword);
-    if normalized.is_empty() {
-        return false;
-    }
-    let updated = conn
-        .execute(
-            "UPDATE articles SET target_keyword=?1 WHERE id=?2 AND project_id=?3",
-            rusqlite::params![&normalized, article_id, project_id],
-        )
-        .unwrap_or(0);
-    if updated == 0 {
-        return false;
-    }
-    let _ = crate::content::article_index::export_projection(
-        conn,
-        project_id,
-        Path::new(project_path),
-    );
-    true
 }
 
 // ─── Deterministic patch apply via shared materializers (no Task / no LLM) ───
