@@ -187,11 +187,20 @@ verify_install() {
   if [[ -z "${ver}" ]]; then
     die "${BIN_NAME} --version failed or produced empty output"
   fi
-  # Help historically goes to stderr; accept either stream.
+  # Help is stdout after #159; accept either stream for older binaries.
   if ! "${TARGET_BIN}" --help >/dev/null 2>&1; then
     die "${BIN_NAME} --help failed"
   fi
   info "Verified: ${TARGET_BIN} --version → ${ver}"
+
+  # Machine-contract smoke (exit codes, help inventory) when installing from a
+  # monorepo checkout that ships scripts/check-cli-contract.sh. Skipped for
+  # curl | bash customer installs where that script is not on disk.
+  if [[ -n "${CHECKOUT_ROOT:-}" && -f "${CHECKOUT_ROOT}/scripts/check-cli-contract.sh" ]]; then
+    info "Running CLI machine-contract smoke..."
+    PAGESEEDS_CLI="${TARGET_BIN}" bash "${CHECKOUT_ROOT}/scripts/check-cli-contract.sh" \
+      || die "CLI machine-contract smoke failed"
+  fi
 }
 
 print_path_warning() {
@@ -275,3 +284,4 @@ if has_cargo_fallback; then
 fi
 
 die_platform_unsupported
+

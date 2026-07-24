@@ -21,6 +21,7 @@
     "release": "./publish-release.sh",
     "check:ipc": "node scripts/check-ipc-surface.mjs",
     "check:task-store": "./scripts/check-task-store-usage.sh",
+    "check:cli-contract": "bash scripts/check-cli-contract.sh",
     "check:pre-release": "./scripts/pre-release-checks.sh",
     "install:cli": "./scripts/install-cli.sh"
   },
