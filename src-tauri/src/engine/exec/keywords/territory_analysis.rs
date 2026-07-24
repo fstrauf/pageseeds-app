@@ -1,30 +1,76 @@
 /// Deterministic territory analysis for keyword research.
 ///
-/// Extracted from the cannibalization audit. Groups articles by target_keyword,
-/// uses semantic Jaccard grouping to collapse variations, and identifies:
+/// Groups articles by target_keyword, uses semantic Jaccard grouping to collapse
+/// variations, and identifies:
 ///   - Open territories: low coverage (≤1 article) + high impressions (≥5k)
+///   - Mid-coverage themes: 2–5 articles (expansion candidates for shortlist)
 ///   - Saturated themes: high coverage (>5 articles) competing for same theme
+///
+/// Impressions come from the desk SoT daily tape (`gsc_page_daily`, 28-day window
+/// ending yesterday), with fallback to `article_metadata` namespace `gsc` when the
+/// tape has no row for an article.
 ///
 /// Results are synced to the `research_shortlist` SQLite table for consumption
 /// by the keyword research pipeline.
 use std::collections::{HashMap, HashSet};
 
+use chrono::{Duration, Utc};
 use rusqlite::Connection;
 
+use crate::content::slug::{extract_slug_from_url, normalize_url_slug};
 use crate::db::research_shortlist::{upsert_entry, ResearchShortlistEntry};
-use crate::engine::project_paths::ProjectPaths;
+use crate::db::GscDailyWindowMetrics;
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
 const OPEN_TERRITORY_IMPRESSION_THRESHOLD: f64 = 5000.0;
 const SATURATION_THRESHOLD: usize = 5;
 const MAX_OPEN_TERRITORIES: usize = 10;
+const MAX_MID_COVERAGE_THEMES: usize = 10;
+/// Desk recent window: 28 days ending yesterday (matches site_state).
+const GSC_WINDOW_DAYS: i64 = 28;
 
 /// A lightweight article record for territory analysis.
+#[derive(Debug, Clone)]
 struct ArticleSummary {
     id: i64,
     target_keyword: String,
+    url_slug: String,
     gsc_impressions: f64,
+}
+
+/// GSC load provenance for diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GscSource {
+    GscPageDaily,
+    ArticleMetadataFallback,
+    Mixed,
+    None,
+}
+
+impl GscSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::GscPageDaily => "gsc_page_daily",
+            Self::ArticleMetadataFallback => "article_metadata_fallback",
+            Self::Mixed => "mixed",
+            Self::None => "none",
+        }
+    }
+
+    fn from_flags(used_tape: bool, used_fallback: bool) -> Self {
+        match (used_tape, used_fallback) {
+            (true, true) => Self::Mixed,
+            (true, false) => Self::GscPageDaily,
+            (false, true) => Self::ArticleMetadataFallback,
+            (false, false) => Self::None,
+        }
+    }
+}
+
+struct LoadResult {
+    articles: Vec<ArticleSummary>,
+    gsc_source: GscSource,
 }
 
 /// Run territory analysis and sync results to the research_shortlist table.
@@ -37,28 +83,46 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
         }
     };
 
-    // 1. Load articles + GSC metadata
-    let articles = match load_articles_with_gsc(&conn, &task.project_id) {
-        Ok(a) => a,
+    // 1. Load articles + GSC (daily tape preferred, metadata fallback)
+    let load = match load_articles_with_gsc(&conn, &task.project_id) {
+        Ok(r) => r,
         Err(e) => {
             return StepResult::fail(format!("Failed to load articles: {}", e));
         }
     };
 
-    if articles.is_empty() {
+    if load.articles.is_empty() {
+        let output = serde_json::json!({
+            "open_territories": [],
+            "mid_coverage_themes": [],
+            "saturated_themes": [],
+            "total_themes": 0,
+            "synced_to_shortlist": 0,
+            "gsc_source": load.gsc_source.as_str(),
+            "buckets": {
+                "open": 0,
+                "mid_coverage": 0,
+                "saturated": 0,
+                "thin_below_impression_threshold": 0,
+                "articles_without_target_keyword": 0,
+                "articles_with_zero_gsc": 0,
+            },
+            "skip_reasons": ["No articles found for territory analysis"],
+        });
         return StepResult {
             success: true,
-            message: "No articles with GSC data found for territory analysis".to_string(),
-            output: None,
+            message: "No articles found for territory analysis".to_string(),
+            output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
             artifact_key: None,
         };
     }
 
     // 2. Run analysis
-    let analysis = analyze_territories(&articles);
+    let analysis = analyze_territories(&load.articles);
 
-    // 3. Sync open territories to shortlist
+    // 3. Sync open / mid-coverage / saturated to shortlist
     let open_territories = analysis.open_territories.clone();
+    let mid_coverage_themes = analysis.mid_coverage_themes.clone();
     let saturated_themes = analysis.saturated_themes.clone();
 
     let mut synced = 0usize;
@@ -76,7 +140,32 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
         );
         match upsert_entry(&conn, &entry) {
             Ok(_) => synced += 1,
-            Err(e) => log::warn!("[territory_analysis] Failed to upsert shortlist entry for '{}': {}", theme, e),
+            Err(e) => log::warn!(
+                "[territory_analysis] Failed to upsert shortlist entry for '{}': {}",
+                theme,
+                e
+            ),
+        }
+    }
+
+    for theme in &mid_coverage_themes {
+        let entry = ResearchShortlistEntry::new(
+            &task.project_id,
+            &theme.theme,
+            theme.source_keywords.clone(),
+            "territory_analysis",
+            "medium",
+            Some(theme.article_count as i64),
+            Some(theme.total_impressions),
+        );
+        // health_status defaults to unproven via ResearchShortlistEntry::new
+        match upsert_entry(&conn, &entry) {
+            Ok(_) => synced += 1,
+            Err(e) => log::warn!(
+                "[territory_analysis] Failed to upsert mid-coverage theme '{}': {}",
+                theme.theme,
+                e
+            ),
         }
     }
 
@@ -95,72 +184,254 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
         saturated_entry.status = "saturated".to_string();
         match upsert_entry(&conn, &saturated_entry) {
             Ok(_) => synced += 1,
-            Err(e) => log::warn!("[territory_analysis] Failed to upsert saturated theme '{}': {}", theme.theme, e),
+            Err(e) => log::warn!(
+                "[territory_analysis] Failed to upsert saturated theme '{}': {}",
+                theme.theme,
+                e
+            ),
         }
     }
 
     // 4. Prune old covered entries
     let _ = crate::db::research_shortlist::prune_covered(&conn, &task.project_id, 30);
 
-    // 5. Return summary
+    // 5. Diagnostics
+    let articles_without_target_keyword = load
+        .articles
+        .iter()
+        .filter(|a| a.target_keyword.trim().is_empty())
+        .count();
+    let articles_with_zero_gsc = load
+        .articles
+        .iter()
+        .filter(|a| a.gsc_impressions <= 0.0)
+        .count();
+
+    let buckets = serde_json::json!({
+        "open": open_territories.len(),
+        "mid_coverage": mid_coverage_themes.len(),
+        "saturated": saturated_themes.len(),
+        "thin_below_impression_threshold": analysis.thin_below_impression_threshold,
+        "articles_without_target_keyword": articles_without_target_keyword,
+        "articles_with_zero_gsc": articles_with_zero_gsc,
+    });
+
+    let skip_reasons = if synced == 0 {
+        build_skip_reasons(
+            &load,
+            &analysis,
+            articles_without_target_keyword,
+            articles_with_zero_gsc,
+        )
+    } else {
+        Vec::new()
+    };
+
     let output = serde_json::json!({
         "open_territories": open_territories,
+        "mid_coverage_themes": mid_coverage_themes,
         "saturated_themes": saturated_themes,
         "total_themes": analysis.total_themes,
         "synced_to_shortlist": synced,
+        "gsc_source": load.gsc_source.as_str(),
+        "buckets": buckets,
+        "skip_reasons": skip_reasons,
     });
 
     StepResult {
         success: true,
         message: format!(
-            "Territory analysis: {} open territories, {} saturated themes, {} synced to shortlist",
+            "Territory analysis: {} open, {} mid-coverage, {} saturated, {} synced to shortlist (gsc={})",
             open_territories.len(),
+            mid_coverage_themes.len(),
             saturated_themes.len(),
-            synced
+            synced,
+            load.gsc_source.as_str()
         ),
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
         artifact_key: None,
     }
 }
 
+fn build_skip_reasons(
+    load: &LoadResult,
+    analysis: &TerritoryAnalysis,
+    articles_without_kw: usize,
+    articles_with_zero_gsc: usize,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+
+    if load.gsc_source == GscSource::None {
+        reasons.push(
+            "No GSC data from gsc_page_daily or article_metadata; all article impressions are 0"
+                .to_string(),
+        );
+    }
+
+    if analysis.total_themes == 0 {
+        reasons.push(
+            "No themes to classify: no articles have a non-empty target_keyword".to_string(),
+        );
+    } else {
+        if analysis.thin_below_impression_threshold > 0
+            && analysis.open_territories.is_empty()
+            && analysis.mid_coverage_themes.is_empty()
+            && analysis.saturated_themes.is_empty()
+        {
+            reasons.push(format!(
+                "{} theme(s) are thin (≤1 article) with impressions below the open threshold ({})",
+                analysis.thin_below_impression_threshold, OPEN_TERRITORY_IMPRESSION_THRESHOLD as i64
+            ));
+        }
+        if analysis.open_territories.is_empty()
+            && analysis.mid_coverage_themes.is_empty()
+            && analysis.saturated_themes.is_empty()
+            && analysis.thin_below_impression_threshold == 0
+        {
+            reasons.push(
+                "No open, mid-coverage, or saturated themes matched classification rules"
+                    .to_string(),
+            );
+        }
+    }
+
+    if articles_without_kw > 0 {
+        reasons.push(format!(
+            "{} article(s) lack a target_keyword and were excluded from theme grouping",
+            articles_without_kw
+        ));
+    }
+    if articles_with_zero_gsc > 0 && load.gsc_source != GscSource::None {
+        reasons.push(format!(
+            "{} article(s) have zero GSC impressions in the analysis window",
+            articles_with_zero_gsc
+        ));
+    }
+
+    if reasons.is_empty() {
+        reasons.push(
+            "synced_to_shortlist is 0 (no open/mid/saturated themes to upsert)".to_string(),
+        );
+    }
+
+    reasons
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Data loading
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// 28-day window ending yesterday — same shape as desk `recent_window`.
+fn recent_window_dates(period_days: i64) -> (String, String) {
+    let end = Utc::now().date_naive() - Duration::days(1);
+    let start = end - Duration::days(period_days - 1);
+    (
+        start.format("%Y-%m-%d").to_string(),
+        end.format("%Y-%m-%d").to_string(),
+    )
+}
+
+/// Normalized slug → all GSC page URLs that extract to that slug.
+fn build_page_index(
+    conn: &Connection,
+    project_id: &str,
+) -> crate::error::Result<HashMap<String, Vec<String>>> {
+    let pages = crate::db::list_gsc_page_daily_pages(conn, project_id)?;
+    let mut index: HashMap<String, Vec<String>> = HashMap::new();
+    for page in pages {
+        let slug = extract_slug_from_url(&page);
+        if slug.is_empty() {
+            continue;
+        }
+        index.entry(slug).or_default().push(page);
+    }
+    Ok(index)
+}
+
+/// Sum impressions across all GSC page URL variants for a catalog slug.
+fn rollup_impressions_for_slug(
+    page_index: &HashMap<String, Vec<String>>,
+    metrics_by_page: &HashMap<String, GscDailyWindowMetrics>,
+    slug: &str,
+) -> Option<f64> {
+    let pages = page_index.get(slug)?;
+    let mut total = 0.0_f64;
+    let mut any = false;
+    for page in pages {
+        if let Some(m) = metrics_by_page.get(page) {
+            total += m.impressions;
+            any = true;
+        }
+    }
+    if any {
+        Some(total)
+    } else {
+        None
+    }
+}
+
 fn load_articles_with_gsc(
     conn: &Connection,
     project_id: &str,
-) -> crate::error::Result<Vec<ArticleSummary>> {
-    // Load all articles
+) -> crate::error::Result<LoadResult> {
     let articles = crate::engine::task_store::list_articles(conn, project_id)?;
 
-    // Load GSC metadata in bulk (graceful if article_metadata table doesn't exist yet)
+    // Desk SoT: 28-day daily tape rollup by page, joined via slug.
+    let page_index = build_page_index(conn, project_id).unwrap_or_default();
+    let (start, end) = recent_window_dates(GSC_WINDOW_DAYS);
+    let metrics_by_page =
+        crate::db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)
+            .unwrap_or_default();
+
+    // Fallback: article_metadata namespace gsc (legacy / when tape has no row).
     let metadata = crate::db::list_project_metadata(conn, project_id).unwrap_or_default();
-    let mut gsc_by_article: HashMap<i64, serde_json::Value> = HashMap::new();
+    let mut gsc_meta_by_article: HashMap<i64, serde_json::Value> = HashMap::new();
     for (article_id, namespace, payload) in metadata {
         if namespace == "gsc" {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
-                gsc_by_article.insert(article_id, json);
+                gsc_meta_by_article.insert(article_id, json);
             }
         }
     }
 
-    let mut summaries = Vec::new();
+    let mut used_tape = false;
+    let mut used_fallback = false;
+    let mut summaries = Vec::with_capacity(articles.len());
+
     for article in articles {
-        let gsc = gsc_by_article.get(&article.id);
-        let impressions = gsc
-            .and_then(|v| v["impressions"].as_f64())
-            .unwrap_or(0.0);
+        let slug = normalize_url_slug(&article.url_slug);
+        let (impressions, from_tape) =
+            if let Some(imp) = rollup_impressions_for_slug(&page_index, &metrics_by_page, &slug) {
+                (imp, true)
+            } else if let Some(gsc) = gsc_meta_by_article.get(&article.id) {
+                let imp = gsc["impressions"].as_f64().unwrap_or(0.0);
+                (imp, false)
+            } else {
+                (0.0, false)
+            };
+
+        if from_tape {
+            used_tape = true;
+        } else if impressions > 0.0 || gsc_meta_by_article.contains_key(&article.id) {
+            // Count as fallback only when we actually consulted metadata for this article.
+            if gsc_meta_by_article.contains_key(&article.id) {
+                used_fallback = true;
+            }
+        }
 
         let kw = article.target_keyword.unwrap_or_default();
         summaries.push(ArticleSummary {
             id: article.id,
             target_keyword: kw,
+            url_slug: slug,
             gsc_impressions: impressions,
         });
     }
 
-    Ok(summaries)
+    Ok(LoadResult {
+        articles: summaries,
+        gsc_source: GscSource::from_flags(used_tape, used_fallback),
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -178,8 +449,12 @@ pub struct TerritoryTheme {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TerritoryAnalysis {
     pub open_territories: Vec<TerritoryTheme>,
+    pub mid_coverage_themes: Vec<TerritoryTheme>,
     pub saturated_themes: Vec<TerritoryTheme>,
     pub total_themes: usize,
+    /// Themes with ≤1 article and impressions below the open threshold (not shortlisted).
+    #[serde(skip)]
+    pub thin_below_impression_threshold: usize,
 }
 
 fn analyze_territories(articles: &[ArticleSummary]) -> TerritoryAnalysis {
@@ -221,7 +496,9 @@ fn analyze_territories(articles: &[ArticleSummary]) -> TerritoryAnalysis {
     }
 
     let mut open_territories: Vec<TerritoryTheme> = Vec::new();
+    let mut mid_coverage_themes: Vec<TerritoryTheme> = Vec::new();
     let mut saturated_themes: Vec<TerritoryTheme> = Vec::new();
+    let mut thin_below_impression_threshold = 0usize;
 
     for (representative, (ids, source_kws)) in &merged_groups {
         let total_impressions: f64 = ids
@@ -230,46 +507,50 @@ fn analyze_territories(articles: &[ArticleSummary]) -> TerritoryAnalysis {
             .map(|a| a.gsc_impressions)
             .sum();
 
+        let theme = TerritoryTheme {
+            theme: representative.clone(),
+            article_count: ids.len(),
+            total_impressions,
+            source_keywords: source_kws.clone(),
+        };
+
         if ids.len() > SATURATION_THRESHOLD {
-            saturated_themes.push(TerritoryTheme {
-                theme: representative.clone(),
-                article_count: ids.len(),
-                total_impressions,
-                source_keywords: source_kws.clone(),
-            });
+            saturated_themes.push(theme);
+        } else if ids.len() >= 2 && ids.len() <= SATURATION_THRESHOLD {
+            // Mid-coverage: 2..=5 articles (expansion shortlist candidates)
+            mid_coverage_themes.push(theme);
         } else if ids.len() <= 1 && total_impressions >= OPEN_TERRITORY_IMPRESSION_THRESHOLD {
-            open_territories.push(TerritoryTheme {
-                theme: representative.clone(),
-                article_count: ids.len(),
-                total_impressions,
-                source_keywords: source_kws.clone(),
-            });
+            open_territories.push(theme);
+        } else if ids.len() <= 1 {
+            // Thin + low impressions — do not shortlist
+            thin_below_impression_threshold += 1;
         }
     }
 
     // Sort by total impressions descending
-    open_territories.sort_by(|a, b| {
+    let sort_by_impressions = |a: &TerritoryTheme, b: &TerritoryTheme| {
         b.total_impressions
             .partial_cmp(&a.total_impressions)
             .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    saturated_themes.sort_by(|a, b| {
-        b.total_impressions
-            .partial_cmp(&a.total_impressions)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    };
+    open_territories.sort_by(sort_by_impressions);
+    mid_coverage_themes.sort_by(sort_by_impressions);
+    saturated_themes.sort_by(sort_by_impressions);
 
-    // Cap open territories
-    let dropped = open_territories.len().saturating_sub(MAX_OPEN_TERRITORIES);
+    // Cap open and mid-coverage shortlist candidates
     if open_territories.len() > MAX_OPEN_TERRITORIES {
         open_territories.truncate(MAX_OPEN_TERRITORIES);
     }
-    let _ = dropped; // unused for now
+    if mid_coverage_themes.len() > MAX_MID_COVERAGE_THEMES {
+        mid_coverage_themes.truncate(MAX_MID_COVERAGE_THEMES);
+    }
 
     TerritoryAnalysis {
         open_territories,
+        mid_coverage_themes,
         saturated_themes,
         total_themes: merged_groups.len(),
+        thin_below_impression_threshold,
     }
 }
 
@@ -315,16 +596,25 @@ fn keyword_jaccard(a: &str, b: &str) -> f64 {
 mod tests {
     use super::*;
 
+    fn art(id: i64, kw: &str, impressions: f64) -> ArticleSummary {
+        ArticleSummary {
+            id,
+            target_keyword: kw.to_string(),
+            url_slug: format!("slug-{}", id),
+            gsc_impressions: impressions,
+        }
+    }
+
     #[test]
     fn test_analyze_territories_detects_saturated_and_open() {
         let articles = vec![
-            ArticleSummary { id: 1, target_keyword: "saturated theme".to_string(), gsc_impressions: 1000.0 },
-            ArticleSummary { id: 2, target_keyword: "saturated theme".to_string(), gsc_impressions: 1000.0 },
-            ArticleSummary { id: 3, target_keyword: "saturated theme".to_string(), gsc_impressions: 1000.0 },
-            ArticleSummary { id: 4, target_keyword: "saturated theme".to_string(), gsc_impressions: 1000.0 },
-            ArticleSummary { id: 5, target_keyword: "saturated theme".to_string(), gsc_impressions: 1000.0 },
-            ArticleSummary { id: 6, target_keyword: "saturated theme".to_string(), gsc_impressions: 1000.0 },
-            ArticleSummary { id: 7, target_keyword: "open territory".to_string(), gsc_impressions: 5000.0 },
+            art(1, "saturated theme", 1000.0),
+            art(2, "saturated theme", 1000.0),
+            art(3, "saturated theme", 1000.0),
+            art(4, "saturated theme", 1000.0),
+            art(5, "saturated theme", 1000.0),
+            art(6, "saturated theme", 1000.0),
+            art(7, "open territory", 5000.0),
         ];
 
         let analysis = analyze_territories(&articles);
@@ -332,6 +622,117 @@ mod tests {
         assert_eq!(analysis.saturated_themes[0].theme, "saturated theme");
         assert_eq!(analysis.open_territories.len(), 1, "Should detect open territory");
         assert_eq!(analysis.open_territories[0].theme, "open territory");
+        assert!(
+            analysis.mid_coverage_themes.is_empty(),
+            "Six-article theme is saturated, not mid"
+        );
+    }
+
+    #[test]
+    fn test_mid_coverage_two_to_five_articles() {
+        // 3 articles → mid, not open/saturated
+        let articles = vec![
+            art(1, "mid theme", 800.0),
+            art(2, "mid theme", 700.0),
+            art(3, "mid theme", 600.0),
+        ];
+        let analysis = analyze_territories(&articles);
+        assert_eq!(analysis.mid_coverage_themes.len(), 1);
+        assert_eq!(analysis.mid_coverage_themes[0].theme, "mid theme");
+        assert_eq!(analysis.mid_coverage_themes[0].article_count, 3);
+        assert!(analysis.open_territories.is_empty());
+        assert!(analysis.saturated_themes.is_empty());
+        assert_eq!(analysis.thin_below_impression_threshold, 0);
+
+        // Boundaries: 2 and 5 articles are mid
+        let two = vec![art(1, "pair", 100.0), art(2, "pair", 100.0)];
+        let two_a = analyze_territories(&two);
+        assert_eq!(two_a.mid_coverage_themes.len(), 1);
+        assert_eq!(two_a.mid_coverage_themes[0].article_count, 2);
+
+        let five: Vec<_> = (1..=5).map(|i| art(i, "quintet", 50.0)).collect();
+        let five_a = analyze_territories(&five);
+        assert_eq!(five_a.mid_coverage_themes.len(), 1);
+        assert_eq!(five_a.mid_coverage_themes[0].article_count, 5);
+        assert!(five_a.saturated_themes.is_empty());
+    }
+
+    #[test]
+    fn test_bands_six_open_and_three() {
+        // Six → saturated; one with 5k+ → open; three → mid
+        let mut articles: Vec<_> = (1..=6).map(|i| art(i, "saturated kw", 200.0)).collect();
+        articles.push(art(10, "open kw", 5500.0));
+        articles.push(art(11, "mid kw", 300.0));
+        articles.push(art(12, "mid kw", 400.0));
+        articles.push(art(13, "mid kw", 500.0));
+
+        let analysis = analyze_territories(&articles);
+        assert_eq!(analysis.saturated_themes.len(), 1);
+        assert_eq!(analysis.saturated_themes[0].article_count, 6);
+        assert_eq!(analysis.open_territories.len(), 1);
+        assert_eq!(analysis.open_territories[0].theme, "open kw");
+        assert_eq!(analysis.mid_coverage_themes.len(), 1);
+        assert_eq!(analysis.mid_coverage_themes[0].theme, "mid kw");
+        assert_eq!(analysis.mid_coverage_themes[0].article_count, 3);
+        assert_eq!(analysis.total_themes, 3);
+    }
+
+    #[test]
+    fn test_thin_low_impressions_not_shortlisted() {
+        // Single article under 5k impressions → thin, not open/mid/saturated
+        let articles = vec![
+            art(1, "thin theme", 4999.0),
+            art(2, "zero theme", 0.0),
+            art(3, "", 10000.0), // empty keyword excluded from themes
+        ];
+        let analysis = analyze_territories(&articles);
+        assert!(analysis.open_territories.is_empty());
+        assert!(analysis.mid_coverage_themes.is_empty());
+        assert!(analysis.saturated_themes.is_empty());
+        assert_eq!(analysis.thin_below_impression_threshold, 2);
+        assert_eq!(analysis.total_themes, 2);
+
+        // Exactly at threshold still opens
+        let at_bar = vec![art(1, "border open", 5000.0)];
+        let open = analyze_territories(&at_bar);
+        assert_eq!(open.open_territories.len(), 1);
+        assert_eq!(open.thin_below_impression_threshold, 0);
+    }
+
+    #[test]
+    fn test_mid_coverage_capped_by_impressions() {
+        let mut articles = Vec::new();
+        for t in 0..12 {
+            let kw = format!("mid theme {}", t);
+            // Higher t → higher impressions so sort order is deterministic
+            let imp = (t as f64 + 1.0) * 100.0;
+            articles.push(art(t * 2, &kw, imp));
+            articles.push(art(t * 2 + 1, &kw, imp));
+        }
+        let analysis = analyze_territories(&articles);
+        assert_eq!(
+            analysis.mid_coverage_themes.len(),
+            MAX_MID_COVERAGE_THEMES,
+            "mid-coverage should be capped"
+        );
+        // Top by impressions: themes 11 down to 2
+        assert_eq!(analysis.mid_coverage_themes[0].theme, "mid theme 11");
+        assert!(analysis.mid_coverage_themes[0].total_impressions
+            >= analysis.mid_coverage_themes.last().unwrap().total_impressions);
+    }
+
+    #[test]
+    fn test_gsc_source_from_flags() {
+        assert_eq!(
+            GscSource::from_flags(true, false).as_str(),
+            "gsc_page_daily"
+        );
+        assert_eq!(
+            GscSource::from_flags(false, true).as_str(),
+            "article_metadata_fallback"
+        );
+        assert_eq!(GscSource::from_flags(true, true).as_str(), "mixed");
+        assert_eq!(GscSource::from_flags(false, false).as_str(), "none");
     }
 
     #[test]
@@ -349,5 +750,21 @@ mod tests {
         assert_eq!(keyword_jaccard("a b c", "x y z"), 0.0);
         let sim = keyword_jaccard("coffee maker", "best coffee maker");
         assert!(sim > 0.0 && sim < 1.0, "Partial overlap should give 0 < jaccard < 1");
+    }
+
+    #[test]
+    fn test_skip_reasons_when_all_thin() {
+        let articles = vec![art(1, "thin", 100.0)];
+        let analysis = analyze_territories(&articles);
+        let load = LoadResult {
+            articles: articles.clone(),
+            gsc_source: GscSource::GscPageDaily,
+        };
+        let reasons = build_skip_reasons(&load, &analysis, 0, 0);
+        assert!(
+            reasons.iter().any(|r| r.contains("thin") || r.contains("impressions below")),
+            "expected thin/skip reason, got {:?}",
+            reasons
+        );
     }
 }

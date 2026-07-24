@@ -296,6 +296,8 @@ Every article produced by `write_article`, `create_hub_page`, or `refresh_hub_pa
 
 ## Topic Health Reducer
 
+The research shortlist is filled by `research_territory_analysis` (open / mid-coverage / saturated themes) using desk tape `gsc_page_daily` impressions — not by final keyword selection.
+
 After `content_review` or `content_audit` completes, a deterministic reducer loads the latest audit from SQLite (via `load_audit_snapshot`), aggregates signals by `target_keyword`, and updates `research_shortlist.health_status`.
 
 ### Health Status Thresholds

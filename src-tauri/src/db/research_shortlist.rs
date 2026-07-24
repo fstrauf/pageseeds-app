@@ -2,7 +2,8 @@
 ///
 /// The shortlist is a persistent queue of themes/keywords to research.
 /// Sources:
-///   - territory_analysis: open territories / saturated themes from GSC data
+///   - territory_analysis: open / mid-coverage / saturated themes from desk
+///     GSC tape (`gsc_page_daily`); fills shortlist for research (not final selection)
 ///   - coverage_gap: thin clusters from keyword coverage analysis
 ///   - manual: user-added entries
 ///
