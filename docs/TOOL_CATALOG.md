@@ -26,7 +26,7 @@ Deterministic package + session prose + submit gates. Operator policy lives in t
 | Tools | Status | Role |
 |---|---|---|
 | `write-context` / `write-submit` | **Shipped** (#135) | After `select-keywords`: package brief → session writes MDX → submit gates (≥800 words, validate_article) |
-| `fix-context` / `fix-submit` | Path B child (#137) | When present: package slug + goals → session edits → submit. Until then: `create-task fix_content_article -S` |
+| `fix-context` / `fix-submit` | Path B child (#137) | Package slug + goals → session edits → submit. Catalog `articles.target_keyword` updates only with explicit `-K` / `--keyword` or content-patch `changes.target_keyword` (#165). |
 | `merge-context` / `merge-submit` | Path B child (#138) | When present: package members → session merges → submit (high-traffic confirm). Until then: mechanical cannibalization picker only |
 
 Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI best-path when the matching package tools exist.

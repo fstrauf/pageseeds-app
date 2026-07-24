@@ -137,6 +137,9 @@ pub struct ContentFixChanges {
     pub eeat_signal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cta: Option<String>,
+    /// Optional retarget: written to MDX frontmatter and catalog on successful apply/submit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_keyword: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]

@@ -31,6 +31,7 @@ pub(crate) fn patch_has_any_changes(changes: &ContentFixChanges) -> bool {
         || changes.faq_questions.as_ref().is_some_and(|v| !v.is_empty())
         || changes.eeat_signal.is_some()
         || changes.cta.is_some()
+        || changes.target_keyword.is_some()
 }
 
 fn patch_field_present(patch: &ContentFixPatch, field: &str) -> bool {
