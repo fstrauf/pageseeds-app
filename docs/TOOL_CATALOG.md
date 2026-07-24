@@ -139,7 +139,13 @@ Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI b
 |---|---|
 | **Does** | Unified workflow: checks prerequisites, reviews distinctiveness against cluster siblings, and spawns targeted fixes for non-indexed pages. |
 | **When** | Pages exist but Google hasn't indexed them. Prefer this over the granular `fix_indexing*` tasks. |
-| **After completion** | `ArtifactReview` → spawns targeted child fix tasks (`BackendAuto`). |
+| **After completion** | `ArtifactReview` → spawns targeted child fix tasks (`BackendAuto`), including `fix_indexing_internal_links` children with an `indexing_link_target` artifact. |
+
+| Field | `fix_indexing_internal_links` |
+|---|---|
+| **Does** | Adds inbound internal links to one target page (context → plan → apply → verify). |
+| **When** | Prefer as an IHC / `gsc_indexing_recovery` child (artifact attached automatically). Operator-scoped: `create-task -t fix_indexing_internal_links -S <url-slug>` (or CreateTaskTool with `slug`) builds `indexing_link_target`. Bare creates without that artifact fail at execute. |
+| **After completion** | Backend may spawn a delayed GSC indexing outcome review (`BackendAuto`). |
 
 | Field | `clarity_analytics` |
 |---|---|

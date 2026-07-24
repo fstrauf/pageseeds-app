@@ -99,6 +99,71 @@ pub struct LinkSourceCandidate {
     pub reason: String,
 }
 
+/// Pipeline outcome for `fix_indexing_internal_links` plan/apply → verify.
+///
+/// Intentional no-ops (`NoCandidates`, `AlreadyLinked`) must pass verify without
+/// requiring an inbound-link increase. Only `Applied` requires growth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexingLinkOutcome {
+    /// At least one source file was modified to add a link.
+    Applied,
+    /// Planned sources already linked to the target — nothing to do.
+    AlreadyLinked,
+    /// No usable source candidates (empty shortlist or none remaining after filter).
+    NoCandidates,
+}
+
+impl IndexingLinkOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::AlreadyLinked => "already_linked",
+            Self::NoCandidates => "no_candidates",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "applied" => Some(Self::Applied),
+            "already_linked" => Some(Self::AlreadyLinked),
+            "no_candidates" => Some(Self::NoCandidates),
+            _ => None,
+        }
+    }
+
+    /// Non-error intentional no-ops — verify should pass without inbound growth.
+    pub fn is_intentional_noop(self) -> bool {
+        matches!(self, Self::AlreadyLinked | Self::NoCandidates)
+    }
+}
+
+/// Target payload inside the `indexing_link_target` task artifact.
+///
+/// Shape fields are stable across IHC children, GSC recovery, and operator slug spawn.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct IndexingLinkTarget {
+    pub url: String,
+    pub slug: String,
+    pub article_id: i64,
+    pub file: String,
+    pub reason_code: String,
+    pub incoming_link_count_before: usize,
+    pub target_keyword: String,
+    #[serde(default)]
+    pub source_candidates: Vec<LinkSourceCandidate>,
+}
+
+/// Full `indexing_link_target` artifact document (`{ campaign_task_id, target }`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct IndexingLinkTargetArtifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign_task_id: Option<String>,
+    pub target: IndexingLinkTarget,
+}
+
 /// Per-target context built by `IhcBuildTargetContext`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]

@@ -1,12 +1,16 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
+use crate::models::indexing_health::IndexingLinkOutcome;
 use crate::models::task::Task;
 
 use super::*;
 // ─── Step 3: Apply ────────────────────────────────────────────────────────────
 
-/// Deterministic apply: append a Related Articles link or insert a contextual
-/// paragraph link to the chosen source file.
+/// Deterministic apply: append a Related Articles link to the chosen source file.
+///
+/// V1 placement is always `related_section`. Writes an `outcome` field so verify
+/// can pass intentional no-ops (`no_candidates` / `already_linked`) without
+/// requiring an inbound-link increase.
 pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepResult {
     use std::path::Path;
 
@@ -17,11 +21,11 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
     let target_data = match parse_target_artifact(task) {
         Some(t) => t,
         None => {
-            return StepResult::fail("Missing or invalid indexing_link_target artifact".to_string())
+            return StepResult::fail(MISSING_INDEXING_LINK_TARGET_MSG.to_string())
         }
     };
 
-    let target_article_id = target_data["article_id"].as_i64().unwrap_or(0);
+    let target_article_id = target_data.article_id;
     if target_article_id == 0 {
         return StepResult::fail("Target article_id is 0 — no matching article found in DB".to_string());
     }
@@ -29,7 +33,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
     // The target must be a valid link target: present in the project slug set
     // and not redirected away by a consolidation. resolve_slug matches exact
     // first, so a verbatim-existing slug is never destructively normalized.
-    let raw_target_slug = target_data["slug"].as_str().unwrap_or("");
+    let raw_target_slug = target_data.slug.as_str();
     let valid_targets: std::collections::HashSet<String> =
         if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
             crate::engine::task_store::load_valid_link_targets(&db, &task.project_id, project_path)
@@ -46,10 +50,11 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                 ))
         }
     };
-    let target_title = target_data["target_keyword"]
-        .as_str()
-        .unwrap_or(&target_slug)
-        .to_string();
+    let target_title = if target_data.target_keyword.is_empty() {
+        target_slug.clone()
+    } else {
+        target_data.target_keyword.clone()
+    };
 
     // Load plan
     let plan_path = paths
@@ -69,10 +74,24 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
 
     let links = plan["links_to_add"].as_array().cloned().unwrap_or_default();
     if links.is_empty() {
+        let outcome = outcome_from_json(&plan).unwrap_or(IndexingLinkOutcome::NoCandidates);
+        let summary = serde_json::json!({
+            "target_slug": target_slug,
+            "links_added": 0,
+            "links_skipped_existing": 0,
+            "links_failed": 0,
+            "source_files_modified": [],
+            "outcome": outcome.as_str(),
+        });
         return StepResult {
             success: true,
-            message: "Nothing to apply — plan has no links to add".to_string(),
-            output: None,
+            message: match outcome {
+                IndexingLinkOutcome::AlreadyLinked => {
+                    format!("Nothing to apply — sources already link to {target_slug}")
+                }
+                _ => "Nothing to apply — plan has no links to add".to_string(),
+            },
+            output: Some(summary.to_string()),
             artifact_key: None,
         };
     }
@@ -108,10 +127,21 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
             .as_str()
             .unwrap_or(&target_title)
             .to_string();
-        let placement = link["placement"].as_str().unwrap_or("related_section");
 
-        // Find source file from DB
-        let source_file = find_file_by_article_id(&task.project_id, source_id);
+        // Prefer plan source_file, then artifact source_candidates — no global DB lookup.
+        let source_file = link["source_file"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                target_data
+                    .source_candidates
+                    .iter()
+                    .find(|c| c.article_id == source_id)
+                    .map(|c| c.file.clone())
+                    .filter(|f| !f.is_empty())
+            });
+
         let source_basename = match source_file {
             Some(f) => std::path::Path::new(&f)
                 .file_name()
@@ -120,7 +150,7 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
                 .to_string(),
             None => {
                 log::warn!(
-                    "[indexing_link_apply] no file found for source article {}",
+                    "[indexing_link_apply] no source_file on plan/candidates for source article {}",
                     source_id
                 );
                 links_failed += 1;
@@ -161,34 +191,16 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
             continue;
         }
 
-        let new_content = match placement {
-            "contextual_paragraph" => {
-                match insert_contextual_link(&content, &anchor_text, &target_slug) {
-                    Some(c) => c,
-                    None => {
-                        log::warn!(
-                            "[indexing_link_apply] could not find insertion point for contextual link in {}",
-                            source_basename
-                        );
-                        links_failed += 1;
-                        continue;
-                    }
-                }
-            }
-            _ => {
-                // related_section (default)
-                apply_related_section_link(&content, &anchor_text, &target_slug)
-            }
-        };
+        // V1: related_section only
+        let new_content = apply_related_section_link(&content, &anchor_text, &target_slug);
 
         match std::fs::write(file_path, new_content) {
             Ok(_) => {
                 files_modified.push(source_basename.clone());
                 links_added += 1;
                 log::info!(
-                    "[indexing_link_apply] {} — added {} link to {}",
+                    "[indexing_link_apply] {} — added related_section link to {}",
                     source_basename,
-                    placement,
                     target_slug
                 );
             }
@@ -203,12 +215,24 @@ pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepR
         }
     }
 
+    let outcome = if links_added > 0 {
+        IndexingLinkOutcome::Applied
+    } else if links_failed == 0 && links_skipped_existing > 0 {
+        IndexingLinkOutcome::AlreadyLinked
+    } else if links_failed == 0 {
+        IndexingLinkOutcome::NoCandidates
+    } else {
+        // Failed apply path — still record outcome for diagnostics; success=false below.
+        IndexingLinkOutcome::Applied
+    };
+
     let summary = serde_json::json!({
         "target_slug": target_slug,
         "links_added": links_added,
         "links_skipped_existing": links_skipped_existing,
         "links_failed": links_failed,
         "source_files_modified": files_modified,
+        "outcome": outcome.as_str(),
     });
 
     // Success if we added links, OR if all planned links already existed.
@@ -283,77 +307,3 @@ pub(crate) fn apply_related_section_link(content: &str, anchor_text: &str, targe
         )
     }
 }
-
-/// Insert a contextual link into a relevant paragraph.
-///
-/// Finds a paragraph that contains the target keyword or a related term,
-/// and appends a natural sentence with the link at the end of that paragraph.
-/// Returns None if no suitable paragraph is found.
-pub(crate) fn insert_contextual_link(content: &str, anchor_text: &str, target_slug: &str) -> Option<String> {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut best_paragraph_idx: Option<usize> = None;
-    let mut best_score = 0;
-
-    // Simple heuristic: find a paragraph (non-empty, non-heading, non-list, non-code)
-    // that contains words related to the anchor text
-    let anchor_words: Vec<String> = anchor_text
-        .to_lowercase()
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-
-    for (idx, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        // Skip headings, lists, code blocks, frontmatter, empty lines
-        if trimmed.starts_with('#')
-            || trimmed.starts_with('-')
-            || trimmed.starts_with('*')
-            || trimmed.starts_with("```")
-            || trimmed.starts_with("---")
-            || trimmed.is_empty()
-        {
-            continue;
-        }
-
-        let line_lower = trimmed.to_lowercase();
-        let score = anchor_words
-            .iter()
-            .filter(|word| line_lower.contains(*word))
-            .count();
-
-        if score > best_score {
-            best_score = score;
-            best_paragraph_idx = Some(idx);
-        }
-    }
-
-    // If no paragraph contains related words, try to find any substantial paragraph
-    let target_idx = best_paragraph_idx.or_else(|| {
-        lines.iter().enumerate().find_map(|(idx, line)| {
-            let trimmed = line.trim();
-            if trimmed.len() > 80
-                && !trimmed.starts_with('#')
-                && !trimmed.starts_with('-')
-                && !trimmed.starts_with('*')
-                && !trimmed.starts_with("```")
-                && !trimmed.starts_with("---")
-            {
-                Some(idx)
-            } else {
-                None
-            }
-        })
-    })?;
-
-    let insertion_sentence = format!(
-        " For more on this, see [{}]({}).",
-        anchor_text, crate::content::slug::format_blog_link(target_slug)
-    );
-
-    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-    let original_line = &new_lines[target_idx];
-    new_lines[target_idx] = format!("{}{}", original_line.trim_end(), insertion_sentence);
-
-    Some(new_lines.join("\n"))
-}
-

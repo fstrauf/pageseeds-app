@@ -293,7 +293,10 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Implementation,
     },
     // Per-target internal link fix task. Auto-enqueued by the backend queue.
-    // Each task carries a structured target artifact and verifies the target gained inbound links.
+    // Requires `indexing_link_target` artifact — attached by IHC/recovery child
+    // spawn or the operator slug helper (`create-task -t fix_indexing_internal_links -S <slug>` /
+    // `indexing_link_fix::spawn_fix_indexing_internal_links_for_slug`). Bare creates without
+    // the artifact fail at execute (context/plan/apply/verify).
     TaskDefinition {
         task_type: "fix_indexing_internal_links",
         phase: "implementation",

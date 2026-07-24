@@ -6,6 +6,7 @@
 ///   2. indexing_link_plan     — agentic: choose source and anchor from shortlist
 ///   3. indexing_link_apply    — deterministic: append Related Articles link
 ///   4. indexing_link_verify   — deterministic: prove target gained inbound links
+///      (or pass intentional no-ops: no_candidates / already_linked)
 use std::collections::HashMap;
 
 use crate::engine::project_paths::ProjectPaths;
