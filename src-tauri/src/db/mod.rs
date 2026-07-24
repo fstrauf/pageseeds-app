@@ -7,8 +7,15 @@ use crate::error::Result;
 pub mod content_audit;
 pub mod export;
 pub mod global_settings;
+pub mod gsc_join;
 pub mod research_shortlist;
 pub mod seo_discovery;
+
+// Re-export GSC join helpers so callers can use `db::build_page_index` etc.
+pub use gsc_join::{
+    build_page_index, merge_window_metrics, pages_for_slug, previous_window, recent_window,
+    rollup_for_slug, rollup_impressions_for_slug,
+};
 
 /// Get the default database path based on platform conventions.
 /// Used when we need to access the DB without having the AppState.
