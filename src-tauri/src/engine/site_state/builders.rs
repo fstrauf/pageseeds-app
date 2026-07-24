@@ -131,16 +131,13 @@ pub fn build_site_overview(
         .collect();
 
     let avg_ctr = safe_ctr(total_clicks, total_impressions);
-    let hints = build_hints(has_any_gsc, &top_candidates);
+    let freshness = build_gsc_freshness(conn, project_id);
+    let hints = build_hints(has_any_gsc, &freshness, &top_candidates);
 
     Ok(SiteOverview {
         project_id: project_id.to_string(),
         generated_at,
-        freshness: Freshness {
-            gsc_at: gsc_freshness_at(conn, project_id),
-            evidence_index_at: None,
-            evidence_coverage: 0.0,
-        },
+        freshness,
         totals: SiteTotals {
             articles_live: live.len(),
             articles_redirected: articles
@@ -234,6 +231,7 @@ pub fn list_articles_catalog(
     Ok(ArticlesCatalog {
         project_id: project_id.to_string(),
         generated_at,
+        freshness: build_gsc_freshness(conn, project_id),
         filter: ArticlesFilterEcho {
             status: filter.status,
             min_impressions: filter.min_impressions,
@@ -624,10 +622,13 @@ fn previous_window(period_days: i64) -> (String, String) {
     )
 }
 
-fn gsc_freshness_at(conn: &Connection, project_id: &str) -> Option<String> {
-    let query_max = db::ctr_query_metrics_max_fetched_at(conn, project_id)
-        .ok()
-        .flatten();
+/// Desk GSC tape freshness from `gsc_page_daily` only (issue #164).
+///
+/// Does **not** consult `ctr_query_metrics` — live `gsc-*` tools are the
+/// dual-path for API freshness; desk rollups expose tape usability here.
+fn build_gsc_freshness(conn: &Connection, project_id: &str) -> Freshness {
+    use crate::engine::exec::common::GSC_METRICS_MAX_AGE_DAYS;
+
     let page_max: Option<String> = conn
         .query_row(
             "SELECT MAX(fetched_at) FROM gsc_page_daily WHERE project_id = ?1",
@@ -637,11 +638,49 @@ fn gsc_freshness_at(conn: &Connection, project_id: &str) -> Option<String> {
         .ok()
         .flatten();
 
-    match (query_max, page_max) {
-        (Some(a), Some(b)) => Some(if a >= b { a } else { b }),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
+    let Some(gsc_at) = page_max else {
+        return Freshness {
+            gsc_at: None,
+            age_days: None,
+            stale: true,
+            source: "none".into(),
+            hint: Some(
+                "Desk GSC tape empty — use gsc-performance / gsc-queries or run collect_gsc then re-read desk"
+                    .into(),
+            ),
+            evidence_index_at: None,
+            evidence_coverage: 0.0,
+        };
+    };
+
+    let (age_days, stale) = match chrono::DateTime::parse_from_rfc3339(&gsc_at) {
+        Ok(synced_at) => {
+            let age = Utc::now().signed_duration_since(synced_at);
+            let days = age.num_days();
+            let stale = age > Duration::days(GSC_METRICS_MAX_AGE_DAYS);
+            (Some(days), stale)
+        }
+        // Unparseable timestamp: treat as unusable (stale) without inventing age.
+        Err(_) => (None, true),
+    };
+
+    let hint = if stale {
+        Some(
+            "Desk GSC tape stale — use gsc-performance / gsc-queries or run collect_gsc then re-read desk"
+                .into(),
+        )
+    } else {
+        None
+    };
+
+    Freshness {
+        gsc_at: Some(gsc_at),
+        age_days,
+        stale,
+        source: "gsc_page_daily".into(),
+        hint,
+        evidence_index_at: None,
+        evidence_coverage: 0.0,
     }
 }
 
@@ -685,10 +724,13 @@ fn mover_direction(clicks_delta: f64) -> String {
     }
 }
 
-fn build_hints(has_any_gsc: bool, top_pages: &[TopPage]) -> Vec<String> {
+fn build_hints(has_any_gsc: bool, freshness: &Freshness, top_pages: &[TopPage]) -> Vec<String> {
     let mut hints = Vec::new();
-    if !has_any_gsc {
+    // Always surface missing/stale tape for agents scanning hints only (#164).
+    if freshness.source == "none" || !has_any_gsc {
         hints.push("GSC snapshots missing".into());
+    } else if freshness.stale {
+        hints.push("GSC page-daily tape stale".into());
     }
     if top_pages
         .iter()
