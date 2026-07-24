@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
 #
 # Dev / contributor (from pageseeds-app checkout):
-#   ./scripts/install-cli.sh              # download first, cargo fallback
+#   ./scripts/install-cli.sh              # download first (Darwin/arm64), cargo fallback
 #   FROM_SOURCE=1 ./scripts/install-cli.sh  # force cargo build
 #
 # Installs to ${PREFIX:-$HOME/.local}/bin/pageseeds-cli
@@ -49,12 +49,19 @@ detect_checkout_root() {
   return 1
 }
 
-require_darwin_arm64() {
+is_darwin_arm64() {
+  [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]
+}
+
+has_cargo_fallback() {
+  [[ -n "${CHECKOUT_ROOT}" ]] && command -v cargo >/dev/null 2>&1
+}
+
+die_platform_unsupported() {
   local os arch
   os="$(uname -s)"
   arch="$(uname -m)"
-  if [[ "${os}" != "Darwin" || "${arch}" != "arm64" ]]; then
-    cat >&2 <<EOF
+  cat >&2 <<EOF
 error: prebuilt pageseeds-cli is currently only available for macOS Apple Silicon (Darwin/arm64).
   detected: ${os}/${arch}
   options:
@@ -63,8 +70,7 @@ error: prebuilt pageseeds-cli is currently only available for macOS Apple Silico
       (requires Rust/cargo)
     - other platforms are not yet supported
 EOF
-    exit 1
-  fi
+  exit 1
 }
 
 resolve_version() {
@@ -115,6 +121,7 @@ install_from_download() {
   local version="$1"
   local asset="pageseeds-cli-${version}-${ARCH_TRIPLE}.tar.gz"
   local url="https://github.com/${REPO}/releases/download/cli-v${version}/${asset}"
+  local sha_url="${url}.sha256"
   local tmp
   tmp="$(mktemp -d)"
 
@@ -122,6 +129,19 @@ install_from_download() {
   if ! curl -fsSL -o "${tmp}/${asset}" "${url}"; then
     rm -rf "${tmp}"
     return 1
+  fi
+
+  # Checksum is part of the release contract — fail closed if missing or wrong.
+  info "Downloading checksum ${sha_url} ..."
+  if ! curl -fsSL -o "${tmp}/${asset}.sha256" "${sha_url}"; then
+    rm -rf "${tmp}"
+    die "failed to download checksum ${asset}.sha256 (refusing to install unverified binary)"
+  fi
+
+  info "Verifying checksum ..."
+  if ! (cd "${tmp}" && shasum -a 256 -c "${asset}.sha256"); then
+    rm -rf "${tmp}"
+    die "checksum verification failed for ${asset} (refusing to install)"
   fi
 
   if ! tar -xzf "${tmp}/${asset}" -C "${tmp}"; then
@@ -192,6 +212,19 @@ blocked, clear quarantine once:
 EOF
 }
 
+# Shared success epilogue. Pass "gatekeeper" to print the macOS quarantine note.
+complete_install() {
+  local mode="${1:-}"
+  info "Installed: ${TARGET_BIN}"
+  print_path_warning
+  if [[ "${mode}" == "gatekeeper" ]]; then
+    print_gatekeeper_note
+  fi
+  verify_install
+  info "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."
+  exit 0
+}
+
 # ── main ─────────────────────────────────────────────────────────────────
 
 CHECKOUT_ROOT=""
@@ -205,50 +238,40 @@ fi
 if [[ "${FROM_SOURCE}" == "1" ]]; then
   [[ -n "${CHECKOUT_ROOT}" ]] || die "FROM_SOURCE=1 requires running from a pageseeds-app checkout (with src-tauri/Cargo.toml)"
   install_from_source "${CHECKOUT_ROOT}"
-  info "Installed: ${TARGET_BIN}"
-  print_path_warning
-  verify_install
-  info "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."
-  exit 0
+  complete_install
 fi
 
-# Download-first path (customer default + checkout without FROM_SOURCE)
-require_darwin_arm64
+# Prebuilt download path (Darwin/arm64 only)
+if is_darwin_arm64; then
+  VERSION_RESOLVED=""
+  if VERSION_RESOLVED="$(resolve_version)"; then
+    info "Resolved version: ${VERSION_RESOLVED}"
+    if install_from_download "${VERSION_RESOLVED}"; then
+      complete_install gatekeeper
+    fi
+    # Tarball download/extract failed — cargo fallback when available
+    if has_cargo_fallback; then
+      info "warning: download failed; falling back to cargo build" >&2
+      install_from_source "${CHECKOUT_ROOT}"
+      complete_install
+    fi
+    die "download failed and no cargo fallback available. Retry later, set VERSION=..., or clone pageseeds-app and run FROM_SOURCE=1 ./scripts/install-cli.sh"
+  fi
 
-VERSION_RESOLVED=""
-if ! VERSION_RESOLVED="$(resolve_version)"; then
-  if [[ -n "${CHECKOUT_ROOT}" ]] && command -v cargo >/dev/null 2>&1; then
+  # Could not resolve a cli-v* release
+  if has_cargo_fallback; then
     info "warning: could not resolve a cli-v* GitHub release; falling back to cargo build" >&2
     install_from_source "${CHECKOUT_ROOT}"
-    info "Installed: ${TARGET_BIN}"
-    print_path_warning
-    verify_install
-    info "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."
-    exit 0
+    complete_install
   fi
   die "could not resolve version (set VERSION=... or publish a cli-v* release). From a checkout you can use FROM_SOURCE=1."
 fi
 
-info "Resolved version: ${VERSION_RESOLVED}"
-
-if install_from_download "${VERSION_RESOLVED}"; then
-  info "Installed: ${TARGET_BIN}"
-  print_path_warning
-  print_gatekeeper_note
-  verify_install
-  info "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."
-  exit 0
-fi
-
-# Download failed — cargo fallback only from checkout
-if [[ -n "${CHECKOUT_ROOT}" ]] && command -v cargo >/dev/null 2>&1; then
-  info "warning: download failed; falling back to cargo build" >&2
+# Non-Darwin/arm64 (or Darwin non-arm64): fall through to cargo when checkout exists
+if has_cargo_fallback; then
+  info "No prebuilt binary for $(uname -s)/$(uname -m); building from source..."
   install_from_source "${CHECKOUT_ROOT}"
-  info "Installed: ${TARGET_BIN}"
-  print_path_warning
-  verify_install
-  info "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."
-  exit 0
+  complete_install
 fi
 
-die "download failed and no cargo fallback available. Retry later, set VERSION=..., or clone pageseeds-app and run FROM_SOURCE=1 ./scripts/install-cli.sh"
+die_platform_unsupported
