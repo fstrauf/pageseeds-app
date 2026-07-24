@@ -54,13 +54,15 @@ pub fn build_site_overview(
     let mut top_candidates: Vec<TopPage> = Vec::new();
     let mut movers: Vec<TopMover> = Vec::new();
     let mut has_any_gsc = false;
+    let mut multi_url_slug_count = 0_usize;
 
     for article in &live {
         let slug = normalize_url_slug(&article.url_slug);
-        let page = resolve_page_url(&page_index, &slug);
-        let recent = page
-            .as_ref()
-            .and_then(|p| recent_by_page.get(p).copied());
+        let pages = resolve_page_urls(&page_index, &slug);
+        if pages.len() > 1 {
+            multi_url_slug_count += 1;
+        }
+        let recent = merge_window_metrics(pages.iter().filter_map(|p| recent_by_page.get(p).copied()));
         if let Some(m) = recent {
             has_any_gsc = true;
             total_impressions += m.impressions;
@@ -78,8 +80,8 @@ pub fn build_site_overview(
             });
         }
 
-        if let Some(p) = page.as_ref() {
-            let prev = prev_by_page.get(p).copied();
+        if !pages.is_empty() {
+            let prev = merge_window_metrics(pages.iter().filter_map(|p| prev_by_page.get(p).copied()));
             if let (Some(r), Some(b)) = (recent, prev) {
                 has_any_gsc = true;
                 let clicks_delta = r.clicks - b.clicks;
@@ -132,7 +134,12 @@ pub fn build_site_overview(
 
     let avg_ctr = safe_ctr(total_clicks, total_impressions);
     let freshness = build_gsc_freshness(conn, project_id);
-    let hints = build_hints(has_any_gsc, &freshness, &top_candidates);
+    let hints = build_hints(
+        has_any_gsc,
+        &freshness,
+        &top_candidates,
+        multi_url_slug_count,
+    );
 
     Ok(SiteOverview {
         project_id: project_id.to_string(),
@@ -192,10 +199,10 @@ pub fn list_articles_catalog(
         }
 
         let slug = normalize_url_slug(&article.url_slug);
-        let page = resolve_page_url(&page_index, &slug);
-        let metrics = page
-            .as_ref()
-            .and_then(|p| metrics_by_page.get(p).copied());
+        let pages = resolve_page_urls(&page_index, &slug);
+        let metrics =
+            merge_window_metrics(pages.iter().filter_map(|p| metrics_by_page.get(p).copied()));
+        let url_variants = if metrics.is_some() { pages.len() } else { 0 };
         let top_queries = load_top_queries(conn, project_id, article.id);
         let indexing_status = indexing_by_slug.get(&slug).cloned();
 
@@ -203,6 +210,7 @@ pub fn list_articles_catalog(
             article,
             period_days,
             metrics.as_ref(),
+            url_variants,
             indexing_status,
             top_queries,
             None, // list path: DB fields only — no MDX re-parse
@@ -273,12 +281,14 @@ pub fn get_article_package(
     let indexing_by_slug = indexing_status_map(conn, project_id);
 
     let normalized_slug = normalize_url_slug(&article.url_slug);
-    let page = resolve_page_url(&page_index, &normalized_slug);
-    let metrics = page.as_ref().and_then(|p| {
-        db::gsc_page_daily_window_metrics(conn, project_id, p, &start, &end)
-            .ok()
-            .flatten()
-    });
+    let pages = resolve_page_urls(&page_index, &normalized_slug);
+    // Prefer bulk map when available; fall back to per-page SQL then merge.
+    // Issue #166: sum all URL variants that normalize to the catalog slug.
+    let metrics_by_page =
+        db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)?;
+    let metrics =
+        merge_window_metrics(pages.iter().filter_map(|p| metrics_by_page.get(p).copied()));
+    let url_variants = if metrics.is_some() { pages.len() } else { 0 };
     let top_queries = load_top_queries(conn, project_id, article.id);
     let indexing_status = indexing_by_slug.get(&normalized_slug).cloned();
 
@@ -288,6 +298,7 @@ pub fn get_article_package(
         article,
         period_days,
         metrics.as_ref(),
+        url_variants,
         indexing_status,
         top_queries.clone(),
         Some(&materialized.enrichment),
@@ -332,6 +343,7 @@ fn build_catalog_row(
     article: &Article,
     period_days: i64,
     metrics: Option<&GscDailyWindowMetrics>,
+    url_variants: usize,
     indexing_status: Option<String>,
     top_queries: Vec<QueryMetric>,
     file_enrichment: Option<&FileEnrichment>,
@@ -389,6 +401,7 @@ fn build_catalog_row(
             ctr,
             avg_position: position,
             period_days,
+            url_variants,
         },
         top_queries,
         // Delta vs #117: link counts left at zero — full scan is expensive per row.
@@ -598,11 +611,54 @@ fn build_page_index(conn: &Connection, project_id: &str) -> Result<Vec<(String, 
         .collect())
 }
 
-fn resolve_page_url(page_index: &[(String, String)], slug: &str) -> Option<String> {
+/// All GSC page URLs that match the catalog slug (underscore/hyphen/slash variants).
+/// Empty = no GSC inventory for this slug.
+fn resolve_page_urls(page_index: &[(String, String)], slug: &str) -> Vec<String> {
     page_index
         .iter()
-        .find(|(s, page)| s == slug || page_matches_slug(page, slug))
+        .filter(|(s, page)| s == slug || page_matches_slug(page, slug))
         .map(|(_, page)| page.clone())
+        .collect()
+}
+
+/// Merge window metrics from multiple GSC page keys into one rollup.
+///
+/// Desk must **sum all page keys that normalize to the catalog slug** so first-only
+/// matching does not undercount impressions when GSC stores underscore vs hyphen
+/// or trailing-slash URL variants as separate pages.
+fn merge_window_metrics(
+    iter: impl IntoIterator<Item = GscDailyWindowMetrics>,
+) -> Option<GscDailyWindowMetrics> {
+    let mut clicks = 0.0_f64;
+    let mut impressions = 0.0_f64;
+    let mut position_weight = 0.0_f64;
+    let mut days_with_data = 0_i64;
+    let mut any = false;
+
+    for m in iter {
+        any = true;
+        clicks += m.clicks;
+        impressions += m.impressions;
+        position_weight += m.position * m.impressions;
+        days_with_data = days_with_data.max(m.days_with_data);
+    }
+
+    if !any {
+        return None;
+    }
+
+    let position = if impressions > 0.0 {
+        position_weight / impressions
+    } else {
+        0.0
+    };
+
+    Some(GscDailyWindowMetrics {
+        days_with_data,
+        clicks,
+        impressions,
+        position,
+    })
 }
 
 fn recent_window(period_days: i64) -> (String, String) {
@@ -724,7 +780,12 @@ fn mover_direction(clicks_delta: f64) -> String {
     }
 }
 
-fn build_hints(has_any_gsc: bool, freshness: &Freshness, top_pages: &[TopPage]) -> Vec<String> {
+fn build_hints(
+    has_any_gsc: bool,
+    freshness: &Freshness,
+    top_pages: &[TopPage],
+    multi_url_slug_count: usize,
+) -> Vec<String> {
     let mut hints = Vec::new();
     // Always surface missing/stale tape for agents scanning hints only (#164).
     if freshness.source == "none" || !has_any_gsc {
@@ -737,6 +798,11 @@ fn build_hints(has_any_gsc: bool, freshness: &Freshness, top_pages: &[TopPage]) 
         .any(|p| p.impressions >= 1000.0 && p.ctr < 0.01)
     {
         hints.push("High-impression low-CTR pages present".into());
+    }
+    if multi_url_slug_count > 0 {
+        hints.push(format!(
+            "GSC multi-URL inventory: {multi_url_slug_count} catalog slugs map to >1 page URL"
+        ));
     }
     // Always until #119
     hints.push("Evidence index not available".into());

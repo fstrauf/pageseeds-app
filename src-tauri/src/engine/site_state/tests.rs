@@ -542,6 +542,142 @@ fn gsc_freshness_fresh_tape_not_stale() {
     let _ = fs::remove_dir_all(&project);
 }
 
+/// Issue #166: underscore + hyphen (and trailing-slash) GSC page URLs that
+/// normalize to the same catalog slug must sum impressions/clicks; url_variants
+/// exposes the multi-URL inventory.
+#[test]
+fn gsc_url_variants_summed_into_desk_rollups() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // Catalog slug uses hyphens (normalized form).
+    insert_article(
+        &conn,
+        "proj1",
+        1,
+        "digital-marketing-nz-guide",
+        "Digital Marketing NZ Guide",
+        "content/guide.mdx",
+        "published",
+        500,
+    );
+    // Single-page control article.
+    insert_article(
+        &conn,
+        "proj1",
+        2,
+        "solo-page",
+        "Solo Page",
+        "content/solo.mdx",
+        "published",
+        100,
+    );
+
+    let (d1, d2) = recent_dates();
+    // Two GSC page keys that normalize to digital-marketing-nz-guide:
+    // underscore path + hyphen path with trailing slash.
+    let rows = vec![
+        daily_row(
+            "https://example.com/blog/digital_marketing_nz_guide",
+            &d1,
+            4.0,
+            100.0,
+        ),
+        daily_row(
+            "https://example.com/blog/digital_marketing_nz_guide",
+            &d2,
+            6.0,
+            150.0,
+        ),
+        daily_row(
+            "https://example.com/blog/digital-marketing-nz-guide/",
+            &d1,
+            3.0,
+            50.0,
+        ),
+        daily_row(
+            "https://example.com/blog/digital-marketing-nz-guide/",
+            &d2,
+            2.0,
+            50.0,
+        ),
+        // Single-page control: one URL only.
+        daily_row("https://example.com/blog/solo-page", &d1, 1.0, 20.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    // Expected sums for multi-variant slug:
+    // clicks: 4+6+3+2 = 15, impressions: 100+150+50+50 = 350
+    let catalog = list_articles_catalog(
+        &conn,
+        "proj1",
+        &project_path,
+        ArticlesFilter::default(),
+    )
+    .unwrap();
+
+    let multi = catalog
+        .articles
+        .iter()
+        .find(|a| a.slug == "digital-marketing-nz-guide")
+        .expect("multi-variant article in catalog");
+    assert_eq!(multi.gsc.clicks, 15.0);
+    assert_eq!(multi.gsc.impressions, 350.0);
+    assert_eq!(multi.gsc.url_variants, 2);
+
+    let solo = catalog
+        .articles
+        .iter()
+        .find(|a| a.slug == "solo-page")
+        .expect("solo article in catalog");
+    assert_eq!(solo.gsc.clicks, 1.0);
+    assert_eq!(solo.gsc.impressions, 20.0);
+    assert_eq!(solo.gsc.url_variants, 1);
+
+    // Package path also merges + reports url_variants.
+    let pkg = get_article_package(
+        &conn,
+        "proj1",
+        &project_path,
+        "digital-marketing-nz-guide",
+        Some(28),
+    )
+    .unwrap();
+    assert_eq!(pkg.catalog.gsc.clicks, 15.0);
+    assert_eq!(pkg.catalog.gsc.impressions, 350.0);
+    assert_eq!(pkg.catalog.gsc.url_variants, 2);
+
+    let pkg_solo =
+        get_article_package(&conn, "proj1", &project_path, "solo-page", Some(28)).unwrap();
+    assert_eq!(pkg_solo.catalog.gsc.url_variants, 1);
+    assert_eq!(pkg_solo.catalog.gsc.impressions, 20.0);
+
+    // Site overview totals include the summed multi-variant metrics.
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    // multi 350 + solo 20 = 370 impressions; multi 15 + solo 1 = 16 clicks
+    assert_eq!(overview.totals.impressions, 370.0);
+    assert_eq!(overview.totals.clicks, 16.0);
+    let top = overview
+        .top_pages
+        .iter()
+        .find(|p| p.slug == "digital-marketing-nz-guide")
+        .expect("multi-variant in top pages");
+    assert_eq!(top.impressions, 350.0);
+    assert_eq!(top.clicks, 15.0);
+    assert!(
+        overview
+            .hints
+            .iter()
+            .any(|h| h.contains("GSC multi-URL inventory")),
+        "overview should hint multi-URL inventory: {:?}",
+        overview.hints
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
 #[test]
 fn min_impressions_filter() {
     let conn = in_memory_db();

@@ -160,6 +160,9 @@ pub struct GscRollup {
     pub ctr: f64,
     pub avg_position: f64,
     pub period_days: i64,
+    /// Count of distinct GSC page URLs that normalize to this catalog slug
+    /// (underscore/hyphen/trailing-slash variants). 0 when no metrics / no pages.
+    pub url_variants: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
