@@ -12,13 +12,10 @@
 /// Dev (from pageseeds-app checkout): ./scripts/install-cli.sh  or  FROM_SOURCE=1 ./scripts/install-cli.sh
 /// Dev only: cargo run --bin pageseeds-cli -- <tool> ...
 
-use pageseeds_lib::config::cli_config::{
-    self, GlobalCliConfig, LocalCliConfig, MISSING_PROJECT_CONTEXT_HINT,
-};
-use pageseeds_lib::engine::project_create::{create_or_link_project, CreateProjectParams};
+use pageseeds_lib::config::cli_config::{self, expand_tilde, MISSING_PROJECT_CONTEXT_HINT};
+use pageseeds_lib::engine::cli_setup;
 use pageseeds_lib::engine::tools::{InvestigationContext, investigate};
 use pageseeds_lib::models::cannibalization::ApprovalStatus;
-use pageseeds_lib::models::project::ProjectMode;
 use pageseeds_lib::models::task::{Priority, TaskRunPolicy, TaskStatus};
 
 fn main() {
@@ -1317,11 +1314,6 @@ fn has_flag(args: &[String], long: &str, short: &str) -> bool {
     })
 }
 
-fn expand_tilde(path: &str) -> String {
-    if path.starts_with('~') { std::env::var("HOME").map(|h| path.replacen('~', &h, 1)).unwrap_or_else(|_| path.into()) }
-    else { path.into() }
-}
-
 /// Hard-error path: `ERROR: …` on stderr, empty stdout, exit 1.
 /// License deny must use this same shape with a buy URL in the message.
 fn exit(msg: &str) -> ! {
@@ -1336,55 +1328,36 @@ fn run_list_projects() {
         Ok(c) => c,
         Err(e) => exit(&format!("failed to open project database: {e}")),
     };
-    let projects = match pageseeds_lib::engine::task_store::list_projects(&conn) {
-        Ok(p) => p,
+    match cli_setup::list_projects(&conn) {
+        Ok(outcome) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&outcome).unwrap_or_default()
+            );
+        }
         Err(e) => exit(&format!("failed to list projects: {e}")),
-    };
-    let payload = serde_json::json!({
-        "count": projects.len(),
-        "projects": projects,
-    });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&payload).unwrap_or_default()
-    );
+    }
 }
 
 /// Free meta: create/link a workspace project via the shared helper.
 fn run_create_project(args: &[String]) {
-    let path_raw = flag(args, "--path", "")
-        .or_else(|| flag(args, "--project-path", "-p"))
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".into())
-        });
-    let path = expand_tilde(&path_raw);
-    let name = flag(args, "--name", "-n").unwrap_or_else(|| {
-        std::path::Path::new(&path)
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "project".into())
-    });
+    let path = flag(args, "--path", "").or_else(|| flag(args, "--project-path", "-p"));
+    let name = flag(args, "--name", "-n");
     let site_url = flag(args, "--site-url", "");
+    let cwd = std::env::current_dir().ok();
 
     let db = pageseeds_lib::db::default_db_path();
     let conn = match open_db(&db.to_string_lossy()) {
         Ok(c) => c,
         Err(e) => exit(&format!("failed to open project database: {e}")),
     };
-    match create_or_link_project(
+    match cli_setup::create_project(
         &conn,
-        CreateProjectParams {
+        cli_setup::CreateProjectOpts {
+            path,
             name,
-            path: Some(path),
-            content_dir: None,
             site_url,
-            site_id: None,
-            sitemap_url: None,
-            project_mode: ProjectMode::Workspace,
-            clarity_project_id: None,
+            cwd,
         },
     ) {
         Ok(outcome) => {
@@ -1408,22 +1381,8 @@ fn run_setup(args: &[String]) {
     let skip_first_win = has_flag(args, "--skip-first-win", "");
     let _yes = has_flag(args, "--yes", "-y"); // reserved for future interactive prompts
 
-    let path_raw = flag(args, "--path", "")
-        .or_else(|| flag(args, "--project-path", "-p"))
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".into())
-        });
-    let path = expand_tilde(&path_raw);
-    let abs_path = cli_config::normalize_path_string(&path);
-    let name = flag(args, "--name", "-n").unwrap_or_else(|| {
-        std::path::Path::new(&abs_path)
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "project".into())
-    });
+    let path = flag(args, "--path", "").or_else(|| flag(args, "--project-path", "-p"));
+    let name = flag(args, "--name", "-n");
     let site_url = flag(args, "--site-url", "");
     let license_key = flag(args, "--license", "").or_else(|| {
         std::env::var("PAGESEEDS_LICENSE")
@@ -1431,152 +1390,40 @@ fn run_setup(args: &[String]) {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     });
+    let cwd = std::env::current_dir().ok();
 
     if status_only {
-        run_setup_status(&abs_path, json_mode);
+        run_setup_status(path, json_mode, cwd);
         return;
     }
 
-    // 1. Optional license activate
-    let mut license_activated = false;
-    let mut license_error: Option<String> = None;
-    if let Some(key) = license_key.as_deref() {
-        match pageseeds_lib::license::activate(key) {
-            Ok(()) => license_activated = true,
-            Err(e) => {
-                // Free path still completes; report the failure.
-                license_error = Some(e);
-            }
-        }
-    }
-    let license_status = pageseeds_lib::license::status();
-
-    // 2–3. Link or create workspace project
     let db = pageseeds_lib::db::default_db_path();
     let conn = match open_db(&db.to_string_lossy()) {
         Ok(c) => c,
         Err(e) => exit(&format!("failed to open project database: {e}")),
     };
-    let outcome = match create_or_link_project(
+    let outcome = match cli_setup::setup(
         &conn,
-        CreateProjectParams {
-            name: name.clone(),
-            path: Some(abs_path.clone()),
-            content_dir: None,
-            site_url: site_url.clone(),
-            site_id: None,
-            sitemap_url: None,
-            project_mode: ProjectMode::Workspace,
-            clarity_project_id: None,
+        cli_setup::SetupOpts {
+            path,
+            name,
+            site_url,
+            license_key,
+            skip_first_win,
+            cwd,
         },
     ) {
         Ok(o) => o,
         Err(e) => exit(&e.to_string()),
     };
 
-    // 4. Write global + local config defaults
-    if let Err(e) = cli_config::save_global(&GlobalCliConfig {
-        default_project_id: Some(outcome.project.id.clone()),
-        default_project_path: Some(outcome.project.path.clone()),
-    }) {
-        exit(&format!("failed to write global CLI config: {e}"));
-    }
-    let local_cwd = std::path::Path::new(&abs_path);
-    if let Err(e) = cli_config::save_local(
-        local_cwd,
-        &LocalCliConfig {
-            project_id: Some(outcome.project.id.clone()),
-        },
-    ) {
-        exit(&format!("failed to write .pageseeds.yaml: {e}"));
-    }
-
-    // 5. First-win desk read (free site-overview)
-    let mut first_win: Option<serde_json::Value> = None;
-    let mut first_win_error: Option<String> = None;
-    if !skip_first_win {
-        match pageseeds_lib::engine::site_state::build_site_overview(
-            &conn,
-            &outcome.project.id,
-            &outcome.project.path,
-            None,
-        ) {
-            Ok(r) => first_win = Some(serde_json::to_value(r).unwrap_or_default()),
-            Err(e) => first_win_error = Some(e.to_string()),
+    let payload = serde_json::to_value(&outcome).unwrap_or_default();
+    if !json_mode {
+        for line in outcome.human_progress_lines() {
+            eprintln!("{line}");
         }
     }
-
-    let payload = serde_json::json!({
-        "ok": true,
-        "created": outcome.created,
-        "project": {
-            "id": outcome.project.id,
-            "name": outcome.project.name,
-            "path": outcome.project.path,
-            "site_url": outcome.project.site_url,
-        },
-        "config": {
-            "global_written": true,
-            "local_written": true,
-            "local_path": format!("{}/.pageseeds.yaml", abs_path.trim_end_matches('/')),
-        },
-        "license": {
-            "activated": license_activated,
-            "error": license_error,
-            "status": license_status,
-        },
-        "first_win": first_win,
-        "first_win_error": first_win_error,
-        "next": [
-            "pageseeds-cli site-overview",
-            "pageseeds-cli articles -m 100 -l 20",
-        ],
-    });
-
-    if json_mode {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&payload).unwrap_or_default()
-        );
-        return;
-    }
-
-    // Human progress
-    eprintln!(
-        "Project {} ({})",
-        outcome.project.id,
-        if outcome.created {
-            "created"
-        } else {
-            "linked"
-        }
-    );
-    eprintln!("  path: {}", outcome.project.path);
-    eprintln!("  wrote global defaults + .pageseeds.yaml");
-    if license_activated {
-        eprintln!("  license: activated");
-    } else if let Some(err) = &license_error {
-        eprintln!("  license: activate failed ({err}) — free desk still works");
-    } else {
-        match &license_status {
-            pageseeds_lib::license::LicenseStatus::Valid { .. } => {
-                eprintln!("  license: valid");
-            }
-            pageseeds_lib::license::LicenseStatus::Missing => {
-                eprintln!("  license: none (optional for free desk tools)");
-            }
-            other => eprintln!("  license: {other:?}"),
-        }
-    }
-    if skip_first_win {
-        eprintln!("  first-win: skipped");
-    } else if first_win.is_some() {
-        eprintln!("  first-win: site-overview ok");
-    } else if let Some(err) = &first_win_error {
-        eprintln!("  first-win: site-overview failed ({err})");
-    }
-    eprintln!("Next: pageseeds-cli site-overview");
-    // Machine-readable summary also on stdout for agents that pipe setup.
+    // Machine-readable summary on stdout (agents pipe setup; --json skips human stderr only).
     println!(
         "{}",
         serde_json::to_string_pretty(&payload).unwrap_or_default()
@@ -1584,75 +1431,20 @@ fn run_setup(args: &[String]) {
 }
 
 /// Report-only readiness check (no mutations). Exit 1 when not desk-ready.
-fn run_setup_status(abs_path: &str, json_mode: bool) {
-    let binary_ok = true; // we're running
-    let config_global = cli_config::load_global().unwrap_or_default();
-    let has_global = config_global.default_project_id.is_some()
-        && config_global.default_project_path.is_some();
-    let local = cli_config::load_local(std::path::Path::new(abs_path)).ok().flatten();
-    let has_local = local
-        .as_ref()
-        .and_then(|l| l.project_id.as_ref())
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-
+fn run_setup_status(path: Option<String>, json_mode: bool, cwd: Option<std::path::PathBuf>) {
     let db = pageseeds_lib::db::default_db_path();
     let conn = open_db(&db.to_string_lossy()).ok();
-    let project_registered = conn
-        .as_ref()
-        .and_then(|c| {
-            pageseeds_lib::engine::task_store::find_project_by_path(c, abs_path)
-                .ok()
-                .flatten()
-        })
-        .or_else(|| {
-            let id = config_global
-                .default_project_id
-                .as_deref()
-                .or_else(|| local.as_ref().and_then(|l| l.project_id.as_deref()))?;
-            conn.as_ref()
-                .and_then(|c| pageseeds_lib::engine::task_store::get_project(c, id).ok())
-        });
-
-    let license_status = pageseeds_lib::license::status();
-    let gsc_env = std::env::var("GSC_SERVICE_ACCOUNT_PATH")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            std::env::var("GSC_REPORT_OAUTH_CLIENT_SECRETS")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        })
-        .is_some();
-
-    let desk_ready = has_global || has_local || project_registered.is_some();
-    let payload = serde_json::json!({
-        "desk_ready": desk_ready,
-        "binary": binary_ok,
-        "config": {
-            "global": has_global,
-            "local": has_local,
-            "default_project_id": config_global.default_project_id,
-            "default_project_path": config_global.default_project_path,
-        },
-        "project": project_registered.as_ref().map(|p| serde_json::json!({
-            "id": p.id,
-            "name": p.name,
-            "path": p.path,
-        })),
-        "license": license_status,
-        "gsc_env_present": gsc_env,
-        "path": abs_path,
-        "hint": if desk_ready {
-            None
-        } else {
-            Some("Run `pageseeds-cli setup --path . --yes` to register this project.")
-        },
-    });
+    let outcome = match cli_setup::setup_status(
+        conn.as_ref(),
+        cli_setup::SetupStatusOpts { path, cwd },
+    ) {
+        Ok(o) => o,
+        Err(e) => exit(&e.to_string()),
+    };
 
     // Always print JSON for --status so agents can parse; human notes on stderr.
     if !json_mode {
-        if desk_ready {
+        if outcome.desk_ready {
             eprintln!("setup status: desk-ready");
         } else {
             eprintln!("setup status: not desk-ready — run pageseeds-cli setup --path . --yes");
@@ -1660,9 +1452,9 @@ fn run_setup_status(abs_path: &str, json_mode: bool) {
     }
     println!(
         "{}",
-        serde_json::to_string_pretty(&payload).unwrap_or_default()
+        serde_json::to_string_pretty(&outcome).unwrap_or_default()
     );
-    if !desk_ready {
+    if !outcome.desk_ready {
         std::process::exit(1);
     }
 }

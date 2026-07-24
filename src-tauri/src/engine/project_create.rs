@@ -60,22 +60,6 @@ fn managed_project_root(project_id: &str) -> Result<PathBuf> {
     Ok(root)
 }
 
-fn paths_match(a: &str, b: &str) -> bool {
-    let na = crate::config::cli_config::normalize_path_string(a);
-    let nb = crate::config::cli_config::normalize_path_string(b);
-    if na == nb {
-        return true;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return na.eq_ignore_ascii_case(&nb);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
-}
-
 /// Create a new project or link to an existing one by path (idempotent).
 pub fn create_or_link_project(
     conn: &Connection,
@@ -90,16 +74,20 @@ pub fn create_or_link_project(
 
     let name_for_init = params.name.clone();
     let project_mode = params.project_mode;
+    // Normalize Workspace paths once so stored rows and path-match identity are
+    // absolute/stable regardless of caller (setup, create-project, Tauri).
     let resolved_path = match project_mode {
-        ProjectMode::Workspace => params
-            .path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                Error::Other("Workspace projects require a repository path".to_string())
-            })?
-            .to_string(),
+        ProjectMode::Workspace => {
+            let raw = params
+                .path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    Error::Other("Workspace projects require a repository path".to_string())
+                })?;
+            crate::config::cli_config::normalize_path_string(raw)
+        }
         ProjectMode::LiveSite => {
             let site_url = params
                 .site_url
@@ -122,16 +110,29 @@ pub fn create_or_link_project(
 
     // Prefer path match first — re-setup / re-create on same path reuses the row.
     if let Some(existing) = task_store::find_project_by_path(conn, &resolved_path)? {
+        let mut project = existing;
+        // Cheap re-setup improvement: apply --site-url when provided on a link.
+        if let Some(url) = params
+            .site_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            if project.site_url.as_deref() != Some(url) {
+                project.site_url = Some(url.to_string());
+                project = task_store::update_project(conn, &project)?;
+            }
+        }
         // Refresh scheduler defaults (idempotent) and workspace files for workspace mode.
-        if let Err(e) = crate::engine::scheduler::seed_default_rules(conn, &existing.id) {
+        if let Err(e) = crate::engine::scheduler::seed_default_rules(conn, &project.id) {
             log::warn!("[create_project] Failed to seed scheduler rules: {}", e);
         }
-        if existing.project_mode == ProjectMode::Workspace {
-            let repo_root = Path::new(&existing.path);
+        if project.project_mode == ProjectMode::Workspace {
+            let repo_root = Path::new(&project.path);
             if let Err(e) = crate::engine::setup_check::initialize_project_workspace(
                 repo_root,
-                existing.site_url.as_deref().or(params.site_url.as_deref()),
-                Some(&existing.name),
+                project.site_url.as_deref(),
+                Some(&project.name),
             ) {
                 log::warn!(
                     "[create_project] Failed to auto-initialize workspace: {}",
@@ -140,14 +141,14 @@ pub fn create_or_link_project(
             }
         }
         return Ok(CreateProjectOutcome {
-            project: existing,
+            project,
             created: false,
         });
     }
 
     // Id collision with a different path must refuse (no silent relink).
     if let Ok(existing) = task_store::get_project(conn, &id) {
-        if !paths_match(&existing.path, &resolved_path) {
+        if !crate::config::cli_config::paths_equal(&existing.path, &resolved_path) {
             return Err(Error::Other(format!(
                 "Project id '{id}' is already registered at a different path ({}). \
 Choose a different --name or remove the existing project first.",
@@ -359,6 +360,55 @@ mod tests {
             .unwrap()
             .expect("should find by path");
         assert_eq!(found.id, "site");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_path_normalized_on_store() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, conn) = temp_db();
+        let repo = dir.join("normed");
+        std::fs::create_dir_all(&repo).unwrap();
+        let abs = repo.canonicalize().unwrap().to_string_lossy().to_string();
+        // Pass with trailing spaces / uncanonical form — stored row must be normalized.
+        let outcome = create_or_link_project(
+            &conn,
+            CreateProjectParams {
+                name: "Normed".into(),
+                path: Some(format!("  {abs}  ")),
+                content_dir: None,
+                site_url: None,
+                site_id: None,
+                sitemap_url: None,
+                project_mode: ProjectMode::Workspace,
+                clarity_project_id: None,
+            },
+        )
+        .unwrap();
+        assert!(outcome.created);
+        assert_eq!(outcome.project.path, abs);
+
+        // Relative-looking re-link via the absolute path still hits the same row.
+        let again = create_or_link_project(
+            &conn,
+            CreateProjectParams {
+                name: "Normed".into(),
+                path: Some(abs.clone()),
+                content_dir: None,
+                site_url: Some("sc-domain:example.com".into()),
+                site_id: None,
+                sitemap_url: None,
+                project_mode: ProjectMode::Workspace,
+                clarity_project_id: None,
+            },
+        )
+        .unwrap();
+        assert!(!again.created);
+        assert_eq!(
+            again.project.site_url.as_deref(),
+            Some("sc-domain:example.com"),
+            "re-setup with --site-url should update the linked row"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

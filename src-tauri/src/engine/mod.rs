@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod batch;
+pub mod cli_setup;
 pub mod content_brief;
 pub mod content_fix;
 pub mod content_review_selection;

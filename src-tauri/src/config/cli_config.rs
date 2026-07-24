@@ -148,6 +148,10 @@ fn env_nonempty(key: &str) -> Option<String> {
 }
 
 /// Expand a leading `~` to `$HOME` (best-effort).
+///
+/// Canonical path API (issue #177 / review): use this + [`normalize_path_string`]
+/// + [`paths_equal`] everywhere path identity matters. Do not reimplement tilde
+/// expansion or path matching in the bin, task_store, or project_create.
 pub fn expand_tilde(path: &str) -> String {
     if path.starts_with('~') {
         std::env::var("HOME")
@@ -159,8 +163,15 @@ pub fn expand_tilde(path: &str) -> String {
 }
 
 /// Best-effort absolute path for comparison / storage.
+///
+/// Trims whitespace, expands `~`, canonicalizes when the path exists on disk,
+/// otherwise makes absolute via cwd when relative. Empty/whitespace → empty string.
 pub fn normalize_path_string(path: &str) -> String {
-    let expanded = expand_tilde(path);
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let expanded = expand_tilde(trimmed);
     let p = PathBuf::from(&expanded);
     if let Ok(c) = p.canonicalize() {
         return c.to_string_lossy().to_string();
@@ -171,6 +182,25 @@ pub fn normalize_path_string(path: &str) -> String {
     std::env::current_dir()
         .map(|cwd| cwd.join(&p).to_string_lossy().to_string())
         .unwrap_or(expanded)
+}
+
+/// Path identity after [`normalize_path_string`].
+///
+/// On macOS, comparison is ASCII case-insensitive (HFS+/APFS default).
+pub fn paths_equal(a: &str, b: &str) -> bool {
+    let na = normalize_path_string(a);
+    let nb = normalize_path_string(b);
+    if na == nb {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        na.eq_ignore_ascii_case(&nb)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 /// Resolve project id + path using the full chain.
@@ -506,6 +536,39 @@ mod tests {
         save_global(&original).unwrap();
         let loaded = load_global().unwrap();
         assert_eq!(loaded, original);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn normalize_path_string_absolute_and_tilde() {
+        let _env = EnvGuard::acquire(&["HOME"]);
+        let tmp = unique_temp_dir("ps_cli_path_norm");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let abs = repo.canonicalize().unwrap().to_string_lossy().to_string();
+
+        assert_eq!(normalize_path_string(&abs), abs);
+        assert_eq!(normalize_path_string(&format!("  {abs}  ")), abs);
+        assert_eq!(normalize_path_string(""), "");
+        assert_eq!(normalize_path_string("   "), "");
+
+        // Relative path becomes absolute (best-effort via cwd).
+        let rel = normalize_path_string(".");
+        assert!(PathBuf::from(&rel).is_absolute(), "got {rel}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn paths_equal_normalizes_both_sides() {
+        let tmp = unique_temp_dir("ps_cli_paths_eq");
+        let repo = tmp.join("site");
+        std::fs::create_dir_all(&repo).unwrap();
+        let abs = repo.canonicalize().unwrap().to_string_lossy().to_string();
+        // Same path with trailing spaces / as-given absolute should match.
+        assert!(paths_equal(&abs, &format!(" {abs} ")));
+        assert!(paths_equal(&abs, &abs));
+        assert!(!paths_equal(&abs, &tmp.join("other").to_string_lossy()));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

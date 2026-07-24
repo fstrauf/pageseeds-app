@@ -110,55 +110,15 @@ pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
 
 /// Find a registered project whose `path` matches `path` after best-effort
 /// canonicalization. Used by CLI setup/link and config resolution.
+///
+/// Path identity uses the canonical helpers in [`crate::config::cli_config`]
+/// (`normalize_path_string` / `paths_equal`) — do not reimplement here.
 pub fn find_project_by_path(conn: &Connection, path: &str) -> Result<Option<Project>> {
-    let target = normalize_path_for_match(path);
     let projects = list_projects(conn)?;
     for project in projects {
-        let candidate = normalize_path_for_match(&project.path);
-        if paths_equal(&target, &candidate) {
+        if crate::config::cli_config::paths_equal(path, &project.path) {
             return Ok(Some(project));
         }
     }
     Ok(None)
-}
-
-fn normalize_path_for_match(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let expanded = if trimmed.starts_with('~') {
-        std::env::var("HOME")
-            .map(|h| trimmed.replacen('~', &h, 1))
-            .unwrap_or_else(|_| trimmed.to_string())
-    } else {
-        trimmed.to_string()
-    };
-    let p = std::path::Path::new(&expanded);
-    if let Ok(c) = p.canonicalize() {
-        return c.to_string_lossy().to_string();
-    }
-    // Fall back to absolute-or-as-given string for non-existent paths.
-    if p.is_absolute() {
-        expanded
-    } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(p).to_string_lossy().to_string())
-            .unwrap_or(expanded)
-    }
-}
-
-fn paths_equal(a: &str, b: &str) -> bool {
-    if a == b {
-        return true;
-    }
-    // Case-insensitive compare on macOS-like paths when both look absolute.
-    #[cfg(target_os = "macos")]
-    {
-        return a.eq_ignore_ascii_case(b);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
 }
