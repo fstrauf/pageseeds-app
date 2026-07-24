@@ -5,6 +5,13 @@ use crate::models::task::Task;
 use super::*;
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+/// Shared fail message when `indexing_link_target` is missing or unparsable.
+/// Keep all step failures DRY — do not invent execute-time slug discovery.
+pub(crate) const MISSING_INDEXING_LINK_TARGET_MSG: &str =
+    "Missing or invalid `indexing_link_target` artifact (key: indexing_link_target). \
+     Create via a completed indexing_health_campaign / gsc_indexing_recovery child, \
+     or operator path: create-task -t fix_indexing_internal_links -S <url-slug>";
+
 pub(crate) fn parse_target_artifact(task: &Task) -> Option<serde_json::Value> {
     task.artifacts
         .iter()

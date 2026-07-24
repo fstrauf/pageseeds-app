@@ -14,7 +14,7 @@ pub(crate) fn exec_indexing_link_context(task: &Task, project_path: &str) -> Ste
     let target_data = match parse_target_artifact(task) {
         Some(t) => t,
         None => {
-            return StepResult::fail("Missing or invalid indexing_link_target artifact".to_string())
+            return StepResult::fail(MISSING_INDEXING_LINK_TARGET_MSG.to_string())
         }
     };
 

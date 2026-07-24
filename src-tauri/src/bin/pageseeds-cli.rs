@@ -1072,6 +1072,38 @@ fn create_task(
         }));
     }
 
+    // fix_indexing_internal_links always attaches indexing_link_target (IHC child
+    // shape). Bare TaskSpawner creates omit the artifact and fail at context.
+    if tt == "fix_indexing_internal_links" {
+        let slug_val = slug.ok_or_else(|| {
+            "--slug required for fix_indexing_internal_links (url slug of the article to add inbound links for)".to_string()
+        })?;
+        let task = pageseeds_lib::engine::indexing_link_fix::spawn_fix_indexing_internal_links_for_slug(
+            &conn,
+            project_id,
+            project_path,
+            &slug_val,
+            pageseeds_lib::engine::indexing_link_fix::SpawnFixIndexingLinksForSlugOpts {
+                title: if title.is_empty() { None } else { Some(title) },
+                priority: priority_enum,
+                auto_enqueue,
+                source: "pageseeds-cli".to_string(),
+                reason: if reason.is_empty() {
+                    None
+                } else {
+                    Some(reason)
+                },
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(serde_json::json!({
+            "task_id": task.id,
+            "task_type": tt,
+            "title": task.title,
+            "status": task.status,
+        }));
+    }
+
     let task = pageseeds_lib::engine::spawner::TaskSpawner::spawn(&conn, pageseeds_lib::engine::spawner::TaskSpec {
         project_id: project_id.to_string(), task_type: tt.clone(),
         title: Some(title.clone()), description: Some(reason),
@@ -1246,6 +1278,7 @@ Task / queue orchestration:
   create-task             -i <id> -p <path> -t type [-T title] [-r reason] [-a] [-P high|medium|low]
                           fix_content_article also requires -S/--slug <url-slug> (builds recommendations artifact)
                           fix_ctr_article also requires -S/--slug <url-slug> (builds ctr_context from GSC + file)
+                          fix_indexing_internal_links also requires -S/--slug <url-slug> (builds indexing_link_target artifact)
   execute-task            -I <task-id>
   get-task                -I <task-id>                          Full task JSON incl. artifacts
   update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks

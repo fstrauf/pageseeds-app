@@ -189,9 +189,10 @@ pub struct CreateTaskArgs {
     pub title: String,
     /// Why this task is needed
     pub reason: String,
-    /// Required when task_type is `fix_content_article`: article url_slug to fix.
-    /// The shared spawn helper resolves the article and attaches a full
-    /// `recommendations_{article_id}` artifact (SERP categories).
+    /// Required when task_type is `fix_content_article` or
+    /// `fix_indexing_internal_links`: article url_slug to fix.
+    /// Shared spawn helpers resolve the article and attach the required
+    /// artifact (`recommendations_{article_id}` or `indexing_link_target`).
     #[serde(default)]
     pub slug: Option<String>,
 }
@@ -223,6 +224,8 @@ impl Tool for CreateTaskTool {
                 For fix_content_article you MUST pass slug (article url_slug); \
                 the system attaches a full recommendations artifact with SERP \
                 categories — bare creates without slug are rejected. \
+                For fix_indexing_internal_links you MUST pass slug; the system \
+                attaches an indexing_link_target artifact — bare creates fail at execute. \
                 DO NOT call this without first explaining what the task will do and why. \
                 After creating a task, call enqueue_task if you want it to run automatically.",
                 valid_list
@@ -235,7 +238,7 @@ impl Tool for CreateTaskTool {
                     "reason": { "type": "string", "description": "Why this task is needed — appears in the task description" },
                     "slug": {
                         "type": "string",
-                        "description": "Article url_slug. Required for fix_content_article (builds recommendations artifact)."
+                        "description": "Article url_slug. Required for fix_content_article (recommendations artifact) and fix_indexing_internal_links (indexing_link_target artifact)."
                     }
                 },
                 "required": ["task_type", "title", "reason"]
@@ -271,6 +274,42 @@ impl Tool for CreateTaskTool {
                     priority: crate::models::task::Priority::Medium,
                     auto_enqueue: false,
                     source: "create_task_tool".to_string(),
+                },
+            )
+            .map_err(|e| InvestigationToolError::Execution(format!("Failed to create task: {e}")))?;
+
+            return Ok(CreateTaskOutput {
+                task_id: task.id,
+                task_type: args.task_type,
+                title: task.title.unwrap_or(args.title),
+                status: "created".to_string(),
+            });
+        }
+
+        if args.task_type == "fix_indexing_internal_links" {
+            let slug = args.slug.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or_else(|| InvestigationToolError::Execution(
+                    "fix_indexing_internal_links requires slug — article url_slug to add inbound links for".to_string(),
+                ))?;
+            let task = crate::engine::indexing_link_fix::spawn_fix_indexing_internal_links_for_slug(
+                &db,
+                &self.ctx.project_id,
+                &self.ctx.project_path,
+                slug,
+                crate::engine::indexing_link_fix::SpawnFixIndexingLinksForSlugOpts {
+                    title: if args.title.trim().is_empty() {
+                        None
+                    } else {
+                        Some(args.title.clone())
+                    },
+                    priority: crate::models::task::Priority::Medium,
+                    auto_enqueue: false,
+                    source: "create_task_tool".to_string(),
+                    reason: if args.reason.trim().is_empty() {
+                        None
+                    } else {
+                        Some(args.reason.clone())
+                    },
                 },
             )
             .map_err(|e| InvestigationToolError::Execution(format!("Failed to create task: {e}")))?;
