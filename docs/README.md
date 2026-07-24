@@ -20,6 +20,8 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 |-----------------------|-----------|
 | What the app does (business perspective) | [Business Processes](./BUSINESS_PROCESSES.md) |
 | What the app does (technical overview) | [README.md](../README.md) |
+| CLI install + first desk read (commercial operators) | [CLI Getting Started](./CLI_GETTING_STARTED.md) |
+| Free vs paid CLI matrix | [issue #155](https://github.com/fstrauf/pageseeds-app/issues/155) (`docs/CLI_COMMERCIAL.md` when published) |
 | How tasks are executed | [Workflow Engine](./WORKFLOW_ENGINE.md) |
 | Where data lives | [Data Persistence](./DATA_PERSISTENCE.md) |
 | How AI agents work | [Agent Integration](./AGENT_INTEGRATION.md) |
@@ -37,6 +39,7 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 ```
 docs/
 ├── README.md                       # This file
+├── CLI_GETTING_STARTED.md          # Commercial CLI: install, desk, weekly path
 ├── BUSINESS_PROCESSES.md           # What the app does — 14 business workflows
 │   ├── Keyword Research
 │   ├── Content Creation
