@@ -14,7 +14,6 @@ use crate::content::ops::count_words;
 use crate::content::redirects::load_redirect_source_slugs;
 use crate::content::slug::normalize_url_slug;
 use crate::db::{self, GscDailyWindowMetrics};
-use crate::engine::exec::outcome_review::page_matches_slug;
 use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::article::Article;
@@ -58,11 +57,11 @@ pub fn build_site_overview(
 
     for article in &live {
         let slug = normalize_url_slug(&article.url_slug);
-        let pages = resolve_page_urls(&page_index, &slug);
+        let pages = pages_for_slug(&page_index, &slug);
         if pages.len() > 1 {
             multi_url_slug_count += 1;
         }
-        let recent = merge_window_metrics(pages.iter().filter_map(|p| recent_by_page.get(p).copied()));
+        let (recent, _) = rollup_for_slug(&page_index, &recent_by_page, &slug);
         if let Some(m) = recent {
             has_any_gsc = true;
             total_impressions += m.impressions;
@@ -81,7 +80,7 @@ pub fn build_site_overview(
         }
 
         if !pages.is_empty() {
-            let prev = merge_window_metrics(pages.iter().filter_map(|p| prev_by_page.get(p).copied()));
+            let (prev, _) = rollup_for_slug(&page_index, &prev_by_page, &slug);
             if let (Some(r), Some(b)) = (recent, prev) {
                 has_any_gsc = true;
                 let clicks_delta = r.clicks - b.clicks;
@@ -199,10 +198,7 @@ pub fn list_articles_catalog(
         }
 
         let slug = normalize_url_slug(&article.url_slug);
-        let pages = resolve_page_urls(&page_index, &slug);
-        let metrics =
-            merge_window_metrics(pages.iter().filter_map(|p| metrics_by_page.get(p).copied()));
-        let url_variants = if metrics.is_some() { pages.len() } else { 0 };
+        let (metrics, url_variants) = rollup_for_slug(&page_index, &metrics_by_page, &slug);
         let top_queries = load_top_queries(conn, project_id, article.id);
         let indexing_status = indexing_by_slug.get(&slug).cloned();
 
@@ -281,14 +277,10 @@ pub fn get_article_package(
     let indexing_by_slug = indexing_status_map(conn, project_id);
 
     let normalized_slug = normalize_url_slug(&article.url_slug);
-    let pages = resolve_page_urls(&page_index, &normalized_slug);
-    // Prefer bulk map when available; fall back to per-page SQL then merge.
     // Issue #166: sum all URL variants that normalize to the catalog slug.
     let metrics_by_page =
         db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)?;
-    let metrics =
-        merge_window_metrics(pages.iter().filter_map(|p| metrics_by_page.get(p).copied()));
-    let url_variants = if metrics.is_some() { pages.len() } else { 0 };
+    let (metrics, url_variants) = rollup_for_slug(&page_index, &metrics_by_page, &normalized_slug);
     let top_queries = load_top_queries(conn, project_id, article.id);
     let indexing_status = indexing_by_slug.get(&normalized_slug).cloned();
 
@@ -598,34 +590,45 @@ fn build_query_cannibalization(
 
 // ── GSC / page helpers ───────────────────────────────────────────────────────
 
-/// (normalized_slug, page_url) pairs for all gsc_page_daily pages.
-fn build_page_index(conn: &Connection, project_id: &str) -> Result<Vec<(String, String)>> {
+/// Normalized slug → all GSC page URLs that extract to that slug.
+///
+/// Built once per desk read; O(1) lookup replaces a linear scan over inventory.
+fn build_page_index(conn: &Connection, project_id: &str) -> Result<HashMap<String, Vec<String>>> {
     let pages = db::list_gsc_page_daily_pages(conn, project_id)?;
-    Ok(pages
-        .into_iter()
-        .map(|page| {
-            let slug = crate::content::slug::extract_slug_from_url(&page);
-            (slug, page)
-        })
-        .filter(|(slug, _)| !slug.is_empty())
-        .collect())
+    let mut index: HashMap<String, Vec<String>> = HashMap::new();
+    for page in pages {
+        let slug = crate::content::slug::extract_slug_from_url(&page);
+        if slug.is_empty() {
+            continue;
+        }
+        index.entry(slug).or_default().push(page);
+    }
+    Ok(index)
 }
 
-/// All GSC page URLs that match the catalog slug (underscore/hyphen/slash variants).
-/// Empty = no GSC inventory for this slug.
-fn resolve_page_urls(page_index: &[(String, String)], slug: &str) -> Vec<String> {
-    page_index
-        .iter()
-        .filter(|(s, page)| s == slug || page_matches_slug(page, slug))
-        .map(|(_, page)| page.clone())
-        .collect()
+/// Page URLs for a catalog slug (empty slice = no GSC inventory).
+fn pages_for_slug<'a>(page_index: &'a HashMap<String, Vec<String>>, slug: &str) -> &'a [String] {
+    page_index.get(slug).map(Vec::as_slice).unwrap_or(&[])
+}
+
+/// Merge bulk window metrics for every GSC page URL that maps to `slug`.
+///
+/// Returns `(metrics, url_variants)` where `url_variants` is the page count when
+/// any metrics exist, else 0. Desk must **sum all page keys that normalize to the
+/// catalog slug** so first-only matching does not undercount when GSC stores
+/// underscore vs hyphen or trailing-slash URL variants as separate pages.
+fn rollup_for_slug(
+    page_index: &HashMap<String, Vec<String>>,
+    metrics_by_page: &HashMap<String, GscDailyWindowMetrics>,
+    slug: &str,
+) -> (Option<GscDailyWindowMetrics>, usize) {
+    let pages = pages_for_slug(page_index, slug);
+    let metrics = merge_window_metrics(pages.iter().filter_map(|p| metrics_by_page.get(p).copied()));
+    let url_variants = if metrics.is_some() { pages.len() } else { 0 };
+    (metrics, url_variants)
 }
 
 /// Merge window metrics from multiple GSC page keys into one rollup.
-///
-/// Desk must **sum all page keys that normalize to the catalog slug** so first-only
-/// matching does not undercount impressions when GSC stores underscore vs hyphen
-/// or trailing-slash URL variants as separate pages.
 fn merge_window_metrics(
     iter: impl IntoIterator<Item = GscDailyWindowMetrics>,
 ) -> Option<GscDailyWindowMetrics> {
