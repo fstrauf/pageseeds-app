@@ -207,6 +207,7 @@ fn main() {
             let kind = pageseeds_lib::engine::fix_package::FixKind::parse(&kind_raw)
                 .unwrap_or_else(|e| exit(&e.to_string()));
             let file_override = flag(&args, "--file", "-f");
+            let target_keyword = flag(&args, "--keyword", "-K");
             let patch_json = match flag(&args, "--patch", "-P") {
                 Some(p) => {
                     let expanded = expand_tilde(&p);
@@ -227,6 +228,7 @@ fn main() {
                     pageseeds_lib::engine::fix_package::FixSubmitOpts {
                         file_override,
                         patch_json,
+                        target_keyword,
                     },
                 )
                 .map(|r| serde_json::to_value(r).unwrap_or_default())
@@ -1266,8 +1268,8 @@ Tools:
   article-list  article-frontmatter  article-body-hash  article-title-scan  validate-article
   fix-context      -S/--slug <slug> -k/--kind content|ctr [-g/--goals "..."] [-d period-days]
                    Path B package (full file path + queries + skill; no nested generate)
-  fix-submit       -S/--slug <slug> -k/--kind content|ctr [--patch <json>] [--file <mdx>]
-                   Apply optional patch and/or validate on-disk MDX (no nested generate)
+  fix-submit       -S/--slug <slug> -k/--kind content|ctr [--patch <json>] [--file <mdx>] [-K/--keyword <phrase>]
+                   Apply optional patch and/or validate on-disk MDX; -K retargets articles.target_keyword
   content-audit-report  run-content-audit  cannibalization-clusters
   indexing-status  ctr-health  framework-files  article-link-graph
   research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec
