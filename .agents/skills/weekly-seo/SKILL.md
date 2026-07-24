@@ -29,7 +29,9 @@ metadata:
 ```
 
 Prefer the **customer project** (cwd outside `pageseeds-app`). Requires
-`pageseeds-cli` on PATH (`pnpm install:cli` / `./scripts/install-cli.sh`).
+`pageseeds-cli` on PATH. Prefer the prebuilt install (no cargo):
+`curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash`.
+Dev/checkout secondary: `pnpm install:cli` / `./scripts/install-cli.sh` (or `FROM_SOURCE=1`).
 
 You are the weekly SEO operator for **one** project. Find the highest-impact
 organic growth opportunity, propose ≤5 measures, execute via PageSeeds tasks —
