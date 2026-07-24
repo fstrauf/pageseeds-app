@@ -6,7 +6,9 @@
 ///
 /// Usage (preferred — installed binary, any cwd):
 ///   pageseeds-cli <tool> -i <project-id> -p <project-path> [args...]
-/// Install: ./scripts/install-cli.sh  (from pageseeds-app checkout)
+/// Install:
+///   curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
+/// Dev (from pageseeds-app checkout): ./scripts/install-cli.sh  or  FROM_SOURCE=1 ./scripts/install-cli.sh
 /// Dev only: cargo run --bin pageseeds-cli -- <tool> ...
 
 use pageseeds_lib::engine::tools::{InvestigationContext, investigate};
@@ -20,6 +22,11 @@ fn main() {
     // Must run BEFORE requiring -i/-p so e.g. `pageseeds-cli research-pull --help` exits 0.
     if wants_help(&args) {
         print_help();
+        return;
+    }
+
+    if args[1] == "--version" || args[1] == "-V" {
+        println!("{}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
@@ -202,6 +209,7 @@ fn main() {
             let kind = pageseeds_lib::engine::fix_package::FixKind::parse(&kind_raw)
                 .unwrap_or_else(|e| exit(&e.to_string()));
             let file_override = flag(&args, "--file", "-f");
+            let target_keyword = flag(&args, "--keyword", "-K");
             let patch_json = match flag(&args, "--patch", "-P") {
                 Some(p) => {
                     let expanded = expand_tilde(&p);
@@ -222,6 +230,7 @@ fn main() {
                     pageseeds_lib::engine::fix_package::FixSubmitOpts {
                         file_override,
                         patch_json,
+                        target_keyword,
                     },
                 )
                 .map(|r| serde_json::to_value(r).unwrap_or_default())
@@ -1067,6 +1076,38 @@ fn create_task(
         }));
     }
 
+    // fix_indexing_internal_links always attaches indexing_link_target (IHC child
+    // shape). Bare TaskSpawner creates omit the artifact and fail at context.
+    if tt == "fix_indexing_internal_links" {
+        let slug_val = slug.ok_or_else(|| {
+            "--slug required for fix_indexing_internal_links (url slug of the article to add inbound links for)".to_string()
+        })?;
+        let task = pageseeds_lib::engine::indexing_link_fix::spawn_fix_indexing_internal_links_for_slug(
+            &conn,
+            project_id,
+            project_path,
+            &slug_val,
+            pageseeds_lib::engine::indexing_link_fix::SpawnFixIndexingLinksForSlugOpts {
+                title: if title.is_empty() { None } else { Some(title) },
+                priority: priority_enum,
+                auto_enqueue,
+                source: "pageseeds-cli".to_string(),
+                reason: if reason.is_empty() {
+                    None
+                } else {
+                    Some(reason)
+                },
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(serde_json::json!({
+            "task_id": task.id,
+            "task_type": tt,
+            "title": task.title,
+            "status": task.status,
+        }));
+    }
+
     let task = pageseeds_lib::engine::spawner::TaskSpawner::spawn(&conn, pageseeds_lib::engine::spawner::TaskSpec {
         project_id: project_id.to_string(), task_type: tt.clone(),
         title: Some(title.clone()), description: Some(reason),
@@ -1268,7 +1309,7 @@ const TOOLS: &[ToolHelp] = &[
     },
     ToolHelp {
         name: "create-task",
-        purpose: "Create a task (fix_* needs -S slug)",
+        purpose: "Create a task (fix_content/ctr/indexing_links need -S slug)",
         example: "create-task -i <id> -p <path> -t fix_content_article -S <slug>",
         section: "Task / queue",
     },
@@ -1447,8 +1488,8 @@ const TOOLS: &[ToolHelp] = &[
     },
     ToolHelp {
         name: "fix-submit",
-        purpose: "Path B apply patch and/or validate on-disk MDX",
-        example: "fix-submit -i <id> -p <path> -S <slug> -k content [--patch <json>] [--file <mdx>]",
+        purpose: "Path B apply patch and/or validate on-disk MDX (-K retargets keyword)",
+        example: "fix-submit -i <id> -p <path> -S <slug> -k content [--patch <json>] [--file <mdx>] [-K <keyword>]",
         section: "Path B fix",
     },
     // Audits / reports
@@ -1539,7 +1580,9 @@ desktop app. Prefer the installed binary from any directory.
 
 Usage:
   pageseeds-cli <tool> -i <project-id> -p <project-path> [args]
-  # install: ./scripts/install-cli.sh  →  ~/.local/bin/pageseeds-cli
+  pageseeds-cli --version | -V
+  # install: curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
+  # dev: ./scripts/install-cli.sh  /  FROM_SOURCE=1  →  ~/.local/bin/pageseeds-cli
 
 Common flags: -i/--project-id  -p/--project-path
 "#

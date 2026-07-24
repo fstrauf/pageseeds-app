@@ -32,8 +32,17 @@ pub struct SiteOverview {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Freshness {
-    /// Newest GSC-related fetch timestamp (query metrics and/or page daily).
+    /// Newest `gsc_page_daily.fetched_at` for the project (desk tape only).
     pub gsc_at: Option<String>,
+    /// Whole days since [`Self::gsc_at`], or null when no tape / unparseable.
+    pub age_days: Option<i64>,
+    /// True when tape is missing or older than `GSC_METRICS_MAX_AGE_DAYS` (7).
+    pub stale: bool,
+    /// `"gsc_page_daily"` when any rows exist, else `"none"`.
+    pub source: String,
+    /// Recovery guidance when [`Self::stale`]; omitted when fresh.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     /// Always null until evidence index (#119).
     pub evidence_index_at: Option<String>,
     /// Always 0.0 until evidence index (#119).
@@ -96,6 +105,7 @@ pub struct ArticlesFilter {
 pub struct ArticlesCatalog {
     pub project_id: String,
     pub generated_at: String,
+    pub freshness: Freshness,
     pub filter: ArticlesFilterEcho,
     pub count: usize,
     pub articles: Vec<ArticleCatalogRow>,
@@ -150,6 +160,9 @@ pub struct GscRollup {
     pub ctr: f64,
     pub avg_position: f64,
     pub period_days: i64,
+    /// Count of distinct GSC page URLs that normalize to this catalog slug
+    /// (underscore/hyphen/trailing-slash variants). 0 when no metrics / no pages.
+    pub url_variants: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

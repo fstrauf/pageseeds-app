@@ -325,6 +325,118 @@ use std::time::{SystemTime, UNIX_EPOCH};
         assert_eq!(check.artifact, "gsc_collection.json");
     }
 
+    // ─── check_content_audit_fresh tests (issue #162) ──────────────────────────
+    // Freshness is DB-backed (content_audit_runs.run_at), not content_audit.json mtime.
+
+    fn with_temp_db_path<F, R>(f: F) -> R
+    where
+        F: FnOnce(&std::path::Path) -> R,
+    {
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let dir = unique_temp_dir("ihc_audit_db");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("test.db");
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", db_path.to_string_lossy().as_ref());
+        let result = f(&db_path);
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    fn insert_ihc_test_project(conn: &rusqlite::Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, ?2, ?3, 1, 'workspace')",
+            rusqlite::params![id, "Test Project", "/tmp/test"],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn content_audit_fresh_when_db_run_recent_even_without_json() {
+        with_temp_db_path(|db_path| {
+            let conn = rusqlite::Connection::open(db_path).unwrap();
+            crate::db::init_with_conn(&conn).unwrap();
+            let project_id = "proj-audit-fresh";
+            insert_ihc_test_project(&conn, project_id);
+            let run_at = chrono::Utc::now().to_rfc3339();
+            crate::db::content_audit::save_audit_run(
+                &conn,
+                project_id,
+                &run_at,
+                1,
+                1,
+                0,
+                0,
+                "[]",
+                vec![],
+            )
+            .unwrap();
+            drop(conn);
+
+            // No content_audit.json on disk — freshness must come from DB only.
+            let check = check_content_audit_fresh(project_id, chrono::Duration::days(14));
+            assert!(check.fresh, "fresh DB run must satisfy IHC gate without JSON");
+            assert_eq!(check.artifact, "content_audit.json");
+            assert_eq!(check.action, None);
+            assert_eq!(artifact_to_task_type(&check.artifact), "content_audit");
+        });
+    }
+
+    #[test]
+    fn content_audit_stale_when_no_db_run() {
+        with_temp_db_path(|db_path| {
+            let conn = rusqlite::Connection::open(db_path).unwrap();
+            crate::db::init_with_conn(&conn).unwrap();
+            drop(conn);
+
+            let check = check_content_audit_fresh("proj-no-audit", chrono::Duration::days(14));
+            assert!(!check.fresh, "missing audit run must fail closed");
+            assert_eq!(check.artifact, "content_audit.json");
+            assert_eq!(
+                check.action,
+                Some("auto_enqueue_content_audit".to_string())
+            );
+            assert_eq!(artifact_to_task_type(&check.artifact), "content_audit");
+        });
+    }
+
+    #[test]
+    fn content_audit_stale_when_db_run_old() {
+        with_temp_db_path(|db_path| {
+            let conn = rusqlite::Connection::open(db_path).unwrap();
+            crate::db::init_with_conn(&conn).unwrap();
+            let project_id = "proj-audit-old";
+            insert_ihc_test_project(&conn, project_id);
+            let old_run_at = (chrono::Utc::now() - chrono::Duration::days(20)).to_rfc3339();
+            crate::db::content_audit::save_audit_run(
+                &conn,
+                project_id,
+                &old_run_at,
+                1,
+                1,
+                0,
+                0,
+                "[]",
+                vec![],
+            )
+            .unwrap();
+            drop(conn);
+
+            let check = check_content_audit_fresh(project_id, chrono::Duration::days(14));
+            assert!(!check.fresh, "20-day-old run must be stale under 14-day gate");
+            assert!(check.age_hours.unwrap_or(0) >= 19 * 24);
+            assert_eq!(
+                check.action,
+                Some("auto_enqueue_content_audit".to_string())
+            );
+        });
+    }
+
     // ─── build_rewrite_spec tests ───────────────────────────────────────────────
 
     fn dummy_target_plan(action: &str) -> IndexingTargetPlan {
@@ -471,6 +583,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
         assert!(content.contains("campaign_task_id"));
         assert!(content.contains("test-article"));
         assert!(content.contains("article_id"));
+        // Typed artifact must deserialize via shared parse helper.
+        let mut task = dummy_task();
+        task.artifacts = spec.artifacts.clone();
+        let parsed = crate::engine::exec::content::parse_target_artifact(&task)
+            .expect("typed indexing_link_target");
+        assert_eq!(parsed.article_id, 42);
+        assert_eq!(parsed.slug, "test-article");
+    }
+
+    #[test]
+    fn build_add_links_spec_uses_article_scoped_idempotency_key() {
+        let parent = dummy_task();
+        let target = dummy_target_plan("add_links");
+        let ctx = dummy_target_ctx("good", 0, true, "not_indexed_other");
+        let spec = build_add_links_spec(&parent, &target, Some(&ctx));
+        assert_eq!(
+            spec.idempotency_key.as_deref(),
+            Some("fix_indexing_internal_links:proj-abc:42")
+        );
     }
 
     // ─── fix_indexing fallback mapping (issue #35) ─────────────────────────────

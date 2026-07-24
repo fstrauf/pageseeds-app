@@ -259,6 +259,8 @@ All migrations must be idempotent (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF 
 
 Source of truth for content inventory. Synced with MDX files on disk.
 
+Catalog `articles.target_keyword` is the targeting source of truth for desk reads; Path B `fix-submit` updates it only when explicit `-K` / `--keyword` or a content-patch `changes.target_keyword` is provided (issue #165) — never silent frontmatter→catalog sync.
+
 ```json
 {
   "articles": [

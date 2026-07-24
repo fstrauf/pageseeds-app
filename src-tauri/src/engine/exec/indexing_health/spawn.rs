@@ -289,47 +289,30 @@ pub(crate) fn build_add_links_spec(
 ) -> TaskSpec {
     let url_slug = crate::content::slug::extract_slug_from_url(&target.url);
     // Use article_id (not parent.id) so dedup works across repeated campaign runs.
+    // Same article-scoped key as operator slug spawn so IHC and CLI dedupe together.
     let article_id = ctx.map(|c| c.target.article_id).unwrap_or(0);
-    let idempotency_key = format!("ihc-add-links:{}:{}", parent.project_id, article_id);
+    let idempotency_key = crate::engine::indexing_link_fix::fix_indexing_internal_links_idempotency_key(
+        &parent.project_id,
+        article_id,
+    );
 
     // Build the indexing_link_target artifact that fix_indexing_internal_links expects
     let mut artifacts = vec![];
     if let Some(ctx) = ctx {
-        let source_candidates_json: Vec<serde_json::Value> = ctx
-            .source_candidates
-            .iter()
-            .map(|s| {
-                serde_json::json!({
-                    "article_id": s.article_id,
-                    "slug": &s.slug,
-                    "title": &s.title,
-                    "file": &s.file,
-                    "reason": &s.reason,
-                })
-            })
-            .collect();
-
-        let artifact_content = serde_json::json!({
-            "campaign_task_id": &parent.id,
-            "target": {
-                "url": &ctx.target.url,
-                "slug": &ctx.target.slug,
-                "article_id": ctx.target.article_id,
-                "file": &ctx.target.file,
-                "reason_code": &ctx.target.reason_code,
-                "incoming_link_count_before": ctx.target.incoming_links,
-                "target_keyword": &ctx.target.target_keyword,
-                "source_candidates": source_candidates_json,
-            }
-        });
-
-        artifacts.push(crate::models::task::TaskArtifact {
-            key: "indexing_link_target".to_string(),
-            path: None,
-            artifact_type: Some("indexing_link_target".to_string()),
-            source: Some("indexing_health_campaign".to_string()),
-            content: Some(artifact_content.to_string()),
-        });
+        artifacts.push(crate::engine::indexing_link_fix::indexing_link_target_artifact(
+            Some(parent.id.clone()),
+            crate::models::indexing_health::IndexingLinkTarget {
+                url: ctx.target.url.clone(),
+                slug: ctx.target.slug.clone(),
+                article_id: ctx.target.article_id,
+                file: ctx.target.file.clone(),
+                reason_code: ctx.target.reason_code.clone(),
+                incoming_link_count_before: ctx.target.incoming_links,
+                target_keyword: ctx.target.target_keyword.clone(),
+                source_candidates: ctx.source_candidates.clone(),
+            },
+            "indexing_health_campaign",
+        ));
     }
 
     fix_task_spec(

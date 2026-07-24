@@ -201,7 +201,7 @@ Step 2: gsc_sync_articles (deterministic)
   └─ Pull latest GSC metrics into articles.json
   ↓
 Step 3: content_audit (deterministic)
-  └─ 21-rule health check → content_audit.json
+  └─ 21-rule health check → SQLite content_audit_runs (not content_audit.json)
   ↓
 Step 4: content_review_investigate (agentic, tool-calling when supported)
   ├─ Provider gate: KimiBridge / Claude / OpenAI / Ollama → RO tool investigation
@@ -252,7 +252,7 @@ Step 4: ctr_verify_fix (deterministic)
 - `content/cleaner.rs` — structure validation
 
 ### Artifacts
-- `content_audit.json` — health scores per article
+- `content_audit_runs` / `article_content_audits` (SQLite) — health scores per article (primary; legacy `content_audit.json` is fallback-only for readers)
 - `recommendations.json` — suggested improvements
 - `ctr_audit.json` — CTR analysis results
 
@@ -636,7 +636,7 @@ Saved to: .github/automation/investigations/{id}/
 
 **Desk / Site State first (epic #117):**
 - `site_overview` — Compact site health desk (totals, top pages, movers, hints)
-- `articles` / `article` — GSC-aware catalog list and full per-slug package
+- `articles` / `article` — GSC-aware catalog list and full per-slug package (desk rolls up all GSC page URL variants per normalized slug)
 - `gsc_performance` / `gsc_movers` / `gsc_queries` — Demand and deltas
 
 **Optional / secondary (not ground truth):**
@@ -664,7 +664,7 @@ Saved to: .github/automation/investigations/{id}/
 
 ### Spawned By
 - `collect_gsc` → `fix_technical`, `fix_indexing`, `fix_gsc_access`
-- `content_review` / `content_audit` → `fix_content_article`
+- `content_review` → `fix_content_article` (user selection via ContentReviewPicker; `content_audit` is deterministic helper only)
 - `ctr_audit` → `fix_ctr_article`, `fix_ctr_site_template`
 - `cannibalization_audit` → `consolidate_cluster`
 - Manual creation → `fix_404s`, `fix_redirects`, `technical_seo`, etc.

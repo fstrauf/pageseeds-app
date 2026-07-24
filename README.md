@@ -68,10 +68,19 @@ Ask natural-language questions about your site's performance and get evidence-ba
 
 ---
 
+## CLI (commercial)
+
+Operators can run desk reads and weekly SEO from the **`pageseeds-cli`** binary (shared SQLite with the desktop app). Install, project flags, secrets, first desk read, and the weekly path:
+
+→ **[CLI Getting Started](./docs/CLI_GETTING_STARTED.md)**
+
+---
+
 ## Documentation
 
 | Document | Purpose |
 |----------|---------|
+| [CLI Getting Started](./docs/CLI_GETTING_STARTED.md) | Commercial CLI: install, license notes, desk read, weekly operator path |
 | [Business Processes](./docs/BUSINESS_PROCESSES.md) | What the app does — workflows, features, and process interconnections |
 | [Workflow Engine](./docs/WORKFLOW_ENGINE.md) | How tasks are planned and executed |
 | [Data Persistence](./docs/DATA_PERSISTENCE.md) | SQLite runtime state + JSON committed content |

@@ -148,6 +148,9 @@ pub struct FixSubmitOpts {
     pub file_override: Option<String>,
     /// Optional raw JSON for ContentFixPatch or CtrFixPatch (by kind).
     pub patch_json: Option<String>,
+    /// Explicit catalog retarget (`-K` / `--keyword`). Wins over patch field.
+    /// Empty/whitespace is ignored (does not clear catalog keyword).
+    pub target_keyword: Option<String>,
 }
 
 // ─── Build package ───────────────────────────────────────────────────────────
@@ -259,6 +262,7 @@ fn constraints_for(kind: FixKind) -> FixConstraints {
             "faq_questions".into(),
             "eeat_signal".into(),
             "cta".into(),
+            "target_keyword".into(),
         ],
         FixKind::Ctr => vec![
             "title".into(),
@@ -358,6 +362,21 @@ pub fn submit_fix(
 
     if validation.ok {
         touch_last_edited(conn, project_id, package.article_id);
+
+        // Catalog keyword SoT: only when explicit -K or content-patch field (issue #165).
+        // Runs after validation success so an old catalog keyword never hard-fails submit.
+        if let Some(kw) = resolve_fix_submit_target_keyword(&opts, kind) {
+            if crate::content::article_index::apply_catalog_target_keyword(
+                conn,
+                project_id,
+                package.article_id,
+                &kw,
+                Path::new(project_path),
+            ) && !applied.iter().any(|a| a == "target_keyword")
+            {
+                applied.push("target_keyword".to_string());
+            }
+        }
 
         // Path B CTR ships record a sparse change event (issue #152). Best-effort:
         // ship success must not fail if measurement row write fails.
@@ -467,6 +486,33 @@ fn touch_last_edited(conn: &Connection, project_id: &str, article_id: i64) {
         "UPDATE articles SET last_edited_at = ?1 WHERE id = ?2 AND project_id = ?3",
         rusqlite::params![&now, article_id, project_id],
     );
+}
+
+/// Resolve keyword intent for Path B fix-submit catalog write (issue #165).
+///
+/// Precedence:
+/// 1. `opts.target_keyword` if non-empty after trim
+/// 2. else content-patch `changes.target_keyword` if Some/non-empty
+/// 3. else no catalog write
+fn resolve_fix_submit_target_keyword(opts: &FixSubmitOpts, kind: FixKind) -> Option<String> {
+    if let Some(ref k) = opts.target_keyword {
+        let t = k.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    if kind != FixKind::Content {
+        return None;
+    }
+    let patch_json = opts.patch_json.as_deref()?;
+    let patch: ContentFixPatch = serde_json::from_str(patch_json).ok()?;
+    let k = patch.changes.target_keyword.as_deref()?;
+    let t = k.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 // ─── Deterministic patch apply via shared materializers (no Task / no LLM) ───
@@ -1015,5 +1061,235 @@ Intro paragraph about cold brew makers for home use.
         assert!(crate::db::list_ctr_outcomes(&conn, "proj1")
             .unwrap()
             .is_empty());
+    }
+
+    fn catalog_keyword(conn: &Connection, project_id: &str, article_id: i64) -> Option<String> {
+        conn.query_row(
+            "SELECT target_keyword FROM articles WHERE id = ?1 AND project_id = ?2",
+            rusqlite::params![article_id, project_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+    }
+
+    fn set_catalog_keyword(conn: &Connection, project_id: &str, article_id: i64, kw: &str) {
+        conn.execute(
+            "UPDATE articles SET target_keyword = ?1 WHERE id = ?2 AND project_id = ?3",
+            rusqlite::params![kw, article_id, project_id],
+        )
+        .unwrap();
+    }
+
+    /// Issue #165: explicit -K on fix-submit normalizes and rewrites catalog keyword.
+    #[test]
+    fn submit_with_opts_keyword_resyncs_catalog_target_keyword() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            11,
+            "retarget-me",
+            "Retarget Me",
+            "content/retarget.mdx",
+        );
+        let garbage =
+            "\"how to brew cold coffee at home step by step guide for beginners 2024 2025 2026\"";
+        set_catalog_keyword(&conn, "proj1", 11, garbage);
+        write_mdx(
+            &project,
+            "content/retarget.mdx",
+            &valid_mdx("Retarget Me", "Retarget Me", "Body about pour over coffee."),
+        );
+
+        let intended = "  Pour Over Coffee  ";
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "retarget-me",
+            FixKind::Content,
+            FixSubmitOpts {
+                target_keyword: Some(intended.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert!(
+            result.applied.iter().any(|a| a == "target_keyword"),
+            "applied should include target_keyword: {:?}",
+            result.applied
+        );
+        let expected = crate::content::keyword_match::normalize_keyword(intended);
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 11).as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(expected, "pour over coffee");
+    }
+
+    /// Issue #165: SERP-only submit without -K / patch field leaves catalog unchanged.
+    #[test]
+    fn submit_without_keyword_opt_leaves_garbage_catalog_keyword() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            12,
+            "keep-kw",
+            "Keep Kw",
+            "content/keep.mdx",
+        );
+        let garbage =
+            "\"theta decay accelerates near expiration for iron condor wheel strategy traders\"";
+        set_catalog_keyword(&conn, "proj1", 12, garbage);
+        write_mdx(
+            &project,
+            "content/keep.mdx",
+            &valid_mdx("Keep Kw", "Keep Kw", "Body stays as-is."),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "keep-kw",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert!(!result.applied.iter().any(|a| a == "target_keyword"));
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 12).as_deref(),
+            Some(garbage)
+        );
+    }
+
+    /// Issue #165: content patch `changes.target_keyword` updates frontmatter + catalog.
+    #[test]
+    fn submit_content_patch_target_keyword_updates_fm_and_db() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            13,
+            "patch-kw",
+            "Patch Kw",
+            "content/patch-kw.mdx",
+        );
+        set_catalog_keyword(&conn, "proj1", 13, "old garbage keyword phrase that is very long");
+        write_mdx(
+            &project,
+            "content/patch-kw.mdx",
+            &valid_mdx("Patch Kw", "Patch Kw", "Body for keyword retarget via patch."),
+        );
+
+        let patch = r#"{
+            "article_id": 13,
+            "file": "content/patch-kw.mdx",
+            "changes": {
+                "target_keyword": "AeroPress Recipe"
+            }
+        }"#;
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "patch-kw",
+            FixKind::Content,
+            FixSubmitOpts {
+                patch_json: Some(patch.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result);
+        assert!(result.applied.iter().any(|a| a == "target_keyword"));
+        let written = fs::read_to_string(project.join("content/patch-kw.mdx")).unwrap();
+        assert!(
+            written.contains("target_keyword") && written.contains("AeroPress Recipe"),
+            "frontmatter should include target_keyword: {written}"
+        );
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 13).as_deref(),
+            Some("aeropress recipe")
+        );
+    }
+
+    /// Issue #165: title-only patch must not touch catalog target_keyword.
+    #[test]
+    fn submit_title_only_patch_does_not_touch_target_keyword() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            14,
+            "title-only",
+            "Old Title Only",
+            "content/title-only.mdx",
+        );
+        let original_kw = "keep this catalog keyword intact";
+        set_catalog_keyword(&conn, "proj1", 14, original_kw);
+        write_mdx(
+            &project,
+            "content/title-only.mdx",
+            &valid_mdx(
+                "Old Title Only",
+                "Old Title Only",
+                "Body text about cold brew makers.",
+            ),
+        );
+
+        let patch = r#"{
+            "article_id": 14,
+            "file": "content/title-only.mdx",
+            "changes": {
+                "title": "New SERP Title for Cold Brew"
+            }
+        }"#;
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "title-only",
+            FixKind::Content,
+            FixSubmitOpts {
+                patch_json: Some(patch.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result);
+        assert!(result.applied.iter().any(|a| a == "title"));
+        assert!(!result.applied.iter().any(|a| a == "target_keyword"));
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 14).as_deref(),
+            Some(original_kw)
+        );
+        let written = fs::read_to_string(project.join("content/title-only.mdx")).unwrap();
+        assert!(written.contains("New SERP Title for Cold Brew"));
+        assert!(
+            !written.contains("target_keyword"),
+            "title-only must not inject target_keyword FM: {written}"
+        );
     }
 }

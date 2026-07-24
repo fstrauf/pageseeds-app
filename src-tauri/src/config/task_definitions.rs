@@ -101,12 +101,14 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::UserSelection,
         handler_family: HandlerFamily::ContentReview,
     },
+    // content_audit is deterministic-only (no picker). Auto-refresh from IHC
+    // must land Done, not Review, so the prerequisite gate can complete (#162).
     TaskDefinition {
         task_type: "content_audit",
         phase: "investigation",
         run_policy: TaskRunPolicy::UserEnqueue,
-        review_surface: TaskReviewSurface::ContentReviewPicker,
-        follow_up_policy: FollowUpPolicy::UserSelection,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::ContentReview,
     },
     // Research
@@ -293,7 +295,10 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Implementation,
     },
     // Per-target internal link fix task. Auto-enqueued by the backend queue.
-    // Each task carries a structured target artifact and verifies the target gained inbound links.
+    // Requires `indexing_link_target` artifact — attached by IHC/recovery child
+    // spawn or the operator slug helper (`create-task -t fix_indexing_internal_links -S <slug>` /
+    // `indexing_link_fix::spawn_fix_indexing_internal_links_for_slug`). Bare creates without
+    // the artifact fail at execute (context/plan/apply/verify).
     TaskDefinition {
         task_type: "fix_indexing_internal_links",
         phase: "implementation",
@@ -690,13 +695,14 @@ mod tests {
             default_follow_up_policy("content_review"),
             FollowUpPolicy::UserSelection
         );
+        // content_audit is deterministic helper only — no picker / no follow-ups (#162).
         assert_eq!(
             default_review_surface("content_audit"),
-            TaskReviewSurface::ContentReviewPicker
+            TaskReviewSurface::None
         );
         assert_eq!(
             default_follow_up_policy("content_audit"),
-            FollowUpPolicy::UserSelection
+            FollowUpPolicy::None
         );
     }
 

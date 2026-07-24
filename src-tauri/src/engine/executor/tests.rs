@@ -183,7 +183,8 @@
         );
     }
 
-    // 3. Tasks with a review surface (including content review) go to "review".
+    // 3. Tasks with a review surface (content_review) go to "review".
+    // content_audit is deterministic-only (no review surface) → Done (#162).
     #[test]
     fn review_surface_task_goes_to_review() {
         assert_eq!(
@@ -192,7 +193,7 @@
         );
         assert_eq!(
             completed_task_status("content_audit", true),
-            TaskStatus::Review
+            TaskStatus::Done
         );
     }
 
@@ -581,6 +582,8 @@
             .unwrap();
 
         // Ensure articles table exists and has a dummy article so the pre-flight check passes.
+        // Territory analysis (step in research_keywords) also needs gsc_page_daily +
+        // article_metadata via load_articles_with_gsc, and research_shortlist for upserts.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS articles (
                 id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
@@ -599,6 +602,46 @@
             );
             CREATE TABLE IF NOT EXISTS articles_meta (
                 project_id TEXT PRIMARY KEY, next_article_id INTEGER NOT NULL DEFAULT 1
+            );
+            -- Match MIGRATION_V27 (article_metadata)
+            CREATE TABLE IF NOT EXISTS article_metadata (
+                project_id      TEXT NOT NULL,
+                article_id      INTEGER NOT NULL,
+                namespace       TEXT NOT NULL,
+                payload         TEXT NOT NULL DEFAULT '{}',
+                updated_at      TEXT NOT NULL,
+                PRIMARY KEY (project_id, article_id, namespace)
+            );
+            -- Match MIGRATION_V48 (gsc_page_daily append-only tape)
+            CREATE TABLE IF NOT EXISTS gsc_page_daily (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id      TEXT NOT NULL,
+                page            TEXT NOT NULL,
+                date            TEXT NOT NULL,
+                clicks          REAL NOT NULL DEFAULT 0,
+                impressions     REAL NOT NULL DEFAULT 0,
+                ctr             REAL NOT NULL DEFAULT 0,
+                position        REAL NOT NULL DEFAULT 0,
+                fetched_at      TEXT NOT NULL,
+                UNIQUE(project_id, page, date)
+            );
+            -- Match V39 research_shortlist + V46 health columns
+            CREATE TABLE IF NOT EXISTS research_shortlist (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id          TEXT NOT NULL,
+                theme               TEXT NOT NULL,
+                seeds               TEXT NOT NULL DEFAULT '[]',
+                source              TEXT NOT NULL DEFAULT 'territory_analysis',
+                status              TEXT NOT NULL DEFAULT 'pending',
+                priority            TEXT NOT NULL DEFAULT 'medium',
+                article_count       INTEGER,
+                total_impressions   REAL,
+                signal_score        REAL,
+                health_status       TEXT NOT NULL DEFAULT 'unproven',
+                last_reviewed_at    TEXT,
+                added_at            TEXT NOT NULL,
+                researched_at       TEXT,
+                covered_at          TEXT
             );",
         )
         .unwrap();

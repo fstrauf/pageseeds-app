@@ -1,5 +1,6 @@
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
+use crate::models::indexing_health::IndexingLinkOutcome;
 use crate::models::task::Task;
 
 use super::*;
@@ -9,6 +10,10 @@ use super::*;
 ///
 /// V1 uses the existing prompt-based agent pattern (not Rig extraction)
 /// to keep the implementation simple and proven.
+///
+/// Intentional no-ops write `outcome` so verify can pass without inbound growth:
+/// - empty shortlist → `no_candidates`
+/// - all candidates already link to target → `already_linked`
 pub(crate) fn exec_indexing_link_plan(
     task: &Task,
     project_path: &str,
@@ -22,20 +27,15 @@ pub(crate) fn exec_indexing_link_plan(
     let target_data = match parse_target_artifact(task) {
         Some(t) => t,
         None => {
-            return StepResult::fail("Missing or invalid indexing_link_target artifact".to_string())
+            return StepResult::fail(MISSING_INDEXING_LINK_TARGET_MSG.to_string())
         }
     };
 
-    let target_slug = crate::content::slug::normalize_url_slug(target_data["slug"].as_str().unwrap_or(""));
-    let target_url = target_data["url"].as_str().unwrap_or("").to_string();
-    let target_keyword = target_data["target_keyword"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let reason_code = target_data["reason_code"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let target_slug = crate::content::slug::normalize_url_slug(&target_data.slug);
+    let target_url = target_data.url.clone();
+    let target_keyword = target_data.target_keyword.clone();
+    let reason_code = target_data.reason_code.clone();
+    let target_article_id = target_data.article_id;
 
     // Load context from previous step (or rebuild from artifact)
     let context_json = task
@@ -56,16 +56,31 @@ pub(crate) fn exec_indexing_link_plan(
 
     let sources = context["sources"].as_array().cloned().unwrap_or_default();
     if sources.is_empty() {
-        return StepResult {
-            success: true,
-            message: "Nothing to do — no source candidates available for this target".to_string(),
-            output: Some(serde_json::json!({ "links_to_add": [] }).to_string()),
-            artifact_key: None,
-        };
+        return noop_plan_result(
+            &paths,
+            task,
+            IndexingLinkOutcome::NoCandidates,
+            "Nothing to do — no source candidates available for this target",
+        );
+    }
+
+    // Drop sources that already link to the target before calling the agent.
+    let usable: Vec<serde_json::Value> = sources
+        .iter()
+        .filter(|s| s["already_links_to_target"].as_bool() != Some(true))
+        .cloned()
+        .collect();
+    if usable.is_empty() {
+        return noop_plan_result(
+            &paths,
+            task,
+            IndexingLinkOutcome::AlreadyLinked,
+            "Nothing to do — all candidate sources already link to the target",
+        );
     }
 
     // Build compact prompt
-    let sources_json = serde_json::to_string(&sources).unwrap_or_default();
+    let sources_json = serde_json::to_string(&usable).unwrap_or_default();
     let prompt = format!(
         r#"You are an SEO specialist choosing the best internal link to add.
 
@@ -90,7 +105,8 @@ Output schema:
   "links_to_add": [
     {{
       "source_article_id": <number>,
-      "target_article_id": <number>,
+      "source_file": "<file path from the candidate>",
+      "target_article_id": {target_article_id},
       "anchor_text": "<natural anchor text>",
       "target_slug": "{target_slug}",
       "placement": "related_section",
@@ -104,6 +120,7 @@ Requirements:
 - Choose from the candidate sources above.
 - Do NOT pick a source where already_links_to_target is true.
 - placement must be "related_section" in V1.
+- Include source_file from the chosen candidate.
 "#,
     );
 
@@ -114,11 +131,38 @@ Requirements:
         }
     };
 
-    let plan_json = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
+    let mut plan_json = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
         serde_json::json!({
             "links_to_add": [],
         })
     });
+
+    // Enrich plan rows with source_file from candidates when the agent omits it.
+    if let Some(links) = plan_json["links_to_add"].as_array_mut() {
+        for link in links.iter_mut() {
+            let source_id = link["source_article_id"].as_i64().unwrap_or(0);
+            let has_file = link["source_file"]
+                .as_str()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if !has_file {
+                if let Some(src) = usable
+                    .iter()
+                    .chain(sources.iter())
+                    .find(|s| s["article_id"].as_i64() == Some(source_id))
+                {
+                    if let Some(f) = src["file"].as_str() {
+                        link["source_file"] = serde_json::json!(f);
+                    }
+                }
+            }
+            // V1 hard-codes related_section; ignore any other placement.
+            link["placement"] = serde_json::json!("related_section");
+            if link["target_article_id"].as_i64().unwrap_or(0) == 0 {
+                link["target_article_id"] = serde_json::json!(target_article_id);
+            }
+        }
+    }
 
     // Validate: ensure we got exactly one link
     let link_count = plan_json["links_to_add"]
@@ -128,6 +172,9 @@ Requirements:
     if link_count == 0 {
         return StepResult::fail("Agent returned no link recommendations".to_string());
     }
+
+    // Planned links pending apply — outcome finalized by apply.
+    plan_json["outcome"] = serde_json::json!(IndexingLinkOutcome::Applied.as_str());
 
     // Persist plan for apply step
     let plan_path = paths
@@ -149,3 +196,27 @@ Requirements:
     }
 }
 
+fn noop_plan_result(
+    paths: &ProjectPaths,
+    task: &Task,
+    outcome: IndexingLinkOutcome,
+    message: &str,
+) -> StepResult {
+    let plan_json = serde_json::json!({
+        "links_to_add": [],
+        "outcome": outcome.as_str(),
+    });
+    let plan_path = paths
+        .automation_dir
+        .join(format!("indexing_link_plan_{}.json", task.id));
+    let _ = std::fs::write(
+        &plan_path,
+        serde_json::to_string_pretty(&plan_json).unwrap_or_default(),
+    );
+    StepResult {
+        success: true,
+        message: message.to_string(),
+        output: Some(plan_json.to_string()),
+        artifact_key: None,
+    }
+}

@@ -26,7 +26,7 @@ Deterministic package + session prose + submit gates. Operator policy lives in t
 | Tools | Status | Role |
 |---|---|---|
 | `write-context` / `write-submit` | **Shipped** (#135) | After `select-keywords`: package brief → session writes MDX → submit gates (≥800 words, validate_article) |
-| `fix-context` / `fix-submit` | Path B child (#137) | When present: package slug + goals → session edits → submit. Until then: `create-task fix_content_article -S` |
+| `fix-context` / `fix-submit` | Path B child (#137) | Package slug + goals → session edits → submit. Catalog `articles.target_keyword` updates only with explicit `-K` / `--keyword` or content-patch `changes.target_keyword` (#165). |
 | `merge-context` / `merge-submit` | Path B child (#138) | When present: package members → session merges → submit (high-traffic confirm). Until then: mechanical cannibalization picker only |
 
 Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI best-path when the matching package tools exist.
@@ -139,7 +139,13 @@ Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI b
 |---|---|
 | **Does** | Unified workflow: checks prerequisites, reviews distinctiveness against cluster siblings, and spawns targeted fixes for non-indexed pages. |
 | **When** | Pages exist but Google hasn't indexed them. Prefer this over the granular `fix_indexing*` tasks. |
-| **After completion** | `ArtifactReview` → spawns targeted child fix tasks (`BackendAuto`). |
+| **After completion** | `ArtifactReview` → spawns targeted child fix tasks (`BackendAuto`), including `fix_indexing_internal_links` children with an `indexing_link_target` artifact. |
+
+| Field | `fix_indexing_internal_links` |
+|---|---|
+| **Does** | Adds inbound internal links to one target page (context → plan → apply → verify). |
+| **When** | Prefer as an IHC / `gsc_indexing_recovery` child (artifact attached automatically). Operator-scoped: `create-task -t fix_indexing_internal_links -S <url-slug>` (or CreateTaskTool with `slug`) builds `indexing_link_target`. Bare creates without that artifact fail at execute. |
+| **After completion** | Backend may spawn a delayed GSC indexing outcome review (`BackendAuto`). |
 
 | Field | `clarity_analytics` |
 |---|---|

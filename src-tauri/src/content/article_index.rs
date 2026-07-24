@@ -93,6 +93,38 @@ pub fn export_projection(
     Ok(ExportSummary { exported: count })
 }
 
+/// Update `articles.target_keyword` and re-export the catalog projection.
+///
+/// Uses [`crate::content::keyword_match::normalize_keyword`] (not GSC's 5-word
+/// backfill normalizer). Empty after normalize is a no-op — does not clear the
+/// existing catalog value. Returns whether a row was written.
+pub fn apply_catalog_target_keyword(
+    conn: &Connection,
+    project_id: &str,
+    article_id: i64,
+    keyword: &str,
+    project_path: &Path,
+) -> bool {
+    if article_id == 0 {
+        return false;
+    }
+    let normalized = crate::content::keyword_match::normalize_keyword(keyword);
+    if normalized.is_empty() {
+        return false;
+    }
+    let updated = conn
+        .execute(
+            "UPDATE articles SET target_keyword=?1 WHERE id=?2 AND project_id=?3",
+            rusqlite::params![&normalized, article_id, project_id],
+        )
+        .unwrap_or(0);
+    if updated == 0 {
+        return false;
+    }
+    let _ = export_projection(conn, project_id, project_path);
+    true
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Stale cleanup (SQLite-first)
 // ═══════════════════════════════════════════════════════════════════════════════

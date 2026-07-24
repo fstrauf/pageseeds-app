@@ -8,6 +8,7 @@ pub mod ctr_state;
 pub mod exec;
 pub mod executor;
 pub mod fix_package;
+pub mod indexing_link_fix;
 pub mod keyword_selection;
 pub mod ledger;
 pub mod post_actions;

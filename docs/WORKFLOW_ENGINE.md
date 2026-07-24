@@ -253,12 +253,14 @@ On the **tool** path, `create_fix_content_article_tasks` no-ops (no `recommendat
 **Idempotency:** Each fix task uses idempotency key `fix_content_article:{project_id}:{article_id}` to prevent duplicates if the review is re-run.
 
 **Content Review User Selection (`ContentReviewPicker`):**
-When `content_review` / `content_audit` completes successfully, the system does **not** auto-spawn fix tasks. Instead:
+When `content_review` completes successfully, the system does **not** auto-spawn fix tasks. Instead:
 1. Reads recommendations from the `content_review_recommend` step artifact or disk `recommendations.json`
 2. Validates proposals (known task types, required params, active idempotency keys) and caps at 5
 3. Stores a `content_review_proposals` artifact on the parent; parent lands in `review`
 4. User selects proposals in the ContentReviewPicker; `select_content_review_follow_ups` spawns via `TaskSpawner`
 5. Parent transitions `review` → `done`; each fix task is `UserEnqueue` with key `fix_content_article:{project_id}:{article_id}`
+
+`content_audit` is deterministic-only (single `ContentAudit` step, `review_surface: None`) — it writes SQLite `content_audit_runs`, lands **Done**, and does not open the picker. IHC prerequisite freshness uses DB `run_at`, not `content_audit.json` mtime (#162).
 
 ---
 
@@ -294,7 +296,9 @@ Every article produced by `write_article`, `create_hub_page`, or `refresh_hub_pa
 
 ## Topic Health Reducer
 
-After `content_review` or `content_audit` completes, a deterministic reducer aggregates audit signals by `target_keyword` and updates `research_shortlist.health_status`.
+The research shortlist is filled by `research_territory_analysis` (open / mid-coverage / saturated themes) using desk tape `gsc_page_daily` impressions — not by final keyword selection.
+
+After `content_review` or `content_audit` completes, a deterministic reducer loads the latest audit from SQLite (via `load_audit_snapshot`), aggregates signals by `target_keyword`, and updates `research_shortlist.health_status`.
 
 ### Health Status Thresholds
 

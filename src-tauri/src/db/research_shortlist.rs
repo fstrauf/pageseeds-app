@@ -2,7 +2,8 @@
 ///
 /// The shortlist is a persistent queue of themes/keywords to research.
 /// Sources:
-///   - territory_analysis: open territories / saturated themes from GSC data
+///   - territory_analysis: open / mid-coverage / saturated themes from desk
+///     GSC tape (`gsc_page_daily`); fills shortlist for research (not final selection)
 ///   - coverage_gap: thin clusters from keyword coverage analysis
 ///   - manual: user-added entries
 ///
@@ -69,6 +70,14 @@ impl ResearchShortlistEntry {
 /// Insert or update a shortlist entry. Uses (project_id, theme, source) as the
 /// natural key: if an entry already exists with the same theme for this project,
 /// we update its seeds and metrics rather than creating a duplicate.
+///
+/// **Status policy on UPDATE** (territory band flips share the same natural key):
+/// - Incoming `saturated` → status becomes `saturated` (mid/open → saturated sticks).
+/// - Existing `covered` → re-open to `pending` (article may no longer cover the theme).
+/// - Existing `saturated` with non-saturated incoming → re-open to `pending`
+///   (saturated → open/mid reclassification).
+/// - Existing `researched` is preserved unless the incoming status is `saturated`.
+/// - Other statuses keep their current value (metrics/seeds still refresh).
 pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result<i64> {
     let existing: Option<i64> = conn
         .query_row(
@@ -90,9 +99,14 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                  signal_score = ?5,
                  health_status = ?6,
                  last_reviewed_at = ?7,
-                 status = CASE WHEN status = 'covered' THEN 'pending' ELSE status END,
-                 added_at = ?8
-             WHERE id = ?9",
+                 status = CASE
+                     WHEN ?8 = 'saturated' THEN 'saturated'
+                     WHEN status = 'covered' THEN 'pending'
+                     WHEN status = 'saturated' THEN 'pending'
+                     ELSE status
+                 END,
+                 added_at = ?9
+             WHERE id = ?10",
             rusqlite::params![
                 &seeds_json,
                 &entry.priority,
@@ -101,6 +115,7 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                 entry.signal_score,
                 &entry.health_status,
                 entry.last_reviewed_at.as_ref(),
+                &entry.status,
                 &entry.added_at,
                 id,
             ],
@@ -464,6 +479,85 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].seeds.len(), 2);
         assert_eq!(entries[0].health_status, "promising");
+    }
+
+    #[test]
+    fn upsert_entry_applies_territory_band_status_policy() {
+        let conn = in_memory_db();
+        let theme = "shared territory theme";
+        let source = "territory_analysis";
+
+        // Start as open (pending).
+        let mut open = ResearchShortlistEntry::new(
+            "proj1",
+            theme,
+            vec!["kw".to_string()],
+            source,
+            "high",
+            Some(1),
+            Some(6000.0),
+        );
+        let id = upsert_entry(&conn, &open).unwrap();
+        assert_eq!(list_entries(&conn, "proj1", None).unwrap()[0].status, "pending");
+
+        // Band flip → saturated sticks.
+        let mut sat = open.clone();
+        sat.status = "saturated".to_string();
+        sat.priority = "medium".to_string();
+        sat.article_count = Some(6);
+        sat.total_impressions = Some(9000.0);
+        assert_eq!(upsert_entry(&conn, &sat).unwrap(), id);
+        assert_eq!(
+            list_entries(&conn, "proj1", None).unwrap()[0].status,
+            "saturated"
+        );
+
+        // Band flip saturated → mid/open re-opens to pending.
+        open.article_count = Some(3);
+        open.total_impressions = Some(4000.0);
+        open.priority = "medium".to_string();
+        open.status = "pending".to_string();
+        assert_eq!(upsert_entry(&conn, &open).unwrap(), id);
+        let after_reopen = list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(after_reopen[0].status, "pending");
+        assert_eq!(after_reopen[0].article_count, Some(3));
+
+        // Researched is preserved on non-saturated re-upsert.
+        conn.execute(
+            "UPDATE research_shortlist SET status = 'researched' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        open.article_count = Some(2);
+        assert_eq!(upsert_entry(&conn, &open).unwrap(), id);
+        assert_eq!(
+            list_entries(&conn, "proj1", None).unwrap()[0].status,
+            "researched"
+        );
+
+        // Covered re-opens to pending (existing policy).
+        conn.execute(
+            "UPDATE research_shortlist SET status = 'covered' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        assert_eq!(upsert_entry(&conn, &open).unwrap(), id);
+        assert_eq!(
+            list_entries(&conn, "proj1", None).unwrap()[0].status,
+            "pending"
+        );
+
+        // Saturated overrides researched.
+        conn.execute(
+            "UPDATE research_shortlist SET status = 'researched' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .unwrap();
+        assert_eq!(upsert_entry(&conn, &sat).unwrap(), id);
+        assert_eq!(
+            list_entries(&conn, "proj1", None).unwrap()[0].status,
+            "saturated"
+        );
     }
 
     fn insert_entry_with_seeds(conn: &Connection, theme: &str, seeds: &[&str], status: &str) -> i64 {

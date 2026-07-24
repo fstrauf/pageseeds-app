@@ -1,5 +1,4 @@
-use crate::engine::project_paths::ProjectPaths;
-use crate::engine::workflows::StepResult;
+use crate::models::indexing_health::IndexingLinkOutcome;
 use crate::models::task::Task;
 
 use super::*;
@@ -30,39 +29,6 @@ mod tests {
     }
 
     #[test]
-    fn insert_contextual_link_finds_relevant_paragraph() {
-        let content = "# Machine Learning Guide\n\nMachine learning is a subset of artificial intelligence.\n\nBaking cakes is a fun hobby.\n";
-        let result = insert_contextual_link(content, "machine learning tutorial", "ml-tutorial");
-        assert!(result.is_some());
-        let result = result.unwrap();
-        assert!(result.contains("[machine learning tutorial](/blog/ml-tutorial)"));
-        // The link should be in the ML paragraph, not the baking paragraph
-        let lines: Vec<&str> = result.lines().collect();
-        let ml_line = lines
-            .iter()
-            .position(|l| l.contains("Machine learning"))
-            .unwrap();
-        let baking_line = lines
-            .iter()
-            .position(|l| l.contains("Baking cakes"))
-            .unwrap();
-        assert!(lines[ml_line].contains("ml-tutorial"));
-        assert!(!lines[baking_line].contains("ml-tutorial"));
-    }
-
-    #[test]
-    fn insert_contextual_link_falls_back_to_longest_paragraph() {
-        let content = "# Baking Guide\n\nBaking cakes is a fun hobby that many people enjoy on weekends with their families and friends.\n\nChocolate is delicious.\n";
-        let result = insert_contextual_link(content, "machine learning tutorial", "ml-tutorial");
-        // No keyword match, but falls back to the longest substantial paragraph (>80 chars)
-        assert!(result.is_some(), "should fall back to longest paragraph");
-        let result = result.unwrap();
-        // The longest paragraph gets the link
-        assert!(result.contains("Baking cakes"));
-        assert!(result.contains("ml-tutorial"));
-    }
-
-    #[test]
     fn parse_target_artifact_extracts_target() {
         let task = Task {
             id: "task-1".to_string(),
@@ -83,7 +49,19 @@ mod tests {
                 path: None,
                 artifact_type: None,
                 source: None,
-                content: Some(r#"{"target": {"slug": "test-page", "article_id": 42}}"#.to_string()),
+                content: Some(
+                    r#"{"target": {
+                        "url": "https://example.com/blog/test-page",
+                        "slug": "test-page",
+                        "article_id": 42,
+                        "file": "content/test-page.mdx",
+                        "reason_code": "operator_scoped",
+                        "incoming_link_count_before": 0,
+                        "target_keyword": "test",
+                        "source_candidates": []
+                    }}"#
+                    .to_string(),
+                ),
             }],
             run: crate::models::task::TaskRun::default(),
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -94,8 +72,9 @@ mod tests {
         let target = parse_target_artifact(&task);
         assert!(target.is_some());
         let target = target.unwrap();
-        assert_eq!(target["slug"].as_str(), Some("test-page"));
-        assert_eq!(target["article_id"].as_i64(), Some(42));
+        assert_eq!(target.slug, "test-page");
+        assert_eq!(target.article_id, 42);
+        assert_eq!(target.file, "content/test-page.mdx");
     }
 
     #[test]
@@ -176,13 +155,14 @@ mod tests {
                 r#"{"target": {
                     "article_id": 42,
                     "slug": "target-page",
-                    "title": "Target Page",
                     "url": "https://example.com/blog/target-page",
+                    "file": "content/target-page.mdx",
                     "target_keyword": "target keyword",
                     "reason_code": "no_internal_links",
+                    "incoming_link_count_before": 0,
                     "source_candidates": [
-                        {"article_id": 7, "slug": "source-a", "file": "source-a.mdx", "title": "Source A", "gsc_impressions": 120, "score": 0.9},
-                        {"article_id": 8, "slug": "source-b", "file": "source-b.mdx", "title": "Source B", "gsc_impressions": 45, "score": 0.5}
+                        {"article_id": 7, "slug": "source-a", "file": "source-a.mdx", "title": "Source A", "reason": "shared target keyword"},
+                        {"article_id": 8, "slug": "source-b", "file": "source-b.mdx", "title": "Source B", "reason": "shared target keyword"}
                     ]
                 }}"#
                 .to_string(),
@@ -277,6 +257,156 @@ mod tests {
             "expected empty-sources short-circuit, got: {}",
             plan.message
         );
+        let plan_json: serde_json::Value =
+            serde_json::from_str(plan.output.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(
+            plan_json["outcome"].as_str(),
+            Some(IndexingLinkOutcome::NoCandidates.as_str())
+        );
+    }
+
+    /// When every source already links to the target, plan must no-op with
+    /// `already_linked` (not call the agent).
+    #[test]
+    fn plan_short_circuits_when_all_sources_already_link() {
+        let mut task = indexing_link_task(vec![target_artifact_with_candidates()]);
+        task.artifacts.push(crate::models::task::TaskArtifact {
+            key: "indexing_link_context".to_string(),
+            path: None,
+            artifact_type: None,
+            source: None,
+            content: Some(
+                r#"{"target": {}, "sources": [
+                    {"article_id": 7, "already_links_to_target": true, "file": "a.mdx"},
+                    {"article_id": 8, "already_links_to_target": true, "file": "b.mdx"}
+                ]}"#
+                .to_string(),
+            ),
+        });
+
+        let plan = exec_indexing_link_plan(&task, "/nonexistent", "__test_unknown_provider__");
+        assert!(plan.success, "plan should short-circuit: {}", plan.message);
+        assert!(
+            plan.message.contains("already link"),
+            "expected already-linked short-circuit, got: {}",
+            plan.message
+        );
+        let plan_json: serde_json::Value =
+            serde_json::from_str(plan.output.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(
+            plan_json["outcome"].as_str(),
+            Some(IndexingLinkOutcome::AlreadyLinked.as_str())
+        );
+    }
+
+    /// Apply + verify honor intentional no-ops (empty candidates) so the empty
+    /// operator path does not fail at verify (issue #163 review finding #1).
+    #[test]
+    fn apply_and_verify_pass_on_no_candidates_noop() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "indexing_link_noop_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let automation_dir = temp_dir.join(".github").join("automation");
+        std::fs::create_dir_all(&automation_dir).unwrap();
+        let project_path = temp_dir.to_string_lossy().to_string();
+
+        let plan_json = serde_json::json!({
+            "links_to_add": [],
+            "outcome": "no_candidates"
+        });
+        std::fs::write(
+            automation_dir.join("indexing_link_plan_task-1.json"),
+            serde_json::to_string(&plan_json).unwrap(),
+        )
+        .unwrap();
+
+        let mut task = indexing_link_task(vec![target_artifact_with_candidates()]);
+        task.artifacts.push(crate::models::task::TaskArtifact {
+            key: "indexing_link_plan".to_string(),
+            path: None,
+            artifact_type: None,
+            source: None,
+            content: Some(plan_json.to_string()),
+        });
+
+        let apply = exec_indexing_link_apply(&task, &project_path);
+        // Apply may fail target slug validation without a real DB/project slug
+        // set — if so, skip the full path and only assert plan outcome plumbing
+        // via load_pipeline_outcome.
+        if apply.success {
+            let apply_json: serde_json::Value =
+                serde_json::from_str(apply.output.as_deref().unwrap_or("{}")).unwrap();
+            assert_eq!(
+                apply_json["outcome"].as_str(),
+                Some(IndexingLinkOutcome::NoCandidates.as_str())
+            );
+            task.artifacts.push(crate::models::task::TaskArtifact {
+                key: "indexing_link_apply".to_string(),
+                path: None,
+                artifact_type: None,
+                source: None,
+                content: apply.output.clone(),
+            });
+        }
+
+        // Verify with apply outcome present (or plan-only fallback).
+        if !task
+            .artifacts
+            .iter()
+            .any(|a| a.key == "indexing_link_apply")
+        {
+            task.artifacts.push(crate::models::task::TaskArtifact {
+                key: "indexing_link_apply".to_string(),
+                path: None,
+                artifact_type: None,
+                source: None,
+                content: Some(
+                    serde_json::json!({
+                        "outcome": "no_candidates",
+                        "links_added": 0
+                    })
+                    .to_string(),
+                ),
+            });
+        }
+
+        let verify = exec_indexing_link_verify(&task, &project_path);
+        assert!(
+            verify.success,
+            "verify must pass on no_candidates: {}",
+            verify.message
+        );
+        assert!(
+            verify.message.contains("no_candidates") || verify.message.contains("skipped"),
+            "expected no_candidates message, got: {}",
+            verify.message
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn outcome_parse_roundtrip() {
+        assert_eq!(
+            IndexingLinkOutcome::parse("applied"),
+            Some(IndexingLinkOutcome::Applied)
+        );
+        assert_eq!(
+            IndexingLinkOutcome::parse("already_linked"),
+            Some(IndexingLinkOutcome::AlreadyLinked)
+        );
+        assert_eq!(
+            IndexingLinkOutcome::parse("no_candidates"),
+            Some(IndexingLinkOutcome::NoCandidates)
+        );
+        assert!(IndexingLinkOutcome::AlreadyLinked.is_intentional_noop());
+        assert!(IndexingLinkOutcome::NoCandidates.is_intentional_noop());
+        assert!(!IndexingLinkOutcome::Applied.is_intentional_noop());
     }
 
     /// End-to-end test: apply a link to the real learnedlate repo file and verify

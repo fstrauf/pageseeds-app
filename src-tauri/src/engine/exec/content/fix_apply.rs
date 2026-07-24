@@ -92,7 +92,7 @@ pub(crate) fn exec_fix_content_article_apply(
         return StepResult::fail(format!("Failed to write file: {}", e));
     }
 
-    // Update last_edited_at in articles table
+    // Update last_edited_at (and catalog target_keyword when retargeting — issue #165)
     let article_id = context
         .as_ref()
         .map(|c| c.article_id)
@@ -105,6 +105,15 @@ pub(crate) fn exec_fix_content_article_apply(
                 "UPDATE articles SET last_edited_at = ?1 WHERE id = ?2 AND project_id = ?3",
                 rusqlite::params![&now, id, &task.project_id],
             );
+            if let Some(ref kw) = patch.changes.target_keyword {
+                let _ = crate::content::article_index::apply_catalog_target_keyword(
+                    &db,
+                    &task.project_id,
+                    id,
+                    kw,
+                    Path::new(project_path),
+                );
+            }
         }
     }
 
@@ -151,6 +160,7 @@ pub(crate) fn materialize_content_fix_changes(
         ref faq_questions,
         ref eeat_signal,
         ref cta,
+        ref target_keyword,
     } = *changes;
 
     let mut new_fm = fm;
@@ -165,6 +175,11 @@ pub(crate) fn materialize_content_fix_changes(
     if let Some(new_desc) = description {
         new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "description", new_desc);
         applied.push("description".to_string());
+    }
+
+    if let Some(new_kw) = target_keyword {
+        new_fm = crate::content::frontmatter::replace_scalar(&new_fm, "target_keyword", new_kw);
+        applied.push("target_keyword".to_string());
     }
 
     if let Some(new_h1) = h1 {

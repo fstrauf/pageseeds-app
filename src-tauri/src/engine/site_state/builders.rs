@@ -13,8 +13,10 @@ use rusqlite::Connection;
 use crate::content::ops::count_words;
 use crate::content::redirects::load_redirect_source_slugs;
 use crate::content::slug::normalize_url_slug;
-use crate::db::{self, GscDailyWindowMetrics};
-use crate::engine::exec::outcome_review::page_matches_slug;
+use crate::db::{
+    self, build_page_index, pages_for_slug, previous_window, recent_window, rollup_for_slug,
+    GscDailyWindowMetrics,
+};
 use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::article::Article;
@@ -54,13 +56,15 @@ pub fn build_site_overview(
     let mut top_candidates: Vec<TopPage> = Vec::new();
     let mut movers: Vec<TopMover> = Vec::new();
     let mut has_any_gsc = false;
+    let mut multi_url_slug_count = 0_usize;
 
     for article in &live {
         let slug = normalize_url_slug(&article.url_slug);
-        let page = resolve_page_url(&page_index, &slug);
-        let recent = page
-            .as_ref()
-            .and_then(|p| recent_by_page.get(p).copied());
+        let pages = pages_for_slug(&page_index, &slug);
+        if pages.len() > 1 {
+            multi_url_slug_count += 1;
+        }
+        let (recent, _) = rollup_for_slug(&page_index, &recent_by_page, &slug);
         if let Some(m) = recent {
             has_any_gsc = true;
             total_impressions += m.impressions;
@@ -78,8 +82,8 @@ pub fn build_site_overview(
             });
         }
 
-        if let Some(p) = page.as_ref() {
-            let prev = prev_by_page.get(p).copied();
+        if !pages.is_empty() {
+            let (prev, _) = rollup_for_slug(&page_index, &prev_by_page, &slug);
             if let (Some(r), Some(b)) = (recent, prev) {
                 has_any_gsc = true;
                 let clicks_delta = r.clicks - b.clicks;
@@ -131,16 +135,18 @@ pub fn build_site_overview(
         .collect();
 
     let avg_ctr = safe_ctr(total_clicks, total_impressions);
-    let hints = build_hints(has_any_gsc, &top_candidates);
+    let freshness = build_gsc_freshness(conn, project_id);
+    let hints = build_hints(
+        has_any_gsc,
+        &freshness,
+        &top_candidates,
+        multi_url_slug_count,
+    );
 
     Ok(SiteOverview {
         project_id: project_id.to_string(),
         generated_at,
-        freshness: Freshness {
-            gsc_at: gsc_freshness_at(conn, project_id),
-            evidence_index_at: None,
-            evidence_coverage: 0.0,
-        },
+        freshness,
         totals: SiteTotals {
             articles_live: live.len(),
             articles_redirected: articles
@@ -195,10 +201,7 @@ pub fn list_articles_catalog(
         }
 
         let slug = normalize_url_slug(&article.url_slug);
-        let page = resolve_page_url(&page_index, &slug);
-        let metrics = page
-            .as_ref()
-            .and_then(|p| metrics_by_page.get(p).copied());
+        let (metrics, url_variants) = rollup_for_slug(&page_index, &metrics_by_page, &slug);
         let top_queries = load_top_queries(conn, project_id, article.id);
         let indexing_status = indexing_by_slug.get(&slug).cloned();
 
@@ -206,6 +209,7 @@ pub fn list_articles_catalog(
             article,
             period_days,
             metrics.as_ref(),
+            url_variants,
             indexing_status,
             top_queries,
             None, // list path: DB fields only — no MDX re-parse
@@ -234,6 +238,7 @@ pub fn list_articles_catalog(
     Ok(ArticlesCatalog {
         project_id: project_id.to_string(),
         generated_at,
+        freshness: build_gsc_freshness(conn, project_id),
         filter: ArticlesFilterEcho {
             status: filter.status,
             min_impressions: filter.min_impressions,
@@ -275,12 +280,10 @@ pub fn get_article_package(
     let indexing_by_slug = indexing_status_map(conn, project_id);
 
     let normalized_slug = normalize_url_slug(&article.url_slug);
-    let page = resolve_page_url(&page_index, &normalized_slug);
-    let metrics = page.as_ref().and_then(|p| {
-        db::gsc_page_daily_window_metrics(conn, project_id, p, &start, &end)
-            .ok()
-            .flatten()
-    });
+    // Issue #166: sum all URL variants that normalize to the catalog slug.
+    let metrics_by_page =
+        db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)?;
+    let (metrics, url_variants) = rollup_for_slug(&page_index, &metrics_by_page, &normalized_slug);
     let top_queries = load_top_queries(conn, project_id, article.id);
     let indexing_status = indexing_by_slug.get(&normalized_slug).cloned();
 
@@ -290,6 +293,7 @@ pub fn get_article_package(
         article,
         period_days,
         metrics.as_ref(),
+        url_variants,
         indexing_status,
         top_queries.clone(),
         Some(&materialized.enrichment),
@@ -334,6 +338,7 @@ fn build_catalog_row(
     article: &Article,
     period_days: i64,
     metrics: Option<&GscDailyWindowMetrics>,
+    url_variants: usize,
     indexing_status: Option<String>,
     top_queries: Vec<QueryMetric>,
     file_enrichment: Option<&FileEnrichment>,
@@ -391,6 +396,7 @@ fn build_catalog_row(
             ctr,
             avg_position: position,
             period_days,
+            url_variants,
         },
         top_queries,
         // Delta vs #117: link counts left at zero — full scan is expensive per row.
@@ -585,49 +591,16 @@ fn build_query_cannibalization(
     Ok(out)
 }
 
-// ── GSC / page helpers ───────────────────────────────────────────────────────
+// GSC page-index / window / rollup helpers live in `db::gsc_join` (shared with
+// territory analysis — single SoT, issue #167 / PR #176).
 
-/// (normalized_slug, page_url) pairs for all gsc_page_daily pages.
-fn build_page_index(conn: &Connection, project_id: &str) -> Result<Vec<(String, String)>> {
-    let pages = db::list_gsc_page_daily_pages(conn, project_id)?;
-    Ok(pages
-        .into_iter()
-        .map(|page| {
-            let slug = crate::content::slug::extract_slug_from_url(&page);
-            (slug, page)
-        })
-        .filter(|(slug, _)| !slug.is_empty())
-        .collect())
-}
+/// Desk GSC tape freshness from `gsc_page_daily` only (issue #164).
+///
+/// Does **not** consult `ctr_query_metrics` — live `gsc-*` tools are the
+/// dual-path for API freshness; desk rollups expose tape usability here.
+fn build_gsc_freshness(conn: &Connection, project_id: &str) -> Freshness {
+    use crate::engine::exec::common::GSC_METRICS_MAX_AGE_DAYS;
 
-fn resolve_page_url(page_index: &[(String, String)], slug: &str) -> Option<String> {
-    page_index
-        .iter()
-        .find(|(s, page)| s == slug || page_matches_slug(page, slug))
-        .map(|(_, page)| page.clone())
-}
-
-fn recent_window(period_days: i64) -> (String, String) {
-    let end = Utc::now().date_naive() - Duration::days(1);
-    let start = end - Duration::days(period_days - 1);
-    (start.format("%Y-%m-%d").to_string(), end.format("%Y-%m-%d").to_string())
-}
-
-fn previous_window(period_days: i64) -> (String, String) {
-    let recent_end = Utc::now().date_naive() - Duration::days(1);
-    let recent_start = recent_end - Duration::days(period_days - 1);
-    let prev_end = recent_start - Duration::days(1);
-    let prev_start = prev_end - Duration::days(period_days - 1);
-    (
-        prev_start.format("%Y-%m-%d").to_string(),
-        prev_end.format("%Y-%m-%d").to_string(),
-    )
-}
-
-fn gsc_freshness_at(conn: &Connection, project_id: &str) -> Option<String> {
-    let query_max = db::ctr_query_metrics_max_fetched_at(conn, project_id)
-        .ok()
-        .flatten();
     let page_max: Option<String> = conn
         .query_row(
             "SELECT MAX(fetched_at) FROM gsc_page_daily WHERE project_id = ?1",
@@ -637,11 +610,49 @@ fn gsc_freshness_at(conn: &Connection, project_id: &str) -> Option<String> {
         .ok()
         .flatten();
 
-    match (query_max, page_max) {
-        (Some(a), Some(b)) => Some(if a >= b { a } else { b }),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
+    let Some(gsc_at) = page_max else {
+        return Freshness {
+            gsc_at: None,
+            age_days: None,
+            stale: true,
+            source: "none".into(),
+            hint: Some(
+                "Desk GSC tape empty — use gsc-performance / gsc-queries or run collect_gsc then re-read desk"
+                    .into(),
+            ),
+            evidence_index_at: None,
+            evidence_coverage: 0.0,
+        };
+    };
+
+    let (age_days, stale) = match chrono::DateTime::parse_from_rfc3339(&gsc_at) {
+        Ok(synced_at) => {
+            let age = Utc::now().signed_duration_since(synced_at);
+            let days = age.num_days();
+            let stale = age > Duration::days(GSC_METRICS_MAX_AGE_DAYS);
+            (Some(days), stale)
+        }
+        // Unparseable timestamp: treat as unusable (stale) without inventing age.
+        Err(_) => (None, true),
+    };
+
+    let hint = if stale {
+        Some(
+            "Desk GSC tape stale — use gsc-performance / gsc-queries or run collect_gsc then re-read desk"
+                .into(),
+        )
+    } else {
+        None
+    };
+
+    Freshness {
+        gsc_at: Some(gsc_at),
+        age_days,
+        stale,
+        source: "gsc_page_daily".into(),
+        hint,
+        evidence_index_at: None,
+        evidence_coverage: 0.0,
     }
 }
 
@@ -685,16 +696,29 @@ fn mover_direction(clicks_delta: f64) -> String {
     }
 }
 
-fn build_hints(has_any_gsc: bool, top_pages: &[TopPage]) -> Vec<String> {
+fn build_hints(
+    has_any_gsc: bool,
+    freshness: &Freshness,
+    top_pages: &[TopPage],
+    multi_url_slug_count: usize,
+) -> Vec<String> {
     let mut hints = Vec::new();
-    if !has_any_gsc {
+    // Always surface missing/stale tape for agents scanning hints only (#164).
+    if freshness.source == "none" || !has_any_gsc {
         hints.push("GSC snapshots missing".into());
+    } else if freshness.stale {
+        hints.push("GSC page-daily tape stale".into());
     }
     if top_pages
         .iter()
         .any(|p| p.impressions >= 1000.0 && p.ctr < 0.01)
     {
         hints.push("High-impression low-CTR pages present".into());
+    }
+    if multi_url_slug_count > 0 {
+        hints.push(format!(
+            "GSC multi-URL inventory: {multi_url_slug_count} catalog slugs map to >1 page URL"
+        ));
     }
     // Always until #119
     hints.push("Evidence index not available".into());

@@ -1,0 +1,103 @@
+# Build and publish pageseeds-cli release binaries.
+# Tag scheme: cli-v{semver}  e.g. cli-v0.1.0
+# Asset: pageseeds-cli-{semver}-aarch64-apple-darwin.tar.gz
+name: Release CLI
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver to package (must match src-tauri/Cargo.toml). Empty = read from Cargo.toml."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos-arm64:
+    name: Build pageseeds-cli (macOS arm64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n1)"
+          if [[ -z "${CARGO_VERSION}" ]]; then
+            echo "error: could not read package version from src-tauri/Cargo.toml" >&2
+            exit 1
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            INPUT="${{ inputs.version }}"
+            if [[ -n "${INPUT}" ]]; then
+              VERSION="${INPUT#cli-v}"
+              VERSION="${VERSION#v}"
+            else
+              VERSION="${CARGO_VERSION}"
+            fi
+          else
+            REF="${GITHUB_REF_NAME:-}"
+            if [[ "${REF}" != cli-v* ]]; then
+              echo "error: expected tag cli-v*, got '${REF}'" >&2
+              exit 1
+            fi
+            VERSION="${REF#cli-v}"
+          fi
+
+          if [[ "${VERSION}" != "${CARGO_VERSION}" ]]; then
+            echo "error: tag/input version '${VERSION}' != Cargo.toml version '${CARGO_VERSION}'" >&2
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=cli-v${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Build release binary
+        run: |
+          cargo build --release --manifest-path src-tauri/Cargo.toml --bin pageseeds-cli
+
+      - name: Package tarball + checksum
+        id: pkg
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          BIN="src-tauri/target/release/pageseeds-cli"
+          if [[ ! -x "${BIN}" ]]; then
+            echo "error: binary not found at ${BIN}" >&2
+            exit 1
+          fi
+          STAGE="$(mktemp -d)"
+          cp "${BIN}" "${STAGE}/pageseeds-cli"
+          chmod +x "${STAGE}/pageseeds-cli"
+          ASSET="pageseeds-cli-${VERSION}-aarch64-apple-darwin.tar.gz"
+          tar -C "${STAGE}" -czf "${ASSET}" pageseeds-cli
+          shasum -a 256 "${ASSET}" > "${ASSET}.sha256"
+          echo "asset=${ASSET}" >> "${GITHUB_OUTPUT}"
+          echo "checksum=${ASSET}.sha256" >> "${GITHUB_OUTPUT}"
+          ls -la "${ASSET}" "${ASSET}.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: pageseeds-cli v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          # workflow_dispatch without an existing tag: create draft for dry-run inspection
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          files: |
+            ${{ steps.pkg.outputs.asset }}
+            ${{ steps.pkg.outputs.checksum }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
