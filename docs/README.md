@@ -26,6 +26,7 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 | Where data lives | [Data Persistence](./DATA_PERSISTENCE.md) |
 | How AI agents work | [Agent Integration](./AGENT_INTEGRATION.md) |
 | How to build features | [Agent Development Playbook](./AGENT_DEVELOPMENT_PLAYBOOK.md) |
+| CLI free vs paid tools (commercial boundary) | [CLI Commercial](./CLI_COMMERCIAL.md) |
 | The critical rules | [CONTRACTS.md](../CONTRACTS.md) |
 | Agent rules and orientation | [AGENTS.md](../AGENTS.md) |
 | Quick orientation | [AI_QUICK_START.md](../AI_QUICK_START.md) |
