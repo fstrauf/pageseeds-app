@@ -271,3 +271,23 @@ Enforcement points (do not bypass or re-implement):
 - **Every new-article write** (`write_article`, `create_content`, `create_hub_page`, `refresh_hub_page`) runs the deterministic `content_write_verify` step between the write stage and link verify: it fails the task when no article file was written and registered (issue #13 contract — never Done with zero output). Provider file-IO capability is defined in exactly one place (`rig/provider.rs::provider_supports_file_io()`).
 - **Nested content write host policy (issue #143):** agentic steps that declare `PromptSection::ContentDirectives` (ContentHandler write/optimize) require a file-IO host (`grok`/`kimi`). This is the **sole** policy for nested content write: under text-only providers (`openai`/`claude`/`ollama`), `exec_agentic` fails loud early with a Path B (`write-context` / `write-submit`) pointer. There is no executor-write fallback that persists agent chat text as MDX. Nested `execute-task` is the unattended fallback and must use grok/kimi; CLI Path B is preferred for outer-agent quality. Structured-extraction fix paths are not gated. If a file-IO agent still produces no file, `content_write_verify` fails the task (issue #13).
 - **`consolidate_cluster` must rewrite inbound links** to every redirected slug (`merge_rewrite_inbound_links`) before `merge_validate_output` asserts none remain.
+
+---
+
+## 14. CLI machine contract (`pageseeds-cli`)
+
+`pageseeds-cli` is a machine-facing binary for agents and CI. Streams and exit codes are stable; do not "improve" them without a semver callout.
+
+| Case | stdout | stderr | exit |
+|---|---|---|---|
+| **Success payload** | single JSON value | empty | **0** |
+| **Usage / domain hard error** | empty | `ERROR: …` | **1** |
+| **Outcome envelope** (validation / task result) | JSON with `ok` / `success` fields | empty | **0** even when `ok`/`success` is **false** — caller inspects JSON |
+| **License deny** (when #156 lands) | empty | `ERROR: …` including buy URL | **1** (same path as hard error) |
+| **Help** (`-h`/`--help`, `help`, no args, or `<tool> --help`) | human help text | empty | **0** |
+
+**Path B note (do not break):** `write-submit` and `merge-submit` validation failures print JSON with `ok: false` and still exit **0**. Only domain/usage failures (missing file, bad flags, missing project) use `ERROR:` + exit 1.
+
+**Semver surface:** flags and subcommand names are a breaking-change surface; renames must be called out in release notes. Smoke check: `scripts/check-cli-contract.sh`.
+
+**Hard-error helper:** `exit(msg)` in `src-tauri/src/bin/pageseeds-cli.rs` is the sole hard-fail path (`eprintln!("ERROR: …")` + exit 1). License deny (#156) must reuse it with a buy URL in the message — do not invent a separate exit channel.

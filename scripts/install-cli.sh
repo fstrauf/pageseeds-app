@@ -39,4 +39,5 @@ else
 fi
 
 "${BIN_DIR}/${BIN_NAME}" --help >/dev/null
+PAGESEEDS_CLI="${BIN_DIR}/${BIN_NAME}" bash "${ROOT}/scripts/check-cli-contract.sh"
 echo "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."

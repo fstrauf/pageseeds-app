@@ -16,7 +16,9 @@ use pageseeds_lib::models::task::{Priority, TaskRunPolicy, TaskStatus};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {
+    // Early help: no args, bare `help`, or -h/--help anywhere (including after tool name).
+    // Must run BEFORE requiring -i/-p so e.g. `pageseeds-cli research-pull --help` exits 0.
+    if wants_help(&args) {
         print_help();
         return;
     }
@@ -1203,74 +1205,444 @@ fn expand_tilde(path: &str) -> String {
     else { path.into() }
 }
 
-fn exit(msg: &str) -> ! { eprintln!("ERROR: {msg}"); std::process::exit(1); }
+/// Hard-error path: `ERROR: …` on stderr, empty stdout, exit 1.
+/// License deny (#156) must use this same shape with a buy URL in the message.
+fn exit(msg: &str) -> ! {
+    eprintln!("ERROR: {msg}");
+    std::process::exit(1);
+}
+
+/// True when the invocation should print help and exit 0 (no tool dispatch).
+fn wants_help(args: &[String]) -> bool {
+    if args.len() < 2 {
+        return true;
+    }
+    if args[1] == "help" {
+        return true;
+    }
+    // -h / --help anywhere after argv[0], including `tool --help`
+    args[1..].iter().any(|a| a == "-h" || a == "--help")
+}
+
+/// One help row for a dispatched tool. Keep in sync with the `match` arms in `main`.
+struct ToolHelp {
+    name: &'static str,
+    purpose: &'static str,
+    example: &'static str,
+    section: &'static str,
+}
+
+/// Complete inventory of match-arm tools. New tools must be added here and in `main`.
+const TOOLS: &[ToolHelp] = &[
+    // GSC
+    ToolHelp {
+        name: "gsc-performance",
+        purpose: "GSC page performance rows (last 90d)",
+        example: "gsc-performance -i <id> -p <path> [-l N]",
+        section: "GSC",
+    },
+    ToolHelp {
+        name: "gsc-queries",
+        purpose: "GSC queries (site-wide or -u page URL)",
+        example: "gsc-queries -i <id> -p <path> [-u <page-url>] [-l N]",
+        section: "GSC",
+    },
+    ToolHelp {
+        name: "gsc-movers",
+        purpose: "GSC page movers (recent vs prior 30d)",
+        example: "gsc-movers -i <id> -p <path> [-l N]",
+        section: "GSC",
+    },
+    // Task / queue
+    ToolHelp {
+        name: "list-tasks",
+        purpose: "List tasks (optional type/status filter)",
+        example: "list-tasks -i <id> [-t type] [-s status]",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "cancel-tasks",
+        purpose: "Cancel matching tasks (requires --yes)",
+        example: "cancel-tasks -i <id> -t type [-s status] --yes",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "create-task",
+        purpose: "Create a task (fix_* needs -S slug)",
+        example: "create-task -i <id> -p <path> -t fix_content_article -S <slug>",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "execute-task",
+        purpose: "Run one task by id (nested agent host)",
+        example: "execute-task -I <task-id>",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "get-task",
+        purpose: "Full task JSON including artifacts",
+        example: "get-task -I <task-id>",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "update-task-status",
+        purpose: "Close artifact-review tasks (done|cancelled)",
+        example: "update-task-status -I <task-id> -s done",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "select-keywords",
+        purpose: "Create content tasks from research picks",
+        example: "select-keywords -I <research-task-id> -K kw1,kw2",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "write-context",
+        purpose: "Path B write package (brief/path/skill; no LLM)",
+        example: "write-context -i <id> -p <path> -I <research-task-id> -K <keyword>",
+        section: "Path B write",
+    },
+    ToolHelp {
+        name: "write-submit",
+        purpose: "Path B validate+ingest MDX (ok:false still exit 0)",
+        example: "write-submit -i <id> -p <path> -f <mdx> [-I write-task-id] [-K keyword]",
+        section: "Path B write",
+    },
+    ToolHelp {
+        name: "research-context",
+        purpose: "Path B research strategy package (no side effects)",
+        example: "research-context -i <id>",
+        section: "Path B research",
+    },
+    ToolHelp {
+        name: "research-pull",
+        purpose: "Path B seeds → custom_keyword_research (create+execute)",
+        example: "research-pull -i <id> -K seed1,seed2 [--no-execute]",
+        section: "Path B research",
+    },
+    ToolHelp {
+        name: "merge-context",
+        purpose: "Path B merge package with full MDX bodies (no LLM)",
+        example: "merge-context -i <id> -p <path> -I <consolidate-task-id>",
+        section: "Path B merge",
+    },
+    ToolHelp {
+        name: "merge-submit",
+        purpose: "Path B apply merge (ok:false validation still exit 0)",
+        example: "merge-submit -i <id> -p <path> -I <consolidate-task-id> [-y]",
+        section: "Path B merge",
+    },
+    ToolHelp {
+        name: "select-content-review",
+        purpose: "Spawn fix_content_article from content_review picks",
+        example: "select-content-review -I <review-task-id> -P id1,id2",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "select-cannibalization",
+        purpose: "Spawn cannibalization fixes from parent picks",
+        example: "select-cannibalization -I <parent-task-id> -S type:id,...",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "create-articles-from-keywords",
+        purpose: "Create article tasks from keyword list",
+        example: "create-articles-from-keywords -i <id> -I <research-task-id> -k \"kw1, kw2\"",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "set-task-status",
+        purpose: "Set any task status string",
+        example: "set-task-status -I <task-id> -s done",
+        section: "Task / queue",
+    },
+    ToolHelp {
+        name: "create-reddit-replies",
+        purpose: "Create draft_reddit_reply tasks for post ids",
+        example: "create-reddit-replies -I <parent-task-id> -P post1,post2",
+        section: "Task / queue",
+    },
+    // Cannibalization
+    ToolHelp {
+        name: "cannibalization-strategy",
+        purpose: "Load strategy + review rows for a project",
+        example: "cannibalization-strategy -i <id>",
+        section: "Cannibalization",
+    },
+    ToolHelp {
+        name: "set-review-status",
+        purpose: "Approve/reject a cannibalization recommendation",
+        example: "set-review-status -i <id> -S <strategy-id> -T <type> -I <rec-id> -s approved",
+        section: "Cannibalization",
+    },
+    ToolHelp {
+        name: "create-tasks-from-approved",
+        purpose: "Spawn tasks from approved recommendations",
+        example: "create-tasks-from-approved -i <id> -S latest",
+        section: "Cannibalization",
+    },
+    // Dead-weight
+    ToolHelp {
+        name: "score-zero-impression-articles",
+        purpose: "Score low/zero-impression articles (WS4)",
+        example: "score-zero-impression-articles -i <id> -p <path> [-m <max-impressions>]",
+        section: "Dead-weight",
+    },
+    // Site State desk
+    ToolHelp {
+        name: "site-overview",
+        purpose: "Site health desk (totals, top pages, movers)",
+        example: "site-overview -i <id> -p <path> [-d period-days]",
+        section: "Site State desk",
+    },
+    ToolHelp {
+        name: "articles",
+        purpose: "Article catalog with GSC filters",
+        example: "articles -i <id> -p <path> [-s status] [-m min-imp] [-l N] [-R]",
+        section: "Site State desk",
+    },
+    ToolHelp {
+        name: "article",
+        purpose: "Full package for one article slug",
+        example: "article -i <id> -p <path> -S <slug> [-d period-days]",
+        section: "Site State desk",
+    },
+    // Article inspect
+    ToolHelp {
+        name: "article-list",
+        purpose: "Lightweight article list from DB",
+        example: "article-list -i <id> [-s status]",
+        section: "Article inspect",
+    },
+    ToolHelp {
+        name: "article-frontmatter",
+        purpose: "Parsed frontmatter for a slug",
+        example: "article-frontmatter -p <path> -S <slug>",
+        section: "Article inspect",
+    },
+    ToolHelp {
+        name: "article-body-hash",
+        purpose: "Body hashes for change detection",
+        example: "article-body-hash -i <id> -p <path>",
+        section: "Article inspect",
+    },
+    ToolHelp {
+        name: "article-title-scan",
+        purpose: "Scan titles across content dir",
+        example: "article-title-scan -i <id> -p <path>",
+        section: "Article inspect",
+    },
+    ToolHelp {
+        name: "validate-article",
+        purpose: "Validate one article (floors / structure)",
+        example: "validate-article -i <id> -p <path> -S <slug>",
+        section: "Article inspect",
+    },
+    // Path B fix
+    ToolHelp {
+        name: "fix-context",
+        purpose: "Path B fix package (file + queries + skill; no generate)",
+        example: "fix-context -i <id> -p <path> -S <slug> -k content|ctr [-g goals]",
+        section: "Path B fix",
+    },
+    ToolHelp {
+        name: "fix-submit",
+        purpose: "Path B apply patch and/or validate on-disk MDX",
+        example: "fix-submit -i <id> -p <path> -S <slug> -k content [--patch <json>] [--file <mdx>]",
+        section: "Path B fix",
+    },
+    // Audits / reports
+    ToolHelp {
+        name: "content-audit-report",
+        purpose: "Read last content audit report from repo",
+        example: "content-audit-report -p <path>",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "run-content-audit",
+        purpose: "Run content audit and print result JSON",
+        example: "run-content-audit -i <id> -p <path>",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "cannibalization-clusters",
+        purpose: "Read cannibalization cluster JSON from repo",
+        example: "cannibalization-clusters -p <path>",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "indexing-status",
+        purpose: "Indexing health snapshot",
+        example: "indexing-status -i <id> -p <path>",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "ctr-health",
+        purpose: "CTR health summary across articles",
+        example: "ctr-health -i <id> -p <path>",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "framework-files",
+        purpose: "Read framework / skill files from project",
+        example: "framework-files -p <path> [-f <relative-file>]",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "article-link-graph",
+        purpose: "Internal /blog/ link graph scan",
+        example: "article-link-graph -i <id> -p <path>",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "research-shortlist",
+        purpose: "List research shortlist rows",
+        example: "research-shortlist -i <id> [-s pending|researched|covered] [-H health]",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "article-quality-reviews",
+        purpose: "Recent article quality review rows",
+        example: "article-quality-reviews -i <id> [-l N]",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "compare-rendered",
+        purpose: "Compare rendered titles vs frontmatter",
+        example: "compare-rendered -p <path> [-m max]",
+        section: "Audits / reports",
+    },
+    ToolHelp {
+        name: "write-feature-spec",
+        purpose: "Write a feature-spec markdown stub into the repo",
+        example: "write-feature-spec -p <path> -T \"title\" [-s severity] [-m impact]",
+        section: "Audits / reports",
+    },
+];
 
 fn print_help() {
-    eprintln!(r#"pageseeds-cli — individual data tools for agents / KimiCode
+    // Help goes to stdout so agents can pipe it; contract documents this.
+    println!(
+        r#"pageseeds-cli — individual data tools for agents / KimiCode
 
-Each subcommand calls one PageSeeds data function and prints JSON to stdout.
-Uses the same SQLite DB as the desktop app. Prefer the installed binary from
-any directory (do not require opening pageseeds-app source).
+Machine contract:
+  Success payload:          single JSON value on stdout; exit 0
+  Usage / domain hard error: "ERROR: …" on stderr; exit 1; stdout empty
+  Outcome envelope:         JSON on stdout with ok/success fields; exit 0 even when
+                            ok/success is false — caller inspects JSON (Path B write-submit,
+                            merge-submit, etc.)
+  License deny (when #156): same as hard error (stderr + exit 1); message includes buy URL
+  Help:                     -h/--help, help, no args, or <tool> --help → exit 0; text on stdout
+
+Each subcommand calls one PageSeeds data function. Uses the same SQLite DB as the
+desktop app. Prefer the installed binary from any directory.
 
 Usage:
   pageseeds-cli <tool> -i <project-id> -p <project-path> [args]
   # install: ./scripts/install-cli.sh  →  ~/.local/bin/pageseeds-cli
 
-Tools:
-  gsc-performance  gsc-queries  gsc-movers   [-l/--limit N]  (defaults: perf/queries 50, movers 30; max 200)
-  gsc-queries      also accepts -u/--page-url <url>
-  site-overview    [-d/--period-days N]                     Site health desk (totals, top pages, movers)
-  articles         [-s status] [-m min-impressions] [-R include-redirected] [-l limit] [-d period-days]
-  article          -S/--slug <slug> [-d/--period-days N]    Full package for one article
-  article-list  article-frontmatter  article-body-hash  article-title-scan  validate-article
-  fix-context      -S/--slug <slug> -k/--kind content|ctr [-g/--goals "..."] [-d period-days]
-                   Path B package (full file path + queries + skill; no nested generate)
-  fix-submit       -S/--slug <slug> -k/--kind content|ctr [--patch <json>] [--file <mdx>]
-                   Apply optional patch and/or validate on-disk MDX (no nested generate)
-  content-audit-report  run-content-audit  cannibalization-clusters
-  indexing-status  ctr-health  framework-files  article-link-graph
-  research-shortlist  article-quality-reviews  compare-rendered  write-feature-spec
+Common flags: -i/--project-id  -p/--project-path
+"#
+    );
 
-Task / queue orchestration:
-  list-tasks              -i <id> -p <path> [-t type] [-s status]
-  cancel-tasks            -i <id> -p <path> -t type [-s status] [--yes]
-  create-task             -i <id> -p <path> -t type [-T title] [-r reason] [-a] [-P high|medium|low]
-                          fix_content_article also requires -S/--slug <url-slug> (builds recommendations artifact)
-                          fix_ctr_article also requires -S/--slug <url-slug> (builds ctr_context from GSC + file)
-  execute-task            -I <task-id>
-  get-task                -I <task-id>                          Full task JSON incl. artifacts
-  update-task-status      -I <task-id> -s done|cancelled        Close out artifact-review tasks
-  select-keywords         -I <research-task-id> -K <kw,kw,...>  Create content tasks, mark research done
-  write-context           -i <id> -p <path> -I <research-task-id> -K <keyword>
-                          Deterministic write package (brief, target path, skill, floors) — no LLM
-  write-submit            -i <id> -p <path> -f/--file <path> | -S/--slug <slug> [-I write-task-id] [-K keyword]
-                          Validate MDX (≥800 words), ingest, complete write task, spawn cluster_and_link
-  merge-context           -i <id> -p <path>
-                          Modes: -I <consolidate-task-id>
-                                 OR --keep-id <id> --redirect-ids <id,id,...>
-                                 OR -K/--keep-url <url> -R/--redirect-urls <url,url,...>
-                          Deterministic merge package (full MDX bodies, skill, floors) — no LLM
-  merge-submit            -i <id> -p <path>
-                          -I <consolidate-task-id> OR -K keep-url -R redirect-urls [-y/--confirm]
-                          Validate keeper MDX (≥400 words), redirects.csv, rewrite links, depublish, sync
-  select-content-review   -I <review-task-id> -P <proposal-id,...>  Spawn fix_content_article from content_review
-  select-cannibalization  -I <parent-task-id> -S <type:id,...>  Spawn cannibalization fixes, mark parent done
-  create-articles-from-keywords -i <id> -I <research-task-id> -k "kw1, kw2, ..."
-  set-task-status         -I <task-id> -s <status>              Set any task status
+    let mut last_section = "";
+    for t in TOOLS {
+        if t.section != last_section {
+            println!("{}:", t.section);
+            last_section = t.section;
+        }
+        println!("  {:28} {}", t.name, t.purpose);
+        println!("    ex: pageseeds-cli {}", t.example);
+    }
 
-Cannibalization workflow:
-  cannibalization-strategy -i <id> -p <path>
-  set-review-status        -i <id> -S <strategy-id> -T <type> -I <rec-id> -s approved|rejected|pending
-  create-tasks-from-approved -i <id> -S <strategy-id>|latest
+    println!(
+        r#"
+Semver: flags and subcommand names are a breaking-change surface; call out renames
+in release notes. Outcome JSON field shapes may evolve with a minor bump when
+documented; silent renames of flags/tools are not allowed.
+"#
+    );
+}
 
-Dead-weight remediation (WS4):
-  score-zero-impression-articles -i <id> -p <path> [-m <max-impressions>]
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-Research / quality health:
-  research-shortlist        -i <id> [-s pending|researched|covered] [-H promising|unproven|depleted]
-  article-quality-reviews   -i <id> [-l <limit>]
+    #[test]
+    fn help_inventory_lists_required_tools() {
+        let names: Vec<&str> = TOOLS.iter().map(|t| t.name).collect();
+        for required in [
+            "research-context",
+            "research-pull",
+            "create-reddit-replies",
+            "write-submit",
+            "write-context",
+            "fix-context",
+            "fix-submit",
+            "merge-context",
+            "merge-submit",
+            "site-overview",
+            "articles",
+            "article",
+        ] {
+            assert!(
+                names.contains(&required),
+                "TOOLS inventory missing required tool: {required}"
+            );
+        }
+    }
 
-Common: -i/--project-id  -p/--project-path
-Run with <tool> --help for tool-specific flags.
-"#);
+    #[test]
+    fn help_text_contains_key_tools_and_contract() {
+        // Capture print_help by formatting the same sources (names + contract keywords).
+        let joined = TOOLS
+            .iter()
+            .map(|t| t.name)
+            .collect::<Vec<_>>()
+            .join(" ");
+        for needle in [
+            "research-context",
+            "research-pull",
+            "create-reddit-replies",
+            "write-submit",
+            "fix-context",
+        ] {
+            assert!(joined.contains(needle), "help inventory missing {needle}");
+        }
+        // Ensure Path B tools have non-empty purpose + example.
+        for t in TOOLS.iter().filter(|t| t.section.starts_with("Path B")) {
+            assert!(!t.purpose.is_empty(), "{} missing purpose", t.name);
+            assert!(!t.example.is_empty(), "{} missing example", t.name);
+        }
+    }
+
+    #[test]
+    fn wants_help_covers_top_level_and_per_tool() {
+        let no_args = vec!["pageseeds-cli".into()];
+        assert!(wants_help(&no_args));
+
+        let top_h = vec!["pageseeds-cli".into(), "-h".into()];
+        assert!(wants_help(&top_h));
+
+        let top_help = vec!["pageseeds-cli".into(), "--help".into()];
+        assert!(wants_help(&top_help));
+
+        let bare = vec!["pageseeds-cli".into(), "help".into()];
+        assert!(wants_help(&bare));
+
+        let per_tool = vec![
+            "pageseeds-cli".into(),
+            "research-pull".into(),
+            "--help".into(),
+        ];
+        assert!(wants_help(&per_tool));
+
+        let real = vec![
+            "pageseeds-cli".into(),
+            "research-pull".into(),
+            "-i".into(),
+            "proj".into(),
+        ];
+        assert!(!wants_help(&real));
+    }
 }
