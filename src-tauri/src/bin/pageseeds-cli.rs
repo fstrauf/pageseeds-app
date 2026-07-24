@@ -6,7 +6,9 @@
 ///
 /// Usage (preferred — installed binary, any cwd):
 ///   pageseeds-cli <tool> -i <project-id> -p <project-path> [args...]
-/// Install: ./scripts/install-cli.sh  (from pageseeds-app checkout)
+/// Install:
+///   curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
+/// Dev (from pageseeds-app checkout): ./scripts/install-cli.sh  or  FROM_SOURCE=1 ./scripts/install-cli.sh
 /// Dev only: cargo run --bin pageseeds-cli -- <tool> ...
 
 use pageseeds_lib::engine::tools::{InvestigationContext, investigate};
@@ -18,6 +20,11 @@ fn main() {
 
     if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {
         print_help();
+        return;
+    }
+
+    if args[1] == "--version" || args[1] == "-V" {
+        println!("{}", env!("CARGO_PKG_VERSION"));
         return;
     }
 
@@ -1214,7 +1221,9 @@ any directory (do not require opening pageseeds-app source).
 
 Usage:
   pageseeds-cli <tool> -i <project-id> -p <project-path> [args]
-  # install: ./scripts/install-cli.sh  →  ~/.local/bin/pageseeds-cli
+  pageseeds-cli --version | -V
+  # install: curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
+  # dev: ./scripts/install-cli.sh  /  FROM_SOURCE=1  →  ~/.local/bin/pageseeds-cli
 
 Tools:
   gsc-performance  gsc-queries  gsc-movers   [-l/--limit N]  (defaults: perf/queries 50, movers 30; max 200)
