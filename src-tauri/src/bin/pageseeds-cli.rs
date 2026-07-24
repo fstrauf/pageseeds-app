@@ -1266,7 +1266,7 @@ fn expand_tilde(path: &str) -> String {
 }
 
 /// Hard-error path: `ERROR: …` on stderr, empty stdout, exit 1.
-/// License deny (#156) must use this same shape with a buy URL in the message.
+/// License deny must use this same shape with a buy URL in the message.
 fn exit(msg: &str) -> ! {
     eprintln!("ERROR: {msg}");
     std::process::exit(1);
@@ -1648,7 +1648,7 @@ Machine contract:
   Outcome envelope:         JSON on stdout with ok/success fields; exit 0 even when
                             ok/success is false — caller inspects JSON (Path B write-submit,
                             merge-submit, etc.)
-  License deny (when #156): same as hard error (stderr + exit 1); message includes buy URL
+  License deny:             same as hard error (stderr + exit 1); message includes buy URL
   Help:                     -h/--help, help, no args, or <tool> --help → exit 0; text on stdout
 
 Each subcommand calls one PageSeeds data function. Uses the same SQLite DB as the
@@ -1772,5 +1772,47 @@ mod tests {
             "proj".into(),
         ];
         assert!(!wants_help(&real));
+    }
+
+    /// Free ∪ paid must cover the help inventory; every paid name must be a real tool.
+    /// Prevents silently ungating a paid tool (or leaving a dead paid name) on rename/add.
+    #[test]
+    fn free_paid_inventory_matches_tools() {
+        let paid = pageseeds_lib::license::paid_tools();
+        let tool_names: Vec<&str> = TOOLS.iter().map(|t| t.name).collect();
+
+        for name in paid {
+            assert!(
+                tool_names.contains(name),
+                "paid tool '{name}' missing from TOOLS help inventory"
+            );
+        }
+
+        let free_count = tool_names
+            .iter()
+            .filter(|n| !pageseeds_lib::license::requires_paid_license(n))
+            .count();
+        let paid_in_tools = tool_names
+            .iter()
+            .filter(|n| pageseeds_lib::license::requires_paid_license(n))
+            .count();
+
+        assert_eq!(
+            paid_in_tools,
+            paid.len(),
+            "paid set size must equal number of TOOLS names that require a license"
+        );
+        assert_eq!(
+            TOOLS.len(),
+            free_count + paid_in_tools,
+            "every TOOLS entry must be free or paid (no double-count / gaps)"
+        );
+        assert_eq!(
+            TOOLS.len(),
+            free_count + paid.len(),
+            "TOOLS.len() must equal free + paid (paid ⊆ TOOLS)"
+        );
+        assert_eq!(TOOLS.len(), 46, "TOOLS inventory size (free+paid commercial boundary)");
+        assert_eq!(paid.len(), 24, "paid set size must match docs/CLI_COMMERCIAL.md");
     }
 }

@@ -4,6 +4,7 @@
 //! - Verify signature + claims locally; no network / phone-home
 //! - Production embeds **public** PEM only (`public_key.pem`); private key lives with website minting
 
+use jsonwebtoken::errors::{Error as JwtError, ErrorKind as JwtErrorKind};
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -90,6 +91,11 @@ pub fn requires_paid_license(tool: &str) -> bool {
     PAID_TOOLS.contains(&tool)
 }
 
+/// Paid tool names (exact CLI subcommand strings). Exposed for inventory invariant tests.
+pub fn paid_tools() -> &'static [&'static str] {
+    PAID_TOOLS
+}
+
 /// Activate: verify JWT (signature + claims) then persist raw token string.
 pub fn activate(token: &str) -> Result<(), String> {
     let token = token.trim();
@@ -97,7 +103,7 @@ pub fn activate(token: &str) -> Result<(), String> {
         return Err("license key is empty".to_string());
     }
     // Verify before write — refuse invalid / expired / wrong plan.
-    let _claims = verify_token(token, &public_key_pem())?;
+    let _claims = verify_token(token, &public_key_pem()).map_err(VerifyError::into_message)?;
     let path = license_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -130,12 +136,29 @@ pub fn status() -> LicenseStatus {
             reason: "license file is empty".to_string(),
         };
     }
-    match verify_token(raw, &public_key_pem()) {
+    let pem = public_key_pem();
+    match verify_token(raw, &pem) {
         Ok(claims) => LicenseStatus::Valid {
             plan: claims.plan,
             exp: claims.exp,
         },
-        Err(e) => classify_verify_error(&e, raw),
+        Err(VerifyError::Jwt(ref e)) if matches!(e.kind(), JwtErrorKind::ExpiredSignature) => {
+            // Signature path already succeeded; only exp failed. Re-decode without exp
+            // validation so status can surface plan/exp instead of lying None fields.
+            match decode_claims(raw, &pem, false) {
+                Ok(claims) => LicenseStatus::Expired {
+                    plan: Some(claims.plan),
+                    exp: Some(claims.exp),
+                },
+                Err(_) => LicenseStatus::Expired {
+                    plan: None,
+                    exp: None,
+                },
+            }
+        }
+        Err(e) => LicenseStatus::Invalid {
+            reason: e.into_message(),
+        },
     }
 }
 
@@ -169,6 +192,27 @@ pub fn require_valid() -> Result<(), String> {
 
 // ─── Internal ────────────────────────────────────────────────────────────────
 
+/// Structured verify failure — keeps `jsonwebtoken::Error` so callers match
+/// `ErrorKind` instead of string-scanning display text.
+#[derive(Debug)]
+enum VerifyError {
+    InvalidKey(String),
+    Jwt(JwtError),
+    WrongPlan(String),
+}
+
+impl VerifyError {
+    fn into_message(self) -> String {
+        match self {
+            VerifyError::InvalidKey(msg) => format!("invalid public key / decoding key: {msg}"),
+            VerifyError::Jwt(e) => format!("JWT verification failed: {e}"),
+            VerifyError::WrongPlan(got) => {
+                format!("invalid plan '{got}' (expected '{REQUIRED_PLAN}')")
+            }
+        }
+    }
+}
+
 fn public_key_pem() -> String {
     #[cfg(test)]
     {
@@ -181,43 +225,32 @@ fn public_key_pem() -> String {
     PRODUCTION_PUBLIC_KEY_PEM.to_string()
 }
 
-/// Verify RS256 signature + standard claims (exp) and deserialize license claims.
-fn verify_token(token: &str, public_pem: &str) -> Result<LicenseClaims, String> {
+/// Decode RS256 JWT claims; `validate_exp` controls NumericDate exp check.
+fn decode_claims(
+    token: &str,
+    public_pem: &str,
+    validate_exp: bool,
+) -> Result<LicenseClaims, VerifyError> {
     let key = DecodingKey::from_rsa_pem(public_pem.as_bytes())
-        .map_err(|e| format!("invalid public key / decoding key: {e}"))?;
+        .map_err(|e| VerifyError::InvalidKey(e.to_string()))?;
 
     let mut validation = Validation::new(Algorithm::RS256);
-    validation.validate_exp = true;
+    validation.validate_exp = validate_exp;
     // We only require exp + plan; sub/iat optional. Disable aud/iss defaults.
     validation.set_required_spec_claims(&["exp"]);
     validation.validate_aud = false;
 
-    let data = decode::<LicenseClaims>(token, &key, &validation)
-        .map_err(|e| format!("JWT verification failed: {e}"))?;
-
-    if data.claims.plan != REQUIRED_PLAN {
-        return Err(format!(
-            "invalid plan '{}' (expected '{}')",
-            data.claims.plan, REQUIRED_PLAN
-        ));
-    }
-
+    let data = decode::<LicenseClaims>(token, &key, &validation).map_err(VerifyError::Jwt)?;
     Ok(data.claims)
 }
 
-/// Prefer Expired over generic Invalid when error is clearly expiry-related.
-fn classify_verify_error(err: &str, _raw_token: &str) -> LicenseStatus {
-    let lower = err.to_lowercase();
-    // jsonwebtoken ErrorKind::ExpiredSignature → "ExpiredSignature" / "expired"
-    if lower.contains("expired") {
-        return LicenseStatus::Expired {
-            plan: None,
-            exp: None,
-        };
+/// Verify RS256 signature + standard claims (exp) and required plan.
+fn verify_token(token: &str, public_pem: &str) -> Result<LicenseClaims, VerifyError> {
+    let claims = decode_claims(token, public_pem, true)?;
+    if claims.plan != REQUIRED_PLAN {
+        return Err(VerifyError::WrongPlan(claims.plan));
     }
-    LicenseStatus::Invalid {
-        reason: err.to_string(),
-    }
+    Ok(claims)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -327,7 +360,8 @@ mod tests {
     #[test]
     fn expired_token_fails() {
         let _env = TestLicenseEnv::new();
-        let token = mint(&valid_claims(-3600));
+        let claims = valid_claims(-3600);
+        let token = mint(&claims);
         let err = activate(&token).unwrap_err();
         assert!(
             err.to_lowercase().contains("expir") || err.to_lowercase().contains("jwt"),
@@ -336,8 +370,14 @@ mod tests {
         // Write expired token manually to exercise status path
         std::fs::write(license_path().unwrap(), &token).unwrap();
         match status() {
-            LicenseStatus::Expired { .. } | LicenseStatus::Invalid { .. } => {}
-            other => panic!("expected Expired/Invalid, got {other:?}"),
+            LicenseStatus::Expired {
+                plan: Some(plan),
+                exp: Some(exp),
+            } => {
+                assert_eq!(plan, "cli");
+                assert_eq!(exp, claims.exp);
+            }
+            other => panic!("expected Expired with plan/exp, got {other:?}"),
         }
         assert!(require_valid().is_err());
     }
@@ -402,9 +442,9 @@ mod tests {
 
     #[test]
     fn paid_set_has_exact_count() {
-        assert_eq!(PAID_TOOLS.len(), 24, "must match docs/CLI_COMMERCIAL.md");
+        assert_eq!(paid_tools().len(), 24, "must match docs/CLI_COMMERCIAL.md");
         // uniqueness
-        let mut v = PAID_TOOLS.to_vec();
+        let mut v = paid_tools().to_vec();
         v.sort();
         v.dedup();
         assert_eq!(v.len(), 24);

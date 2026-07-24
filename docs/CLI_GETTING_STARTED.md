@@ -37,17 +37,9 @@ FROM_SOURCE=1 ./scripts/install-cli.sh  # force cargo build
 
 ---
 
-## 2. License (commercial path — **not shipped yet**)
+## 2. License (commercial path)
 
-As of today, the binary has **no** `license` tool:
-
-```text
-pageseeds-cli license  →  ERROR: Unknown tool 'license'
-```
-
-Do **not** treat activate as a working step until the license gate lands ([issue #156](https://github.com/fstrauf/pageseeds-app/issues/156)).
-
-**Contract when #156 ships:**
+Activate a key once per machine (offline JWT store; no phone-home):
 
 ```bash
 pageseeds-cli license activate <key>
@@ -55,7 +47,9 @@ pageseeds-cli license status
 pageseeds-cli license deactivate
 ```
 
-Paid deny (when gated) on stderr:
+Paid tools (write/fix/merge, research-pull, task act, audits that write) require a valid license. Free desk/GSC/inspect tools work without one. See [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md).
+
+Paid deny on stderr:
 
 ```text
 ERROR: Paid command '<tool>' requires a valid PageSeeds license.
@@ -149,7 +143,7 @@ Sketch:
 3. **Do not** nest `content_review` as the weekly strategy brain.
 4. **Do not** `cargo run` from the product repo for the customer path.
 
-### Path B write (paid when #156 lands)
+### Path B write (paid)
 
 After keyword selection has a research task + chosen keyword:
 
@@ -172,8 +166,7 @@ Full budgets, bans, Path B fix/merge, and report format: weekly-seo skill only.
 | `ERROR: --project-path required` (or missing project id) | Pass **both** `-i` and `-p` (absolute path) on every data tool |
 | Project not found / empty desk | Wrong `-i` or DB; list projects via `sqlite3` on the default (or `PAGESEEDS_DB_PATH`) DB; confirm desktop has registered the project |
 | GSC empty / auth errors | Secrets: `GSC_SERVICE_ACCOUNT_PATH` or `GSC_REPORT_OAUTH_CLIENT_SECRETS` in the secrets chain; site property configured on the project |
-| `Unknown tool 'license'` | Expected until #156; license activate/status/deactivate are not in the binary yet |
-| Paid command requires license (when gated) | `pageseeds-cli license activate <key>` then retry; buy at https://pageseeds.com |
+| Paid command requires license | `pageseeds-cli license activate <key>` then retry; buy at https://pageseeds.com |
 
 ---
 
