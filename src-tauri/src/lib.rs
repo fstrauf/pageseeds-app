@@ -6,6 +6,7 @@ pub mod db;
 pub mod engine;
 mod error;
 pub mod gsc;
+pub mod license;
 mod live_site;
 pub mod logging;
 pub mod models;

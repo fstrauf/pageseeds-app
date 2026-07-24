@@ -31,6 +31,25 @@ fn main() {
     }
 
     let tool = &args[1];
+
+    // License subcommands are always free and must not require -i/-p or open the DB.
+    if tool == "license" {
+        run_license_command(&args);
+        return;
+    }
+
+    // Gate paid tools before any DB / project work. Unknown tools skip the gate
+    // so they still hit the existing "Unknown tool" path.
+    if pageseeds_lib::license::requires_paid_license(tool) {
+        if let Err(_e) = pageseeds_lib::license::require_valid() {
+            exit(&format!(
+                "Paid command '{tool}' requires a valid PageSeeds license.\n\
+Activate: pageseeds-cli license activate <key>\n\
+Buy: https://pageseeds.com"
+            ));
+        }
+    }
+
     let project_id = flag(&args, "--project-id", "-i").unwrap_or_default();
     let project_path = flag(&args, "--project-path", "-p").as_deref().map(expand_tilde);
 
@@ -1247,10 +1266,67 @@ fn expand_tilde(path: &str) -> String {
 }
 
 /// Hard-error path: `ERROR: …` on stderr, empty stdout, exit 1.
-/// License deny (#156) must use this same shape with a buy URL in the message.
+/// License deny must use this same shape with a buy URL in the message.
 fn exit(msg: &str) -> ! {
     eprintln!("ERROR: {msg}");
     std::process::exit(1);
+}
+
+/// `pageseeds-cli license activate|status|deactivate` — free, no -i/-p, no DB.
+fn run_license_command(args: &[String]) {
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "activate" => {
+            let key = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            if key.is_empty() {
+                exit("usage: pageseeds-cli license activate <key>");
+            }
+            match pageseeds_lib::license::activate(key) {
+                Ok(()) => {
+                    let st = pageseeds_lib::license::status();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&st).unwrap_or_else(|_| r#"{"status":"valid"}"#.into())
+                    );
+                }
+                Err(e) => exit(&format!("license activate failed: {e}")),
+            }
+        }
+        "status" => {
+            let st = pageseeds_lib::license::status();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&st).unwrap_or_else(|_| r#"{"status":"invalid"}"#.into())
+            );
+        }
+        "deactivate" => match pageseeds_lib::license::deactivate() {
+            Ok(()) => {
+                println!(r#"{{"status":"missing","message":"license removed from local store"}}"#);
+            }
+            Err(e) => exit(&format!("license deactivate failed: {e}")),
+        },
+        "" | "help" => {
+            println!(
+                r#"pageseeds-cli license — offline JWT license management
+
+Usage:
+  pageseeds-cli license activate <key>
+  pageseeds-cli license status
+  pageseeds-cli license deactivate
+
+Notes:
+  - Free commands (desk, GSC reads, inspect) never require a license
+  - Paid commands require a valid non-expired JWT (plan=cli, RS256)
+  - Store: $PAGESEEDS_LICENSE_PATH or ~/.config/pageseeds/license.jwt
+  - No phone-home; deactivate only deletes the local file
+  - Buy: https://pageseeds.com
+"#
+            );
+        }
+        other => exit(&format!(
+            "unknown license subcommand '{other}'. Use: activate | status | deactivate"
+        )),
+    }
 }
 
 /// True when the invocation should print help and exit 0 (no tool dispatch).
@@ -1572,7 +1648,7 @@ Machine contract:
   Outcome envelope:         JSON on stdout with ok/success fields; exit 0 even when
                             ok/success is false — caller inspects JSON (Path B write-submit,
                             merge-submit, etc.)
-  License deny (when #156): same as hard error (stderr + exit 1); message includes buy URL
+  License deny:             same as hard error (stderr + exit 1); message includes buy URL
   Help:                     -h/--help, help, no args, or <tool> --help → exit 0; text on stdout
 
 Each subcommand calls one PageSeeds data function. Uses the same SQLite DB as the
@@ -1580,11 +1656,20 @@ desktop app. Prefer the installed binary from any directory.
 
 Usage:
   pageseeds-cli <tool> -i <project-id> -p <project-path> [args]
+  pageseeds-cli license activate <key> | status | deactivate
   pageseeds-cli --version | -V
   # install: curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
   # dev: ./scripts/install-cli.sh  /  FROM_SOURCE=1  →  ~/.local/bin/pageseeds-cli
 
 Common flags: -i/--project-id  -p/--project-path
+
+License:
+  Free tools (desk, GSC reads, inspect) always work without a key.
+  Paid tools (write/fix/merge, research-pull, task act, audits that write)
+  require: pageseeds-cli license activate <key>
+  Status:  pageseeds-cli license status
+  Buy:     https://pageseeds.com
+  Details: docs/CLI_COMMERCIAL.md
 "#
     );
 
@@ -1687,5 +1772,47 @@ mod tests {
             "proj".into(),
         ];
         assert!(!wants_help(&real));
+    }
+
+    /// Free ∪ paid must cover the help inventory; every paid name must be a real tool.
+    /// Prevents silently ungating a paid tool (or leaving a dead paid name) on rename/add.
+    #[test]
+    fn free_paid_inventory_matches_tools() {
+        let paid = pageseeds_lib::license::paid_tools();
+        let tool_names: Vec<&str> = TOOLS.iter().map(|t| t.name).collect();
+
+        for name in paid {
+            assert!(
+                tool_names.contains(name),
+                "paid tool '{name}' missing from TOOLS help inventory"
+            );
+        }
+
+        let free_count = tool_names
+            .iter()
+            .filter(|n| !pageseeds_lib::license::requires_paid_license(n))
+            .count();
+        let paid_in_tools = tool_names
+            .iter()
+            .filter(|n| pageseeds_lib::license::requires_paid_license(n))
+            .count();
+
+        assert_eq!(
+            paid_in_tools,
+            paid.len(),
+            "paid set size must equal number of TOOLS names that require a license"
+        );
+        assert_eq!(
+            TOOLS.len(),
+            free_count + paid_in_tools,
+            "every TOOLS entry must be free or paid (no double-count / gaps)"
+        );
+        assert_eq!(
+            TOOLS.len(),
+            free_count + paid.len(),
+            "TOOLS.len() must equal free + paid (paid ⊆ TOOLS)"
+        );
+        assert_eq!(TOOLS.len(), 46, "TOOLS inventory size (free+paid commercial boundary)");
+        assert_eq!(paid.len(), 24, "paid set size must match docs/CLI_COMMERCIAL.md");
     }
 }
