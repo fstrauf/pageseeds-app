@@ -62,15 +62,12 @@ pub(crate) fn classify_topic_health(
 pub(crate) fn run_topic_health_reducer(ctx: &PostTaskContext<'_>) -> crate::error::Result<()> {
     use crate::db::research_shortlist;
 
-    // Load latest audit artifacts for this project.
+    // Load latest audit from DB (primary) or legacy content_audit.json fallback.
+    // Do not read the JSON file alone — post-migration audits live only in SQLite (#162).
     let paths = crate::engine::project_paths::ProjectPaths::from_path(ctx.project_path);
-    let audit_path = paths.automation_dir.join("content_audit.json");
-    let audit_json = std::fs::read_to_string(&audit_path).unwrap_or_default();
-    if audit_json.is_empty() {
-        return Ok(());
-    }
-    let audit: serde_json::Value = serde_json::from_str(&audit_json).unwrap_or_default();
-    let articles = audit["articles"].as_array().unwrap_or(&Vec::new()).clone();
+    let snapshot =
+        crate::engine::exec::common::load_audit_snapshot(&ctx.task.project_id, &paths);
+    let articles = snapshot.articles;
     if articles.is_empty() {
         return Ok(());
     }

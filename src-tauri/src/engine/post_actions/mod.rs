@@ -301,10 +301,8 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
     // Disposal is selection-only via ContentReviewPicker — do NOT auto-spawn
     // fix_content_article children here. Users choose proposals in the picker;
     // `select_content_review_follow_ups` spawns via TaskSpawner.
-    if matches!(
-        ctx.task.task_type.as_str(),
-        "content_review" | "content_audit"
-    ) {
+    // content_audit is deterministic-only (no picker) — skip proposals (#162).
+    if ctx.task.task_type == "content_review" {
         // Reload so we see step artifacts written during execution.
         let parent = task_store::get_task(ctx.conn, &ctx.task.id).unwrap_or_else(|_| ctx.task.clone());
         if let Err(e) = crate::engine::content_review_selection::build_and_store_proposals_artifact(
@@ -317,7 +315,14 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
                 e
             );
         }
+    }
 
+    // Topic health reducer runs for both content_review and content_audit when
+    // audit data is available (DB primary via load_audit_snapshot).
+    if matches!(
+        ctx.task.task_type.as_str(),
+        "content_review" | "content_audit"
+    ) {
         if let Err(e) = run_topic_health_reducer(ctx) {
             log::warn!("[post_actions] topic health reducer failed: {}", e);
         }
@@ -671,9 +676,9 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
     }
 
     // Retry blocked indexing_health_campaign tasks when their prerequisites complete.
-    // The IHC step 1 fails when gsc_collection.json / link_scan.json / content_audit.json
-    // are stale, auto-spawns helper tasks, and marks itself failed. After a helper
-    // finishes, re-enqueue any blocked IHC task so it can run to completion.
+    // The IHC step 1 fails when gsc_collection / link_scan / content_audit are stale
+    // (content_audit freshness is DB-backed), auto-spawns helper tasks, and marks
+    // itself failed. After a helper finishes, re-enqueue any blocked IHC task.
     retry_blocked_ihc_tasks(ctx, &mut follow_up_ids);
 
     follow_up_ids

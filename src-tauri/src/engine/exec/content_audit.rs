@@ -6,6 +6,10 @@ use sha2::{Digest, Sha256};
 /// Covers:
 ///   - exec_content_audit   (21-check deterministic article quality audit)
 ///   - audit_one_article    (per-article check logic)
+///
+/// Results are persisted to SQLite (`content_audit_runs` + `article_content_audits`)
+/// only — there is no `content_audit.json` write. IHC freshness and consumers
+/// read via `db::content_audit` / `load_audit_snapshot`.
 use crate::engine::project_paths::ProjectPaths;
 
 /// Native Rust replacement for `pageseeds automation seo content-audit`.
@@ -13,7 +17,8 @@ use crate::engine::project_paths::ProjectPaths;
 /// Runs 21 deterministic checks per article (keyword in title/H1/meta, word count,
 /// internal links, temporal URLs, page bloat, literal template variables, title
 /// token duplication, readability, passive voice, etc.), scores each article, and
-/// writes content_audit.json to automation/content_audit.json. No LLM or external API needed.
+/// saves the run to SQLite (`content_audit_runs`). No LLM or external API needed.
+/// Does not write `content_audit.json`.
 pub fn exec_content_audit(
     task: &crate::models::task::Task,
     project_path: &str,

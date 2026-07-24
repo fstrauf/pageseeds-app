@@ -408,10 +408,9 @@ export function TaskDetail({ task, onClose, onUpdated, onDeleted, onArticleTasks
             </>
           )}
 
-          {/* Content review picker — user selects which fix_content_article tasks to spawn */}
+          {/* Content review picker — content_review only (content_audit is Done, no picker) */}
           {(task.review_surface === 'content_review_picker' ||
-            task.type === 'content_review' ||
-            task.type === 'content_audit') &&
+            task.type === 'content_review') &&
             task.status === 'review' && (
             <>
               <Separator className="bg-border" />

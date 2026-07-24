@@ -77,9 +77,9 @@ Steps are defined by handlers in `engine/workflows/handlers.rs` and executed by 
 | `"collect_gsc_inspect"` | Deterministic: GSC URL Inspection API + classification + task spawning | `gsc_collection.json`, fix tasks | Nothing |
 | `"gsc_sync_articles"` | Deterministic: fetch GSC analytics → update articles.json | Updated articles.json | Nothing |
 | `"keyword_research_cli"` | Deterministic: Ahrefs keyword API calls + dedup + ranking | Keyword JSON artifact | Optional theme artifact |
-| `"content_review_recommend"` | Hybrid: deterministic article scoring + single agentic recommendation call | `recommendations.json` | `content_audit.json`, articles.json |
+| `"content_review_recommend"` | Hybrid: deterministic article scoring + single agentic recommendation call | `recommendations.json` | content_audit_runs (DB), articles.json |
 | `"content_sync"` | Deterministic: validate articles.json ↔ content files | Validation report | Nothing |
-| `"content_audit"` | Deterministic: 21-check article audit + health scoring | `content_audit.json` | articles.json |
+| `"content_audit"` | Deterministic: 21-check article audit + health scoring | SQLite `content_audit_runs` (no JSON write) | articles.json |
 
 **The `reddit_enrich` step requires database access and is handled inline in the executor outer loop** (not inside `run_step`). The same pattern applies to `reddit_search` data persistence. These steps return a placeholder `StepResult` from `run_step`; the real work runs in the outer loop keyed on `step.kind`.
 
@@ -142,8 +142,8 @@ Certain task types automatically create follow-up tasks when they complete succe
 
 | Task type | Auto-spawns | Spawning function |
 |---|---|---|
-| `"content_review"` | `fix_content_article` tasks | `create_fix_content_article_tasks()` in `post_actions.rs` |
-| `"content_audit"` | `fix_content_article` tasks | same |
+| `"content_review"` | Stores proposals; user spawns `fix_content_article` via picker | `build_and_store_proposals_artifact` + selection command |
+| `"content_audit"` | None (deterministic helper; topic-health reducer + IHC retry only) | `post_actions` |
 | `"collect_gsc"` | Fix tasks from `gsc_collection.json` artifact | `create_tasks_from_collection_after_exec()` in `executor.rs` |
 | `"research_keywords"` | Adds self to follow-up list (for UI review picker) | Inline at `executor.rs` ~line 271 |
 

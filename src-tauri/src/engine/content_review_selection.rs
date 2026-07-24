@@ -270,6 +270,10 @@ fn has_active_task_for_key(conn: &Connection, key: &str) -> bool {
 
 /// Read recommendations (artifact or disk), validate, and upsert the
 /// `content_review_proposals` artifact on the parent. Does **not** spawn tasks.
+///
+/// New runs use `content_review` only (`content_audit` is deterministic and has
+/// no picker). Historical `content_audit` parents with proposals are still
+/// accepted so old review tasks can complete selection (#162).
 pub fn build_and_store_proposals_artifact(
     conn: &Connection,
     parent_task: &Task,
@@ -407,6 +411,9 @@ fn parse_recommendations_content(
 /// - Rejects ids not present in the stored artifact
 /// - Spawns via `TaskSpawner` (canonical path for fix_content_article children)
 /// - Marks articles in_review and parent Done
+///
+/// Preferred parent type is `content_review`. Historical `content_audit` parents
+/// that still carry a proposals artifact remain accepted for selection (#162).
 pub fn spawn_from_selection(
     conn: &Connection,
     parent_task_id: &str,

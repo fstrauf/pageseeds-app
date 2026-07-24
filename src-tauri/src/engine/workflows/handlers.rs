@@ -296,12 +296,21 @@ impl WorkflowHandler for ContentReviewHandler {
         matches!(task_type(task), "content_review" | "content_audit")
     }
 
-    fn plan(&self, _task: &Task) -> Vec<WorkflowStep> {
+    fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
+        // content_audit is the deterministic helper only (IHC auto-refresh, desk).
+        // Single ContentAudit step → Done (no investigate / no picker) — #162.
+        if task_type(task) == "content_audit" {
+            return vec![WorkflowStep::new(
+                "content_audit",
+                StepKind::ContentAudit,
+            )];
+        }
+
         vec![
             // Step 1: fetch GSC page metrics and write into articles.json.
             // Optional — a missing service account skips gracefully rather than aborting.
             WorkflowStep::new("content_review_gsc_sync", StepKind::GscSyncArticles).optional(),
-            // Step 2: deterministic multi-check audit → writes content_audit.json.
+            // Step 2: deterministic multi-check audit → SQLite content_audit_runs.
             // Optional — still valuable even without GSC data.
             WorkflowStep::new("content_review_audit", StepKind::ContentAudit).optional(),
             // Step 3: native sync — validates articles.json ↔ content files, dates.
@@ -314,8 +323,6 @@ impl WorkflowHandler for ContentReviewHandler {
             //   fallback     → content_review_recommend (ContentReviewRecommendations)
             // Tool path intentionally does not write recommendations.json / spawn
             // fix tasks until issue #81 owns proposed_tasks validation + picker.
-            // Do not re-add ContentReviewRecommend as a plan terminal or change
-            // task_definitions lifecycle metadata in this PR.
             WorkflowStep::new(
                 "content_review_investigate",
                 StepKind::ContentReviewInvestigate,
@@ -995,10 +1002,12 @@ mod registry_tests {
             "plan must not include ContentReviewRecommend as a step; recommend is fallback inside exec"
         );
 
+        // content_audit is deterministic-only: single ContentAudit step (#162).
         let audit_steps = handler.plan(&make_task("content_audit"));
+        assert_eq!(audit_steps.len(), 1);
         assert_eq!(
             audit_steps.last().map(|s| s.kind),
-            Some(StepKind::ContentReviewInvestigate)
+            Some(StepKind::ContentAudit)
         );
     }
 
