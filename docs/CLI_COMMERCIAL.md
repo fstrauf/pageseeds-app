@@ -1,9 +1,9 @@
 # CLI commercial boundary (free desk vs paid operator)
 
-> **Source of truth for free vs paid tool names.** License gate ([#156](https://github.com/fstrauf/pageseeds-app/issues/156)) and marketing must match this file.
-> Code enforcement lives in #156 (static paid set at CLI entry) — not here.
+> **Source of truth for free vs paid tool names.** Marketing and the code gate must match this file.
+> Code enforcement: static paid set in [`src-tauri/src/license/mod.rs`](../src-tauri/src/license/mod.rs) (`PAID_TOOLS`), gated from [`pageseeds-cli.rs`](../src-tauri/src/bin/pageseeds-cli.rs) (#156).
 >
-> **This file is the SoT for free vs paid names.** #156 must match the paid set below. Do not invent a second free/paid list in code or website copy.
+> **This file is the SoT for free vs paid names.** Keep `PAID_TOOLS` and the lists below in sync. Do not invent a second free/paid list in website copy.
 
 ---
 
@@ -34,8 +34,8 @@ Meta entries below are **not** match arms in `pageseeds-cli.rs`; they stay free 
 ### Meta
 
 - `--help` / `-h` / bare `help` / no args
-- `license activate|status|deactivate` (when #156 ships)
-- `version` (when present)
+- `license activate|status|deactivate`
+- `--version` / `-V`
 
 ### Desk / article reads
 
@@ -154,7 +154,7 @@ When in doubt: free = observe; paid = act or mutate.
 When adding a CLI match arm in [`src-tauri/src/bin/pageseeds-cli.rs`](../src-tauri/src/bin/pageseeds-cli.rs):
 
 1. Update **this file** (free or paid list + counts).
-2. Update **#156**’s static paid set in the same PR (once the gate exists).
+2. Update `PAID_TOOLS` in `src-tauri/src/license/mod.rs` in the same PR.
 3. Keep help `TOOLS` / `print_help` in sync with match arms.
 
 Inventory check for implementers:
@@ -183,5 +183,46 @@ Inventory check for implementers:
 
 - **SoT for free vs paid names:** this document.
 - **#156** implements a static paid set that **must match** the 24 paid tools listed above (plus any later tools classified paid via the rule of thumb and updated here in the same PR).
-- Free tools and meta (`--help`, future `license` / `version`) must remain ungated.
+- Free tools and meta (`--help`, `license` / `version`) must remain ungated.
 - No free Path B trial in v1: `write-context`, `write-submit`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit` stay paid.
+
+---
+
+## License commands
+
+| Command | Behavior |
+|---------|----------|
+| `pageseeds-cli license activate <key>` | Verify JWT (RS256 signature + claims) **before** write; persist raw token to license store |
+| `pageseeds-cli license status` | JSON: `missing` / `valid` (plan, exp) / `expired` / `invalid` |
+| `pageseeds-cli license deactivate` | **Local file delete only** — no phone-home |
+
+**Store path:** `$PAGESEEDS_LICENSE_PATH` if set, else `{dirs::config_dir}/pageseeds/license.jwt` (typically `~/.config/pageseeds/license.jwt` on Linux, `~/Library/Application Support/pageseeds/license.jwt` on macOS).
+
+**Runtime gate:** for each paid tool name, the CLI re-reads the file and re-verifies signature + `exp` + `plan` offline. No network. Expiry is the JWT `exp` claim only.
+
+**Deny message shape (stderr, exit 1):**
+
+```
+ERROR: Paid command '<tool>' requires a valid PageSeeds license.
+Activate: pageseeds-cli license activate <key>
+Buy: https://pageseeds.com
+```
+
+Code: [`src-tauri/src/license/mod.rs`](../src-tauri/src/license/mod.rs), gate in [`pageseeds-cli.rs`](../src-tauri/src/bin/pageseeds-cli.rs).
+
+---
+
+## JWT claim contract (website / mint — pageseeds#4)
+
+| Field | Required | Notes |
+|-------|----------|--------|
+| Algorithm | **RS256** only | CLI rejects other algs |
+| `exp` | **Required** | NumericDate (seconds). After this, license is expired |
+| `plan` | **Required** | Must be exactly `"cli"` |
+| `iat` | Recommended | Issued-at NumericDate |
+| `sub` | Optional | Customer id / email hash / etc. |
+
+- CLI embeds **public** PEM only: [`src-tauri/src/license/public_key.pem`](../src-tauri/src/license/public_key.pem).
+- **Private key must never be committed** to pageseeds-app. The matching private key is held by the website license mint ([fstrauf/pageseeds](https://github.com/fstrauf/pageseeds) issue #4 / commercial backend).
+- Unit tests use a **separate** RSA pair under `src-tauri/src/license/testdata/` (`#[cfg(test)]` only).
+- No phone-home, no seat checks, no desktop gate in this epic.

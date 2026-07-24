@@ -31,6 +31,25 @@ fn main() {
     }
 
     let tool = &args[1];
+
+    // License subcommands are always free and must not require -i/-p or open the DB.
+    if tool == "license" {
+        run_license_command(&args);
+        return;
+    }
+
+    // Gate paid tools before any DB / project work. Unknown tools skip the gate
+    // so they still hit the existing "Unknown tool" path.
+    if pageseeds_lib::license::requires_paid_license(tool) {
+        if let Err(_e) = pageseeds_lib::license::require_valid() {
+            exit(&format!(
+                "Paid command '{tool}' requires a valid PageSeeds license.\n\
+Activate: pageseeds-cli license activate <key>\n\
+Buy: https://pageseeds.com"
+            ));
+        }
+    }
+
     let project_id = flag(&args, "--project-id", "-i").unwrap_or_default();
     let project_path = flag(&args, "--project-path", "-p").as_deref().map(expand_tilde);
 
@@ -1253,6 +1272,63 @@ fn exit(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// `pageseeds-cli license activate|status|deactivate` — free, no -i/-p, no DB.
+fn run_license_command(args: &[String]) {
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "activate" => {
+            let key = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            if key.is_empty() {
+                exit("usage: pageseeds-cli license activate <key>");
+            }
+            match pageseeds_lib::license::activate(key) {
+                Ok(()) => {
+                    let st = pageseeds_lib::license::status();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&st).unwrap_or_else(|_| r#"{"status":"valid"}"#.into())
+                    );
+                }
+                Err(e) => exit(&format!("license activate failed: {e}")),
+            }
+        }
+        "status" => {
+            let st = pageseeds_lib::license::status();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&st).unwrap_or_else(|_| r#"{"status":"invalid"}"#.into())
+            );
+        }
+        "deactivate" => match pageseeds_lib::license::deactivate() {
+            Ok(()) => {
+                println!(r#"{{"status":"missing","message":"license removed from local store"}}"#);
+            }
+            Err(e) => exit(&format!("license deactivate failed: {e}")),
+        },
+        "" | "help" => {
+            println!(
+                r#"pageseeds-cli license — offline JWT license management
+
+Usage:
+  pageseeds-cli license activate <key>
+  pageseeds-cli license status
+  pageseeds-cli license deactivate
+
+Notes:
+  - Free commands (desk, GSC reads, inspect) never require a license
+  - Paid commands require a valid non-expired JWT (plan=cli, RS256)
+  - Store: $PAGESEEDS_LICENSE_PATH or ~/.config/pageseeds/license.jwt
+  - No phone-home; deactivate only deletes the local file
+  - Buy: https://pageseeds.com
+"#
+            );
+        }
+        other => exit(&format!(
+            "unknown license subcommand '{other}'. Use: activate | status | deactivate"
+        )),
+    }
+}
+
 /// True when the invocation should print help and exit 0 (no tool dispatch).
 fn wants_help(args: &[String]) -> bool {
     if args.len() < 2 {
@@ -1580,11 +1656,20 @@ desktop app. Prefer the installed binary from any directory.
 
 Usage:
   pageseeds-cli <tool> -i <project-id> -p <project-path> [args]
+  pageseeds-cli license activate <key> | status | deactivate
   pageseeds-cli --version | -V
   # install: curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
   # dev: ./scripts/install-cli.sh  /  FROM_SOURCE=1  →  ~/.local/bin/pageseeds-cli
 
 Common flags: -i/--project-id  -p/--project-path
+
+License:
+  Free tools (desk, GSC reads, inspect) always work without a key.
+  Paid tools (write/fix/merge, research-pull, task act, audits that write)
+  require: pageseeds-cli license activate <key>
+  Status:  pageseeds-cli license status
+  Buy:     https://pageseeds.com
+  Details: docs/CLI_COMMERCIAL.md
 "#
     );
 
