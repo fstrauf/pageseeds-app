@@ -23,7 +23,9 @@ pub(crate) fn exec_ihc_check_prerequisites(task: &Task, project_path: &str) -> S
     let checks = vec![
         check_gsc_collection_fresh(&paths),
         check_artifact(&paths, "link_scan.json", chrono::Duration::days(7)),
-        check_artifact(&paths, "content_audit.json", chrono::Duration::days(14)),
+        // Content audit freshness is DB-backed (content_audit_runs), not JSON mtime.
+        // After migration, exec_content_audit only writes SQLite — file mtime never refreshes.
+        check_content_audit_fresh(&task.project_id, chrono::Duration::days(14)),
     ];
 
     // Clusters are a nice-to-have, not a blocker. The campaign runs fine without them.
@@ -195,6 +197,54 @@ pub(crate) fn artifact_to_task_type(artifact: &str) -> &str {
         "link_scan.json" => "cluster_and_link",
         "content_audit.json" => "content_audit",
         _ => artifact.trim_end_matches(".json"),
+    }
+}
+
+/// DB-based freshness for the content audit prerequisite (issue #162).
+///
+/// `exec_content_audit` writes only to SQLite `content_audit_runs` (no
+/// `content_audit.json`). Freshness is based on the latest run's `run_at`.
+/// Artifact name stays `content_audit.json` so `artifact_to_task_type` still
+/// maps the stale action to `content_audit`. Missing run / unreadable DB /
+/// unparseable timestamp → not fresh (fail closed).
+pub(crate) fn check_content_audit_fresh(
+    project_id: &str,
+    max_age: chrono::Duration,
+) -> PrerequisiteCheck {
+    let artifact = "content_audit.json".to_string();
+    let stale = |age_hours: Option<i64>| PrerequisiteCheck {
+        artifact: artifact.clone(),
+        fresh: false,
+        age_hours,
+        action: Some("auto_enqueue_content_audit".to_string()),
+    };
+
+    let conn = match rusqlite::Connection::open(crate::db::default_db_path()) {
+        Ok(c) => c,
+        Err(_) => return stale(None),
+    };
+
+    let run = match crate::db::content_audit::get_latest_audit_run(&conn, project_id) {
+        Ok(Some(r)) => r,
+        Ok(None) | Err(_) => return stale(None),
+    };
+
+    let run_at = match chrono::DateTime::parse_from_rfc3339(&run.run_at) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return stale(None),
+    };
+
+    let age = chrono::Utc::now().signed_duration_since(run_at);
+    let age_hours = age.num_hours().max(0);
+    if age < max_age {
+        PrerequisiteCheck {
+            artifact,
+            fresh: true,
+            age_hours: Some(age_hours),
+            action: None,
+        }
+    } else {
+        stale(Some(age_hours))
     }
 }
 

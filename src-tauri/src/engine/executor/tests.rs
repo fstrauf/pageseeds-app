@@ -183,7 +183,8 @@
         );
     }
 
-    // 3. Tasks with a review surface (including content review) go to "review".
+    // 3. Tasks with a review surface (content_review) go to "review".
+    // content_audit is deterministic-only (no review surface) → Done (#162).
     #[test]
     fn review_surface_task_goes_to_review() {
         assert_eq!(
@@ -192,7 +193,7 @@
         );
         assert_eq!(
             completed_task_status("content_audit", true),
-            TaskStatus::Review
+            TaskStatus::Done
         );
     }
 
