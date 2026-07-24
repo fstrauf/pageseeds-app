@@ -231,6 +231,11 @@ complete_install() {
   fi
   verify_install
   info "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."
+  echo ""
+  echo "Next step: in your customer project repo, run:"
+  echo "  ${BIN_NAME} setup --path . --yes"
+  echo "Then desk tools work without -i/-p, e.g.:"
+  echo "  ${BIN_NAME} site-overview"
   exit 0
 }
 

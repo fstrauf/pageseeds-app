@@ -107,3 +107,18 @@ pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM projects WHERE id = ?1", [id])?;
     Ok(())
 }
+
+/// Find a registered project whose `path` matches `path` after best-effort
+/// canonicalization. Used by CLI setup/link and config resolution.
+///
+/// Path identity uses the canonical helpers in [`crate::config::cli_config`]
+/// (`normalize_path_string` / `paths_equal`) — do not reimplement here.
+pub fn find_project_by_path(conn: &Connection, path: &str) -> Result<Option<Project>> {
+    let projects = list_projects(conn)?;
+    for project in projects {
+        if crate::config::cli_config::paths_equal(path, &project.path) {
+            return Ok(Some(project));
+        }
+    }
+    Ok(None)
+}

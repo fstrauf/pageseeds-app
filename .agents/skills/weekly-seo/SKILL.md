@@ -67,24 +67,33 @@ product gaps — report them; do not implement mid-run.
 
 ## Inputs
 
-- `-i <project-id>` — PageSeeds project ID  
-- `-p <project-path>` — absolute path to the **customer** repo  
+Prefer **setup defaults** so you do not pass `-i`/`-p` on every call:
 
 ```bash
-sqlite3 ~/Library/Application\ Support/com.pageseeds.app/pageseeds.db \
-  "SELECT id, name, path FROM projects"
+# Once per customer project (idempotent)
+pageseeds-cli setup --path . --yes
+# Discover registered projects (no raw sqlite)
+pageseeds-cli list-projects
 ```
 
-State `id` / `name` / `path` once. Pass `-i` / `-p` on every tool that needs them.
+After setup, desk tools resolve project context from flags → env →
+`.pageseeds.yaml` → global defaults → registry. Explicit `-i`/`-p` still override.
+
+- `-i <project-id>` — optional after setup  
+- `-p <project-path>` — optional after setup  
+
+If context is missing: run `pageseeds-cli setup` (do **not** open sqlite by hand).
 
 ```bash
+pageseeds-cli <tool> [args...]
+# or with explicit override:
 pageseeds-cli <tool> -i <project-id> -p <project-path> [args...]
 ```
 
 Use the installed binary from any directory. Never `cd` into `pageseeds-app` or
 `cargo run` for this skill. All tools print **JSON**. Never invent numbers.
 
-CLI → same SQLite as the desktop app. UI need not be running.
+CLI → same store as the desktop app. UI need not be running.
 
 ---
 

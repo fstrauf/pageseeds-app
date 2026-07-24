@@ -5,12 +5,15 @@
 /// Zero business logic duplication.
 ///
 /// Usage (preferred — installed binary, any cwd):
-///   pageseeds-cli <tool> -i <project-id> -p <project-path> [args...]
+///   pageseeds-cli setup --path . --yes
+///   pageseeds-cli <tool> [-i <project-id>] [-p <project-path>] [args...]
 /// Install:
 ///   curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
 /// Dev (from pageseeds-app checkout): ./scripts/install-cli.sh  or  FROM_SOURCE=1 ./scripts/install-cli.sh
 /// Dev only: cargo run --bin pageseeds-cli -- <tool> ...
 
+use pageseeds_lib::config::cli_config::{self, expand_tilde, MISSING_PROJECT_CONTEXT_HINT};
+use pageseeds_lib::engine::cli_setup;
 use pageseeds_lib::engine::tools::{InvestigationContext, investigate};
 use pageseeds_lib::models::cannibalization::ApprovalStatus;
 use pageseeds_lib::models::task::{Priority, TaskRunPolicy, TaskStatus};
@@ -38,6 +41,20 @@ fn main() {
         return;
     }
 
+    // Free meta tools: no paid gate; handle before project-context resolution.
+    if tool == "list-projects" {
+        run_list_projects();
+        return;
+    }
+    if tool == "create-project" {
+        run_create_project(&args);
+        return;
+    }
+    if tool == "setup" {
+        run_setup(&args);
+        return;
+    }
+
     // Gate paid tools before any DB / project work. Unknown tools skip the gate
     // so they still hit the existing "Unknown tool" path.
     if pageseeds_lib::license::requires_paid_license(tool) {
@@ -50,10 +67,34 @@ Buy: https://pageseeds.com"
         }
     }
 
-    let project_id = flag(&args, "--project-id", "-i").unwrap_or_default();
-    let project_path = flag(&args, "--project-path", "-p").as_deref().map(expand_tilde);
-
     let db = pageseeds_lib::db::default_db_path();
+    let flags_id = flag(&args, "--project-id", "-i");
+    let flags_path = flag(&args, "--project-path", "-p")
+        .as_deref()
+        .map(expand_tilde);
+
+    // Resolve project context: flags → env → local yaml → global defaults → DB fill.
+    // Explicit -i/-p always win; after `setup`, desk tools work without flags.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let conn_for_resolve = open_db(&db.to_string_lossy()).ok();
+    let resolved = cli_config::resolve_project_context(
+        flags_id.as_deref(),
+        flags_path.as_deref(),
+        &cwd,
+        conn_for_resolve.as_ref(),
+    );
+    let (project_id, project_path) = match resolved {
+        Ok(r) => (r.project_id, Some(r.project_path)),
+        Err(_) => {
+            // Keep empty defaults so tools that don't need project (e.g. get-task)
+            // still run; tools that require path/id exit with setup hint below.
+            (
+                flags_id.clone().unwrap_or_default(),
+                flags_path.clone(),
+            )
+        }
+    };
+
     let ctx = InvestigationContext {
         project_id: project_id.clone(),
         project_path: project_path.clone().unwrap_or_default(),
@@ -61,7 +102,10 @@ Buy: https://pageseeds.com"
     };
 
     let require_project_path = || -> String {
-        project_path.clone().unwrap_or_else(|| exit("--project-path required"))
+        project_path
+            .clone()
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or_else(|| exit(MISSING_PROJECT_CONTEXT_HINT))
     };
 
     let result: Result<serde_json::Value, String> = match tool.as_str() {
@@ -185,7 +229,7 @@ Buy: https://pageseeds.com"
             let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
             let _ = require_project_path();
             if project_id.is_empty() {
-                exit("--project-id required");
+                exit(MISSING_PROJECT_CONTEXT_HINT);
             }
             investigate::validate_article_json(&ctx, &slug)
                 .map(|r| serde_json::to_value(r).unwrap_or_default())
@@ -1252,17 +1296,22 @@ fn open_db(db_path: &str) -> Result<rusqlite::Connection, String> {
 }
 
 fn flag(args: &[String], long: &str, short: &str) -> Option<String> {
-    for i in 0..args.len() { if args[i] == long || args[i] == short { if i + 1 < args.len() { return Some(args[i + 1].clone()); } } }
+    for i in 0..args.len() {
+        let matches_long = !long.is_empty() && args[i] == long;
+        let matches_short = !short.is_empty() && args[i] == short;
+        if matches_long || matches_short {
+            if i + 1 < args.len() {
+                return Some(args[i + 1].clone());
+            }
+        }
+    }
     None
 }
 
 fn has_flag(args: &[String], long: &str, short: &str) -> bool {
-    args.iter().any(|a| a == long || a == short)
-}
-
-fn expand_tilde(path: &str) -> String {
-    if path.starts_with('~') { std::env::var("HOME").map(|h| path.replacen('~', &h, 1)).unwrap_or_else(|_| path.into()) }
-    else { path.into() }
+    args.iter().any(|a| {
+        (!long.is_empty() && a == long) || (!short.is_empty() && a == short)
+    })
 }
 
 /// Hard-error path: `ERROR: …` on stderr, empty stdout, exit 1.
@@ -1270,6 +1319,144 @@ fn expand_tilde(path: &str) -> String {
 fn exit(msg: &str) -> ! {
     eprintln!("ERROR: {msg}");
     std::process::exit(1);
+}
+
+/// Free meta: list registered projects as JSON (same DB as desktop).
+fn run_list_projects() {
+    let db = pageseeds_lib::db::default_db_path();
+    let conn = match open_db(&db.to_string_lossy()) {
+        Ok(c) => c,
+        Err(e) => exit(&format!("failed to open project database: {e}")),
+    };
+    match cli_setup::list_projects(&conn) {
+        Ok(outcome) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&outcome).unwrap_or_default()
+            );
+        }
+        Err(e) => exit(&format!("failed to list projects: {e}")),
+    }
+}
+
+/// Free meta: create/link a workspace project via the shared helper.
+fn run_create_project(args: &[String]) {
+    let path = flag(args, "--path", "").or_else(|| flag(args, "--project-path", "-p"));
+    let name = flag(args, "--name", "-n");
+    let site_url = flag(args, "--site-url", "");
+    let cwd = std::env::current_dir().ok();
+
+    let db = pageseeds_lib::db::default_db_path();
+    let conn = match open_db(&db.to_string_lossy()) {
+        Ok(c) => c,
+        Err(e) => exit(&format!("failed to open project database: {e}")),
+    };
+    match cli_setup::create_project(
+        &conn,
+        cli_setup::CreateProjectOpts {
+            path,
+            name,
+            site_url,
+            cwd,
+        },
+    ) {
+        Ok(outcome) => {
+            let payload = serde_json::json!({
+                "created": outcome.created,
+                "project": outcome.project,
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload).unwrap_or_default()
+            );
+        }
+        Err(e) => exit(&e.to_string()),
+    }
+}
+
+/// Free meta: one-shot onboarding — link/create, write defaults, optional first-win desk read.
+fn run_setup(args: &[String]) {
+    let json_mode = has_flag(args, "--json", "");
+    let status_only = has_flag(args, "--status", "");
+    let skip_first_win = has_flag(args, "--skip-first-win", "");
+    let _yes = has_flag(args, "--yes", "-y"); // reserved for future interactive prompts
+
+    let path = flag(args, "--path", "").or_else(|| flag(args, "--project-path", "-p"));
+    let name = flag(args, "--name", "-n");
+    let site_url = flag(args, "--site-url", "");
+    let license_key = flag(args, "--license", "").or_else(|| {
+        std::env::var("PAGESEEDS_LICENSE")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    });
+    let cwd = std::env::current_dir().ok();
+
+    if status_only {
+        run_setup_status(path, json_mode, cwd);
+        return;
+    }
+
+    let db = pageseeds_lib::db::default_db_path();
+    let conn = match open_db(&db.to_string_lossy()) {
+        Ok(c) => c,
+        Err(e) => exit(&format!("failed to open project database: {e}")),
+    };
+    let outcome = match cli_setup::setup(
+        &conn,
+        cli_setup::SetupOpts {
+            path,
+            name,
+            site_url,
+            license_key,
+            skip_first_win,
+            cwd,
+        },
+    ) {
+        Ok(o) => o,
+        Err(e) => exit(&e.to_string()),
+    };
+
+    let payload = serde_json::to_value(&outcome).unwrap_or_default();
+    if !json_mode {
+        for line in outcome.human_progress_lines() {
+            eprintln!("{line}");
+        }
+    }
+    // Machine-readable summary on stdout (agents pipe setup; --json skips human stderr only).
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
+}
+
+/// Report-only readiness check (no mutations). Exit 1 when not desk-ready.
+fn run_setup_status(path: Option<String>, json_mode: bool, cwd: Option<std::path::PathBuf>) {
+    let db = pageseeds_lib::db::default_db_path();
+    let conn = open_db(&db.to_string_lossy()).ok();
+    let outcome = match cli_setup::setup_status(
+        conn.as_ref(),
+        cli_setup::SetupStatusOpts { path, cwd },
+    ) {
+        Ok(o) => o,
+        Err(e) => exit(&e.to_string()),
+    };
+
+    // Always print JSON for --status so agents can parse; human notes on stderr.
+    if !json_mode {
+        if outcome.desk_ready {
+            eprintln!("setup status: desk-ready");
+        } else {
+            eprintln!("setup status: not desk-ready — run pageseeds-cli setup --path . --yes");
+        }
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&outcome).unwrap_or_default()
+    );
+    if !outcome.desk_ready {
+        std::process::exit(1);
+    }
 }
 
 /// `pageseeds-cli license activate|status|deactivate` — free, no -i/-p, no DB.
@@ -1351,6 +1538,25 @@ struct ToolHelp {
 
 /// Complete inventory of match-arm tools. New tools must be added here and in `main`.
 const TOOLS: &[ToolHelp] = &[
+    // Meta / onboarding (free)
+    ToolHelp {
+        name: "list-projects",
+        purpose: "List registered projects as JSON (no -i/-p)",
+        example: "list-projects",
+        section: "Meta",
+    },
+    ToolHelp {
+        name: "create-project",
+        purpose: "Register a workspace project (shared helper / same DB as desktop)",
+        example: "create-project --path . --name \"My Site\"",
+        section: "Meta",
+    },
+    ToolHelp {
+        name: "setup",
+        purpose: "Link/create project, write defaults, first desk win (idempotent)",
+        example: "setup --path . --yes [--skip-first-win] [--status] [--license KEY]",
+        section: "Meta",
+    },
     // GSC
     ToolHelp {
         name: "gsc-performance",
@@ -1655,16 +1861,19 @@ Each subcommand calls one PageSeeds data function. Uses the same SQLite DB as th
 desktop app. Prefer the installed binary from any directory.
 
 Usage:
-  pageseeds-cli <tool> -i <project-id> -p <project-path> [args]
-  pageseeds-cli license activate <key> | status | deactivate
+  pageseeds-cli setup --path . --yes          # once per machine/project
+  pageseeds-cli <tool> [args]                # after setup, -i/-p optional
+  pageseeds-cli <tool> -i <id> -p <path> …  # flags always override defaults
+  pageseeds-cli list-projects | create-project | license …
   pageseeds-cli --version | -V
   # install: curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
   # dev: ./scripts/install-cli.sh  /  FROM_SOURCE=1  →  ~/.local/bin/pageseeds-cli
 
-Common flags: -i/--project-id  -p/--project-path
+Project context (first match wins): -i/-p → env → .pageseeds.yaml → global config
+  → project registry. Missing context: run `pageseeds-cli setup`.
 
 License:
-  Free tools (desk, GSC reads, inspect) always work without a key.
+  Free tools (desk, GSC reads, inspect, setup/list/create) always work without a key.
   Paid tools (write/fix/merge, research-pull, task act, audits that write)
   require: pageseeds-cli license activate <key>
   Status:  pageseeds-cli license status
@@ -1812,7 +2021,17 @@ mod tests {
             free_count + paid.len(),
             "TOOLS.len() must equal free + paid (paid ⊆ TOOLS)"
         );
-        assert_eq!(TOOLS.len(), 46, "TOOLS inventory size (free+paid commercial boundary)");
+        assert_eq!(TOOLS.len(), 49, "TOOLS inventory size (free+paid commercial boundary)");
         assert_eq!(paid.len(), 24, "paid set size must match docs/CLI_COMMERCIAL.md");
+        for meta in ["list-projects", "create-project", "setup"] {
+            assert!(
+                tool_names.contains(&meta),
+                "meta free tool '{meta}' missing from TOOLS"
+            );
+            assert!(
+                !pageseeds_lib::license::requires_paid_license(meta),
+                "meta tool '{meta}' must be free"
+            );
+        }
     }
 }

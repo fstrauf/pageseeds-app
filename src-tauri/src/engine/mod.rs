@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod batch;
+pub mod cli_setup;
 pub mod content_brief;
 pub mod content_fix;
 pub mod content_review_selection;
@@ -12,6 +13,7 @@ pub mod indexing_link_fix;
 pub mod keyword_selection;
 pub mod ledger;
 pub mod post_actions;
+pub mod project_create;
 pub mod project_paths;
 pub mod prompts;
 pub mod queue;
