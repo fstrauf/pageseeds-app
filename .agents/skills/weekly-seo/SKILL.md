@@ -202,6 +202,8 @@ There is **no** `refresh_ground_truth` CLI yet (dual-path until it lands).
 | Stale snapshots / desk cache | `create-task -t collect_gsc` then **`execute-task` this run** if needed |
 | Clarity (if configured) | same pattern with `collect_clarity` |
 
+- **Desk tape flag:** On `site-overview` / `articles`, read `freshness.stale` and `freshness.hint` before treating zero impressions/clicks as demand truth (empty/stale `gsc_page_daily` is not “no traffic”).
+
 If GSC disconnected: continue on catalog/indexing tools only; note it.
 
 ### C. Desk exploration (primary)
@@ -536,7 +538,8 @@ weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
 
 **Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
 and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both
-answer the same question.
+answer the same question. Desk JSON exposes `freshness.stale` / `freshness.hint`
+on `site-overview` and `articles` — honor those before treating zeros as demand.
 
 **MCP (#92):** mount **desk tools first**; skill = operator policy. Tighten soft
 guidance if agents thrash — not hard rails first.

@@ -184,6 +184,12 @@ fn site_overview_totals_articles_live() {
     assert!(overview.hints.iter().any(|h| h.contains("Evidence index")));
     assert!(overview.freshness.evidence_index_at.is_none());
     assert_eq!(overview.freshness.evidence_coverage, 0.0);
+    // Fresh insert → not stale (tape age ≤ GSC_METRICS_MAX_AGE_DAYS).
+    assert!(!overview.freshness.stale);
+    assert_eq!(overview.freshness.source, "gsc_page_daily");
+    assert!(overview.freshness.gsc_at.is_some());
+    assert!(overview.freshness.age_days.is_some());
+    assert!(overview.freshness.hint.is_none());
 
     let _ = fs::remove_dir_all(&project);
 }
@@ -367,6 +373,171 @@ fn top_movers_computed_when_both_windows_exist() {
     assert_eq!(overview.top_movers[0].slug, "mover");
     assert!(overview.top_movers[0].clicks_delta > 0.0);
     assert_eq!(overview.top_movers[0].direction, "up");
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn gsc_freshness_empty_tape_is_stale_with_hint() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "lonely", "Lonely", "content/l.mdx", "published", 10,
+    );
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert!(overview.freshness.stale);
+    assert_eq!(overview.freshness.source, "none");
+    assert!(overview.freshness.gsc_at.is_none());
+    assert!(overview.freshness.age_days.is_none());
+    let hint = overview.freshness.hint.as_deref().unwrap_or("");
+    assert!(
+        hint.contains("empty") || hint.contains("collect_gsc"),
+        "expected recovery hint, got {hint:?}"
+    );
+    assert!(
+        overview
+            .hints
+            .iter()
+            .any(|h| h.contains("GSC snapshots missing") || h.to_lowercase().contains("stale")),
+        "overview hints should signal missing/stale GSC: {:?}",
+        overview.hints
+    );
+
+    let catalog = list_articles_catalog(
+        &conn,
+        "proj1",
+        &project_path,
+        ArticlesFilter::default(),
+    )
+    .unwrap();
+    assert!(catalog.freshness.stale);
+    assert_eq!(catalog.freshness.source, "none");
+    assert!(catalog.freshness.hint.is_some());
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn gsc_freshness_old_tape_is_stale_with_age() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "aged", "Aged", "content/a.mdx", "published", 10,
+    );
+
+    let (d1, _) = recent_dates();
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row(
+            "https://example.com/blog/aged",
+            &d1,
+            1.0,
+            20.0,
+        )],
+    )
+    .unwrap();
+
+    // insert_gsc_page_daily_snapshots stamps fetched_at = now; backdate past threshold.
+    let old_fetched = (Utc::now() - Duration::days(10)).to_rfc3339();
+    conn.execute(
+        "UPDATE gsc_page_daily SET fetched_at = ?1 WHERE project_id = ?2",
+        rusqlite::params![old_fetched, "proj1"],
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert!(overview.freshness.stale);
+    assert_eq!(overview.freshness.source, "gsc_page_daily");
+    assert_eq!(overview.freshness.gsc_at.as_deref(), Some(old_fetched.as_str()));
+    assert!(
+        overview.freshness.age_days.unwrap_or(0)
+            > crate::engine::exec::common::GSC_METRICS_MAX_AGE_DAYS
+    );
+    let hint = overview.freshness.hint.as_deref().unwrap_or("");
+    assert!(
+        hint.contains("stale") || hint.contains("collect_gsc"),
+        "expected recovery hint, got {hint:?}"
+    );
+    assert!(
+        overview
+            .hints
+            .iter()
+            .any(|h| h.contains("stale") || h.contains("GSC snapshots missing")),
+        "overview hints should signal stale GSC tape: {:?}",
+        overview.hints
+    );
+
+    let catalog = list_articles_catalog(
+        &conn,
+        "proj1",
+        &project_path,
+        ArticlesFilter::default(),
+    )
+    .unwrap();
+    assert!(catalog.freshness.stale);
+    assert_eq!(catalog.freshness.source, "gsc_page_daily");
+    assert!(catalog.freshness.age_days.is_some());
+    assert!(catalog.freshness.hint.is_some());
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn gsc_freshness_fresh_tape_not_stale() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "fresh", "Fresh", "content/f.mdx", "published", 10,
+    );
+
+    let (d1, _) = recent_dates();
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row(
+            "https://example.com/blog/fresh",
+            &d1,
+            2.0,
+            40.0,
+        )],
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert!(!overview.freshness.stale);
+    assert_eq!(overview.freshness.source, "gsc_page_daily");
+    assert!(overview.freshness.gsc_at.is_some());
+    assert!(overview.freshness.age_days.unwrap_or(99) <= 7);
+    assert!(overview.freshness.hint.is_none());
+    assert!(
+        !overview.hints.iter().any(|h| h.contains("stale")),
+        "fresh tape must not emit stale hint: {:?}",
+        overview.hints
+    );
+    assert!(
+        !overview.hints.iter().any(|h| h == "GSC snapshots missing"),
+        "fresh tape with metrics must not claim snapshots missing: {:?}",
+        overview.hints
+    );
+
+    let catalog = list_articles_catalog(
+        &conn,
+        "proj1",
+        &project_path,
+        ArticlesFilter::default(),
+    )
+    .unwrap();
+    assert!(!catalog.freshness.stale);
+    assert_eq!(catalog.freshness.source, "gsc_page_daily");
+    assert!(catalog.freshness.hint.is_none());
 
     let _ = fs::remove_dir_all(&project);
 }
