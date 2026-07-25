@@ -2,13 +2,11 @@
 ///
 /// These cross the Tauri IPC boundary to the frontend review UI.
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum Confidence {
     High,
     Medium,
@@ -51,9 +49,8 @@ impl rusqlite::types::FromSql for Confidence {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum ApprovalStatus {
     #[default]
     Pending,
@@ -101,9 +98,8 @@ impl rusqlite::types::FromSql for ApprovalStatus {
 
 // ─── Recommendation structs ───────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct MergeRecommendation {
     pub cluster_id: String,
     pub confidence: Confidence,
@@ -167,9 +163,8 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct HubRecommendation {
     pub topic: String,
     pub suggested_url: String,
@@ -185,9 +180,8 @@ pub struct HubRecommendation {
     pub approval_status: ApprovalStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct CalculatorRecommendation {
     pub strategy: String,
     pub ticker_universe: String,
@@ -199,9 +193,8 @@ pub struct CalculatorRecommendation {
     pub approval_status: ApprovalStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct TerritoryRecommendation {
     pub theme: String,
     pub priority: String,
@@ -213,9 +206,8 @@ pub struct TerritoryRecommendation {
     pub approval_status: ApprovalStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct StrategyRisk {
     pub risk: String,
     pub mitigation: String,
@@ -223,9 +215,8 @@ pub struct StrategyRisk {
 
 // ─── Top-level strategy ───────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct CannibalizationStrategy {
     #[serde(default)]
     pub generated_at: String,
@@ -243,9 +234,8 @@ pub struct CannibalizationStrategy {
 
 // ─── Territory Strategy ───────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct TerritoryStrategy {
     pub theme: String,
     pub priority: String,
@@ -259,9 +249,8 @@ pub struct TerritoryStrategy {
     pub existing_coverage: Vec<TerritoryCoverageItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct TerritoryContentRec {
     pub title: String,
     pub url_slug: String,
@@ -269,9 +258,8 @@ pub struct TerritoryContentRec {
     pub rationale: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct TerritoryCoverageItem {
     pub article_id: i64,
     pub title: String,
@@ -281,9 +269,8 @@ pub struct TerritoryCoverageItem {
 
 // ─── Selection input for task-drawer picker ───────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct CannibalizationSelection {
     pub recommendation_type: String,
     pub recommendation_id: String,
@@ -291,9 +278,8 @@ pub struct CannibalizationSelection {
 
 // ─── Review state (DB row) ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct StrategyReview {
     pub id: i64,
     pub strategy_id: String,
@@ -311,9 +297,8 @@ pub struct StrategyReview {
 // ─── Frontend view model ──────────────────────────────────────────────────────
 
 /// Status of an existing fix task for a recommendation.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct RecommendationTaskStatus {
     pub recommendation_type: String,
     pub recommendation_id: String,
@@ -322,9 +307,8 @@ pub struct RecommendationTaskStatus {
 }
 
 /// A strategy with per-recommendation approval state merged in.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct StrategyWithReviews {
     pub strategy: CannibalizationStrategy,
     pub reviews: Vec<StrategyReview>,

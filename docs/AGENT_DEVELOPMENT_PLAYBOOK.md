@@ -72,10 +72,10 @@ cargo test -p pageseeds-core task_definitions
 
 **Use when:** A component needs to run tasks or show queue state.
 
-**Primitive:** Backend queue commands in `tauri.ts`
+**Primitive:** Backend queue APIs (`engine/queue.rs`) / CLI package-submit paths
 
 **Files to inspect first:**
-- `src/lib/tauri.ts` — `enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`
+- `(removed desktop IPC)` — `enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`
 - `src/stores/queueStore.ts` — how the frontend subscribes to queue state
 - `src/hooks/useQueueRunner.ts` — how the UI reacts to queue events
 
@@ -246,7 +246,7 @@ cargo test -p pageseeds-core step_registry
    - Must say "Return ONLY a valid JSON object matching the schema"
 
 2. **Model** — `crates/pageseeds-core/src/models/{domain}.rs`
-   - Add `PatchType` struct with `#[derive(JsonSchema, TS)]` + `#[ts(export)]`
+   - Add `PatchType` struct with `#[derive(JsonSchema)]`
    - Add `PatchChanges` struct with optional fields for each fix category
    - Add `VerificationReport` + `VerifiedItem` structs
    - Reuse existing models from `ctr.rs` or `content_review.rs` as templates
@@ -336,29 +336,28 @@ cargo test -p pageseeds-core export::
 
 **Use when:** You need a new panel, table, or form that displays or mutates data.
 
-**Primitive:** Tauri command → `tauri.ts` wrapper → component
+**Primitive:** Domain function → thin CLI command (if operator-facing)
 
 **Files to inspect first:**
-- `src/lib/tauri.ts` — existing invoke wrappers
+- `(removed desktop IPC)` — existing invoke wrappers
 - `src/lib/types.ts` — type definitions
 - `src/components/` — similar component for patterns
 
 **Files touched (in order):**
 1. Rust: `commands/{domain}.rs` — thin command (or reuse existing)
-2. Rust: `lib.rs` — register in `generate_handler!` if new command
-3. TypeScript: `src/lib/tauri.ts` — add typed wrapper
+2. Domain: implement in `pageseeds-core`; expose via CLI only if needed
+3. TypeScript: `(removed desktop IPC)` — add typed wrapper
 4. TypeScript: `src/lib/types.ts` — add/update type if needed
 5. React: `src/components/{domain}/` — build component
 
 **Files NOT touched:**
-- No `invoke()` calls outside `tauri.ts`
+- Keep `pageseeds-cli` thin; no business logic in the binary
 - No business logic in components
 - No Zustand bare store subscriptions (use selectors)
 
 **Validation:**
 ```bash
 # Verify no unregistered invokes
-pnpm run check:ipc
 # Type check
 pnpm exec tsc -b
 ```
@@ -369,8 +368,6 @@ pnpm exec tsc -b
 
 | What you changed | Run this |
 |---|---|
-| Rust model with `#[ts(export)]` | `./scripts/sync-bindings.sh && ./scripts/check-bindings.sh` |
-| New command or changed signature | `pnpm run check:ipc` |
 | New task type or handler | `cargo test -p pageseeds-core task_definitions` |
 | Task lifecycle or task creation logic | `pnpm run check:task-store && cargo test -p pageseeds-core task_definitions` |
 | Documentation links | `./scripts/check-docs-links.sh` |

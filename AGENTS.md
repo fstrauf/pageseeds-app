@@ -1,4 +1,4 @@
-# AI Agent Guide — PageSeeds App
+# AI Agent Guide — PageSeeds Operator CLI
 
 Concise orientation and rules for AI agents working in this repo.
 
@@ -9,16 +9,14 @@ Concise orientation and rules for AI agents working in this repo.
 
 ## What This Repo Is
 
-A **Rust workspace** for SEO operator tooling plus a (temporarily non-building) Tauri desktop shell.
+**PageSeeds Operator CLI** — a pure Rust workspace for SEO operator tooling. The Tauri desktop shell and React frontend were removed in **#184** (historical releases only; not rebuilt here).
 
-- **Domain library**: `crates/pageseeds-core` (`pageseeds_core`) — **no Tauri deps**
+- **Domain library**: `crates/pageseeds-core` (`pageseeds_core`) — no UI/Tauri deps
 - **Operator CLI**: `crates/pageseeds-cli` (`pageseeds-cli` bin) — depends only on core
-- **Desktop**: `src-tauri/` — **temporarily non-building**; domain SoT moved to core; rebuild deferred to **#184**
-- **Frontend**: React + TypeScript + Vite + Tailwind v4 + shadcn/ui (`src/`)
-- **Store**: SQLite (runtime state) + JSON in the user's repo (committed content data)
+- **Store**: SQLite (operator runtime state) + JSON in the user's repo (committed content data)
 - **LLM layer**: Rig-core providers with a legacy CLI fallback (`crates/pageseeds-core/src/rig/`, `engine/agent.rs`)
 
-> **Crate split (#183):** Edit domain logic in `crates/pageseeds-core`, not under `src-tauri/src/` (except Tauri `commands/` until #184). Ship gates for operator work: `cargo test -p pageseeds-core` / `cargo build -p pageseeds-cli` / `pnpm run test:cli`.
+> **Ship gate:** `pnpm run test:cli` (`cargo test -p pageseeds-core` → `check:task-store` → `check:cli-contract`). Also: `cargo build -p pageseeds-cli`. Install path: `scripts/install-cli.sh` / `docs/CLI_GETTING_STARTED.md`.
 
 ---
 
@@ -30,20 +28,19 @@ A **Rust workspace** for SEO operator tooling plus a (temporarily non-building) 
 | **Run the weekly SEO pass on a project** | Invoke the `weekly-seo` skill (`.agents/skills/weekly-seo/SKILL.md`, discoverable by Kimi Code) — **desk-first** (epic #117): refresh if stale → `site-overview` → `articles`/`article`/`gsc-queries` → ≤5 actions → report. Soft audits optional, not ground truth. Skill is the workflow; judgment lives in the agent. | Build a Rust orchestrator, scheduler, or cross-project runner; treat soft clusters as merge authority |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
 | **Add or change task lifecycle behavior** | Follow the [Task Lifecycle Contract](#task-lifecycle-contract), then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
-| **Attach tasks to execution** | Use backend queue commands through `tauri.ts` (`enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`). | Call `executeTask` directly from components |
+| **Attach tasks to execution** | Use the engine queue (`engine/queue.rs`) or CLI task/submit paths; enqueue via domain APIs. | Bypass the queue with ad-hoc executor calls from scripts |
 | **Programmatically create tasks** | Use `TaskSpawner::spawn` or `TaskSpawner::spawn_follow_up`. | Call `task_store::create_task` directly |
 | **Pass downstream context/data** | Use task artifacts + deterministic prep steps. | Make the agent rediscover file paths or metrics from prose |
-| **Get JSON from an agent** | Use shared extraction helpers (`engine::text` in Rust; `artifacts.ts` on frontend). | Write new regex parsers or normalizer paths |
+| **Get JSON from an agent** | Use shared extraction helpers (`engine::text` in Rust). | Write new regex parsers or normalizer paths |
 | **Sync article state to repo JSON** | Use `db::export::write_articles_to_repo()` or `content::ops::sync_and_validate()`. | Write raw SQL + manual `fs::write` of `articles.json` |
-| **Add a new workflow step** | Add `StepKind` variant → register in `step_registry.rs` → add match arm in `executor.rs` → implement in `engine/exec/`. | Put business logic in `commands/` or the handler |
-| **Add frontend UI around backend data** | Add command wrapper in `tauri.ts` → add type in `types.ts` → build component in `src/components/`. | Call `invoke()` inline in components |
+| **Add a new workflow step** | Add `StepKind` variant → register in `step_registry.rs` → add match arm in `executor.rs` → implement in `engine/exec/`. | Put business logic in the CLI binary or the handler |
 
 > **weekly-seo skill source of truth:** Canonical path is `.agents/skills/weekly-seo/SKILL.md`. `.grok/skills/weekly-seo/SKILL.md` is a symlink for Grok discovery — edit only the `.agents` file.
 
 **Golden rules:**
 1. A new skill file is ~20 lines. A new task type + handler + exec module is ~200+ lines. **Prefer the skill.**
 2. When the output is an MDX article, reuse `write_article` with a different skill — do not build a new pipeline.
-3. The queue is backend-managed. Components enqueue; they do not execute.
+3. The queue is backend-managed. CLI/operators enqueue or execute via documented paths; do not invent parallel runners.
 4. **NEVER re-implement a primitive that already exists.** Before writing `split_whitespace().count()`, `parse_frontmatter()`, or a slug normalizer, check the [DRY catalog](#dry-core-reusable-functions). The canonical version strips markdown, handles edge cases, and is the single source of truth. Fragmentation creates bugs that surface weeks later in unrelated workflows.
 
 ---
@@ -53,12 +50,12 @@ A **Rust workspace** for SEO operator tooling plus a (temporarily non-building) 
 ```
 Cargo.toml                 # workspace: pageseeds-core, pageseeds-cli
 crates/
-├── pageseeds-core/        # Domain library (rlib only; NO tauri)
+├── pageseeds-core/        # Domain library (rlib only)
 │   ├── skills/            # Embedded app-default skills (include_str!)
 │   ├── config/            # tool_catalog.toml
 │   └── src/
 │       ├── db/            # SQLite init, migrations, JSON repo export
-│       ├── models/        # Serde structs (IPC + CLI)
+│       ├── models/        # Serde structs (CLI + domain)
 │       ├── engine/        # Workflow orchestration: store, spawner, executor, handlers
 │       │   ├── workflows/ # Handler trait + step plans
 │       │   └── exec/      # Step implementations
@@ -67,15 +64,11 @@ crates/
 │       ├── reddit/, gsc/, seo/, social/, clarity/, rig/, license/, …
 │       └── lib.rs         # Domain modules only
 └── pageseeds-cli/         # Operator CLI bin (depends only on core)
-src-tauri/                 # Desktop shell — TEMPORARILY NON-BUILDING (#184)
-└── src/commands/          # #[tauri::command] bindings (not in core)
-
-src/
-├── lib/
-│   ├── bindings/        # Auto-generated TS from Rust (ts-rs)
-│   ├── tauri.ts         # All invoke() wrappers
-│   └── types.ts         # Re-exports bindings + frontend-only types
-└── components/          # Feature-scoped React components
+    └── src/main.rs
+scripts/
+├── install-cli.sh         # Customer + contributor install path
+├── check-cli-contract.sh
+└── check-task-store-usage.sh
 ```
 
 For the full tree and per-folder responsibilities, see [`AI_QUICK_START.md`](./AI_QUICK_START.md).
@@ -84,14 +77,13 @@ For the full tree and per-folder responsibilities, see [`AI_QUICK_START.md`](./A
 
 ## Core Rules
 
-### Rust Backend
+### Rust Domain + CLI
 
-1. **Business logic lives in Rust modules** — never in `commands.rs` or the frontend.
-2. **`commands.rs` is thin**. Each command validates inputs → calls a module function → returns result. No logic beyond that.
-3. **One error type**. Use `error::Error` and `error::Result<T>` throughout. Commands return `Result<T, String>` (Tauri requirement).
-4. **SQLite is the runtime store**. All mutable state goes through `engine/task_store.rs`. Schema changes require a new migration constant in `db/mod.rs` — never alter existing SQL migration blocks.
-5. **Task creation goes through `engine::spawner::TaskSpawner`**. Never call `task_store::create_task` directly for programmatic task creation. The spawner enforces idempotency and dependency validation.
-6. **No subprocess calls**. All I/O uses Rust crates directly (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.). The only CLI fallback is inside the agent compatibility layer and is legacy.
+1. **Business logic lives in `pageseeds-core` modules** — keep `pageseeds-cli` thin (parse args → call core → print JSON/errors).
+2. **One error type**. Use `error::Error` and `error::Result<T>` throughout the domain crate.
+3. **SQLite is the operator runtime store**. All mutable state goes through `engine/task_store.rs`. Schema changes require a new migration constant in `db/mod.rs` — never alter existing SQL migration blocks.
+4. **Task creation goes through `engine::spawner::TaskSpawner`**. Never call `task_store::create_task` directly for programmatic task creation. The spawner enforces idempotency and dependency validation.
+5. **No subprocess calls**. All I/O uses Rust crates directly (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.). The only CLI fallback is inside the agent compatibility layer and is legacy.
 
 ### RIG / LLM Integration
 
@@ -102,20 +94,11 @@ For the full tree and per-folder responsibilities, see [`AI_QUICK_START.md`](./A
 5. **Provider fallback is centralized.** Any fallback to `agent-wrapper`, CLI providers, or compatibility shims belongs in the Rig/provider layer and must be documented as temporary.
 6. **Test without live providers by default.** Unit tests for Rig-backed code should use fixtures, mock providers, or mocked tools. Live tests must be `#[ignore]`.
 
-### Frontend
-
-1. **Frontend calls Rust**. All data fetching and mutations go through `invoke()` in `src/lib/tauri.ts`. No direct file I/O in React.
-2. **Keep `tauri.ts` the single IPC file**. Every new command gets a typed wrapper there.
-3. **`types.ts` mirrors Rust models exactly**. When you change a Rust struct, update the corresponding TypeScript interface immediately (or regenerate bindings with `./scripts/sync-bindings.sh`).
-4. **UI stack**: Tailwind v4, shadcn/ui primitives (`components/ui/`), Manrope body font, Fraunces display font. See `STYLE_GUIDE.md` for tokens.
-5. **All UI must use shadcn/ui** — no raw HTML alternatives. Use `Sheet`, `ScrollArea`, `Textarea`, `Input`, `Button`, `Badge`, `Separator`, `Select`, `Tabs`, `Dialog`, etc.
-6. **No business logic in components**. Components render and dispatch. They call `tauri.ts` helpers and display results.
-
 ### Secrets
 
 - Precedence: `~/.config/automation/secrets.env` → `{repo}/.env.local` → `{repo}/.env` → shell vars.
 - Managed by `config/env_resolver.rs` (`EnvResolver`). Use it everywhere; don't read env vars directly.
-- Never embed keys or paths in code. Settings UI writes to the secrets file via `import_env_file` command.
+- Never embed keys or paths in code. Operators manage secrets via env files / CLI setup; use `EnvResolver`.
 
 ### Settings Architecture
 
@@ -134,17 +117,17 @@ Before adding or changing anything that creates, queues, reviews, or spawns task
 
 | Lane | Source of truth | How it works | Reuse |
 |---|---|---|---|
-| **User starts an existing task** | `src/lib/taskQueueActions.ts`, `src/stores/queueStore.ts`, `crates/pageseeds-core/src/engine/queue.rs` | Frontend sends `EnqueueItem`s; backend persists queue rows, starts the runner, emits queue events. | `enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`, `removeQueueItem` |
+| **User / CLI starts an existing task** | `crates/pageseeds-core/src/engine/queue.rs`, CLI package/submit paths | Enqueue or execute via domain queue APIs; backend persists queue rows and runs the executor. | queue APIs, CLI task tools |
 | **System creates a task** | `crates/pageseeds-core/src/engine/spawner.rs` | Build a `TaskSpec`; defaults come from `config/task_definitions.rs`; idempotency prevents duplicate active work. | `TaskSpawner::spawn` |
 | **Task creates backend follow-ups after success** | `crates/pageseeds-core/src/engine/post_actions.rs` | `after_task_success` runs after executor completion and returns created task IDs; queue auto-enqueues only follow-ups whose `run_policy` is `auto_enqueue`. | `TaskSpawner::spawn_follow_up` |
-| **Task requires user input before follow-ups** | `config/task_definitions.rs` + review UI + selection command | Parent task gets `review_surface != none` and usually `follow_up_policy = UserSelection`; executor leaves it in `review`; the selection command validates choices, creates downstream tasks, marks parent done. | Existing patterns: keyword picker, Reddit picker, cannibalization picker |
+| **Task requires user input before follow-ups** | `config/task_definitions.rs` + CLI selection tools | Parent task gets `review_surface != none` and usually `follow_up_policy = UserSelection`; executor leaves it in `review`; selection validates choices, creates downstream tasks, marks parent done. | Existing patterns: keyword picker, Reddit picker, cannibalization / content-review select |
 | **Task should only show results, not spawn work** | `config/task_definitions.rs` | Use `artifact_review` and `follow_up_policy = None`. | Existing artifact review surfaces |
 
 **Hard rules:**
-- `config/task_definitions.rs` owns `run_policy`, `review_surface`, `follow_up_policy`, and `handler_family`. Do not duplicate those decisions in React state or executor branches.
-- Components enqueue; they do not execute.
+- `config/task_definitions.rs` owns `run_policy`, `review_surface`, `follow_up_policy`, and `handler_family`. Do not duplicate those decisions in ad-hoc CLI branches or executor special cases.
+- Enqueue via domain APIs; do not execute outside the queue/executor contract.
 - Backend follow-ups live in `engine/post_actions.rs` or a domain module called from it.
-- User-selection follow-ups must not be spawned before the user chooses. Store selectable options as artifacts, route the completed parent to `review`, and create downstream tasks from the selection command.
+- User-selection follow-ups must not be spawned before the user chooses. Store selectable options as artifacts, route the completed parent to `review`, and create downstream tasks from the selection path.
 - Every generated task needs an idempotency key unless it is intentionally one-off.
 - Run `pnpm run check:task-store` after task-creation changes.
 
@@ -152,7 +135,7 @@ Before adding or changing anything that creates, queues, reviews, or spawns task
 
 ## Overview Tool Catalog
 
-The capabilities surfaced on the Overview screen are **task types**, not function calls — enqueue them via the queue; never execute directly. Full per-tool reference: [`docs/TOOL_CATALOG.md`](./docs/TOOL_CATALOG.md).
+The operator tool catalog is **task types**, not raw function calls — enqueue/execute via the engine queue or documented CLI paths; never invent parallel runners. Full per-tool reference: [`docs/TOOL_CATALOG.md`](./docs/TOOL_CATALOG.md).
 
 > **Desk model (epic #117 / #139):** Weekly organic growth uses the [weekly-seo skill](./.agents/skills/weekly-seo/SKILL.md) — Site State reads then few hard actions. **Do not** nest `content_review` as the weekly strategy brain. Specialist audits below are when **already scoped**; soft audits are optional, not the weekly spine.
 
@@ -179,8 +162,8 @@ Rules:
 - **`content_review` is UI/unattended umbrella** when a nested investigation task + picker is desired — not the weekly-seo skill's strategy brain (CLI: desk → `fix_content_article`).
 - **Low CTR for agent/CLI weekly:** prefer desk-selected `fix_content_article` over enqueueing full `ctr_audit` (BackendAuto spawns many children and burns execution budget). Do not flip AutoEnqueue/BackendAuto defaults — UI unattended path stays.
 
-- **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. Do not start them manually from Overview (CLI weekly path may create+execute when desk data is stale).
-- **Lifecycle metadata is owned by `config/task_definitions.rs`.** When the Overview UI and Rust disagree, the Rust file wins. Update both together.
+- **Collection tasks (`collect_gsc`, `collect_clarity`) are `AutoEnqueue`** — the system runs them. CLI weekly path may create+execute when desk data is stale.
+- **Lifecycle metadata is owned by `config/task_definitions.rs`.** That file wins when docs or CLI help disagree.
 
 ---
 
@@ -237,7 +220,7 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 | `resolve_content_dir()` | `content/ops.rs` | Content path guessing |
 | `slug_from_filename()` | `content/ops.rs` | String manipulation on filenames |
 | `apply_publish()` | `content/publish.rs` | Any publish/status-change workflow |
-| `content_health_check()` | `content/ops.rs` | One-off file existence checks in UI code |
+| `content_health_check()` | `content/ops.rs` | One-off file existence checks outside ops |
 | `keyword_match::normalize_keyword()` / `keyword_present()` / `keyword_occurrences()` | `content/keyword_match.rs` | Raw `contains()` / `matches()` keyword checks (stored keywords may contain quotes or long phrases) |
 
 ### Project / Site URL (`models/project.rs`)
@@ -295,12 +278,12 @@ If a step lacks all three → it is a placeholder. Use kind `"manual"` instead u
 
 ## Layer Responsibilities
 
-There are four places backend logic can live. Knowing which to use removes guesswork.
+There are three places domain logic can live. Knowing which to use removes guesswork.
 
 | Layer | File Pattern | Responsibility |
 |-------|--------------|----------------|
-| **Commands** | `commands/{domain}.rs` | IPC boundary: validate inputs, lock DB, call a module function, return result. **No business logic.** |
-| **Domain modules** | `{domain}/` | Business logic, data access, external API calls |
+| **CLI binary** | `crates/pageseeds-cli/src/` | Arg parse, license gate, call core, print JSON/errors. **No business logic.** |
+| **Domain modules** | `crates/pageseeds-core/src/{domain}/` | Business logic, data access, external API calls |
 | **Engine exec** | `engine/exec/{domain}.rs` | Deterministic step implementations called by the executor |
 | **Workflow handlers** | `engine/workflows/handlers.rs` | Orchestration / planning: returns `Vec<WorkflowStep>` |
 
@@ -309,8 +292,8 @@ There are four places backend logic can live. Knowing which to use removes guess
 ```
 I have new logic — where does it go?
 │
-├─ Is it reading request inputs and returning a Tauri response?
-│  └─→ commands/{domain}.rs
+├─ Is it CLI UX (flags, stdout JSON, help text)?
+│  └─→ crates/pageseeds-cli (thin; call core)
 │
 ├─ Is it building a step graph for a task type?
 │  └─→ engine/workflows/handlers.rs
@@ -319,7 +302,7 @@ I have new logic — where does it go?
 │  └─→ engine/exec/{domain}.rs
 │
 └─ Everything else (API clients, parsers, DB access, algorithms)
-   └─→ {domain}/
+   └─→ {domain}/ under pageseeds-core
 ```
 
 The `social/` domain and the `clarity/` domain are the canonical examples of fully modularized domains.
@@ -328,7 +311,7 @@ The `social/` domain and the `clarity/` domain are the canonical examples of ful
 
 ## How to Add a Feature
 
-For scenario-specific instructions (changing a skill, adding content behavior, wiring the queue, building a fix pipeline, adding UI), see the [Agent Development Playbook](./docs/AGENT_DEVELOPMENT_PLAYBOOK.md).
+For scenario-specific instructions (changing a skill, adding content behavior, wiring the queue, building a fix pipeline), see the [Agent Development Playbook](./docs/AGENT_DEVELOPMENT_PLAYBOOK.md).
 
 For workflow mechanics, data persistence, business processes, and LLM integration, see the docs listed under [See Also](#see-also).
 
@@ -336,7 +319,7 @@ At a high level:
 
 1. **Port behavior, not architecture** — identify inputs/outputs first.
 2. **Test the agent prompt before writing the executor**.
-3. **One end-to-end run before any UI work** — backend must produce correct output first.
+3. **One end-to-end CLI/domain run before expanding scope** — core must produce correct output first.
 4. **Spec before code** — any feature touching 2+ files gets a spec in `docs/` first.
 5. **Ship one thing at a time**.
 
@@ -352,26 +335,21 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 
 ## Pre-Change Checklist
 
-**Ship gates** (choose by work kind; never improvise ad-hoc compositions — extend the matching `package.json` script):
+**Ship gate** (never improvise ad-hoc compositions — extend the matching `package.json` script):
 
 | Work kind | Gate | Composition / notes |
 |-----------|------|---------------------|
-| **Operator / CLI / domain Rust** (default for product work) | `pnpm test:cli` | `test:rust` (`cargo test -p pageseeds-core`) → `check:task-store` → `check:cli-contract`. No Vite/lint/tsc/IPC/bindings. Missing operator checks go into **`test:cli`**. |
-| **Desktop / React / IPC / bindings** (until #184) | `pnpm test:all` | Full monorepo: rust + lint + tsc + vitest + check:ipc + check:task-store + check-bindings + build. **Desktop `src-tauri` may not build until #184.** Missing desktop checks go into **`test:all`**. |
+| **Operator / CLI / domain Rust** (all product work) | `pnpm test:cli` | `test:rust` (`cargo test -p pageseeds-core`) → `check:task-store` → `check:cli-contract`. `pnpm test:all` is an alias of `test:cli`. Missing operator checks go into **`test:cli`**. |
 
-### Rust Backend
+### Domain + CLI
 - [ ] Checked for reuse against the DRY catalog above
 - [ ] Task lifecycle contract checked (if creating/queuing/spawning tasks)
-- [ ] Operator/CLI-only changes: ship with `pnpm test:cli` (not every desktop bullet below)
-- [ ] `cargo check -p pageseeds-core` / `cargo build -p pageseeds-cli` before frontend work
+- [ ] Ship with `pnpm test:cli`
+- [ ] `cargo check -p pageseeds-core` / `cargo build -p pageseeds-cli`
 - [ ] `pnpm run test:rust` passes — especially `all_task_types_have_non_fallback_handler` (uses `cargo nextest` when installed; tests that mutate process env must hold `test_support::ENV_LOCK`)
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] Settings placed correctly: user preferences → `global_settings`; project config → `projects`
-- [ ] No business logic added to `commands/*.rs`
-- [ ] When IPC surface changes: `tauri.ts` wrapper added/updated for any new or changed command
-- [ ] When desktop models change: `types.ts` updated to match Rust struct changes (or run `./scripts/sync-bindings.sh`)
-- [ ] When `#[ts(export)]` models change: `./scripts/check-bindings.sh` passes
-- [ ] When IPC surface changes: `pnpm run check:ipc` passes
+- [ ] No business logic added to `crates/pageseeds-cli` beyond arg parse / I/O
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls outside the agent compatibility layer
 - [ ] Reviewed `CONTRACTS.md` for affected implicit contracts
@@ -379,28 +357,16 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 - [ ] Every new agentic step has specific input context, output contract, and a comment explaining why it cannot be deterministic
 - [ ] Every new deterministic step does not contain a hard-coded heuristic that substitutes for judgment
 
-### Frontend
-(Apply when desktop / React / IPC / bindings work is touched; operator/CLI-only PRs use `pnpm test:cli`.)
-- [ ] `pnpm run lint` passes
-- [ ] `pnpm exec tsc -b` passes
-- [ ] `pnpm test` passes
-- [ ] `pnpm run check:ipc` passes
-- [ ] `pnpm run build` passes
-- [ ] Zustand store accesses use selectors (`useQueueStore(s => s.items)`)
-- [ ] Arrays mapped in hooks/components are wrapped in `useMemo`
-- [ ] Callbacks passed as JSX props are wrapped in `useCallback`
-- [ ] `useQuery` data is used directly — never copied into local state via `useEffect`
-- [ ] No components defined inside other components
-
 ---
 
 ## See Also
 
+- [`docs/CLI_GETTING_STARTED.md`](./docs/CLI_GETTING_STARTED.md) — Install + first desk read
+- [`docs/CLI_COMMERCIAL.md`](./docs/CLI_COMMERCIAL.md) — Free vs paid tools
 - [`docs/AGENT_DEVELOPMENT_PLAYBOOK.md`](./docs/AGENT_DEVELOPMENT_PLAYBOOK.md) — Scenario-based development guide
-- [`docs/BUSINESS_PROCESSES.md`](./docs/BUSINESS_PROCESSES.md) — What the app does and how workflows connect
+- [`docs/BUSINESS_PROCESSES.md`](./docs/BUSINESS_PROCESSES.md) — What the product does and how workflows connect
 - [`docs/WORKFLOW_ENGINE.md`](./docs/WORKFLOW_ENGINE.md) — Handlers, steps, executor, async execution
 - [`docs/DATA_PERSISTENCE.md`](./docs/DATA_PERSISTENCE.md) — SQLite/JSON architecture
 - [`docs/AGENT_INTEGRATION.md`](./docs/AGENT_INTEGRATION.md) — LLM integration with Rig
 - [`AI_QUICK_START.md`](./AI_QUICK_START.md) — Full directory map and quick orientation
 - [`CONTRACTS.md`](./CONTRACTS.md) — Runtime invariants and hidden rules
-- [`STYLE_GUIDE.md`](./STYLE_GUIDE.md) — Design system and UI tokens

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "PageSeeds domain library (no Tauri)"
+description = "PageSeeds domain library (operator CLI)"
 license = "UNLICENSED"
 
 [lib]
@@ -31,7 +31,6 @@ jsonwebtoken = "9"
 csv = "1"
 urlencoding = "2"
 env_logger = "0.11"
-ts-rs = { version = "12", features = ["serde-json-impl"] }
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

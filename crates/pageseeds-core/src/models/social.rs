@@ -1,15 +1,13 @@
 //! Social media marketing models
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Enums
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum Platform {
     #[serde(rename = "tiktok")]
     TikTok,
@@ -56,9 +54,8 @@ impl rusqlite::types::FromSql for Platform {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum PostStatus {
     Draft,
     Review,
@@ -110,9 +107,8 @@ impl rusqlite::types::FromSql for PostStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum SourceType {
     Article,
     Screenshot,
@@ -155,9 +151,8 @@ impl rusqlite::types::FromSql for SourceType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum PostFormat {
     SingleImage,
     Carousel,
@@ -200,9 +195,8 @@ impl rusqlite::types::FromSql for PostFormat {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum CampaignStatus {
     Draft,
     Generating,
@@ -248,9 +242,8 @@ impl rusqlite::types::FromSql for CampaignStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum AssetType {
     Image,
     Video,
@@ -284,9 +277,8 @@ impl rusqlite::types::FromSql for AssetType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum CanvasSize {
     TikTok,   // 9:16 (1080x1920)
     Square,   // 1:1 (1080x1080)
@@ -326,9 +318,8 @@ impl rusqlite::types::FromSql for CanvasSize {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum TextPosition {
     Top,
     Center,
@@ -369,8 +360,7 @@ impl rusqlite::types::FromSql for TextPosition {
 // Structs
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceConfig {
     pub include_articles: bool,
     pub article_slugs: Vec<String>,
@@ -379,8 +369,7 @@ pub struct SourceConfig {
     pub include_specs: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisualAsset {
     pub path: String,
     pub asset_type: AssetType,
@@ -389,8 +378,7 @@ pub struct VisualAsset {
     pub overlay_text: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub views: Option<u64>,
@@ -404,8 +392,7 @@ pub struct PostMetrics {
     pub clicks: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverlayConfig {
     pub canvas_size: CanvasSize,
     pub font_family: String,
@@ -415,8 +402,7 @@ pub struct OverlayConfig {
     pub max_text_length: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateExample {
     pub hook: String,
     pub caption: String,
@@ -427,8 +413,7 @@ pub struct TemplateExample {
 // Main Entity Models
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SocialCampaign {
     pub id: String,
     pub project_id: String,
@@ -444,8 +429,7 @@ pub struct SocialCampaign {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SocialPost {
     pub id: String,
     pub campaign_id: String,
@@ -486,8 +470,7 @@ pub struct SocialPost {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentTemplate {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -510,16 +493,14 @@ pub struct ContentTemplate {
 // Request/Response Types
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CampaignStats {
     pub total_posts: u64,
     pub by_status: std::collections::HashMap<String, u64>,
     pub by_platform: std::collections::HashMap<String, u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleConfig {
     pub strategy: ScheduleStrategy,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -528,17 +509,15 @@ pub struct ScheduleConfig {
     pub interval_hours: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum ScheduleStrategy {
     Immediate,
     Staggered,
     SpecificTimes,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateCampaignRequest {
     pub project_id: String,
     pub name: String,
@@ -549,8 +528,7 @@ pub struct CreateCampaignRequest {
     pub template_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTemplateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,

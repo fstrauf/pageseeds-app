@@ -16,12 +16,12 @@ content_review / content_audit task
   └─ ContentReviewRecommend   (agentic → recommendations.json)
 ```
 
-- Source: `src-tauri/src/engine/workflows/handlers.rs` (`ContentReviewHandler`)
-- Audit logic: `src-tauri/src/engine/exec/content_audit.rs`
-- DB persistence: `src-tauri/src/db/content_audit.rs`
-- Recommendation logic: `src-tauri/src/engine/exec/content/review.rs`
+- Source: `crates/pageseeds-core/src/engine/workflows/handlers.rs` (`ContentReviewHandler`)
+- Audit logic: `crates/pageseeds-core/src/engine/exec/content_audit.rs`
+- DB persistence: `crates/pageseeds-core/src/db/content_audit.rs`
+- Recommendation logic: `crates/pageseeds-core/src/engine/exec/content/review.rs`
 
-After the parent task succeeds, `src-tauri/src/engine/post_actions.rs` calls `create_fix_content_article_tasks` (`src-tauri/src/engine/exec/content/task_spawner.rs`), which creates one `fix_content_article` task per recommended article.
+After the parent task succeeds, `crates/pageseeds-core/src/engine/post_actions.rs` calls `create_fix_content_article_tasks` (`crates/pageseeds-core/src/engine/exec/content/task_spawner.rs`), which creates one `fix_content_article` task per recommended article.
 
 ### 1.2 Per-article fix pipeline
 
@@ -33,13 +33,13 @@ fix_content_article task
   └─ fix_content_article_verify      (deterministic re-audit checks)
 ```
 
-- Source: `src-tauri/src/engine/workflows/handlers.rs` (`ImplementationHandler`)
-- Steps: `src-tauri/src/engine/exec/content/fix_*.rs`
-- Skill: `src-tauri/skills/content-fix-apply/SKILL.md` (embedded app default)
+- Source: `crates/pageseeds-core/src/engine/workflows/handlers.rs` (`ImplementationHandler`)
+- Steps: `crates/pageseeds-core/src/engine/exec/content/fix_*.rs`
+- Skill: `crates/pageseeds-core/skills/content-fix-apply/SKILL.md` (embedded app default)
 
 ### 1.3 Frontend Health Dashboard
 
-`src/components/health/HealthDashboard.tsx` already consumes `get_content_audit_report` and surfaces:
+`(desktop UI removed #184)/health/HealthDashboard.tsx` already consumes `get_content_audit_report` and surfaces:
 
 - Content health summary (`good / needs_improvement / poor`)
 - A content score
@@ -57,9 +57,9 @@ It has a **Run Full Audit** button that calls `run_health_audit`, which spawns `
 
 | Command | File | Purpose |
 |---|---|---|
-| `run_health_audit` | `src-tauri/src/commands/health.rs` | Spawns content_review + indexing_health_campaign |
-| `get_content_audit_report` | `src-tauri/src/commands/health.rs` | Returns latest audit JSON from DB or legacy file |
-| `get_indexing_health_summary` | `src-tauri/src/commands/health.rs` | Indexing stats from `gsc_url_indexing_status` |
+| `run_health_audit` | `crates/pageseeds-core/src/commands/health.rs` | Spawns content_review + indexing_health_campaign |
+| `get_content_audit_report` | `crates/pageseeds-core/src/commands/health.rs` | Returns latest audit JSON from DB or legacy file |
+| `get_indexing_health_summary` | `crates/pageseeds-core/src/commands/health.rs` | Indexing stats from `gsc_url_indexing_status` |
 
 ---
 
@@ -140,22 +140,22 @@ This lets the user attack the highest-ROI articles first rather than the alphabe
 ### Phase A — Backend pattern analyzer (no UI yet)
 
 1. **Add a pattern-analysis module**
-   - New file: `src-tauri/src/engine/content_health/patterns.rs`
+   - New file: `crates/pageseeds-core/src/engine/content_health/patterns.rs`
    - Struct `ContentPattern { name, severity, fix_mode, articles: Vec<PatternArticle>, priority_score }`
    - Function `analyze_patterns(conn, project_id, run_id) -> Vec<ContentPattern>`
    - Reads the latest `content_audit_runs` + `article_content_audits` rows.
 
 2. **Add a command**
-   - File: `src-tauri/src/commands/health.rs`
+   - File: `crates/pageseeds-core/src/commands/health.rs`
    - `get_content_health_patterns(project_id) -> Vec<ContentPattern>`
    - Wrapper that calls the analyzer and returns JSON.
 
 3. **Add deterministic fix helpers**
-   - `src-tauri/src/engine/content_health/fix_external_links.rs`
+   - `crates/pageseeds-core/src/engine/content_health/fix_external_links.rs`
      - Input: article file path
      - Output: append 2–3 curated external links to the end of the article body
      - Use a hardcoded domain list + topic matching (CBOE, OCC, FINRA, IRS Pub 550, etc.)
-   - `src-tauri/src/engine/content_health/fix_meta_length.rs`
+   - `crates/pageseeds-core/src/engine/content_health/fix_meta_length.rs`
      - Input: article file path
      - Output: rewrite title/description to hit length targets
      - This can be rule-based for simple cases, agentic for hard ones.
@@ -169,13 +169,13 @@ This lets the user attack the highest-ROI articles first rather than the alphabe
 
 ### Phase B — Extend HealthDashboard with patterns
 
-1. **Update `src/lib/tauri.ts`**
+1. **Update `(desktop IPC removed #184)`**
    - Add `getContentHealthPatterns(projectId)` wrapper.
 
 2. **Update `src/lib/types.ts`**
    - Add `ContentPattern`, `PatternArticle` interfaces.
 
-3. **Update `src/components/health/HealthDashboard.tsx`**
+3. **Update `(desktop UI removed #184)/health/HealthDashboard.tsx`**
    - Fetch patterns in addition to the raw audit.
    - Add a **Patterns** section above or beside Priority Issues.
    - Each pattern card shows:
@@ -190,7 +190,7 @@ This lets the user attack the highest-ROI articles first rather than the alphabe
      - **Enqueue selected** button
 
 4. **Add batch enqueue command**
-   - `src-tauri/src/commands/health.rs`: `enqueue_content_pattern_fixes(project_id, pattern_name, article_ids)`
+   - `crates/pageseeds-core/src/commands/health.rs`: `enqueue_content_pattern_fixes(project_id, pattern_name, article_ids)`
    - Creates one `fix_content_article` task per article with the appropriate skill param.
    - Skills to add:
      - `.github/skills/add-external-links/SKILL.md`
@@ -202,7 +202,7 @@ This lets the user attack the highest-ROI articles first rather than the alphabe
 ### Phase C — Trend / diff view
 
 1. **Add backend helper**
-   - `src-tauri/src/db/content_audit.rs`: `get_audit_run_history(project_id, limit) -> Vec<AuditRunSummary>`
+   - `crates/pageseeds-core/src/db/content_audit.rs`: `get_audit_run_history(project_id, limit) -> Vec<AuditRunSummary>`
    - Already have `content_audit_runs` table; just query it.
 
 2. **Add frontend trend chart**
@@ -250,16 +250,16 @@ Create one new skill `.github/skills/add-external-links/SKILL.md`. This alone un
 
 | File | Change |
 |---|---|
-| `src-tauri/src/engine/content_health/patterns.rs` | NEW — pattern analyzer |
-| `src-tauri/src/commands/health.rs` | ADD `get_content_health_patterns`, `enqueue_content_pattern_fixes` |
-| `src/lib/tauri.ts` | ADD wrappers |
+| `crates/pageseeds-core/src/engine/content_health/patterns.rs` | NEW — pattern analyzer |
+| `crates/pageseeds-core/src/commands/health.rs` | ADD `get_content_health_patterns`, `enqueue_content_pattern_fixes` |
+| `(desktop IPC removed #184)` | ADD wrappers |
 | `src/lib/types.ts` | ADD `ContentPattern`, `PatternArticle` |
-| `src/components/health/HealthDashboard.tsx` | ADD patterns section + drill-down + enqueue buttons |
+| `(desktop UI removed #184)/health/HealthDashboard.tsx` | ADD patterns section + drill-down + enqueue buttons |
 | `.github/skills/add-external-links/SKILL.md` | NEW skill |
 | `.github/skills/rewrite-meta/SKILL.md` | NEW skill |
 | `.github/skills/align-keyword-and-h1/SKILL.md` | NEW skill |
-| `src-tauri/src/engine/workflows/handlers.rs` | Possibly map pattern skill param to `fix_content_article` |
-| `src-tauri/src/engine/exec/content/fix_generate.rs` | Read skill from task params if overridden by pattern |
+| `crates/pageseeds-core/src/engine/workflows/handlers.rs` | Possibly map pattern skill param to `fix_content_article` |
+| `crates/pageseeds-core/src/engine/exec/content/fix_generate.rs` | Read skill from task params if overridden by pattern |
 
 ---
 

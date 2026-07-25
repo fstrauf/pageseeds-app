@@ -1,6 +1,6 @@
 # Implicit Contracts
 
-This file documents runtime contracts, invariants, and hidden rules that are NOT enforceable by the compiler but WILL cause silent failures if violated. Read this before modifying `executor.rs`, `engine/workflows/`, `commands/`, or any content pipeline file.
+This file documents runtime contracts, invariants, and hidden rules that are NOT enforceable by the compiler but WILL cause silent failures if violated. Read this before modifying `executor.rs`, `engine/workflows/`, or any content pipeline file. (Historical Tauri `commands/` IPC layer was removed in #184.)
 
 ---
 
@@ -14,7 +14,7 @@ This file documents runtime contracts, invariants, and hidden rules that are NOT
 | `"in_progress"` | Currently executing | `executor.rs` at task start |
 | `"review"` | Awaiting user decision | `executor.rs` — keyword research only |
 | `"done"` | Completed successfully | `executor.rs` — most task types |
-| `"cancelled"` | User dismissed | Frontend UI only |
+| `"cancelled"` | User dismissed | Operator / CLI cancel path |
 
 **Critical rule:** Tasks that finish with `"review"` are defined in `config/task_definitions.rs` via `review_on_success: true`. Currently:
 - `research_keywords`
@@ -41,7 +41,7 @@ let new_status = completed_task_status(&task.task_type, all_ok);
 "collection" | "investigation" | "research" | "implementation" | "verification"
 ```
 
-Default phase per task type is set in `config::default_phase()`. Do not use phase strings not in this list — they will not appear in the UI phase filter and will be silently ignored.
+Default phase per task type is set in `config::default_phase()`. Do not use phase strings not in this list.
 
 ---
 
@@ -223,7 +223,7 @@ During execution, each step in `ExecutionResult.steps[]` has a `status` field. T
 
 ## 10. Commands Layer Must Remain Thin
 
-**Rule:** `commands/*.rs` files are IPC adapters only. Each command does exactly:
+**Historical (desktop removed #184):** former `commands/*.rs` IPC adapters did exactly:
 1. Acquire state lock
 2. Call one module function
 3. Return `result.map_err(|e| e.to_string())`

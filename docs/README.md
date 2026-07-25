@@ -87,7 +87,6 @@ docs/
 ├── AI_QUICK_START.md               # Entry point for AI agents
 ├── AGENTS.md                       # Agent orientation, core rules, DRY catalog, pre-change checklist
 ├── CONTRACTS.md                    # Runtime invariants (critical)
-├── STYLE_GUIDE.md                  # Design system
 └── QUEUE_DEBUG.md                  # Debugging guide
 ```
 

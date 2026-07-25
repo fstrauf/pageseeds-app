@@ -12,7 +12,7 @@ All capabilities are **task types**, not function calls. Enqueue them; do not ex
 
 | Context | API |
 |---|---|
-| Frontend component | `enqueueTasks([{ taskType, projectId, ... }])` in `src/lib/tauri.ts` |
+| Operator / CLI | Enqueue via domain queue APIs or documented CLI task tools |
 | Backend follow-up after a task | `TaskSpawner::spawn` / `spawn_follow_up` (`engine/spawner.rs`) |
 | Programmatic system task | `TaskSpawner::spawn` (never `task_store::create_task` directly) |
 | Weekly SEO operator (CLI) | Desk reads → Path B package/submit where available → may-create hard actions — see weekly-seo skill |

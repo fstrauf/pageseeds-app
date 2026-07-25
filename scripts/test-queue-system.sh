@@ -17,9 +17,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TAURI_DIR="$PROJECT_DIR/src-tauri"
-
-cd "$TAURI_DIR"
+cd "$PROJECT_DIR"
 
 # Colors
 RED='\033[0;31m'
@@ -52,7 +50,7 @@ run_unit_tests() {
     
     # JSON extraction test
     echo "Testing JSON extraction..."
-    cargo test --test reddit_e2e_test test_json_extraction_from_kimi_output -- --nocapture
+    cargo test -p pageseeds-core --test reddit_e2e_test test_json_extraction_from_kimi_output -- --nocapture
     
     print_success "Unit tests passed"
 }
@@ -62,13 +60,13 @@ run_integration_tests() {
     print_header "Running Integration Tests"
     
     echo "Testing queue state management..."
-    cargo test --test queue_integration_test test_queue_enqueue_and_state_management -- --nocapture
+    cargo test -p pageseeds-core --test queue_integration_test test_queue_enqueue_and_state_management -- --nocapture
     
     echo "Testing batch log submission..."
-    cargo test --test queue_integration_test test_batch_log_submission -- --nocapture
+    cargo test -p pageseeds-core --test queue_integration_test test_batch_log_submission -- --nocapture
     
     echo "Testing log querying..."
-    cargo test --test queue_integration_test test_log_querying -- --nocapture
+    cargo test -p pageseeds-core --test queue_integration_test test_log_querying -- --nocapture
     
     print_success "Integration tests passed"
 }
@@ -86,7 +84,7 @@ run_e2e_tests() {
     
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo "Testing full queue flow with real execution..."
-        cargo test --test queue_e2e_test test_full_queue_flow_with_real_execution -- --ignored --nocapture
+        cargo test -p pageseeds-core --test queue_e2e_test test_full_queue_flow_with_real_execution -- --ignored --nocapture
         print_success "E2E tests passed"
     else
         print_warning "E2E tests skipped"
@@ -98,7 +96,7 @@ run_log_tests() {
     print_header "Running Log System Tests"
     
     echo "Testing log persistence..."
-    cargo test --test queue_e2e_test test_log_persistence -- --nocapture
+    cargo test -p pageseeds-core --test queue_e2e_test test_log_persistence -- --nocapture
     
     print_success "Log tests passed"
 }

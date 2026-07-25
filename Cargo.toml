@@ -4,8 +4,6 @@ members = [
     "crates/pageseeds-core",
     "crates/pageseeds-cli",
 ]
-# Desktop (src-tauri) is temporarily out of the workspace pending #184.
-# Do not add it until it depends on pageseeds-core without dual SoT.
 
 [workspace.package]
 version = "0.1.0"

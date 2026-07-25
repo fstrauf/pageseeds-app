@@ -1,13 +1,11 @@
 /// Types for content merge patches produced by the agentic `merge_draft_patch`
 /// step and applied deterministically by `merge_apply_patch`.
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// A structured patch describing how to merge unique content from redirect
 /// targets into a keeper article.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct ContentMergePatch {
     /// Absolute or repo-relative path to the keeper MDX file.
     pub keeper_file: String,
@@ -23,9 +21,8 @@ pub struct ContentMergePatch {
 }
 
 /// A section to add to the keeper.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct SectionAddition {
     /// Heading text (without # prefix).
     pub heading: String,
@@ -38,9 +35,8 @@ pub struct SectionAddition {
 }
 
 /// A transition edit to an existing paragraph.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct TransitionEdit {
     /// Existing text to locate (must be unique enough to find).
     pub find: String,
@@ -49,9 +45,8 @@ pub struct TransitionEdit {
 }
 
 /// A single redirect rule.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct RedirectRule {
     pub source: String,
     pub destination: String,
@@ -59,9 +54,8 @@ pub struct RedirectRule {
 }
 
 /// Preflight report for a merge operation.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct MergePreflightReport {
     pub keeper_file_exists: bool,
     pub keeper_is_indexable: bool,
@@ -73,9 +67,8 @@ pub struct MergePreflightReport {
 }
 
 /// Extracted unique sections from a redirect page.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct SectionInventory {
     pub file: String,
     pub headings: Vec<ExtractedHeading>,
@@ -84,44 +77,39 @@ pub struct SectionInventory {
     pub faqs: Vec<ExtractedFaq>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct ExtractedHeading {
     pub level: u8,
     pub text: String,
     pub body: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct ExtractedTable {
     pub caption: Option<String>,
     pub markdown: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct ExtractedExample {
     pub caption: Option<String>,
     pub code: String,
     pub language: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct ExtractedFaq {
     pub question: String,
     pub answer: String,
 }
 
 /// Validation report after merge apply.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct MergeValidationReport {
     pub keeper_valid: bool,
     pub keeper_word_count: usize,

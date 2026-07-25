@@ -2,7 +2,9 @@
 
 **AI-powered SEO content operations for teams that want to grow organic traffic systematically.**
 
-PageSeeds is a desktop application that automates the end-to-end SEO content lifecycle — from keyword research to published articles, from performance monitoring to autonomous optimization. It runs locally as a self-contained Tauri app with no external service dependencies beyond the APIs you already use.
+PageSeeds is the **Operator CLI** (`pageseeds-cli`) plus a Rust domain library. It automates the end-to-end SEO content lifecycle — from keyword research to published articles, from performance monitoring to autonomous optimization — from any customer project directory.
+
+> **Desktop discontinued.** Historical Tauri/React desktop releases are archival only. Product development is CLI + domain crates only (issue #184).
 
 ---
 
@@ -60,19 +62,26 @@ Ask natural-language questions about your site's performance and get evidence-ba
 
 | Layer | Technology |
 |-------|-----------|
-| **Backend** | Rust (Tauri 2) |
-| **Frontend** | React + TypeScript + Vite + Tailwind v4 + shadcn/ui |
+| **Domain** | Rust library `crates/pageseeds-core` |
+| **Operator surface** | `pageseeds-cli` binary |
 | **Runtime Store** | SQLite (bundled, no system dependency) |
-| **Committed Data** | JSON files in your repo (`articles.json`, `automation artifacts`) |
+| **Committed Data** | JSON files in your repo (`articles.json`, automation artifacts) |
 | **AI Providers** | Kimi, Copilot, Claude (configurable) |
 
 ---
 
-## CLI (commercial)
+## Install & get started (CLI)
 
-Operators can run desk reads and weekly SEO from the **`pageseeds-cli`** binary (shared SQLite with the desktop app). Install, project flags, secrets, first desk read, and the weekly path:
+```bash
+# Customer install (macOS Apple Silicon prebuilt; other platforms: FROM_SOURCE=1)
+curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/install-cli.sh | bash
 
-→ **[CLI Getting Started](./docs/CLI_GETTING_STARTED.md)**
+# In a customer project repo
+pageseeds-cli setup --path . --yes
+pageseeds-cli site-overview
+```
+
+→ **[CLI Getting Started](./docs/CLI_GETTING_STARTED.md)** · **[CLI Commercial (free vs paid)](./docs/CLI_COMMERCIAL.md)**
 
 ---
 
@@ -80,8 +89,9 @@ Operators can run desk reads and weekly SEO from the **`pageseeds-cli`** binary 
 
 | Document | Purpose |
 |----------|---------|
-| [CLI Getting Started](./docs/CLI_GETTING_STARTED.md) | Commercial CLI: install, license notes, desk read, weekly operator path |
-| [Business Processes](./docs/BUSINESS_PROCESSES.md) | What the app does — workflows, features, and process interconnections |
+| [CLI Getting Started](./docs/CLI_GETTING_STARTED.md) | Install, license notes, desk read, weekly operator path |
+| [CLI Commercial](./docs/CLI_COMMERCIAL.md) | Free desk tools vs paid write/fix/research |
+| [Business Processes](./docs/BUSINESS_PROCESSES.md) | Workflows, features, and process interconnections |
 | [Workflow Engine](./docs/WORKFLOW_ENGINE.md) | How tasks are planned and executed |
 | [Data Persistence](./docs/DATA_PERSISTENCE.md) | SQLite runtime state + JSON committed content |
 | [Agent Integration](./docs/AGENT_INTEGRATION.md) | How LLM agents are invoked and responses normalized |
@@ -95,20 +105,18 @@ Operators can run desk reads and weekly SEO from the **`pageseeds-cli`** binary 
 ## Development
 
 ```bash
-# Install dependencies
-pnpm install
+# Build operator CLI
+cargo build -p pageseeds-cli
 
-# Dev mode (frontend + Rust hot reload)
-pnpm tauri dev
+# Ship gate (Rust tests + task-store + CLI contract)
+pnpm run test:cli
 
-# Lint + typecheck + test
-pnpm run lint
-pnpm exec tsc -b
-pnpm test
-
-# Production build
-pnpm run build
+# Install local release binary to ~/.local/bin
+pnpm run install:cli
+# or: FROM_SOURCE=1 ./scripts/install-cli.sh
 ```
+
+`pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates).
 
 ---
 
@@ -116,6 +124,4 @@ pnpm run build
 
 PageSeeds exists to answer one question: **"How do we grow organic traffic without hiring a 5-person SEO team?"**
 
-The app treats SEO as a system — with inputs (keywords, content briefs), processes (research, creation, optimization), and feedback loops (GSC data, CTR, rankings). AI agents handle judgment-heavy decisions. Deterministic code handles repeatable operations. Humans stay in control via review surfaces and approval gates.
-
-We believe the future of SEO is not more dashboards. It is **autonomous execution with human oversight**.
+The product treats SEO as a system — with inputs (keywords, content briefs), processes (research, creation, optimization), and feedback loops (GSC data, CTR, rankings). AI agents handle judgment-heavy decisions. Deterministic code handles repeatable operations. Operators stay in control via CLI review/selection tools and approval gates.

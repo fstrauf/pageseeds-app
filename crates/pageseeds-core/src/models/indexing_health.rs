@@ -1,11 +1,9 @@
 /// Types for the unified indexing health campaign workflow.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// Verdict from the agentic distinctiveness review step.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DistinctivenessVerdict {
     pub target_url: String,
     pub verdict: String, // "DISTINCT" | "OVERLAP"
@@ -23,8 +21,7 @@ pub struct DistinctivenessVerdict {
 }
 
 /// Per-target plan produced by the reduce step.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IndexingTargetPlan {
     pub url: String,
     pub reason_code: String,
@@ -47,16 +44,14 @@ pub struct IndexingTargetPlan {
 }
 
 /// The full campaign plan written by `ihc_reduce_plan`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IndexingCampaignPlan {
     pub generated_at: String,
     pub targets: Vec<IndexingTargetPlan>,
     pub summary: IndexingCampaignSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IndexingCampaignSummary {
     pub total_targets: usize,
     pub fix_content: usize,
@@ -70,8 +65,7 @@ pub struct IndexingCampaignSummary {
 }
 
 /// Result of a single prerequisite freshness check.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrerequisiteCheck {
     pub artifact: String,
     pub fresh: bool,
@@ -81,16 +75,14 @@ pub struct PrerequisiteCheck {
 }
 
 /// Output of the `IhcCheckPrerequisites` step.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrerequisiteReport {
     pub all_fresh: bool,
     pub checks: Vec<PrerequisiteCheck>,
 }
 
 /// A potential source article for adding internal links.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkSourceCandidate {
     pub article_id: i64,
     pub slug: String,
@@ -141,8 +133,7 @@ impl IndexingLinkOutcome {
 /// Target payload inside the `indexing_link_target` task artifact.
 ///
 /// Shape fields are stable across IHC children, GSC recovery, and operator slug spawn.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexingLinkTarget {
     pub url: String,
     pub slug: String,
@@ -156,8 +147,7 @@ pub struct IndexingLinkTarget {
 }
 
 /// Full `indexing_link_target` artifact document (`{ campaign_task_id, target }`).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexingLinkTargetArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign_task_id: Option<String>,
@@ -165,8 +155,7 @@ pub struct IndexingLinkTargetArtifact {
 }
 
 /// Per-target context built by `IhcBuildTargetContext`.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexingTargetContext {
     pub target: TargetArticleSummary,
     pub cluster: Option<ClusterContext>,
@@ -175,8 +164,7 @@ pub struct IndexingTargetContext {
     pub source_candidates: Vec<LinkSourceCandidate>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetArticleSummary {
     pub url: String,
     pub slug: String,
@@ -191,8 +179,7 @@ pub struct TargetArticleSummary {
     pub file: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterContext {
     pub cluster_id: String,
     pub theme: String,
@@ -203,8 +190,7 @@ pub struct ClusterContext {
     pub exact_keyword_dupe: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiblingArticle {
     pub url: String,
     pub title: String,
@@ -214,8 +200,7 @@ pub struct SiblingArticle {
     pub impressions: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetDiagnosis {
     pub has_links: bool,
     pub is_long: bool,

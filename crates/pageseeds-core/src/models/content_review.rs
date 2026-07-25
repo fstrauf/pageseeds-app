@@ -1,11 +1,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// Structured output from the content review recommendation agent.
 /// Uses rig's Extractor<T> for type-safe generation via tool calling.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContentReviewRecommendations {
     #[serde(default)]
     pub generated_at: String,
@@ -16,15 +14,13 @@ pub struct ContentReviewRecommendations {
 }
 
 /// Single-article recommendations — used when processing one article at a time.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SingleArticleRecommendations {
     #[serde(alias = "recommendations")]
     pub suggestions: Vec<ReviewSuggestion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewArticleRecommendation {
     pub article_id: i64,
     pub article_title: String,
@@ -37,8 +33,7 @@ pub struct ReviewArticleRecommendation {
     pub suggestions: Vec<ReviewSuggestion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewSuggestion {
     pub category: String,
     #[serde(alias = "current_text")]
@@ -59,8 +54,7 @@ pub struct ReviewSuggestion {
 pub const CONTENT_REVIEW_PROPOSALS_KEY: &str = "content_review_proposals";
 
 /// A single validated follow-up proposal the user can select in the picker.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentReviewProposal {
     /// Stable selection id (e.g. `fix_content_article:{article_id}`).
     pub id: String,
@@ -77,8 +71,7 @@ pub struct ContentReviewProposal {
 }
 
 /// A raw proposal that failed validation, with the reason recorded for the UI.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DroppedProposal {
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,8 +82,7 @@ pub struct DroppedProposal {
 
 /// Validated proposal list stored on the parent task after content_review.
 /// Cap of 5 proposals is enforced by `engine::content_review_selection`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContentReviewSelectableArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub findings_summary: Option<String>,
@@ -106,8 +98,7 @@ pub struct ContentReviewSelectableArtifact {
 // ─── Content Fix Patch (structured replacement values) ───────────────────────
 
 /// The agent returns this instead of raw MDX. Rust applies it deterministically.
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentFixPatch {
     pub article_id: i64,
@@ -117,8 +108,7 @@ pub struct ContentFixPatch {
     pub changes: ContentFixChanges,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentFixChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,16 +132,14 @@ pub struct ContentFixChanges {
     pub target_keyword: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentFixLink {
     pub anchor_text: String,
     pub target_slug: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentFixFaq {
     pub question: String,
@@ -160,8 +148,7 @@ pub struct ContentFixFaq {
 
 // ─── Verification Report ─────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentFixVerificationReport {
     pub summary: String,
@@ -171,8 +158,7 @@ pub struct ContentFixVerificationReport {
     pub fixes: Vec<ContentFixVerifiedItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentFixVerifiedItem {
     pub category: String,
@@ -189,8 +175,7 @@ pub struct ContentFixVerifiedItem {
 
 /// Structured output from the article quality review agent.
 /// Used by the review_article_quality task to gate articles before clustering/linking.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ContentQualityReview {
     pub overall_pass: bool,
@@ -210,8 +195,7 @@ pub struct ContentQualityReview {
     pub summary: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct QualityCheck {
     pub id: String,
@@ -227,8 +211,7 @@ pub struct QualityCheck {
 /// supports tool calling. Stored as the `investigation_findings` artifact.
 /// Does **not** write `recommendations.json` (so fix_content_article spawning
 /// no-ops safely until a later issue wires proposed_tasks).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct InvestigationFindings {
     /// 1–2 sentence TL;DR of the investigation.
@@ -240,8 +223,7 @@ pub struct InvestigationFindings {
     pub proposed_tasks: Vec<ProposedTask>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Finding {
     pub title: String,
@@ -282,8 +264,7 @@ impl StandaloneInvestigationResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ProposedTask {
     /// Task type string from task_definitions (e.g. `ctr_audit`, `fix_content_article`).

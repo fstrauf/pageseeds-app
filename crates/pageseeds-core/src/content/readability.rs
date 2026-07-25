@@ -2,7 +2,6 @@ use crate::error::Result;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // Compiled regex patterns for MDX cleaning
 static IMPORT_RE: Lazy<Regex> =
@@ -15,8 +14,7 @@ static MD_IMAGES_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!\[[^\]]*\]\([^)]+\
 static WHITESPACE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 
 /// Readability analysis report for an article.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadabilityReport {
     pub flesch_reading_ease: f64,
     pub flesch_kincaid_grade: f64,

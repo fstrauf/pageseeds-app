@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # CI guard: list direct runtime reads of articles.json outside approved modules.
 #
-# Approved modules (domain SoT after #183 crate split):
+# Approved modules (domain SoT after #183/#184):
 #   - crates/pageseeds-core/src/db/export.rs              (canonical import/export/projection)
 #   - crates/pageseeds-core/src/engine/setup_check/       (setup diagnostics)
-#   - src-tauri/src/commands/articles.rs                  (residual desktop IPC wrappers; #184)
 #
 # Any new hit must be explicitly added to the ALLOWLIST or migrated to use
 # the article-index service / SQLite.
@@ -16,7 +15,6 @@ cd "$(dirname "$0")/.."
 # Exact files and directory prefixes (trailing / = any file under that tree).
 ALLOWLIST_EXACT="
 crates/pageseeds-core/src/db/export.rs
-src-tauri/src/commands/articles.rs
 "
 ALLOWLIST_PREFIXES="
 crates/pageseeds-core/src/engine/setup_check/
@@ -37,11 +35,11 @@ is_allowed() {
   return 1
 }
 
-# Scan domain SoT + residual desktop commands (domain under src-tauri was deleted).
+# Scan domain SoT under crates/pageseeds-core (+ CLI).
 FILES=$(
   {
     grep -rln "articles\.json" crates/pageseeds-core/src/ 2>/dev/null || true
-    grep -rln "articles\.json" src-tauri/src/commands/ 2>/dev/null || true
+    grep -rln "articles\.json" crates/pageseeds-cli/src/ 2>/dev/null || true
   } | sort -u
 )
 

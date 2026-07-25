@@ -69,7 +69,7 @@ InvestigationResult {
 }
 ```
 
-## Tool Catalog (`src-tauri/config/tool_catalog.toml`)
+## Tool Catalog (`crates/pageseeds-core/config/tool_catalog.toml`)
 
 Bundled into the binary via `include_str!()` and loaded by `engine/tools/investigate/catalog.rs`. TOML is authoritative for preamble text and `mutates` flags (Full vs ReadOnly is derived from `mutates`). Each tool has a corresponding Rust constructor in `engine/tools/investigate` implementing `rig::tool::Tool`. Multi-turn tool-agent attach runs through `rig::provider::run_tool_equipped_agent` (unsupported backends return typed `ToolAgentError::Unsupported`).
 
@@ -164,9 +164,9 @@ mutates = true
 Each tool in the catalog maps to a Rust struct implementing `rig::tool::Tool`. The tools are **thin wrappers** around existing Rust module functions — no new business logic.
 
 ```
-src-tauri/config/tool_catalog.toml          # Authoritative catalog (preamble + mutates)
-src-tauri/src/rig/provider.rs               # run_tool_equipped_agent, backend_supports_tool_calling
-src-tauri/src/engine/tools/investigate/
+crates/pageseeds-core/config/tool_catalog.toml          # Authoritative catalog (preamble + mutates)
+crates/pageseeds-core/src/rig/provider.rs               # run_tool_equipped_agent, backend_supports_tool_calling
+crates/pageseeds-core/src/engine/tools/investigate/
 ├── mod.rs              # Kit API, name→Tool constructors
 ├── catalog.rs          # include_str! TOML load, Full/RO catalog text
 ├── gsc.rs / articles.rs / audit.rs / project.rs / shared.rs
@@ -249,7 +249,6 @@ pub fn get_investigation(
 
 ```rust
 #[derive(Serialize, TS)]
-#[ts(export)]
 pub struct InvestigationResult {
     pub id: String,
     pub question: String,
@@ -264,7 +263,6 @@ pub struct InvestigationResult {
 }
 
 #[derive(Serialize, TS)]
-#[ts(export)]
 pub struct Finding {
     pub title: String,
     pub description: String,
@@ -274,7 +272,6 @@ pub struct Finding {
 }
 
 #[derive(Serialize, TS)]
-#[ts(export)]
 pub enum FixType {
     AutoFixable,
     DeveloperActionable,
@@ -356,7 +353,7 @@ scripted `content_review_recommend` path.
 
 | File | Change |
 |------|--------|
-| `src-tauri/config/tool_catalog.toml` | Tool definitions with purpose/when_to_use/mutates |
+| `crates/pageseeds-core/config/tool_catalog.toml` | Tool definitions with purpose/when_to_use/mutates |
 | `engine/tools/investigate/catalog.rs` | Loads TOML via include_str!, builds agent preamble |
 | `rig/provider.rs` | `run_tool_equipped_agent` + `ToolAgentError` |
 | `engine/tools/mod.rs` | Re-exports investigation kit API |
@@ -380,7 +377,7 @@ scripted `content_review_recommend` path.
 |------|--------|
 | `src/components/health/InvestigationPanel.tsx` | New — Ask AI input + results display |
 | `src/components/health/InvestigationResult.tsx` | New — investigation findings card |
-| `src/lib/tauri.ts` | Add `investigate`, `getAvailableTools` wrappers |
+| `crates/pageseeds-cli` | Add CLI surface if operator-facing |
 | `src/lib/types.ts` | Add InvestigationResult, Finding, FixType types |
 
 ### Total new code: ~800 lines (Rust) + ~300 lines (React)

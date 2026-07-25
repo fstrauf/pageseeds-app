@@ -141,13 +141,13 @@ This feature should reuse existing PageSeeds primitives as much as possible:
   - Re-audit can reuse `run-content-audit` logic or trigger a queue task of type `content_audit`.
 
 - **Frontend:**
-  - New command wrapper in `src/lib/tauri.ts`.
+  - Expose via CLI only if operator-facing.
   - New types in `src/lib/types.ts`.
   - New component/feature directory: `src/components/content-health/`.
   - Use existing `useQueueStore` to reflect enqueued tasks.
 
 - **Skills:**
-  - Add new skill files under `.github/skills/` (or embedded defaults in `src-tauri/src/skills/`):
+  - Add new skill files under `.github/skills/` (or embedded defaults in `crates/pageseeds-core/src/skills/`):
     - `add-external-links/SKILL.md`
     - `rewrite-meta/SKILL.md`
     - `align-keyword-and-h1/SKILL.md`

@@ -60,7 +60,7 @@ FROM_SOURCE=1 ./scripts/install-cli.sh  # force cargo build
 ## What setup does
 
 1. **Optional license** — if `--license` or `PAGESEEDS_LICENSE` is set, activates via the existing license store. Free desk path still completes if license is omitted or fails.
-2. **Link or create** a workspace project in the same SQLite DB as the desktop app (shared helper; no hand-rolled SQL).
+2. **Link or create** a workspace project in the operator SQLite DB (shared helper; no hand-rolled SQL).
 3. **Write defaults**
    - Global: `~/.config/pageseeds/config.toml` (`default_project_id`, `default_project_path`)
    - Local: `.pageseeds.yaml` in the project (`project_id`)
@@ -148,7 +148,7 @@ pageseeds-cli write-submit -f <mdx-path>
 
 ## Escape hatch (advanced)
 
-Defaults and `list-projects` cover normal use. The app DB is shared with the desktop app:
+Defaults and `list-projects` cover normal use. The app DB is shared with the operator:
 
 | OS | Default DB path |
 |----|-----------------|
@@ -170,7 +170,7 @@ Before opening operator or CLI PRs, run:
 pnpm test:cli
 ```
 
-That gate runs Rust tests (`test:rust`), the task-store lifecycle check (`check:task-store`), and the CLI machine-contract smoke (`check:cli-contract` → `scripts/check-cli-contract.sh`). It does **not** run lint, tsc, vitest, IPC, bindings, or a Vite build — those belong to `pnpm test:all` for desktop work.
+That gate runs Rust tests (`test:rust`), the task-store lifecycle check (`check:task-store`), and the CLI machine-contract smoke (`check:cli-contract` → `scripts/check-cli-contract.sh`). `pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates).
 
 Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS.md) §14.
 

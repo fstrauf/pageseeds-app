@@ -323,32 +323,26 @@ signal_score = avg_quality + (clicks * 10) + (impressions / 100)
 
 ## Async Execution Pattern
 
-SQLite connections are `!Send`, so tasks run in dedicated threads:
+SQLite connections are `!Send`, so tasks run in dedicated threads (CLI and executor hosts use the same pattern):
 
 ```rust
-#[tauri::command]
-pub async fn execute_task(...) -> Result<...> {
-    let db_path = state.db_path.clone();
-    
-    tokio::task::spawn_blocking(move || {
-        // 1. Open dedicated SQLite connection
-        let db = rusqlite::Connection::open(&db_path)?;
-        db.busy_timeout(Duration::from_secs(10))?;
-        
-        // 2. Create local Tokio runtime for async execution
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            executor::execute_task(&db, &task_id).await
-        })
+// Host opens a connection on a blocking thread, then runs the executor.
+tokio::task::spawn_blocking(move || {
+    // 1. Open dedicated SQLite connection
+    let db = rusqlite::Connection::open(&db_path)?;
+    db.busy_timeout(Duration::from_secs(10))?;
+
+    // 2. Create local Tokio runtime for async execution
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        executor::execute_task(&db, &task_id).await
     })
-    .await
-    .map_err(|e| e.to_string())?
-}
+})
 ```
 
 **Why:**
 - SQLite connections cannot be sent between threads
-- Tauri runtime is multi-threaded async
+- The host may be multi-threaded async (CLI Tokio runtime)
 - Each task gets its own OS thread + connection + local runtime
 
 **Key Rules:**

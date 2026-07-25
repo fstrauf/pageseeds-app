@@ -1,17 +1,14 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// Connection status returned to the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClarityConnectionStatus {
     pub connected: bool,
     pub message: String,
 }
 
 /// A single exported row exposed over IPC.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClarityExportRowPayload {
     pub clarity_date: String,
     pub dimension_set: String,
@@ -21,8 +18,7 @@ pub struct ClarityExportRowPayload {
 }
 
 /// A single finding exposed over IPC.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClarityFindingPayload {
     pub issue_type: String,
     pub severity: String,
@@ -33,8 +29,7 @@ pub struct ClarityFindingPayload {
 }
 
 /// A finding that was skipped during follow-up task creation, with the reason.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaritySkippedFinding {
     pub issue_type: String,
     pub url: String,
@@ -42,16 +37,14 @@ pub struct ClaritySkippedFinding {
 }
 
 /// Result of creating follow-up tasks from selected Clarity findings.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClarityTaskCreationResult {
     pub created_tasks: Vec<crate::models::task::Task>,
     pub skipped: Vec<ClaritySkippedFinding>,
 }
 
 /// Summary payload exposed over IPC.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaritySummaryPayload {
     pub project_id: String,
     pub generated_at: String,
@@ -61,8 +54,7 @@ pub struct ClaritySummaryPayload {
 }
 
 /// Page score payload exposed over IPC.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClarityPageScorePayload {
     pub url: String,
     pub total_sessions: f64,

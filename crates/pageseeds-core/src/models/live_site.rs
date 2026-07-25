@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSitePage {
     pub url: String,
     pub path: String,
@@ -35,9 +33,8 @@ pub struct LiveSitePage {
     pub last_crawled_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSiteImportResult {
     pub sitemap_url: String,
     pub discovered_urls: usize,
@@ -46,9 +43,8 @@ pub struct LiveSiteImportResult {
     pub pages_failed: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSiteGscSyncResult {
     pub site_url: String,
     pub start_date: String,
@@ -59,9 +55,8 @@ pub struct LiveSiteGscSyncResult {
     pub synced_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSiteAuditSummary {
     pub total_pages: usize,
     pub healthy_pages: usize,
@@ -74,9 +69,8 @@ pub struct LiveSiteAuditSummary {
     pub orphan_pages: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSiteAuditPage {
     pub url: String,
     pub path: String,
@@ -93,17 +87,15 @@ pub struct LiveSiteAuditPage {
     pub issue_count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSiteAuditReport {
     pub summary: LiveSiteAuditSummary,
     pub pages: Vec<LiveSiteAuditPage>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSiteLinkProfile {
     pub url: String,
     pub path: String,
@@ -113,9 +105,8 @@ pub struct LiveSiteLinkProfile {
     pub unresolved_links: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct LiveSiteLinkScanResult {
     pub total_pages: usize,
     pub total_internal_links: usize,

@@ -18,9 +18,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TAURI_DIR="$PROJECT_DIR/src-tauri"
-
-cd "$TAURI_DIR"
+cd "$PROJECT_DIR"
 
 # Colors for output
 RED='\033[0;31m'
@@ -79,7 +77,7 @@ run_json_test() {
     echo "No external APIs required."
     echo ""
     
-    if cargo test --test reddit_e2e_test test_json_extraction_from_kimi_output -- --nocapture; then
+    if cargo test -p pageseeds-core --test reddit_e2e_test test_json_extraction_from_kimi_output -- --nocapture; then
         print_success "JSON extraction test passed!"
         return 0
     else
@@ -104,7 +102,7 @@ run_config_test() {
     echo ""
     
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if cargo test --test reddit_e2e_test test_reddit_config_parsing_with_real_kimi -- --ignored --nocapture; then
+        if cargo test -p pageseeds-core --test reddit_e2e_test test_reddit_config_parsing_with_real_kimi -- --ignored --nocapture; then
             print_success "Config parsing test passed!"
             return 0
         else
@@ -135,7 +133,7 @@ run_full_flow_test() {
     echo ""
     
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if cargo test --test reddit_e2e_test test_full_reddit_flow_with_real_apis -- --ignored --nocapture; then
+        if cargo test -p pageseeds-core --test reddit_e2e_test test_full_reddit_flow_with_real_apis -- --ignored --nocapture; then
             print_success "Full flow test passed!"
             return 0
         else
