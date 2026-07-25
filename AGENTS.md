@@ -16,7 +16,8 @@ Concise orientation and rules for AI agents working in this repo.
 - **Store**: SQLite (operator runtime state) + JSON in the user's repo (committed content data)
 - **LLM layer**: Rig-core providers with a legacy CLI fallback (`crates/pageseeds-core/src/rig/`, `engine/agent.rs`)
 
-> **Ship gate:** `pnpm run test:cli` (`cargo test -p pageseeds-core` → `check:task-store` → `check:cli-contract`). Also: `cargo build -p pageseeds-cli`. Install path: `scripts/install-cli.sh` / `docs/CLI_GETTING_STARTED.md`.
+> **Ship gate:** `pnpm run test:cli` (`cargo test -p pageseeds-core` → `check:task-store` → `check:cli-contract`). Also: `cargo build -p pageseeds-cli`. Install path: `scripts/install-cli.sh` / `docs/CLI_GETTING_STARTED.md`.  
+> **GitHub Actions CI** (`.github/workflows/ci.yml`) runs `pnpm test:cli` on PRs and pushes to `main` — operator PRs are gated by the CLI ship gate only (no desktop/Vite/IPC). Releases: [docs/CLI_RELEASE.md](./docs/CLI_RELEASE.md).
 
 ---
 
@@ -362,6 +363,7 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 ## See Also
 
 - [`docs/CLI_GETTING_STARTED.md`](./docs/CLI_GETTING_STARTED.md) — Install + first desk read
+- [`docs/CLI_RELEASE.md`](./docs/CLI_RELEASE.md) — CLI version bump, `cli-v*` tags, GitHub release
 - [`docs/CLI_COMMERCIAL.md`](./docs/CLI_COMMERCIAL.md) — Free vs paid tools
 - [`docs/AGENT_DEVELOPMENT_PLAYBOOK.md`](./docs/AGENT_DEVELOPMENT_PLAYBOOK.md) — Scenario-based development guide
 - [`docs/BUSINESS_PROCESSES.md`](./docs/BUSINESS_PROCESSES.md) — What the product does and how workflows connect

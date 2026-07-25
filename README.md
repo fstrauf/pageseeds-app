@@ -90,6 +90,7 @@ pageseeds-cli site-overview
 | Document | Purpose |
 |----------|---------|
 | [CLI Getting Started](./docs/CLI_GETTING_STARTED.md) | Install, license notes, desk read, weekly operator path |
+| [CLI Release](./docs/CLI_RELEASE.md) | Version bump, `cli-v*` tags, GitHub release assets |
 | [CLI Commercial](./docs/CLI_COMMERCIAL.md) | Free desk tools vs paid write/fix/research |
 | [Business Processes](./docs/BUSINESS_PROCESSES.md) | Workflows, features, and process interconnections |
 | [Workflow Engine](./docs/WORKFLOW_ENGINE.md) | How tasks are planned and executed |
@@ -116,7 +117,7 @@ pnpm run install:cli
 # or: FROM_SOURCE=1 ./scripts/install-cli.sh
 ```
 
-`pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates).
+`pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates). GitHub Actions CI runs the same gate on PRs and pushes to `main`. How to cut a CLI release: **[CLI Release](./docs/CLI_RELEASE.md)**.
 
 ---
 

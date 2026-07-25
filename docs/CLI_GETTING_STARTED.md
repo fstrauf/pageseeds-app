@@ -194,6 +194,7 @@ Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS
 | Doc / link | Role |
 |------------|------|
 | [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md) | Free vs paid tool names |
+| [CLI_RELEASE.md](./CLI_RELEASE.md) | Version bump, `cli-v*` tags, GitHub release |
 | [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) | Weekly operator policy |
 | [CONTRACTS.md](../CONTRACTS.md) | Runtime / machine contracts |
 | [issue #177](https://github.com/fstrauf/pageseeds-app/issues/177) | Setup wizard |
