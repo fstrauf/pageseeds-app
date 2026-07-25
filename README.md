@@ -117,7 +117,7 @@ pnpm run install:cli
 # or: FROM_SOURCE=1 ./scripts/install-cli.sh
 ```
 
-`pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates). GitHub Actions CI runs the same gate on PRs and pushes to `main`. How to cut a CLI release: **[CLI Release](./docs/CLI_RELEASE.md)**.
+`pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates). Run the ship gate locally before merge; there is no PR CI workflow. How to cut a CLI release: **[CLI Release](./docs/CLI_RELEASE.md)**.
 
 ---
 

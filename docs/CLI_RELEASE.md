@@ -61,7 +61,7 @@ Details: [CLI_GETTING_STARTED.md](./CLI_GETTING_STARTED.md).
 
 - **No new** Tauri/React desktop builds from this repo (see #184).
 - Historical Mac app channel was **`fstrauf/pageseeds-releases`** with tags `v*` (DMG updater feed). Local `latest.json` updater feed is **obsolete** and not shipped.
-- Product development and CI gate **CLI only** (`pnpm run test:cli`).
+- Product development ship gate is **CLI only**, run locally: `pnpm run test:cli` / `pnpm test:all`.
 
 ---
 
@@ -70,6 +70,5 @@ Details: [CLI_GETTING_STARTED.md](./CLI_GETTING_STARTED.md).
 | Path | Role |
 |------|------|
 | [`.github/workflows/release-cli.yml`](../.github/workflows/release-cli.yml) | Tag / dispatch release job |
-| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | PR/push CLI gate |
 | [`scripts/install-cli.sh`](../scripts/install-cli.sh) | Customer + contributor install |
 | [CLI Getting Started](./CLI_GETTING_STARTED.md) | Operator install and first desk read |
