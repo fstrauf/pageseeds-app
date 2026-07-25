@@ -91,9 +91,26 @@ pub struct SubmitResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_task_status: Option<String>,
     pub follow_up_task_ids: Vec<String>,
+    /// Catalog `articles.status` after registration (`"draft"` for new Path B writes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_status: Option<String>,
+    /// Why catalog status is what it is (stable string for operators/CLI JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_status_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
+
+/// Outcome of Path B article registration (ingest + draft demote + keyword tag).
+struct RegisterOutcome {
+    registered: bool,
+    newly_ingested: bool,
+    catalog_status: Option<String>,
+}
+
+/// Stable reason when Path B forces new catalog rows to draft (issue #168).
+const CATALOG_DRAFT_UNTIL_PUBLISH_REASON: &str =
+    "new articles stay draft until publish_content / apply_publish";
 
 // ─── build_write_package ─────────────────────────────────────────────────────
 
@@ -269,6 +286,8 @@ pub fn submit_written_article(
             write_task_id: write_task.as_ref().map(|t| t.id.clone()),
             write_task_status: write_task.as_ref().map(|t| t.status.as_str().to_string()),
             follow_up_task_ids: vec![],
+            catalog_status: None,
+            catalog_status_reason: None,
             message: Some(
                 "Validation failed — expand the article (min 800 words, structure, meta) and resubmit."
                     .to_string(),
@@ -289,6 +308,8 @@ pub fn submit_written_article(
             write_task_id: write_task.as_ref().map(|t| t.id.clone()),
             write_task_status: write_task.as_ref().map(|t| t.status.as_str().to_string()),
             follow_up_task_ids: vec![],
+            catalog_status: None,
+            catalog_status_reason: None,
             message: Some(format!(
                 "Submitted file is outside the project content dir ({}). Write to the package target_file and resubmit.",
                 content_dir.display()
@@ -296,8 +317,8 @@ pub fn submit_written_article(
         });
     }
 
-    // Single registration path (ingest → keyword meta → export → tracked check).
-    let registered = register_submitted_article(
+    // Single registration path (ingest → draft demote → keyword meta → export → tracked check).
+    let outcome = register_submitted_article(
         conn,
         project_id,
         project_path,
@@ -306,7 +327,7 @@ pub fn submit_written_article(
         target_keyword.as_deref(),
     )?;
 
-    if !registered {
+    if !outcome.registered {
         return Ok(SubmitResult {
             ok: false,
             slug: Some(slug),
@@ -317,6 +338,8 @@ pub fn submit_written_article(
             write_task_id: write_task.as_ref().map(|t| t.id.clone()),
             write_task_status: write_task.as_ref().map(|t| t.status.as_str().to_string()),
             follow_up_task_ids: vec![],
+            catalog_status: None,
+            catalog_status_reason: None,
             message: Some(
                 "Article validated but registration failed — file was not ingested and is not tracked. Check content dir and resubmit."
                     .to_string(),
@@ -349,6 +372,18 @@ pub fn submit_written_article(
         follow_up_task_ids.push(id);
     }
 
+    let catalog_status_reason = if outcome.newly_ingested {
+        Some(CATALOG_DRAFT_UNTIL_PUBLISH_REASON.to_string())
+    } else {
+        None
+    };
+    let message = if outcome.newly_ingested {
+        "Article validated and registered. Catalog status is draft until publish_content / apply_publish."
+            .to_string()
+    } else {
+        "Article validated and registered.".to_string()
+    };
+
     Ok(SubmitResult {
         ok: true,
         slug: Some(slug),
@@ -359,7 +394,9 @@ pub fn submit_written_article(
         write_task_id: final_write_task_id,
         write_task_status,
         follow_up_task_ids,
-        message: Some("Article validated and registered.".to_string()),
+        catalog_status: outcome.catalog_status,
+        catalog_status_reason,
+        message: Some(message),
     })
 }
 
@@ -489,8 +526,9 @@ fn resolve_bound_write_task(
 
 /// Unified article registration for Path B submit.
 ///
-/// Always: `ingest_orphans` → keyword meta when known → export → tracked check.
-/// Returns true when the article is newly ingested or already tracked.
+/// Always: `ingest_orphans` → force catalog `draft` for newly ingested files
+/// (FM status is not catalog SoT — issue #168) → keyword meta when known →
+/// export → tracked check.
 fn register_submitted_article(
     conn: &Connection,
     project_id: &str,
@@ -498,7 +536,7 @@ fn register_submitted_article(
     file_path: &Path,
     write_task: Option<&Task>,
     target_keyword: Option<&str>,
-) -> Result<bool, String> {
+) -> Result<RegisterOutcome, String> {
     let summary = crate::content::article_index::ingest_orphans(conn, project_id, project_path)
         .map_err(|e| format!("Article registration failed: {e}"))?;
 
@@ -518,27 +556,70 @@ fn register_submitted_article(
         (None, None, 0i64)
     };
 
-    if summary.ingested > 0 && (keyword.is_some() || kd_str.is_some() || vol != 0) {
+    let has_keyword_meta = keyword.is_some() || kd_str.is_some() || vol != 0;
+
+    // NOTE: catalog draft until publish; FM status ignored here (issue #168).
+    // Always demote newly ingested Path B articles to draft until publish_content /
+    // apply_publish — not only when keyword meta is present.
+    if summary.ingested > 0 {
         for filename in &summary.files {
-            let _ = conn.execute(
-                "UPDATE articles
-                 SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                     status='draft'
-                 WHERE project_id=?4 AND file LIKE ?5",
-                rusqlite::params![
-                    keyword.as_deref(),
-                    kd_str.as_deref(),
-                    vol,
-                    project_id,
-                    format!("%{filename}"),
-                ],
-            );
+            if has_keyword_meta {
+                let _ = conn.execute(
+                    "UPDATE articles
+                     SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                         status='draft'
+                     WHERE project_id=?4 AND file LIKE ?5",
+                    rusqlite::params![
+                        keyword.as_deref(),
+                        kd_str.as_deref(),
+                        vol,
+                        project_id,
+                        format!("%{filename}"),
+                    ],
+                );
+            } else {
+                let _ = conn.execute(
+                    "UPDATE articles SET status='draft'
+                     WHERE project_id=?1 AND file LIKE ?2",
+                    rusqlite::params![project_id, format!("%{filename}")],
+                );
+            }
         }
     }
 
     let _ = crate::content::article_index::export_projection(conn, project_id, project_path);
 
-    Ok(summary.ingested > 0 || article_tracked(conn, project_id, file_path))
+    let newly_ingested = summary.ingested > 0;
+    let registered = newly_ingested || article_tracked(conn, project_id, file_path);
+    let catalog_status = if registered {
+        lookup_article_status(conn, project_id, file_path)
+    } else {
+        None
+    };
+
+    Ok(RegisterOutcome {
+        registered,
+        newly_ingested,
+        catalog_status,
+    })
+}
+
+/// Read `articles.status` for the submitted file basename (cheap post-register read).
+fn lookup_article_status(
+    conn: &Connection,
+    project_id: &str,
+    file_path: &Path,
+) -> Option<String> {
+    let basename = file_path.file_name().and_then(|n| n.to_str())?;
+    if basename.is_empty() {
+        return None;
+    }
+    conn.query_row(
+        "SELECT status FROM articles WHERE project_id = ?1 AND file LIKE ?2 LIMIT 1",
+        rusqlite::params![project_id, format!("%{basename}")],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
 }
 
 /// Mark bound write_article Done after successful registration.
@@ -876,6 +957,15 @@ mod tests {
         )
     }
 
+    /// Long MDX with frontmatter `status: published` (must not become catalog published on Path B).
+    fn long_article_mdx_fm_published(keyword: &str) -> String {
+        let pad = "word ".repeat(850);
+        format!(
+            "---\ntitle: Best SEO Tools\ndescription: {}\nslug: seo-tools\ndate: \"2024-06-01\"\nstatus: published\n---\n\n# Best SEO Tools\n\n{keyword} guide for operators.\n\n{pad}\n",
+            meta_ok()
+        )
+    }
+
     #[test]
     fn build_package_emits_brief_path_skill_and_word_floors() {
         let tmp = TempProjectDir::new();
@@ -1049,6 +1139,20 @@ mod tests {
         assert!(result.ingested, "article should be registered");
         assert_eq!(result.write_task_id.as_deref(), Some(write_id.as_str()));
         assert_eq!(result.write_task_status.as_deref(), Some("done"));
+        assert_eq!(result.catalog_status.as_deref(), Some("draft"));
+        assert_eq!(
+            result.catalog_status_reason.as_deref(),
+            Some(CATALOG_DRAFT_UNTIL_PUBLISH_REASON)
+        );
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("draft until publish_content"),
+            "message={:?}",
+            result.message
+        );
         assert!(
             !result.follow_up_task_ids.is_empty(),
             "cluster_and_link should spawn"
@@ -1068,6 +1172,107 @@ mod tests {
                 .map(|a| (&a.url_slug, &a.file, &a.target_keyword))
                 .collect::<Vec<_>>()
         );
+        let submitted = articles
+            .iter()
+            .find(|a| a.file.contains("seo_tools") || a.url_slug == "seo-tools")
+            .expect("submitted article row");
+        assert_eq!(
+            submitted.status, "draft",
+            "Path B catalog must be draft after submit"
+        );
+    }
+
+    /// Issue #168: FM `status: published` must not leave catalog as published.
+    /// Draft demote is unconditional — even with no keyword meta.
+    #[test]
+    fn submit_forces_catalog_draft_even_when_fm_published_and_no_keyword_meta() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx_fm_published("seo tools")).unwrap();
+
+        // No keyword / write_task — previously skipped the draft UPDATE branch.
+        let result = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts::default(),
+        )
+        .expect("submit should succeed without keyword meta");
+
+        assert!(result.ok, "checks={:?}", result.checks);
+        assert!(result.ingested);
+        assert_eq!(result.catalog_status.as_deref(), Some("draft"));
+        assert_eq!(
+            result.catalog_status_reason.as_deref(),
+            Some(CATALOG_DRAFT_UNTIL_PUBLISH_REASON)
+        );
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("draft until publish_content"),
+            "message={:?}",
+            result.message
+        );
+
+        let articles = crate::engine::task_store::list_articles(&conn, "proj1").unwrap();
+        let submitted = articles
+            .iter()
+            .find(|a| a.file.contains("seo_tools") || a.url_slug == "seo-tools")
+            .expect("submitted article row");
+        assert_eq!(
+            submitted.status, "draft",
+            "FM status:published must not become catalog published on Path B; got {:?}",
+            submitted.status
+        );
+    }
+
+    /// Focused registration invariant: newly ingested files always get draft
+    /// even when keyword meta is absent (issue #168).
+    #[test]
+    fn register_submitted_article_always_drafts_new_ingest_without_keyword() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("orphan_pub.mdx");
+        fs::write(
+            &file,
+            "---\ntitle: Orphan\ndescription: A short orphan body for registration-only draft invariant tests without full submit floors.\nslug: orphan-pub\ndate: \"2024-06-02\"\nstatus: published\n---\n\n# Orphan\n\nbody.\n",
+        )
+        .unwrap();
+
+        let outcome = register_submitted_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            &file,
+            None,
+            None, // no keyword meta
+        )
+        .expect("register");
+
+        assert!(outcome.registered);
+        assert!(outcome.newly_ingested);
+        assert_eq!(outcome.catalog_status.as_deref(), Some("draft"));
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM articles WHERE project_id='proj1' AND file LIKE '%orphan_pub.mdx'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row after register");
+        assert_eq!(status, "draft");
     }
 
     #[test]
