@@ -342,20 +342,26 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 
 ## Pre-Change Checklist
 
-**Canonical pre-ship gate: `pnpm test:all`.** It runs the Rust suite (via `cargo nextest` with per-test timeouts, falling back to `cargo test`), lint, `tsc -b`, vitest, `check:ipc`, `check:task-store`, `check-bindings`, and a full build. Never improvise an ad-hoc gate command; if the gate is missing a check, add it to the `test:all` script in `package.json`.
+**Ship gates** (choose by work kind; never improvise ad-hoc compositions — extend the matching `package.json` script):
+
+| Work kind | Gate | Composition / notes |
+|-----------|------|---------------------|
+| **Operator / CLI / domain Rust** (default for product work) | `pnpm test:cli` | `test:rust` → `check:task-store` → `check:cli-contract`. No Vite/lint/tsc/IPC/bindings. Missing operator checks go into **`test:cli`**. |
+| **Desktop / React / IPC / bindings** (until #184) | `pnpm test:all` | Full monorepo: rust + lint + tsc + vitest + check:ipc + check:task-store + check-bindings + build. Missing desktop checks go into **`test:all`**. |
 
 ### Rust Backend
 - [ ] Checked for reuse against the DRY catalog above
 - [ ] Task lifecycle contract checked (if creating/queuing/spawning tasks)
+- [ ] Operator/CLI-only changes: ship with `pnpm test:cli` (not every desktop bullet below)
 - [ ] `cargo check` passes before touching the frontend
 - [ ] `pnpm run test:rust` passes — especially `all_task_types_have_non_fallback_handler` (uses `cargo nextest` when installed; tests that mutate process env must hold `test_support::ENV_LOCK`)
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] Settings placed correctly: user preferences → `global_settings`; project config → `projects`
 - [ ] No business logic added to `commands/*.rs`
-- [ ] `tauri.ts` wrapper added/updated for any new or changed command
-- [ ] `types.ts` updated to match Rust struct changes (or run `./scripts/sync-bindings.sh`)
-- [ ] `./scripts/check-bindings.sh` passes if a Rust model with `#[ts(export)]` changed
-- [ ] `pnpm run check:ipc` passes
+- [ ] When IPC surface changes: `tauri.ts` wrapper added/updated for any new or changed command
+- [ ] When desktop models change: `types.ts` updated to match Rust struct changes (or run `./scripts/sync-bindings.sh`)
+- [ ] When `#[ts(export)]` models change: `./scripts/check-bindings.sh` passes
+- [ ] When IPC surface changes: `pnpm run check:ipc` passes
 - [ ] No secrets or absolute machine paths in source code
 - [ ] No `subprocess` / shell calls outside the agent compatibility layer
 - [ ] Reviewed `CONTRACTS.md` for affected implicit contracts
@@ -364,6 +370,7 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 - [ ] Every new deterministic step does not contain a hard-coded heuristic that substitutes for judgment
 
 ### Frontend
+(Apply when desktop / React / IPC / bindings work is touched; operator/CLI-only PRs use `pnpm test:cli`.)
 - [ ] `pnpm run lint` passes
 - [ ] `pnpm exec tsc -b` passes
 - [ ] `pnpm test` passes

@@ -288,6 +288,6 @@ Enforcement points (do not bypass or re-implement):
 
 **Path B note (do not break):** `write-submit` and `merge-submit` validation failures print JSON with `ok: false` and still exit **0**. Only domain/usage failures (missing file, bad flags, missing project) use `ERROR:` + exit 1.
 
-**Semver surface:** flags and subcommand names are a breaking-change surface; renames must be called out in release notes. Smoke check: `scripts/check-cli-contract.sh`.
+**Semver surface:** flags and subcommand names are a breaking-change surface; renames must be called out in release notes. Smoke check: `scripts/check-cli-contract.sh` (via `pnpm run check:cli-contract`). Operator ship gate: `pnpm test:cli`.
 
 **Hard-error helper:** `exit(msg)` in `src-tauri/src/bin/pageseeds-cli.rs` is the sole hard-fail path (`eprintln!("ERROR: …")` + exit 1). License deny (#156) must reuse it with a buy URL in the message — do not invent a separate exit channel.
