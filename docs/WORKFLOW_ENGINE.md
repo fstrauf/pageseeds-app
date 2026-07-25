@@ -277,7 +277,7 @@ Every article produced by `write_article`, `create_hub_page`, or `refresh_hub_pa
    - Returns a structured JSON context artifact.
 
 2. **`content_quality_review`** (agentic)
-   - Runs the embedded `content-quality-review` skill (`src-tauri/skills/content-quality-review/SKILL.md`, overridable per-project via `.github/skills/content-quality-review/SKILL.md`) via Rig `Extractor<ContentQualityReview>`. A missing skill fails the step rather than falling back to a built-in prompt.
+   - Runs the embedded `content-quality-review` skill (`crates/pageseeds-core/skills/content-quality-review/SKILL.md`, overridable per-project via `.github/skills/content-quality-review/SKILL.md`) via Rig `Extractor<ContentQualityReview>`. A missing skill fails the step rather than falling back to a built-in prompt.
    - Scores the article on four criteria (1–100):
      - `usefulness_score` — original insight, examples, data
      - `image_score` — at least one relevant, genuinely useful image

@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 advisory=0
 
 # 1. New functions named extract_json* or parse_json* in engine/exec/
-new_extractors=$(grep -rn "^\s*pub\s\+fn\s\+\(extract_json\|parse_json\)" src-tauri/src/engine/exec/ --include="*.rs" | grep -v "// ok:" || true)
+new_extractors=$(grep -rn "^\s*pub\s\+fn\s\+\(extract_json\|parse_json\)" crates/pageseeds-core/src/engine/exec/ --include="*.rs" | grep -v "// ok:" || true)
 
 if [ -n "$new_extractors" ]; then
     echo "ADVISORY: New JSON extraction functions found in engine/exec/."
@@ -28,7 +28,7 @@ if [ -n "$new_extractors" ]; then
 fi
 
 # 2. Regex-based JSON extraction in engine/exec/ (pattern: find('{') + find('}') or similar)
-regex_extractors=$(grep -rn "find('{')\|find('}')\|rfind('{')\|rfind('}')" src-tauri/src/engine/exec/ --include="*.rs" | grep -v "// ok:" || true)
+regex_extractors=$(grep -rn "find('{')\|find('}')\|rfind('{')\|rfind('}')" crates/pageseeds-core/src/engine/exec/ --include="*.rs" | grep -v "// ok:" || true)
 
 if [ -n "$regex_extractors" ]; then
     echo "ADVISORY: Manual JSON boundary detection found in engine/exec/."

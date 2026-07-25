@@ -6,6 +6,26 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Desktop shell is intentionally non-building until #184 (post #183 crate split).
+is_desktop_non_building() {
+  if [ "${DESKTOP_SKIP:-}" = "1" ]; then
+    return 0
+  fi
+  local lib="src-tauri/src/lib.rs"
+  if [ ! -f "$lib" ]; then
+    return 0
+  fi
+  if grep -q 'compile_error!' "$lib" && grep -Eq '#184|non-building' "$lib"; then
+    return 0
+  fi
+  return 1
+}
+
+if is_desktop_non_building; then
+  echo "Skipping IPC/bindings check: src-tauri desktop shell is non-building pending #184."
+  exit 0
+fi
+
 echo "[check-bindings] Generating TypeScript bindings from Rust..."
 cd src-tauri
 cargo test export_bindings --lib --quiet

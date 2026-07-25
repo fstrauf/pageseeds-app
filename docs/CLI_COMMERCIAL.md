@@ -1,7 +1,7 @@
 # CLI commercial boundary (free desk vs paid operator)
 
 > **Source of truth for free vs paid tool names.** Marketing and the code gate must match this file.
-> Code enforcement: static paid set in [`src-tauri/src/license/mod.rs`](../src-tauri/src/license/mod.rs) (`PAID_TOOLS`), gated from [`pageseeds-cli.rs`](../src-tauri/src/bin/pageseeds-cli.rs) (#156).
+> Code enforcement: static paid set in [`crates/pageseeds-core/src/license/mod.rs`](../crates/pageseeds-core/src/license/mod.rs) (`PAID_TOOLS`), gated from [`pageseeds-cli`](../crates/pageseeds-cli/src/main.rs) (#156).
 >
 > **This file is the SoT for free vs paid names.** Keep `PAID_TOOLS` and the lists below in sync. Do not invent a second free/paid list in website copy.
 
@@ -154,10 +154,10 @@ When in doubt: free = observe; paid = act or mutate.
 
 ## Maintenance
 
-When adding a CLI match arm in [`src-tauri/src/bin/pageseeds-cli.rs`](../src-tauri/src/bin/pageseeds-cli.rs):
+When adding a CLI match arm in [`crates/pageseeds-cli/src/main.rs`](../crates/pageseeds-cli/src/main.rs):
 
 1. Update **this file** (free or paid list + counts).
-2. Update `PAID_TOOLS` in `src-tauri/src/license/mod.rs` in the same PR.
+2. Update `PAID_TOOLS` in `crates/pageseeds-core/src/license/mod.rs` in the same PR.
 3. Keep help `TOOLS` / `print_help` in sync with match arms.
 
 Inventory check for implementers:
@@ -177,7 +177,7 @@ Inventory check for implementers:
 | Commercial CLI epic | [#154](https://github.com/fstrauf/pageseeds-app/issues/154) |
 | Website offer / pricing | [fstrauf/pageseeds](https://github.com/fstrauf/pageseeds) — do **not** claim free write/fix/merge |
 | Weekly operator skill | [`.agents/skills/weekly-seo/SKILL.md`](../.agents/skills/weekly-seo/SKILL.md) — desk explore free; Path B / task act paid |
-| CLI binary | [`src-tauri/src/bin/pageseeds-cli.rs`](../src-tauri/src/bin/pageseeds-cli.rs) |
+| CLI binary | [`crates/pageseeds-cli/src/main.rs`](../crates/pageseeds-cli/src/main.rs) |
 | Docs index | [README.md](./README.md) |
 
 ---
@@ -211,7 +211,7 @@ Activate: pageseeds-cli license activate <key>
 Buy: https://pageseeds.com
 ```
 
-Code: [`src-tauri/src/license/mod.rs`](../src-tauri/src/license/mod.rs), gate in [`pageseeds-cli.rs`](../src-tauri/src/bin/pageseeds-cli.rs).
+Code: [`crates/pageseeds-core/src/license/mod.rs`](../crates/pageseeds-core/src/license/mod.rs), gate in [`pageseeds-cli`](../crates/pageseeds-cli/src/main.rs).
 
 ---
 
@@ -225,7 +225,7 @@ Code: [`src-tauri/src/license/mod.rs`](../src-tauri/src/license/mod.rs), gate in
 | `iat` | Recommended | Issued-at NumericDate |
 | `sub` | Optional | Customer id / email hash / etc. |
 
-- CLI embeds **public** PEM only: [`src-tauri/src/license/public_key.pem`](../src-tauri/src/license/public_key.pem).
+- CLI embeds **public** PEM only: [`crates/pageseeds-core/src/license/public_key.pem`](../crates/pageseeds-core/src/license/public_key.pem).
 - **Private key must never be committed** to pageseeds-app. The matching private key is held by the website license mint ([fstrauf/pageseeds](https://github.com/fstrauf/pageseeds) issue #4 / commercial backend).
-- Unit tests use a **separate** RSA pair under `src-tauri/src/license/testdata/` (`#[cfg(test)]` only).
+- Unit tests use a **separate** RSA pair under `crates/pageseeds-core/src/license/testdata/` (`#[cfg(test)]` only).
 - No phone-home, no seat checks, no desktop gate in this epic.
