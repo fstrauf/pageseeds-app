@@ -162,6 +162,20 @@ Prefer `pageseeds-cli list-projects` over raw `sqlite3` queries. Do **not** hand
 
 ---
 
+## Developer / contributor verification
+
+Before opening operator or CLI PRs, run:
+
+```bash
+pnpm test:cli
+```
+
+That gate runs Rust tests (`test:rust`), the task-store lifecycle check (`check:task-store`), and the CLI machine-contract smoke (`check:cli-contract` → `scripts/check-cli-contract.sh`). It does **not** run lint, tsc, vitest, IPC, bindings, or a Vite build — those belong to `pnpm test:all` for desktop work.
+
+Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS.md) §14.
+
+---
+
 ## Troubleshooting
 
 | Symptom | What to check |
