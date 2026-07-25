@@ -76,8 +76,8 @@ docs/
 │   ├── Adding Content-Writing Behavior
 │   ├── Attaching Tasks to Queue
 │   ├── Building Per-Article Fix Pipelines
-│   └── Adding Frontend UI
-└── AGENTIC_INVESTIGATION_SPEC.md   # Investigation feature specification
+│   └── Expose via Thin CLI Command
+└── AGENTIC_INVESTIGATION_SPEC.md   # Investigation feature specification (archival; CLI/domain only)
 ```
 
 ### Root Documentation

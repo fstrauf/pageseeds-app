@@ -24,9 +24,9 @@ The workflow engine orchestrates task execution. It is **not** a general-purpose
 │        │      Execute steps sequentially                               │
 │        │                                                                │
 │        ▼                                                                │
-│   ┌─────────────┐   Emit events   ┌─────────────┐                      │
-│   │   Executor  │────────────────▶│  Frontend   │                      │
-│   │  (run_step) │                  │  (events)   │                      │
+│   ┌─────────────┐   Progress /     ┌─────────────┐                      │
+│   │   Executor  │────────────────▶│  CLI / logs  │                      │
+│   │  (run_step) │   artifacts      │  (stdout)    │                      │
 │   └─────────────┘                  └─────────────┘                      │
 │        │                                                                │
 │        ▼                                                                │
@@ -367,16 +367,7 @@ Batch runner checks: `"automatic"` OR `"batchable"`.
 
 ## Events
 
-The executor emits Tauri events for live UI updates:
-
-```rust
-app_handle.emit("queue:task-started", QueueProgressEvent { ... });
-app_handle.emit("queue:task-step-progress", StepProgressEvent { ... });
-app_handle.emit("queue:task-completed", QueueProgressEvent { ... });
-app_handle.emit("queue:task-failed", QueueProgressEvent { ... });
-```
-
-The frontend `useQueueRunner` hook consumes these to drive the TaskRunner UI.
+The executor updates task/step status in the SQLite store and surfaces progress via domain queue APIs. Operators observe progress through CLI task/queue tools and JSON output (desktop event bus removed #184).
 
 ---
 
@@ -420,7 +411,7 @@ The frontend `useQueueRunner` hook consumes these to drive the TaskRunner UI.
 
 4. **Wire in executor** by adding match arm in `run_step()`.
 
-5. **Add types** to `models/` and `src/lib/types.ts`.
+5. **Add types** to `models/` (and expose via thin CLI JSON if operator-facing).
 
 ---
 

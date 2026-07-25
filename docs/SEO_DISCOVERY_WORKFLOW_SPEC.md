@@ -1,6 +1,6 @@
 # PageSeeds SEO Discovery Workflow — Technical Specification
 
-**Status:** Draft  
+**Status:** Draft (archival UI paths scrubbed — desktop removed #184; implement via CLI + domain only)  
 **Author:** AI Agent working session  
 **Date:** 2026-07-09  
 **Goal:** Make PageSeeds automatically surface, rank, and act on the same kinds of SEO opportunities we currently discover manually for sites like brewedlate.com.
@@ -17,7 +17,7 @@ The concrete trigger for this work was the **brewedlate.com cold-brew CTR opport
 
 1. Add a new `seo_health_scan` umbrella task that orchestrates the existing `content_audit`, `ctr_audit` context build, `indexing_health_campaign` prerequisites, `cannibalization_audit` context, and optional Clarity summary.
 2. Add a deterministic `RankOpportunities` step that reads all of those artifacts and emits one `seo_opportunities.json` ranked by expected traffic impact and fix effort.
-3. Surface the ranked list in a new `OpportunityReview` UI, letting the user select which opportunities become `fix_content_article`, `fix_ctr_article`, `fix_indexing_internal_links`, or `consolidate_cluster` children.
+3. Surface the ranked list via CLI selection / review artifact, letting the operator select which opportunities become `fix_content_article`, `fix_ctr_article`, `fix_indexing_internal_links`, or `consolidate_cluster` children.
 4. Tighten the existing CTR pipeline so it does not silently drop pure snippet/title-quality opportunities when source-level health checks pass.
 5. Persist the opportunity backlog in SQLite so discovery is stateful across runs.
 
@@ -308,7 +308,7 @@ Add `OpportunityReview` to `TaskReviewSurface` in `crates/pageseeds-core/src/mod
 3. Let the user check/uncheck rows.
 4. On "Create tasks", call a new command `create_tasks_from_opportunities` that spawns the appropriate child tasks via `TaskSpawner::spawn`.
 
-The command lives in `crates/pageseeds-core/src/commands/seo_discovery.rs` and is thin: validate input → call `engine::exec::seo_discovery::spawn_from_opportunities` → return task IDs.
+Expose via a domain function under `engine/exec/seo_discovery/` (or similar) and a thin CLI subcommand: validate input → call `spawn_from_opportunities` → return task IDs. Do not add a `commands/` module under core.
 
 ### 4.5 Fix the CTR pipeline's pure-opportunity blind spot
 
@@ -372,8 +372,8 @@ The post-action in `crates/pageseeds-core/src/engine/post_actions.rs` that spawn
 ### Phase 2 — Review surface and task creation
 
 1. **Add `OpportunityReview` variant** to `TaskReviewSurface` and update domain models.
-2. **Create frontend component** `src/components/review/OpportunityReview.tsx`.
-3. **Add backend command** `create_tasks_from_opportunities` in `crates/pageseeds-core/src/commands/seo_discovery.rs`.
+2. **Add thin CLI selection path** for operators to approve opportunities (JSON in / task IDs out).
+3. **Add domain API** `create_tasks_from_opportunities` in core (not a `commands/` module).
 4. **Implement `spawn_from_opportunities`** in `crates/pageseeds-core/src/engine/exec/seo_discovery/spawn.rs`.
 
 ### Phase 3 — CTR and Clarity integration
@@ -403,9 +403,8 @@ The post-action in `crates/pageseeds-core/src/engine/post_actions.rs` that spawn
 | `crates/pageseeds-core/src/db/mod.rs` | Add `seo_opportunities` table migration |
 | `crates/pageseeds-core/src/db/seo_discovery.rs` (new) | CRUD for opportunity table |
 | `crates/pageseeds-core/src/models/task.rs` | Add `OpportunityReview` to `TaskReviewSurface` |
-| `crates/pageseeds-core/src/commands/seo_discovery.rs` (new) | `create_tasks_from_opportunities` command |
-| `src/lib/types.ts` | Add opportunity type |
-| `src/components/review/OpportunityReview.tsx` (new) | Review surface UI |
+| Domain + thin CLI for `create_tasks_from_opportunities` | Operator selection → spawn children |
+| `crates/pageseeds-core/src/models/` | Opportunity types for JSON CLI output |
 | `.github/skills/feature-spec-generation/SKILL.md` | Input contract update |
 
 ---

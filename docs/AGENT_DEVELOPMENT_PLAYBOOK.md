@@ -70,31 +70,31 @@ cargo test -p pageseeds-core task_definitions
 
 ## Scenario: Attaching Tasks to Execution (Queue)
 
-**Use when:** A component needs to run tasks or show queue state.
+**Use when:** An operator or system path needs to enqueue or run tasks via the backend queue.
 
 **Primitive:** Backend queue APIs (`engine/queue.rs`) / CLI package-submit paths
 
 **Files to inspect first:**
-- `(removed desktop IPC)` — `enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`
-- `src/stores/queueStore.ts` — how the frontend subscribes to queue state
-- `src/hooks/useQueueRunner.ts` — how the UI reacts to queue events
+- `crates/pageseeds-core/src/engine/queue.rs` — enqueue, snapshot, pause/resume, auto-enqueue
+- `crates/pageseeds-cli/src/` — thin CLI entry points that call domain queue APIs
+- Documented CLI task/package tools (Path B) — see [`docs/TOOL_CATALOG.md`](./TOOL_CATALOG.md)
 
 **Files usually touched:**
-- Component file in `src/components/`
-- Possibly `src/stores/queueStore.ts` for new queue actions
+- Domain callers that enqueue via `engine/queue.rs` APIs
+- Possibly a thin CLI subcommand if the operator needs a new surface
 
 **Files NOT touched:**
 - `engine/executor.rs` (queue execution is already wired)
 - `engine/batch.rs` (batch loop is self-contained)
-- Any direct `invoke('execute_task')` call
+- Any ad-hoc direct `execute_task` bypass of the queue
 
-**Rule:** Components call `enqueueTasks()` and listen to events. They never call `executeTask` directly.
+**Rule:** Operators and domain code enqueue via the queue (or documented CLI package/submit paths). They never invent parallel runners or call the executor outside the queue contract.
 
 ---
 
 ## Scenario: Designing Task Lifecycle Behavior
 
-**Use when:** A feature creates tasks, puts tasks in the queue, changes what happens after a task succeeds, or requires user input before downstream tasks exist.
+**Use when:** A feature creates tasks, puts tasks in the queue, changes what happens after a task succeeds, or requires user/operator input before downstream tasks exist.
 
 **Primitive:** `TaskDefinition` + `TaskSpawner` + backend queue + review surface
 
@@ -103,28 +103,28 @@ cargo test -p pageseeds-core task_definitions
 - `crates/pageseeds-core/src/engine/spawner.rs` — centralized task creation and idempotency
 - `crates/pageseeds-core/src/engine/post_actions.rs` — backend follow-up creation after successful task runs
 - `crates/pageseeds-core/src/engine/queue.rs` — backend-owned queue, persistence, auto-enqueue behavior
-- `src/lib/taskQueueActions.ts` and `src/stores/queueStore.ts` — frontend queue entry points
+- CLI selection / package-submit paths under `crates/pageseeds-cli/` — operator entry points for user-selection lanes
 
 **Choose the lifecycle lane first:**
 
 | If the feature needs... | Use this lane | Usually touched |
 |---|---|---|
-| A user clicks a button to run existing tasks | Enqueue existing tasks | Component + `taskQueueActions`/queue context |
+| Operator starts existing tasks via CLI | Enqueue existing tasks | CLI thin command + `engine/queue.rs` |
 | Code creates tasks without user picking from results | System-created tasks | Domain module or `post_actions` + `TaskSpawner::spawn` |
 | A completed task creates automatic downstream work | Backend follow-up | `post_actions.rs` + `TaskSpawner::spawn_follow_up` |
-| The user must choose keywords/recommendations/opportunities first | User-selection follow-up | `task_definitions.rs`, review UI, selection command |
+| The operator must choose keywords/recommendations/opportunities first | User-selection follow-up | `task_definitions.rs`, selection CLI path, artifacts on parent |
 | Results should be reviewed but not converted into tasks | Review-only artifact | `task_definitions.rs` review surface, no task creation |
 
 **Rules:**
-- `run_policy` answers: can this task be auto-enqueued, or must the user enqueue it?
-- `review_surface` answers: should completion stop in `review` and show a picker/review UI?
+- `run_policy` answers: can this task be auto-enqueued, or must the operator enqueue it?
+- `review_surface` answers: should completion stop in `review` and wait for operator selection?
 - `follow_up_policy` answers: are follow-ups backend-created, user-selected, or absent?
 - The executor already sends any task with a non-`none` review surface to `review`; do not reimplement that status logic.
 - The queue auto-enqueues only created follow-ups whose `run_policy` is `auto_enqueue`; user-selected follow-ups wait for a selection command.
-- Selection commands validate the selected IDs against the parent task artifact, create downstream tasks through the task creation primitive, and mark the parent done.
+- Selection paths validate the selected IDs against the parent task artifact, create downstream tasks through the task creation primitive, and mark the parent done.
 
 **Files NOT touched:**
-- Do not add ad-hoc task execution calls in components.
+- Do not add ad-hoc task execution outside the queue/executor contract.
 - Do not add lifecycle branches to `engine/executor.rs` unless the executor contract itself changes.
 - Do not call `task_store::create_task` from new programmatic task factories.
 
@@ -153,7 +153,7 @@ cargo test -p pageseeds-core task_definitions
 
 **Files NOT touched:**
 - `engine/task_store.rs` directly (use `TaskSpawner`)
-- `commands/` (follow-ups are backend-side)
+- CLI binary beyond thin enqueue/print (follow-ups are backend-side in `post_actions`)
 
 **Validation:**
 ```bash
@@ -286,7 +286,7 @@ cargo test -p pageseeds-core step_registry
 
 **Files NOT touched:**
 - `engine/executor.rs` (the generic executor orchestrates; step registry wires your steps)
-- `commands/` (unless you need a new UI command — follow the frontend scenario above)
+- `pageseeds-cli` (unless you need a new thin operator command — see “Expose via Thin CLI Command” below)
 - Do not add a new `HandlerFamily` unless the step graph structure is genuinely different
 
 **Validation:**
@@ -332,34 +332,28 @@ cargo test -p pageseeds-core export::
 
 ---
 
-## Scenario: Adding Frontend UI Around Backend Data
+## Scenario: Expose via Thin CLI Command
 
-**Use when:** You need a new panel, table, or form that displays or mutates data.
+**Use when:** Domain logic already exists (or will live in `pageseeds-core`) and operators need a machine-facing surface.
 
-**Primitive:** Domain function → thin CLI command (if operator-facing)
+**Primitive:** Domain function → thin `pageseeds-cli` subcommand
 
 **Files to inspect first:**
-- `(removed desktop IPC)` — existing invoke wrappers
-- `src/lib/types.ts` — type definitions
-- `src/components/` — similar component for patterns
+- Existing CLI wiring under `crates/pageseeds-cli/src/`
+- The domain module that already owns the behavior
 
 **Files touched (in order):**
-1. Rust: `commands/{domain}.rs` — thin command (or reuse existing)
-2. Domain: implement in `pageseeds-core`; expose via CLI only if needed
-3. TypeScript: `(removed desktop IPC)` — add typed wrapper
-4. TypeScript: `src/lib/types.ts` — add/update type if needed
-5. React: `src/components/{domain}/` — build component
+1. Domain: implement in `pageseeds-core` (`engine/`, `content/`, domain modules)
+2. CLI: add or extend a thin subcommand — parse args → call core → print JSON/errors
 
 **Files NOT touched:**
-- Keep `pageseeds-cli` thin; no business logic in the binary
-- No business logic in components
-- No Zustand bare store subscriptions (use selectors)
+- Keep `pageseeds-cli` thin; no business logic, prompts, or DB side-effects in the binary
+- Do not reintroduce a Tauri `commands/` IPC layer (desktop removed #184)
 
 **Validation:**
 ```bash
-# Verify no unregistered invokes
-# Type check
-pnpm exec tsc -b
+cargo build -p pageseeds-cli
+pnpm run check:cli-contract
 ```
 
 ---
@@ -372,8 +366,8 @@ pnpm exec tsc -b
 | Task lifecycle or task creation logic | `pnpm run check:task-store && cargo test -p pageseeds-core task_definitions` |
 | Documentation links | `./scripts/check-docs-links.sh` |
 | Skill paths | `./scripts/check-skill-paths.sh` |
-| Frontend invoke usage | `./scripts/check-invoke-usage.sh` |
-| Full validation | `./scripts/pre-release-checks.sh` |
+| CLI contract / thin adapter | `pnpm run check:cli-contract` |
+| Full operator validation | `pnpm run test:cli` |
 
 ---
 

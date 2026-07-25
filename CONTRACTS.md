@@ -221,16 +221,11 @@ During execution, each step in `ExecutionResult.steps[]` has a `status` field. T
 
 ---
 
-## 10. Commands Layer Must Remain Thin
+## 10. Thin Adapters (CLI Only)
 
-**Historical (desktop removed #184):** former `commands/*.rs` IPC adapters did exactly:
-1. Acquire state lock
-2. Call one module function
-3. Return `result.map_err(|e| e.to_string())`
+**Historical (desktop removed #184):** a Tauri `commands/*.rs` IPC layer existed and was required to stay thin (lock → one domain call → map error). That layer is gone; do not reintroduce it.
 
-**Current violations** (known technical debt — do not copy this pattern):
-- `commands/reddit.rs::draft_reddit_reply` — contains inline prompt engineering (~100 lines). Should move to `reddit/prompts.rs`.
-- `commands/reddit.rs::post_to_reddit` — writes to DB AND creates history file side-effects inline. Should move to `reddit/history.rs`.
+**Current rule:** `pageseeds-cli` is the only adapter. Keep it thin — parse args → call `pageseeds-core` → print JSON/errors. Business logic, prompts, DB side-effects, and file I/O belong in domain modules under `pageseeds-core`, never in the CLI binary.
 
 ---
 

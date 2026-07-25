@@ -1,5 +1,7 @@
 # Agentic Investigation Feature Spec
 
+> **Status:** Archival design notes. Desktop UI and Tauri `commands/` were removed in **#184**. Implement via domain APIs + thin `pageseeds-cli` only; do not reintroduce React/`src/` or a commands layer under core.
+
 ## Problem
 
 The Health Dashboard and its underlying tasks (`content_review`, `ctr_audit`, `cannibalization_audit`, `indexing_health_campaign`) run **pre-defined checks**. They find what you told them to find. They are excellent for recurring monitoring — "are we still within the guardrails?" — but they cannot discover novel issues.
@@ -218,37 +220,33 @@ impl Tool for GscPerformanceTool {
 }
 ```
 
-## Commands
+## Operator API (domain + thin CLI)
 
 ```rust
-// commands/investigate.rs
+// Domain functions in pageseeds-core (e.g. engine/exec/investigate.rs);
+// CLI subcommands call these and print JSON — no Tauri commands layer.
 
 /// Run an agentic investigation: the agent has access to data tools
 /// and explores freely to answer the user's question.
-#[tauri::command]
 pub async fn investigate(
-    state: tauri::State<'_, AppState>,
-    project_id: String,
-    question: String,
-) -> Result<InvestigationResult, String>;
+    project_id: &str,
+    question: &str,
+) -> Result<InvestigationResult, Error>;
 
 /// Get a list of available tools the agent can use.
-#[tauri::command]
-pub fn get_available_tools() -> Result<Vec<ToolInfo>, String>;
+pub fn get_available_tools() -> Result<Vec<ToolInfo>, Error>;
 
 /// Get a previously saved investigation result.
-#[tauri::command]
 pub fn get_investigation(
-    state: tauri::State<'_, AppState>,
-    project_id: String,
-    investigation_id: String,
-) -> Result<InvestigationResult, String>;
+    project_id: &str,
+    investigation_id: &str,
+) -> Result<InvestigationResult, Error>;
 ```
 
 ## Investigation Result
 
 ```rust
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 pub struct InvestigationResult {
     pub id: String,
     pub question: String,
@@ -262,7 +260,7 @@ pub struct InvestigationResult {
     pub saved_path: Option<String>, // path to saved markdown
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 pub struct Finding {
     pub title: String,
     pub description: String,
@@ -271,7 +269,7 @@ pub struct Finding {
     pub auto_fix_task: Option<String>,
 }
 
-#[derive(Serialize, TS)]
+#[derive(Serialize)]
 pub enum FixType {
     AutoFixable,
     DeveloperActionable,
@@ -297,36 +295,13 @@ pub enum FixType {
 6. Agent returns structured InvestigationResult via Extractor<T>
 7. Result saved to .github/automation/investigations/{id}/answer.md
 8. Evidence saved to .github/automation/investigations/{id}/evidence.json
-9. Frontend renders the result in a chat-like panel
+9. CLI prints InvestigationResult JSON (and/or writes answer.md + evidence.json)
 ```
 
-## Frontend: Investigation Panel
+## Operator surface (CLI)
 
-Added to the Health Dashboard as an "Ask AI" section:
+Desktop Health Dashboard / "Ask AI" panel was removed in **#184**. Operators run investigations via CLI (question in → JSON / markdown artifacts out) or via embedded domain steps.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Health Audit                                  [Run Full Audit] │
-│  Last updated: 2 hours ago  Diff: +3 new, -2 resolved         │
-├─────────────────────────────────────────────────────────────┤
-│  Ask AI about your site                                       │
-│  ┌─────────────────────────────────────────────────┐          │
-│  │ Why are my impressions not growing?              │ [Ask]   │
-│  └─────────────────────────────────────────────────┘          │
-│                                                               │
-│  ── Latest Investigation ──                                   │
-│  Q: "Why is my CTR below 1%?"                      2h ago     │
-│  A: "Found 150 articles with duplicated brand name in         │
-│      title template. Fix app/layout.tsx line 23 to            │
-│      remove the duplicate `{brand}`. This affects all         │
-│      SERP titles, likely suppressing CTR site-wide."          │
-│  Findings: Title template bug (critical), 6 exact             │
-│            duplicate content groups (critical)                │
-│  [View full analysis →]  [Auto-fix →]                         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-The standalone investigation panel remains a free-form complement to the dashboard.
 In addition, **`content_review` embeds the same read-only investigate loop** when
 the configured backend supports tool calling (`ContentReviewInvestigate` step;
 see issue #80). That path uses `InvestigationAccess::ReadOnly` (no create/enqueue
@@ -339,17 +314,17 @@ scripted `content_review_recommend` path.
 
 | Scenario | Use |
 |---|---|
-| Weekly health check | Run Full Audit (dashboard) |
+| Weekly health check | Desk + targeted audits / `content_review` when scoped |
 | "Why is my traffic dropping?" | Investigate (agentic) |
 | "Are there structural problems?" | Investigate (agentic) |
-| "Which articles need work?" | Run Full Audit → review priority issues |
+| "Which articles need work?" | Content audit → review priority issues / patterns |
 | "Should I consolidate any content?" | Investigate (agentic) |
-| Scheduled monitoring | Run Full Audit (auto-enqueued) |
-| Post-publish validation | Run Full Audit (auto-triggered) |
+| Scheduled monitoring | Auto-enqueued collect_* + desk-first weekly path |
+| Post-publish validation | Content audit / fix verify steps |
 
 ## Files to Create / Modify
 
-### Backend (Rust)
+### Domain (Rust)
 
 | File | Change |
 |------|--------|
@@ -367,20 +342,17 @@ scripted `content_review_recommend` path.
 | `engine/tools/linking.rs` | New — ArticleLinkGraphTool |
 | `engine/tools/task.rs` | New — CreateTaskTool |
 | `engine/exec/investigate.rs` | New — exec_investigate |
-| `commands/investigate.rs` | New — thin command wrappers |
-| `commands/mod.rs` | Add `investigate` module |
-| `lib.rs` | Register new commands |
+| Domain models for InvestigationResult | Typed JSON for CLI/artifacts |
 
-### Frontend (React/TS)
+### CLI
 
 | File | Change |
 |------|--------|
-| `src/components/health/InvestigationPanel.tsx` | New — Ask AI input + results display |
-| `src/components/health/InvestigationResult.tsx` | New — investigation findings card |
-| `crates/pageseeds-cli` | Add CLI surface if operator-facing |
-| `src/lib/types.ts` | Add InvestigationResult, Finding, FixType types |
+| `crates/pageseeds-cli` | Thin subcommand: parse args → call core → print JSON |
 
-### Total new code: ~800 lines (Rust) + ~300 lines (React)
+### Total new code: ~800–1100 lines Rust (domain + thin CLI); no React
+
+Note: do **not** add `commands/investigate.rs` or any Tauri IPC registration.
 
 ## Success Metrics
 

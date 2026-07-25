@@ -1,6 +1,6 @@
-//! PageSeeds domain library — business logic with zero Tauri dependencies.
+//! PageSeeds domain library — business logic with zero UI/Tauri dependencies.
 //!
-//! Used by `pageseeds-cli` and (after #184) the desktop shell.
+//! Used by `pageseeds-cli` only (desktop removed #184).
 
 // rig-derive expands to `::rig_core::…` when it cannot resolve the crate name
 // via proc_macro_crate (lib name is `rig`, package name is `rig-core`).

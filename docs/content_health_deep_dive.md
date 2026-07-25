@@ -1,6 +1,8 @@
 # Content Health Deep Dive — Current Workflow vs. Proposed Loop
 
-> This doc maps how PageSeeds currently surfaces content-audit findings, what we had to do manually for the Days to Expiry project, and how to close the gap so the next audit is actionable inside the app.
+> **Status:** Archival design notes (desktop UI removed #184). Implementation targets are **CLI + domain APIs** only — do not invent a `commands/` module under core or rebuild desktop UI paths. Prefer `task_definitions.rs`, `engine/queue.rs`, `TaskSpawner`, and thin `pageseeds-cli` surfaces.
+>
+> This doc maps how PageSeeds surfaces content-audit findings, what we had to do manually for the Days to Expiry project, and how to close the gap so the next audit is actionable for operators.
 
 ---
 
@@ -37,46 +39,33 @@ fix_content_article task
 - Steps: `crates/pageseeds-core/src/engine/exec/content/fix_*.rs`
 - Skill: `crates/pageseeds-core/skills/content-fix-apply/SKILL.md` (embedded app default)
 
-### 1.3 Frontend Health Dashboard
+### 1.3 Operator surfaces (CLI / domain)
 
-`(desktop UI removed #184)/health/HealthDashboard.tsx` already consumes `get_content_audit_report` and surfaces:
+Desktop Health Dashboard was removed in **#184**. Operators work through:
 
-- Content health summary (`good / needs_improvement / poor`)
-- A content score
-- A few priority issue cards:
-  - Title token duplication
-  - Literal template variables
-  - Temporal URLs
-  - Page bloat
-  - Exact duplicate content
-- CTR, cannibalization, and indexing sections
+- Desk reads + hard actions (weekly-seo skill / CLI Path B)
+- Task types: `content_review`, `content_audit`, `fix_content_article`, `indexing_health_campaign`
+- Domain APIs for audit reports and indexing summaries (via DB / export paths in `pageseeds-core`)
+- Enqueue via `engine/queue.rs` or documented CLI task tools
 
-It has a **Run Full Audit** button that calls `run_health_audit`, which spawns `content_review` + `indexing_health_campaign` tasks.
-
-### 1.4 Existing commands
-
-| Command | File | Purpose |
-|---|---|---|
-| `run_health_audit` | `crates/pageseeds-core/src/commands/health.rs` | Spawns content_review + indexing_health_campaign |
-| `get_content_audit_report` | `crates/pageseeds-core/src/commands/health.rs` | Returns latest audit JSON from DB or legacy file |
-| `get_indexing_health_summary` | `crates/pageseeds-core/src/commands/health.rs` | Indexing stats from `gsc_url_indexing_status` |
+Historical desktop IPC names (`run_health_audit`, `get_content_audit_report`, `get_indexing_health_summary`) mapped to domain behavior that still lives under `engine/`, `db/`, and task types — not under a `commands/` module.
 
 ---
 
 ## 2. What we still had to do manually
 
-For Days to Expiry, the audit produced a 26 KB JSON report with 162 articles. The dashboard showed the high-level buckets, but to turn it into work we had to run ad-hoc scripts to find:
+For Days to Expiry, the audit produced a 26 KB JSON report with 162 articles. High-level buckets were available, but to turn it into work we had to run ad-hoc scripts to find:
 
 1. **Missing external links** — 95 of 97 poor/needs articles had 0 external links. Not surfaced as a priority issue.
 2. **Keyword / H1 mismatch** — ~40 articles had target keywords that never appeared in the H1 or first 100 words. Not surfaced.
 3. **Meta title/description length** — dozens of titles/descriptions were too short or too long. Not surfaced.
 4. **Thin content** — 28 articles under 2,000 words. Not surfaced as a group.
 5. **Duplicate target keywords** — 6 keyword phrases were assigned to multiple articles (cannibalization). Not surfaced.
-6. **Temporal URL evergreening** — the dashboard flags temporal URLs, but does not suggest merging month-specific pages into a hub.
+6. **Temporal URL evergreening** — temporal URLs may be flagged, but merge-into-hub suggestions are not automated.
 7. **Trend / diff** — no way to see which articles moved between runs without remembering previous numbers.
-8. **Batch actions** — the only action on most issue cards is "View details"; there is no "Fix all 95 missing-external-links articles" button.
+8. **Batch actions** — no first-class "fix all N missing-external-links articles" operator command.
 
-In short: the app does a great job **running** the audit and **fixing one article at a time**, but it does not yet **expose the patterns** or let the user **enqueue pattern-level fixes**.
+In short: the product does a great job **running** the audit and **fixing one article at a time**, but it does not yet **expose the patterns** or let the operator **enqueue pattern-level fixes** via CLI.
 
 ---
 
@@ -93,13 +82,13 @@ Audit result stored in DB (already happens)
   ↓
 NEW: Pattern analyzer reads the latest run
   ↓
-HealthDashboard displays patterns + affected articles
+CLI / desk surfaces patterns + affected articles
   ↓
-User clicks "Fix pattern" → app creates task(s)
+Operator selects pattern or article IDs → enqueue task(s)
   ↓
 Queue runs tasks → post_actions updates state
   ↓
-User clicks "Re-audit" → dashboard refreshes with deltas
+Operator re-audits → patterns + deltas refresh
 ```
 
 ### 3.2 Patterns to surface
@@ -131,24 +120,24 @@ priority = (100 - health_score) * 10
          + pattern_weight
 ```
 
-This lets the user attack the highest-ROI articles first rather than the alphabetical list.
+This lets the operator attack the highest-ROI articles first rather than the alphabetical list.
 
 ---
 
 ## 4. Concrete implementation plan
 
-### Phase A — Backend pattern analyzer (no UI yet)
+### Phase A — Domain pattern analyzer
 
 1. **Add a pattern-analysis module**
-   - New file: `crates/pageseeds-core/src/engine/content_health/patterns.rs`
+   - New file: `crates/pageseeds-core/src/engine/content_health/patterns.rs` (or under `content/` / `db/` if more natural)
    - Struct `ContentPattern { name, severity, fix_mode, articles: Vec<PatternArticle>, priority_score }`
    - Function `analyze_patterns(conn, project_id, run_id) -> Vec<ContentPattern>`
    - Reads the latest `content_audit_runs` + `article_content_audits` rows.
 
-2. **Add a command**
-   - File: `crates/pageseeds-core/src/commands/health.rs`
-   - `get_content_health_patterns(project_id) -> Vec<ContentPattern>`
-   - Wrapper that calls the analyzer and returns JSON.
+2. **Expose via domain API + thin CLI (if operator-facing)**
+   - Domain: `get_content_health_patterns(project_id) -> Vec<ContentPattern>`
+   - CLI: thin subcommand that prints JSON — parse args → call core → print
+   - Do **not** add `crates/pageseeds-core/src/commands/health.rs` (no commands layer after #184)
 
 3. **Add deterministic fix helpers**
    - `crates/pageseeds-core/src/engine/content_health/fix_external_links.rs`
@@ -167,78 +156,53 @@ This lets the user attack the highest-ROI articles first rather than the alphabe
      - `fix_meta_length`
    - For this proposal, **Option 1 is recommended** because it reuses the existing 4-step pipeline and verification.
 
-### Phase B — Extend HealthDashboard with patterns
+### Phase B — Operator pattern enqueue
 
-1. **Update `(desktop IPC removed #184)`**
-   - Add `getContentHealthPatterns(projectId)` wrapper.
+1. **CLI list patterns** — print ranked patterns + affected article IDs as JSON.
+2. **CLI / selection path to enqueue fixes**
+   - Domain: `enqueue_content_pattern_fixes(project_id, pattern_name, article_ids)`
+   - Creates one `fix_content_article` task per article with the appropriate skill param via `TaskSpawner`.
+   - Enqueue through `engine/queue.rs`.
+3. **Skills to add**
+   - `.github/skills/add-external-links/SKILL.md`
+   - `.github/skills/rewrite-meta/SKILL.md`
+   - `.github/skills/align-keyword-and-h1/SKILL.md`
+   - `.github/skills/expand-content/SKILL.md`
+   - `.github/skills/evergreen-temporal-pages/SKILL.md`
 
-2. **Update `src/lib/types.ts`**
-   - Add `ContentPattern`, `PatternArticle` interfaces.
-
-3. **Update `(desktop UI removed #184)/health/HealthDashboard.tsx`**
-   - Fetch patterns in addition to the raw audit.
-   - Add a **Patterns** section above or beside Priority Issues.
-   - Each pattern card shows:
-     - Pattern name
-     - Affected article count
-     - Average health score
-     - Severity badge
-     - **Fix pattern** button
-   - Clicking a pattern opens a drill-down table with:
-     - Article ID, title, health score, priority
-     - Checkboxes to include/exclude
-     - **Enqueue selected** button
-
-4. **Add batch enqueue command**
-   - `crates/pageseeds-core/src/commands/health.rs`: `enqueue_content_pattern_fixes(project_id, pattern_name, article_ids)`
-   - Creates one `fix_content_article` task per article with the appropriate skill param.
-   - Skills to add:
-     - `.github/skills/add-external-links/SKILL.md`
-     - `.github/skills/rewrite-meta/SKILL.md`
-     - `.github/skills/align-keyword-and-h1/SKILL.md`
-     - `.github/skills/expand-content/SKILL.md`
-     - `.github/skills/evergreen-temporal-pages/SKILL.md`
-
-### Phase C — Trend / diff view
+### Phase C — Trend / diff
 
 1. **Add backend helper**
    - `crates/pageseeds-core/src/db/content_audit.rs`: `get_audit_run_history(project_id, limit) -> Vec<AuditRunSummary>`
    - Already have `content_audit_runs` table; just query it.
 
-2. **Add frontend trend chart**
-   - Reuse existing chart component or add a simple bar/line chart.
-   - Show good / needs_improvement / poor counts over the last 5–10 runs.
+2. **CLI trend summary**
+   - Print good / needs_improvement / poor counts over the last 5–10 runs as JSON.
 
-3. **Add moved-articles list**
+3. **Moved-articles list**
    - Compare current run to previous run per article.
    - Show "Moved to good", "Moved to poor", "New issues".
 
-### Phase D — Re-audit close-the-loop button
+### Phase D — Re-audit close-the-loop
 
-1. **Frontend**
-   - Add a **Re-run Content Audit** button in HealthDashboard.
-   - It calls `run_health_audit` or a slimmer `content_audit`-only variant.
-   - Polls queue status and refreshes patterns + audit when done.
-
+1. **Operator**
+   - Enqueue `content_review` (or a slimmer `content_audit`-only variant) via CLI/queue.
 2. **Backend**
-   - Existing queue system already handles this; just enqueue `content_review`.
+   - Existing queue system already handles this; re-run pattern analysis after completion.
 
 ---
 
 ## 5. Recommended quick wins (start here)
 
-The fastest path to value is to enhance the existing HealthDashboard with the missing patterns and use the existing `fix_content_article` pipeline.
+The fastest path to value is domain pattern analysis + CLI enqueue of the existing `fix_content_article` pipeline.
 
-### 5.1 Backend quick win
+### 5.1 Domain quick win
 
-Add a single new command `get_content_health_patterns` that returns the 8–10 patterns above. No new task types, no new exec modules.
+Add `get_content_health_patterns` in core that returns the 8–10 patterns above. No new task types, no new exec modules.
 
-### 5.2 Frontend quick win
+### 5.2 CLI quick win
 
-Add a **Patterns** section to `HealthDashboard` that:
-- Lists patterns sorted by priority
-- Shows count and avg health
-- Has a **Fix all** button that creates `fix_content_article` tasks using the existing skill mechanism
+Print patterns sorted by priority (count + avg health) and a **fix pattern** path that creates `fix_content_article` tasks using the existing skill mechanism.
 
 ### 5.3 Skill quick win
 
@@ -251,10 +215,7 @@ Create one new skill `.github/skills/add-external-links/SKILL.md`. This alone un
 | File | Change |
 |---|---|
 | `crates/pageseeds-core/src/engine/content_health/patterns.rs` | NEW — pattern analyzer |
-| `crates/pageseeds-core/src/commands/health.rs` | ADD `get_content_health_patterns`, `enqueue_content_pattern_fixes` |
-| `(desktop IPC removed #184)` | ADD wrappers |
-| `src/lib/types.ts` | ADD `ContentPattern`, `PatternArticle` |
-| `(desktop UI removed #184)/health/HealthDashboard.tsx` | ADD patterns section + drill-down + enqueue buttons |
+| Domain API + thin CLI subcommand (not `commands/`) | ADD list patterns + enqueue pattern fixes |
 | `.github/skills/add-external-links/SKILL.md` | NEW skill |
 | `.github/skills/rewrite-meta/SKILL.md` | NEW skill |
 | `.github/skills/align-keyword-and-h1/SKILL.md` | NEW skill |
@@ -266,11 +227,11 @@ Create one new skill `.github/skills/add-external-links/SKILL.md`. This alone un
 ## 7. Acceptance criteria
 
 - [ ] `get_content_health_patterns` returns at least the top 8 patterns for any project with a recent audit.
-- [ ] HealthDashboard shows patterns with counts, severity, and avg health score.
-- [ ] User can click **Fix pattern** and enqueue `fix_content_article` tasks for all affected articles.
-- [ ] User can exclude individual articles from the batch.
-- [ ] Re-audit button refreshes the dashboard and shows deltas.
-- [ ] Trend chart shows last 5 runs' good/needs/poor counts.
+- [ ] CLI (or desk-readable JSON) shows patterns with counts, severity, and avg health score.
+- [ ] Operator can enqueue `fix_content_article` tasks for all affected articles of a pattern.
+- [ ] Operator can exclude individual articles from the batch.
+- [ ] Re-audit refreshes patterns and shows deltas.
+- [ ] Trend summary shows last 5 runs' good/needs/poor counts.
 - [ ] Deterministic-only patterns (external links, meta length) can optionally skip the LLM step.
 
 ---
@@ -279,5 +240,5 @@ Create one new skill `.github/skills/add-external-links/SKILL.md`. This alone un
 
 - **Reuses existing pipeline:** The `content_review` → `fix_content_article` flow already works. We are not rebuilding it.
 - **Fits the architecture:** Pattern analysis is deterministic; fix tasks are agentic; the queue orchestrates everything.
-- **Works for every project:** Once built, BrewedLate, Days to Expiry, and any future project get the same Content Health view.
-- **Matches user mental model:** Users think "fix all the missing external links" not "open 95 articles one by one."
+- **Works for every project:** Once built, BrewedLate, Days to Expiry, and any future project get the same Content Health patterns.
+- **Matches operator mental model:** Operators think "fix all the missing external links" not "open 95 articles one by one."
