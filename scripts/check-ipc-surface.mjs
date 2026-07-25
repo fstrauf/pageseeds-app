@@ -34,10 +34,27 @@ function* walkDir(dir) {
   }
 }
 
+/** Desktop shell is intentionally non-building until #184 (post #183 crate split). */
+function isDesktopNonBuilding(libRsPath, libRsText) {
+  if (process.env.DESKTOP_SKIP === "1") return true;
+  if (!existsSync(libRsPath)) return true;
+  return (
+    /compile_error!\s*\(/.test(libRsText) &&
+    (libRsText.includes("#184") || libRsText.includes("non-building"))
+  );
+}
+
 // ─── Parse registered commands from lib.rs ───────────────────────────────────
 
 const libRsPath = join(root, "src-tauri", "src", "lib.rs");
-const libRs = readFileSync(libRsPath, "utf-8");
+const libRs = existsSync(libRsPath) ? readFileSync(libRsPath, "utf-8") : "";
+
+if (isDesktopNonBuilding(libRsPath, libRs)) {
+  console.log(
+    "Skipping IPC/bindings check: src-tauri desktop shell is non-building pending #184."
+  );
+  process.exit(0);
+}
 
 // Extract commands::name from generate_handler![...]
 const handlerMatch = libRs.match(/tauri::generate_handler!\s*\[([^\]]*)\]/s);

@@ -11,12 +11,12 @@ Scenario-based guide for the most common agent tasks in this repo.
 
 **Use when:** The AI's output tone, structure, or instructions need to change, but the execution flow stays the same.
 
-**Primitive:** Skill files (`.github/skills/{skill_name}/SKILL.md`) + embedded defaults (`src-tauri/src/skills/`)
+**Primitive:** Skill files (`.github/skills/{skill_name}/SKILL.md`) + embedded defaults (`crates/pageseeds-core/skills/`)
 
 **Files to inspect first:**
-- `src-tauri/src/engine/skills.rs` — skill loading order (project overrides embedded)
-- `src-tauri/src/engine/prompts.rs` — how skill content is assembled into prompts
-- Existing skill in `.github/skills/{name}/SKILL.md` or `src-tauri/src/skills/{name}/SKILL.md`
+- `crates/pageseeds-core/src/engine/skills.rs` — skill loading order (project overrides embedded)
+- `crates/pageseeds-core/src/engine/prompts.rs` — how skill content is assembled into prompts
+- Existing skill in `.github/skills/{name}/SKILL.md` or `crates/pageseeds-core/skills/{name}/SKILL.md`
 
 **Files usually touched:**
 - `.github/skills/{new_skill}/SKILL.md` (new skill)
@@ -31,7 +31,7 @@ Scenario-based guide for the most common agent tasks in this repo.
 **Validation:**
 ```bash
 # Verify the skill loads
-cargo test --manifest-path src-tauri/Cargo.toml skills::
+cargo test -p pageseeds-core skills::
 ```
 
 **Rule of thumb:** If your change can be expressed as "tell the AI to do X differently," it's a skill change. If you need new data prep or a different step sequence, it's a workflow change.
@@ -45,9 +45,9 @@ cargo test --manifest-path src-tauri/Cargo.toml skills::
 **Primitive:** `write_article` task type + `ContentHandler` + skill param
 
 **Files to inspect first:**
-- `src-tauri/src/engine/workflows/handlers.rs` — `ContentHandler::plan()` shows the single agentic step
-- `src-tauri/src/engine/workflows/handlers.rs` — `exec_agentic()` shows how skills are loaded and prompts built
-- `src-tauri/src/content/ops.rs` — `ingest_orphan_files()` for how articles are saved
+- `crates/pageseeds-core/src/engine/workflows/handlers.rs` — `ContentHandler::plan()` shows the single agentic step
+- `crates/pageseeds-core/src/engine/workflows/handlers.rs` — `exec_agentic()` shows how skills are loaded and prompts built
+- `crates/pageseeds-core/src/content/ops.rs` — `ingest_orphan_files()` for how articles are saved
 
 **Files usually touched:**
 - New skill: `.github/skills/{new_skill}/SKILL.md`
@@ -61,7 +61,7 @@ cargo test --manifest-path src-tauri/Cargo.toml skills::
 **Validation:**
 ```bash
 # Verify the task routes to ContentHandler
-cargo test --manifest-path src-tauri/Cargo.toml task_definitions
+cargo test -p pageseeds-core task_definitions
 ```
 
 **Anti-pattern:** See AGENTS.md "Anti-Pattern Case Study: Hub Page Creation" for what happens when you ignore this.
@@ -99,10 +99,10 @@ cargo test --manifest-path src-tauri/Cargo.toml task_definitions
 **Primitive:** `TaskDefinition` + `TaskSpawner` + backend queue + review surface
 
 **Files to inspect first:**
-- `src-tauri/src/config/task_definitions.rs` — source of truth for `run_policy`, `review_surface`, `follow_up_policy`, and `handler_family`
-- `src-tauri/src/engine/spawner.rs` — centralized task creation and idempotency
-- `src-tauri/src/engine/post_actions.rs` — backend follow-up creation after successful task runs
-- `src-tauri/src/engine/queue.rs` — backend-owned queue, persistence, auto-enqueue behavior
+- `crates/pageseeds-core/src/config/task_definitions.rs` — source of truth for `run_policy`, `review_surface`, `follow_up_policy`, and `handler_family`
+- `crates/pageseeds-core/src/engine/spawner.rs` — centralized task creation and idempotency
+- `crates/pageseeds-core/src/engine/post_actions.rs` — backend follow-up creation after successful task runs
+- `crates/pageseeds-core/src/engine/queue.rs` — backend-owned queue, persistence, auto-enqueue behavior
 - `src/lib/taskQueueActions.ts` and `src/stores/queueStore.ts` — frontend queue entry points
 
 **Choose the lifecycle lane first:**
@@ -131,7 +131,7 @@ cargo test --manifest-path src-tauri/Cargo.toml task_definitions
 **Validation:**
 ```bash
 pnpm run check:task-store
-cargo test --manifest-path src-tauri/Cargo.toml task_definitions
+cargo test -p pageseeds-core task_definitions
 ```
 
 ---
@@ -143,12 +143,12 @@ cargo test --manifest-path src-tauri/Cargo.toml task_definitions
 **Primitive:** `TaskSpawner::spawn_follow_up()`
 
 **Files to inspect first:**
-- `src-tauri/src/engine/spawner.rs` — `spawn_follow_up()` and idempotency key format
-- `src-tauri/src/engine/post_actions.rs` — where follow-ups are triggered after task success
-- `src-tauri/src/config/task_definitions.rs` — follow-up task `run_policy`, review surface, and default metadata
+- `crates/pageseeds-core/src/engine/spawner.rs` — `spawn_follow_up()` and idempotency key format
+- `crates/pageseeds-core/src/engine/post_actions.rs` — where follow-ups are triggered after task success
+- `crates/pageseeds-core/src/config/task_definitions.rs` — follow-up task `run_policy`, review surface, and default metadata
 
 **Files usually touched:**
-- `src-tauri/src/engine/post_actions.rs` — add follow-up creation logic
+- `crates/pageseeds-core/src/engine/post_actions.rs` — add follow-up creation logic
 - If a new artifact needs parsing: the parent task's exec module
 
 **Files NOT touched:**
@@ -170,9 +170,9 @@ pnpm run check:task-store
 **Primitive:** Task artifacts + deterministic prep steps
 
 **Files to inspect first:**
-- `src-tauri/src/engine/workflows/handlers.rs` — how steps pass artifacts via `latest_raw_output`
-- `src-tauri/src/models/task.rs` — `TaskArtifact` structure
-- `src-tauri/src/engine/exec/` — existing deterministic steps that build context
+- `crates/pageseeds-core/src/engine/workflows/handlers.rs` — how steps pass artifacts via `latest_raw_output`
+- `crates/pageseeds-core/src/models/task.rs` — `TaskArtifact` structure
+- `crates/pageseeds-core/src/engine/exec/` — existing deterministic steps that build context
 
 **The correct pattern:**
 1. Deterministic step: gather data, compute metrics, write structured JSON artifact
@@ -196,9 +196,9 @@ pnpm run check:task-store
 **Primitive:** `StepKind` enum + registry + executor match arm + exec function
 
 **Files to inspect first:**
-- `src-tauri/src/engine/workflows/step_kind.rs` — existing variants
-- `src-tauri/src/engine/step_registry.rs` — registry mapping
-- `src-tauri/src/engine/executor.rs` — `run_step()` match dispatch
+- `crates/pageseeds-core/src/engine/workflows/step_kind.rs` — existing variants
+- `crates/pageseeds-core/src/engine/step_registry.rs` — registry mapping
+- `crates/pageseeds-core/src/engine/executor.rs` — `run_step()` match dispatch
 
 **Files touched (in order):**
 1. `engine/workflows/step_kind.rs` — add `StepKind::YourStep`
@@ -210,7 +210,7 @@ pnpm run check:task-store
 **Validation:**
 ```bash
 # Verify StepKind round-trips through registry
-cargo test --manifest-path src-tauri/Cargo.toml step_registry
+cargo test -p pageseeds-core step_registry
 ```
 
 ---
@@ -245,35 +245,35 @@ cargo test --manifest-path src-tauri/Cargo.toml step_registry
    - Must list validation rules the Rust side will enforce
    - Must say "Return ONLY a valid JSON object matching the schema"
 
-2. **Model** — `src-tauri/src/models/{domain}.rs`
+2. **Model** — `crates/pageseeds-core/src/models/{domain}.rs`
    - Add `PatchType` struct with `#[derive(JsonSchema, TS)]` + `#[ts(export)]`
    - Add `PatchChanges` struct with optional fields for each fix category
    - Add `VerificationReport` + `VerifiedItem` structs
    - Reuse existing models from `ctr.rs` or `content_review.rs` as templates
 
-3. **Step kinds** — `src-tauri/src/engine/workflows/step_kind.rs`
+3. **Step kinds** — `crates/pageseeds-core/src/engine/workflows/step_kind.rs`
    - Add `{Domain}FixContext`, `{Domain}FixGenerate`, `{Domain}FixApply`, `{Domain}FixVerify`
    - Register string mappings in `as_str()`, `from_str()`, and test array
 
-4. **Step registry** — `src-tauri/src/engine/step_registry.rs`
+4. **Step registry** — `crates/pageseeds-core/src/engine/step_registry.rs`
    - Context: `register_blocking!(..., exec_{domain}_fix_context)`
    - Generate: `handlers.insert(..., Box::new(|step, ctx| { ... exec_{domain}_fix_generate(...).await }))`
    - Apply/Verify: `register_blocking!` or `handlers.insert` with `spawn_blocking`
 
-5. **Handler plan** — `src-tauri/src/engine/workflows/handlers.rs`
+5. **Handler plan** — `crates/pageseeds-core/src/engine/workflows/handlers.rs`
    - Replace generic `WorkflowStep::new("...", StepKind::Agentic)` with the 4-step sequence
    - Set `.with_param(step_params::SKILL, "{fix-skill}")` on generate step
    - Set `.with_param(step_params::ARTIFACT_NAME, "{domain}_fix_patch")` on generate step
    - Set `.with_latest_raw_policy(ReplaceWithOutput)` on context step
 
-6. **Execution modules** — `src-tauri/src/engine/exec/{domain}/`
+6. **Execution modules** — `crates/pageseeds-core/src/engine/exec/{domain}/`
    - `{domain}_fix_context.rs` — deterministic data gathering
    - `{domain}_fix_generate.rs` — structured extraction with `extract_with_backend::<PatchType>()`
    - `{domain}_fix_apply.rs` — deterministic file patch application
    - `{domain}_fix_verify.rs` — deterministic health check re-run
    - Update `mod.rs` to declare and re-export all four
 
-7. **Task spawner** — `src-tauri/src/engine/exec/{domain}/task_spawner.rs` (or `post_actions.rs`)
+7. **Task spawner** — `crates/pageseeds-core/src/engine/exec/{domain}/task_spawner.rs` (or `post_actions.rs`)
    - Create per-item follow-up tasks with full single-item context embedded in artifacts
    - Do NOT store lightweight references — the task must be self-contained
 
@@ -292,13 +292,13 @@ cargo test --manifest-path src-tauri/Cargo.toml step_registry
 **Validation:**
 ```bash
 # Verify StepKind round-trips
-cargo test --manifest-path src-tauri/Cargo.toml step_registry
+cargo test -p pageseeds-core step_registry
 
 # Verify the full pipeline compiles
-cargo check --manifest-path src-tauri/Cargo.toml
+cargo check -p pageseeds-core
 
 # Verify structured extraction schema is valid JSON Schema
-cargo test --manifest-path src-tauri/Cargo.toml extract_structured
+cargo test -p pageseeds-core extract_structured
 ```
 
 **Anti-pattern:** Reusing `StepKind::Agentic` with a generic prompt for per-article fixes. The agent doesn't know what to fix, doesn't know the output format, and generates unconstrained prose that hits the 120s timeout. Always use the 4-step hybrid pattern.
@@ -312,9 +312,9 @@ cargo test --manifest-path src-tauri/Cargo.toml extract_structured
 **Primitive:** `content::ops` + `db::export`
 
 **Files to inspect first:**
-- `src-tauri/src/content/ops.rs` — `ingest_orphan_files()`, `sync_and_validate()`, `read_file_metadata()`
-- `src-tauri/src/db/export.rs` — `write_articles_to_repo()`, `export_articles()`
-- `src-tauri/src/content/publish.rs` — `apply_publish()` for status transitions
+- `crates/pageseeds-core/src/content/ops.rs` — `ingest_orphan_files()`, `sync_and_validate()`, `read_file_metadata()`
+- `crates/pageseeds-core/src/db/export.rs` — `write_articles_to_repo()`, `export_articles()`
+- `crates/pageseeds-core/src/content/publish.rs` — `apply_publish()` for status transitions
 
 **Files usually touched:**
 - Reuse existing function from `content::ops` or `db::export`
@@ -327,7 +327,7 @@ cargo test --manifest-path src-tauri/Cargo.toml extract_structured
 **Validation:**
 ```bash
 # Verify export round-trip works
-cargo test --manifest-path src-tauri/Cargo.toml export::
+cargo test -p pageseeds-core export::
 ```
 
 ---
@@ -371,8 +371,8 @@ pnpm exec tsc -b
 |---|---|
 | Rust model with `#[ts(export)]` | `./scripts/sync-bindings.sh && ./scripts/check-bindings.sh` |
 | New command or changed signature | `pnpm run check:ipc` |
-| New task type or handler | `cargo test --manifest-path src-tauri/Cargo.toml task_definitions` |
-| Task lifecycle or task creation logic | `pnpm run check:task-store && cargo test --manifest-path src-tauri/Cargo.toml task_definitions` |
+| New task type or handler | `cargo test -p pageseeds-core task_definitions` |
+| Task lifecycle or task creation logic | `pnpm run check:task-store && cargo test -p pageseeds-core task_definitions` |
 | Documentation links | `./scripts/check-docs-links.sh` |
 | Skill paths | `./scripts/check-skill-paths.sh` |
 | Frontend invoke usage | `./scripts/check-invoke-usage.sh` |

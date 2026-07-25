@@ -157,7 +157,7 @@ When in doubt: free = observe; paid = act or mutate.
 When adding a CLI match arm in [`crates/pageseeds-cli/src/main.rs`](../crates/pageseeds-cli/src/main.rs):
 
 1. Update **this file** (free or paid list + counts).
-2. Update `PAID_TOOLS` in `src-tauri/src/license/mod.rs` in the same PR.
+2. Update `PAID_TOOLS` in `crates/pageseeds-core/src/license/mod.rs` in the same PR.
 3. Keep help `TOOLS` / `print_help` in sync with match arms.
 
 Inventory check for implementers:
@@ -225,7 +225,7 @@ Code: [`crates/pageseeds-core/src/license/mod.rs`](../crates/pageseeds-core/src/
 | `iat` | Recommended | Issued-at NumericDate |
 | `sub` | Optional | Customer id / email hash / etc. |
 
-- CLI embeds **public** PEM only: [`src-tauri/src/license/public_key.pem`](../src-tauri/src/license/public_key.pem).
+- CLI embeds **public** PEM only: [`crates/pageseeds-core/src/license/public_key.pem`](../crates/pageseeds-core/src/license/public_key.pem).
 - **Private key must never be committed** to pageseeds-app. The matching private key is held by the website license mint ([fstrauf/pageseeds](https://github.com/fstrauf/pageseeds) issue #4 / commercial backend).
-- Unit tests use a **separate** RSA pair under `src-tauri/src/license/testdata/` (`#[cfg(test)]` only).
+- Unit tests use a **separate** RSA pair under `crates/pageseeds-core/src/license/testdata/` (`#[cfg(test)]` only).
 - No phone-home, no seat checks, no desktop gate in this epic.

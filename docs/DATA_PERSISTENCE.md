@@ -427,10 +427,10 @@ Three managed states declared in `lib.rs`:
 
 | Component | Path |
 |-----------|------|
-| SQLite init | `src-tauri/src/db/mod.rs` |
-| Export functions | `src-tauri/src/db/export.rs` |
-| Content operations | `src-tauri/src/content/ops.rs` |
-| Project paths | `src-tauri/src/engine/project_paths.rs` |
+| SQLite init | `crates/pageseeds-core/src/db/mod.rs` |
+| Export functions | `crates/pageseeds-core/src/db/export.rs` |
+| Content operations | `crates/pageseeds-core/src/content/ops.rs` |
+| Project paths | `crates/pageseeds-core/src/engine/project_paths.rs` |
 
 ---
 

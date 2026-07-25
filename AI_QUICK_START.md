@@ -6,14 +6,16 @@
 
 ## What This Is
 
-A **Tauri 2 desktop app** for SEO content workflows. Self-contained binary — no Python, no external CLI dependencies.
+A **Rust workspace** for SEO operator tooling plus a (temporarily non-building) Tauri desktop shell.
 
 | Layer | Tech |
 |-------|------|
-| Backend | Rust (`src-tauri/src/`) |
+| Domain | Rust library `crates/pageseeds-core` (`pageseeds_core`) — **no Tauri** |
+| Operator CLI | `crates/pageseeds-cli` (`pageseeds-cli` bin) |
+| Desktop shell | `src-tauri/` — **non-building until #184** (commands rewire deferred) |
 | Frontend | React + TypeScript + Vite + Tailwind v4 + shadcn/ui (`src/`) |
 | Store | SQLite (runtime state) + JSON in user's repo (committed content) |
-| IPC | Tauri commands (`invoke()` frontend → `#[tauri::command]` Rust) |
+| IPC | Tauri commands (`invoke()` frontend → `#[tauri::command]` Rust) — shell only until #184 |
 
 ---
 
@@ -37,97 +39,59 @@ A **Tauri 2 desktop app** for SEO content workflows. Self-contained binary — n
 ## Directory Structure
 
 ```
-src-tauri/src/
-├── main.rs              # Entry point — no logic
-├── lib.rs               # Tauri setup, state management, command registration
-├── error.rs             # Central Error enum + Result<T>
-├── commands/            # ALL #[tauri::command] handlers — thin IPC wrappers
-│   ├── mod.rs
-│   ├── tasks.rs
-│   ├── gsc.rs
-│   ├── reddit.rs
-│   └── ...
-├── models/              # Pure serde structs — no logic
-│   ├── task.rs          # Task, TaskArtifact, TaskRun, TaskStatus, etc.
-│   ├── article.rs
-│   ├── project.rs
-│   └── ...
-├── db/
-│   ├── mod.rs           # SQLite init + migrations
-│   └── export.rs        # JSON read/write for user's repo
-├── engine/              # Workflow orchestration
-│   ├── executor.rs      # Orchestrator only (~400 lines)
-│   ├── spawner.rs       # CENTRALIZED task creation — use this, not task_store
-│   ├── batch.rs         # Autonomous batch execution
-│   ├── scheduler.rs     # Scheduled rule evaluation
-│   ├── task_store.rs    # SQLite CRUD for tasks/projects
-│   ├── agent.rs         # LLM provider calls
-│   ├── prompts.rs       # Prompt assembly
-│   ├── normalizer.rs    # Parse agent output → JSON
-│   ├── skills.rs        # Load SKILL.md files
-│   ├── project_paths.rs # Resolve automation/content dirs
-│   ├── runtime.rs       # Async execution helpers
-│   ├── workflows/
-│   │   ├── mod.rs       # WorkflowStep struct
-│   │   └── handlers.rs  # WorkflowHandler trait + all handlers
-│   └── exec/            # Domain-specific execution logic
-│       ├── mod.rs
-│       ├── keywords.rs  # Keyword research
-│       ├── content.rs   # Content review/apply
-│       ├── content_audit.rs
-│       ├── reddit.rs    # Reddit search + enrichment
-│       ├── gsc.rs       # GSC collection + sync
-│       └── utils.rs
-├── content/             # MDX operations
-│   ├── locator.rs       # Find content directory
-│   ├── ops.rs           # Sync, slug generation, frontmatter
-│   ├── cleaner.rs       # Validate/fix MDX structure
-│   ├── dates.rs         # Date analysis/redistribution
-│   ├── linking.rs       # Internal link scanning
-│   └── publish.rs       # Publishing workflow
-├── reddit/              # Reddit JSON API
-│   ├── mod.rs
-│   ├── search.rs
-│   ├── db.rs            # Opportunity CRUD
-│   ├── prompts.rs       # Reply drafting prompts
-│   └── history.rs       # Reply history tracking
-├── gsc/                 # Google Search Console
-│   ├── auth.rs          # Service account + OAuth
-│   ├── client.rs        # Authenticated HTTP client
-│   ├── analytics.rs     # Search analytics
-│   ├── indexing.rs      # URL Inspection API
-│   ├── classification.rs # Reason codes
-│   ├── coverage.rs      # 404 detection
-│   ├── redirects.rs     # Redirect analysis
-│   └── reports.rs       # Report generation
-├── seo/                 # Ahrefs integration
-│   ├── keywords.rs      # Keyword ideas + difficulty
-│   ├── backlinks.rs     # Backlink analysis
-│   └── traffic.rs       # Traffic estimates
-└── config/              # Configuration
-    ├── mod.rs           # Constants, default values
-    └── env_resolver.rs  # Secrets resolution
+Cargo.toml                 # workspace: pageseeds-core, pageseeds-cli
+crates/
+├── pageseeds-core/        # Domain library (rlib only; NO tauri)
+│   ├── skills/            # Embedded app-default skills (include_str!)
+│   ├── config/            # tool_catalog.toml
+│   └── src/
+│       ├── lib.rs         # Domain modules only
+│       ├── error.rs       # Central Error enum + Result<T>
+│       ├── models/        # Pure serde structs — no logic
+│       │   ├── task.rs    # Task, TaskArtifact, TaskRun, TaskStatus, etc.
+│       │   ├── article.rs
+│       │   ├── project.rs
+│       │   └── ...
+│       ├── db/
+│       │   ├── mod.rs     # SQLite init + migrations
+│       │   └── export.rs  # JSON read/write for user's repo
+│       ├── engine/        # Workflow orchestration
+│       │   ├── executor.rs
+│       │   ├── spawner.rs # CENTRALIZED task creation — use this, not task_store
+│       │   ├── task_store.rs
+│       │   ├── agent.rs
+│       │   ├── prompts.rs
+│       │   ├── skills.rs
+│       │   ├── workflows/
+│       │   │   └── handlers.rs
+│       │   └── exec/      # Domain-specific execution logic
+│       ├── content/       # MDX operations
+│       ├── reddit/, gsc/, seo/, social/, clarity/, rig/, license/, …
+│       └── config/        # Constants, env_resolver, task_definitions
+└── pageseeds-cli/         # Operator CLI bin (depends only on core)
+    └── src/main.rs
+
+src-tauri/                 # Desktop shell — TEMPORARILY NON-BUILDING (#184)
+└── src/
+    ├── lib.rs             # Stub (compile_error! pending #184)
+    ├── main.rs
+    └── commands/          # #[tauri::command] IPC bindings (rewire to core in #184)
 
 src/
 ├── lib/
-│   ├── tauri.ts         # ALL invoke() wrappers — one function per command
-│   └── types.ts         # TypeScript types mirroring Rust exactly
+│   ├── tauri.ts           # ALL invoke() wrappers — one function per command
+│   ├── bindings/          # Auto-generated TS from Rust (ts-rs)
+│   └── types.ts           # TypeScript types mirroring Rust exactly
 ├── stores/
-│   ├── queueStore.ts    # Global task queue state
+│   ├── queueStore.ts
 │   └── ...
-└── components/          # Feature-scoped React components
-    ├── ui/              # shadcn/ui primitives ONLY
-    ├── tasks/           # TaskBoard, TaskDetail, TaskRunner
-    ├── articles/        # ArticleTable, ContentHealth, PublishPanel
-    ├── reddit/          # OpportunityFeed, ReplyDraft, RedditStats
-    ├── gsc/             # GSCDashboard, IndexingReport, CoverageView
-    ├── seo/             # KeywordResearch, BacklinkView, TrafficOverview
-    ├── social/          # SocialDashboard, CampaignList, PostEditor, TemplateList
-    ├── health/          # HealthDashboard, InvestigationPanel
-    ├── cannibalization/ # CannibalizationReview
-    ├── projects/        # ProjectSwitcher, ProjectSettings
-    └── settings/        # SecretsManager, SchedulerConfig
+└── components/            # Feature-scoped React components
+    ├── ui/                # shadcn/ui primitives ONLY
+    ├── tasks/, articles/, reddit/, gsc/, seo/, social/, …
+    └── settings/
 ```
+
+> **Crate split (#183):** Edit domain logic in `crates/pageseeds-core`, not under `src-tauri/src/` (except Tauri `commands/` until #184). Ship gates: `cargo test -p pageseeds-core` / `cargo build -p pageseeds-cli` / `pnpm run test:cli`.
 
 ---
 
@@ -193,13 +157,13 @@ TaskSpawner::spawn_follow_up(conn, parent_task, "task_type", "title")?;
 ## Adding a Feature
 
 ### New Rust Module
-1. Create `src-tauri/src/{domain}/mod.rs`
-2. Declare in `lib.rs`: `mod {domain};`
-3. Add types to `models/` if crossing IPC
-4. Add `#[tauri::command]` to `commands/` (thin wrapper)
-5. Register command in `lib.rs` `generate_handler![]`
+1. Create `crates/pageseeds-core/src/{domain}/mod.rs`
+2. Declare in `crates/pageseeds-core/src/lib.rs`: `mod {domain};` (or `pub mod`)
+3. Add types to `crates/pageseeds-core/src/models/` if crossing IPC
+4. Desktop IPC (when shell builds again, #184): thin `#[tauri::command]` in `src-tauri/src/commands/` calling core
+5. Register command in the desktop shell `generate_handler![]` (shell only)
 6. Add typed wrapper to `src/lib/tauri.ts`
-7. Add TypeScript type to `src/lib/types.ts`
+7. Add TypeScript type to `src/lib/types.ts` (or regenerate bindings)
 8. Build React component in `src/components/{domain}/`
 
 ### New SQLite Table
@@ -230,7 +194,7 @@ Use `config::env_resolver::EnvResolver` — never `std::env::var()` directly.
 
 ## Pre-Change Checklist
 
-- [ ] `cargo check` passes before touching frontend
+- [ ] `cargo check -p pageseeds-core` / `cargo build -p pageseeds-cli` passes before frontend work
 - [ ] New SQLite columns added via new migration (not altering existing)
 - [ ] No business logic added to `commands/`
 - [ ] `tauri.ts` wrapper added/updated for any new/changed command
@@ -245,12 +209,15 @@ Use `config::env_resolver::EnvResolver` — never `std::env::var()` directly.
 ## Common Commands
 
 ```bash
+# Operator / domain gates (default for product work)
+cargo test -p pageseeds-core
+cargo build -p pageseeds-cli
+pnpm run test:cli
+
+# Frontend (desktop shell non-building until #184)
 pnpm dev              # Vite dev server
-pnpm tauri dev        # Tauri dev mode (Rust + frontend)
-cargo check           # Check Rust code
-pnpm build            # Production build
-./build-release.sh    # Build macOS release
-./publish-release.sh  # Interactive release
+pnpm build            # Frontend production build
+# pnpm tauri dev      # deferred — src-tauri compile_error! until #184
 ```
 
 ---

@@ -68,11 +68,11 @@ The canonical flow:
 
 ## Agent Providers
 
-The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds/rig) providers in `src-tauri/src/rig/`.
+The primary integration is through [`rig-core`](https://github.com/0xPlaygrounds/rig) providers in `crates/pageseeds-core/src/rig/`.
 
 ### Current Providers
 
-- **Grok CLI** (default) — native `grok -p --always-approve` subprocess (`src-tauri/src/rig/grok_cli.rs`). Agentic file tools run with `--cwd` / process CWD = project root. Requires `grok` on PATH. Same shape as Kimi CLI for write_article / agentic steps. **Not** Rig multi-turn tool-capable for PageSeeds investigation tools — `content_review` investigate falls back to scripted recommend (same as Kimi CLI).
+- **Grok CLI** (default) — native `grok -p --always-approve` subprocess (`crates/pageseeds-core/src/rig/grok_cli.rs`). Agentic file tools run with `--cwd` / process CWD = project root. Requires `grok` on PATH. Same shape as Kimi CLI for write_article / agentic steps. **Not** Rig multi-turn tool-capable for PageSeeds investigation tools — `content_review` investigate falls back to scripted recommend (same as Kimi CLI).
 - **Kimi CLI** — native `kimi -p` subprocess (agentic file tools; investigate falls back to scripted recommend)
 - **Claude** — Anthropic API via Rig (`ANTHROPIC_API_KEY`); pure completion, no project file I/O; Rig tool-capable
 - **OpenAI** — OpenAI API via Rig (`OPENAI_API_KEY`); pure completion, no project file I/O; Rig tool-capable
@@ -123,7 +123,7 @@ WorkflowStep::new("analyze_content", StepKind::Agentic)
 ```
 
 **Executor behavior:**
-1. Load SKILL.md from project `.github/skills/{skill}/SKILL.md` or app defaults (`src-tauri/src/skills/`)
+1. Load SKILL.md from project `.github/skills/{skill}/SKILL.md` or app defaults (`crates/pageseeds-core/skills/`)
 2. Assemble context (task details, prior artifacts)
 3. Call `run_agent_with_skill`
 4. Store raw output in `latest_raw_output`
@@ -233,7 +233,7 @@ Strategies:
 
 ## Rig Tools
 
-For agentic investigation or multi-tool workflows, expose deterministic capabilities as Rig tools in `src-tauri/src/engine/tools/`:
+For agentic investigation or multi-tool workflows, expose deterministic capabilities as Rig tools in `crates/pageseeds-core/src/engine/tools/`:
 
 ```rust
 use rig::tool::{Tool, ToolDefinition};
@@ -320,7 +320,7 @@ fn test_reddit_config_parsing_with_real_kimi() {
 
 ### Live LLM evals (removed)
 
-Live nested-generate eval suites (`src-tauri/src/evals/`, `fixtures/evals/`,
+Live nested-generate eval suites (`crates/pageseeds-core/src/evals/`, `fixtures/evals/`,
 `scripts/run-evals.sh`) were removed: they gated the ship path on flaky host-LLM
 output for a path Path B (session agent + package/submit) has superseded for
 operator SEO. Prefer deterministic unit tests and Path B validation floors.
@@ -393,16 +393,16 @@ Every agentic step must document expected output, either in the skill or in the 
 
 | Component | Path |
 |-----------|------|
-| Agent invocation | `src-tauri/src/engine/agent.rs` |
-| Rig provider layer | `src-tauri/src/rig/provider.rs` |
-| Rig extraction | `src-tauri/src/rig/extraction.rs` |
-| Prompt assembly | `src-tauri/src/engine/prompts.rs` |
-| JSON extraction | `src-tauri/src/engine/text.rs` |
-| Skill loading | `src-tauri/src/engine/skills.rs` |
-| Skill embeddings | `src-tauri/src/engine/skills_search.rs` |
-| Article evidence embeddings | `src-tauri/src/content/article_evidence.rs` |
-| Embedding backend (Ollama / OpenAI) | `src-tauri/src/rig/embeddings.rs` |
-| Rig tools | `src-tauri/src/engine/tools/` |
+| Agent invocation | `crates/pageseeds-core/src/engine/agent.rs` |
+| Rig provider layer | `crates/pageseeds-core/src/rig/provider.rs` |
+| Rig extraction | `crates/pageseeds-core/src/rig/extraction.rs` |
+| Prompt assembly | `crates/pageseeds-core/src/engine/prompts.rs` |
+| JSON extraction | `crates/pageseeds-core/src/engine/text.rs` |
+| Skill loading | `crates/pageseeds-core/src/engine/skills.rs` |
+| Skill embeddings | `crates/pageseeds-core/src/engine/skills_search.rs` |
+| Article evidence embeddings | `crates/pageseeds-core/src/content/article_evidence.rs` |
+| Embedding backend (Ollama / OpenAI) | `crates/pageseeds-core/src/rig/embeddings.rs` |
+| Rig tools | `crates/pageseeds-core/src/engine/tools/` |
 
 Local article/skill vectors use Ollama `nomic-embed-text` by default. When Ollama
 is missing, article evidence still stores durable facts (`word_count`, `h1`,
