@@ -669,33 +669,12 @@ fn research_context(db_path: &str, project_id: &str) -> Result<serde_json::Value
         exit("--project-id required");
     }
     let conn = open_db(db_path)?;
-    let refresh = pageseeds_core::engine::research_package::ensure_research_shortlist_fresh(
+    let package = pageseeds_core::engine::research_package::build_research_context(
         &conn,
         project_id,
         pageseeds_core::engine::research_package::RESEARCH_SHORTLIST_MAX_AGE_DAYS,
-    );
-    let package = pageseeds_core::engine::research_package::build_research_strategy_package(
-        &conn,
-        project_id,
     )?;
-    let mut value = serde_json::to_value(package).map_err(|e| e.to_string())?;
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "shortlist_refreshed".into(),
-            serde_json::json!(refresh.shortlist_refreshed),
-        );
-        obj.insert(
-            "shortlist_refresh_reason".into(),
-            serde_json::json!(refresh.shortlist_refresh_reason),
-        );
-        if let Some(territory) = refresh.territory {
-            obj.insert("territory".into(), territory);
-        }
-        if let Some(error) = refresh.error {
-            obj.insert("shortlist_refresh_error".into(), serde_json::json!(error));
-        }
-    }
-    Ok(value)
+    serde_json::to_value(package).map_err(|e| e.to_string())
 }
 
 /// Path B research pull: session-owned seeds → custom_keyword_research (no nested theme LLM).

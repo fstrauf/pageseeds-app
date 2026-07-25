@@ -18,6 +18,7 @@ pub mod project_paths;
 pub mod prompts;
 pub mod queue;
 pub mod research_package;
+pub mod research_shortlist_refresh;
 pub mod runtime;
 pub mod scheduler;
 pub mod setup_check;
