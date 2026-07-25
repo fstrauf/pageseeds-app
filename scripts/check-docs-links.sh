@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 errors=0
 
 # Find all markdown files and extract relative links
-for file in $(find . -maxdepth 2 -name "*.md" -not -path "./node_modules/*" -not -path "./src-tauri/target/*" | sort); do
+for file in $(find . -maxdepth 2 -name "*.md" -not -path "./node_modules/*" -not -path "./target/*" | sort); do
     # Extract markdown links: [text](./path) or [text](path)
     links=$(grep -oE '\[([^]]+)\]\(([^)]+)\)' "$file" | \
         grep -oE '\]\([^)]+\)' | \

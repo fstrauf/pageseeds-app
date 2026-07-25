@@ -389,7 +389,7 @@ Auto-spawns: fix_ctr_article tasks for site-wide template issues
 
 ### Key Files
 - `engine/exec/ctr_audit/` — 4-step fix pipeline
-- `components/health/HealthDashboard.tsx` — CTR health display
+- CLI / desk reads — operator surfaces for CTR and site health (desktop HealthDashboard removed #184)
 
 ---
 

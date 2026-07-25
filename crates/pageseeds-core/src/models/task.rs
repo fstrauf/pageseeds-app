@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 // ─── Status / mode enums ──────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum TaskStatus {
     #[default]
     Todo,
@@ -65,9 +63,8 @@ impl rusqlite::types::FromSql for TaskStatus {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum TaskRunPolicy {
     /// System may auto-enqueue this task; user may also enqueue it manually.
     AutoEnqueue,
@@ -114,9 +111,8 @@ impl rusqlite::types::FromSql for TaskRunPolicy {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum TaskReviewSurface {
     #[default]
     None,
@@ -174,9 +170,8 @@ impl rusqlite::types::FromSql for TaskReviewSurface {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum FollowUpPolicy {
     #[default]
     None,
@@ -222,9 +217,8 @@ impl rusqlite::types::FromSql for FollowUpPolicy {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum AgentPolicy {
     #[default]
     #[serde(rename = "none")]
@@ -270,9 +264,8 @@ impl rusqlite::types::FromSql for AgentPolicy {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum Priority {
     High,
     Medium,
@@ -315,9 +308,8 @@ impl rusqlite::types::FromSql for Priority {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct TaskArtifact {
     pub key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -330,9 +322,8 @@ pub struct TaskArtifact {
     pub content: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct TaskRun {
     pub attempts: u32,
     pub last_error: Option<String>,
@@ -343,9 +334,8 @@ pub struct TaskRun {
     pub completion_tokens: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct Task {
     pub id: String,
     #[serde(rename = "type")]

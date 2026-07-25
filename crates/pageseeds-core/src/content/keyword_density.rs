@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// Section presence for keyword distribution.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SectionPresence {
     pub section: String, // "intro", "body", "conclusion"
     pub present: bool,
@@ -11,16 +9,14 @@ pub struct SectionPresence {
 }
 
 /// Consecutive keyword violation.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsecutiveViolation {
     pub sentence_start: usize,
     pub sentence_count: usize,
 }
 
 /// Keyword density analysis report.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeywordDensityReport {
     pub keyword: String,
     pub total_words: usize,

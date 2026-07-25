@@ -140,14 +140,13 @@ This feature should reuse existing PageSeeds primitives as much as possible:
   - Task creation goes through `engine::spawner::TaskSpawner::spawn` (or batch variant).
   - Re-audit can reuse `run-content-audit` logic or trigger a queue task of type `content_audit`.
 
-- **Frontend:**
-  - New command wrapper in `src/lib/tauri.ts`.
-  - New types in `src/lib/types.ts`.
-  - New component/feature directory: `src/components/content-health/`.
-  - Use existing `useQueueStore` to reflect enqueued tasks.
+- **Operator surface (CLI only; desktop removed #184):**
+  - Expose via thin CLI if operator-facing (parse args → call core → print JSON).
+  - Types live in `pageseeds-core` models; no React/`src/` UI.
+  - Enqueue via `engine/queue.rs` / `TaskSpawner`.
 
 - **Skills:**
-  - Add new skill files under `.github/skills/` (or embedded defaults in `src-tauri/src/skills/`):
+  - Add new skill files under `.github/skills/` (or embedded defaults in `crates/pageseeds-core/src/skills/`):
     - `add-external-links/SKILL.md`
     - `rewrite-meta/SKILL.md`
     - `align-keyword-and-h1/SKILL.md`

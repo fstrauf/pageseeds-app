@@ -76,8 +76,8 @@ docs/
 │   ├── Adding Content-Writing Behavior
 │   ├── Attaching Tasks to Queue
 │   ├── Building Per-Article Fix Pipelines
-│   └── Adding Frontend UI
-└── AGENTIC_INVESTIGATION_SPEC.md   # Investigation feature specification
+│   └── Expose via Thin CLI Command
+└── AGENTIC_INVESTIGATION_SPEC.md   # Investigation feature specification (archival; CLI/domain only)
 ```
 
 ### Root Documentation
@@ -87,7 +87,6 @@ docs/
 ├── AI_QUICK_START.md               # Entry point for AI agents
 ├── AGENTS.md                       # Agent orientation, core rules, DRY catalog, pre-change checklist
 ├── CONTRACTS.md                    # Runtime invariants (critical)
-├── STYLE_GUIDE.md                  # Design system
 └── QUEUE_DEBUG.md                  # Debugging guide
 ```
 

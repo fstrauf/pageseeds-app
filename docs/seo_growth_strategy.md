@@ -50,7 +50,7 @@
 # 1. PageSeeds app
 cd pageseeds-app
 git checkout feat/seo-growth-strategy
-cargo build --manifest-path src-tauri/Cargo.toml  # or npm run tauri dev
+cargo build --manifest-path Cargo.toml  # or npm run tauri dev
 
 # 2. Restart the bridge (to pick up fs handlers)
 kill $(lsof -ti:8080)
@@ -63,15 +63,15 @@ nohup kimi-acp-bridge > /tmp/kimi-bridge.log 2>&1 &
 
 ### Key files changed
 
-- `src-tauri/skills/content-write/SKILL.md` — new content strategy skill
-- `src-tauri/src/seo/winnability.rs` — new winnability classifier
-- `src-tauri/src/bin/write_article_smoke.rs` — new isolated test tool
-- `src-tauri/src/seo/provider.rs` — `serp_features()` on the trait
-- `src-tauri/src/seo/dataforseo.rs` — DataForSEO SERP API implementation
-- `src-tauri/src/seo/mod.rs` — factory defaults to DataForSEO
-- `src-tauri/src/engine/exec/research/final_selection.rs` — enrichment + fallback removal
-- `src-tauri/src/engine/agent.rs` — workdir threading
-- `src-tauri/src/rig/compat/kimi.rs` — `X-Kimi-Workdir` header
+- `crates/pageseeds-core/skills/content-write/SKILL.md` — new content strategy skill
+- `crates/pageseeds-core/src/seo/winnability.rs` — new winnability classifier
+- `crates/pageseeds-core/src/bin/write_article_smoke.rs` — new isolated test tool
+- `crates/pageseeds-core/src/seo/provider.rs` — `serp_features()` on the trait
+- `crates/pageseeds-core/src/seo/dataforseo.rs` — DataForSEO SERP API implementation
+- `crates/pageseeds-core/src/seo/mod.rs` — factory defaults to DataForSEO
+- `crates/pageseeds-core/src/engine/exec/research/final_selection.rs` — enrichment + fallback removal
+- `crates/pageseeds-core/src/engine/agent.rs` — workdir threading
+- `crates/pageseeds-core/src/rig/compat/kimi.rs` — `X-Kimi-Workdir` header
 - `kimi-acp-openai-bridge/src/kimi_acp_bridge/acp_client.py` — fs handlers + capabilities fix
 - `kimi-acp-openai-bridge/src/kimi_acp_bridge/server.py` — workdir header extraction
 
@@ -397,9 +397,9 @@ WS1 and WS2 are complete. WS4 is now unblocked — the winnability classifier ca
 | H. Computed insights discarded | Provenance artifact = `{"keyword":"X"}` only | Writer blind to research findings |
 
 ### Key file paths
-- Research selector: `src-tauri/src/engine/exec/research/final_selection.rs`
-- Article handler (no skill): `src-tauri/src/engine/workflows/handlers.rs:220`
-- Generic fallback prompt: `src-tauri/src/engine/workflows/handlers.rs:1194`
-- Ahrefs SERP filter (organic-only): `src-tauri/src/seo/keywords.rs:680`
-- Provenance artifact (keyword only): `src-tauri/src/engine/keyword_selection.rs:578`
-- SEO provider trait (no SERP method): `src-tauri/src/seo/provider.rs:17`
+- Research selector: `crates/pageseeds-core/src/engine/exec/research/final_selection.rs`
+- Article handler (no skill): `crates/pageseeds-core/src/engine/workflows/handlers.rs:220`
+- Generic fallback prompt: `crates/pageseeds-core/src/engine/workflows/handlers.rs:1194`
+- Ahrefs SERP filter (organic-only): `crates/pageseeds-core/src/seo/keywords.rs:680`
+- Provenance artifact (keyword only): `crates/pageseeds-core/src/engine/keyword_selection.rs:578`
+- SEO provider trait (no SERP method): `crates/pageseeds-core/src/seo/provider.rs:17`

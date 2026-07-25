@@ -93,7 +93,7 @@ pageseeds-cli <tool> -i <project-id> -p <project-path> [args...]
 Use the installed binary from any directory. Never `cd` into `pageseeds-app` or
 `cargo run` for this skill. All tools print **JSON**. Never invent numbers.
 
-CLI → same store as the desktop app. UI need not be running.
+CLI uses the operator SQLite store (no desktop UI).
 
 ---
 
@@ -104,7 +104,7 @@ Breaking these fails the run.
 | # | Rule |
 |---|------|
 | 1 | **CLI only** for data/tasks (+ the report file). No direct DB writes, no hand-editing MDX. |
-| 2 | **No product source edits** under `pageseeds-app` / `src-tauri` / product manifests. |
+| 2 | **No product source edits** under `pageseeds-app` product crates (unless explicitly requested). |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
 | 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`; Path B fix uses `fix-context` / `fix-submit` when available. |
@@ -130,7 +130,7 @@ Do **not** invent work via soft audits when desk reads suffice.
 [Indexing / not-indexed policy](#indexing--not-indexed-policy).
 
 
-**Not for weekly strategy:** `content_review` — desktop UI / unattended only (#139).
+**Not for weekly strategy:** `content_review` — historical desktop / unattended only (#139).
 Do **not** `create-task content_review` for weekly explore. Desk → judgment → hard actions.
 
 ### CTR / content fix policy
@@ -396,7 +396,7 @@ pageseeds-cli get-task -I <task-id>
   `target`. Then `select-keywords -I <id> -K kw1,kw2` — max **3**, fewer better.
   **After select-keywords, use Path B for articles** (below) — do **not**
   `execute-task` the spawned `write_article` tasks.
-- **ContentReviewPicker:** desktop/unattended only — not weekly strategy. If inherited, dispose mechanically; do not start new `content_review` for weekly explore. `select-content-review -I <parent> -P id1,id2`
+- **ContentReviewPicker:** unattended / non-weekly only — not weekly strategy. If inherited, dispose mechanically; do not start new `content_review` for weekly explore. `select-content-review -I <parent> -P id1,id2`
 - **RedditPicker:** `create-reddit-replies -I <id> -P id1,id2`
 - **ArtifactReview:** summarize; `update-task-status -I <id> -s done`
 

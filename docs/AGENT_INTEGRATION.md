@@ -324,7 +324,7 @@ Live nested-generate eval suites (`crates/pageseeds-core/src/evals/`, `fixtures/
 `scripts/run-evals.sh`) were removed: they gated the ship path on flaky host-LLM
 output for a path Path B (session agent + package/submit) has superseded for
 operator SEO. Prefer deterministic unit tests and Path B validation floors.
-`pnpm test:all` no longer runs live evals.
+`pnpm test:cli` (alias: `test:all`) does not run live evals.
 
 ---
 

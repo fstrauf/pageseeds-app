@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// Status of a queue run.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum QueueRunStatus {
     #[default]
     Idle,
@@ -57,9 +55,8 @@ impl rusqlite::types::FromSql for QueueRunStatus {
 }
 
 /// Status of an individual item within a queue run.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum QueueItemStatus {
     #[default]
     Pending,
@@ -112,9 +109,8 @@ impl rusqlite::types::FromSql for QueueItemStatus {
 }
 
 /// A durable queue run.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct QueueRun {
     pub id: String,
     pub status: QueueRunStatus,
@@ -128,9 +124,8 @@ pub struct QueueRun {
 }
 
 /// An item within a queue run.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct QueueItem {
     pub run_id: String,
     pub position: i64,
@@ -153,9 +148,8 @@ pub struct QueueItem {
 }
 
 /// Full snapshot of the active queue for the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct QueueSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run: Option<QueueRun>,
@@ -163,18 +157,16 @@ pub struct QueueSnapshot {
 }
 
 /// Request to enqueue tasks.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct EnqueueRequest {
     pub items: Vec<EnqueueItem>,
     #[serde(default)]
     pub mode: EnqueueMode,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, TS)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum EnqueueMode {
     #[default]
     Append,
@@ -182,9 +174,8 @@ pub enum EnqueueMode {
 }
 
 /// A single task to enqueue.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct EnqueueItem {
     pub task_id: String,
     pub project_id: String,

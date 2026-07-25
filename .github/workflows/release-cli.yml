@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Semver to package (must match src-tauri/Cargo.toml). Empty = read from Cargo.toml."
+        description: "Semver to package (must match workspace.package.version). Empty = read from workspace Cargo.toml."
         required: false
         type: string
 
@@ -32,9 +32,10 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n1)"
+          # Workspace version lives under [workspace.package]
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
           if [[ -z "${CARGO_VERSION}" ]]; then
-            echo "error: could not read package version from src-tauri/Cargo.toml" >&2
+            echo "error: could not read package version from workspace Cargo.toml" >&2
             exit 1
           fi
 
@@ -66,14 +67,14 @@ jobs:
 
       - name: Build release binary
         run: |
-          cargo build --release --manifest-path src-tauri/Cargo.toml --bin pageseeds-cli
+          cargo build --release -p pageseeds-cli
 
       - name: Package tarball + checksum
         id: pkg
         run: |
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
-          BIN="src-tauri/target/release/pageseeds-cli"
+          BIN="target/release/pageseeds-cli"
           if [[ ! -x "${BIN}" ]]; then
             echo "error: binary not found at ${BIN}" >&2
             exit 1

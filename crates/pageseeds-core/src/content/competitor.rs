@@ -2,7 +2,6 @@ use crate::error::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
-use ts_rs::TS;
 
 // Compiled regex patterns for HTML cleaning
 static SCRIPT_RE: LazyLock<Regex> =
@@ -13,8 +12,7 @@ static HTML_TAGS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").u
 static WHITESPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 /// Competitor word count data.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompetitorWordCount {
     pub url: String,
     pub domain: String,
@@ -23,8 +21,7 @@ pub struct CompetitorWordCount {
 }
 
 /// Section of a competitor article.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompetitorSection {
     pub heading: String,
     pub level: u8, // 1, 2, or 3
@@ -33,8 +30,7 @@ pub struct CompetitorSection {
 }
 
 /// Full structure analysis of a competitor page.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompetitorStructure {
     pub url: String,
     pub domain: String,
@@ -43,8 +39,7 @@ pub struct CompetitorStructure {
 }
 
 /// Word count comparison result.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordCountComparison {
     pub keyword: String,
     pub competitors: Vec<CompetitorWordCount>,

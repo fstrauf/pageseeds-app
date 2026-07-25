@@ -27,7 +27,7 @@ The site has 108 pages not indexed by Google, with 12 flagged for content fixes 
   - `https://brewedlate.com/blog/49-trending-specialty-coffee-2025`
 - **Root Cause**: The word count extraction logic or MDX-to-HTML rendering pipeline is failing to parse content body, possibly due to malformed frontmatter, missing body delimiters, or a regression in the `count_words()` utility.
 - **Fix**: 
-  - Audit `src-tauri/src/content/ops.rs` → `count_words()` and `read_file_metadata()` to ensure they handle edge cases (empty body, malformed frontmatter, non-standard delimiters).
+  - Audit `crates/pageseeds-core/src/content/ops.rs` → `count_words()` and `read_file_metadata()` to ensure they handle edge cases (empty body, malformed frontmatter, non-standard delimiters).
   - Audit the MDX rendering pipeline in the frontend/static generator to confirm content is not being stripped by a layout or template error.
 - **Estimated Effort**: medium
 
@@ -41,7 +41,7 @@ The site has 108 pages not indexed by Google, with 12 flagged for content fixes 
   - `./src/blog/posts/285_coffee_to_water_ratio_french_press.mdx` → 55 tables, 18,086 bytes
 - **Root Cause**: Content generation pipeline or skill templates are overusing markdown tables for structured data instead of semantic HTML, lists, or dedicated components.
 - **Fix**: 
-  - Update the content generation skill/template in `.github/skills/` or `src-tauri/src/skills/` to discourage table-heavy output for non-tabular data.
+  - Update the content generation skill/template in `.github/skills/` or `crates/pageseeds-core/src/skills/` to discourage table-heavy output for non-tabular data.
   - Add a post-generation deterministic step in `engine/exec/content/fix_apply.rs` or similar to convert simple two-column tables to definition lists or plain paragraphs.
 - **Estimated Effort**: small
 

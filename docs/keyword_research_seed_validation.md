@@ -50,17 +50,17 @@ is driven by domain knowledge instead of Google's popularity ranking.
 
 | File | Change |
 |---|---|
-| `src-tauri/src/engine/workflows/handlers.rs` | Remove `research_autocomplete` from the plan; update step comments (7 → 6 steps) |
-| `src-tauri/src/engine/workflows/step_kind.rs` | Remove `ResearchAutocomplete` variant and its mappings |
-| `src-tauri/src/engine/step_registry.rs` | Remove `ResearchAutocomplete` registration |
-| `src-tauri/src/engine/exec/research/autocomplete.rs` | Delete `exec_research_autocomplete`; rename file to `final_selection.rs` (remaining contents are final selection + winnability) |
-| `src-tauri/src/engine/exec/research/mod.rs` | Update module doc comment; module rename |
-| `src-tauri/src/engine/exec/research/prompts.rs` | `research_seed_validation` reads the `research_seed_extraction` artifact (themes) instead of the autocomplete artifact |
-| `src-tauri/src/prompts/seed_validation.md` | Rewrite contract: validate themes + propose seed phrasings |
-| `src-tauri/src/models/research.rs` | Update `SeedValidationOutput` doc comment |
-| `src-tauri/src/engine/exec/keywords/research_pipeline.rs` | Fix stale cost-estimate comment; log estimated cost from actual (theme, seed) pair count |
-| `src-tauri/src/engine/exec/keywords/tests.rs` | Plan assertion: 6 steps |
-| `src-tauri/src/engine/executor/tests.rs` | Remove autocomplete mock/env/assertions from full-flow test |
+| `crates/pageseeds-core/src/engine/workflows/handlers.rs` | Remove `research_autocomplete` from the plan; update step comments (7 → 6 steps) |
+| `crates/pageseeds-core/src/engine/workflows/step_kind.rs` | Remove `ResearchAutocomplete` variant and its mappings |
+| `crates/pageseeds-core/src/engine/step_registry.rs` | Remove `ResearchAutocomplete` registration |
+| `crates/pageseeds-core/src/engine/exec/research/autocomplete.rs` | Delete `exec_research_autocomplete`; rename file to `final_selection.rs` (remaining contents are final selection + winnability) |
+| `crates/pageseeds-core/src/engine/exec/research/mod.rs` | Update module doc comment; module rename |
+| `crates/pageseeds-core/src/engine/exec/research/prompts.rs` | `research_seed_validation` reads the `research_seed_extraction` artifact (themes) instead of the autocomplete artifact |
+| `crates/pageseeds-core/src/prompts/seed_validation.md` | Rewrite contract: validate themes + propose seed phrasings |
+| `crates/pageseeds-core/src/models/research.rs` | Update `SeedValidationOutput` doc comment |
+| `crates/pageseeds-core/src/engine/exec/keywords/research_pipeline.rs` | Fix stale cost-estimate comment; log estimated cost from actual (theme, seed) pair count |
+| `crates/pageseeds-core/src/engine/exec/keywords/tests.rs` | Plan assertion: 6 steps |
+| `crates/pageseeds-core/src/engine/executor/tests.rs` | Remove autocomplete mock/env/assertions from full-flow test |
 | `docs/WORKFLOW_ENGINE.md`, `docs/BUSINESS_PROCESSES.md` | Remove/update autocomplete references |
 
 Out of scope: `seo/google_autocomplete.rs` stays — the legacy Ahrefs provider

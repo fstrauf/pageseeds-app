@@ -6,14 +6,12 @@
 ///   Step 3 (agentic): final_selection → ResearchFinalOutput
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// Output from Step 1: research_seed_extraction
 ///
 /// The LLM reads the project brief and extracts research themes and competitor domains.
 /// Contract: MUST return valid JSON with {"themes": [...], "competitors": [...]}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SeedExtractionOutput {
     /// 8-12 seed themes for Ahrefs keyword ideas API
     /// Each theme should be 1-3 words maximum
@@ -24,8 +22,7 @@ pub struct SeedExtractionOutput {
 }
 
 /// A validated seed within a theme.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ValidatedSeed {
     pub theme: String,
     pub seeds: Vec<String>,
@@ -36,8 +33,7 @@ pub struct ValidatedSeed {
 /// The LLM validates extracted themes for domain relevance and proposes 1-3
 /// seed phrasings per on-topic theme.
 /// Contract: MUST return valid JSON with {"validated_seeds": [{"theme": ..., "seeds": [...]}]}
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SeedValidationOutput {
     pub validated_seeds: Vec<ValidatedSeed>,
 }
@@ -56,8 +52,7 @@ pub struct CandidateRelevanceOutput {
 }
 
 /// A scored keyword from the Ahrefs pipeline
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScoredKeyword {
     /// The keyword phrase
     pub keyword: String,
@@ -87,8 +82,7 @@ pub struct ScoredKeyword {
 }
 
 /// A competitor top keyword from Ahrefs traffic data.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CompetitorTopKeyword {
     pub keyword: String,
     pub traffic: Option<f64>,
@@ -96,8 +90,7 @@ pub struct CompetitorTopKeyword {
 }
 
 /// Competitor traffic insight for the final selection agent.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CompetitorInsight {
     pub domain: String,
     pub traffic_monthly_avg: f64,
@@ -108,8 +101,7 @@ pub struct CompetitorInsight {
 ///
 /// The deterministic step calls Ahrefs API for each theme,
 /// deduplicates, fetches KD scores, and returns structured data.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KeywordPipelineOutput {
     /// All keywords found with their scores
     pub keywords: Vec<ScoredKeyword>,
@@ -128,8 +120,7 @@ pub struct KeywordPipelineOutput {
 }
 
 /// A selected keyword candidate for final output
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelectedKeyword {
     /// The keyword phrase
     pub keyword: String,
@@ -160,8 +151,7 @@ pub struct SelectedKeyword {
 }
 
 /// A landing page candidate (for commercial research)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LandingPageCandidate {
     /// The keyword phrase
     pub keyword: String,
@@ -195,8 +185,7 @@ pub struct LandingPageCandidate {
 /// Output from Step 3: research_final_selection
 ///
 /// The LLM selects the best candidates from the structured data.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ResearchFinalOutput {
     /// Selected informational keywords (for research_keywords task)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -234,8 +223,7 @@ impl ResearchFinalOutput {
 /// - selections from final selection
 ///
 /// This is the spec-target type for the `research_keywords` workflow.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KeywordResearchOutput {
     pub themes: Vec<String>,
     pub validated_seeds: Vec<ValidatedSeed>,

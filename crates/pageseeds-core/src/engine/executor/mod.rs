@@ -11,14 +11,12 @@ use crate::engine::step_registry::{StepContext, StepRegistry};
 use crate::engine::workflows::{handlers::default_handlers, step_params, StepResult, WorkflowStep};
 use crate::engine::{agent, task_store};
 use crate::models::task::{FollowUpPolicy, Task, TaskArtifact, TaskReviewSurface, TaskStatus};
-use ts_rs::TS;
 
 // ─── Event Types ──────────────────────────────────────────────────────────────
 
 // ─── Public Types ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepProgress {
     pub step_name: String,
     pub kind: String,
@@ -27,8 +25,7 @@ pub struct StepProgress {
     pub output: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
     pub task_id: String,
     pub success: bool,
@@ -40,8 +37,7 @@ pub struct ExecutionResult {
     pub finished_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FollowUpTask {
     pub id: String,
     pub task_type: String,

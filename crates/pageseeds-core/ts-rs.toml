@@ -1,3 +1,0 @@
-# ts-rs configuration — export TypeScript bindings for the desktop frontend.
-# Desktop rebuild (#184) will consume these; path is relative to this crate.
-output_path = "../../src/lib/bindings"

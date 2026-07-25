@@ -1,8 +1,8 @@
-# Overview Tool Catalog
+# Operator Tool Catalog
 
-The agent-facing reference for the **user-facing capabilities** surfaced on the Overview screen. Each entry is a workflow task type that can be enqueued (not an in-process Rig tool). Use this catalog to decide *which* task to start, then enqueue it via the queue — never execute it directly.
+The agent-facing reference for **operator capabilities** (workflow task types). Each entry is a task type that can be enqueued (not an in-process Rig tool). Use this catalog to decide *which* task to start, then enqueue it via the queue — never execute it directly.
 
-> **Source of truth:** `crates/pageseeds-core/src/config/task_definitions.rs` owns lifecycle metadata (`run_policy`, `review_surface`, `follow_up_policy`, `handler_family`). The Overview UI mirrors this in `QUICK_ACTIONS` (`src/components/overview/Overview.tsx`). If the two ever disagree, the Rust file wins.
+> **Source of truth:** `crates/pageseeds-core/src/config/task_definitions.rs` owns lifecycle metadata (`run_policy`, `review_surface`, `follow_up_policy`, `handler_family`). This catalog is the operator-facing description of those task types. If docs and code disagree, the Rust file wins.
 
 > **Desk model (epics #117 / #136 / #139):** The primary agent path for weekly organic growth is **Site State reads** (`site-overview` / `articles` / `article` + GSC tools via CLI) then a **few hard actions**. Judgment/prose lives on the **session agent**; package/gates live on **CLI/Rust** — never nested weak host on CLI best-path (#136). Do **not** nest `content_review` as the weekly strategy brain (#139) — that task remains desktop UI / unattended product. Soft TF-IDF clusters are exploratory only, never merge authority. Prefer Path B package/submit for write (and fix/merge when present). See the [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md).
 
@@ -12,7 +12,7 @@ All capabilities are **task types**, not function calls. Enqueue them; do not ex
 
 | Context | API |
 |---|---|
-| Frontend component | `enqueueTasks([{ taskType, projectId, ... }])` in `src/lib/tauri.ts` |
+| Operator / CLI | Enqueue via domain queue APIs or documented CLI task tools |
 | Backend follow-up after a task | `TaskSpawner::spawn` / `spawn_follow_up` (`engine/spawner.rs`) |
 | Programmatic system task | `TaskSpawner::spawn` (never `task_store::create_task` directly) |
 | Weekly SEO operator (CLI) | Desk reads → Path B package/submit where available → may-create hard actions — see weekly-seo skill |

@@ -5,15 +5,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrAgentOutput {
     pub recommendations: Vec<CtrRecommendation>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrRecommendation {
     pub article_id: i64,
@@ -33,8 +31,7 @@ pub struct CtrRecommendation {
 
 // ─── Verification Report (deterministic check results) ────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrVerificationReport {
     pub summary: String,
@@ -44,8 +41,7 @@ pub struct CtrVerificationReport {
     pub articles: Vec<CtrVerifiedArticle>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrVerifiedArticle {
     pub article_id: i64,
@@ -54,8 +50,7 @@ pub struct CtrVerifiedArticle {
     pub fixes: Vec<CtrVerifiedFix>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrVerifiedFix {
     pub fix_type: CtrFixType,
@@ -71,8 +66,7 @@ pub struct CtrVerifiedFix {
     pub expected: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFix {
     #[serde(rename = "type")]
@@ -85,8 +79,7 @@ pub struct CtrFix {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, PartialEq)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CtrFixType {
     TitleRewrite,
@@ -97,8 +90,7 @@ pub enum CtrFixType {
 
 // ─── Fix Report (agent output after applying fixes) ───────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixReport {
     pub applied: Vec<CtrFixApplied>,
@@ -106,8 +98,7 @@ pub struct CtrFixReport {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixApplied {
     pub article_id: i64,
@@ -115,8 +106,7 @@ pub struct CtrFixApplied {
     pub changes: Vec<CtrFixChange>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixChange {
     pub fix_type: CtrFixType,
@@ -125,8 +115,7 @@ pub struct CtrFixChange {
     pub new: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixSkipped {
     pub article_id: i64,
@@ -137,8 +126,7 @@ pub struct CtrFixSkipped {
 // ─── Agent Patch Output (structured replacement values) ───────────────────────
 
 /// The agent returns this instead of raw MDX. Rust applies it deterministically.
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatch {
     pub article_id: i64,
@@ -148,8 +136,7 @@ pub struct CtrFixPatch {
     pub changes: CtrFixPatchChanges,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatchChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,15 +153,13 @@ pub struct CtrFixPatchChanges {
 
 // NOTE: row-objects are required for provider-safe schemars (no nested
 // array-of-arrays for tool params — OpenAI-shaped providers reject them).
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrComparisonTableRow {
     pub cells: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrSnippetPatch {
     pub target_query: String,
@@ -187,8 +172,7 @@ pub struct CtrSnippetPatch {
     pub comparison_table: Option<Vec<CtrComparisonTableRow>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CtrSnippetFormat {
     DirectAnswerParagraph,
@@ -198,8 +182,7 @@ pub enum CtrSnippetFormat {
     DefinitionWithSteps,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, JsonSchema)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixPatchFaqQuestion {
     pub question: String,
@@ -208,8 +191,7 @@ pub struct CtrFixPatchFaqQuestion {
 
 // ─── Per-Article Fix Verification Report ──────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixVerificationReport {
     pub article_id: i64,
@@ -218,8 +200,7 @@ pub struct CtrFixVerificationReport {
     pub checks: Vec<CtrFixCheckResult>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrFixCheckResult {
     pub check_type: String, // "title" | "description" | "snippet" | "faq"
@@ -232,8 +213,7 @@ pub struct CtrFixCheckResult {
 
 // ─── Health Summary (project-wide CTR health dashboard) ───────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrHealthSummary {
     pub total_articles: usize,
@@ -254,8 +234,7 @@ pub struct CtrHealthSummary {
     pub open_issues_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrHealthArticle {
     pub id: i64,
@@ -272,8 +251,7 @@ pub struct CtrHealthArticle {
 
 // ─── Rendered SERP Audit (page-level rendered HTML observation) ───────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrRenderedPageAudit {
     pub article_id: i64,
@@ -298,8 +276,7 @@ pub struct CtrRenderedPageAudit {
     pub checked_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, Default)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrSnippetMarkup {
     pub has_question_h2: bool,
@@ -310,8 +287,7 @@ pub struct CtrSnippetMarkup {
 // ─── Site Title Template Detection ────────────────────────────────────────────
 
 /// Result of detecting a repeated site-wide title template pattern.
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrTemplateDetectionResult {
     /// The detected template pattern, e.g. "{title} | Days to Expiry | Days to Expiry — Option Selling Analyzer"
@@ -332,8 +308,7 @@ pub struct CtrTemplateDetectionResult {
     pub pages: Vec<CtrTemplatePageDetail>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrTemplatePageDetail {
     pub article_id: i64,
@@ -345,8 +320,7 @@ pub struct CtrTemplatePageDetail {
 
 // ─── CTR Outcome Tracking ─────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CtrOutcome {
     pub project_id: String,

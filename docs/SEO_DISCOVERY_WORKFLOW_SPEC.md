@@ -1,6 +1,6 @@
 # PageSeeds SEO Discovery Workflow — Technical Specification
 
-**Status:** Draft  
+**Status:** Draft (archival UI paths scrubbed — desktop removed #184; implement via CLI + domain only)  
 **Author:** AI Agent working session  
 **Date:** 2026-07-09  
 **Goal:** Make PageSeeds automatically surface, rank, and act on the same kinds of SEO opportunities we currently discover manually for sites like brewedlate.com.
@@ -17,7 +17,7 @@ The concrete trigger for this work was the **brewedlate.com cold-brew CTR opport
 
 1. Add a new `seo_health_scan` umbrella task that orchestrates the existing `content_audit`, `ctr_audit` context build, `indexing_health_campaign` prerequisites, `cannibalization_audit` context, and optional Clarity summary.
 2. Add a deterministic `RankOpportunities` step that reads all of those artifacts and emits one `seo_opportunities.json` ranked by expected traffic impact and fix effort.
-3. Surface the ranked list in a new `OpportunityReview` UI, letting the user select which opportunities become `fix_content_article`, `fix_ctr_article`, `fix_indexing_internal_links`, or `consolidate_cluster` children.
+3. Surface the ranked list via CLI selection / review artifact, letting the operator select which opportunities become `fix_content_article`, `fix_ctr_article`, `fix_indexing_internal_links`, or `consolidate_cluster` children.
 4. Tighten the existing CTR pipeline so it does not silently drop pure snippet/title-quality opportunities when source-level health checks pass.
 5. Persist the opportunity backlog in SQLite so discovery is stateful across runs.
 
@@ -29,12 +29,12 @@ The concrete trigger for this work was the **brewedlate.com cold-brew CTR opport
 
 | Task type | What it discovers | Where the logic lives | Follow-up today |
 |-----------|-------------------|----------------------|-----------------|
-| `content_review` / `content_audit` | Top 20 priority articles from `content_audit` + GSC; agent writes recommendations | `src-tauri/src/engine/exec/content/review.rs` selects; agent generates `recommendations.json` | `create_fix_content_article_tasks` in `src-tauri/src/engine/exec/content/task_spawner.rs` spawns `fix_content_article` children |
-| `ctr_audit` | Articles with title/meta/FAQ/snippet issues; computes `clicks_lost` per article | `src-tauri/src/engine/exec/ctr_audit/context.rs` builds context; `src-tauri/src/engine/exec/ctr_audit/task_spawner.rs` spawns fixes | `create_ctr_fix_tasks` spawns `fix_ctr_article` children only when `issues_detected` flags are true |
-| `indexing_health_campaign` | Not-indexed URLs, cluster siblings, thin content, missing internal links | `src-tauri/src/engine/exec/indexing_health/build_context.rs` + `reduce.rs` | `spawn_campaign_children` in `src-tauri/src/engine/exec/indexing_health/spawn.rs` spawns `fix_content_article`, `fix_indexing_internal_links`, `fix_indexing` children |
-| `cannibalization_audit` | TF-IDF similarity clusters, duplicate target keywords, hub gaps | `src-tauri/src/engine/exec/cannibalization/build_context.rs` + `analyze.rs` | `create_can_fix_tasks` intentionally returns `Vec::new()`; user must approve via `CannibalizationPicker` |
-| `clarity_analytics` | UX anomalies: rage/dead/quickback clicks, scroll depth, engagement | `src-tauri/src/engine/exec/clarity/investigate.rs` | `ArtifactReview` only — no child tasks |
-| `generate_feature_spec` | Developer-focused spec from audit findings | `src-tauri/src/engine/post_actions.rs` spawns it after `content_review`/`content_audit`/`ctr_audit`/`indexing_health_campaign` | None |
+| `content_review` / `content_audit` | Top 20 priority articles from `content_audit` + GSC; agent writes recommendations | `crates/pageseeds-core/src/engine/exec/content/review.rs` selects; agent generates `recommendations.json` | `create_fix_content_article_tasks` in `crates/pageseeds-core/src/engine/exec/content/task_spawner.rs` spawns `fix_content_article` children |
+| `ctr_audit` | Articles with title/meta/FAQ/snippet issues; computes `clicks_lost` per article | `crates/pageseeds-core/src/engine/exec/ctr_audit/context.rs` builds context; `crates/pageseeds-core/src/engine/exec/ctr_audit/task_spawner.rs` spawns fixes | `create_ctr_fix_tasks` spawns `fix_ctr_article` children only when `issues_detected` flags are true |
+| `indexing_health_campaign` | Not-indexed URLs, cluster siblings, thin content, missing internal links | `crates/pageseeds-core/src/engine/exec/indexing_health/build_context.rs` + `reduce.rs` | `spawn_campaign_children` in `crates/pageseeds-core/src/engine/exec/indexing_health/spawn.rs` spawns `fix_content_article`, `fix_indexing_internal_links`, `fix_indexing` children |
+| `cannibalization_audit` | TF-IDF similarity clusters, duplicate target keywords, hub gaps | `crates/pageseeds-core/src/engine/exec/cannibalization/build_context.rs` + `analyze.rs` | `create_can_fix_tasks` intentionally returns `Vec::new()`; user must approve via `CannibalizationPicker` |
+| `clarity_analytics` | UX anomalies: rage/dead/quickback clicks, scroll depth, engagement | `crates/pageseeds-core/src/engine/exec/clarity/investigate.rs` | `ArtifactReview` only — no child tasks |
+| `generate_feature_spec` | Developer-focused spec from audit findings | `crates/pageseeds-core/src/engine/post_actions.rs` spawns it after `content_review`/`content_audit`/`ctr_audit`/`indexing_health_campaign` | None |
 
 ### 2.2 Where the data lives
 
@@ -49,12 +49,12 @@ All of these write artifacts to the project's `.github/automation/` dir and/or t
 
 ### 2.3 Key code paths
 
-- Task lifecycle metadata (run policy, review surface, follow-up policy): `src-tauri/src/config/task_definitions.rs`
-- Step plans: `src-tauri/src/engine/workflows/handlers.rs`
-- Follow-up spawning: `src-tauri/src/engine/post_actions.rs`
-- Content-review priority scoring: `src-tauri/src/engine/exec/content/review.rs:124-152`
-- CTR context + `clicks_lost`: `src-tauri/src/engine/exec/ctr_audit/context.rs:95-336`
-- CTR fix spawning (and the current filter): `src-tauri/src/engine/exec/ctr_audit/task_spawner.rs:66-91`
+- Task lifecycle metadata (run policy, review surface, follow-up policy): `crates/pageseeds-core/src/config/task_definitions.rs`
+- Step plans: `crates/pageseeds-core/src/engine/workflows/handlers.rs`
+- Follow-up spawning: `crates/pageseeds-core/src/engine/post_actions.rs`
+- Content-review priority scoring: `crates/pageseeds-core/src/engine/exec/content/review.rs:124-152`
+- CTR context + `clicks_lost`: `crates/pageseeds-core/src/engine/exec/ctr_audit/context.rs:95-336`
+- CTR fix spawning (and the current filter): `crates/pageseeds-core/src/engine/exec/ctr_audit/task_spawner.rs:66-91`
 
 ### 2.4 What already works well
 
@@ -81,7 +81,7 @@ Today those findings live in five different artifacts and review surfaces. There
 
 ### 3.2 `ctr_audit` drops pure snippet-quality opportunities
 
-In `src-tauri/src/engine/exec/ctr_audit/task_spawner.rs:66-91`, a `fix_ctr_article` task is only created when one of these source-level flags is true:
+In `crates/pageseeds-core/src/engine/exec/ctr_audit/task_spawner.rs:66-91`, a `fix_ctr_article` task is only created when one of these source-level flags is true:
 
 - `file_not_found`
 - `title_too_long`
@@ -93,7 +93,7 @@ The brewedlate cold-brew case had a technically valid title/meta but a snippet t
 
 ### 3.3 `content_review` excludes non-indexed articles
 
-`src-tauri/src/engine/exec/content/review.rs:350-387` filters out any article whose slug appears in `gsc_collection.json` with a `not_indexed*` reason. That is correct for content fixes (Google cannot reward content it cannot see), but it means indexing problems are invisible to the umbrella review. A unified opportunity list should keep indexing issues in their own lane rather than dropping them silently.
+`crates/pageseeds-core/src/engine/exec/content/review.rs:350-387` filters out any article whose slug appears in `gsc_collection.json` with a `not_indexed*` reason. That is correct for content fixes (Google cannot reward content it cannot see), but it means indexing problems are invisible to the umbrella review. A unified opportunity list should keep indexing issues in their own lane rather than dropping them silently.
 
 ### 3.4 `clarity_analytics` findings are not connected to GSC opportunity
 
@@ -113,7 +113,7 @@ The existing feature-spec task is useful for planning repo-level changes, but it
 
 ### 4.1 New task type: `seo_health_scan`
 
-Add a new task definition in `src-tauri/src/config/task_definitions.rs`:
+Add a new task definition in `crates/pageseeds-core/src/config/task_definitions.rs`:
 
 ```rust
 TaskDefinition {
@@ -126,7 +126,7 @@ TaskDefinition {
 }
 ```
 
-Add a handler in `src-tauri/src/engine/workflows/handlers.rs` (or extend `ContentReviewHandler`) with this step plan:
+Add a handler in `crates/pageseeds-core/src/engine/workflows/handlers.rs` (or extend `ContentReviewHandler`) with this step plan:
 
 1. `gsc_sync` (optional) — refresh GSC page + query metrics.
 2. `content_audit` — deterministic 21-check content quality.
@@ -141,7 +141,7 @@ The optional steps depend on configured integrations (Clarity project ID, GSC se
 
 ### 4.2 New deterministic step: `RankOpportunities`
 
-Implement in a new file `src-tauri/src/engine/exec/seo_discovery/rank.rs`.
+Implement in a new file `crates/pageseeds-core/src/engine/exec/seo_discovery/rank.rs`.
 
 **Inputs** (all already exist on disk/DB):
 
@@ -273,7 +273,7 @@ fn recommended_action(s: &Signals) -> &'static str {
 
 ### 4.3 Persist opportunities in SQLite
 
-Add a new migration in `src-tauri/src/db/mod.rs` for a `seo_opportunities` table:
+Add a new migration in `crates/pageseeds-core/src/db/mod.rs` for a `seo_opportunities` table:
 
 ```sql
 CREATE TABLE seo_opportunities (
@@ -301,18 +301,18 @@ On each `seo_health_scan` run:
 
 ### 4.4 New review surface: `OpportunityReview`
 
-Add `OpportunityReview` to `TaskReviewSurface` in `src-tauri/src/models/task.rs` (and regenerate bindings). The frontend component (`src/components/review/OpportunityReview.tsx`) should:
+Add `OpportunityReview` to `TaskReviewSurface` in `crates/pageseeds-core/src/models/task.rs`. CLI/operator selection should:
 
 1. Load `seo_opportunities.json` and/or query the DB table.
 2. Show a ranked table: page, score, effort, primary signal, recommended action.
 3. Let the user check/uncheck rows.
 4. On "Create tasks", call a new command `create_tasks_from_opportunities` that spawns the appropriate child tasks via `TaskSpawner::spawn`.
 
-The command lives in `src-tauri/src/commands/seo_discovery.rs` and is thin: validate input → call `engine::exec::seo_discovery::spawn_from_opportunities` → return task IDs.
+Expose via a domain function under `engine/exec/seo_discovery/` (or similar) and a thin CLI subcommand: validate input → call `spawn_from_opportunities` → return task IDs. Do not add a `commands/` module under core.
 
 ### 4.5 Fix the CTR pipeline's pure-opportunity blind spot
 
-In `src-tauri/src/engine/exec/ctr_audit/task_spawner.rs`, change the spawn logic so that `clicks_lost` itself can trigger a fix task even when source-level health checks pass.
+In `crates/pageseeds-core/src/engine/exec/ctr_audit/task_spawner.rs`, change the spawn logic so that `clicks_lost` itself can trigger a fix task even when source-level health checks pass.
 
 Current code (simplified):
 
@@ -353,7 +353,7 @@ In `RankOpportunities`, when a URL has both `clicks_lost > 0` and `ux_anomaly_z_
 
 ### 4.7 Update `generate_feature_spec` prompt to consume `seo_opportunities.json`
 
-The post-action in `src-tauri/src/engine/post_actions.rs` that spawns `generate_feature_spec` should pass the latest `seo_opportunities.json` (if present) into the agent context. The existing skill at `.github/skills/feature-spec-generation/SKILL.md` already expects "audit findings"; extend its input contract to include the unified opportunity list so it can separate P0 code changes from P1 content fixes more accurately.
+The post-action in `crates/pageseeds-core/src/engine/post_actions.rs` that spawns `generate_feature_spec` should pass the latest `seo_opportunities.json` (if present) into the agent context. The existing skill at `.github/skills/feature-spec-generation/SKILL.md` already expects "audit findings"; extend its input contract to include the unified opportunity list so it can separate P0 code changes from P1 content fixes more accurately.
 
 ---
 
@@ -361,21 +361,20 @@ The post-action in `src-tauri/src/engine/post_actions.rs` that spawns `generate_
 
 ### Phase 1 — Minimal viable unified discovery (no UI)
 
-1. **Add `seo_opportunities` SQLite table** (`src-tauri/src/db/mod.rs` migration).
-2. **Implement `RankOpportunities` step** in new file `src-tauri/src/engine/exec/seo_discovery/rank.rs`.
-3. **Register `seo_health_scan` task type** in `src-tauri/src/config/task_definitions.rs`.
-4. **Add handler + step plan** in `src-tauri/src/engine/workflows/handlers.rs`.
+1. **Add `seo_opportunities` SQLite table** (`crates/pageseeds-core/src/db/mod.rs` migration).
+2. **Implement `RankOpportunities` step** in new file `crates/pageseeds-core/src/engine/exec/seo_discovery/rank.rs`.
+3. **Register `seo_health_scan` task type** in `crates/pageseeds-core/src/config/task_definitions.rs`.
+4. **Add handler + step plan** in `crates/pageseeds-core/src/engine/workflows/handlers.rs`.
 5. **Write `seo_opportunities.json`** to `.github/automation/` and persist to DB.
 6. **Wire post-action**: after `seo_health_scan`, do not auto-spawn; instead mark task as `review` and store the opportunity artifact.
 7. **Add tests** for `RankOpportunities` scoring using fixture JSON files.
 
 ### Phase 2 — Review surface and task creation
 
-1. **Add `OpportunityReview` variant** to `TaskReviewSurface` and regenerate TS bindings (`./scripts/sync-bindings.sh`).
-2. **Create frontend component** `src/components/review/OpportunityReview.tsx`.
-3. **Add backend command** `create_tasks_from_opportunities` in `src-tauri/src/commands/seo_discovery.rs`.
-4. **Implement `spawn_from_opportunities`** in `src-tauri/src/engine/exec/seo_discovery/spawn.rs`.
-5. **Update `src/lib/tauri.ts`** with the new command wrapper.
+1. **Add `OpportunityReview` variant** to `TaskReviewSurface` and update domain models.
+2. **Add thin CLI selection path** for operators to approve opportunities (JSON in / task IDs out).
+3. **Add domain API** `create_tasks_from_opportunities` in core (not a `commands/` module).
+4. **Implement `spawn_from_opportunities`** in `crates/pageseeds-core/src/engine/exec/seo_discovery/spawn.rs`.
 
 ### Phase 3 — CTR and Clarity integration
 
@@ -394,20 +393,18 @@ The post-action in `src-tauri/src/engine/post_actions.rs` that spawns `generate_
 
 | File | Change |
 |------|--------|
-| `src-tauri/src/config/task_definitions.rs` | Add `seo_health_scan` definition |
-| `src-tauri/src/engine/workflows/handlers.rs` | Add `SeoDiscoveryHandler` or extend existing handler |
-| `src-tauri/src/engine/workflows/step_kinds.rs` (or wherever `StepKind` is defined) | Add `RankOpportunities`, `OpportunityReviewAgent` |
-| `src-tauri/src/engine/exec/seo_discovery/rank.rs` | New: opportunity scoring |
-| `src-tauri/src/engine/exec/seo_discovery/spawn.rs` | New: spawn child tasks from selected opportunities |
-| `src-tauri/src/engine/post_actions.rs` | Mark `seo_health_scan` for review; pass opportunities to `generate_feature_spec` |
-| `src-tauri/src/engine/exec/ctr_audit/task_spawner.rs` | Allow `clicks_lost` to trigger fix tasks |
-| `src-tauri/src/db/mod.rs` | Add `seo_opportunities` table migration |
-| `src-tauri/src/db/seo_discovery.rs` (new) | CRUD for opportunity table |
-| `src-tauri/src/models/task.rs` | Add `OpportunityReview` to `TaskReviewSurface` |
-| `src-tauri/src/commands/seo_discovery.rs` (new) | `create_tasks_from_opportunities` command |
-| `src/lib/tauri.ts` | Wrap new command |
-| `src/lib/types.ts` | Add opportunity type |
-| `src/components/review/OpportunityReview.tsx` (new) | Review surface UI |
+| `crates/pageseeds-core/src/config/task_definitions.rs` | Add `seo_health_scan` definition |
+| `crates/pageseeds-core/src/engine/workflows/handlers.rs` | Add `SeoDiscoveryHandler` or extend existing handler |
+| `crates/pageseeds-core/src/engine/workflows/step_kinds.rs` (or wherever `StepKind` is defined) | Add `RankOpportunities`, `OpportunityReviewAgent` |
+| `crates/pageseeds-core/src/engine/exec/seo_discovery/rank.rs` | New: opportunity scoring |
+| `crates/pageseeds-core/src/engine/exec/seo_discovery/spawn.rs` | New: spawn child tasks from selected opportunities |
+| `crates/pageseeds-core/src/engine/post_actions.rs` | Mark `seo_health_scan` for review; pass opportunities to `generate_feature_spec` |
+| `crates/pageseeds-core/src/engine/exec/ctr_audit/task_spawner.rs` | Allow `clicks_lost` to trigger fix tasks |
+| `crates/pageseeds-core/src/db/mod.rs` | Add `seo_opportunities` table migration |
+| `crates/pageseeds-core/src/db/seo_discovery.rs` (new) | CRUD for opportunity table |
+| `crates/pageseeds-core/src/models/task.rs` | Add `OpportunityReview` to `TaskReviewSurface` |
+| Domain + thin CLI for `create_tasks_from_opportunities` | Operator selection → spawn children |
+| `crates/pageseeds-core/src/models/` | Opportunity types for JSON CLI output |
 | `.github/skills/feature-spec-generation/SKILL.md` | Input contract update |
 
 ---
@@ -421,7 +418,7 @@ The post-action in `src-tauri/src/engine/post_actions.rs` that spawns `generate_
 - [ ] Pages with both CTR opportunity and Clarity UX anomaly get a `snippet_mismatch_likely` flag.
 - [ ] The `OpportunityReview` UI shows the ranked list and lets the user create tasks.
 - [ ] Created tasks use `TaskSpawner::spawn` with proper idempotency keys and `DeduplicationPolicy::Cooldown { days: 30 }`.
-- [ ] `cargo test` passes; `pnpm run check:ipc` passes; `pnpm exec tsc -b` passes.
+- [ ] `cargo test` passes; `pnpm run test:cli` passes.
 - [ ] `generate_feature_spec` consumes `seo_opportunities.json` when available.
 
 ---

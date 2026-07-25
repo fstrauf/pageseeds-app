@@ -26,7 +26,7 @@ die() { echo "error: $*" >&2; exit 1; }
 info() { echo "$*"; }
 
 # Detect whether this script is running from a real file under a pageseeds-app
-# checkout that has a workspace Cargo.toml (or legacy src-tauri/Cargo.toml).
+# checkout that has a workspace Cargo.toml with pageseeds-cli.
 # When piped via curl | bash, $0 is "bash" (or similar) and there is no monorepo root.
 detect_checkout_root() {
   local script_path="${BASH_SOURCE[0]:-$0}"
@@ -43,11 +43,6 @@ detect_checkout_root() {
   local root
   root="$(cd "$(dirname "${script_path}")/.." && pwd 2>/dev/null)" || return 1
   if [[ -f "${root}/Cargo.toml" ]] && grep -q 'pageseeds-cli' "${root}/Cargo.toml" 2>/dev/null; then
-    echo "${root}"
-    return 0
-  fi
-  # Legacy monorepo layout (pre-#183)
-  if [[ -f "${root}/src-tauri/Cargo.toml" ]]; then
     echo "${root}"
     return 0
   fi
@@ -167,19 +162,11 @@ install_from_download() {
 
 install_from_source() {
   local root="$1"
-  local manifest=""
-  local src=""
+  local manifest="${root}/Cargo.toml"
+  local src="${root}/target/release/${BIN_NAME}"
 
-  if [[ -f "${root}/Cargo.toml" ]] && grep -q 'pageseeds-cli' "${root}/Cargo.toml" 2>/dev/null; then
-    # Workspace layout (#183+): crates/pageseeds-cli
-    manifest="${root}/Cargo.toml"
-    src="${root}/target/release/${BIN_NAME}"
-  elif [[ -f "${root}/src-tauri/Cargo.toml" ]]; then
-    # Legacy single-crate layout
-    manifest="${root}/src-tauri/Cargo.toml"
-    src="${root}/src-tauri/target/release/${BIN_NAME}"
-  else
-    die "Cargo.toml not found (expected workspace root or src-tauri/Cargo.toml under ${root})"
+  if [[ ! -f "${manifest}" ]] || ! grep -q 'pageseeds-cli' "${manifest}" 2>/dev/null; then
+    die "workspace Cargo.toml with pageseeds-cli not found under ${root}"
   fi
 
   if ! command -v cargo >/dev/null 2>&1; then
@@ -187,11 +174,7 @@ install_from_source() {
   fi
 
   info "Building release ${BIN_NAME} from source..."
-  if [[ "${manifest}" == "${root}/Cargo.toml" ]]; then
-    cargo build --release --manifest-path "${manifest}" -p pageseeds-cli
-  else
-    cargo build --release --manifest-path "${manifest}" --bin "${BIN_NAME}"
-  fi
+  cargo build --release --manifest-path "${manifest}" -p pageseeds-cli
 
   [[ -x "${src}" ]] || die "expected binary not found at ${src}"
 
@@ -270,7 +253,7 @@ fi
 
 # Force source build (any platform with cargo; no prebuilt matrix check)
 if [[ "${FROM_SOURCE}" == "1" ]]; then
-  [[ -n "${CHECKOUT_ROOT}" ]] || die "FROM_SOURCE=1 requires running from a pageseeds-app checkout (workspace Cargo.toml or src-tauri/Cargo.toml)"
+  [[ -n "${CHECKOUT_ROOT}" ]] || die "FROM_SOURCE=1 requires running from a pageseeds-app checkout (workspace Cargo.toml with pageseeds-cli)"
   install_from_source "${CHECKOUT_ROOT}"
   complete_install
 fi

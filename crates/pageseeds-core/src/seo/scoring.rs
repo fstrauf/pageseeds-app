@@ -2,11 +2,9 @@ use crate::seo::intent::IntentClassification;
 use crate::seo::keywords::KeywordIdea;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use ts_rs::TS;
 
 /// Multi-factor opportunity score for a keyword.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpportunityScore {
     pub keyword: String,
     pub total_score: f64, // 0.0–1.0

@@ -41,7 +41,7 @@ editing PageSeeds product source.
 | **Capability surface** | Installed `pageseeds-cli` binary — JSON tools (same functions as app/Rig tools). Treat this like an MCP tool list. |
 | **Operator / policy** | This skill — goals, budgets, lifecycle, report, isolation rails. |
 | **Agent loop** | You (Grok/Kimi/etc.) — **choose tools freely** within hard rails. |
-| **Product source** | **Out of scope.** Never open or patch `pageseeds-app` / `src-tauri` during this run. |
+| **Product source** | **Out of scope.** Never open or patch `pageseeds-app` product crates during this run. |
 
 Do **not** treat the old 1→8 phase list as a mandatory script. Use **hard rails**
 always; use **soft guidance** when you have no better lead.
@@ -110,8 +110,8 @@ of the SEO run unless the user explicitly asked for a product engineering task.
 
 All tools print **JSON to stdout**. Never invent numbers — cite tool output.
 
-The CLI talks to the same SQLite DB as the desktop app
-(`~/Library/Application Support/com.pageseeds.app/`). The Tauri UI does not need
+The CLI uses the operator SQLite DB
+(`~/Library/Application Support/com.pageseeds.app/` on macOS). No UI is needed
 to be running.
 
 ---
@@ -123,7 +123,7 @@ These are **not** optional. Breaking them fails the run.
 1. **Data access only via `pageseeds-cli`** (and the report file). No direct DB
    writes, no hand-editing project MDX/content. Tasks do content changes.
 2. **No product source edits.** Never modify files under `pageseeds-app`,
-   `src-tauri`, app `Cargo.toml` / `package.json`, or any PageSeeds product
+   product crates, app `Cargo.toml` / `package.json`, or any PageSeeds product
    tree. Never “add a missing CLI command” or patch the app mid-run.
 3. **Missing capability → escalate, don’t implement.** If a needed subcommand
    fails or is absent, document the gap in the report / user message and work

@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 /// Search intent classification for a keyword.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentClassification {
     pub keyword: String,
     pub intent: String, // "informational" | "navigational" | "transactional" | "commercial"

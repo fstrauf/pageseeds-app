@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 
 violations=$(grep -rn "\.github/automation/skills" --include="*.md" --include="*.rs" --include="*.ts" --include="*.tsx" . | \
     grep -v "node_modules/" | \
-    grep -v "src-tauri/target/" | \
+    grep -v "target/" | \
     grep -v ".git/" || true)
 
 if [ -n "$violations" ]; then

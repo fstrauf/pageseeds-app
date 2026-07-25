@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub enum ProjectMode {
     #[default]
     Workspace,
@@ -46,9 +44,8 @@ impl rusqlite::types::FromSql for ProjectMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -72,9 +69,8 @@ pub struct Project {
     pub clarity_project_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct ProjectCreate {
     pub name: String,
     pub path: Option<String>,

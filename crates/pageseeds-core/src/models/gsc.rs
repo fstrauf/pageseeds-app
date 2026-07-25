@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct PageMetrics {
     pub page: String,
     pub clicks: f64,
@@ -12,9 +10,8 @@ pub struct PageMetrics {
     pub position: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct QueryMetrics {
     pub query: String,
     pub clicks: f64,
@@ -47,9 +44,8 @@ pub struct PageDailyMetrics {
     pub position: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct MoverMetrics {
     pub key: String,
     pub current_clicks: f64,
@@ -63,9 +59,8 @@ pub struct MoverMetrics {
     pub position_delta: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct InspectionRecord {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,9 +92,8 @@ pub struct InspectionRecord {
     pub priority: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct Coverage404Record {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,9 +106,8 @@ pub struct Coverage404Record {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct RedirectRecord {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,9 +120,8 @@ pub struct RedirectRecord {
     pub final_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct GscAuthStatus {
     pub service_account_configured: bool,
     pub oauth_configured: bool,
@@ -159,9 +151,8 @@ impl TokenState {
 // GSC Drift Detection
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct GscDriftReport {
     pub site_url: String,
     pub sitemap_url: String,
@@ -187,9 +178,8 @@ pub struct GscDriftReport {
     pub link_scan_age_hours: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct DriftUrl {
     pub url: String,
     pub slug: String,
@@ -207,9 +197,8 @@ pub struct DriftUrl {
     pub issues: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct ResubmitCandidate {
     pub url: String,
     pub slug: String,
@@ -229,9 +218,8 @@ pub struct ResubmitCandidate {
     pub recovery_status: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct RecoveryStats {
     pub total_attempts: usize,
     pub linked: usize,

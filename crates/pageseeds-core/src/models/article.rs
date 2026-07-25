@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export)]
 pub struct Article {
     pub id: i64,
     pub title: String,
@@ -63,8 +61,7 @@ pub struct Article {
 }
 
 /// Category scores for quality breakdown
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityBreakdown {
     /// Content length and structure score
     pub content: u8,
@@ -80,8 +77,7 @@ pub struct QualityBreakdown {
     pub readability: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct RepairPathResult {
     pub checked: usize,
