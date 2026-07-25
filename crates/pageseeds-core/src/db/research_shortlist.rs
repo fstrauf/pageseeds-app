@@ -145,6 +145,34 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
     }
 }
 
+/// Count all shortlist rows for a project (any source/status).
+pub fn count_entries(conn: &Connection, project_id: &str) -> Result<usize> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM research_shortlist WHERE project_id = ?1",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    Ok(n as usize)
+}
+
+/// Latest `added_at` among rows written by territory analysis for this project.
+///
+/// Used as a freshness clock for the shortlist filler (no dedicated sync table).
+/// Territory upserts rewrite `added_at`, so this is last filler time.
+/// Aggregate always returns a row; `None` means no territory_analysis rows.
+pub fn max_territory_added_at(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Option<String>> {
+    let value: Option<String> = conn.query_row(
+        "SELECT MAX(added_at) FROM research_shortlist
+         WHERE project_id = ?1 AND source = 'territory_analysis'",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    Ok(value)
+}
+
 /// List entries for a project, optionally filtered by status.
 pub fn list_entries(
     conn: &Connection,

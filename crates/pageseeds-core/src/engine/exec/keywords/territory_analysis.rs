@@ -74,48 +74,66 @@ struct LoadResult {
     gsc_source: GscSource,
 }
 
-/// Run territory analysis and sync results to the research_shortlist table.
-pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str) -> StepResult {
-    let db_path = crate::db::default_db_path();
-    let conn = match Connection::open(&db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            return StepResult::fail(format!("Failed to open DB: {}", e));
-        }
-    };
+/// Diagnostics from a territory analysis run (shared by task step + research-context ensure).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TerritoryRunDiagnostics {
+    pub open_territories: Vec<TerritoryTheme>,
+    pub mid_coverage_themes: Vec<TerritoryTheme>,
+    pub saturated_themes: Vec<TerritoryTheme>,
+    pub total_themes: usize,
+    pub synced_to_shortlist: usize,
+    pub gsc_source: String,
+    pub buckets: serde_json::Value,
+    pub skip_reasons: Vec<String>,
+    pub message: String,
+}
 
+impl TerritoryRunDiagnostics {
+    /// JSON shape historically stored as the territory step artifact/output.
+    pub fn to_output_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "open_territories": self.open_territories,
+            "mid_coverage_themes": self.mid_coverage_themes,
+            "saturated_themes": self.saturated_themes,
+            "total_themes": self.total_themes,
+            "synced_to_shortlist": self.synced_to_shortlist,
+            "gsc_source": self.gsc_source,
+            "buckets": self.buckets,
+            "skip_reasons": self.skip_reasons,
+        })
+    }
+}
+
+/// Core territory analysis: load articles, classify themes, upsert shortlist.
+///
+/// Callable from the workflow step and from `ensure_research_shortlist_fresh`
+/// (CLI `research-context`) with an already-open connection — no nested DB open.
+pub fn run_territory_analysis(
+    conn: &Connection,
+    project_id: &str,
+) -> crate::error::Result<TerritoryRunDiagnostics> {
     // 1. Load articles + GSC (daily tape preferred, metadata fallback)
-    let load = match load_articles_with_gsc(&conn, &task.project_id) {
-        Ok(r) => r,
-        Err(e) => {
-            return StepResult::fail(format!("Failed to load articles: {}", e));
-        }
-    };
+    let load = load_articles_with_gsc(conn, project_id)?;
 
     if load.articles.is_empty() {
-        let output = serde_json::json!({
-            "open_territories": [],
-            "mid_coverage_themes": [],
-            "saturated_themes": [],
-            "total_themes": 0,
-            "synced_to_shortlist": 0,
-            "gsc_source": load.gsc_source.as_str(),
-            "buckets": {
+        return Ok(TerritoryRunDiagnostics {
+            open_territories: vec![],
+            mid_coverage_themes: vec![],
+            saturated_themes: vec![],
+            total_themes: 0,
+            synced_to_shortlist: 0,
+            gsc_source: load.gsc_source.as_str().to_string(),
+            buckets: serde_json::json!({
                 "open": 0,
                 "mid_coverage": 0,
                 "saturated": 0,
                 "thin_below_impression_threshold": 0,
                 "articles_without_target_keyword": 0,
                 "articles_with_zero_gsc": 0,
-            },
-            "skip_reasons": ["No articles found for territory analysis"],
-        });
-        return StepResult {
-            success: true,
+            }),
+            skip_reasons: vec!["No articles found for territory analysis".to_string()],
             message: "No articles found for territory analysis".to_string(),
-            output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
-            artifact_key: None,
-        };
+        });
     }
 
     // 2. Run analysis
@@ -128,42 +146,24 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
 
     let mut synced = 0usize;
     for territory in &open_territories {
-        if sync_theme_to_shortlist(
-            &conn,
-            &task.project_id,
-            territory,
-            "high",
-            "pending",
-        ) {
+        if sync_theme_to_shortlist(conn, project_id, territory, "high", "pending") {
             synced += 1;
         }
     }
     for theme in &mid_coverage_themes {
-        if sync_theme_to_shortlist(
-            &conn,
-            &task.project_id,
-            theme,
-            "medium",
-            "pending",
-        ) {
+        if sync_theme_to_shortlist(conn, project_id, theme, "medium", "pending") {
             synced += 1;
         }
     }
     for theme in &saturated_themes {
         // Saturated themes get a special status so keyword research can deprioritize them
-        if sync_theme_to_shortlist(
-            &conn,
-            &task.project_id,
-            theme,
-            "medium",
-            "saturated",
-        ) {
+        if sync_theme_to_shortlist(conn, project_id, theme, "medium", "saturated") {
             synced += 1;
         }
     }
 
     // 4. Prune old covered entries
-    let _ = crate::db::research_shortlist::prune_covered(&conn, &task.project_id, 30);
+    let _ = crate::db::research_shortlist::prune_covered(conn, project_id, 30);
 
     // 5. Diagnostics
     let articles_without_target_keyword = load
@@ -197,29 +197,49 @@ pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str)
         Vec::new()
     };
 
-    let output = serde_json::json!({
-        "open_territories": open_territories,
-        "mid_coverage_themes": mid_coverage_themes,
-        "saturated_themes": saturated_themes,
-        "total_themes": analysis.total_themes,
-        "synced_to_shortlist": synced,
-        "gsc_source": load.gsc_source.as_str(),
-        "buckets": buckets,
-        "skip_reasons": skip_reasons,
-    });
+    let gsc_source = load.gsc_source.as_str().to_string();
+    let message = format!(
+        "Territory analysis: {} open, {} mid-coverage, {} saturated, {} synced to shortlist (gsc={})",
+        open_territories.len(),
+        mid_coverage_themes.len(),
+        saturated_themes.len(),
+        synced,
+        gsc_source
+    );
 
-    StepResult {
-        success: true,
-        message: format!(
-            "Territory analysis: {} open, {} mid-coverage, {} saturated, {} synced to shortlist (gsc={})",
-            open_territories.len(),
-            mid_coverage_themes.len(),
-            saturated_themes.len(),
-            synced,
-            load.gsc_source.as_str()
-        ),
-        output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
-        artifact_key: None,
+    Ok(TerritoryRunDiagnostics {
+        open_territories,
+        mid_coverage_themes,
+        saturated_themes,
+        total_themes: analysis.total_themes,
+        synced_to_shortlist: synced,
+        gsc_source,
+        buckets,
+        skip_reasons,
+        message,
+    })
+}
+
+/// Run territory analysis and sync results to the research_shortlist table.
+pub(crate) fn exec_research_territory_analysis(task: &Task, _project_path: &str) -> StepResult {
+    let db_path = crate::db::default_db_path();
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return StepResult::fail(format!("Failed to open DB: {}", e));
+        }
+    };
+
+    match run_territory_analysis(&conn, &task.project_id) {
+        Ok(diag) => StepResult {
+            success: true,
+            message: diag.message.clone(),
+            output: Some(
+                serde_json::to_string_pretty(&diag.to_output_json()).unwrap_or_default(),
+            ),
+            artifact_key: None,
+        },
+        Err(e) => StepResult::fail(format!("Failed to run territory analysis: {}", e)),
     }
 }
 

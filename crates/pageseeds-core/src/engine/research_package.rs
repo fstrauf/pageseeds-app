@@ -4,9 +4,13 @@
 //! Uses existing `custom_keyword_research` (no nested seed extraction/validation LLM).
 //!
 //! Flow:
-//!   research-context → session proposes seeds → research-pull → select-keywords → write Path B
+//!   research-context → ensure shortlist fresh (territory when empty/stale) →
+//!   session proposes seeds → research-pull → select-keywords → write Path B
 //!
 //! No LLM calls live in this module.
+//! Shortlist refresh side effects live in [`super::research_shortlist_refresh`];
+//! [`build_research_strategy_package`] stays pure read. Prefer
+//! [`build_research_context`] for the full CLI envelope.
 
 use std::collections::HashSet;
 
@@ -19,6 +23,12 @@ use crate::engine::keyword_selection::extract_selectable_keywords;
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
+
+// Re-export refresh surface so callers can use `research_package::*` paths.
+pub use crate::engine::research_shortlist_refresh::{
+    ensure_research_shortlist_fresh, shortlist_refresh_reason, ShortlistRefreshResult,
+    RESEARCH_SHORTLIST_MAX_AGE_DAYS,
+};
 
 // ─── Strategy package ────────────────────────────────────────────────────────
 
@@ -88,8 +98,45 @@ const STRATEGY_GUIDANCE: &[&str] = &[
     "Desktop research_keywords (nested seed extraction) remains available for UI; prefer research-pull on CLI weekly path.",
 ];
 
+/// Full Path B `research-context` envelope: pure strategy package + shortlist refresh fields.
+///
+/// Serializes to a flat JSON object (strategy fields flattened) matching the prior CLI merge shape:
+/// `shortlist_refreshed`, `shortlist_refresh_reason`, optional `territory`, optional
+/// `shortlist_refresh_error`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResearchContextPackage {
+    #[serde(flatten)]
+    pub strategy: ResearchStrategyPackage,
+    pub shortlist_refreshed: bool,
+    pub shortlist_refresh_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub territory: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortlist_refresh_error: Option<String>,
+}
+
+/// Ensure shortlist freshness then build the pure strategy package into one envelope.
+///
+/// Side effects only via [`ensure_research_shortlist_fresh`]. CLI should call this
+/// and `serde_json::to_value` only — no package field composition in the binary.
+pub fn build_research_context(
+    conn: &Connection,
+    project_id: &str,
+    max_age_days: i64,
+) -> Result<ResearchContextPackage, String> {
+    let refresh = ensure_research_shortlist_fresh(conn, project_id, max_age_days);
+    let strategy = build_research_strategy_package(conn, project_id)?;
+    Ok(ResearchContextPackage {
+        strategy,
+        shortlist_refreshed: refresh.shortlist_refreshed,
+        shortlist_refresh_reason: refresh.shortlist_refresh_reason,
+        territory: refresh.territory,
+        shortlist_refresh_error: refresh.error,
+    })
+}
+
 /// Build a strategy package from research_shortlist + open research tasks.
-/// No LLM. No side effects.
+/// No LLM. No side effects (read-only). Refresh lives in [`ensure_research_shortlist_fresh`].
 pub fn build_research_strategy_package(
     conn: &Connection,
     project_id: &str,
@@ -644,6 +691,88 @@ mod tests {
         );
         assert!(!names.contains(&"research_seed_extraction"));
         assert!(!names.contains(&"research_seed_validation"));
+        // Path B pull must never nest territory analysis (issue #192).
+        assert!(!names.contains(&"research_territory_analysis"));
+    }
+
+    #[test]
+    fn research_context_envelope_merges_refresh_fields_flat() {
+        // Typed envelope must serialize the same flat JSON keys as the old CLI merge.
+        let conn = in_memory_db();
+        insert_shortlist(
+            &conn,
+            "proj1",
+            "existing",
+            "pending",
+            "promising",
+            &["seed"],
+        );
+        // Fresh territory row so ensure skips.
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE research_shortlist SET source = 'territory_analysis', added_at = ?1
+             WHERE project_id = 'proj1'",
+            rusqlite::params![now],
+        )
+        .unwrap();
+
+        let envelope = build_research_context(
+            &conn,
+            "proj1",
+            RESEARCH_SHORTLIST_MAX_AGE_DAYS,
+        )
+        .unwrap();
+        assert!(!envelope.shortlist_refreshed);
+        assert_eq!(
+            envelope.shortlist_refresh_reason,
+            shortlist_refresh_reason::SKIPPED_FRESH
+        );
+        assert!(envelope.territory.is_none());
+        assert!(envelope.shortlist_refresh_error.is_none());
+        assert_eq!(envelope.strategy.project_id, "proj1");
+        assert_eq!(envelope.strategy.shortlist.len(), 1);
+
+        let value = serde_json::to_value(&envelope).unwrap();
+        let obj = value.as_object().unwrap();
+        assert!(obj.contains_key("project_id"));
+        assert!(obj.contains_key("shortlist"));
+        assert!(obj.contains_key("health_counts"));
+        assert!(obj.contains_key("open_research_task_ids"));
+        assert!(obj.contains_key("guidance"));
+        assert_eq!(obj["shortlist_refreshed"], false);
+        assert_eq!(obj["shortlist_refresh_reason"], "skipped_fresh");
+        assert!(!obj.contains_key("territory"));
+        assert!(!obj.contains_key("shortlist_refresh_error"));
+        // Flatten: strategy is not nested under a "strategy" key.
+        assert!(!obj.contains_key("strategy"));
+    }
+
+    #[test]
+    fn research_context_maps_failed_refresh_to_shortlist_refresh_error() {
+        let conn = in_memory_db();
+        let envelope = build_research_context(&conn, "", RESEARCH_SHORTLIST_MAX_AGE_DAYS);
+        // Empty project_id fails pure build after ensure fails.
+        assert!(envelope.is_err());
+
+        // Non-empty project with ensure-only failure path still builds strategy when
+        // project_id is valid: use failed ensure via empty project_id is already covered
+        // above. Verify field rename for a synthetic package.
+        let synthetic = ResearchContextPackage {
+            strategy: ResearchStrategyPackage {
+                project_id: "p".into(),
+                shortlist: vec![],
+                health_counts: ShortlistHealthCounts::default(),
+                open_research_task_ids: vec![],
+                guidance: vec![],
+            },
+            shortlist_refreshed: false,
+            shortlist_refresh_reason: shortlist_refresh_reason::FAILED.to_string(),
+            territory: None,
+            shortlist_refresh_error: Some("boom".into()),
+        };
+        let value = serde_json::to_value(&synthetic).unwrap();
+        assert_eq!(value["shortlist_refresh_error"], "boom");
+        assert!(value.get("error").is_none());
     }
 
     #[test]

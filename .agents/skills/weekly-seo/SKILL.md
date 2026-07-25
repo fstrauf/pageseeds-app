@@ -303,14 +303,17 @@ pageseeds-cli research-pull -i <id> -p <path> --seeds "theme one,theme two" ...
 
 Prefer this over relying solely on nested research_seed_extraction when tools exist.
 
-**Research:** generative. Prefer `research-shortlist` / `research-context`
-health (`promising` / `depleted` / `unproven`).
+**Research:** generative. Prefer `research-context` (auto-refreshes shortlist
+when empty/stale via territory) then health (`promising` / `depleted` /
+`unproven`). Path B `research-pull` still does **not** write shortlist.
 
-- **Empty shortlist is not “no themes”:** If `research-shortlist` /
-  `research-context` is empty (or Path B pull alone returns nothing useful),
-  run `update_research_shortlist` (create+execute that task) **before** claiming
-  “no themes” or “no gaps.” Do **not** treat empty shortlist after Path B pull
-  alone as proof there are no research gaps.
+- **Prefer `research-context` first:** It ensures shortlist freshness (empty or
+  territory rows older than 7d → territory analysis). Read
+  `shortlist_refreshed` / `shortlist_refresh_reason` and territory
+  `skip_reasons` when still empty after refresh — not “mystery empty.”
+- **Manual fallback only:** If `research-context` fails or you need a force
+  re-fill, create+execute `update_research_shortlist`. Do **not** treat empty
+  shortlist after Path B pull alone as proof there are no research gaps.
 - Never claim “no gaps found” if research did not run — say **skipped** + why +
   last research date.
 
@@ -559,7 +562,7 @@ Desk path chased, detours, what you skipped (and why).
 - Max 5 creates / 15 executions / 3 new articles.  
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Not-indexed → desk-selected `fix_indexing_internal_links` / `fix_content_article -S`; not default full `indexing_health_campaign`.  
-- Empty research shortlist → `update_research_shortlist` before “no themes.”  
+- Empty research shortlist → call `research-context` first (auto-refresh); `update_research_shortlist` only if force/fail. 
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
 - Mechanical reviews only; only write the weekly report file.  

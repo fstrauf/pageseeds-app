@@ -662,15 +662,17 @@ fn merge_submit(
 }
 
 /// Path B research strategy package: shortlist + health + open research tasks.
-/// No side effects. Prefer over raw research-shortlist for session seed planning.
+/// Deterministic. May refresh research_shortlist via territory analysis when
+/// empty/stale (issue #192). Prefer over raw research-shortlist for session seed planning.
 fn research_context(db_path: &str, project_id: &str) -> Result<serde_json::Value, String> {
     if project_id.is_empty() {
         exit("--project-id required");
     }
     let conn = open_db(db_path)?;
-    let package = pageseeds_core::engine::research_package::build_research_strategy_package(
+    let package = pageseeds_core::engine::research_package::build_research_context(
         &conn,
         project_id,
+        pageseeds_core::engine::research_package::RESEARCH_SHORTLIST_MAX_AGE_DAYS,
     )?;
     serde_json::to_value(package).map_err(|e| e.to_string())
 }
@@ -1633,7 +1635,7 @@ const TOOLS: &[ToolHelp] = &[
     },
     ToolHelp {
         name: "research-context",
-        purpose: "Path B research strategy package (no side effects)",
+        purpose: "Path B research strategy package; refreshes shortlist when empty/stale",
         example: "research-context -i <id>",
         section: "Path B research",
     },
