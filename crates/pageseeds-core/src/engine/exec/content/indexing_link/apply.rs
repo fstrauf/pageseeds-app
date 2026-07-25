@@ -1,0 +1,309 @@
+use crate::engine::project_paths::ProjectPaths;
+use crate::engine::workflows::StepResult;
+use crate::models::indexing_health::IndexingLinkOutcome;
+use crate::models::task::Task;
+
+use super::*;
+// ─── Step 3: Apply ────────────────────────────────────────────────────────────
+
+/// Deterministic apply: append a Related Articles link to the chosen source file.
+///
+/// V1 placement is always `related_section`. Writes an `outcome` field so verify
+/// can pass intentional no-ops (`no_candidates` / `already_linked`) without
+/// requiring an inbound-link increase.
+pub(crate) fn exec_indexing_link_apply(task: &Task, project_path: &str) -> StepResult {
+    use std::path::Path;
+
+    let paths = ProjectPaths::from_path(project_path);
+    let repo_root = Path::new(project_path);
+
+    // Parse target artifact for metadata
+    let target_data = match parse_target_artifact(task) {
+        Some(t) => t,
+        None => {
+            return StepResult::fail(MISSING_INDEXING_LINK_TARGET_MSG.to_string())
+        }
+    };
+
+    let target_article_id = target_data.article_id;
+    if target_article_id == 0 {
+        return StepResult::fail("Target article_id is 0 — no matching article found in DB".to_string());
+    }
+
+    // The target must be a valid link target: present in the project slug set
+    // and not redirected away by a consolidation. resolve_slug matches exact
+    // first, so a verbatim-existing slug is never destructively normalized.
+    let raw_target_slug = target_data.slug.as_str();
+    let valid_targets: std::collections::HashSet<String> =
+        if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
+            crate::engine::task_store::load_valid_link_targets(&db, &task.project_id, project_path)
+                .unwrap_or_default()
+        } else {
+            std::collections::HashSet::new()
+        };
+    let target_slug = match crate::content::slug::resolve_slug(raw_target_slug, &valid_targets) {
+        Some(slug) => slug,
+        None => {
+            return StepResult::fail(format!(
+                    "Target slug '{}' is not a valid link target (missing from project or redirected away)",
+                    raw_target_slug
+                ))
+        }
+    };
+    let target_title = if target_data.target_keyword.is_empty() {
+        target_slug.clone()
+    } else {
+        target_data.target_keyword.clone()
+    };
+
+    // Load plan
+    let plan_path = paths
+        .automation_dir
+        .join(format!("indexing_link_plan_{}.json", task.id));
+    let plan: serde_json::Value = std::fs::read_to_string(&plan_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .or_else(|| {
+            task.artifacts
+                .iter()
+                .find(|a| a.key == "indexing_link_plan")
+                .and_then(|a| a.content.as_ref())
+                .and_then(|c| serde_json::from_str(c).ok())
+        })
+        .unwrap_or_default();
+
+    let links = plan["links_to_add"].as_array().cloned().unwrap_or_default();
+    if links.is_empty() {
+        let outcome = outcome_from_json(&plan).unwrap_or(IndexingLinkOutcome::NoCandidates);
+        let summary = serde_json::json!({
+            "target_slug": target_slug,
+            "links_added": 0,
+            "links_skipped_existing": 0,
+            "links_failed": 0,
+            "source_files_modified": [],
+            "outcome": outcome.as_str(),
+        });
+        return StepResult {
+            success: true,
+            message: match outcome {
+                IndexingLinkOutcome::AlreadyLinked => {
+                    format!("Nothing to apply — sources already link to {target_slug}")
+                }
+                _ => "Nothing to apply — plan has no links to add".to_string(),
+            },
+            output: Some(summary.to_string()),
+            artifact_key: None,
+        };
+    }
+
+    // Locate content directory
+    let resolution = crate::content::locator::resolve(repo_root, None);
+    let content_dir = match resolution.selected {
+        Some(d) => d,
+        None => {
+            return StepResult::fail("Could not locate content directory".to_string())
+        }
+    };
+
+    // Build basename → full path map
+    let all_files = crate::content::locator::collect_markdown_files(&content_dir);
+    let file_map: HashMap<String, std::path::PathBuf> = all_files
+        .iter()
+        .filter_map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| (name.to_string(), p.clone()))
+        })
+        .collect();
+
+    let mut files_modified: Vec<String> = Vec::new();
+    let mut links_added = 0usize;
+    let mut links_skipped_existing = 0usize;
+    let mut links_failed = 0usize;
+
+    for link in &links {
+        let source_id = link["source_article_id"].as_i64().unwrap_or(0);
+        let anchor_text = link["anchor_text"]
+            .as_str()
+            .unwrap_or(&target_title)
+            .to_string();
+
+        // Prefer plan source_file, then artifact source_candidates — no global DB lookup.
+        let source_file = link["source_file"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                target_data
+                    .source_candidates
+                    .iter()
+                    .find(|c| c.article_id == source_id)
+                    .map(|c| c.file.clone())
+                    .filter(|f| !f.is_empty())
+            });
+
+        let source_basename = match source_file {
+            Some(f) => std::path::Path::new(&f)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&f)
+                .to_string(),
+            None => {
+                log::warn!(
+                    "[indexing_link_apply] no source_file on plan/candidates for source article {}",
+                    source_id
+                );
+                links_failed += 1;
+                continue;
+            }
+        };
+
+        let Some(file_path) = file_map.get(&source_basename) else {
+            log::warn!(
+                "[indexing_link_apply] source file not found in content dir: {}",
+                source_basename
+            );
+            links_failed += 1;
+            continue;
+        };
+
+        let content = match std::fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!(
+                    "[indexing_link_apply] cannot read {}: {}",
+                    file_path.display(),
+                    e
+                );
+                links_failed += 1;
+                continue;
+            }
+        };
+
+        // Skip if already links to target
+        if content.contains(&crate::content::slug::format_blog_link(&target_slug)) {
+            log::info!(
+                "[indexing_link_apply] {} already links to {} — skipping",
+                source_basename,
+                target_slug
+            );
+            links_skipped_existing += 1;
+            continue;
+        }
+
+        // V1: related_section only
+        let new_content = apply_related_section_link(&content, &anchor_text, &target_slug);
+
+        match std::fs::write(file_path, new_content) {
+            Ok(_) => {
+                files_modified.push(source_basename.clone());
+                links_added += 1;
+                log::info!(
+                    "[indexing_link_apply] {} — added related_section link to {}",
+                    source_basename,
+                    target_slug
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[indexing_link_apply] failed to write {}: {}",
+                    file_path.display(),
+                    e
+                );
+                links_failed += 1;
+            }
+        }
+    }
+
+    let outcome = if links_added > 0 {
+        IndexingLinkOutcome::Applied
+    } else if links_failed == 0 && links_skipped_existing > 0 {
+        IndexingLinkOutcome::AlreadyLinked
+    } else if links_failed == 0 {
+        IndexingLinkOutcome::NoCandidates
+    } else {
+        // Failed apply path — still record outcome for diagnostics; success=false below.
+        IndexingLinkOutcome::Applied
+    };
+
+    let summary = serde_json::json!({
+        "target_slug": target_slug,
+        "links_added": links_added,
+        "links_skipped_existing": links_skipped_existing,
+        "links_failed": links_failed,
+        "source_files_modified": files_modified,
+        "outcome": outcome.as_str(),
+    });
+
+    // Success if we added links, OR if all planned links already existed.
+    // Failure only if there were actual errors (file not found, write failed, etc.)
+    let success = links_added > 0
+        || (links_failed == 0 && links_skipped_existing > 0);
+    let message = if links_added > 0 {
+        format!(
+            "Applied {} link(s) to {} for target {}",
+            links_added,
+            files_modified.join(", "),
+            target_slug
+        )
+    } else if links_skipped_existing > 0 && links_failed == 0 {
+        format!(
+            "Link(s) to {} already exist — no changes needed",
+            target_slug
+        )
+    } else {
+        format!(
+            "Applied {} link(s) to {} for target {}",
+            links_added,
+            files_modified.join(", "),
+            target_slug
+        )
+    };
+
+    StepResult {
+        success,
+        message,
+        output: Some(summary.to_string()),
+        artifact_key: None,
+    }
+}
+
+pub(crate) fn apply_related_section_link(content: &str, anchor_text: &str, target_slug: &str) -> String {
+    let related_section_start = content.lines().position(|l| {
+        let t = l.trim();
+        t.starts_with("##") && t.to_lowercase().contains("related")
+    });
+
+    let new_link_line = format!("- [{}]({})\n", anchor_text, crate::content::slug::format_blog_link(target_slug));
+
+    if let Some(start_idx) = related_section_start {
+        let lines: Vec<&str> = content.lines().collect();
+        let end_idx = lines
+            .iter()
+            .enumerate()
+            .skip(start_idx + 1)
+            .find(|(_, l)| {
+                let t = l.trim();
+                t.starts_with("##") && !t.to_lowercase().contains("related")
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(lines.len());
+
+        let before = lines[..start_idx].join("\n");
+        let section = lines[start_idx..end_idx].join("\n");
+        let after = lines[end_idx..].join("\n");
+
+        let new_section = format!("{}\n{}", section.trim_end(), new_link_line.trim_end());
+        if after.is_empty() {
+            format!("{}\n{}", before.trim_end(), new_section)
+        } else {
+            format!("{}\n{}\n{}", before.trim_end(), new_section, after)
+        }
+    } else {
+        format!(
+            "{}\n\n## Related Articles\n\n{}",
+            content.trim_end(),
+            new_link_line
+        )
+    }
+}

@@ -1,0 +1,708 @@
+/// Shared CTR fix patch normalization and validation.
+///
+/// Used by both `exec_ctr_fix_generate` (to validate before returning) and
+/// `exec_ctr_fix_apply` (final safety boundary before writing).
+use crate::models::ctr::{CtrFixPatch, CtrRecommendation};
+use crate::models::task::Task;
+
+/// Normalize a patch in-place before validation (task path — resolves keyword from rec).
+pub(crate) fn normalize_patch_before_validation(
+    patch: &mut CtrFixPatch,
+    task: &Task,
+) -> Vec<String> {
+    let recommendation = extract_recommendation(task).ok().flatten();
+    let target_keyword = recommendation
+        .as_ref()
+        .map(|rec| rec.target_keyword.as_str())
+        .filter(|s| !s.trim().is_empty());
+    normalize_patch_fields(patch, target_keyword)
+}
+
+/// Task-free normalize used by CLI Path B and shared with the task wrapper.
+pub(crate) fn normalize_patch_fields(
+    patch: &mut CtrFixPatch,
+    target_keyword: Option<&str>,
+) -> Vec<String> {
+    let mut repairs = Vec::new();
+    let target_keyword = target_keyword.map(str::trim).unwrap_or("");
+
+    if let Some(title) = patch.changes.title.as_mut() {
+        normalize_whitespace_in_place(title, "title whitespace", &mut repairs);
+        if title.chars().count() > crate::engine::exec::audit_health::TITLE_MAX_LEN {
+            if let Some(shortened) =
+                shorten_to_char_limit(title, crate::engine::exec::audit_health::TITLE_MAX_LEN)
+            {
+                if shortened.chars().count() <= crate::engine::exec::audit_health::TITLE_MAX_LEN {
+                    *title = shortened;
+                    repairs.push(format!(
+                        "shortened title to <= {} chars",
+                        crate::engine::exec::audit_health::TITLE_MAX_LEN
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(description) = patch.changes.description.as_mut() {
+        normalize_whitespace_in_place(description, "description whitespace", &mut repairs);
+        if description.chars().count() > crate::engine::exec::audit_health::META_MAX_LEN {
+            if let Some(shortened) = shorten_meta_description(
+                description,
+                crate::engine::exec::audit_health::META_MIN_LEN,
+                crate::engine::exec::audit_health::META_MAX_LEN,
+            ) {
+                *description = shortened;
+                repairs.push(format!(
+                    "shortened description to {}-{} chars",
+                    crate::engine::exec::audit_health::META_MIN_LEN,
+                    crate::engine::exec::audit_health::META_MAX_LEN
+                ));
+            }
+        }
+    }
+
+    if let Some(first_paragraph) = patch.changes.first_paragraph.as_mut() {
+        normalize_whitespace_in_place(first_paragraph, "first_paragraph whitespace", &mut repairs);
+
+        let min_words = crate::engine::exec::audit_health::SNIPPET_MIN_WORDS;
+        let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
+        let word_count = crate::content::ops::count_words(first_paragraph);
+        if word_count < min_words && word_count + 20 >= min_words {
+            if let Some(padded) =
+                pad_paragraph_to_min_words(first_paragraph, min_words, target_keyword)
+            {
+                repairs.push(format!(
+                    "padded first_paragraph from {} to {} words",
+                    word_count,
+                    crate::content::ops::count_words(&padded)
+                ));
+                *first_paragraph = padded;
+            }
+        } else if word_count > max_words && word_count <= max_words + 8 {
+            *first_paragraph = first_paragraph
+                .split_whitespace()
+                .take(max_words)
+                .collect::<Vec<_>>()
+                .join(" ");
+            repairs.push(format!("trimmed first_paragraph to {} words", max_words));
+        }
+
+    }
+
+    if let Some(questions) = patch.changes.faq_questions.as_mut() {
+        for question in questions {
+            normalize_whitespace_in_place(
+                &mut question.question,
+                "faq question whitespace",
+                &mut repairs,
+            );
+            normalize_whitespace_in_place(
+                &mut question.answer,
+                "faq answer whitespace",
+                &mut repairs,
+            );
+            // Do not force trailing '?'; empty checks stay in validate.
+        }
+    }
+
+    if let Some(snippet) = patch.changes.snippet_patch.as_mut() {
+        normalize_whitespace_in_place(
+            &mut snippet.heading,
+            "snippet heading whitespace",
+            &mut repairs,
+        );
+        normalize_whitespace_in_place(
+            &mut snippet.answer_paragraph,
+            "snippet answer whitespace",
+            &mut repairs,
+        );
+        let word_count = crate::content::ops::count_words(&snippet.answer_paragraph);
+        let max_words = crate::engine::exec::audit_health::SNIPPET_MAX_WORDS;
+        if word_count > max_words && word_count <= max_words + 5 {
+            snippet.answer_paragraph = snippet
+                .answer_paragraph
+                .split_whitespace()
+                .take(max_words)
+                .collect::<Vec<_>>()
+                .join(" ");
+            repairs.push(format!(
+                "trimmed snippet answer_paragraph to {} words",
+                max_words
+            ));
+        }
+    }
+
+    repairs
+}
+
+/// Drop fields that failed field-level validation so remaining valid changes
+/// (title/meta) can still be applied. Mirrors content-fix partial recovery.
+pub(crate) fn prune_invalid_change_fields(
+    patch: &mut CtrFixPatch,
+    errors: &[String],
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    if patch.changes.title.is_some()
+        && errors.iter().any(|e| {
+            e.starts_with("title is ")
+                || e.starts_with("title is empty")
+                || e.starts_with("title contains year")
+        })
+    {
+        patch.changes.title = None;
+        notes.push("dropped invalid title".to_string());
+    }
+    if patch.changes.description.is_some()
+        && errors.iter().any(|e| {
+            e.starts_with("description is ") || e.starts_with("description contains year")
+        })
+    {
+        patch.changes.description = None;
+        notes.push("dropped invalid description".to_string());
+    }
+    if patch.changes.first_paragraph.is_some()
+        && errors.iter().any(|e| {
+            e.starts_with("first_paragraph is ")
+                || e.starts_with("first_paragraph must contain")
+                || e.starts_with("first_paragraph contains")
+        })
+    {
+        patch.changes.first_paragraph = None;
+        notes.push("dropped invalid first_paragraph".to_string());
+    }
+    if patch.changes.faq_questions.is_some()
+        && errors.iter().any(|e| e.starts_with("faq_questions"))
+    {
+        patch.changes.faq_questions = None;
+        notes.push("dropped invalid faq_questions".to_string());
+    }
+    if patch.changes.snippet_patch.is_some()
+        && errors.iter().any(|e| e.starts_with("snippet_patch"))
+    {
+        patch.changes.snippet_patch = None;
+        notes.push("dropped invalid snippet_patch".to_string());
+    }
+    notes
+}
+
+/// Validate a patch against deterministic rules (task path).
+pub(crate) fn validate_patch_before_write(
+    patch: &CtrFixPatch,
+    task: &Task,
+    original_content: &str,
+) -> Vec<String> {
+    let recommendation = extract_recommendation(task).ok().flatten();
+    let target_keyword = recommendation
+        .as_ref()
+        .map(|rec| rec.target_keyword.as_str())
+        .filter(|s| !s.trim().is_empty());
+    validate_patch_fields(patch, target_keyword, original_content)
+}
+
+/// Task-free validate used by CLI Path B and shared with the task wrapper.
+pub(crate) fn validate_patch_fields(
+    patch: &CtrFixPatch,
+    target_keyword: Option<&str>,
+    original_content: &str,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    let current_year = crate::content::year_policy::current_calendar_year();
+
+    if let Some(title) = patch.changes.title.as_deref() {
+        let title_len = title.chars().count();
+        if title.trim().is_empty() {
+            errors.push("title is empty".to_string());
+        } else if title_len > crate::engine::exec::audit_health::TITLE_MAX_LEN {
+            errors.push(format!(
+                "title is {} chars, expected <= {}",
+                title_len,
+                crate::engine::exec::audit_health::TITLE_MAX_LEN
+            ));
+        }
+        if let Some(err) =
+            crate::content::year_policy::non_current_year_error("title", title, current_year)
+        {
+            errors.push(err);
+        }
+    }
+
+    if let Some(description) = patch.changes.description.as_deref() {
+        let description_len = description.chars().count();
+        if description_len < crate::engine::exec::audit_health::META_MIN_LEN
+            || description_len > crate::engine::exec::audit_health::META_MAX_LEN
+        {
+            errors.push(format!(
+                "description is {} chars, expected {}-{}",
+                description_len,
+                crate::engine::exec::audit_health::META_MIN_LEN,
+                crate::engine::exec::audit_health::META_MAX_LEN
+            ));
+        }
+        if let Some(err) = crate::content::year_policy::non_current_year_error(
+            "description",
+            description,
+            current_year,
+        ) {
+            errors.push(err);
+        }
+    }
+
+    if let Some(first_paragraph) = patch.changes.first_paragraph.as_deref() {
+        let word_count = crate::content::ops::count_words(first_paragraph);
+        if word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+            || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+        {
+            errors.push(format!(
+                "first_paragraph is {} words, expected {}-{}",
+                word_count,
+                crate::engine::exec::audit_health::SNIPPET_MIN_WORDS,
+                crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+            ));
+        }
+
+        if first_paragraph.contains("\n\n") {
+            errors.push("first_paragraph contains blank lines".to_string());
+        }
+
+        if let Some(kw) = target_keyword.map(str::trim).filter(|s| !s.is_empty()) {
+            // Keyword required when present; no `?` substitute (issue #112).
+            if !crate::content::keyword_match::keyword_present(
+                &first_paragraph.to_lowercase(),
+                kw,
+            ) {
+                let display_kw = crate::content::keyword_match::normalize_keyword(kw);
+                errors.push(format!(
+                    "first_paragraph must contain target keyword '{}'",
+                    if display_kw.is_empty() {
+                        kw.to_string()
+                    } else {
+                        display_kw
+                    }
+                ));
+            }
+        }
+    }
+
+    if let Some(questions) = patch.changes.faq_questions.as_ref() {
+        if !crate::engine::exec::audit_health::has_frontmatter_faq(original_content) {
+            if questions.len() < 3 || questions.len() > 5 {
+                errors.push(format!(
+                    "faq_questions has {} questions, expected 3-5",
+                    questions.len()
+                ));
+            }
+            for (index, question) in questions.iter().enumerate() {
+                if question.question.trim().is_empty() {
+                    errors.push(format!("faq_questions[{}].question is empty", index));
+                } else if !question.question.trim().ends_with('?') {
+                    errors.push(format!(
+                        "faq_questions[{}].question must end with '?'",
+                        index
+                    ));
+                }
+                if question.answer.trim().is_empty() {
+                    errors.push(format!("faq_questions[{}].answer is empty", index));
+                }
+            }
+        }
+    }
+
+    if let Some(snippet) = patch.changes.snippet_patch.as_ref() {
+        let answer_word_count = crate::content::ops::count_words(&snippet.answer_paragraph);
+        if answer_word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+            || answer_word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+        {
+            errors.push(format!(
+                "snippet_patch.answer_paragraph is {} words, expected {}-{}",
+                answer_word_count,
+                crate::engine::exec::audit_health::SNIPPET_MIN_WORDS,
+                crate::engine::exec::audit_health::SNIPPET_MAX_WORDS
+            ));
+        }
+        if snippet.heading.trim().is_empty() {
+            errors.push("snippet_patch.heading is empty".to_string());
+        }
+        if snippet.answer_paragraph.contains("\n\n") {
+            errors.push("snippet_patch.answer_paragraph contains blank lines".to_string());
+        }
+    }
+
+    errors
+}
+
+/// Parse title, meta, and first paragraph from raw MDX content.
+pub(crate) fn parse_content_excerpt(content: &str) -> (String, String, String) {
+    let (frontmatter_str, body) = match crate::content::frontmatter::split_mdx(content) {
+        Some((fm, b)) => (fm, b),
+        None => ("", content),
+    };
+
+    let scalars = crate::content::frontmatter::top_level_scalars(frontmatter_str);
+    let title = scalars
+        .iter()
+        .find(|s| s.key == "title")
+        .and_then(|s| {
+            let v = s.raw_value.trim_matches('"').trim_matches('\'');
+            if !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let meta = scalars
+        .iter()
+        .find(|s| s.key == "description")
+        .and_then(|s| {
+            let v = s.raw_value.trim_matches('"').trim_matches('\'');
+            if !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let first_paragraph = crate::content::cleaner::find_first_paragraph_range(body)
+        .map(|(start, end)| body[start..end].to_string())
+        .unwrap_or_default();
+
+    (title, meta, first_paragraph)
+}
+
+/// Validate that the patch satisfies the recommendations (requested fixes are represented).
+pub(crate) fn validate_patch_against_recommendation(
+    patch: &CtrFixPatch,
+    rec: &CtrRecommendation,
+    original_content: &str,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    if patch.article_id != rec.article_id {
+        errors.push(format!(
+            "patch.article_id ({}) does not match recommendation.article_id ({})",
+            patch.article_id, rec.article_id
+        ));
+    }
+
+    if patch.file != rec.file {
+        errors.push(format!(
+            "patch.file ('{}') does not match recommendation.file ('{}')",
+            patch.file, rec.file
+        ));
+    }
+
+    let fixes: Vec<crate::models::ctr::CtrFixType> =
+        rec.fixes.iter().map(|f| f.fix_type.clone()).collect();
+
+    let has_title_issue = fixes.contains(&crate::models::ctr::CtrFixType::TitleRewrite);
+    let has_meta_issue = fixes.contains(&crate::models::ctr::CtrFixType::MetaDescription);
+    let has_snippet_issue = fixes.contains(&crate::models::ctr::CtrFixType::SnippetBait);
+    let has_faq_issue = fixes.contains(&crate::models::ctr::CtrFixType::FaqSchema);
+
+    let (_current_title, current_meta, current_first) = parse_content_excerpt(original_content);
+
+    // Title: if title_rewrite was requested, patch must always include a title (issue #112).
+    if has_title_issue && patch.changes.title.is_none() {
+        errors.push(
+            "title_rewrite was requested but patch has no title".to_string(),
+        );
+    }
+
+    // Meta: if meta_description was requested, patch must have description unless current passes.
+    if has_meta_issue && patch.changes.description.is_none() {
+        let meta_len = current_meta.chars().count();
+        if meta_len < crate::engine::exec::audit_health::META_MIN_LEN
+            || meta_len > crate::engine::exec::audit_health::META_MAX_LEN
+        {
+            errors.push(
+                "meta_description was requested but patch has no description and current meta is out of range".to_string(),
+            );
+        }
+    }
+
+    let has_any_change = patch.changes.title.is_some()
+        || patch.changes.description.is_some()
+        || patch.changes.first_paragraph.is_some()
+        || patch.changes.faq_questions.is_some()
+        || patch.changes.snippet_patch.is_some();
+
+    // Snippet/FAQ: when the agent produced invalid snippet/FAQ and we pruned them,
+    // still allow title/meta partial recovery instead of discarding the whole patch.
+    if has_snippet_issue
+        && patch.changes.first_paragraph.is_none()
+        && patch.changes.snippet_patch.is_none()
+    {
+        let word_count = crate::content::ops::count_words(&current_first);
+        if (word_count < crate::engine::exec::audit_health::SNIPPET_MIN_WORDS
+            || word_count > crate::engine::exec::audit_health::SNIPPET_MAX_WORDS)
+            && !has_any_change
+        {
+            errors.push(
+                "snippet_bait was requested but patch has no first_paragraph or snippet_patch and current snippet is out of range".to_string(),
+            );
+        }
+    }
+
+    // FAQ: if faq_schema was requested, patch must have faq_questions unless file already has FAQ.
+    if has_faq_issue && patch.changes.faq_questions.is_none() {
+        if !crate::engine::exec::audit_health::has_frontmatter_faq(original_content)
+            && !has_any_change
+        {
+            errors.push(
+                "faq_schema was requested but patch has no faq_questions and file has no frontmatter FAQ"
+                    .to_string(),
+            );
+        }
+    }
+
+    // Error on unrequested title/meta/first_paragraph changes (not snippet_patch/faq since those can be additive)
+    if patch.changes.title.is_some() && !has_title_issue {
+        errors.push("patch includes title change but title_rewrite was not requested".to_string());
+    }
+    if patch.changes.description.is_some() && !has_meta_issue {
+        errors.push(
+            "patch includes description change but meta_description was not requested".to_string(),
+        );
+    }
+    if patch.changes.first_paragraph.is_some() && !has_snippet_issue {
+        errors.push(
+            "patch includes first_paragraph change but snippet_bait was not requested".to_string(),
+        );
+    }
+
+    errors
+}
+
+/// Build a validated `CtrFixPatch` from concrete recommendation strings when possible.
+///
+/// Used by generate to short-circuit the LLM when analyze already produced write-ready
+/// values. Returns `None` if any fix cannot be mapped, or if normalize/validate fails —
+/// never soft-succeeds an empty or incomplete patch when open fixes still need changes.
+pub(crate) fn try_patch_from_recommendation(
+    rec: &CtrRecommendation,
+    original_content: &str,
+    task: &Task,
+) -> Option<CtrFixPatch> {
+    use crate::models::ctr::{CtrFixPatchChanges, CtrFixPatchFaqQuestion, CtrFixType};
+
+    let mut changes = CtrFixPatchChanges::default();
+
+    for fix in &rec.fixes {
+        match fix.fix_type {
+            CtrFixType::TitleRewrite => {
+                let recommended = fix.recommended.as_str()?;
+                if recommended.trim().is_empty() {
+                    return None;
+                }
+                changes.title = Some(recommended.to_string());
+            }
+            CtrFixType::MetaDescription => {
+                let recommended = fix.recommended.as_str()?;
+                if recommended.trim().is_empty() {
+                    return None;
+                }
+                changes.description = Some(recommended.to_string());
+            }
+            CtrFixType::SnippetBait => {
+                // String-only first_paragraph mapping; complex objects require the LLM.
+                let recommended = fix.recommended.as_str()?;
+                if recommended.trim().is_empty() {
+                    return None;
+                }
+                changes.first_paragraph = Some(recommended.to_string());
+            }
+            CtrFixType::FaqSchema => {
+                // Only complete FAQ objects with non-empty question + answer.
+                // Questions-only / incomplete FAQ → None (do not invent answers).
+                let items = fix.recommended.as_array()?;
+                if items.is_empty() {
+                    return None;
+                }
+                let mut faq_questions = Vec::with_capacity(items.len());
+                for item in items {
+                    let obj = item.as_object()?;
+                    let question = obj.get("question")?.as_str()?;
+                    let answer = obj.get("answer")?.as_str()?;
+                    if question.trim().is_empty() || answer.trim().is_empty() {
+                        return None;
+                    }
+                    faq_questions.push(CtrFixPatchFaqQuestion {
+                        question: question.to_string(),
+                        answer: answer.to_string(),
+                    });
+                }
+                changes.faq_questions = Some(faq_questions);
+            }
+        }
+    }
+
+    let mut patch = CtrFixPatch {
+        article_id: rec.article_id,
+        file: rec.file.clone(),
+        error: None,
+        changes,
+    };
+
+    let _repairs = normalize_patch_before_validation(&mut patch, task);
+    let mut errors = validate_patch_before_write(&patch, task, original_content);
+    if !errors.is_empty() {
+        let _ = prune_invalid_change_fields(&mut patch, &errors);
+        errors = validate_patch_before_write(&patch, task, original_content);
+    }
+    errors.extend(validate_patch_against_recommendation(
+        &patch,
+        rec,
+        original_content,
+    ));
+
+    // Reject empty patches after prune — never soft-succeed with no changes.
+    let has_change = patch.changes.title.is_some()
+        || patch.changes.description.is_some()
+        || patch.changes.first_paragraph.is_some()
+        || patch.changes.faq_questions.is_some()
+        || patch.changes.snippet_patch.is_some();
+    if !errors.is_empty() || !has_change {
+        log::info!(
+            "[try_patch_from_recommendation] Deterministic map rejected for {}: {}",
+            rec.file,
+            if errors.is_empty() {
+                "no valid changes after normalize/prune".to_string()
+            } else {
+                errors.join("; ")
+            }
+        );
+        return None;
+    }
+
+    Some(patch)
+}
+
+/// Extract the single CtrRecommendation from the task's ctr_recommendations artifact.
+pub(crate) fn extract_recommendation(task: &Task) -> Result<Option<CtrRecommendation>, String> {
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|a| a.key == "ctr_recommendations");
+
+    let json = match artifact {
+        Some(a) => match a.content.as_ref() {
+            Some(c) => c,
+            None => return Err("ctr_recommendations artifact has no content".to_string()),
+        },
+        None => return Ok(None),
+    };
+
+    match serde_json::from_str(json) {
+        Ok(r) => Ok(Some(r)),
+        Err(e) => Err(format!("JSON parse error: {}", e)),
+    }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+fn normalize_whitespace_in_place(value: &mut String, note: &str, repairs: &mut Vec<String>) {
+    let normalized = collapse_whitespace(value);
+    if normalized != *value {
+        *value = normalized;
+        repairs.push(note.to_string());
+    }
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn shorten_to_char_limit(value: &str, max_chars: usize) -> Option<String> {
+    let clean = collapse_whitespace(value);
+    if clean.chars().count() <= max_chars {
+        return Some(clean);
+    }
+
+    let mut shortened = String::new();
+    for word in clean.split_whitespace() {
+        let candidate = if shortened.is_empty() {
+            word.to_string()
+        } else {
+            format!("{} {}", shortened, word)
+        };
+        if candidate.chars().count() > max_chars {
+            break;
+        }
+        shortened = candidate;
+    }
+
+    let shortened = shortened
+        .trim_end_matches(&[' ', ',', ';', ':', '-', '|'][..])
+        .trim()
+        .to_string();
+    if shortened.is_empty() {
+        None
+    } else {
+        Some(shortened)
+    }
+}
+
+fn shorten_meta_description(value: &str, min_chars: usize, max_chars: usize) -> Option<String> {
+    let mut shortened = shorten_to_char_limit(value, max_chars)?;
+    shortened = shortened
+        .trim_end_matches(&[' ', ',', ';', ':', '-'][..])
+        .trim()
+        .to_string();
+    if !shortened.ends_with('.') && !shortened.ends_with('!') && !shortened.ends_with('?') {
+        if shortened.chars().count() < max_chars {
+            shortened.push('.');
+        }
+    }
+
+    let len = shortened.chars().count();
+    if len >= min_chars && len <= max_chars {
+        Some(shortened)
+    } else {
+        None
+    }
+}
+
+fn pad_paragraph_to_min_words(
+    paragraph: &str,
+    min_words: usize,
+    target_keyword: &str,
+) -> Option<String> {
+    let mut text = paragraph.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let kw = crate::content::keyword_match::normalize_keyword(target_keyword);
+    let fillers = [
+        "This guide covers the key steps and practical considerations.",
+        "Use the sections below for definitions and a simple checklist.",
+        "Read on for clear examples and trade-offs.",
+    ];
+    for filler in fillers {
+        let mut candidate = if text.ends_with('.') || text.ends_with('!') || text.ends_with('?') {
+            format!("{} {}", text, filler)
+        } else {
+            format!("{}. {}", text, filler)
+        };
+        if !kw.is_empty()
+            && !crate::content::keyword_match::keyword_present(&candidate.to_lowercase(), &kw)
+        {
+            candidate = format!(
+                "{} This overview focuses on {}.",
+                candidate.trim_end_matches('.'),
+                kw
+            );
+        }
+        if crate::content::ops::count_words(&candidate) >= min_words {
+            return Some(candidate);
+        }
+        text = candidate;
+    }
+    if crate::content::ops::count_words(&text) >= min_words {
+        Some(text)
+    } else {
+        None
+    }
+}

@@ -1,0 +1,50 @@
+[package]
+name = "pageseeds-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "PageSeeds domain library (no Tauri)"
+license = "UNLICENSED"
+
+[lib]
+name = "pageseeds_core"
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+dotenvy = "0.15"
+dirs = "5"
+log = "0.4"
+regex = "1"
+walkdir = "2"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "process", "macros"] }
+futures = "0.3"
+jsonwebtoken = "9"
+csv = "1"
+urlencoding = "2"
+env_logger = "0.11"
+ts-rs = { version = "12", features = ["serde-json-impl"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+agent-wrapper = { git = "https://github.com/fstrauf/agent-wrapper", tag = "v0.1.0" }
+rig-core = { version = "0.35", features = ["derive", "experimental"] }
+schemars = "1.0"
+async-trait = "0.1"
+writing-analysis = "0.1"
+once_cell = "1"
+scraper = "0.26"
+url = "2"
+base64 = "0.22"
+toml = { version = "0.8", features = ["preserve_order"] }
+
+[dev-dependencies]
+wiremock = "0.6"

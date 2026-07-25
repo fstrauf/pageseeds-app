@@ -14,7 +14,12 @@ cd "$(dirname "$0")/.."
 
 # Find all Rust files that contain "task_store::create_task".
 # Exclude allowed locations, binary smoke tests, and calls inside #[cfg(test)] modules.
-violations=$(grep -rn "task_store::create_task" src-tauri/src --include="*.rs" | while IFS=: read -r file line text; do
+# Scan domain core + CLI + residual desktop commands (until #184).
+violations=$(grep -rn "task_store::create_task" \
+    crates/pageseeds-core/src \
+    crates/pageseeds-cli/src \
+    src-tauri/src \
+    --include="*.rs" 2>/dev/null | while IFS=: read -r file line text; do
     if [[ "$file" == *engine/spawner.rs \
         || "$file" == *engine/task_store.rs \
         || "$file" == *commands/tasks.rs \

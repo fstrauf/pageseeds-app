@@ -36,3 +36,7 @@ smoke_*.db
 smoke_*.db-shm
 smoke_*.db-wal
 src-tauri/data.sqlite
+/target
+
+# ts-rs accidental local export if config missing
+/crates/pageseeds-core/bindings/

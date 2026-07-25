@@ -4,15 +4,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MANIFEST="${ROOT}/src-tauri/Cargo.toml"
+# Workspace root Cargo.toml (pageseeds-core + pageseeds-cli)
+MANIFEST="${ROOT}/Cargo.toml"
 
 resolve_bin() {
   if [[ -n "${PAGESEEDS_CLI:-}" && -x "${PAGESEEDS_CLI}" ]]; then
     echo "${PAGESEEDS_CLI}"
     return
   fi
-  local debug="${ROOT}/src-tauri/target/debug/pageseeds-cli"
-  local release="${ROOT}/src-tauri/target/release/pageseeds-cli"
+  local debug="${ROOT}/target/debug/pageseeds-cli"
+  local release="${ROOT}/target/release/pageseeds-cli"
   if [[ -x "${debug}" ]]; then
     echo "${debug}"
     return
@@ -26,7 +27,7 @@ resolve_bin() {
     return
   fi
   echo "Building debug pageseeds-cli..." >&2
-  cargo build --manifest-path "${MANIFEST}" --bin pageseeds-cli >&2
+  cargo build -p pageseeds-cli --manifest-path "${MANIFEST}" >&2
   if [[ ! -x "${debug}" ]]; then
     echo "error: failed to build pageseeds-cli at ${debug}" >&2
     exit 1

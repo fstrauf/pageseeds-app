@@ -9,13 +9,16 @@ Concise orientation and rules for AI agents working in this repo.
 
 ## What This Repo Is
 
-A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI dependency.
+A **Rust workspace** for SEO operator tooling plus a (temporarily non-building) Tauri desktop shell.
 
-- **Backend**: Rust (`src-tauri/src/`)
+- **Domain library**: `crates/pageseeds-core` (`pageseeds_core`) — **no Tauri deps**
+- **Operator CLI**: `crates/pageseeds-cli` (`pageseeds-cli` bin) — depends only on core
+- **Desktop**: `src-tauri/` — **temporarily non-building**; domain SoT moved to core; rebuild deferred to **#184**
 - **Frontend**: React + TypeScript + Vite + Tailwind v4 + shadcn/ui (`src/`)
 - **Store**: SQLite (runtime state) + JSON in the user's repo (committed content data)
-- **LLM layer**: Rig-core providers with a legacy CLI fallback (`src-tauri/src/rig/`, `src-tauri/src/engine/agent.rs`)
-- **Not related to `pageseeds-cli`**: business logic is re-implemented here in Rust
+- **LLM layer**: Rig-core providers with a legacy CLI fallback (`crates/pageseeds-core/src/rig/`, `engine/agent.rs`)
+
+> **Crate split (#183):** Edit domain logic in `crates/pageseeds-core`, not under `src-tauri/src/` (except Tauri `commands/` until #184). Ship gates for operator work: `cargo test -p pageseeds-core` / `cargo build -p pageseeds-cli` / `pnpm run test:cli`.
 
 ---
 
@@ -23,7 +26,7 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 
 | If you need to... | Use this path | Do NOT |
 |---|---|---|
-| **Adjust how an AI writes/reviews content** | Edit the embedded skill in `src-tauri/skills/{skill}/SKILL.md` — it is the single source of truth for app-default skills (registered in `engine/skills.rs`). Project-level `.github/skills/{skill}/SKILL.md` overrides still work for per-project customization, but trigger a drift warning at load time when an embedded counterpart exists and its version marker differs. Test with `build_prompt_preview` before touching executor logic; validate with unit tests + Path B package/submit floors (not live LLM evals). | Add a new task type or handler just to change the prompt |
+| **Adjust how an AI writes/reviews content** | Edit the embedded skill in `crates/pageseeds-core/skills/{skill}/SKILL.md` — it is the single source of truth for app-default skills (registered in `engine/skills.rs`). Project-level `.github/skills/{skill}/SKILL.md` overrides still work for per-project customization, but trigger a drift warning at load time when an embedded counterpart exists and its version marker differs. Test with `build_prompt_preview` before touching executor logic; validate with unit tests + Path B package/submit floors (not live LLM evals). | Add a new task type or handler just to change the prompt |
 | **Run the weekly SEO pass on a project** | Invoke the `weekly-seo` skill (`.agents/skills/weekly-seo/SKILL.md`, discoverable by Kimi Code) — **desk-first** (epic #117): refresh if stale → `site-overview` → `articles`/`article`/`gsc-queries` → ≤5 actions → report. Soft audits optional, not ground truth. Skill is the workflow; judgment lives in the agent. | Build a Rust orchestrator, scheduler, or cross-project runner; treat soft clusters as merge authority |
 | **Add a new content-writing behavior** | Reuse `write_article` + `ContentHandler` + a `skill` param. | Add a new handler unless the step graph changes |
 | **Add or change task lifecycle behavior** | Follow the [Task Lifecycle Contract](#task-lifecycle-contract), then update `config/task_definitions.rs`, `engine/post_actions.rs`, or the user-selection command as appropriate. | Encode lifecycle rules in a component, executor special case, or ad-hoc task factory |
@@ -48,17 +51,24 @@ A **Tauri 2 desktop app** — self-contained binary, no Python, no external CLI 
 ## Directory Map
 
 ```
-src-tauri/src/
-├── commands/            # #[tauri::command] bindings — thin wrappers by domain
-├── db/                  # SQLite init, migrations, JSON repo export
-├── models/              # Serde structs crossing the IPC boundary
-├── engine/              # Workflow orchestration: store, spawner, executor, handlers
-│   ├── workflows/       # Handler trait + step plans
-│   └── exec/            # Step implementations
-├── config/              # Constants, task definitions, env resolver
-├── content/             # MDX file operations
-├── reddit/, gsc/, seo/, social/, clarity/, rig/  # Domain modules
-└── lib.rs               # Tauri setup + state
+Cargo.toml                 # workspace: pageseeds-core, pageseeds-cli
+crates/
+├── pageseeds-core/        # Domain library (rlib only; NO tauri)
+│   ├── skills/            # Embedded app-default skills (include_str!)
+│   ├── config/            # tool_catalog.toml
+│   └── src/
+│       ├── db/            # SQLite init, migrations, JSON repo export
+│       ├── models/        # Serde structs (IPC + CLI)
+│       ├── engine/        # Workflow orchestration: store, spawner, executor, handlers
+│       │   ├── workflows/ # Handler trait + step plans
+│       │   └── exec/      # Step implementations
+│       ├── config/        # Constants, task definitions, env resolver
+│       ├── content/       # MDX file operations
+│       ├── reddit/, gsc/, seo/, social/, clarity/, rig/, license/, …
+│       └── lib.rs         # Domain modules only
+└── pageseeds-cli/         # Operator CLI bin (depends only on core)
+src-tauri/                 # Desktop shell — TEMPORARILY NON-BUILDING (#184)
+└── src/commands/          # #[tauri::command] bindings (not in core)
 
 src/
 ├── lib/
@@ -86,7 +96,7 @@ For the full tree and per-folder responsibilities, see [`AI_QUICK_START.md`](./A
 ### RIG / LLM Integration
 
 1. **Use standard `rig-core` primitives first.** Prefer Rig providers/completion models, `Extractor<T>`, `Tool`/tool sets, embeddings, and agents before writing custom HTTP loops, regex JSON extraction, bespoke tool registries, or prompt-only protocols.
-2. **Keep Rig behind the local integration layer.** Put provider, extraction, tool, embedding, and agent adapters in `src-tauri/src/rig/` (or the existing domain module that already wraps Rig).
+2. **Keep Rig behind the local integration layer.** Put provider, extraction, tool, embedding, and agent adapters in `crates/pageseeds-core/src/rig/` (or the existing domain module that already wraps Rig).
 3. **Structured output uses schemas.** New agentic steps that need JSON must define a typed Rust output struct with `serde` + `schemars::JsonSchema` and use a Rig extractor or equivalent typed extraction wrapper.
 4. **Tools use Rig tool abstractions.** If a model needs to call Ahrefs, GSC, Reddit, file analysis, or other deterministic capabilities, expose them as typed Rig tools.
 5. **Provider fallback is centralized.** Any fallback to `agent-wrapper`, CLI providers, or compatibility shims belongs in the Rig/provider layer and must be documented as temporary.
@@ -346,14 +356,14 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 
 | Work kind | Gate | Composition / notes |
 |-----------|------|---------------------|
-| **Operator / CLI / domain Rust** (default for product work) | `pnpm test:cli` | `test:rust` → `check:task-store` → `check:cli-contract`. No Vite/lint/tsc/IPC/bindings. Missing operator checks go into **`test:cli`**. |
-| **Desktop / React / IPC / bindings** (until #184) | `pnpm test:all` | Full monorepo: rust + lint + tsc + vitest + check:ipc + check:task-store + check-bindings + build. Missing desktop checks go into **`test:all`**. |
+| **Operator / CLI / domain Rust** (default for product work) | `pnpm test:cli` | `test:rust` (`cargo test -p pageseeds-core`) → `check:task-store` → `check:cli-contract`. No Vite/lint/tsc/IPC/bindings. Missing operator checks go into **`test:cli`**. |
+| **Desktop / React / IPC / bindings** (until #184) | `pnpm test:all` | Full monorepo: rust + lint + tsc + vitest + check:ipc + check:task-store + check-bindings + build. **Desktop `src-tauri` may not build until #184.** Missing desktop checks go into **`test:all`**. |
 
 ### Rust Backend
 - [ ] Checked for reuse against the DRY catalog above
 - [ ] Task lifecycle contract checked (if creating/queuing/spawning tasks)
 - [ ] Operator/CLI-only changes: ship with `pnpm test:cli` (not every desktop bullet below)
-- [ ] `cargo check` passes before touching the frontend
+- [ ] `cargo check -p pageseeds-core` / `cargo build -p pageseeds-cli` before frontend work
 - [ ] `pnpm run test:rust` passes — especially `all_task_types_have_non_fallback_handler` (uses `cargo nextest` when installed; tests that mutate process env must hold `test_support::ENV_LOCK`)
 - [ ] New SQLite columns added via a new migration, not by altering existing ones
 - [ ] Settings placed correctly: user preferences → `global_settings`; project config → `projects`

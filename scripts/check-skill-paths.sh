@@ -13,7 +13,7 @@ violations=$(grep -rn "\.github/automation/skills" --include="*.md" --include="*
 
 if [ -n "$violations" ]; then
     echo "ERROR: Stale skill path references found."
-    echo "Skills live at .github/skills/{name}/SKILL.md (project-level) or are embedded in src-tauri/src/skills/ (app defaults)."
+    echo "Skills live at .github/skills/{name}/SKILL.md (project-level) or are embedded in crates/pageseeds-core/skills/ (app defaults)."
     echo "They do NOT live at .github/automation/skills/."
     echo ""
     echo "Violations:"
