@@ -10,7 +10,6 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json;
 
 use crate::engine::executor::{self, ExecutionResult};
-use crate::engine::queue_runner;
 use crate::engine::task_store;
 use crate::error::Result;
 use crate::models::queue::{

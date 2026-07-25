@@ -290,4 +290,4 @@ Enforcement points (do not bypass or re-implement):
 
 **Semver surface:** flags and subcommand names are a breaking-change surface; renames must be called out in release notes. Smoke check: `scripts/check-cli-contract.sh` (via `pnpm run check:cli-contract`). Operator ship gate: `pnpm test:cli`.
 
-**Hard-error helper:** `exit(msg)` in `src-tauri/src/bin/pageseeds-cli.rs` is the sole hard-fail path (`eprintln!("ERROR: …")` + exit 1). License deny (#156) must reuse it with a buy URL in the message — do not invent a separate exit channel.
+**Hard-error helper:** `exit(msg)` in `crates/pageseeds-cli/src/main.rs` is the sole hard-fail path (`eprintln!("ERROR: …")` + exit 1). License deny (#156) must reuse it with a buy URL in the message — do not invent a separate exit channel.

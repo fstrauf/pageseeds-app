@@ -134,9 +134,9 @@ Before adding or changing anything that creates, queues, reviews, or spawns task
 
 | Lane | Source of truth | How it works | Reuse |
 |---|---|---|---|
-| **User starts an existing task** | `src/lib/taskQueueActions.ts`, `src/stores/queueStore.ts`, `src-tauri/src/engine/queue.rs` | Frontend sends `EnqueueItem`s; backend persists queue rows, starts the runner, emits queue events. | `enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`, `removeQueueItem` |
-| **System creates a task** | `src-tauri/src/engine/spawner.rs` | Build a `TaskSpec`; defaults come from `config/task_definitions.rs`; idempotency prevents duplicate active work. | `TaskSpawner::spawn` |
-| **Task creates backend follow-ups after success** | `src-tauri/src/engine/post_actions.rs` | `after_task_success` runs after executor completion and returns created task IDs; queue auto-enqueues only follow-ups whose `run_policy` is `auto_enqueue`. | `TaskSpawner::spawn_follow_up` |
+| **User starts an existing task** | `src/lib/taskQueueActions.ts`, `src/stores/queueStore.ts`, `crates/pageseeds-core/src/engine/queue.rs` | Frontend sends `EnqueueItem`s; backend persists queue rows, starts the runner, emits queue events. | `enqueueTasks`, `getQueueSnapshot`, `pauseQueue`, `resumeQueue`, `removeQueueItem` |
+| **System creates a task** | `crates/pageseeds-core/src/engine/spawner.rs` | Build a `TaskSpec`; defaults come from `config/task_definitions.rs`; idempotency prevents duplicate active work. | `TaskSpawner::spawn` |
+| **Task creates backend follow-ups after success** | `crates/pageseeds-core/src/engine/post_actions.rs` | `after_task_success` runs after executor completion and returns created task IDs; queue auto-enqueues only follow-ups whose `run_policy` is `auto_enqueue`. | `TaskSpawner::spawn_follow_up` |
 | **Task requires user input before follow-ups** | `config/task_definitions.rs` + review UI + selection command | Parent task gets `review_surface != none` and usually `follow_up_policy = UserSelection`; executor leaves it in `review`; the selection command validates choices, creates downstream tasks, marks parent done. | Existing patterns: keyword picker, Reddit picker, cannibalization picker |
 | **Task should only show results, not spawn work** | `config/task_definitions.rs` | Use `artifact_review` and `follow_up_policy = None`. | Existing artifact review surfaces |
 
