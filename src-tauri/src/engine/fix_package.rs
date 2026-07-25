@@ -363,9 +363,15 @@ pub fn submit_fix(
     if validation.ok {
         touch_last_edited(conn, project_id, package.article_id);
 
-        // Catalog keyword SoT: only when explicit -K or content-patch field (issue #165).
+        // Catalog keyword SoT: -K, content-patch field, or FM when it differs (issues #165 / #179).
         // Runs after validation success so an old catalog keyword never hard-fails submit.
-        if let Some(kw) = resolve_fix_submit_target_keyword(&opts, kind) {
+        // No silent sync on desk reads — only Path B fix-submit after successful validation.
+        if let Some(kw) = resolve_fix_submit_target_keyword(
+            &opts,
+            kind,
+            &content,
+            package.target_keyword.as_deref(),
+        ) {
             if crate::content::article_index::apply_catalog_target_keyword(
                 conn,
                 project_id,
@@ -488,13 +494,22 @@ fn touch_last_edited(conn: &Connection, project_id: &str, article_id: i64) {
     );
 }
 
-/// Resolve keyword intent for Path B fix-submit catalog write (issue #165).
+/// Resolve keyword intent for Path B fix-submit catalog write (issues #165 / #179).
 ///
 /// Precedence:
-/// 1. `opts.target_keyword` if non-empty after trim
-/// 2. else content-patch `changes.target_keyword` if Some/non-empty
-/// 3. else no catalog write
-fn resolve_fix_submit_target_keyword(opts: &FixSubmitOpts, kind: FixKind) -> Option<String> {
+/// 1. `opts.target_keyword` (`-K`) if non-empty after trim
+/// 2. else content-patch `changes.target_keyword` if Some/non-empty (content kind only)
+/// 3. else FM `target_keyword` from the submitted file if non-empty after
+///    [`normalize_keyword`] and **differs** from the current catalog keyword
+///    (content kind only; empty FM never clears catalog)
+///
+/// SERP/title-only submits without keyword intent leave the catalog unchanged.
+fn resolve_fix_submit_target_keyword(
+    opts: &FixSubmitOpts,
+    kind: FixKind,
+    content: &str,
+    catalog_keyword: Option<&str>,
+) -> Option<String> {
     if let Some(ref k) = opts.target_keyword {
         let t = k.trim();
         if !t.is_empty() {
@@ -504,15 +519,30 @@ fn resolve_fix_submit_target_keyword(opts: &FixSubmitOpts, kind: FixKind) -> Opt
     if kind != FixKind::Content {
         return None;
     }
-    let patch_json = opts.patch_json.as_deref()?;
-    let patch: ContentFixPatch = serde_json::from_str(patch_json).ok()?;
-    let k = patch.changes.target_keyword.as_deref()?;
-    let t = k.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t.to_string())
+    if let Some(patch_json) = opts.patch_json.as_deref() {
+        if let Ok(patch) = serde_json::from_str::<ContentFixPatch>(patch_json) {
+            if let Some(ref k) = patch.changes.target_keyword {
+                let t = k.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
     }
+    // Issue #179 residual A: FM keyword that differs from catalog after normalize.
+    let fm_raw =
+        crate::content::frontmatter::extract_frontmatter_string(content, "target_keyword")?;
+    let fm_norm = crate::content::keyword_match::normalize_keyword(&fm_raw);
+    if fm_norm.is_empty() {
+        return None;
+    }
+    let catalog_norm = catalog_keyword
+        .map(crate::content::keyword_match::normalize_keyword)
+        .unwrap_or_default();
+    if fm_norm == catalog_norm {
+        return None;
+    }
+    Some(fm_raw)
 }
 
 // ─── Deterministic patch apply via shared materializers (no Task / no LLM) ───
@@ -1290,6 +1320,229 @@ Intro paragraph about cold brew makers for home use.
         assert!(
             !written.contains("target_keyword"),
             "title-only must not inject target_keyword FM: {written}"
+        );
+    }
+
+    fn valid_mdx_with_keyword(title: &str, h1: &str, keyword: &str, body_extra: &str) -> String {
+        format!(
+            r#"---
+title: "{title}"
+description: "A solid meta description that is long enough for SEO structural checks and stays under one fifty five."
+date: "2026-01-15"
+target_keyword: "{keyword}"
+---
+
+# {h1}
+
+Intro paragraph about cold brew makers for home use.
+
+{body_extra}
+"#
+        )
+    }
+
+    /// Issue #179: FM-only retarget (no -K, no patch field) updates catalog + projection.
+    #[test]
+    fn submit_fm_keyword_only_resyncs_catalog_when_differs() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            15,
+            "fm-retarget",
+            "FM Retarget",
+            "content/fm-retarget.mdx",
+        );
+        set_catalog_keyword(&conn, "proj1", 15, "old garbage keyword phrase that is very long");
+        write_mdx(
+            &project,
+            "content/fm-retarget.mdx",
+            &valid_mdx_with_keyword(
+                "FM Retarget",
+                "FM Retarget",
+                "Pour Over Coffee",
+                "Body about pour over.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "fm-retarget",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert!(
+            result.applied.iter().any(|a| a == "target_keyword"),
+            "applied should include target_keyword: {:?}",
+            result.applied
+        );
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 15).as_deref(),
+            Some("pour over coffee")
+        );
+        // Projection re-exported under .github/automation/articles.json
+        let proj_path = project.join(".github/automation/articles.json");
+        assert!(
+            proj_path.exists(),
+            "catalog projection should be re-exported at {}",
+            proj_path.display()
+        );
+        let proj = fs::read_to_string(&proj_path).unwrap();
+        assert!(
+            proj.contains("pour over coffee"),
+            "projection should contain normalized keyword: {proj}"
+        );
+    }
+
+    /// Issue #179: explicit -K still wins over FM (and patch).
+    #[test]
+    fn submit_opts_keyword_wins_over_fm_and_patch() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            16,
+            "k-wins",
+            "K Wins",
+            "content/k-wins.mdx",
+        );
+        set_catalog_keyword(&conn, "proj1", 16, "catalog garbage");
+        write_mdx(
+            &project,
+            "content/k-wins.mdx",
+            &valid_mdx_with_keyword(
+                "K Wins",
+                "K Wins",
+                "Frontmatter Keyword",
+                "Body text.",
+            ),
+        );
+
+        let patch = r#"{
+            "article_id": 16,
+            "file": "content/k-wins.mdx",
+            "changes": {
+                "target_keyword": "Patch Keyword"
+            }
+        }"#;
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "k-wins",
+            FixKind::Content,
+            FixSubmitOpts {
+                target_keyword: Some("  Explicit CLI Keyword  ".to_string()),
+                patch_json: Some(patch.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result);
+        assert!(result.applied.iter().any(|a| a == "target_keyword"));
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 16).as_deref(),
+            Some("explicit cli keyword")
+        );
+    }
+
+    /// Issue #179: empty/missing FM keyword does not clear catalog.
+    #[test]
+    fn submit_empty_fm_keyword_does_not_clear_catalog() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            17,
+            "empty-fm",
+            "Empty FM",
+            "content/empty-fm.mdx",
+        );
+        let keep = "keep this catalog keyword intact";
+        set_catalog_keyword(&conn, "proj1", 17, keep);
+        // valid_mdx has no target_keyword field
+        write_mdx(
+            &project,
+            "content/empty-fm.mdx",
+            &valid_mdx("Empty FM", "Empty FM", "Body without FM keyword."),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "empty-fm",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert!(!result.applied.iter().any(|a| a == "target_keyword"));
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 17).as_deref(),
+            Some(keep)
+        );
+    }
+
+    /// Issue #179: FM keyword identical to catalog (after normalize) is a no-op write.
+    #[test]
+    fn submit_fm_keyword_same_as_catalog_is_noop() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            18,
+            "same-kw",
+            "Same Kw",
+            "content/same-kw.mdx",
+        );
+        set_catalog_keyword(&conn, "proj1", 18, "pour over coffee");
+        write_mdx(
+            &project,
+            "content/same-kw.mdx",
+            &valid_mdx_with_keyword(
+                "Same Kw",
+                "Same Kw",
+                "Pour Over Coffee",
+                "Body about pour over.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "same-kw",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert!(!result.applied.iter().any(|a| a == "target_keyword"));
+        assert_eq!(
+            catalog_keyword(&conn, "proj1", 18).as_deref(),
+            Some("pour over coffee")
         );
     }
 }

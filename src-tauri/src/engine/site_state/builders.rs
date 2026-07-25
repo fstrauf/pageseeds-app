@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use crate::content::ops::count_words;
 use crate::content::redirects::load_redirect_source_slugs;
-use crate::content::slug::normalize_url_slug;
+use crate::content::slug::{extract_slug_from_url, normalize_url_slug, resolve_slug};
 use crate::db::{
     self, build_page_index, pages_for_slug, previous_window, recent_window, rollup_for_slug,
     GscDailyWindowMetrics,
@@ -121,17 +121,31 @@ pub fn build_site_overview(
         .iter()
         .filter(|s| s.last_reason_code.as_deref() != Some("indexed_pass"))
         .collect();
+    // Global GSC count may include live-site-only paths; sample is catalog-only
+    // so create-task -S can act on every sample slug (issue #179 residual D).
     let not_indexed_count = not_indexed_rows.len();
+    let catalog_slugs: HashSet<String> = articles
+        .iter()
+        .map(|a| normalize_url_slug(&a.url_slug))
+        .filter(|s| !s.is_empty())
+        .collect();
     let not_indexed_sample: Vec<NotIndexedSample> = not_indexed_rows
         .into_iter()
-        .take(10)
-        .map(|s| NotIndexedSample {
-            slug: crate::content::slug::extract_slug_from_url(&s.url),
-            reason: s
-                .last_reason_code
-                .clone()
-                .unwrap_or_else(|| "unknown".into()),
+        .filter_map(|s| {
+            let extracted = extract_slug_from_url(&s.url);
+            if extracted.is_empty() {
+                return None;
+            }
+            let slug = resolve_slug(&extracted, &catalog_slugs)?;
+            Some(NotIndexedSample {
+                slug,
+                reason: s
+                    .last_reason_code
+                    .clone()
+                    .unwrap_or_else(|| "unknown".into()),
+            })
         })
+        .take(10)
         .collect();
 
     let avg_ctr = safe_ctr(total_clicks, total_impressions);
@@ -660,7 +674,7 @@ fn indexing_status_map(conn: &Connection, project_id: &str) -> HashMap<String, S
     let rows = crate::gsc::db::list_by_project(conn, project_id).unwrap_or_default();
     let mut map = HashMap::new();
     for row in rows {
-        let slug = crate::content::slug::extract_slug_from_url(&row.url);
+        let slug = extract_slug_from_url(&row.url);
         if slug.is_empty() {
             continue;
         }
