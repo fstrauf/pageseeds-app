@@ -713,3 +713,83 @@ fn min_impressions_filter() {
 
     let _ = fs::remove_dir_all(&project);
 }
+
+/// Issue #179 residual D: `not_indexed_sample` only includes catalog-resolvable
+/// slugs so operators can `create-task -S` every sample entry.
+#[test]
+fn not_indexed_sample_filters_to_catalog_slugs() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // Catalog tracks one article; GSC has that plus a live-site-only path.
+    insert_article(
+        &conn,
+        "proj1",
+        1,
+        "catalog-post",
+        "Catalog Post",
+        "content/catalog-post.mdx",
+        "published",
+        200,
+    );
+
+    let now = Utc::now().to_rfc3339();
+    let in_catalog = crate::gsc::db::UrlIndexingStatus {
+        url: "https://example.com/blog/catalog-post".into(),
+        project_id: "proj1".into(),
+        last_inspected_at: Some(now.clone()),
+        last_reason_code: Some("crawled_currently_not_indexed".into()),
+        last_verdict: Some("fail".into()),
+        last_action: None,
+        consecutive_passes: 0,
+        last_task_created_at: None,
+        last_task_type: None,
+        last_task_id: None,
+        last_fix_summary: None,
+        fix_attempt_count: 0,
+        last_task_resolved_at: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
+    let live_only = crate::gsc::db::UrlIndexingStatus {
+        url: "https://example.com/blog/live-site-only-path".into(),
+        project_id: "proj1".into(),
+        last_inspected_at: Some(now.clone()),
+        last_reason_code: Some("discovered_currently_not_indexed".into()),
+        last_verdict: Some("fail".into()),
+        last_action: None,
+        consecutive_passes: 0,
+        last_task_created_at: None,
+        last_task_type: None,
+        last_task_id: None,
+        last_fix_summary: None,
+        fix_attempt_count: 0,
+        last_task_resolved_at: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    // Insert live-only first so raw first-10 sampling would surface it if
+    // filtering were absent.
+    crate::gsc::db::upsert_status(&conn, &live_only).unwrap();
+    crate::gsc::db::upsert_status(&conn, &in_catalog).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+
+    // Global count still includes all GSC not-indexed rows.
+    assert_eq!(overview.totals.not_indexed, 2);
+    // Sample is catalog-only — never the live-site-only slug alone/unlabeled.
+    assert_eq!(overview.not_indexed_sample.len(), 1);
+    assert_eq!(overview.not_indexed_sample[0].slug, "catalog-post");
+    assert!(
+        !overview
+            .not_indexed_sample
+            .iter()
+            .any(|s| s.slug.contains("live-site-only")),
+        "non-catalog GSC paths must not appear in sample: {:?}",
+        overview.not_indexed_sample
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}

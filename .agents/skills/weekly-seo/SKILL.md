@@ -123,9 +123,11 @@ Breaking these fails the run.
 `collect_gsc`, `collect_clarity`, `clarity_analytics`, `reddit_opportunity_search`.
 
 **Prefer when desk data already supports the action:** `fix_content_article -S`,
-`research_keywords`, `research_landing_pages`, indexing tasks.
+`research_keywords`, `research_landing_pages`, targeted indexing fixes.
 Do **not** invent work via soft audits when desk reads suffice.
 **Demote for weekly CLI:** `ctr_audit` — see [CTR / content fix policy](#ctr--content-fix-policy).
+**Demote for weekly CLI:** full `indexing_health_campaign` — see
+[Indexing / not-indexed policy](#indexing--not-indexed-policy).
 
 
 **Not for weekly strategy:** `content_review` — desktop UI / unattended only (#139).
@@ -153,6 +155,24 @@ CLI weekly best-path for low CTR is **desk-selected targeted fixes**, not a full
    `ctr_audit` and BackendAuto-spawn children — intentional product path. This
    skill is the **CLI operator best-path**; do not flip lifecycle metadata.
 
+### Indexing / not-indexed policy
+
+CLI weekly best-path for not-indexed pages is **desk-selected targeted fixes**,
+not a full `indexing_health_campaign` fan-out.
+
+1. **Best path (default):** Use `site-overview` `not_indexed_sample` (catalog-
+   resolvable slugs only) + `articles` / `article -S` to pick a few actionable
+   URLs. Prefer targeted `fix_indexing_internal_links` and/or
+   `fix_content_article -S` (counts toward ≤5 creates). Cite reason codes /
+   slug evidence in `-r`.
+2. **Do NOT** enqueue full `indexing_health_campaign` as the default weekly
+   action — same budget-burn risk as full `ctr_audit`.
+3. **`indexing_health_campaign` is rare/optional:** Keep it in may-create for
+   scoped/rare use when desk cannot narrow candidates and you explicitly need
+   the productized campaign (still honor budgets). If you create it, note why.
+4. **Hard ban-as-default:** Never treat full IHC as the weekly CLI default for
+   “many not-indexed” — desk → targeted fixes first.
+
 ### Measurement stubs ≠ action backlog (issue #152)
 
 - **`ctr_outcome_review` / deferred CTR measurement todos are not weekly action
@@ -178,6 +198,7 @@ CLI weekly best-path for low CTR is **desk-selected targeted fixes**, not a full
 | `content_review` as strategy brain (`create-task content_review` for weekly explore) | Desk → agent judgment → hard actions (#139) |
 | Soft clusters (`cannibalization-clusters`) as truth / merge authority | Hard evidence only (same query on 2+ URLs, exact keyword dupe, etc.) |
 | Full `ctr_audit` spawn by default (#140) | Desk → targeted `fix_content_article -S`; scoped `ctr_audit` only when needed |
+| Full `indexing_health_campaign` spawn by default (#179) | Desk → targeted `fix_indexing_internal_links` / `fix_content_article -S`; scoped IHC only when needed |
 | Nested `execute-task` LLM for write/fix/merge when Path B tools exist | Path B package → session edit → submit |
 
 ## Soft guidance (default path)
@@ -261,7 +282,7 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 |-------------------|-------------------|
 | High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; Path B fix when available. **Not** full `ctr_audit` first (see CTR policy); **not** `content_review` as strategy brain |
 | Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
-| Many not-indexed | Indexing diagnostics / internal links |
+| Many not-indexed | Desk → targeted `fix_indexing_internal_links` / `fix_content_article -S` on catalog sample slugs. **Not** full `indexing_health_campaign` first (see Indexing policy) |
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
 | Structural MDX issues | `content_cleanup` / `content_review` |
 | Template/title systemic bugs | `generate_feature_spec` + evidence |
@@ -282,9 +303,16 @@ pageseeds-cli research-pull -i <id> -p <path> --seeds "theme one,theme two" ...
 
 Prefer this over relying solely on nested research_seed_extraction when tools exist.
 
-**Research:** generative. Prefer `research-shortlist` health
-(`promising` / `depleted` / `unproven`). Never claim “no gaps found” if research
-did not run — say **skipped** + why + last research date.
+**Research:** generative. Prefer `research-shortlist` / `research-context`
+health (`promising` / `depleted` / `unproven`).
+
+- **Empty shortlist is not “no themes”:** If `research-shortlist` /
+  `research-context` is empty (or Path B pull alone returns nothing useful),
+  run `update_research_shortlist` (create+execute that task) **before** claiming
+  “no themes” or “no gaps.” Do **not** treat empty shortlist after Path B pull
+  alone as proof there are no research gaps.
+- Never claim “no gaps found” if research did not run — say **skipped** + why +
+  last research date.
 
 Avoid-heavy keyword pickers (AIO-blocked heads, mostly `winnability: avoid`):
 prefer shortlist **promising** themes/seeds and re-run research; pick only
@@ -530,6 +558,8 @@ Desk path chased, detours, what you skipped (and why).
 - No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
+- Not-indexed → desk-selected `fix_indexing_internal_links` / `fix_content_article -S`; not default full `indexing_health_campaign`.  
+- Empty research shortlist → `update_research_shortlist` before “no themes.”  
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
 - Mechanical reviews only; only write the weekly report file.  
@@ -544,6 +574,8 @@ Desk path chased, detours, what you skipped (and why).
 clusters and specialist audits remain available but are **optional**, not the
 weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
 `ctr_audit` BackendAuto fan-out is the UI/unattended path, not CLI default.
+CLI weekly indexing: catalog-aware `not_indexed_sample` → targeted link/content
+fixes; full `indexing_health_campaign` is rare/scoped, not CLI default.
 
 **Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
 and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both
