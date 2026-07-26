@@ -57,6 +57,17 @@ fn write_mdx(project: &std::path::Path, rel: &str, body: &str) {
 }
 
 fn daily_row(page: &str, date: &str, clicks: f64, impressions: f64) -> crate::models::gsc::PageDailyMetrics {
+    daily_row_at(page, date, clicks, impressions, 8.0)
+}
+
+/// Like [`daily_row`] but with an explicit position (for striking-distance band tests).
+fn daily_row_at(
+    page: &str,
+    date: &str,
+    clicks: f64,
+    impressions: f64,
+    position: f64,
+) -> crate::models::gsc::PageDailyMetrics {
     crate::models::gsc::PageDailyMetrics {
         page: page.to_string(),
         date: date.to_string(),
@@ -67,7 +78,7 @@ fn daily_row(page: &str, date: &str, clicks: f64, impressions: f64) -> crate::mo
         } else {
             0.0
         },
-        position: 8.0,
+        position,
     }
 }
 
@@ -797,6 +808,353 @@ fn not_indexed_sample_filters_to_catalog_slugs() {
         "non-catalog GSC paths must not appear in sample: {:?}",
         overview.not_indexed_sample
     );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+// ── Issue #204: zero_impression / striking_distance / hard_cannibalization ───
+
+#[test]
+fn zero_impression_counts_published_with_zero_or_missing_gsc() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // Live published with traffic — should NOT be zero-impression.
+    insert_article(
+        &conn, "proj1", 1, "has-traffic", "Has Traffic", "content/t.mdx", "published", 100,
+    );
+    // Live published missing GSC rows → treat as 0 impressions.
+    insert_article(
+        &conn, "proj1", 2, "no-gsc-rows", "No Gsc", "content/n.mdx", "published", 50,
+    );
+    // Live published with explicit 0 impressions.
+    insert_article(
+        &conn, "proj1", 3, "zero-impr", "Zero Impr", "content/z.mdx", "published", 40,
+    );
+    // Draft (not published) with 0 impressions — excluded.
+    insert_article(
+        &conn, "proj1", 4, "draft-zero", "Draft Zero", "content/d.mdx", "draft", 20,
+    );
+    // Redirected published with 0 impressions — excluded (not live).
+    insert_article(
+        &conn, "proj1", 5, "redirected-zero", "Redirected", "content/r.mdx", "published", 10,
+    );
+    fs::write(
+        project.join(".github/automation/redirects.csv"),
+        "source,destination,status\n/blog/redirected-zero,/blog/has-traffic,301\n",
+    )
+    .unwrap();
+
+    let (d1, _) = recent_dates();
+    let rows = vec![
+        daily_row("https://example.com/blog/has-traffic", &d1, 5.0, 100.0),
+        daily_row("https://example.com/blog/zero-impr", &d1, 0.0, 0.0),
+        // draft-zero / no-gsc-rows / redirected-zero have no rows
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+
+    assert!(overview.zero_impression.degraded_reason.is_none());
+    assert_eq!(overview.zero_impression.count, 2);
+    let slugs: Vec<&str> = overview
+        .zero_impression
+        .sample
+        .iter()
+        .map(|s| s.slug.as_str())
+        .collect();
+    // Sample sorted by slug asc.
+    assert_eq!(slugs, vec!["no-gsc-rows", "zero-impr"]);
+    assert!(overview
+        .hints
+        .iter()
+        .any(|h| h == "Zero-impression published inventory present"));
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn zero_impression_degraded_when_gsc_tape_missing() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "lonely", "Lonely", "content/l.mdx", "published", 10,
+    );
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.freshness.source, "none");
+    assert_eq!(overview.zero_impression.count, 0);
+    assert!(overview.zero_impression.sample.is_empty());
+    assert_eq!(
+        overview.zero_impression.degraded_reason.as_deref(),
+        Some("gsc_missing")
+    );
+    assert!(
+        !overview
+            .hints
+            .iter()
+            .any(|h| h == "Zero-impression published inventory present")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn striking_distance_inclusion_and_exclusion_band() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // pos 8, impr 250 → included (default daily_row position is 8.0).
+    insert_article(
+        &conn, "proj1", 1, "in-band", "In Band", "content/i.mdx", "published", 100,
+    );
+    // pos 6, high impr → excluded (below STRIKING_POS_MIN).
+    insert_article(
+        &conn, "proj1", 2, "too-high", "Too High", "content/h.mdx", "published", 100,
+    );
+    // pos 14, high impr → excluded (above STRIKING_POS_MAX).
+    insert_article(
+        &conn, "proj1", 3, "too-low", "Too Low", "content/l.mdx", "published", 100,
+    );
+    // pos 10, impr 50 → excluded (below STRIKING_MIN_IMPRESSIONS).
+    insert_article(
+        &conn, "proj1", 4, "low-impr", "Low Impr", "content/m.mdx", "published", 100,
+    );
+    // pos 7 boundary + high impr → included.
+    insert_article(
+        &conn, "proj1", 5, "boundary-min", "Boundary Min", "content/b.mdx", "published", 100,
+    );
+    // pos 13 boundary + higher impr → included; should sort first by impr desc.
+    insert_article(
+        &conn, "proj1", 6, "boundary-max", "Boundary Max", "content/x.mdx", "published", 100,
+    );
+
+    let (d1, _) = recent_dates();
+    let rows = vec![
+        daily_row_at("https://example.com/blog/in-band", &d1, 10.0, 250.0, 8.0),
+        daily_row_at("https://example.com/blog/too-high", &d1, 20.0, 500.0, 6.0),
+        daily_row_at("https://example.com/blog/too-low", &d1, 5.0, 400.0, 14.0),
+        daily_row_at("https://example.com/blog/low-impr", &d1, 1.0, 50.0, 10.0),
+        daily_row_at("https://example.com/blog/boundary-min", &d1, 8.0, 220.0, 7.0),
+        daily_row_at("https://example.com/blog/boundary-max", &d1, 12.0, 300.0, 13.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.striking_distance.count, 3);
+    let slugs: Vec<&str> = overview
+        .striking_distance
+        .sample
+        .iter()
+        .map(|s| s.slug.as_str())
+        .collect();
+    // Sorted by impressions desc: boundary-max (300), in-band (250), boundary-min (220).
+    assert_eq!(slugs, vec!["boundary-max", "in-band", "boundary-min"]);
+    assert!(overview
+        .hints
+        .iter()
+        .any(|h| h == "Striking-distance pages present"));
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn hard_cannibalization_multi_url_same_query() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    insert_article(
+        &conn, "proj1", 1, "page-a", "Page A", "content/a.mdx", "published", 100,
+    );
+    insert_article(
+        &conn, "proj1", 2, "page-b", "Page B", "content/b.mdx", "published", 100,
+    );
+    insert_article(
+        &conn, "proj1", 3, "page-c", "Page C", "content/c.mdx", "published", 100,
+    );
+
+    // Need some GSC tape so overview has_any_gsc is true (unrelated to hard cannibal).
+    let (d1, _) = recent_dates();
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row(
+            "https://example.com/blog/page-a",
+            &d1,
+            1.0,
+            20.0,
+        )],
+    )
+    .unwrap();
+
+    // Shared query across A and B with impr >= 10 each → hard cannibal group.
+    crate::db::set_ctr_query_metrics(
+        &conn,
+        "proj1",
+        1,
+        "https://example.com/blog/page-a",
+        &[(
+            "shared widget query".into(),
+            50.0,
+            3.0,
+            0.06,
+            8.0,
+            None,
+        )],
+        Some("2026-01-01"),
+        Some("2026-01-28"),
+    )
+    .unwrap();
+    crate::db::set_ctr_query_metrics(
+        &conn,
+        "proj1",
+        2,
+        "https://example.com/blog/page-b",
+        &[(
+            "Shared Widget Query".into(), // case-insensitive match
+            30.0,
+            1.0,
+            0.033,
+            9.0,
+            None,
+        )],
+        Some("2026-01-01"),
+        Some("2026-01-28"),
+    )
+    .unwrap();
+    // Solo query on C only — not multi-URL.
+    crate::db::set_ctr_query_metrics(
+        &conn,
+        "proj1",
+        3,
+        "https://example.com/blog/page-c",
+        &[(
+            "unique query only".into(),
+            100.0,
+            5.0,
+            0.05,
+            4.0,
+            None,
+        )],
+        Some("2026-01-01"),
+        Some("2026-01-28"),
+    )
+    .unwrap();
+    // Shared query with below-threshold impressions should not form a group.
+    // (Would need a second article too; skip — already covered by floor filter.)
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert!(overview.hard_cannibalization.degraded_reason.is_none());
+    assert_eq!(overview.hard_cannibalization.count, 1);
+    assert_eq!(overview.hard_cannibalization.sample.len(), 1);
+    let group = &overview.hard_cannibalization.sample[0];
+    assert_eq!(group.query, "shared widget query");
+    assert_eq!(group.slugs.len(), 2);
+    // Slugs sorted by impressions desc.
+    assert_eq!(group.slugs[0].slug, "page-a");
+    assert_eq!(group.slugs[0].impressions, 50.0);
+    assert_eq!(group.slugs[1].slug, "page-b");
+    assert_eq!(group.slugs[1].impressions, 30.0);
+    assert!(overview
+        .hints
+        .iter()
+        .any(|h| h == "Hard same-query cannibal samples present"));
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn hard_cannibalization_empty_metrics_is_degraded() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "solo", "Solo", "content/s.mdx", "published", 10,
+    );
+
+    let (d1, _) = recent_dates();
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row("https://example.com/blog/solo", &d1, 1.0, 10.0)],
+    )
+    .unwrap();
+
+    // No ctr_query_metrics rows at all.
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.hard_cannibalization.count, 0);
+    assert!(overview.hard_cannibalization.sample.is_empty());
+    assert_eq!(
+        overview.hard_cannibalization.degraded_reason.as_deref(),
+        Some("ctr_query_metrics_empty")
+    );
+    assert!(
+        !overview
+            .hints
+            .iter()
+            .any(|h| h == "Hard same-query cannibal samples present")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn hard_cannibalization_below_impression_floor_not_grouped() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "a", "A", "content/a.mdx", "published", 10,
+    );
+    insert_article(
+        &conn, "proj1", 2, "b", "B", "content/b.mdx", "published", 10,
+    );
+
+    let (d1, _) = recent_dates();
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row("https://example.com/blog/a", &d1, 1.0, 10.0)],
+    )
+    .unwrap();
+
+    // Same query on two articles but both under SHARED_QUERY_MIN_IMPRESSIONS (10).
+    crate::db::set_ctr_query_metrics(
+        &conn,
+        "proj1",
+        1,
+        "https://example.com/blog/a",
+        &[("thin query".into(), 5.0, 0.0, 0.0, 12.0, None)],
+        Some("2026-01-01"),
+        Some("2026-01-28"),
+    )
+    .unwrap();
+    crate::db::set_ctr_query_metrics(
+        &conn,
+        "proj1",
+        2,
+        "https://example.com/blog/b",
+        &[("thin query".into(), 9.0, 0.0, 0.0, 11.0, None)],
+        Some("2026-01-01"),
+        Some("2026-01-28"),
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    // Metrics exist so not degraded, but no group meets ≥2 articles at floor.
+    assert!(overview.hard_cannibalization.degraded_reason.is_none());
+    assert_eq!(overview.hard_cannibalization.count, 0);
+    assert!(overview.hard_cannibalization.sample.is_empty());
 
     let _ = fs::remove_dir_all(&project);
 }
