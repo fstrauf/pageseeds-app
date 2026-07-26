@@ -379,7 +379,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `ctr-health` | Productized composite — prefer impressions/CTR from desk + `gsc-queries` |
 | `seo_health_scan` (task) | Optional backlog only when desk data is insufficient |
 | `content-audit-report` / `run-content-audit` | Optional deep structural checks |
-| `indexing-status`, `article-title-scan`, `article-body-hash`, `article-link-graph`, `framework-files`, `research-shortlist`, `article-quality-reviews`, `score-zero-impression-articles`, `article-list` / `article-frontmatter` | Use when desk points there |
+| `indexing-status`, `article-title-scan`, `article-body-hash`, `article-link-graph`, `framework-files`, `research-shortlist`, `article-quality-reviews`, `score-zero-impression-articles`, `article-list` / `article-frontmatter` | Use when desk points there — **dead-weight score is secondary** (see [Dead-weight / winnability](#dead-weight--winnability-secondary)) |
 
 **Exploration budget:** prefer **≤ ~25** tool calls before locking a plan
 (PostHog desk counts toward this — keep it to a few MCP calls, not a full
@@ -422,9 +422,45 @@ field present”** — optional priors only, not mandatory creates every week.
 
 | Pattern (when field present) | Preference |
 |------------------------------|------------|
-| High `zero_impression` count / sample | Optional: score/remediate path if tools exist; else note inventory — **not** mandatory create every week |
+| High `zero_impression` count / sample | Optional: cache-first dead-weight path ([below](#dead-weight--winnability-secondary)) — **not** mandatory create every week; never weekly re-score loop |
 | Striking-distance band (pos ~7–13 + meaningful impr) | See **[Striking-distance preferred path](#striking-distance-preferred-path)** — ≤2 creates; overview sample when present, else interim `articles`/`gsc-performance` filter; **not** mandatory |
 | Hard same-query cannibal samples | Optional scoped `cannibalization_audit` **only with hard multi-URL query evidence** — soft clusters still non-authority |
+
+### Dead-weight / winnability (secondary)
+
+Scoring and remediating low/zero-impression articles is **optional and secondary**
+— not part of the default weekly ≤5 spine, and **not** a weekly re-score loop.
+
+**Cache-first (no paid SERP):**
+
+```bash
+# List last scores + bucket counts — $0, no DataForSEO
+pageseeds-cli score-zero-impression-articles -i <id> -p <path> --from-cache
+# alias: --list
+```
+
+**Live score only when cache empty/stale and budget allows** (paid DataForSEO
+SERP; default TTL **60 days**, default max **25** live assessments per run):
+
+```bash
+pageseeds-cli score-zero-impression-articles -i <id> -p <path> [-m 10] [--max 25] [--ttl-days 60]
+# Re-score even when fresh: --force
+```
+
+Scores persist to `article_metadata` namespace `winnability` (`scored_at` + bucket).
+JSON reports `scored` / `skipped_fresh` / `skipped_cap` / `truncated`.
+
+#### Bucket → human-compose action (existing tools only)
+
+| Bucket | Prefer | Avoid |
+|--------|--------|--------|
+| **Avoid** | Merge-context path / `merge-submit` when hard cannibal or thin dupe; **noindex only with human confirm** | **Never** bulk noindex from score output; never auto-noindex |
+| **Differentiate** | `create-task -t fix_content_article -S <slug>` (or Path B `fix-context` / `fix-submit`) citing cached reason — **$0, no DataForSEO** | Re-running live score just to act |
+| **Target** | `cluster_and_link` / `interlinking` and/or targeted `fix_content_article -S` | Treating zero-impr alone as “delete” |
+
+**Remediation execution does not call DataForSEO** — compose from cached
+bucket/reason. Do **not** re-score every weekly pass; prefer `--from-cache`
+first. Counts toward ≤5 creates only if you act; inventory note-only is fine.
 
 ### PostHog desk (optional)
 
@@ -776,6 +812,8 @@ match / user skip).
 - Max 5 creates / 15 executions / 3 new articles.  
 - **Due `content_outcome_review` preferred when present** (≤1–2 exec toward ≤15; not creates). Never create these tasks.  
 - Soft new desk fields (zero-impr / striking / hard-cannibal) are **never mandatory** actions.  
+- Dead-weight scoring is **secondary / cache-first** (`--from-cache`); not default spine; no weekly re-score loop; no auto bulk noindex.  
+
 - Striking-distance (pos **7–13**, impr ≥ ~200): optional soft prior → ≤**2** existing actions; no campaign type / DataForSEO / default full IHC or `ctr_audit`.  
 - Outcomes = **GSC windows** (`gsc_page_daily`), not live SERP / DataForSEO.  
 - `ctr_outcome_review` cancel/ignore; `content_outcome_review` execute when due — do not conflate.  
@@ -812,6 +850,12 @@ filter (overview sample when present, else interim `articles` /
 `striking_distance_campaign`, no DataForSEO, no default full IHC/`ctr_audit`
 for ranking push. Soft prior only; one URL one targeted fix (no CTR + striking
 double-create).
+
+**Dead-weight (#206):** `score-zero-impression-articles` persists winnability
+to `article_metadata`; prefer `--from-cache` / `--list`; live score TTL 60d /
+max 25. Secondary only — not default spine, no weekly re-score, no auto bulk
+noindex. Bucket → human compose: Avoid merge/noindex-with-confirm;
+Differentiate `fix_content_article -S` ($0); Target link boost / fix.
 
 **PostHog (optional MCP):** same-session behavioral layer after GSC desk —
 bounce, engagement, top paths, light CWV — used only to re-rank SEO candidates

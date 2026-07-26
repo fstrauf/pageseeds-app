@@ -1,6 +1,7 @@
 pub mod ahrefs;
 pub mod backlinks;
 pub mod dataforseo;
+pub mod dead_weight;
 pub mod google_autocomplete;
 pub mod intent;
 pub mod keywords;

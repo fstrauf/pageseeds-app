@@ -915,104 +915,56 @@ fn create_tasks_from_approved(db_path: &str, project_id: &str, args: &[String]) 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn score_zero_impression_articles(db_path: &str, project_id: &str, project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    use pageseeds_core::seo::dead_weight::{
+        list_from_cache, score_and_persist_with_provider, ScoreOptions, DEFAULT_MAX_IMPRESSIONS,
+        DEFAULT_MAX_LIVE_SCORES, DEFAULT_SCORE_TTL_DAYS,
+    };
+
     let conn = open_db(db_path)?;
-    let project = pageseeds_core::engine::task_store::get_project(&conn, project_id).map_err(|e| e.to_string())?;
+    let from_cache = has_flag(args, "--from-cache", "") || has_flag(args, "--list", "");
 
-    // Resolve SEO provider (DataForSEO by default).
-    let provider_name = project.seo_provider.as_deref().unwrap_or("dataforseo");
-    let env = pageseeds_core::config::env_resolver::EnvResolver::new(project_path);
-    let provider = pageseeds_core::seo::resolve_provider(provider_name, &env).map_err(|e| e.to_string())?;
+    if from_cache {
+        let result = list_from_cache(&conn, project_id).map_err(|e| e.to_string())?;
+        return serde_json::to_value(result).map_err(|e| e.to_string());
+    }
 
-    // Load published articles with no GSC data or very low impressions (dead weight).
+    let force = has_flag(args, "--force", "");
     let max_impressions: f64 = flag(args, "--max-impressions", "-m")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(10.0);
-    let mut stmt = conn.prepare(
-        "SELECT a.id, a.title, a.url_slug, a.target_keyword, a.keyword_difficulty, a.status,
-                COALESCE(json_extract(m.payload, '$.impressions'), 0) as impressions
-         FROM articles a
-         LEFT JOIN article_metadata m ON m.project_id = a.project_id AND m.article_id = a.id AND m.namespace = 'gsc'
-         WHERE a.project_id = ?1 AND a.status = 'published'
-           AND (m.article_id IS NULL OR json_extract(m.payload, '$.impressions') <= ?2)
-         ORDER BY a.id"
-    ).map_err(|e| e.to_string())?;
+        .unwrap_or(DEFAULT_MAX_IMPRESSIONS);
+    let max_live: usize = flag(args, "--max", "")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MAX_LIVE_SCORES);
+    let ttl_days: u64 = flag(args, "--ttl-days", "")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_SCORE_TTL_DAYS);
+    let country = flag(args, "--country", "").unwrap_or_else(|| "us".to_string());
 
-    let max_imp_str = max_impressions.to_string();
-    let rows = stmt.query_map([project_id, max_imp_str.as_str()], |row| {
-        Ok((
-            row.get::<_, i64>("id")?,
-            row.get::<_, String>("title")?,
-            row.get::<_, String>("url_slug")?,
-            row.get::<_, Option<String>>("target_keyword")?,
-            row.get::<_, Option<String>>("keyword_difficulty")?,
-            row.get::<_, f64>("impressions")?,
-        ))
-    }).map_err(|e| e.to_string())?;
+    let project = pageseeds_core::engine::task_store::get_project(&conn, project_id)
+        .map_err(|e| e.to_string())?;
+    let provider_name = project.seo_provider.as_deref().unwrap_or("dataforseo");
+    let env = pageseeds_core::config::env_resolver::EnvResolver::new(project_path);
+    let provider =
+        pageseeds_core::seo::resolve_provider(provider_name, &env).map_err(|e| e.to_string())?;
 
-    let articles: Vec<_> = rows.filter_map(|r| r.ok()).collect();
+    let opts = ScoreOptions {
+        max_impressions,
+        force,
+        ttl_days,
+        max_live,
+        country,
+    };
 
-    // Filter to low/no-impression articles with a target keyword.
-    let candidates: Vec<_> = articles
-        .into_iter()
-        .filter(|(_, _, _, kw, _, imp)| kw.is_some() && *imp <= max_impressions)
-        .collect();
-
-    if candidates.is_empty() {
-        return Ok(serde_json::json!({
-            "scored": 0,
-            "message": "no low-impression published articles with target keywords found",
-        }));
-    }
-
-    // Score each candidate via DataForSEO SERP API + winnability classifier.
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let mut results = Vec::new();
-    for (id, title, slug, keyword, kd_str, _) in candidates {
-        let keyword = keyword.unwrap_or_default();
-        if keyword.is_empty() { continue; }
-
-        let assessment = rt.block_on(async {
-            match provider.serp_features(&keyword, "us").await {
-                Ok(serp) => {
-                    let kd = kd_str.as_deref().and_then(|s| s.parse::<f64>().ok());
-                    pageseeds_core::seo::winnability::assess(&keyword, &serp, kd, None)
-                }
-                Err(e) => pageseeds_core::seo::winnability::WinnabilityAssessment {
-                    keyword: keyword.clone(),
-                    bucket: pageseeds_core::seo::winnability::WinnabilityBucket::Avoid,
-                    ai_overview_present: false,
-                    featured_snippet_present: false,
-                    authority_competitors: vec![],
-                    risk_score: 99,
-                    reason: format!("SERP lookup failed: {e}"),
-                },
-            }
-        });
-
-        results.push(serde_json::json!({
-            "article_id": id,
-            "title": title,
-            "slug": slug,
-            "target_keyword": keyword,
-            "bucket": assessment.bucket.as_str(),
-            "risk_score": assessment.risk_score,
-            "ai_overview_present": assessment.ai_overview_present,
-            "featured_snippet_present": assessment.featured_snippet_present,
-            "authority_competitors": assessment.authority_competitors,
-            "reason": assessment.reason,
-        }));
-    }
-
-    let avoid: Vec<_> = results.iter().filter(|r| r["bucket"] == "avoid").collect();
-    let differentiate: Vec<_> = results.iter().filter(|r| r["bucket"] == "differentiate").collect();
-    let target: Vec<_> = results.iter().filter(|r| r["bucket"] == "target").collect();
-
-    Ok(serde_json::json!({
-        "scored": results.len(),
-        "avoid": { "count": avoid.len(), "articles": avoid },
-        "differentiate": { "count": differentiate.len(), "articles": differentiate },
-        "target": { "count": target.len(), "articles": target },
-    }))
+    let result = rt
+        .block_on(score_and_persist_with_provider(
+            &conn,
+            project_id,
+            provider.as_ref(),
+            &opts,
+        ))
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1709,8 +1661,8 @@ const TOOLS: &[ToolHelp] = &[
     // Dead-weight
     ToolHelp {
         name: "score-zero-impression-articles",
-        purpose: "Score low/zero-impression articles (WS4)",
-        example: "score-zero-impression-articles -i <id> -p <path> [-m <max-impressions>]",
+        purpose: "Score low/zero-impression articles; persist winnability; --from-cache/--list lists without SERP",
+        example: "score-zero-impression-articles -i <id> -p <path> [--from-cache|--list] [--force] [-m <max-impr>] [--max <N>] [--ttl-days <N>]",
         section: "Dead-weight",
     },
     // Site State desk
