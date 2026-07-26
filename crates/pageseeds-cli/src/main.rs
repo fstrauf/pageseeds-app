@@ -955,15 +955,17 @@ fn score_zero_impression_articles(db_path: &str, project_id: &str, project_path:
         country,
     };
 
+    // Sync score loop; SERP is driven via Handle::block_on inside assess_fn.
+    // Do not wrap the whole call in rt.block_on (nested block_on panics).
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let result = rt
-        .block_on(score_and_persist_with_provider(
-            &conn,
-            project_id,
-            provider.as_ref(),
-            &opts,
-        ))
-        .map_err(|e| e.to_string())?;
+    let result = score_and_persist_with_provider(
+        &conn,
+        project_id,
+        provider.as_ref(),
+        &opts,
+        rt.handle(),
+    )
+    .map_err(|e| e.to_string())?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 

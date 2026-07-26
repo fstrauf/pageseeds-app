@@ -506,109 +506,52 @@ pub fn score_and_persist_at(
     Ok(result)
 }
 
-/// Live path: call `provider.serp_features` + [`assess`] per candidate that
-/// needs a fresh score. SERP errors become Avoid with risk_score 99 (same
-/// shape as the former CLI behavior).
-pub async fn score_and_persist_with_provider(
+/// SERP failure → Avoid with risk_score 99 (stable CLI/operator shape).
+pub fn serp_error_assessment(keyword: &str, err: impl std::fmt::Display) -> WinnabilityAssessment {
+    WinnabilityAssessment {
+        keyword: keyword.to_string(),
+        bucket: WinnabilityBucket::Avoid,
+        ai_overview_present: false,
+        featured_snippet_present: false,
+        authority_competitors: vec![],
+        risk_score: 99,
+        reason: format!("SERP lookup failed: {err}"),
+    }
+}
+
+/// Assess one candidate via `provider.serp_features` (sync bridge over Tokio).
+fn assess_via_provider(
+    runtime: &tokio::runtime::Handle,
+    provider: &dyn SeoDataProvider,
+    candidate: &DeadWeightCandidate,
+    country: &str,
+) -> WinnabilityAssessment {
+    let kd = candidate
+        .keyword_difficulty
+        .as_deref()
+        .and_then(|s| s.parse::<f64>().ok());
+    match runtime.block_on(provider.serp_features(&candidate.target_keyword, country)) {
+        Ok(serp) => assess(&candidate.target_keyword, &serp, kd, None),
+        Err(e) => serp_error_assessment(&candidate.target_keyword, &e),
+    }
+}
+
+/// Live path: thin wrapper that injects SERP via `assess_fn` into the shared
+/// [`score_and_persist`] loop (no duplicated TTL/force/cap/persist machine).
+///
+/// Call from a **synchronous** context with a Tokio runtime handle (e.g. CLI
+/// after `Runtime::new()`). Do not nest this inside an outer `runtime.block_on`
+/// of a future that itself calls `Handle::block_on` — that panics.
+pub fn score_and_persist_with_provider(
     conn: &Connection,
     project_id: &str,
     provider: &dyn SeoDataProvider,
     opts: &ScoreOptions,
+    runtime: &tokio::runtime::Handle,
 ) -> Result<ScoreRunResult> {
-    let now = Utc::now();
-    // Collect candidates first so we can decide live vs skip without holding
-    // the async assessor across SQLite state in a closure that needs &mut self
-    // of an async block. We drive the same state machine as score_and_persist_at
-    // but await SERP inside the loop.
-    let candidates =
-        load_low_impression_candidates(conn, project_id, opts.max_impressions)?;
-
-    if candidates.is_empty() {
-        return Ok(ScoreRunResult::empty(
-            false,
-            opts.ttl_days,
-            opts.max_live,
-            Some(
-                "no low-impression published articles with target keywords found"
-                    .to_string(),
-            ),
-        ));
-    }
-
-    let mut result = ScoreRunResult::empty(false, opts.ttl_days, opts.max_live, None);
-    let mut live_count = 0usize;
-
-    for candidate in &candidates {
-        let stored = load_stored_score(conn, project_id, candidate.article_id)?;
-
-        if !opts.force {
-            if let Some(ref s) = stored {
-                if is_score_fresh(s, opts.ttl_days, now) {
-                    result.skipped_fresh += 1;
-                    result.push_entry(entry_from_stored(
-                        candidate.article_id,
-                        &candidate.title,
-                        &candidate.slug,
-                        s,
-                    ));
-                    continue;
-                }
-            }
-        }
-
-        if live_count >= opts.max_live {
-            result.skipped_cap += 1;
-            if let Some(ref s) = stored {
-                result.push_entry(entry_from_stored(
-                    candidate.article_id,
-                    &candidate.title,
-                    &candidate.slug,
-                    s,
-                ));
-            }
-            continue;
-        }
-
-        let kd = candidate
-            .keyword_difficulty
-            .as_deref()
-            .and_then(|s| s.parse::<f64>().ok());
-        let assessment = match provider
-            .serp_features(&candidate.target_keyword, &opts.country)
-            .await
-        {
-            Ok(serp) => assess(&candidate.target_keyword, &serp, kd, None),
-            Err(e) => WinnabilityAssessment {
-                keyword: candidate.target_keyword.clone(),
-                bucket: WinnabilityBucket::Avoid,
-                ai_overview_present: false,
-                featured_snippet_present: false,
-                authority_competitors: vec![],
-                risk_score: 99,
-                reason: format!("SERP lookup failed: {e}"),
-            },
-        };
-
-        persist_score(
-            conn,
-            project_id,
-            candidate.article_id,
-            &assessment,
-            candidate.impressions,
-            now,
-        )?;
-        live_count += 1;
-        result.scored += 1;
-        result.push_entry(entry_from_assessment(
-            candidate,
-            &assessment,
-            &now.to_rfc3339(),
-            candidate.impressions,
-        ));
-    }
-
-    result.truncated = result.skipped_cap > 0;
-    Ok(result)
+    score_and_persist(conn, project_id, opts, |candidate| {
+        assess_via_provider(runtime, provider, candidate, &opts.country)
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
