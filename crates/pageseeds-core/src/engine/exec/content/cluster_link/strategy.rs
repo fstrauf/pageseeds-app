@@ -77,22 +77,8 @@ pub(crate) fn exec_cluster_link_strategy(
 
     // Write-spawned cluster tasks attach focus_slug so we must-cover inbound
     // TO the newly written article even when the rest of the graph looks healthy.
-    let focus_slug = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "focus_slug")
-        .and_then(|a| a.content.as_deref())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| crate::content::slug::normalize_url_slug(s));
-    let focus_id = focus_slug.as_ref().and_then(|slug| {
-        articles.iter().find(|a| {
-            crate::content::slug::normalize_url_slug(&a.url_slug) == *slug
-                || crate::content::slug::normalize_url_slug(
-                    &crate::content::ops::slug_from_filename(&a.file),
-                ) == *slug
-        }).map(|a| a.id)
-    });
+    let focus_slug = super::task_focus_slug(task);
+    let focus_id = resolve_focus_article_id(focus_slug.as_deref(), &articles);
 
     // Compact article index (id, title, slug).
     // We intentionally omit `file` here; it adds ~35 bytes/article and is only

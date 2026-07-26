@@ -373,14 +373,7 @@ pub(crate) fn rescan_link_residuals(task: &Task, project_path: &str) -> LinkResi
     use std::path::Path;
 
     let mut residuals = LinkResiduals::default();
-    let focus_slug = task
-        .artifacts
-        .iter()
-        .find(|a| a.key == "focus_slug")
-        .and_then(|a| a.content.as_deref())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| crate::content::slug::normalize_url_slug(s));
+    let focus_slug = super::task_focus_slug(task);
 
     let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) else {
         log::warn!("[cluster_link_apply] failed to open DB for re-scan");
@@ -422,13 +415,8 @@ pub(crate) fn rescan_link_residuals(task: &Task, project_path: &str) -> LinkResi
             residuals.orphans_remaining = result.orphan_ids.len() as i32;
             residuals.zero_incoming_remaining = result.zero_incoming_ids.len() as i32;
 
-            if let Some(ref slug) = focus_slug {
-                let focus_id = articles.iter().find(|a| {
-                    crate::content::slug::normalize_url_slug(&a.url_slug) == *slug
-                        || crate::content::slug::normalize_url_slug(
-                            &crate::content::ops::slug_from_filename(&a.file),
-                        ) == *slug
-                }).map(|a| a.id);
+            if focus_slug.is_some() {
+                let focus_id = super::resolve_focus_article_id(focus_slug.as_deref(), &articles);
                 residuals.focus_still_zero_incoming = Some(match focus_id {
                     Some(id) => result.zero_incoming_ids.contains(&id),
                     // Unknown focus slug: treat as still-zero when any residual zero-incoming exists

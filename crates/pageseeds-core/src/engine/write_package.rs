@@ -23,7 +23,7 @@ use crate::engine::keyword_selection::{
     extract_keyword_metrics, extract_selectable_keywords, normalize_keyword,
 };
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
-use crate::models::task::{AgentPolicy, Priority, Task, TaskRunPolicy, TaskStatus};
+use crate::models::task::{Priority, Task, TaskArtifact, TaskRunPolicy, TaskStatus};
 
 /// Target body length for Path B writers (guidance; floor is [`DEFAULT_MIN_WORD_COUNT`]).
 pub const DEFAULT_TARGET_WORD_COUNT: usize = 1200;
@@ -370,10 +370,43 @@ pub fn submit_written_article(
         ) {
             follow_up_task_ids.push(id);
         }
-    } else if let Some(id) =
-        spawn_standalone_cluster_and_link(conn, project_id, &slug, &target_keyword)
-    {
-        follow_up_task_ids.push(id);
+    } else {
+        // Path B unbound: no write_task — synthesize a minimal parent so the
+        // single spawn entrypoint owns focus attachment + idempotency.
+        let topic = target_keyword
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .unwrap_or(slug.as_str());
+        let focus_slug = crate::content::slug::normalize_url_slug(&slug);
+        let synthetic_parent = Task {
+            id: format!("path-b:{project_id}:{focus_slug}"),
+            task_type: "write_article".to_string(),
+            phase: "implementation".to_string(),
+            status: TaskStatus::Done,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            title: Some(format!("Write article: {topic}")),
+            description: Some(format!("Path B submit for {focus_slug}")),
+            project_id: project_id.to_string(),
+            artifacts: vec![
+                crate::engine::exec::content::focus_slug_artifact(&focus_slug),
+                TaskArtifact {
+                    key: "url_slug".to_string(),
+                    path: None,
+                    artifact_type: Some("text".to_string()),
+                    source: Some("write_spawn".to_string()),
+                    content: Some(focus_slug.clone()),
+                },
+            ],
+            ..Default::default()
+        };
+        if let Some(id) = crate::engine::exec::content::create_cluster_and_link_task(
+            conn,
+            &synthetic_parent,
+            &project_path.to_string_lossy(),
+        ) {
+            follow_up_task_ids.push(id);
+        }
     }
 
     let catalog_status_reason = if outcome.newly_ingested {
@@ -698,60 +731,10 @@ fn article_tracked(conn: &Connection, project_id: &str, file_path: &Path) -> boo
     .unwrap_or(false)
 }
 
-fn spawn_standalone_cluster_and_link(
-    conn: &Connection,
-    project_id: &str,
-    slug: &str,
-    keyword: &Option<String>,
-) -> Option<String> {
-    let topic = keyword
-        .as_deref()
-        .filter(|k| !k.is_empty())
-        .unwrap_or(slug);
-    let title = format!("Cluster and link: {topic}");
-    let description = format!(
-        "Scan internal link graph and add missing links following Path B article: {slug}"
-    );
-    let idempotency_key = format!("followup:path-b:{project_id}:{slug}:cluster_and_link");
-    let focus_slug = crate::content::slug::normalize_url_slug(slug);
-    let artifacts = vec![crate::engine::exec::content::focus_slug_artifact(&focus_slug)];
-    let spec = TaskSpec {
-        project_id: project_id.to_string(),
-        task_type: "cluster_and_link".to_string(),
-        title: Some(title),
-        description: Some(description),
-        phase: Some("implementation".to_string()),
-        run_policy: Some(TaskRunPolicy::AutoEnqueue),
-        priority: Priority::Medium,
-        agent_policy: AgentPolicy::Required,
-        idempotency_key: Some(idempotency_key),
-        artifacts,
-        depends_on: vec![],
-        ..Default::default()
-    };
-    match TaskSpawner::spawn(conn, spec) {
-        Ok(task) => {
-            log::info!(
-                "[write_package] spawned standalone cluster_and_link {} for slug {}",
-                task.id,
-                slug
-            );
-            Some(task.id)
-        }
-        Err(e) => {
-            log::warn!(
-                "[write_package] failed to spawn standalone cluster_and_link: {}",
-                e
-            );
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::task::{TaskArtifact, TaskStatus};
+    use crate::models::task::TaskStatus;
     use std::fs;
     use uuid::Uuid;
 
@@ -1323,11 +1306,33 @@ mod tests {
             assert!(result.ok, "checks={:?}", result.checks);
             assert!(!result.follow_up_task_ids.is_empty());
             assert!(result.write_task_id.is_none());
+            let cluster =
+                crate::engine::task_store::get_task(&conn, &result.follow_up_task_ids[0]).unwrap();
+            assert_eq!(cluster.task_type, "cluster_and_link");
+            let focus = cluster
+                .artifacts
+                .iter()
+                .find(|a| a.key == "focus_slug")
+                .and_then(|a| a.content.as_deref());
+            assert_eq!(focus, Some("seo-tools"));
             return;
         }
         assert!(result.ok, "checks={:?}", result.checks);
         assert!(!result.follow_up_task_ids.is_empty());
         assert!(result.write_task_id.is_none());
+        let cluster =
+            crate::engine::task_store::get_task(&conn, &result.follow_up_task_ids[0]).unwrap();
+        assert_eq!(cluster.task_type, "cluster_and_link");
+        let focus = cluster
+            .artifacts
+            .iter()
+            .find(|a| a.key == "focus_slug")
+            .and_then(|a| a.content.as_deref());
+        assert_eq!(
+            focus,
+            Some("seo-tools"),
+            "Path B unbound must attach focus_slug via create_cluster_and_link_task"
+        );
     }
 
     #[test]

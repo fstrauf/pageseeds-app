@@ -432,17 +432,11 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
                     let orphans = val["orphans_remaining"].as_i64().unwrap_or(0);
                     let zero_incoming = val["zero_incoming_remaining"].as_i64().unwrap_or(0);
                     let links_added = val["links_added"].as_i64().unwrap_or(0);
-                    let has_focus_slug = ctx
-                        .task
-                        .artifacts
-                        .iter()
-                        .any(|a| a.key == "focus_slug" && a.content.as_ref().is_some_and(|c| !c.trim().is_empty()));
+                    // Apply always emits focus_still_zero_incoming when focus is set;
+                    // trust the contract (missing key ⇒ false).
                     let focus_still_zero = val["focus_still_zero_incoming"]
                         .as_bool()
-                        .unwrap_or(false)
-                        || (has_focus_slug
-                            && zero_incoming > 0
-                            && val.get("focus_still_zero_incoming").is_none());
+                        .unwrap_or(false);
                     // Cap follow-ups at 3 rounds total to avoid infinite loops
                     let current_round = ctx
                         .task

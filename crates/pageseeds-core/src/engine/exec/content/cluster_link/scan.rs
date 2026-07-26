@@ -113,6 +113,17 @@ pub(crate) fn focus_slug_artifact(slug: &str) -> TaskArtifact {
     }
 }
 
+/// Read the task's `focus_slug` artifact (normalized), if present and non-empty.
+pub(crate) fn task_focus_slug(task: &Task) -> Option<String> {
+    task.artifacts
+        .iter()
+        .find(|a| a.key == "focus_slug")
+        .and_then(|a| a.content.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(crate::content::slug::normalize_url_slug)
+}
+
 /// Extract the url_slug of the article that triggered a write-spawned
 /// `cluster_and_link` task.
 ///
@@ -257,6 +268,15 @@ pub(crate) fn create_cluster_and_link_task(
         artifacts.push(focus_slug_artifact(&slug));
     }
 
+    // Only depend on a parent that exists in the store. Path B unbound submit
+    // synthesizes an in-memory parent (stable id + focus artifacts) that is not
+    // persisted — same empty-depends_on behavior as the former standalone spawn.
+    let depends_on = if crate::engine::task_store::get_task(conn, &parent_task.id).is_ok() {
+        vec![parent_task.id.clone()]
+    } else {
+        Vec::new()
+    };
+
     let spec = TaskSpec {
         project_id: parent_task.project_id.clone(),
         task_type: "cluster_and_link".to_string(),
@@ -268,7 +288,7 @@ pub(crate) fn create_cluster_and_link_task(
         agent_policy: AgentPolicy::Required,
         idempotency_key: Some(idempotency_key),
         artifacts,
-        depends_on: vec![parent_task.id.clone()],
+        depends_on,
         ..Default::default()
     };
 
