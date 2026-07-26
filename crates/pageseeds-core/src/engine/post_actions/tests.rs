@@ -298,3 +298,96 @@ use super::topic_health::classify_topic_health;
             "deployed_at null until verify"
         );
     }
+
+    /// Nested after_task_success still spawns content_outcome_review (issue #23 / #203).
+    #[test]
+    fn write_article_after_success_spawns_content_outcome_review() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        let project_path = std::env::temp_dir().join(format!(
+            "pageseeds-pa-outcome-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_dir_all(&project_path);
+        std::fs::create_dir_all(project_path.join("content/blog")).unwrap();
+        std::fs::write(
+            project_path.join("content/blog/written-post.mdx"),
+            "---\ntitle: Written\nslug: written-post\n---\n\n# Written\n\nbody\n",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('proj1', 'Test', ?1, 1, 'workspace')",
+            [project_path.to_str().unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash
+             ) VALUES (1, 'proj1', 'Written', 'written-post',
+                       'content/blog/written-post.mdx', 'draft', 'kw', '[]', 0, 10, 0, 'h')",
+            [],
+        )
+        .unwrap();
+
+        let mut task = make_task();
+        task.id = "write-nested-1".to_string();
+        task.task_type = "write_article".to_string();
+        task.project_id = "proj1".to_string();
+        task.status = TaskStatus::Done;
+        task.description = Some(
+            "File: content/blog/written-post.mdx | Target keyword: written post".to_string(),
+        );
+        crate::engine::task_store::create_task(&conn, &task).unwrap();
+
+        let follow_ups = after_task_success(&PostTaskContext {
+            conn: &conn,
+            task: &task,
+            project_path: project_path.to_str().unwrap(),
+            progress: &[],
+        });
+
+        let reviews: Vec<_> = follow_ups
+            .iter()
+            .filter_map(|id| crate::engine::task_store::get_task(&conn, id).ok())
+            .filter(|t| t.task_type == "content_outcome_review")
+            .collect();
+        assert_eq!(
+            reviews.len(),
+            1,
+            "nested write must spawn content_outcome_review; follow_ups={follow_ups:?}"
+        );
+        let review = &reviews[0];
+        assert!(review.not_before.is_some());
+        let art = review
+            .artifacts
+            .iter()
+            .find(|a| a.key == "content_outcome_target")
+            .expect("content_outcome_target");
+        let v: serde_json::Value =
+            serde_json::from_str(art.content.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(v["slug"].as_str(), Some("written-post"));
+        assert_eq!(v["parent_task_id"].as_str(), Some("write-nested-1"));
+
+        // Core helper is idempotent for same parent+slug.
+        let again = spawn_content_outcome_review_for_slug(&conn, &task, "written-post");
+        assert_eq!(again.as_deref(), Some(review.id.as_str()));
+
+        let _ = std::fs::remove_dir_all(&project_path);
+    }
+
+    /// Empty slug → None (shared helper contract).
+    #[test]
+    fn spawn_content_outcome_review_for_slug_rejects_empty() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('proj1', 'Test', '/tmp/pa_empty', 1, 'workspace')",
+            [],
+        )
+        .unwrap();
+        let task = make_task();
+        assert!(spawn_content_outcome_review_for_slug(&conn, &task, "").is_none());
+    }

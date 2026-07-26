@@ -449,7 +449,11 @@ per-fix review tasks.
 - Do **not** spawn `ctr_outcome_review` from `after_task_success` (task type kept
   for legacy rows / handler registration only).
 - Content outcome reviews (`content_outcome_review`) are a separate path and are
-  not folded into this model.
+  not folded into this model. They are spawned from **nested** `after_task_success`
+  (write_article / fix_content_article / consolidate_cluster) **and** Path B
+  write-submit / merge-submit / fix-submit `kind=content` via the shared
+  `spawn_content_outcome_review_for_slug` helper (+30d `not_before`, issue #203).
+  Path B `kind=ctr` remains `ctr_outcomes` change events only.
 
 ---
 

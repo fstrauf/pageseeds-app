@@ -616,3 +616,152 @@ fn high_traffic_requires_confirm() {
     assert!(result.ok, "checks={:?}", result.checks);
     assert!(result.redirects_written);
 }
+
+/// Issue #203: merge-submit spawns one content_outcome_review for keeper only.
+#[test]
+fn submit_spawns_content_outcome_review_for_keeper_only() {
+    let tmp = TempProjectDir::new();
+    let conn = in_memory_db(tmp.path().to_str().unwrap());
+
+    write_mdx(tmp.path(), "hub-page", "Hub Page", &pad_body(450));
+    write_mdx(tmp.path(), "old-page", "Old Page", &pad_body(80));
+    insert_article(&conn, 1, "hub-page", "Hub Page", "content/blog/hub_page.mdx");
+    insert_article(&conn, 2, "old-page", "Old Page", "content/blog/old_page.mdx");
+
+    let task = TaskSpawner::spawn(
+        &conn,
+        TaskSpec {
+            project_id: "proj1".to_string(),
+            task_type: "consolidate_cluster".to_string(),
+            title: Some("Merge cluster: c1".into()),
+            artifacts: vec![TaskArtifact {
+                key: "cannibalization_strategy".into(),
+                path: None,
+                artifact_type: Some("json".into()),
+                source: None,
+                content: Some(
+                    serde_json::json!({
+                        "merge_recommendations": [{
+                            "cluster_id": "c1",
+                            "keep_url": "/blog/hub-page",
+                            "redirect_urls": ["/blog/old-page"]
+                        }]
+                    })
+                    .to_string(),
+                ),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let result = submit_merge(
+        &conn,
+        "proj1",
+        tmp.path(),
+        MergeSubmitOpts {
+            consolidate_task_id: Some(task.id.clone()),
+            keep_url: Some("/blog/hub-page".into()),
+            redirect_urls: Some(vec!["/blog/old-page".into()]),
+            confirmed: false,
+        },
+    )
+    .expect("submit succeeds");
+
+    assert!(result.ok, "checks={:?}", result.checks);
+    assert_eq!(result.follow_up_task_ids.len(), 1);
+    let review =
+        crate::engine::task_store::get_task(&conn, &result.follow_up_task_ids[0]).unwrap();
+    assert_eq!(review.task_type, "content_outcome_review");
+    assert_not_before_approx_30d(review.not_before.as_deref());
+
+    let art = review
+        .artifacts
+        .iter()
+        .find(|a| a.key == "content_outcome_target")
+        .expect("content_outcome_target");
+    let v: serde_json::Value =
+        serde_json::from_str(art.content.as_deref().unwrap_or("{}")).unwrap();
+    assert_eq!(v["slug"].as_str(), Some("hub-page"), "keeper only");
+    assert_eq!(v["parent_task_id"].as_str(), Some(task.id.as_str()));
+    // Redirected slug must not get its own review.
+    assert_ne!(v["slug"].as_str(), Some("old-page"));
+
+    // Re-submit with same parent+slug is idempotent.
+    // Re-create redirect source file so validation can find it again isn't needed
+    // if we only care about spawn — but submit may re-apply. Seed a fresh merge
+    // by re-writing the redirected file for a second submit path is heavy; instead
+    // call the public helper twice.
+    let parent = crate::engine::task_store::get_task(&conn, &task.id).unwrap();
+    let second = crate::engine::post_actions::spawn_content_outcome_review_for_slug(
+        &conn,
+        &parent,
+        "hub-page",
+    );
+    assert_eq!(
+        second.as_deref(),
+        Some(review.id.as_str()),
+        "idempotent re-spawn returns existing"
+    );
+    let reviews: Vec<_> = crate::engine::task_store::list_tasks(&conn, "proj1")
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.task_type == "content_outcome_review")
+        .collect();
+    assert_eq!(reviews.len(), 1);
+}
+
+/// Issue #203: unbound merge-submit uses stable synthetic parent id.
+#[test]
+fn submit_unbound_spawns_content_outcome_review_with_synthetic_parent() {
+    let tmp = TempProjectDir::new();
+    let conn = in_memory_db(tmp.path().to_str().unwrap());
+
+    write_mdx(tmp.path(), "hub-page", "Hub Page", &pad_body(450));
+    write_mdx(tmp.path(), "old-page", "Old Page", &pad_body(80));
+    insert_article(&conn, 1, "hub-page", "Hub Page", "content/blog/hub_page.mdx");
+    insert_article(&conn, 2, "old-page", "Old Page", "content/blog/old_page.mdx");
+
+    let result = submit_merge(
+        &conn,
+        "proj1",
+        tmp.path(),
+        MergeSubmitOpts {
+            keep_url: Some("/blog/hub-page".into()),
+            redirect_urls: Some(vec!["/blog/old-page".into()]),
+            confirmed: false,
+            ..Default::default()
+        },
+    )
+    .expect("unbound submit succeeds");
+
+    assert!(result.ok, "checks={:?}", result.checks);
+    assert_eq!(result.follow_up_task_ids.len(), 1);
+    let review =
+        crate::engine::task_store::get_task(&conn, &result.follow_up_task_ids[0]).unwrap();
+    assert_eq!(review.task_type, "content_outcome_review");
+    let art = review
+        .artifacts
+        .iter()
+        .find(|a| a.key == "content_outcome_target")
+        .expect("content_outcome_target");
+    let v: serde_json::Value =
+        serde_json::from_str(art.content.as_deref().unwrap_or("{}")).unwrap();
+    assert_eq!(v["slug"].as_str(), Some("hub-page"));
+    assert_eq!(
+        v["parent_task_id"].as_str(),
+        Some("path-b-merge:proj1:hub-page")
+    );
+}
+
+fn assert_not_before_approx_30d(not_before: Option<&str>) {
+    let nb = not_before.expect("not_before set");
+    let parsed = chrono::DateTime::parse_from_rfc3339(nb)
+        .expect("RFC3339")
+        .with_timezone(&chrono::Utc);
+    let days = (parsed - chrono::Utc::now()).num_days();
+    assert!(
+        (28..=32).contains(&days),
+        "not_before ~+30d, got {days} days"
+    );
+}

@@ -273,6 +273,17 @@ Enforcement points (do not bypass or re-implement):
   - **Full agent rewrite baseline:** when pre-apply content equals post-apply content (agent already overwrote the file before `fix-submit`), every current unresolvable `/blog/` link hard-fails — there is no residual baseline. The submit message documents this so agents fix invented links.
   - **Fail-closed catalog load:** content fix-submit and write-submit must not treat `load_valid_link_targets` failure as “no targets → auto-pass”; load errors hard-fail submit.
 
+**BUSINESS RULE (issue #203 — Path B content closed-loop):** Path B content ships schedule the same +30d `content_outcome_review` as nested write/fix/consolidate:
+
+| Surface | Spawns `content_outcome_review`? | Parent for idempotency |
+|---|---|---|
+| `write-submit` success | Yes (submitted slug) | Bound write task, else synthetic `path-b:{project}:{slug}` |
+| `merge-submit` success | Yes (**keeper slug only**) | Bound consolidate, else synthetic `path-b-merge:{project}:{keep_slug}` |
+| `fix-submit` `kind=content` success | Yes | Synthetic `path-b-fix-content:{project}:{slug}` |
+| `fix-submit` `kind=ctr` success | **No** — `ctr_outcomes` change event only | — |
+
+Shared helper: `post_actions::spawn_content_outcome_review_for_slug`. Do **not** call full `after_task_success` from Path B. Re-submit is idempotent via `content_outcome_review:{project}:{parent_id}:{slug}`.
+
 ---
 
 ## 14. CLI machine contract (`pageseeds-cli`)
