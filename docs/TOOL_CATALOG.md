@@ -155,13 +155,15 @@ Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI b
 
 ### Off-site engagement
 
+Reddit only. For link-building / outreach / rank trackers, see [Non-goals / not in product](#non-goals--not-in-product).
+
 | Field | `reddit_opportunity_search` |
 |---|---|
 | **Does** | Searches subreddits for posts to engage with and saves pending opportunities. |
 | **When** | Weekly audience engagement. Runs automatically on `AutoEnqueue`. |
 | **After completion** | `RedditPicker` → user picks posts → spawns `reddit_reply` children (`UserSelection`). |
 
-#### Non-goals / not in product
+### Non-goals / not in product
 
 Product boundaries for agents and operators (epic [#202](https://github.com/fstrauf/pageseeds-app/issues/202) / [#210](https://github.com/fstrauf/pageseeds-app/issues/210)). Do **not** invent Accuranker-style trackers or link-building outreach as weekly SEO or in-product work.
 
