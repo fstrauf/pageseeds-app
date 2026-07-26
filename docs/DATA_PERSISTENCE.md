@@ -195,6 +195,15 @@ available to fill vectors (≥95% live coverage target when backend is up).
 Module: `content/article_evidence.rs`. Commands: `reindex_article_evidence`,
 `get_article_evidence_coverage`.
 
+#### `article_metadata` (sidecar namespaces)
+
+Generic per-article JSON sidecars: `(project_id, article_id, namespace)` → payload.
+CRUD: `db::set_article_metadata` / `get_article_metadata` / `list_project_metadata`.
+
+Known namespaces include:
+- `gsc` — rolled-up impressions/clicks used by desk and dead-weight candidate filter
+- `winnability` — dead-weight scores from `score-zero-impression-articles` (`scored_at`, bucket, risk, reason; TTL/cap in `seo/dead_weight.rs`)
+
 ### Migrations
 
 **Rule:** Never alter existing migration blocks. Always add new `MIGRATION_VN` constants.

@@ -29,9 +29,11 @@
 - Slug fix committed to main (`9dcc866`). Fresh audit 2026-07-06: 16 clusters, 14/16 correct, zero non-canonical URLs.
 - **To do**: rebuild the PageSeeds app, restart the kimi-acp-bridge, process the `consolidate_cluster` review queue in the UI. Cancel the 35 stale May–Jun tasks.
 
-**WS4 — Dead-weight remediation** ⏳
-- 56 zero-impression articles categorized: ~15 Avoid, ~20 Differentiate, ~21 Target
-- **Decision**: don't noindex yet. Rebuild first, run `research_keywords` (which now auto-scores winnability via WS2), then let the scores decide.
+**WS4 — Dead-weight remediation** ✅ (Layer 2: persist + human compose)
+- CLI `score-zero-impression-articles` persists each assessment to `article_metadata` namespace `winnability` (`scored_at` + bucket fields).
+- Cache list: `--from-cache` / `--list` (zero SEO provider calls). Live score TTL **60 days** (local metadata); default max **25** live SERP assessments per run (`--force` to re-score).
+- **Human-gated compose only** — not auto bulk noindex. Differentiate → `fix_content_article -S` (no DataForSEO); Avoid → merge preferred / noindex only with human confirm; Target → link boost / targeted fix.
+- Weekly skill: secondary, cache-first — not default ≤5 spine.
 
 **WS5 — Striking-distance push** ⏳
 - 18 articles at positions 7-13 identified with priorities (see §WS5 below)
@@ -324,17 +326,28 @@ Prioritized workstreams. Each has a clear acceptance test.
 - The 35 stale consolidate_cluster tasks from May–Jun should be cancelled/replaced by the fresh audit output.
 - **Acceptance**: merges produce canonical URLs; consolidated clusters track position recovery over 4-6 weeks.
 
-### WS4 — Dead-weight remediation  `[READY — needs app rebuild for SERP scoring]`
+### WS4 — Dead-weight remediation  `[DONE — persist + human compose (#206)]`
 
-The 56 zero-impression articles fall into three likely categories (rough categorization without SERP data — the winnability classifier gives precise scores once the app is rebuilt):
+Layer 2 is **score → persist → human compose**, not auto noindex.
 
-**Likely Avoid (~15 articles):** Informational queries Investopedia / AIO-dominated. `what-are-greeks-options`, `what-are-greeks-faq`, `options-trading-for-dummies`, `protective-put-option`, `dividend-income-strategy`, `how-to-make-money-with-stocks-beginner`, `sell-covered-calls-guide`, `selling-puts-for-income`, `income-from-idle-cash`, etc.
+**Tooling (`score-zero-impression-articles`):**
+- Live path calls DataForSEO SERP + `seo::winnability::assess`, then **persists** to `article_metadata` namespace `winnability` (`scored_at`, bucket, risk, reason, SERP flags, optional `impressions_at_score`).
+- **`--from-cache` / `--list`:** last scores + bucket counts with **zero** SEO provider calls.
+- **TTL:** default **60 days** local metadata freshness; default score run skips fresh rows unless `--force`.
+- **Cap:** default max **25** live assessments per run; JSON reports `scored` / `skipped_fresh` / `skipped_cap` / `truncated`.
+- Domain logic in `seo/dead_weight.rs`; CLI is thin parse/print. **No** new task type; **no** new SQLite table.
 
-**Likely Differentiate (~20 articles):** Calculator/tool pages that need the actual tool embedded. `covered-call-screener-*` (5 variants from the Apr 2026 sprint), `options-calculator`, `option-price-calculator`, `options-profit-calculator`, `cboe-options-calculator`, `long-call-option-calculator`, `portfolio-visualizer`, `covered-call-portfolio-tracking`. These are the right strategy (proprietary tools) but have zero impressions — likely because they're thin pages without the actual calculator embedded, OR they're cannibalizing each other.
+**Bucket → action (human-gated, existing tools):**
 
-**Likely Target (~21 articles):** Strategy-specific articles that should rank but don't. `0dte-options-strategy`, `bear-call-spread-strategy`, `call-spreads-vs-put-spreads`, `straddle-vs-strangle`, `leaps-options-strategy`, `wheel-options-trading-strategy-pdf`, etc. These likely need internal-link boost + cannibalization resolution (WS3) to gain visibility, not removal.
+| Bucket | Prefer | Never |
+|--------|--------|--------|
+| Avoid | Merge path when hard dupe/cannibal; noindex **only** with human confirm | Auto / bulk noindex from score output |
+| Differentiate | `fix_content_article -S` (or Path B fix) citing cached reason — **$0** | Live SERP just to act |
+| Target | `cluster_and_link` / `interlinking` and/or targeted fix | Delete solely for zero impressions |
 
-**Decision:** Do NOT noindex yet. Rebuild the app, run a `research_keywords` run (which now scores winnability via WS2), and apply the classifier retroactively to these 56. Then noindex the Avoid bucket, rewrite the Differentiate bucket with the content-write skill, and boost the Target bucket via internal links.
+Weekly SEO skill treats this as **secondary / cache-first** — not the default ≤5 spine, no weekly re-score loop.
+
+Historical inventory (pre-score rough categories for daystoexpiry): ~15 Avoid / ~20 Differentiate / ~21 Target informational vs tool vs strategy pages — use live/cached scores as authority when present.
 
 ### WS5 — Striking-distance push  `[READY — can run in the app]`
 
