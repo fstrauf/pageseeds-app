@@ -174,17 +174,28 @@ not a full `indexing_health_campaign` fan-out.
 4. **Hard ban-as-default:** Never treat full IHC as the weekly CLI default for
    “many not-indexed” — desk → targeted fixes first.
 
-### Measurement stubs ≠ action backlog (issue #152)
+### Measurement: two review types (do not conflate)
 
-- **`ctr_outcome_review` / deferred CTR measurement todos are not weekly action
-  backlog.** Cancel them freely; do not execute them as weekly strategy.
-- Closed-loop measurement = **`gsc_page_daily` tape** + sparse **`ctr_outcomes`
-  change events** recorded when a CTR fix ships (Path B `fix-submit -k ctr` or
-  nested `fix_ctr_article`). No new review-task fan-out.
-- **When to re-check:** after ~14 days, for high-impression ships, re-read desk
-  (`article` / `gsc-performance` / daily windows) — not by running legacy
-  measurement tasks. “Due” means data is ready + high-impr desk priority, not a
-  todo queue item.
+| Task type | Weekly policy |
+|-----------|----------------|
+| `ctr_outcome_review` | **Cancel / ignore** — deprecated measurement fan-out (#152). Not weekly backlog. |
+| `content_outcome_review` | **Execute when due** (≤1–2) — real closed-loop for write/fix/merge ships (#23; Path B spawn = #203). Prefer when present; not a hard fail if none. |
+
+**CTR closed-loop (no review-task fan-out):** measurement = **`gsc_page_daily`
+tape** + sparse **`ctr_outcomes`** change events when a CTR fix ships (Path B
+`fix-submit -k ctr` or nested `fix_ctr_article`). After ~14 days, for
+high-impression ships, re-read desk (`article` / `gsc-performance` / daily
+windows) — not by running legacy `ctr_outcome_review` tasks.
+
+**Content closed-loop:** system-spawned `content_outcome_review` rows compare
+**GSC snapshot windows** on `gsc_page_daily` (not live SERP / rank trackers /
+DataForSEO). See [Due `content_outcome_review`](#due-content_outcome_review)
+under soft path A.
+
+- **Never** `create-task content_outcome_review` (system spawn only; bare create
+  lacks `content_outcome_target`). **Never** add it to may-create.
+- **Never** treat “measurement stubs” as “cancel all outcome reviews” — only
+  `ctr_outcome_review` is cancel-or-ignore.
 
 ---
 
@@ -201,11 +212,13 @@ not a full `indexing_health_campaign` fan-out.
 | Full `ctr_audit` spawn by default (#140) | Desk → targeted `fix_content_article -S`; scoped `ctr_audit` only when needed |
 | Full `indexing_health_campaign` spawn by default (#179) | Desk → targeted `fix_indexing_internal_links` / `fix_content_article -S`; scoped IHC only when needed |
 | Nested `execute-task` LLM for write/fix/merge when Path B tools exist | Path B package → session edit → submit |
+| `create-task content_outcome_review` / may-create addition | System spawn only; execute **due** rows (see soft path A) |
+| `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; desk re-read for CTR closed-loop |
 
 ## Soft guidance (default path)
 
 ```text
-recency → refresh ground truth (if stale) → site-overview
+recency → due content_outcome_review (≤1–2 if present) → refresh ground truth (if stale) → site-overview
   → articles / article / gsc-queries
   → optional PostHog desk (if MCP available)
   → ≤5 actions → report
@@ -224,6 +237,30 @@ pageseeds-cli list-tasks -i <id> -p <path>
 - **Skip run** only if last weekly **&lt; 5 days** *or* **≥ 5** fix-like tasks
   open (`todo`/`queued`/`in_progress`) **and** user did not force. State why.
 - Override: “run anyway” → continue.
+
+#### Due `content_outcome_review`
+
+**Prefer when present** — close the measurement loop for recent write/fix/merge
+ships before inventing new soft work. Zero due tasks is fine; continue the desk
+path. Outcomes are **GSC window compares** (`gsc_page_daily`), not live SERP.
+
+```text
+list-tasks -t content_outcome_review -s todo
+→ keep rows where not_before is null OR not_before ≤ now (ISO)
+→ prefer high-impr / regressed-looking parents if multiple; else oldest due
+→ execute-task ≤1–2 (counts toward ≤15 exec; NOT a create)
+→ get-task: read content_outcome_compare / classification
+→ ArtifactReview: summarize → update-task-status -s done
+→ report under Follow-ups / Measures
+```
+
+| Rule | Detail |
+|------|--------|
+| Cap | **≤1–2** executes per weekly run (measurement must not dominate ≤15) |
+| Future `not_before` | **Do not** execute — `execute-task` does **not** enforce delay; skill filters client-side |
+| Create | **Never** `create-task content_outcome_review`; never may-create |
+| On `regressed` / `insufficient_data` | Note in report; optional soft desk deep-dive later — **do not** auto-spawn fix fan-out from this alone |
+| Not required | DataForSEO, Clarity, Reddit, full `ctr_audit` / IHC, or `content_review` as strategy brain |
 
 ### B. Refresh ground truth (if stale)
 
@@ -285,7 +322,11 @@ tool without a new hypothesis.
    for the same site — weave into ranking, never invent SEO demand from it.  
 5. **Act** only with evidence; gap growth → research (below).
 
-#### Soft hints (priors — CTR & cannibalization emerge from desk data)
+#### Soft hints (priors only — never forced weekly actions)
+
+Priors from desk data and (when present) new overview fields. **Do not** require
+DataForSEO, Clarity, Reddit, full `ctr_audit`, full `indexing_health_campaign`,
+or `content_review` as strategy brain for these signals.
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
@@ -300,6 +341,17 @@ tool without a new hypothesis.
 | Quiet site + thin backlog | `research_keywords` / `research_landing_pages` |
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
+
+##### When `site-overview` exposes new desk signals (#204)
+
+Field names match desk surfaces when they land; until then treat as **“when
+field present”** — optional priors only, not mandatory creates every week.
+
+| Pattern (when field present) | Preference |
+|------------------------------|------------|
+| High `zero_impression` count / sample | Optional: score/remediate path if tools exist; else note inventory — **not** mandatory create every week |
+| Striking-distance band (pos ~7–13 + meaningful impr) | Prefer targeted `fix_content_article -S` or internal links on top N — still ≤5 creates; cite overview sample |
+| Hard same-query cannibal samples | Optional scoped `cannibalization_audit` **only with hard multi-URL query evidence** — soft clusters still non-authority |
 
 ### PostHog desk (optional)
 
@@ -590,6 +642,7 @@ match / user skip).
 | Measure | Evidence | Task | Outcome |
 
 ## Follow-ups executed
+- Outcome reviews executed (slug + classification) or “none due”.
 …
 
 ## Decisions made for you
@@ -604,6 +657,8 @@ match / user skip).
 ## Skipped (and why)
 - Including research skip vs “not run” honesty rule.
 - PostHog skip reason if not already covered above.
+- Soft desk signals noticed (zero-impr / striking / hard-cannibal) or “fields not present yet”.
+- Future `not_before` `content_outcome_review` rows left for later (do not execute early).
 
 ## Product / CLI gaps (if any)
 - e.g. no `refresh_ground_truth` yet — used collect_gsc / live gsc-* dual-path
@@ -644,6 +699,10 @@ match / user skip).
 - Installed `pageseeds-cli` only — never product `cargo run`.  
 - No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
+- **Due `content_outcome_review` preferred when present** (≤1–2 exec toward ≤15; not creates). Never create these tasks.  
+- Soft new desk fields (zero-impr / striking / hard-cannibal) are **never mandatory** actions.  
+- Outcomes = **GSC windows** (`gsc_page_daily`), not live SERP / DataForSEO.  
+- `ctr_outcome_review` cancel/ignore; `content_outcome_review` execute when due — do not conflate.  
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Not-indexed → desk-selected `fix_indexing_internal_links` / `fix_content_article -S`; not default full `indexing_health_campaign`.  
 - Empty research shortlist → call `research-context` first (auto-refresh); `update_research_shortlist` only if force/fail. 
@@ -664,6 +723,12 @@ weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
 `ctr_audit` BackendAuto fan-out is the UI/unattended path, not CLI default.
 CLI weekly indexing: catalog-aware `not_indexed_sample` → targeted link/content
 fixes; full `indexing_health_campaign` is rare/scoped, not CLI default.
+
+**Closed-loop measurement (#209):** prefer due system-spawned
+`content_outcome_review` (≤1–2) early in the weekly path — GSC snapshot windows
+only. Keep `ctr_outcome_review` cancel-or-ignore (#152). Soft overview signals
+(zero-impression / striking-distance / hard cannibal) are optional priors when
+present (#204); never mandatory weekly actions; budgets ≤5 / ≤15 / ≤3 unchanged.
 
 **PostHog (optional MCP):** same-session behavioral layer after GSC desk —
 bounce, engagement, top paths, light CWV — used only to re-rank SEO candidates
