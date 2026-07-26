@@ -4,6 +4,7 @@
 //! excerpt generate). Submit applies optional structured patches or accepts an
 //! already-edited file, then validates structure — no nested LLM generate.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
@@ -24,7 +25,7 @@ use crate::engine::site_state::{
 use crate::engine::skills;
 use crate::engine::task_store;
 use crate::error::{Error, Result};
-use crate::models::content_review::ContentFixPatch;
+use crate::models::content_review::{ContentFixLink, ContentFixPatch};
 use crate::models::ctr::CtrFixPatch;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -334,10 +335,34 @@ pub fn submit_fix(
         ))
     })?;
 
+    // Pre-apply snapshot for residual link policy (content kind only).
+    // If the agent already rewrote the file before fix-submit, pre == post and
+    // every current unresolvable /blog/ link hard-fails (no residual baseline).
+    let pre_content = std::fs::read_to_string(&file_path).map_err(|e| {
+        Error::Other(format!("Failed to read {}: {e}", file_path.display()))
+    })?;
+
+    // Content kind: fail-closed on target-catalog load (CONTRACTS §13).
+    // CTR kind: link gate stays OFF entirely.
+    let valid_link_targets = if kind == FixKind::Content {
+        Some(
+            task_store::load_valid_link_targets(conn, project_id, project_path).map_err(|e| {
+                Error::Validation(format!(
+                    "Failed to load valid link targets for content fix-submit (fail-closed): {e}"
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
+
     // Optional structured patch apply (deterministic, no generate).
     if let Some(ref patch_json) = opts.patch_json {
         let patch_applied = match kind {
             FixKind::Content => apply_content_patch(
+                conn,
+                project_id,
+                project_path,
                 &file_path,
                 package.article_id,
                 &package.file,
@@ -358,7 +383,13 @@ pub fn submit_fix(
         Error::Other(format!("Failed to read {}: {e}", file_path.display()))
     })?;
 
-    let validation = validate_fix_content(&package.slug, &content, package.target_keyword.as_deref());
+    let validation = validate_fix_content(
+        &package.slug,
+        &content,
+        Some(pre_content.as_str()),
+        package.target_keyword.as_deref(),
+        valid_link_targets.as_ref(),
+    );
 
     if validation.ok {
         touch_last_edited(conn, project_id, package.article_id);
@@ -426,10 +457,25 @@ pub fn submit_fix(
             ))
         }
     } else {
-        Some(format!(
-            "Validation failed for {} — fix MDX and resubmit",
-            package.file
-        ))
+        let link_fail = validation
+            .checks
+            .iter()
+            .any(|c| c.id == "internal_links_new_resolve" && !c.pass);
+        // When pre == post, residual baseline is the already-written file: all
+        // unresolvable /blog/ links hard-fail (agent full rewrite before submit).
+        if link_fail && kind == FixKind::Content && pre_content == content {
+            Some(format!(
+                "Validation failed for {} — unresolvable /blog/ links hard-fail when the file is \
+                 unchanged at fix-submit (no residual baseline for a full agent rewrite); fix \
+                 invented internal links and resubmit",
+                package.file
+            ))
+        } else {
+            Some(format!(
+                "Validation failed for {} — fix MDX and resubmit",
+                package.file
+            ))
+        }
     };
 
     Ok(FixSubmitResult {
@@ -457,13 +503,25 @@ fn resolve_file(repo: &Path, file_ref: &str) -> Option<PathBuf> {
 
 /// Fix-path validation: always gate MDX structure + H1 + title; do **not** hard-fail
 /// min_word_count (partial SERP fixes on short legacy posts).
+///
+/// **Content kind residual link policy (issue #195 / CONTRACTS §13):**
+/// When `valid_link_targets` is `Some`, hard-fail only `/blog/` links that are
+/// unresolvable in `content` and were **not** already present (same `slug_written`)
+/// in `pre_content`. Pre-existing broken links are reported non-blocking.
+/// If `pre_content` is identical to `content` (agent full rewrite already on disk),
+/// every current unresolvable link hard-fails — there is no residual baseline.
+///
+/// **CTR kind:** pass `valid_link_targets: None` so the link gate stays OFF.
 fn validate_fix_content(
     slug: &str,
     content: &str,
+    pre_content: Option<&str>,
     target_keyword: Option<&str>,
+    valid_link_targets: Option<&HashSet<String>>,
 ) -> FixValidationReport {
     let input = ValidateArticleInput {
         target_keyword: target_keyword.map(|s| s.to_string()),
+        // Residual policy is applied below; do not use full-file link auto-pass/fail here.
         valid_link_targets: None,
         // Soft: do not fail partial SERP fixes on pre-existing short bodies.
         min_word_count: Some(0),
@@ -473,14 +531,126 @@ fn validate_fix_content(
     // Keep structural + identity checks; drop length floors and keyword presence
     // that would block intentional partial SERP fixes (mirrors fix_verify residual policy).
     let keep = |id: &str| matches!(id, "mdx_structure" | "has_h1" | "frontmatter_title");
-    let checks: Vec<ArticleCheck> = full
+    let mut checks: Vec<ArticleCheck> = full
         .checks
         .into_iter()
         .filter(|c| keep(&c.id))
         .collect();
+
+    if let Some(targets) = valid_link_targets {
+        let post_broken = unresolvable_blog_slugs(content, targets);
+        let (newly_broken, pre_broken) = match pre_content {
+            Some(pre) if pre == content => {
+                // No residual baseline (file unchanged at submit): hard-fail all current broken.
+                (post_broken.clone(), Vec::new())
+            }
+            Some(pre) => {
+                let pre_broken = unresolvable_blog_slugs(pre, targets);
+                let newly: Vec<String> = post_broken
+                    .iter()
+                    .filter(|s| !pre_broken.iter().any(|p| p == *s))
+                    .cloned()
+                    .collect();
+                (newly, pre_broken)
+            }
+            None => (post_broken.clone(), Vec::new()),
+        };
+
+        if newly_broken.is_empty() {
+            let detail = if pre_broken.is_empty() {
+                if post_broken.is_empty() {
+                    None
+                } else {
+                    // Should not happen when pre != post residual filters correctly.
+                    Some(format!(
+                        "pre-existing broken (not hard-failed): {}",
+                        post_broken.join(", ")
+                    ))
+                }
+            } else {
+                // pre_broken only relevant when we used residual (pre != post).
+                let still_present: Vec<&String> = pre_broken
+                    .iter()
+                    .filter(|s| post_broken.iter().any(|p| p == *s))
+                    .collect();
+                if still_present.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "pre-existing broken (not hard-failed): {}",
+                        still_present
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                }
+            };
+            checks.push(ArticleCheck {
+                id: "internal_links_new_resolve".to_string(),
+                pass: true,
+                detail,
+            });
+        } else {
+            checks.push(ArticleCheck {
+                id: "internal_links_new_resolve".to_string(),
+                pass: false,
+                detail: Some(format!(
+                    "newly introduced unresolvable /blog/ links: {}",
+                    newly_broken.join(", ")
+                )),
+            });
+        }
+    }
+
     let ok = checks.iter().all(|c| c.pass);
 
     FixValidationReport { ok, checks }
+}
+
+/// Unresolvable `/blog/` link slugs via `extract_blog_link_hrefs` + `resolve_slug`.
+fn unresolvable_blog_slugs(content: &str, targets: &HashSet<String>) -> Vec<String> {
+    let links = crate::content::linking::extract_blog_link_hrefs(content);
+    let mut broken: Vec<String> = links
+        .into_iter()
+        .filter_map(|(_anchor, _href, slug_written)| {
+            if crate::content::slug::resolve_slug(&slug_written, targets).is_none() {
+                Some(slug_written)
+            } else {
+                None
+            }
+        })
+        .collect();
+    broken.sort();
+    broken.dedup();
+    broken
+}
+
+/// Require each patch `internal_links[].target_slug` to resolve against the catalog.
+/// Same spirit as `fix_generate` validation — refuse before any MDX write.
+fn validate_patch_internal_link_targets(
+    links: &[ContentFixLink],
+    valid_slugs: &HashSet<String>,
+) -> Result<()> {
+    for (i, link) in links.iter().enumerate() {
+        if link.target_slug.is_empty() {
+            return Err(Error::Validation(format!(
+                "internal_links[{i}].target_slug is empty"
+            )));
+        }
+        if link.anchor_text.trim().is_empty() {
+            return Err(Error::Validation(format!(
+                "internal_links[{i}].anchor_text is empty"
+            )));
+        }
+        if crate::content::slug::resolve_slug(&link.target_slug, valid_slugs).is_none() {
+            return Err(Error::Validation(format!(
+                "internal_links[{i}].target_slug '{}' does not match any article in this project",
+                link.target_slug
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn touch_last_edited(conn: &Connection, project_id: &str, article_id: i64) {
@@ -548,6 +718,9 @@ fn resolve_fix_submit_target_keyword(
 // ─── Deterministic patch apply via shared materializers (no Task / no LLM) ───
 
 fn apply_content_patch(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &str,
     file_path: &Path,
     article_id: i64,
     package_file: &str,
@@ -566,6 +739,17 @@ fn apply_content_patch(
     }
     if article_id != 0 {
         patch.article_id = article_id;
+    }
+
+    // CONTRACTS §13: refuse unresolvable internal_links before any MDX write.
+    if let Some(ref links) = patch.changes.internal_links {
+        let valid_slugs = task_store::load_valid_link_targets(conn, project_id, project_path)
+            .map_err(|e| {
+                Error::Validation(format!(
+                    "Failed to load valid link targets for content patch (fail-closed): {e}"
+                ))
+            })?;
+        validate_patch_internal_link_targets(links, &valid_slugs)?;
     }
 
     let original = std::fs::read_to_string(file_path)
@@ -1544,5 +1728,441 @@ Intro paragraph about cold brew makers for home use.
             catalog_keyword(&conn, "proj1", 18).as_deref(),
             Some("pour over coffee")
         );
+    }
+
+    // ─── Issue #195: residual /blog/ link gate on content fix-submit ─────────
+
+    /// New unresolvable `/blog/` link introduced on disk hard-fails content fix-submit.
+    #[test]
+    fn submit_new_broken_blog_link_fails() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            20,
+            "link-base",
+            "Link Base",
+            "content/link-base.mdx",
+        );
+        // Clean baseline (no ghost link).
+        write_mdx(
+            &project,
+            "content/link-base.mdx",
+            &valid_mdx("Link Base", "Link Base", "Body about cold brew."),
+        );
+
+        // Agent rewrites file with a new unresolvable /blog/ link before submit.
+        // pre == post at submit → residual baseline is the rewritten file → hard-fail all.
+        write_mdx(
+            &project,
+            "content/link-base.mdx",
+            &valid_mdx(
+                "Link Base Updated",
+                "Link Base Updated",
+                "See [ghost](/blog/ghost-slug) for more.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "link-base",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(!result.ok, "new broken link must hard-fail: {:?}", result);
+        let link_check = result
+            .validation
+            .checks
+            .iter()
+            .find(|c| c.id == "internal_links_new_resolve")
+            .expect("internal_links_new_resolve check present");
+        assert!(!link_check.pass);
+        let detail = link_check.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("ghost-slug"),
+            "detail should name the broken slug: {detail}"
+        );
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("residual baseline")
+                || result
+                    .message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("unresolvable"),
+            "message should document full-rewrite residual case: {:?}",
+            result.message
+        );
+    }
+
+    /// Pre-existing broken link alone does not hard-fail when a title patch changes the file.
+    #[test]
+    fn submit_preexisting_broken_link_with_title_patch_succeeds() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            21,
+            "legacy-broken",
+            "Legacy Broken",
+            "content/legacy-broken.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/legacy-broken.mdx",
+            &valid_mdx(
+                "Legacy Broken",
+                "Legacy Broken",
+                "See [ghost](/blog/ghost-slug) for legacy context.",
+            ),
+        );
+
+        let patch = r#"{
+            "article_id": 21,
+            "file": "content/legacy-broken.mdx",
+            "changes": {
+                "title": "New SERP Title Without Touching Links"
+            }
+        }"#;
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "legacy-broken",
+            FixKind::Content,
+            FixSubmitOpts {
+                patch_json: Some(patch.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            result.ok,
+            "pre-existing broken link must not alone hard-fail: {:?}",
+            result.validation
+        );
+        assert!(result.applied.iter().any(|a| a == "title"));
+        let link_check = result
+            .validation
+            .checks
+            .iter()
+            .find(|c| c.id == "internal_links_new_resolve")
+            .expect("internal_links_new_resolve check present");
+        assert!(link_check.pass);
+        let detail = link_check.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("ghost-slug") && detail.contains("pre-existing"),
+            "should note pre-existing broken non-blocking: {detail}"
+        );
+        let written = fs::read_to_string(project.join("content/legacy-broken.mdx")).unwrap();
+        assert!(written.contains("New SERP Title Without Touching Links"));
+        assert!(written.contains("/blog/ghost-slug"));
+    }
+
+    /// Patch with internal_links to a non-catalog slug is rejected; file not written.
+    #[test]
+    fn submit_patch_invalid_target_slug_rejected() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            22,
+            "patch-link",
+            "Patch Link",
+            "content/patch-link.mdx",
+        );
+        let original = valid_mdx("Patch Link", "Patch Link", "Body stays clean.");
+        write_mdx(&project, "content/patch-link.mdx", &original);
+
+        let patch = r#"{
+            "article_id": 22,
+            "file": "content/patch-link.mdx",
+            "changes": {
+                "internal_links": [
+                    { "anchor_text": "Ghost", "target_slug": "does-not-exist-slug" }
+                ]
+            }
+        }"#;
+
+        let err = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "patch-link",
+            FixKind::Content,
+            FixSubmitOpts {
+                patch_json: Some(patch.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("does-not-exist-slug") || msg.contains("does not match"),
+            "validation error should name the bad slug: {msg}"
+        );
+        let after = fs::read_to_string(project.join("content/patch-link.mdx")).unwrap();
+        assert_eq!(after, original, "invalid patch must not write MDX");
+        assert!(!after.contains("does-not-exist-slug"));
+    }
+
+    /// Patch that adds a link to an existing catalog article slug succeeds.
+    #[test]
+    fn submit_patch_valid_new_link_passes() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            23,
+            "source-post",
+            "Source Post",
+            "content/source-post.mdx",
+        );
+        insert_article(
+            &conn,
+            "proj1",
+            24,
+            "target-post",
+            "Target Post",
+            "content/target-post.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/source-post.mdx",
+            &valid_mdx("Source Post", "Source Post", "Body about cold brew."),
+        );
+        write_mdx(
+            &project,
+            "content/target-post.mdx",
+            &valid_mdx("Target Post", "Target Post", "Target body."),
+        );
+
+        let patch = r#"{
+            "article_id": 23,
+            "file": "content/source-post.mdx",
+            "changes": {
+                "internal_links": [
+                    { "anchor_text": "Target Post", "target_slug": "target-post" }
+                ]
+            }
+        }"#;
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "source-post",
+            FixKind::Content,
+            FixSubmitOpts {
+                patch_json: Some(patch.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert!(result
+            .applied
+            .iter()
+            .any(|a| a.starts_with("internal_links")));
+        let written = fs::read_to_string(project.join("content/source-post.mdx")).unwrap();
+        assert!(written.contains("/blog/target-post"));
+        let link_check = result
+            .validation
+            .checks
+            .iter()
+            .find(|c| c.id == "internal_links_new_resolve")
+            .expect("link check present for content kind");
+        assert!(link_check.pass);
+    }
+
+    /// Residual pre≠post: CTA patch embeds a new unresolvable `/blog/` link → hard-fail.
+    #[test]
+    fn submit_patch_cta_introduces_new_broken_link_fails() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            25,
+            "add-ghost",
+            "Add Ghost",
+            "content/add-ghost.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/add-ghost.mdx",
+            &valid_mdx("Add Ghost", "Add Ghost", "Clean body, no links yet."),
+        );
+
+        // CTA is free-form prose; materialize appends it without catalog checks.
+        // Residual gate must still catch newly introduced unresolvable /blog/ links.
+        let patch = r#"{
+            "article_id": 25,
+            "file": "content/add-ghost.mdx",
+            "changes": {
+                "cta": "Read more in [ghost](/blog/ghost-slug)."
+            }
+        }"#;
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "add-ghost",
+            FixKind::Content,
+            FixSubmitOpts {
+                patch_json: Some(patch.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!result.ok, "new broken link via CTA must hard-fail: {:?}", result);
+        let link_check = result
+            .validation
+            .checks
+            .iter()
+            .find(|c| c.id == "internal_links_new_resolve")
+            .expect("internal_links_new_resolve check present");
+        assert!(!link_check.pass);
+        let detail = link_check.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("ghost-slug"),
+            "detail should name the broken slug: {detail}"
+        );
+    }
+
+    /// CTR fix-submit does not hard-fail on unresolvable /blog/ links.
+    #[test]
+    fn submit_ctr_does_not_hard_fail_on_broken_links() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            26,
+            "ctr-links",
+            "CTR Links",
+            "content/ctr-links.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/ctr-links.mdx",
+            &valid_mdx(
+                "CTR Links",
+                "CTR Links",
+                "See [ghost](/blog/ghost-slug) still here.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "ctr-links",
+            FixKind::Ctr,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(
+            result.ok,
+            "CTR kind must not hard-fail on links: {:?}",
+            result.validation
+        );
+        assert!(
+            !result
+                .validation
+                .checks
+                .iter()
+                .any(|c| c.id == "internal_links_new_resolve"),
+            "CTR must not emit content residual link check: {:?}",
+            result.validation.checks
+        );
+    }
+
+    /// Content fix-submit with only resolvable existing /blog/ links succeeds.
+    #[test]
+    fn submit_content_with_valid_existing_link_ok() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            27,
+            "linked-from",
+            "Linked From",
+            "content/linked-from.mdx",
+        );
+        insert_article(
+            &conn,
+            "proj1",
+            28,
+            "linked-to",
+            "Linked To",
+            "content/linked-to.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/linked-from.mdx",
+            &valid_mdx(
+                "Linked From",
+                "Linked From",
+                "See [Linked To](/blog/linked-to) for more.",
+            ),
+        );
+        write_mdx(
+            &project,
+            "content/linked-to.mdx",
+            &valid_mdx("Linked To", "Linked To", "Target body."),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "linked-from",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        let link_check = result
+            .validation
+            .checks
+            .iter()
+            .find(|c| c.id == "internal_links_new_resolve")
+            .expect("link check present");
+        assert!(link_check.pass);
     }
 }

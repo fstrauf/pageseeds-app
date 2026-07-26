@@ -260,16 +260,20 @@ pub fn submit_written_article(
         })
         .filter(|k| !k.trim().is_empty());
 
+    // Fail-closed: if the valid-target catalog cannot load, do not auto-pass links
+    // (CONTRACTS §13). Propagate as submit hard error rather than Option::None.
     let valid_link_targets = crate::engine::task_store::load_valid_link_targets(
         conn,
         project_id,
         &project_path.to_string_lossy(),
     )
-    .ok();
+    .map_err(|e| {
+        format!("Failed to load valid link targets for write-submit (fail-closed): {e}")
+    })?;
 
     let input = ValidateArticleInput {
         target_keyword: target_keyword.clone(),
-        valid_link_targets,
+        valid_link_targets: Some(valid_link_targets),
         min_word_count: Some(DEFAULT_MIN_WORD_COUNT),
     };
     let validation = validate_article_content(&slug, &content, &input);
