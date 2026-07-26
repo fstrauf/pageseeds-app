@@ -22,7 +22,8 @@ use rusqlite::{Connection, OptionalExtension};
 /// Detect existing hub-like pages and persist `page_type = "hub"` in the DB + articles.json.
 ///
 /// Heuristics used:
-/// - URL slug starts with `hub-`/`guide-` (canonical), or dirty `hub/`/`guide/`/`hub_`/`guide_`
+/// - URL slug is hub-like per [`crate::content::slug::is_hub_like_slug`]
+///   (live `hub-` only; dirty `hub/`/`guide/`/`hub_`/`guide_`; not bare `guide-`)
 /// - Title contains "complete guide" or "ultimate guide"
 /// - Word count > 2000 AND target_keyword is broad (3+ words or generic single word)
 ///
@@ -32,7 +33,6 @@ pub fn backfill_hub_page_types(db: &Connection, project_id: &str) -> Result<usiz
     let mut updated = 0;
 
     for article in &articles {
-        let slug = article.url_slug.to_lowercase();
         let title = article.title.to_lowercase();
         let kw = article
             .target_keyword
@@ -40,12 +40,7 @@ pub fn backfill_hub_page_types(db: &Connection, project_id: &str) -> Result<usiz
             .unwrap_or("")
             .to_lowercase();
 
-        let is_hub_url = slug.starts_with("hub/")
-            || slug.starts_with("guide/")
-            || slug.starts_with("hub-")
-            || slug.starts_with("guide-")
-            || slug.starts_with("hub_")
-            || slug.starts_with("guide_");
+        let is_hub_url = crate::content::slug::is_hub_like_slug(&article.url_slug);
 
         let is_hub_title = title.contains("complete guide")
             || title.contains("ultimate guide")

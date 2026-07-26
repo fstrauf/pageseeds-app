@@ -199,6 +199,82 @@ pub fn resolve_slug(slug: &str, valid: &std::collections::HashSet<String>) -> Op
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Hub-like slug detection (URL identity only — page_type checks stay at call sites)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Live product convention for hub identities is the single-segment `hub-{topic}`
+/// form (e.g. `hub-coffee`). Dirty catalog-debt forms are still recognized so
+/// detection stays correct against unhygienized rows:
+/// - path: `hub/{topic}`, `guide/{topic}`
+/// - underscore: `hub_{topic}`, `guide_{topic}`
+///
+/// Bare `guide-` is **not** hub-like: ordinary posts such as `guide-to-espresso`
+/// must not be classified as hubs by URL alone. Call sites that already have
+/// `page_type == "hub"` may still treat the article as a hub without using this
+/// helper for the URL decision.
+///
+/// # Examples
+///
+/// ```
+/// use pageseeds_core::content::slug::is_hub_like_slug;
+///
+/// assert!(is_hub_like_slug("hub-coffee"));
+/// assert!(is_hub_like_slug("hub/coffee"));
+/// assert!(is_hub_like_slug("guide/foo"));
+/// assert!(is_hub_like_slug("hub_x"));
+/// assert!(is_hub_like_slug("guide_x"));
+/// assert!(!is_hub_like_slug("guide-to-espresso"));
+/// assert!(!is_hub_like_slug("guide-coffee"));
+/// assert!(!is_hub_like_slug("my-post"));
+/// ```
+pub fn is_hub_like_slug(slug: &str) -> bool {
+    let s = slug.trim().to_lowercase();
+    s.starts_with("hub-")
+        || s.starts_with("hub/")
+        || s.starts_with("hub_")
+        || s.starts_with("guide/")
+        || s.starts_with("guide_")
+}
+
+/// Extract the topic fragment from a hub-like slug, space-normalized.
+///
+/// Strips the same prefixes as [`is_hub_like_slug`] (live `hub-` plus dirty
+/// `hub/`/`hub_`/`guide/`/`guide_`). Returns `None` when the slug is not
+/// hub-like — including bare `guide-*` posts.
+///
+/// The returned topic has `_`/`-` turned into spaces and is lowercased, matching
+/// the form used when matching against cluster themes / keywords.
+///
+/// # Examples
+///
+/// ```
+/// use pageseeds_core::content::slug::hub_topic_from_slug;
+///
+/// assert_eq!(hub_topic_from_slug("hub-coffee"), Some("coffee".to_string()));
+/// assert_eq!(hub_topic_from_slug("hub/cash_secured_puts"), Some("cash secured puts".to_string()));
+/// assert_eq!(hub_topic_from_slug("guide/foo"), Some("foo".to_string()));
+/// assert_eq!(hub_topic_from_slug("guide-to-espresso"), None);
+/// assert_eq!(hub_topic_from_slug("my-post"), None);
+/// ```
+pub fn hub_topic_from_slug(slug: &str) -> Option<String> {
+    let s = slug.trim().to_lowercase();
+    let rest = if s.starts_with("hub/") || s.starts_with("hub-") || s.starts_with("hub_") {
+        &s[4..]
+    } else if s.starts_with("guide/") || s.starts_with("guide_") {
+        &s[6..]
+    } else {
+        return None;
+    };
+    let topic = rest.trim().replace('_', " ").replace('-', " ");
+    let topic = topic.split_whitespace().collect::<Vec<_>>().join(" ");
+    if topic.is_empty() {
+        None
+    } else {
+        Some(topic)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // URL extraction
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -463,5 +539,40 @@ mod tests {
         );
         assert_eq!(resolve_slug("ghost-slug", &valid), None);
         assert_eq!(resolve_slug("", &valid), None);
+    }
+
+    #[test]
+    fn is_hub_like_slug_live_hub_prefix_only_for_hyphen_form() {
+        // Live single-segment canonical: only hub-
+        assert!(is_hub_like_slug("hub-coffee"));
+        assert!(is_hub_like_slug("Hub-Coffee"));
+        // Dirty catalog-debt forms still recognized
+        assert!(is_hub_like_slug("hub/coffee"));
+        assert!(is_hub_like_slug("guide/foo"));
+        assert!(is_hub_like_slug("hub_x"));
+        assert!(is_hub_like_slug("guide_x"));
+        // Bare guide- is a normal post, not hub-like
+        assert!(!is_hub_like_slug("guide-to-espresso"));
+        assert!(!is_hub_like_slug("guide-coffee"));
+        assert!(!is_hub_like_slug("guide-to-french-press"));
+        assert!(!is_hub_like_slug("my-post"));
+        assert!(!is_hub_like_slug("complete-guide-to-coffee"));
+    }
+
+    #[test]
+    fn hub_topic_from_slug_strips_hub_like_prefixes() {
+        assert_eq!(hub_topic_from_slug("hub-coffee"), Some("coffee".to_string()));
+        assert_eq!(
+            hub_topic_from_slug("hub/cash_secured_puts"),
+            Some("cash secured puts".to_string())
+        );
+        assert_eq!(hub_topic_from_slug("hub_x"), Some("x".to_string()));
+        assert_eq!(hub_topic_from_slug("guide/foo"), Some("foo".to_string()));
+        assert_eq!(hub_topic_from_slug("guide_bar"), Some("bar".to_string()));
+        // Bare guide- is not hub-like → no topic
+        assert_eq!(hub_topic_from_slug("guide-to-espresso"), None);
+        assert_eq!(hub_topic_from_slug("my-post"), None);
+        assert_eq!(hub_topic_from_slug("hub-"), None);
+        assert_eq!(hub_topic_from_slug("hub/"), None);
     }
 }

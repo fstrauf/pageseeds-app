@@ -147,17 +147,10 @@ pub(crate) fn build_clusters(
         let (shared_query_count, top_shared_queries) =
             compute_query_overlap(conn, project_id, records, &indices);
 
-        // Hub existence: hyphen form is live canonical; path/underscore forms
-        // are dirty catalog debt — recognize all so detection stays correct.
-        let hub_exists = indices.iter().any(|&i| {
-            let slug = &records[i].url_slug;
-            slug.starts_with("hub/")
-                || slug.starts_with("guide/")
-                || slug.starts_with("hub-")
-                || slug.starts_with("guide-")
-                || slug.starts_with("hub_")
-                || slug.starts_with("guide_")
-        });
+        // Hub existence via shared slug policy (live hub- + dirty path/underscore forms).
+        let hub_exists = indices
+            .iter()
+            .any(|&i| crate::content::slug::is_hub_like_slug(&records[i].url_slug));
 
         clusters.push(Cluster {
             cluster_id: slugify(&theme),
