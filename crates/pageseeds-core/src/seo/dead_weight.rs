@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::seo::provider::SeoDataProvider;
+use crate::seo::serp_guard::{fetch_serp_features, is_budget_error, SerpSource};
 use crate::seo::winnability::{assess, WinnabilityAssessment, WinnabilityBucket};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -122,6 +123,16 @@ pub struct ScoreRunResult {
     pub scored: usize,
     pub skipped_fresh: usize,
     pub skipped_cap: usize,
+    /// Successful SERP lookups that hit `serp_features_cache` (no network).
+    #[serde(default)]
+    pub cache_hits: usize,
+    /// Successful SERP lookups that paid for a live DataForSEO call.
+    #[serde(default)]
+    pub live_calls: usize,
+    /// Candidates skipped because the per-project daily SERP budget was hit.
+    /// These are **not** persisted as Avoid.
+    #[serde(default)]
+    pub skipped_budget: usize,
     pub truncated: bool,
     pub ttl_days: u64,
     pub max_live: usize,
@@ -139,6 +150,9 @@ impl ScoreRunResult {
             scored: 0,
             skipped_fresh: 0,
             skipped_cap: 0,
+            cache_hits: 0,
+            live_calls: 0,
+            skipped_budget: 0,
             truncated: false,
             ttl_days,
             max_live,
@@ -410,28 +424,34 @@ pub fn list_from_cache(conn: &Connection, project_id: &str) -> Result<ScoreRunRe
 
 // ─── Score + persist ─────────────────────────────────────────────────────────
 
-/// Score low-impression candidates with an injected assessor (unit-testable;
-/// no live SERP). Persists new scores; includes still-fresh cached scores so
-/// bucket inventory reflects the full candidate set without re-paying SERP.
+/// Outcome of assessing one candidate that needs a (re)score.
 ///
-/// Cap (`max_live`) applies only to **new** live assessments.
-pub fn score_and_persist(
-    conn: &Connection,
-    project_id: &str,
-    opts: &ScoreOptions,
-    mut assess_fn: impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
-) -> Result<ScoreRunResult> {
-    let now = Utc::now();
-    score_and_persist_at(conn, project_id, opts, now, &mut assess_fn)
+/// Shared by the injected-assessor path and the live provider path so inventory
+/// rules (freshness / force / max_live / stale-cache surface / persist / buckets)
+/// live in a single loop.
+enum AssessOutcome {
+    /// Persist this assessment. `source` drives `cache_hits` / `live_calls`
+    /// counters when set (provider path); injected assessors pass `None`.
+    Scored {
+        assessment: WinnabilityAssessment,
+        source: Option<SerpSource>,
+    },
+    /// Daily SERP budget hit — **not** Avoid, do not persist. Core loop sets
+    /// budget-exhausted and skips the rest of the batch without further network.
+    BudgetSkip,
 }
 
-/// Same as [`score_and_persist`] with an explicit `now` (tests inject clock).
-pub fn score_and_persist_at(
+/// Single scoring loop: freshness / force / max_live / budget / persist / buckets.
+///
+/// `assess` is only invoked for candidates that still need a new score (not
+/// fresh, under cap, budget not yet exhausted). After the first `BudgetSkip`,
+/// remaining candidates are budget-skipped without calling `assess`.
+fn score_candidates_loop(
     conn: &Connection,
     project_id: &str,
     opts: &ScoreOptions,
     now: DateTime<Utc>,
-    assess_fn: &mut impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
+    mut assess: impl FnMut(&DeadWeightCandidate) -> AssessOutcome,
 ) -> Result<ScoreRunResult> {
     let candidates =
         load_low_impression_candidates(conn, project_id, opts.max_impressions)?;
@@ -449,7 +469,8 @@ pub fn score_and_persist_at(
     }
 
     let mut result = ScoreRunResult::empty(false, opts.ttl_days, opts.max_live, None);
-    let mut live_count = 0usize;
+    let mut assess_count = 0usize;
+    let mut budget_exhausted = false;
 
     for candidate in &candidates {
         let stored = load_stored_score(conn, project_id, candidate.article_id)?;
@@ -469,7 +490,21 @@ pub fn score_and_persist_at(
             }
         }
 
-        if live_count >= opts.max_live {
+        // After first budget hit: skip rest without network; surface stale cache.
+        if budget_exhausted {
+            result.skipped_budget += 1;
+            if let Some(ref s) = stored {
+                result.push_entry(entry_from_stored(
+                    candidate.article_id,
+                    &candidate.title,
+                    &candidate.slug,
+                    s,
+                ));
+            }
+            continue;
+        }
+
+        if assess_count >= opts.max_live {
             result.skipped_cap += 1;
             // Surface stale cache if present so inventory is still useful.
             if let Some(ref s) = stored {
@@ -483,30 +518,88 @@ pub fn score_and_persist_at(
             continue;
         }
 
-        let assessment = assess_fn(candidate);
-        persist_score(
-            conn,
-            project_id,
-            candidate.article_id,
-            &assessment,
-            candidate.impressions,
-            now,
-        )?;
-        live_count += 1;
-        result.scored += 1;
-        result.push_entry(entry_from_assessment(
-            candidate,
-            &assessment,
-            &now.to_rfc3339(),
-            candidate.impressions,
-        ));
+        match assess(candidate) {
+            AssessOutcome::BudgetSkip => {
+                budget_exhausted = true;
+                result.skipped_budget += 1;
+                if let Some(ref s) = stored {
+                    result.push_entry(entry_from_stored(
+                        candidate.article_id,
+                        &candidate.title,
+                        &candidate.slug,
+                        s,
+                    ));
+                }
+            }
+            AssessOutcome::Scored {
+                assessment,
+                source,
+            } => {
+                match source {
+                    Some(SerpSource::Cache) => result.cache_hits += 1,
+                    Some(SerpSource::Live) => result.live_calls += 1,
+                    None => {}
+                }
+                persist_score(
+                    conn,
+                    project_id,
+                    candidate.article_id,
+                    &assessment,
+                    candidate.impressions,
+                    now,
+                )?;
+                assess_count += 1;
+                result.scored += 1;
+                result.push_entry(entry_from_assessment(
+                    candidate,
+                    &assessment,
+                    &now.to_rfc3339(),
+                    candidate.impressions,
+                ));
+            }
+        }
     }
 
-    result.truncated = result.skipped_cap > 0;
+    result.truncated = result.skipped_cap > 0 || result.skipped_budget > 0;
     Ok(result)
 }
 
-/// SERP failure → Avoid with risk_score 99 (stable CLI/operator shape).
+/// Score low-impression candidates with an injected assessor (unit-testable;
+/// no live SERP). Persists new scores; includes still-fresh cached scores so
+/// bucket inventory reflects the full candidate set without re-paying SERP.
+///
+/// Cap (`max_live`) applies only to **new** live assessments.
+/// No budget path — assessor always yields a score.
+pub fn score_and_persist(
+    conn: &Connection,
+    project_id: &str,
+    opts: &ScoreOptions,
+    mut assess_fn: impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
+) -> Result<ScoreRunResult> {
+    let now = Utc::now();
+    score_and_persist_at(conn, project_id, opts, now, &mut assess_fn)
+}
+
+/// Same as [`score_and_persist`] with an explicit `now` (tests inject clock).
+pub fn score_and_persist_at(
+    conn: &Connection,
+    project_id: &str,
+    opts: &ScoreOptions,
+    now: DateTime<Utc>,
+    assess_fn: &mut impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
+) -> Result<ScoreRunResult> {
+    score_candidates_loop(conn, project_id, opts, now, |candidate| {
+        AssessOutcome::Scored {
+            assessment: assess_fn(candidate),
+            source: None,
+        }
+    })
+}
+
+/// Real provider SERP failure → Avoid with risk_score 99 (stable CLI shape).
+///
+/// **Do not** pass budget errors here — use [`is_budget_error`] and skip without
+/// persisting Avoid. Budget is not competitive risk.
 pub fn serp_error_assessment(keyword: &str, err: impl std::fmt::Display) -> WinnabilityAssessment {
     WinnabilityAssessment {
         keyword: keyword.to_string(),
@@ -519,29 +612,15 @@ pub fn serp_error_assessment(keyword: &str, err: impl std::fmt::Display) -> Winn
     }
 }
 
-/// Assess one candidate via `provider.serp_features` (sync bridge over Tokio).
-fn assess_via_provider(
-    runtime: &tokio::runtime::Handle,
-    provider: &dyn SeoDataProvider,
-    candidate: &DeadWeightCandidate,
-    country: &str,
-) -> WinnabilityAssessment {
-    let kd = candidate
-        .keyword_difficulty
-        .as_deref()
-        .and_then(|s| s.parse::<f64>().ok());
-    match runtime.block_on(provider.serp_features(&candidate.target_keyword, country)) {
-        Ok(serp) => assess(&candidate.target_keyword, &serp, kd, None),
-        Err(e) => serp_error_assessment(&candidate.target_keyword, &e),
-    }
-}
-
-/// Live path: thin wrapper that injects SERP via `assess_fn` into the shared
-/// [`score_and_persist`] loop (no duplicated TTL/force/cap/persist machine).
+/// Live path via [`fetch_serp_features`] (cache + daily project cap).
 ///
 /// Call from a **synchronous** context with a Tokio runtime handle (e.g. CLI
 /// after `Runtime::new()`). Do not nest this inside an outer `runtime.block_on`
 /// of a future that itself calls `Handle::block_on` — that panics.
+///
+/// Budget soft-fail: increments `skipped_budget` and does **not** persist Avoid.
+/// After the first budget skip, remaining candidates are also budget-skipped
+/// (no pointless guard loop). Cache hits still assess free of charge.
 pub fn score_and_persist_with_provider(
     conn: &Connection,
     project_id: &str,
@@ -549,8 +628,48 @@ pub fn score_and_persist_with_provider(
     opts: &ScoreOptions,
     runtime: &tokio::runtime::Handle,
 ) -> Result<ScoreRunResult> {
-    score_and_persist(conn, project_id, opts, |candidate| {
-        assess_via_provider(runtime, provider, candidate, &opts.country)
+    let now = Utc::now();
+    score_candidates_loop(conn, project_id, opts, now, |candidate| {
+        let lookup = match runtime.block_on(fetch_serp_features(
+            conn,
+            project_id,
+            provider,
+            &candidate.target_keyword,
+            &opts.country,
+        )) {
+            Ok(lookup) => lookup,
+            Err(e) if is_budget_error(&e) => {
+                log::warn!(
+                    "[dead_weight] SERP daily live-call budget hit for project {}: {}. \
+                     Remaining candidates skipped without Avoid.",
+                    project_id,
+                    e
+                );
+                return AssessOutcome::BudgetSkip;
+            }
+            Err(e) => {
+                // Real provider failure — existing Avoid mapping (not budget).
+                return AssessOutcome::Scored {
+                    assessment: serp_error_assessment(&candidate.target_keyword, &e),
+                    source: None,
+                };
+            }
+        };
+
+        let kd = candidate
+            .keyword_difficulty
+            .as_deref()
+            .and_then(|s| s.parse::<f64>().ok());
+        let assessment = assess(
+            &candidate.target_keyword,
+            &lookup.features,
+            kd,
+            None,
+        );
+        AssessOutcome::Scored {
+            assessment,
+            source: Some(lookup.source),
+        }
     })
 }
 
@@ -559,7 +678,13 @@ pub fn score_and_persist_with_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
+    use crate::seo::intent::IntentClassification;
+    use crate::seo::keywords::{KeywordDifficultyResult, KeywordIdeasResult, SerpFeaturesResult};
     use crate::seo::winnability::WinnabilityBucket;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     fn in_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -570,6 +695,65 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    /// Minimal provider that always "succeeds" SERP — used only when budget allows.
+    struct CountingSerpProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SeoDataProvider for CountingSerpProvider {
+        async fn keyword_ideas(
+            &self,
+            _keyword: &str,
+            _country: &str,
+            _search_engine: &str,
+        ) -> Result<KeywordIdeasResult> {
+            Err(Error::Other("stub".into()))
+        }
+
+        async fn keyword_difficulty(
+            &self,
+            _keyword: &str,
+            _country: &str,
+        ) -> Result<KeywordDifficultyResult> {
+            Err(Error::Other("stub".into()))
+        }
+
+        async fn batch_keyword_difficulty(
+            &self,
+            _keywords: &[String],
+            _country: &str,
+        ) -> Result<Vec<KeywordDifficultyResult>> {
+            Err(Error::Other("stub".into()))
+        }
+
+        async fn search_intent(
+            &self,
+            _keywords: &[String],
+        ) -> Result<Vec<IntentClassification>> {
+            Err(Error::Other("stub".into()))
+        }
+
+        async fn serp_features(
+            &self,
+            keyword: &str,
+            _country: &str,
+        ) -> Result<SerpFeaturesResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(SerpFeaturesResult {
+                keyword: keyword.to_string(),
+                ai_overview_present: false,
+                featured_snippet_present: false,
+                people_also_ask_present: false,
+                organic_results: vec![],
+            })
+        }
+
+        fn name(&self) -> &'static str {
+            "mock"
+        }
     }
 
     fn insert_article(
@@ -902,5 +1086,76 @@ mod tests {
         assert_eq!(result.avoid.count, 1);
         assert_eq!(result.target.count, 1);
         assert!(!result.from_cache);
+    }
+
+    /// Budget must soft-skip — never persist Avoid / risk 99 via serp_error_assessment.
+    #[test]
+    fn budget_error_does_not_persist_avoid() {
+        let conn = in_memory_db();
+        for (id, slug) in [(1i64, "one"), (2, "two"), (3, "three")] {
+            insert_article(
+                &conn,
+                id,
+                slug,
+                slug,
+                &format!("kw {slug}"),
+                "published",
+                None,
+            );
+            set_gsc_impressions(&conn, id, 0.0);
+        }
+
+        let day = Utc::now().format("%Y-%m-%d").to_string();
+        // Exhaust daily live cap (default 50) so every live fetch budgets out.
+        conn.execute(
+            "INSERT INTO serp_daily_usage (project_id, day, live_calls) VALUES ('proj1', ?1, 50)",
+            rusqlite::params![day],
+        )
+        .unwrap();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = CountingSerpProvider {
+            calls: calls.clone(),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = score_and_persist_with_provider(
+            &conn,
+            "proj1",
+            &provider,
+            &ScoreOptions::default(),
+            rt.handle(),
+        )
+        .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "budget must not call provider");
+        assert_eq!(result.scored, 0);
+        assert!(result.skipped_budget >= 3);
+        assert_eq!(result.avoid.count, 0);
+        assert_eq!(result.target.count, 0);
+        assert_eq!(result.differentiate.count, 0);
+        assert_eq!(result.live_calls, 0);
+
+        // Nothing persisted under winnability.
+        for id in [1i64, 2, 3] {
+            assert!(
+                load_stored_score(&conn, "proj1", id).unwrap().is_none(),
+                "article {id} must not get Avoid from budget"
+            );
+        }
+    }
+
+    #[test]
+    fn serp_error_assessment_is_avoid_99_for_real_errors_only() {
+        let a = serp_error_assessment("kw", "timeout");
+        assert_eq!(a.bucket, WinnabilityBucket::Avoid);
+        assert_eq!(a.risk_score, 99);
+        assert!(a.reason.contains("timeout"));
+        // Budget errors must be matched via is_budget_error, not this helper.
+        let budget = Error::SerpBudgetExceeded {
+            project_id: "p".into(),
+            day: "2026-01-01".into(),
+            cap: 50,
+        };
+        assert!(crate::seo::serp_guard::is_budget_error(&budget));
     }
 }
