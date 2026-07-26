@@ -2,9 +2,9 @@
 name: weekly-seo
 description: >-
   Run the weekly SEO pass for one PageSeeds project via pageseeds-cli
-  (desk reads → ≤5 actions → report). Use when the user wants weekly SEO,
-  SEO maintenance, organic growth this week, or /weekly-seo.
-  Operator only — never edit pageseeds-app source.
+  (desk reads → optional PostHog behavioral signals → ≤5 actions → report).
+  Use when the user wants weekly SEO, SEO maintenance, organic growth this
+  week, or /weekly-seo. Operator only — never edit pageseeds-app source.
 when-to-use: >-
   Triggers on "/weekly-seo", "weekly SEO", "run weekly SEO", "SEO pass",
   "SEO maintenance", "what should we do this week for organic traffic",
@@ -40,6 +40,7 @@ not by editing content or product source yourself.
 | Layer | Role |
 |-------|------|
 | **Capability** | `pageseeds-cli` JSON tools (≈ MCP surface) |
+| **Optional signal** | PostHog MCP — light engagement desk only (see below) |
 | **Policy** | This skill — budgets, lifecycle, report, isolation |
 | **Agent** | You — choose tools within hard rails |
 | **Product source** | **Out of scope** — never patch `pageseeds-app` |
@@ -103,7 +104,7 @@ Breaking these fails the run.
 
 | # | Rule |
 |---|------|
-| 1 | **CLI only** for data/tasks (+ the report file). No direct DB writes, no hand-editing MDX. |
+| 1 | **CLI only** for data/tasks (+ the report file), **except** the optional PostHog MCP desk. No direct DB writes, no hand-editing MDX. |
 | 2 | **No product source edits** under `pageseeds-app` product crates (unless explicitly requested). |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
@@ -111,7 +112,7 @@ Breaking these fails the run.
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
 | 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
-| 9 | **Missing integrations:** GSC/Clarity/Reddit fail → degrade and say so; never fake data. |
+| 9 | **Missing integrations:** GSC/Clarity/Reddit/PostHog fail or unavailable → degrade and say so; never fake data. |
 
 ### May-create via `create-task`
 
@@ -205,7 +206,9 @@ not a full `indexing_health_campaign` fan-out.
 
 ```text
 recency → refresh ground truth (if stale) → site-overview
-  → articles / article / gsc-queries → ≤5 actions → report
+  → articles / article / gsc-queries
+  → optional PostHog desk (if MCP available)
+  → ≤5 actions → report
 ```
 
 Reorder/deepen when a clear anomaly appears. Still honor hard rails and plan
@@ -231,6 +234,7 @@ There is **no** `refresh_ground_truth` CLI yet (dual-path until it lands).
 | Live demand / deltas | `gsc-performance`, `gsc-movers`, `gsc-queries` (cheap truth) |
 | Stale snapshots / desk cache | `create-task -t collect_gsc` then **`execute-task` this run** if needed |
 | Clarity (if configured) | same pattern with `collect_clarity` |
+| PostHog (if MCP available) | Optional desk pass — see [PostHog desk (optional)](#posthog-desk-optional); not a CLI task |
 
 - **Desk tape flag:** On `site-overview` / `articles`, read `freshness.stale` and `freshness.hint` before treating zero impressions/clicks as demand truth (empty/stale `gsc_page_daily` is not “no traffic”).
 
@@ -260,27 +264,34 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 
 | Tool | Note |
 |------|------|
+| **PostHog MCP** (optional desk) | Behavioral / engagement signals for the same site — see [PostHog desk (optional)](#posthog-desk-optional). **Not** GSC substitute; skip if MCP or project missing |
 | `cannibalization-clusters` | Soft TF-IDF clusters — **fail open** on mono-niche; **not merge authority** |
 | `ctr-health` | Productized composite — prefer impressions/CTR from desk + `gsc-queries` |
 | `seo_health_scan` (task) | Optional backlog only when desk data is insufficient |
 | `content-audit-report` / `run-content-audit` | Optional deep structural checks |
 | `indexing-status`, `article-title-scan`, `article-body-hash`, `article-link-graph`, `framework-files`, `research-shortlist`, `article-quality-reviews`, `score-zero-impression-articles`, `article-list` / `article-frontmatter` | Use when desk points there |
 
-**Exploration budget:** prefer **≤ ~25** tool calls before locking a plan.
-Stop early when the story is clear; do not thrash the same tool without a new hypothesis.
+**Exploration budget:** prefer **≤ ~25** tool calls before locking a plan
+(PostHog desk counts toward this — keep it to a few MCP calls, not a full
+product review). Stop early when the story is clear; do not thrash the same
+tool without a new hypothesis.
 
 #### How to explore
 
 1. **Wide:** `site-overview` (+ `gsc-movers` / `gsc-performance` if needed).  
 2. **Catalog:** `articles` for filters (high impressions, low CTR, status).  
 3. **Deep:** `article -S <slug>` + `gsc-queries -u <url>` on top candidates.  
-4. **Act** only with evidence; gap growth → research (below).
+4. **Optional PostHog desk** (if MCP available): engagement / bounce / top paths
+   for the same site — weave into ranking, never invent SEO demand from it.  
+5. **Act** only with evidence; gap growth → research (below).
 
 #### Soft hints (priors — CTR & cannibalization emerge from desk data)
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
 | High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; Path B fix when available. **Not** full `ctr_audit` first (see CTR policy); **not** `content_review` as strategy brain |
+| High GSC impressions/clicks + high bounce / low engagement (PostHog) on same URL | Prefer that slug for `fix_content_article -S` — intent/content mismatch more likely; cite both GSC + PostHog in `-r` |
+| Strong organic landing (GSC) but weak conversion path (PostHog funnel/path) | SEO action still content/SERP; note product/UX friction in report — do **not** invent non-SEO tasks mid-run |
 | Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
 | Many not-indexed | Desk → targeted `fix_indexing_internal_links` / `fix_content_article -S` on catalog sample slugs. **Not** full `indexing_health_campaign` first (see Indexing policy) |
 | Orphans / weak links | `cluster_and_link` / `interlinking` |
@@ -289,6 +300,72 @@ Stop early when the story is clear; do not thrash the same tool without a new hy
 | Quiet site + thin backlog | `research_keywords` / `research_landing_pages` |
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
+
+### PostHog desk (optional)
+
+**Role:** light **behavioral / engagement** signal next to GSC demand — not a
+second ground truth, not a full product weekly review (that is
+`posthog-weekly-insights`). Use only to **re-rank or strengthen** SEO actions
+already justified by desk/GSC evidence.
+
+**When to run (default: try once, then skip if blocked):**
+
+| Condition | Action |
+|-----------|--------|
+| PostHog MCP available in this session | Run the light desk below after primary GSC desk |
+| MCP missing / auth fail / no matching project | Skip; note under Skipped in the report — continue on CLI desk only |
+| User says “skip PostHog” / “SEO only” | Skip without probing |
+| User wants deep product analytics | Point them to `posthog-weekly-insights`; do **not** expand this pass |
+
+**Project selection (mandatory before queries):**
+
+1. Resolve the PageSeeds site from setup / `list-projects` / `site-overview`
+   (name + public host, e.g. `expensesorted.com`).
+2. Via PostHog MCP (`posthog__exec` / `posthog:exec`):
+   - `call projects-get {}` or `call organizations-list {}` → list projects.
+   - Match by **name** or known host/domain against the PageSeeds project.
+   - If needed: `call switch-project {"projectId": <id>}` (use schema from
+     `info switch-project` if unsure).
+3. **Ambiguous or no match → skip** PostHog for this run (do not query the
+   wrong product’s events). State the mismatch in the report.
+4. Confirm taxonomy before querying:  
+   `call read-data-schema {"query":{"kind":"events"}}`  
+   Never assume `$pageview` / property names without schema confirmation.
+
+**Light desk (≤ ~4–6 MCP calls total — counts toward exploration budget):**
+
+Prefer web-analytics style tools when present; fall back to trends after schema:
+
+| Goal | Prefer |
+|------|--------|
+| Site KPIs (visitors, bounce, duration) last 7d | `query-web-overview` (or trends on confirmed pageview event) |
+| Top paths + bounce | `query-web-stats` broken down by path/pathname; else trends + `$pathname` breakdown after schema |
+| Core Web Vitals on top organic pages (optional) | `query-web-vitals` if events exist — only for URLs already on the SEO shortlist |
+| Blog → product path (optional, 1 funnel max) | `query-funnel` / `query-paths` only when a blog/CTA event exists in schema |
+
+Window: **last 7 days** (optionally compare prior week if the tool supports it).
+Always prefer `filterTestAccounts` / project defaults that exclude internal users.
+
+**How to weave into the plan (judgment rules):**
+
+1. **GSC remains demand authority.** PostHog does not create “write this keyword”
+   or replace impressions/CTR/position.
+2. **Intersection wins:** URLs that show up in **both** high-impr/low-CTR (or
+   movers) **and** high bounce / low engagement → higher priority for
+   `fix_content_article -S`.
+3. **PostHog-only friction** (rage clicks, funnel drop on app routes, errors) →
+   note in report **Needs attention (product)** — not a weekly SEO create
+   unless it is clearly content/SERP (e.g. thin landing, broken title intent).
+4. **Do not** file product bugs or expand into session-replay archaeology here.
+5. **Cite both sources** in task `-r` and the report when PostHog influenced
+   ranking (e.g. “GSC 12k impr / 0.8% CTR; PostHog bounce ~78% on /blog/…”).
+
+**Anti-patterns:**
+
+- Full PostHog weekly product review mid SEO pass
+- Querying the wrong PostHog project “because something returned data”
+- Inventing SEO demand from DAU/pageviews alone
+- Burning exploration budget on replay deep-dives
 
 
 ### Research strategy package (#141)
@@ -502,6 +579,12 @@ pageseeds-cli merge-submit -i <id> -p <path> \
 
 ## Exploration path
 Desk path chased, detours, what you skipped (and why).
+Include whether PostHog desk ran (which PostHog project) or was skipped.
+
+## PostHog signals (if run)
+1–5 bullets: bounce/engagement/CWV or path findings **only where they
+intersect SEO candidates**. If skipped: one line why (no MCP / no project
+match / user skip).
 
 ## Measures taken
 | Measure | Evidence | Task | Outcome |
@@ -520,6 +603,7 @@ Desk path chased, detours, what you skipped (and why).
 
 ## Skipped (and why)
 - Including research skip vs “not run” honesty rule.
+- PostHog skip reason if not already covered above.
 
 ## Product / CLI gaps (if any)
 - e.g. no `refresh_ground_truth` yet — used collect_gsc / live gsc-* dual-path
@@ -535,7 +619,7 @@ Desk path chased, detours, what you skipped (and why).
 
 **TL;DR:** …
 
-**Exploration:** one line (desk path)
+**Exploration:** one line (desk path; PostHog on/skipped)
 
 **Done**
 - …
@@ -563,6 +647,7 @@ Desk path chased, detours, what you skipped (and why).
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Not-indexed → desk-selected `fix_indexing_internal_links` / `fix_content_article -S`; not default full `indexing_health_campaign`.  
 - Empty research shortlist → call `research-context` first (auto-refresh); `update_research_shortlist` only if force/fail. 
+- **PostHog optional:** light engagement desk only; GSC = demand authority; wrong project / no MCP → skip and say so.  
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
 - Mechanical reviews only; only write the weekly report file.  
@@ -579,6 +664,12 @@ weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
 `ctr_audit` BackendAuto fan-out is the UI/unattended path, not CLI default.
 CLI weekly indexing: catalog-aware `not_indexed_sample` → targeted link/content
 fixes; full `indexing_health_campaign` is rare/scoped, not CLI default.
+
+**PostHog (optional MCP):** same-session behavioral layer after GSC desk —
+bounce, engagement, top paths, light CWV — used only to re-rank SEO candidates
+or flag product friction. Not a CLI tool, not demand truth, not
+`posthog-weekly-insights`. Project must match the PageSeeds site or the pass
+is skipped.
 
 **Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
 and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both
