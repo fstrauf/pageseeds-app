@@ -57,6 +57,9 @@ pub fn build_site_overview(
     let mut movers: Vec<TopMover> = Vec::new();
     let mut has_any_gsc = false;
     let mut multi_url_slug_count = 0_usize;
+    // Collect zero-impression / striking candidates during the same live pass (#204).
+    let mut zero_impression_candidates: Vec<ZeroImpressionSample> = Vec::new();
+    let mut striking_candidates: Vec<StrikingDistanceSample> = Vec::new();
 
     for article in &live {
         let slug = normalize_url_slug(&article.url_slug);
@@ -80,6 +83,34 @@ pub fn build_site_overview(
                 avg_position: m.position,
                 target_keyword: article.target_keyword.clone(),
             });
+
+            // Striking distance: only articles with recent metrics in band (#204).
+            if m.impressions >= STRIKING_MIN_IMPRESSIONS
+                && m.position >= STRIKING_POS_MIN
+                && m.position <= STRIKING_POS_MAX
+            {
+                striking_candidates.push(StrikingDistanceSample {
+                    slug: slug.clone(),
+                    title: Some(article.title.clone()),
+                    impressions: m.impressions,
+                    clicks: m.clicks,
+                    avg_position: m.position,
+                    ctr: Some(ctr),
+                });
+            }
+        }
+
+        // Zero-impression published inventory: missing rollup ≡ 0 impressions.
+        // Degraded path (no usable GSC tape) is applied after freshness is known.
+        if article.status == "published" {
+            let impressions = recent.map(|m| m.impressions).unwrap_or(0.0);
+            if impressions == 0.0 {
+                zero_impression_candidates.push(ZeroImpressionSample {
+                    slug: slug.clone(),
+                    title: Some(article.title.clone()),
+                    status: Some(article.status.clone()),
+                });
+            }
         }
 
         if !pages.is_empty() {
@@ -150,11 +181,48 @@ pub fn build_site_overview(
 
     let avg_ctr = safe_ctr(total_clicks, total_impressions);
     let freshness = build_gsc_freshness(conn, project_id);
+
+    // Zero-impression: never treat the whole catalog as dead weight when GSC
+    // tape is missing (issue #204). Prefer has_any_gsc OR freshness.source.
+    let zero_impression = if !has_any_gsc || freshness.source == "none" {
+        ZeroImpressionInventory {
+            count: 0,
+            sample: vec![],
+            degraded_reason: Some("gsc_missing".into()),
+        }
+    } else {
+        zero_impression_candidates.sort_by(|a, b| a.slug.cmp(&b.slug));
+        let count = zero_impression_candidates.len();
+        zero_impression_candidates.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
+        ZeroImpressionInventory {
+            count,
+            sample: zero_impression_candidates,
+            degraded_reason: None,
+        }
+    };
+
+    striking_candidates.sort_by(|a, b| {
+        b.impressions
+            .partial_cmp(&a.impressions)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let striking_count = striking_candidates.len();
+    striking_candidates.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
+    let striking_distance = StrikingDistanceInventory {
+        count: striking_count,
+        sample: striking_candidates,
+    };
+
+    let hard_cannibalization = build_hard_cannibalization_inventory(conn, project_id, &articles);
+
     let hints = build_hints(
         has_any_gsc,
         &freshness,
         &top_candidates,
         multi_url_slug_count,
+        &zero_impression,
+        &striking_distance,
+        &hard_cannibalization,
     );
 
     Ok(SiteOverview {
@@ -179,6 +247,9 @@ pub fn build_site_overview(
         top_pages: top_candidates,
         top_movers: movers,
         not_indexed_sample,
+        zero_impression,
+        striking_distance,
+        hard_cannibalization,
         hints,
     })
 }
@@ -607,6 +678,137 @@ fn build_query_cannibalization(
     Ok(out)
 }
 
+/// Hard same-query multi-URL inventory for site-overview (issue #204).
+///
+/// Soft TF-IDF / clusters are intentionally out of scope. Never fails the
+/// overview: empty or unreadable metrics degrade to `ctr_query_metrics_empty`.
+fn build_hard_cannibalization_inventory(
+    conn: &Connection,
+    project_id: &str,
+    articles: &[Article],
+) -> HardCannibalizationInventory {
+    let slug_by_id: HashMap<i64, String> = articles
+        .iter()
+        .map(|a| (a.id, normalize_url_slug(&a.url_slug)))
+        .collect();
+
+    let mut stmt = match conn.prepare(
+        "SELECT article_id, query, impressions, clicks
+         FROM ctr_query_metrics
+         WHERE project_id = ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => {
+            return HardCannibalizationInventory {
+                count: 0,
+                sample: vec![],
+                degraded_reason: Some("ctr_query_metrics_empty".into()),
+            };
+        }
+    };
+
+    let all_rows: Vec<(i64, String, f64, f64)> = match stmt.query_map(
+        rusqlite::params![project_id],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        },
+    ) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(_) => {
+            return HardCannibalizationInventory {
+                count: 0,
+                sample: vec![],
+                degraded_reason: Some("ctr_query_metrics_empty".into()),
+            };
+        }
+    };
+
+    if all_rows.is_empty() {
+        return HardCannibalizationInventory {
+            count: 0,
+            sample: vec![],
+            degraded_reason: Some("ctr_query_metrics_empty".into()),
+        };
+    }
+
+    // Group by lowercased query; keep one row per article_id (max impressions).
+    // (article_id, impressions, clicks)
+    let mut by_query: HashMap<String, HashMap<i64, (f64, f64)>> = HashMap::new();
+    for (article_id, query, impressions, clicks) in all_rows {
+        if impressions < HARD_CANNIBAL_MIN_QUERY_IMPRESSIONS {
+            continue;
+        }
+        let q_lower = query.to_lowercase();
+        let entry = by_query.entry(q_lower).or_default();
+        entry
+            .entry(article_id)
+            .and_modify(|(imp, clk)| {
+                if impressions > *imp {
+                    *imp = impressions;
+                    *clk = clicks;
+                }
+            })
+            .or_insert((impressions, clicks));
+    }
+
+    let mut groups: Vec<(String, Vec<HardCannibalSlugMetric>)> = by_query
+        .into_iter()
+        .filter_map(|(query, by_article)| {
+            if by_article.len() < 2 {
+                return None;
+            }
+            let mut slugs: Vec<HardCannibalSlugMetric> = by_article
+                .into_iter()
+                .filter_map(|(aid, (imp, clk))| {
+                    let slug = slug_by_id.get(&aid)?.clone();
+                    Some(HardCannibalSlugMetric {
+                        slug,
+                        impressions: imp,
+                        clicks: Some(clk),
+                    })
+                })
+                .collect();
+            if slugs.len() < 2 {
+                return None;
+            }
+            slugs.sort_by(|a, b| {
+                b.impressions
+                    .partial_cmp(&a.impressions)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            slugs.truncate(HARD_CANNIBAL_MAX_SLUGS_PER_QUERY);
+            if slugs.len() < 2 {
+                return None;
+            }
+            Some((query, slugs))
+        })
+        .collect();
+
+    groups.sort_by(|a, b| {
+        let ta: f64 = a.1.iter().map(|s| s.impressions).sum();
+        let tb: f64 = b.1.iter().map(|s| s.impressions).sum();
+        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let count = groups.len();
+    groups.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
+    let sample = groups
+        .into_iter()
+        .map(|(query, slugs)| HardCannibalizationSample { query, slugs })
+        .collect();
+
+    HardCannibalizationInventory {
+        count,
+        sample,
+        degraded_reason: None,
+    }
+}
+
 // GSC page-index / window / rollup helpers live in `db::gsc_join` (shared with
 // territory analysis — single SoT, issue #167 / PR #176).
 
@@ -717,6 +919,9 @@ fn build_hints(
     freshness: &Freshness,
     top_pages: &[TopPage],
     multi_url_slug_count: usize,
+    zero_impression: &ZeroImpressionInventory,
+    striking_distance: &StrikingDistanceInventory,
+    hard_cannibalization: &HardCannibalizationInventory,
 ) -> Vec<String> {
     let mut hints = Vec::new();
     // Always surface missing/stale tape for agents scanning hints only (#164).
@@ -735,6 +940,16 @@ fn build_hints(
         hints.push(format!(
             "GSC multi-URL inventory: {multi_url_slug_count} catalog slugs map to >1 page URL"
         ));
+    }
+    // Inventory flags: one short string per non-empty, non-degraded set (#204).
+    if zero_impression.count > 0 && zero_impression.degraded_reason.is_none() {
+        hints.push("Zero-impression published inventory present".into());
+    }
+    if striking_distance.count > 0 {
+        hints.push("Striking-distance pages present".into());
+    }
+    if hard_cannibalization.count > 0 && hard_cannibalization.degraded_reason.is_none() {
+        hints.push("Hard same-query cannibal samples present".into());
     }
     // Always until #119
     hints.push("Evidence index not available".into());

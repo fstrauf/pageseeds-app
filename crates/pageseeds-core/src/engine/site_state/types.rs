@@ -15,6 +15,23 @@ pub const BODY_SIZE_CAP: usize = 40_000;
 pub const BODY_TRUNCATION_NOTE: &str =
     "\n\n<!-- truncated: body continues beyond size cap -->";
 
+// ── site_overview desk inventory thresholds (issues #204 / #205) ──────────────
+
+/// Inclusive lower bound of avg position for striking-distance inventory.
+pub const STRIKING_POS_MIN: f64 = 7.0;
+/// Inclusive upper bound of avg position for striking-distance inventory.
+pub const STRIKING_POS_MAX: f64 = 13.0;
+/// Minimum recent-window impressions for striking-distance inventory.
+pub const STRIKING_MIN_IMPRESSIONS: f64 = 200.0;
+
+/// Per-article query impression floor for hard same-query cannibalization
+/// (matches `SHARED_QUERY_MIN_IMPRESSIONS` in cannibalization/candidates.rs).
+pub const HARD_CANNIBAL_MIN_QUERY_IMPRESSIONS: f64 = 10.0;
+/// Max slugs listed per hard-cannibal query group in the overview sample.
+pub const HARD_CANNIBAL_MAX_SLUGS_PER_QUERY: usize = 4;
+/// Sample size cap shared by zero-impression, striking-distance, and hard-cannibal groups.
+pub const OVERVIEW_INVENTORY_SAMPLE_CAP: usize = 10;
+
 // ── site_overview ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,8 +43,71 @@ pub struct SiteOverview {
     pub top_pages: Vec<TopPage>,
     pub top_movers: Vec<TopMover>,
     pub not_indexed_sample: Vec<NotIndexedSample>,
+    /// Published live articles with zero recent-window impressions (#204).
+    pub zero_impression: ZeroImpressionInventory,
+    /// Live articles in the striking-distance position band (#204).
+    pub striking_distance: StrikingDistanceInventory,
+    /// Hard same-query multi-URL cannibal samples from `ctr_query_metrics` (#204).
+    pub hard_cannibalization: HardCannibalizationInventory,
     /// Deterministic flag strings only (no soft-cluster prose).
     pub hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZeroImpressionInventory {
+    pub count: usize,
+    pub sample: Vec<ZeroImpressionSample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degraded_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZeroImpressionSample {
+    pub slug: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrikingDistanceInventory {
+    pub count: usize,
+    pub sample: Vec<StrikingDistanceSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrikingDistanceSample {
+    pub slug: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub impressions: f64,
+    pub clicks: f64,
+    pub avg_position: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ctr: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardCannibalizationInventory {
+    pub count: usize,
+    pub sample: Vec<HardCannibalizationSample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degraded_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardCannibalizationSample {
+    pub query: String,
+    pub slugs: Vec<HardCannibalSlugMetric>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardCannibalSlugMetric {
+    pub slug: String,
+    pub impressions: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clicks: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
