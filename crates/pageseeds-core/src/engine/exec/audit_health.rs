@@ -44,9 +44,11 @@ pub struct ArticleHealth {
     pub title_ok: bool,
     pub meta_ok: bool,
     pub snippet_ok: bool,
-    /// Advisory only: whether FAQ schema/content is present. Never gates `all_ok()`
-    /// and never appears in `issues` (FAQ rich results are dead for normal blogs
-    /// since Google's Aug 2023 restriction).
+    /// Advisory only: whether a **machine-readable** FAQ source is present
+    /// (valid frontmatter `faq:` Q/A and/or parseable inline FAQPage JSON-LD).
+    /// Markdown headings alone do not count. Never gates `all_ok()` and never
+    /// appears in `issues` (FAQ rich results are dead for normal blogs since
+    /// Google's Aug 2023 restriction).
     pub faq_ok: bool,
     pub file_found: bool,
     /// List of issue keys for core checks that FAILED (file/title/meta/snippet only).
@@ -84,7 +86,7 @@ impl ArticleHealth {
 /// | title_ok         | title.len() <= 55                                |
 /// | meta_ok          | meta.len() >= 120 && meta.len() <= 155           |
 /// | snippet_ok       | word_count >= 40 && word_count <= 60 && (has_keyword \|\| has '?') |
-/// | faq_ok           | has_faq_schema == true (advisory only — not in `issues`, not in `all_ok()`) |
+/// | faq_ok           | machine-readable FAQ source (frontmatter Q/A and/or parseable FAQPage JSON-LD); advisory only — not in `issues`, not in `all_ok()` |
 pub const TITLE_MAX_LEN: usize = 55;
 /// Re-export content-domain SEO meta floors (single definition in `validate_article`).
 pub use crate::content::validate_article::{META_MAX_LEN, META_MIN_LEN};
@@ -273,60 +275,27 @@ pub fn read_article_excerpt(
     (title, meta_description, first_paragraph, h1, has_faq, true)
 }
 
-/// Check whether an MDX file contains FAQ schema (JSON-LD FAQPage, markdown FAQ section,
-/// or frontmatter `faq:` YAML list).
+// Re-export FAQ assessment types/helpers so existing callers can use one path.
+pub use crate::content::faq::{
+    assess_faq_source, frontmatter_faq_count, has_frontmatter_faq, has_inline_json_ld_faq,
+    FaqSourceAssessment,
+};
+
+/// Schema readiness: machine-readable FAQ source for theme-owned JSON-LD.
+///
+/// Full assessment (frontmatter + visible section + inline JSON-LD). Returns
+/// true only when frontmatter has valid non-empty `{question, answer}` pairs
+/// and/or the body has parseable inline FAQPage JSON-LD with ≥1 entity.
+/// A markdown `## FAQ` heading alone does **not** count — apply/verify act on
+/// frontmatter `faq:` only.
+///
+/// For frontmatter-only or inline-only checks, use [`has_frontmatter_faq`] /
+/// [`frontmatter_faq_count`] / [`has_inline_json_ld_faq`] instead.
 pub fn has_faq_schema(content: &str) -> bool {
-    has_frontmatter_faq(content)
-        || has_inline_json_ld_faq(content)
-        || has_visible_faq_section(content)
+    assess_faq_source(content).machine_readable
 }
 
-/// Check whether frontmatter contains a valid `faq:` YAML list with at least one entry.
-pub fn has_frontmatter_faq(content: &str) -> bool {
-    if let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(content) {
-        if let Ok(fm) = crate::content::frontmatter::parse(fm_raw) {
-            if let Some(faq) = fm.parsed.get("faq") {
-                if faq.is_sequence() && !faq.as_sequence().unwrap().is_empty() {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Count valid Q/A pairs in frontmatter `faq:`.
-pub fn frontmatter_faq_count(content: &str) -> usize {
-    if let Some((fm_raw, _)) = crate::content::frontmatter::split_mdx(content) {
-        if let Ok(fm) = crate::content::frontmatter::parse(fm_raw) {
-            if let Some(faq) = fm.parsed.get("faq") {
-                if let Some(seq) = faq.as_sequence() {
-                    return seq.len();
-                }
-            }
-        }
-    }
-    0
-}
-
-/// Check for JSON-LD FAQPage schema in the body.
-pub fn has_inline_json_ld_faq(content: &str) -> bool {
-    let content_lower = content.to_lowercase();
-    content_lower.contains("faqpage")
-        || content_lower.contains("\"@type\": \"question\"")
-        || content_lower.contains("'@type': 'question'")
-        || content_lower.contains("\"@type\":\"question\"")
-}
-
-/// Check for markdown FAQ headings in the body.
+/// Check for markdown FAQ headings in the body (visible prose, not schema SoT).
 pub fn has_visible_faq_section(content: &str) -> bool {
-    content.lines().any(|line| {
-        let trimmed = line.trim().to_lowercase();
-        trimmed.starts_with("# faq")
-            || trimmed.starts_with("## faq")
-            || trimmed.starts_with("### faq")
-            || trimmed.starts_with("# frequently asked questions")
-            || trimmed.starts_with("## frequently asked questions")
-            || trimmed.starts_with("### frequently asked questions")
-    })
+    crate::content::faq::has_visible_faq_section(content)
 }

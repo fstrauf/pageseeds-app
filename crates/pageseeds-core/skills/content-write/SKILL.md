@@ -1,6 +1,6 @@
 # Content Writer
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Write or optimize an MDX article that ranks and earns clicks by offering something
 the ranking competitors do not. Generic educational content that duplicates what
@@ -74,8 +74,14 @@ For finance, health, legal, and other YMYL topics this is non-negotiable:
 - **Comparison/decision content** as real markdown tables, not prose lists, wherever a
   reader is choosing between options.
 - **Worked example** with real numbers in the body, not just in a sidebar.
-- **FAQ section** (3-5 questions) addressing the natural follow-ups a searcher has —
-  these feed FAQ schema and People-Also-Ask capture.
+- **FAQ (when included):** provide both sources of truth together:
+  1. YAML frontmatter `faq:` list with **3–5** items, each `{question, answer}`
+     as non-empty strings — this is the machine-readable source the theme uses
+     for FAQPage JSON-LD.
+  2. A visible `## FAQ` (or equivalent) section whose questions match that list.
+  Prefer **not** emitting raw FAQPage `<script type="application/ld+json">` in
+  MDX (the theme owns JSON-LD). Only preserve existing inline JSON-LD if the
+  article already uses that pattern.
 - **Internal links** to genuinely related articles on this site, using descriptive
   anchor text. Choose from the brief's `internal_link_candidates` list — those
   slugs are verified to exist. Only link where it helps the reader, not for
@@ -94,9 +100,9 @@ The frontmatter `title` and H1 must be complete, specific, and click-worthy:
 
 ## Output
 
-A complete MDX document: YAML frontmatter (title, date, description, target_keyword)
-followed by the article body. Return ONLY the MDX content — no markdown wrappers, no
-commentary, no explanations outside the document.
+A complete MDX document: YAML frontmatter (title, date, description, target_keyword,
+and `faq` when an FAQ is included) followed by the article body. Return ONLY the MDX
+content — no markdown wrappers, no commentary, no explanations outside the document.
 
 ## Constraints
 

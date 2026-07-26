@@ -5,6 +5,7 @@ pub mod cleaner;
 pub mod competitor;
 pub mod date_policy;
 pub mod dates;
+pub mod faq;
 pub mod frontmatter;
 pub mod keyword_density;
 pub mod keyword_match;
