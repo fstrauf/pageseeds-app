@@ -174,6 +174,73 @@ not a full `indexing_health_campaign` fan-out.
 4. **Hard ban-as-default:** Never treat full IHC as the weekly CLI default for
    “many not-indexed” — desk → targeted fixes first.
 
+### Striking-distance preferred path
+
+CLI weekly best-path for **striking-distance** pages (GSC avg position roughly
+page-1 bottom / page-2 top with real impressions) is **desk filter → ≤2
+targeted existing actions** — not a campaign type, not a rank tracker.
+
+**Soft prior only:** never mandatory just because the candidate list is
+non-empty. Counts toward hard rail ≤5 creates; do not invent creates when
+higher-impact levers win.
+
+#### GSC evidence criteria (candidate definition)
+
+A page is **striking-distance** for weekly judgment when **all** hold
+(defaults; agent may tighten):
+
+| Criterion | Default | Notes |
+|-----------|---------|--------|
+| Position band | `avg_position` ∈ **[7.0, 13.0]** inclusive | GSC page rollup window (desk period, usually 28d) |
+| Impressions | **≥ ~200** in that window | Aligns with WS5 spirit; raise bar on large sites |
+| Live catalog | Resolved slug, **not redirected** | Same desk hygiene as other hard actions |
+| Freshness | Honor `freshness.stale` / missing tape | Do not invent the band from empty/stale `gsc_page_daily` |
+
+**Not sufficient alone:** soft TF-IDF clusters, DataForSEO / paid SERP rank,
+plateau tool prose without GSC numbers.
+
+#### Candidate sources (priority order)
+
+1. **When present:** `site-overview.striking_distance` (or equivalent sample)
+   from **#204** — cite the overview sample in task `-r`.
+2. **Interim (until #204 lands):** client-side filter of desk data already
+   available:
+   - `articles -m 200` (or higher) → keep rows with `gsc.avg_position` in 7–13
+   - and/or `gsc-performance` rows with position in band + meaningful impressions
+   - Deep-read **≤2–3** top candidates with `article -S` + `gsc-queries -u`
+
+Do **not** require position-band CLI flags or a new campaign task type.
+
+Operator path:
+
+```text
+desk (prefer #204 field when present; else interim filter)
+  → rank candidates by impact (impressions × need)
+  → deep-read ≤2–3 (article -S + gsc-queries -u)
+  → create ≤2 actions from existing types (or skip if better levers win)
+  → report under Measures / Skipped soft signals
+```
+
+#### Preferred actions matrix (existing types only)
+
+| Observation on candidate | Prefer | Do not |
+|--------------------------|--------|--------|
+| High impr + weak title/meta/CTR vs peers | Targeted `fix_content_article -S` or Path B fix (`fix-context` / `fix-submit` with `content` or `ctr`) | Full `ctr_audit` as default |
+| Decent CTR stuck in band; thin inbound / orphan / weak related links | Soft `cluster_and_link` or `interlinking` (cite link graph / desk) | Full `indexing_health_campaign` as default ranking push |
+| Same query hard-cannibal with another URL | Hard-cannibal path / optional scoped `cannibalization_audit` — **not** pure ranking push | Soft clusters as merge authority |
+| Stale dated slug / clear dead page | Inventory decision (#206 territory) — not auto-push | Blind noindex here |
+
+#### Budgets, overlap, bans
+
+- **≤2** striking-distance creates per weekly run (subset of hard rail ≤5).
+- **May-create / soft prior only** — never mandatory when the list is non-empty.
+- **CTR overlap:** one URL should not get both a generic CTR fan-out and a
+  striking-distance create; **one targeted fix is enough**.
+- **Explicit bans for this lever:** no `striking_distance_campaign` task type;
+  no DataForSEO / paid rank tracker; no default full IHC or full `ctr_audit`
+  for “push rankings.”
+- Cite tool evidence (position, impressions, slug) in `-r` and the weekly report.
+
 ### Measurement: two review types (do not conflate)
 
 | Task type | Weekly policy |
@@ -211,6 +278,9 @@ under soft path A.
 | Soft clusters (`cannibalization-clusters`) as truth / merge authority | Hard evidence only (same query on 2+ URLs, exact keyword dupe, etc.) |
 | Full `ctr_audit` spawn by default (#140) | Desk → targeted `fix_content_article -S`; scoped `ctr_audit` only when needed |
 | Full `indexing_health_campaign` spawn by default (#179) | Desk → targeted `fix_indexing_internal_links` / `fix_content_article -S`; scoped IHC only when needed |
+| `striking_distance_campaign` (or any new ranking-push campaign type) (#205) | Skill path only — desk band filter → ≤2 existing `fix_content_article -S` / `cluster_and_link` / `interlinking` |
+| DataForSEO / paid SERP rank tracker for ranking push | GSC `avg_position` + impressions only; never invent ranks |
+| Full IHC / full `ctr_audit` as default for striking-distance (WS5) | See [Striking-distance preferred path](#striking-distance-preferred-path) |
 | Nested `execute-task` LLM for write/fix/merge when Path B tools exist | Path B package → session edit → submit |
 | `create-task content_outcome_review` / may-create addition | System spawn only; execute **due** rows (see soft path A) |
 | `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; desk re-read for CTR closed-loop |
@@ -220,12 +290,15 @@ under soft path A.
 ```text
 recency → due content_outcome_review (≤1–2 if present) → refresh ground truth (if stale) → site-overview
   → articles / article / gsc-queries
+  → optional striking-distance filter (when pos 7–13 inventory looks high-ROI)
   → optional PostHog desk (if MCP available)
   → ≤5 actions → report
 ```
 
-Reorder/deepen when a clear anomaly appears. Still honor hard rails and plan
-before mass create (interactive: approval; hands-off: short plan then go).
+Reorder/deepen when a clear anomaly appears (including optional
+[striking-distance preferred path](#striking-distance-preferred-path) when the
+band has meaningful inventory). Still honor hard rails and plan before mass
+create (interactive: approval; hands-off: short plan then go).
 
 ### A. Recency / load
 
@@ -350,7 +423,7 @@ field present”** — optional priors only, not mandatory creates every week.
 | Pattern (when field present) | Preference |
 |------------------------------|------------|
 | High `zero_impression` count / sample | Optional: score/remediate path if tools exist; else note inventory — **not** mandatory create every week |
-| Striking-distance band (pos ~7–13 + meaningful impr) | Prefer targeted `fix_content_article -S` or internal links on top N — still ≤5 creates; cite overview sample |
+| Striking-distance band (pos ~7–13 + meaningful impr) | See **[Striking-distance preferred path](#striking-distance-preferred-path)** — ≤2 creates; overview sample when present, else interim `articles`/`gsc-performance` filter; **not** mandatory |
 | Hard same-query cannibal samples | Optional scoped `cannibalization_audit` **only with hard multi-URL query evidence** — soft clusters still non-authority |
 
 ### PostHog desk (optional)
@@ -640,6 +713,7 @@ match / user skip).
 
 ## Measures taken
 | Measure | Evidence | Task | Outcome |
+- Call out **striking-distance** picks explicitly when used (slug + avg_position + impressions + why this action).
 
 ## Follow-ups executed
 - Outcome reviews executed (slug + classification) or “none due”.
@@ -658,6 +732,7 @@ match / user skip).
 - Including research skip vs “not run” honesty rule.
 - PostHog skip reason if not already covered above.
 - Soft desk signals noticed (zero-impr / striking / hard-cannibal) or “fields not present yet”.
+- Striking-distance candidates seen but not acted on (and why — budget, better lever, stale tape, thin evidence).
 - Future `not_before` `content_outcome_review` rows left for later (do not execute early).
 
 ## Product / CLI gaps (if any)
@@ -701,6 +776,7 @@ match / user skip).
 - Max 5 creates / 15 executions / 3 new articles.  
 - **Due `content_outcome_review` preferred when present** (≤1–2 exec toward ≤15; not creates). Never create these tasks.  
 - Soft new desk fields (zero-impr / striking / hard-cannibal) are **never mandatory** actions.  
+- Striking-distance (pos **7–13**, impr ≥ ~200): optional soft prior → ≤**2** existing actions; no campaign type / DataForSEO / default full IHC or `ctr_audit`.  
 - Outcomes = **GSC windows** (`gsc_page_daily`), not live SERP / DataForSEO.  
 - `ctr_outcome_review` cancel/ignore; `content_outcome_review` execute when due — do not conflate.  
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
@@ -729,6 +805,13 @@ fixes; full `indexing_health_campaign` is rare/scoped, not CLI default.
 only. Keep `ctr_outcome_review` cancel-or-ignore (#152). Soft overview signals
 (zero-impression / striking-distance / hard cannibal) are optional priors when
 present (#204); never mandatory weekly actions; budgets ≤5 / ≤15 / ≤3 unchanged.
+
+**Striking-distance (#205):** preferred weekly path is skill-only — GSC band
+filter (overview sample when present, else interim `articles` /
+`gsc-performance`) → deep-read ≤2–3 → ≤2 existing fix/link creates. No
+`striking_distance_campaign`, no DataForSEO, no default full IHC/`ctr_audit`
+for ranking push. Soft prior only; one URL one targeted fix (no CTR + striking
+double-create).
 
 **PostHog (optional MCP):** same-session behavioral layer after GSC desk —
 bounce, engagement, top paths, light CWV — used only to re-rank SEO candidates
