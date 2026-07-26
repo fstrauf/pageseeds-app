@@ -370,6 +370,14 @@ pub fn submit_written_article(
         ) {
             follow_up_task_ids.push(id);
         }
+        // Path B closed-loop: +30d content_outcome_review (issue #203).
+        if let Some(id) = crate::engine::post_actions::spawn_content_outcome_review_for_slug(
+            conn,
+            &parent,
+            &slug,
+        ) {
+            follow_up_task_ids.push(id);
+        }
     } else {
         // Path B unbound: no write_task — synthesize a minimal parent so the
         // single spawn entrypoint owns focus attachment + idempotency.
@@ -404,6 +412,15 @@ pub fn submit_written_article(
             conn,
             &synthetic_parent,
             &project_path.to_string_lossy(),
+        ) {
+            follow_up_task_ids.push(id);
+        }
+        // Path B closed-loop: +30d content_outcome_review (issue #203).
+        // Stable synthetic parent id keeps re-submit idempotent.
+        if let Some(id) = crate::engine::post_actions::spawn_content_outcome_review_for_slug(
+            conn,
+            &synthetic_parent,
+            &focus_slug,
         ) {
             follow_up_task_ids.push(id);
         }
@@ -1509,5 +1526,146 @@ mod tests {
         crate::engine::task_store::update_task_status(&conn, &write_id, TaskStatus::Cancelled)
             .unwrap();
         assert!(find_active_write_task_id(&conn, "proj1", &normalized).is_none());
+    }
+
+    /// Issue #203: bound write-submit spawns one +30d content_outcome_review.
+    #[test]
+    fn submit_bound_spawns_content_outcome_review() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let research_id = insert_research_task(&conn);
+        let write_tasks = crate::engine::keyword_selection::create_article_tasks_from_keywords(
+            &conn,
+            "proj1",
+            &research_id,
+            vec!["seo tools".into()],
+        )
+        .unwrap();
+        let write_id = write_tasks[0].id.clone();
+
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx("seo tools")).unwrap();
+
+        let result = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts {
+                write_task_id: Some(write_id.clone()),
+                keyword: Some("seo tools".into()),
+            },
+        )
+        .expect("submit should succeed");
+
+        assert!(result.ok, "checks={:?}", result.checks);
+        let reviews: Vec<_> = result
+            .follow_up_task_ids
+            .iter()
+            .filter_map(|id| crate::engine::task_store::get_task(&conn, id).ok())
+            .filter(|t| t.task_type == "content_outcome_review")
+            .collect();
+        assert_eq!(
+            reviews.len(),
+            1,
+            "exactly one content_outcome_review; follow_ups={:?}",
+            result.follow_up_task_ids
+        );
+        let review = &reviews[0];
+        assert_not_before_approx_30d(review.not_before.as_deref());
+        assert_content_outcome_target(review, "seo-tools", Some(write_id.as_str()));
+    }
+
+    /// Issue #203: unbound write-submit spawns review with synthetic parent idempotency.
+    #[test]
+    fn submit_unbound_spawns_content_outcome_review_and_is_idempotent() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx("seo tools")).unwrap();
+
+        let opts = SubmitOpts {
+            keyword: Some("seo tools".into()),
+            ..Default::default()
+        };
+        let result = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            opts.clone(),
+        )
+        .expect("first submit");
+        assert!(result.ok, "checks={:?}", result.checks);
+
+        let review_ids: Vec<_> = result
+            .follow_up_task_ids
+            .iter()
+            .filter_map(|id| crate::engine::task_store::get_task(&conn, id).ok())
+            .filter(|t| t.task_type == "content_outcome_review")
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(review_ids.len(), 1, "first submit spawns one review");
+        let first_id = review_ids[0].clone();
+        let review = crate::engine::task_store::get_task(&conn, &first_id).unwrap();
+        assert_not_before_approx_30d(review.not_before.as_deref());
+        assert_content_outcome_target(&review, "seo-tools", Some("path-b:proj1:seo-tools"));
+
+        // Re-submit: still one active review (idempotent synthetic parent + slug).
+        let result2 = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            opts,
+        )
+        .expect("re-submit");
+        assert!(result2.ok, "checks={:?}", result2.checks);
+
+        let all_reviews: Vec<_> = crate::engine::task_store::list_tasks(&conn, "proj1")
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.task_type == "content_outcome_review")
+            .collect();
+        assert_eq!(
+            all_reviews.len(),
+            1,
+            "re-submit must not create a second content_outcome_review"
+        );
+        assert_eq!(all_reviews[0].id, first_id);
+    }
+
+    fn assert_not_before_approx_30d(not_before: Option<&str>) {
+        let nb = not_before.expect("not_before set on content_outcome_review");
+        let parsed = chrono::DateTime::parse_from_rfc3339(nb)
+            .expect("not_before is RFC3339")
+            .with_timezone(&chrono::Utc);
+        let days = (parsed - chrono::Utc::now()).num_days();
+        assert!(
+            (28..=32).contains(&days),
+            "not_before should be ~+30d, got {days} days (raw={nb})"
+        );
+    }
+
+    fn assert_content_outcome_target(task: &Task, slug: &str, parent_id: Option<&str>) {
+        let art = task
+            .artifacts
+            .iter()
+            .find(|a| a.key == "content_outcome_target")
+            .expect("content_outcome_target artifact");
+        let v: serde_json::Value =
+            serde_json::from_str(art.content.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(v["slug"].as_str(), Some(slug));
+        if let Some(pid) = parent_id {
+            assert_eq!(v["parent_task_id"].as_str(), Some(pid));
+        }
     }
 }

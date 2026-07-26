@@ -26,8 +26,10 @@ use keyword_meta::find_expected_slug_and_file;
 use outcome_review::spawn_content_outcome_review;
 use topic_health::{find_written_article_file, run_topic_health_reducer};
 
-// Path B / external callers: CTR change-event recorder (no review-task fan-out).
+// Path B / external callers: CTR change-event recorder (no review-task fan-out)
+// and content outcome review spawner (issue #203 closed-loop).
 pub use ctr_outcome::{path_b_ctr_fix_task_id, record_ctr_change_event};
+pub use outcome_review::spawn_content_outcome_review_for_slug;
 
 /// Residual-aware follow-up gate for `cluster_and_link` / `interlinking`.
 ///

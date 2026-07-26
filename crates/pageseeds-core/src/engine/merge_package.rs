@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::content::slug::{format_blog_link, normalize_url_slug};
 use crate::engine::merge_apply;
 use crate::models::article::Article;
-use crate::models::task::{Task, TaskStatus};
+use crate::models::task::{Priority, Task, TaskRunPolicy, TaskStatus};
 
 /// Minimum keeper word count after merge (fail-closed on submit).
 pub const MIN_KEEPER_WORDS: usize = 400;
@@ -142,6 +142,9 @@ pub struct MergeSubmitResult {
     pub consolidate_task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consolidate_task_status: Option<String>,
+    /// Follow-ups spawned on success (e.g. content_outcome_review, issue #203).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub follow_up_task_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
@@ -444,6 +447,7 @@ pub fn submit_merge(
             consolidate_task_status: bound_task
                 .as_ref()
                 .map(|t| t.status.as_str().to_string()),
+            follow_up_task_ids: vec![],
             message: Some(
                 "Validation failed — fix keeper MDX / confirm high-traffic and resubmit. No redirects or depublish applied."
                     .to_string(),
@@ -488,6 +492,38 @@ pub fn submit_merge(
     let (consolidate_task_id, consolidate_task_status) =
         complete_consolidate_task_if_bound(conn, bound_task.as_ref());
 
+    // 11. Path B closed-loop: +30d content_outcome_review for keeper only (#203).
+    let mut follow_up_task_ids = Vec::new();
+    let outcome_parent = if let Some(ref task) = bound_task {
+        // Reload after status change so spawn sees done parent.
+        crate::engine::task_store::get_task(conn, &task.id).unwrap_or_else(|_| {
+            let mut t = task.clone();
+            t.status = TaskStatus::Done;
+            t
+        })
+    } else {
+        // Stable synthetic parent so re-submit stays idempotent.
+        Task {
+            id: format!("path-b-merge:{project_id}:{keep_slug}"),
+            task_type: "consolidate_cluster".to_string(),
+            phase: "implementation".to_string(),
+            status: TaskStatus::Done,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::UserEnqueue,
+            title: Some(format!("Path B merge: {keep_slug}")),
+            description: Some(format!("Path B merge-submit for keeper {keep_slug}")),
+            project_id: project_id.to_string(),
+            ..Default::default()
+        }
+    };
+    if let Some(id) = crate::engine::post_actions::spawn_content_outcome_review_for_slug(
+        conn,
+        &outcome_parent,
+        &keep_slug,
+    ) {
+        follow_up_task_ids.push(id);
+    }
+
     Ok(MergeSubmitResult {
         ok: true,
         checks,
@@ -499,6 +535,7 @@ pub fn submit_merge(
         sources_depublished,
         consolidate_task_id,
         consolidate_task_status,
+        follow_up_task_ids,
         message: Some(format!(
             "Merge applied: redirects written, {inbound_links_rewritten} inbound link(s) rewritten, {sources_depublished} source(s) depublished."
         )),

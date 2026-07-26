@@ -132,6 +132,9 @@ pub struct FixSubmitResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applied: Vec<String>,
     pub validation: FixValidationReport,
+    /// Follow-ups spawned on content success (e.g. content_outcome_review, #203).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub follow_up_task_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
@@ -391,6 +394,7 @@ pub fn submit_fix(
         valid_link_targets.as_ref(),
     );
 
+    let mut follow_up_task_ids = Vec::new();
     if validation.ok {
         touch_last_edited(conn, project_id, package.article_id);
 
@@ -412,6 +416,33 @@ pub fn submit_fix(
             ) && !applied.iter().any(|a| a == "target_keyword")
             {
                 applied.push("target_keyword".to_string());
+            }
+        }
+
+        // Path B content ships schedule +30d content_outcome_review (issue #203).
+        // CTR path records change events only — do not spawn content_outcome_review.
+        if kind == FixKind::Content {
+            let synthetic_parent = crate::models::task::Task {
+                id: format!("path-b-fix-content:{project_id}:{}", package.slug),
+                task_type: "fix_content_article".to_string(),
+                phase: "implementation".to_string(),
+                status: crate::models::task::TaskStatus::Done,
+                priority: crate::models::task::Priority::Medium,
+                run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
+                title: Some(format!("Path B content fix: {}", package.slug)),
+                description: Some(format!(
+                    "Path B fix-submit kind=content for {}",
+                    package.slug
+                )),
+                project_id: project_id.to_string(),
+                ..Default::default()
+            };
+            if let Some(id) = crate::engine::post_actions::spawn_content_outcome_review_for_slug(
+                conn,
+                &synthetic_parent,
+                &package.slug,
+            ) {
+                follow_up_task_ids.push(id);
             }
         }
 
@@ -485,6 +516,7 @@ pub fn submit_fix(
         file: package.file,
         applied,
         validation,
+        follow_up_task_ids,
         message,
     })
 }
@@ -2164,5 +2196,136 @@ Intro paragraph about cold brew makers for home use.
             .find(|c| c.id == "internal_links_new_resolve")
             .expect("link check present");
         assert!(link_check.pass);
+    }
+
+    /// Issue #203: fix-submit kind=content spawns +30d content_outcome_review.
+    #[test]
+    fn submit_content_spawns_content_outcome_review() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            40,
+            "content-outcome",
+            "Content Outcome",
+            "content/content-outcome.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/content-outcome.mdx",
+            &valid_mdx(
+                "Content Outcome",
+                "Content Outcome",
+                "Body for content fix closed-loop.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "content-outcome",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert_eq!(result.follow_up_task_ids.len(), 1);
+        let review =
+            crate::engine::task_store::get_task(&conn, &result.follow_up_task_ids[0]).unwrap();
+        assert_eq!(review.task_type, "content_outcome_review");
+        let nb = review.not_before.as_deref().expect("not_before");
+        let parsed = chrono::DateTime::parse_from_rfc3339(nb)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let days = (parsed - chrono::Utc::now()).num_days();
+        assert!((28..=32).contains(&days), "not_before ~+30d, days={days}");
+
+        let art = review
+            .artifacts
+            .iter()
+            .find(|a| a.key == "content_outcome_target")
+            .expect("content_outcome_target");
+        let v: serde_json::Value =
+            serde_json::from_str(art.content.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(v["slug"].as_str(), Some("content-outcome"));
+        assert_eq!(
+            v["parent_task_id"].as_str(),
+            Some("path-b-fix-content:proj1:content-outcome")
+        );
+
+        // Idempotent re-submit
+        let result2 = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "content-outcome",
+            FixKind::Content,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+        assert!(result2.ok);
+        let reviews: Vec<_> = crate::engine::task_store::list_tasks(&conn, "proj1")
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.task_type == "content_outcome_review")
+            .collect();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].id, result.follow_up_task_ids[0]);
+    }
+
+    /// Issue #203: fix-submit kind=ctr does NOT spawn content_outcome_review.
+    #[test]
+    fn submit_ctr_does_not_spawn_content_outcome_review() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            41,
+            "ctr-no-outcome",
+            "CTR No Outcome",
+            "content/ctr-no-outcome.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/ctr-no-outcome.mdx",
+            &valid_mdx(
+                "CTR No Outcome",
+                "CTR No Outcome",
+                "Body for CTR path.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "ctr-no-outcome",
+            FixKind::Ctr,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert!(
+            result.follow_up_task_ids.is_empty(),
+            "CTR must not spawn content_outcome_review: {:?}",
+            result.follow_up_task_ids
+        );
+        let reviews: Vec<_> = crate::engine::task_store::list_tasks(&conn, "proj1")
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.task_type == "content_outcome_review")
+            .collect();
+        assert!(reviews.is_empty(), "no content_outcome_review for CTR");
+        // Still records ctr change event (issue #152).
+        assert_eq!(crate::db::list_ctr_outcomes(&conn, "proj1").unwrap().len(), 1);
     }
 }
