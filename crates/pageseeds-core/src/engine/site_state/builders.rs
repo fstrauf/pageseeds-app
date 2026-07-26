@@ -445,6 +445,8 @@ fn materialize_article(project_path: &str, article: &Article) -> MaterializedArt
         .filter(|s| !s.is_empty())
         .map(String::from);
     let h1 = extract_h1(&body);
+    // Machine-readable FAQ only (frontmatter Q/A and/or parseable FAQPage JSON-LD).
+    // Markdown ## FAQ prose alone does not set has_faq — see assess_faq_source.
     let has_faq = crate::engine::exec::audit_health::has_faq_schema(&source);
     let body_word_count = count_words(&body) as i64;
 

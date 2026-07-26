@@ -221,7 +221,7 @@ Some content here.
         assert!(!has_faq2, "Should not detect FAQ schema when absent");
         assert!(file_found2);
 
-        // MDX with markdown FAQ heading
+        // MDX with markdown FAQ heading only — not machine-readable schema source
         let mdx_md_faq = r#"---
 title: "Markdown FAQ"
 description: "An article with markdown FAQ"
@@ -238,8 +238,15 @@ Q: What?\nA: This.
 
         let (_, _, _, _, has_faq3, file_found3) =
             crate::engine::exec::audit_health::read_article_excerpt(&path, "content/md_faq.mdx");
-        assert!(has_faq3, "Should detect markdown FAQ heading");
+        assert!(
+            !has_faq3,
+            "Markdown FAQ heading alone must not count as machine-readable FAQ schema"
+        );
         assert!(file_found3);
+        assert!(
+            crate::engine::exec::audit_health::has_visible_faq_section(mdx_md_faq),
+            "Visible section heuristic still detects ## FAQ"
+        );
 
         cleanup(&path);
     }

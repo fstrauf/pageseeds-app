@@ -207,6 +207,13 @@ fn article_package_has_outline_body_and_empty_neighbors() {
         r#"---
 title: Complete Guide
 description: A useful guide about widgets
+faq:
+  - question: "What is a widget?"
+    answer: "A widget is a small mechanical device."
+  - question: "How do I install a widget?"
+    answer: "Follow the setup steps in this guide."
+  - question: "When should I replace a widget?"
+    answer: "Replace when wear indicators show."
 ---
 
 # Complete Guide

@@ -1,6 +1,6 @@
 # Landing Page Writer
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Write a conversion-focused MDX landing page that ranks for a commercial or
 transactional keyword and turns that traffic into signups, trials, or demos.
@@ -72,8 +72,14 @@ For finance, health, legal, and other YMYL topics this is non-negotiable:
 - **Lead paragraph** answers the searcher's core question within the first 100
   words — make it quotable and complete.
 - **Comparison/decision content** as real markdown tables, not prose lists.
-- **FAQ section** (3-5 questions) addressing the natural follow-ups — feeds FAQ
-  schema and People-Also-Ask capture.
+- **FAQ (when included):** provide both sources of truth together:
+  1. YAML frontmatter `faq:` list with **3–5** items, each `{question, answer}`
+     as non-empty strings — this is the machine-readable source the theme uses
+     for FAQPage JSON-LD.
+  2. A visible `## FAQ` (or equivalent) section whose questions match that list.
+  Prefer **not** emitting raw FAQPage `<script type="application/ld+json">` in
+  MDX (the theme owns JSON-LD). Only preserve existing inline JSON-LD if the
+  page already uses that pattern.
 - **Internal links** to genuinely related articles on this site with descriptive
   anchor text, chosen from the brief's `internal_link_candidates`. Only link
   where it helps the reader.
@@ -82,9 +88,9 @@ For finance, health, legal, and other YMYL topics this is non-negotiable:
 
 ## Output
 
-A complete MDX document: YAML frontmatter (title, date, description, target_keyword)
-followed by the page body. Return ONLY the MDX content — no markdown wrappers,
-no commentary, no explanations outside the document.
+A complete MDX document: YAML frontmatter (title, date, description, target_keyword,
+and `faq` when an FAQ is included) followed by the page body. Return ONLY the MDX
+content — no markdown wrappers, no commentary, no explanations outside the document.
 
 ## Constraints
 
