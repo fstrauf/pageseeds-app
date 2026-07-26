@@ -825,24 +825,50 @@ fn enrich_with_winnability(output: &mut KeywordPickerOutput, project_id: &str) {
         };
 
         log::info!(
-            "[winnability] Enriching {} keywords with SERP features via {}",
+            "[winnability] Enriching {} keywords with SERP features via {} (serp_guard)",
             landing_count + blog_count,
             provider_name
         );
 
+        let mut budget_logged = false;
         for (keyword, kd, intent, winnability, reason) in targets {
-            match provider.serp_features(keyword, "us").await {
-                Ok(serp) => {
-                    let assessment =
-                        crate::seo::winnability::assess(keyword, &serp, Some(kd), intent);
+            match crate::seo::serp_guard::fetch_serp_features(
+                &conn,
+                project_id,
+                provider.as_ref(),
+                keyword,
+                "us",
+            )
+            .await
+            {
+                Ok(lookup) => {
+                    let assessment = crate::seo::winnability::assess(
+                        keyword,
+                        &lookup.features,
+                        Some(kd),
+                        intent,
+                    );
                     log::info!(
-                        "[winnability] '{}' → {} (risk={})",
+                        "[winnability] '{}' → {} (risk={}, source={:?})",
                         keyword,
                         assessment.bucket,
-                        assessment.risk_score
+                        assessment.risk_score,
+                        lookup.source
                     );
                     *winnability = Some(assessment.bucket.as_str().to_string());
                     *reason = Some(assessment.reason);
+                }
+                Err(e) if crate::seo::serp_guard::is_budget_error(&e) => {
+                    // Soft-degrade: leave winnability unset. Log once, not per keyword.
+                    if !budget_logged {
+                        log::warn!(
+                            "[winnability] SERP daily live-call budget hit for project {}: {}. \
+                             Remaining keywords skip winnability enrichment.",
+                            project_id,
+                            e
+                        );
+                        budget_logged = true;
+                    }
                 }
                 Err(e) => {
                     log::warn!("[winnability] SERP lookup failed for '{}': {}", keyword, e);

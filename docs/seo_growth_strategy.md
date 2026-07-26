@@ -22,6 +22,7 @@
 - `seo/winnability.rs`: scores keywords Target / Differentiate / Avoid (6 unit tests)
 - No-fallback selection: hard fail if no keywords meet the quality bar
 - Pipeline integration: `enrich_with_winnability()` wires into `exec_research_final_selection` (non-fatal — keywords without scores pass through unchanged)
+- **Cost guard (#208):** product SERP goes through `seo/serp_guard.rs` — keyword+locale cache (TTL 14d) + per-project daily live cap (50). GSC owns post-ship outcomes; DataForSEO SERP is research/diagnostics only.
 
 ### Ready to execute (needs your action — app rebuild)
 
@@ -318,7 +319,8 @@ Prioritized workstreams. Each has a clear acceptance test.
 - **DataForSEO as sole default** → factory + new projects + all fallbacks default to `dataforseo`. Ahrefs accepted for backwards compat but `serp_features()` returns an error on Ahrefs.
 - **Winnability classifier** (`seo/winnability.rs`): scores keywords Target / Differentiate / Avoid based on AIO risk, authority competitor count, KD, intent. 6 unit tests.
 - **No-fallback selection** → hard fail if no keywords meet the quality bar. Iterate on seeds, don't fabricate.
-- **Pipeline integration** → `enrich_with_winnability()` calls `serp_features()` for each selected keyword, scores via `assess()`, attaches bucket + reason to the picker output. Non-fatal: keywords without scores pass through unchanged.
+- **Pipeline integration** → `enrich_with_winnability()` calls `serp_guard::fetch_serp_features()` for each selected keyword, scores via `assess()`, attaches bucket + reason to the picker output. Non-fatal: keywords without scores pass through unchanged (including daily budget soft-fail).
+- **Cost guard (#208)** → `seo/serp_guard.rs`: keyword+locale SQLite cache (default TTL **14 days**) + per-project daily live-call cap (default **50**). GSC / `gsc_page_daily` owns post-ship outcomes; DataForSEO SERP is for research/diagnostics only. Cap hit → no network; research soft-degrades; score-zero does **not** map budget to Avoid.
 
 ### WS3 — Cannibalization merges  `[READY — needs app rebuild]`
 - Slug fix is committed to main (`9dcc866`). Fresh audit ran 2026-07-06: 16 merge clusters, 14/16 keeper decisions correct, zero non-canonical URLs.
@@ -331,11 +333,11 @@ Prioritized workstreams. Each has a clear acceptance test.
 Layer 2 is **score → persist → human compose**, not auto noindex.
 
 **Tooling (`score-zero-impression-articles`):**
-- Live path calls DataForSEO SERP + `seo::winnability::assess`, then **persists** to `article_metadata` namespace `winnability` (`scored_at`, bucket, risk, reason, SERP flags, optional `impressions_at_score`).
+- Live path uses `serp_guard::fetch_serp_features` + `seo::winnability::assess`, then **persists** to `article_metadata` namespace `winnability` (`scored_at`, bucket, risk, reason, SERP flags, optional `impressions_at_score`).
 - **`--from-cache` / `--list`:** last scores + bucket counts with **zero** SEO provider calls.
 - **TTL:** default **60 days** local metadata freshness; default score run skips fresh rows unless `--force`.
-- **Cap:** default max **25** live assessments per run; JSON reports `scored` / `skipped_fresh` / `skipped_cap` / `truncated`.
-- Domain logic in `seo/dead_weight.rs`; CLI is thin parse/print. **No** new task type; **no** new SQLite table.
+- **Caps:** max **25** assessments per run + shared DataForSEO SERP daily live cap (**50**/project via `serp_guard`, keyword cache **14d**). JSON reports `scored` / `skipped_fresh` / `skipped_cap` / `skipped_budget` / `cache_hits` / `live_calls` / `truncated`. Budget skips do **not** persist Avoid.
+- Domain logic in `seo/dead_weight.rs`; CLI is thin parse/print. **No** new task type.
 
 **Bucket → action (human-gated, existing tools):**
 

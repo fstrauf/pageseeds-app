@@ -1526,6 +1526,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 50 {
+        conn.execute_batch(MIGRATION_V50)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (50, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1661,6 +1669,26 @@ CREATE INDEX IF NOT EXISTS idx_article_evidence_project_slug
     ON article_evidence(project_id, slug);
 CREATE INDEX IF NOT EXISTS idx_article_evidence_project_hash
     ON article_evidence(project_id, content_hash);
+"#;
+
+static MIGRATION_V50: &str = r#"
+-- DataForSEO SERP cost guards (issue #208).
+-- Keyword+locale cache (TTL-gated in serp_guard) + per-project daily live-call counter.
+-- GSC owns post-ship outcomes; live SERP is research/diagnostics only.
+CREATE TABLE IF NOT EXISTS serp_features_cache (
+    keyword_norm TEXT NOT NULL,
+    country TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (keyword_norm, country)
+);
+
+CREATE TABLE IF NOT EXISTS serp_daily_usage (
+    project_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    live_calls INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (project_id, day)
+);
 "#;
 
 // ═══════════════════════════════════════════════════════════════════════════════

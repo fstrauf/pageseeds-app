@@ -31,6 +31,17 @@ pub enum Error {
     #[error("Invalid JSON: {0}")]
     InvalidJson(String),
 
+    /// Per-project daily DataForSEO SERP live-call cap hit (soft-fail signal).
+    /// Must not be mapped to winnability Avoid / risk 99 — callers soft-degrade.
+    #[error(
+        "SERP daily live-call budget exceeded for project {project_id} on {day} (cap {cap})"
+    )]
+    SerpBudgetExceeded {
+        project_id: String,
+        day: String,
+        cap: u32,
+    },
+
     #[error("{0}")]
     Other(String),
 }

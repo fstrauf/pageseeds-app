@@ -431,6 +431,12 @@ field present”** — optional priors only, not mandatory creates every week.
 Scoring and remediating low/zero-impression articles is **optional and secondary**
 — not part of the default weekly ≤5 spine, and **not** a weekly re-score loop.
 
+**Do not bulk re-score zero-impression inventory every week.** GSC desk
+(`site-overview` / `articles` / `gsc-*`) is ground truth for post-ship outcomes.
+`score-zero-impression-articles` is **opt-in paid SERP** (DataForSEO), subject to
+`serp_guard` cache (14d keyword+locale) + per-project daily live-call cap (50).
+Prefer free desk actions unless a human asks for winnability buckets.
+
 **Cache-first (no paid SERP):**
 
 ```bash
@@ -440,7 +446,8 @@ pageseeds-cli score-zero-impression-articles -i <id> -p <path> --from-cache
 ```
 
 **Live score only when cache empty/stale and budget allows** (paid DataForSEO
-SERP; default TTL **60 days**, default max **25** live assessments per run):
+SERP; local score TTL **60 days**, max **25** assessments/run; shared SERP
+cache/cap via `serp_guard`):
 
 ```bash
 pageseeds-cli score-zero-impression-articles -i <id> -p <path> [-m 10] [--max 25] [--ttl-days 60]
@@ -448,7 +455,8 @@ pageseeds-cli score-zero-impression-articles -i <id> -p <path> [-m 10] [--max 25
 ```
 
 Scores persist to `article_metadata` namespace `winnability` (`scored_at` + bucket).
-JSON reports `scored` / `skipped_fresh` / `skipped_cap` / `truncated`.
+JSON reports `scored` / `skipped_fresh` / `skipped_cap` / `skipped_budget` /
+`cache_hits` / `live_calls` / `truncated`. Budget skips are **not** Avoid.
 
 #### Bucket → human-compose action (existing tools only)
 
@@ -851,11 +859,14 @@ filter (overview sample when present, else interim `articles` /
 for ranking push. Soft prior only; one URL one targeted fix (no CTR + striking
 double-create).
 
-**Dead-weight (#206):** `score-zero-impression-articles` persists winnability
-to `article_metadata`; prefer `--from-cache` / `--list`; live score TTL 60d /
-max 25. Secondary only — not default spine, no weekly re-score, no auto bulk
-noindex. Bucket → human compose: Avoid merge/noindex-with-confirm;
-Differentiate `fix_content_article -S` ($0); Target link boost / fix.
+**Dead-weight (#206 / #208):** `score-zero-impression-articles` persists
+winnability to `article_metadata`; prefer `--from-cache` / `--list`; live score
+TTL 60d / max 25 per run; DataForSEO SERP also gated by `serp_guard` (14d
+keyword cache + 50 live/day/project). **Do not bulk re-score every week** — GSC
+desk is outcome ground truth; score-zero is opt-in paid diagnostics. Secondary
+only — no auto bulk noindex. Bucket → human compose: Avoid
+merge/noindex-with-confirm; Differentiate `fix_content_article -S` ($0); Target
+link boost / fix.
 
 **PostHog (optional MCP):** same-session behavioral layer after GSC desk —
 bounce, engagement, top paths, light CWV — used only to re-rank SEO candidates

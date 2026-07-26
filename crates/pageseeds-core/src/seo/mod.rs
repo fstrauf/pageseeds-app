@@ -7,6 +7,7 @@ pub mod intent;
 pub mod keywords;
 pub mod provider;
 pub mod scoring;
+pub mod serp_guard;
 pub mod traffic;
 pub mod winnability;
 

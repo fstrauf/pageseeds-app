@@ -124,7 +124,7 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 |------|--------|
 | `run-content-audit` | Run content audit (writes report) |
 | `cannibalization-strategy` | Cannibalization strategy workflow |
-| `score-zero-impression-articles` | Live score = paid (DataForSEO SERP). **`--from-cache` / `--list` = $0** (local `article_metadata` winnability only). Remediation via existing fix/merge/link tools = $0 (no DataForSEO). Default TTL 60d, max 25 live assessments/run. |
+| `score-zero-impression-articles` | Live score = paid (DataForSEO SERP via `serp_guard`: keyword cache 14d + 50 live/day/project). **`--from-cache` / `--list` = $0** (local `article_metadata` winnability only). Remediation via existing fix/merge/link tools = $0 (no DataForSEO). Local score TTL 60d, max 25 assessments/run. |
 
 ### Misc product
 
