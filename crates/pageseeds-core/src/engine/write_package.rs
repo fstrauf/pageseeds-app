@@ -713,6 +713,8 @@ fn spawn_standalone_cluster_and_link(
         "Scan internal link graph and add missing links following Path B article: {slug}"
     );
     let idempotency_key = format!("followup:path-b:{project_id}:{slug}:cluster_and_link");
+    let focus_slug = crate::content::slug::normalize_url_slug(slug);
+    let artifacts = vec![crate::engine::exec::content::focus_slug_artifact(&focus_slug)];
     let spec = TaskSpec {
         project_id: project_id.to_string(),
         task_type: "cluster_and_link".to_string(),
@@ -723,7 +725,7 @@ fn spawn_standalone_cluster_and_link(
         priority: Priority::Medium,
         agent_policy: AgentPolicy::Required,
         idempotency_key: Some(idempotency_key),
-        artifacts: vec![],
+        artifacts,
         depends_on: vec![],
         ..Default::default()
     };

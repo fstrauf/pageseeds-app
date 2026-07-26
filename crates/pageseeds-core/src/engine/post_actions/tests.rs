@@ -2,6 +2,95 @@ use super::topic_health::classify_topic_health;
     use super::*;
 
     #[test]
+    fn should_spawn_cluster_link_follow_up_residual_and_focus_rules() {
+        // Cap
+        assert!(!should_spawn_cluster_link_follow_up(5, 5, 3, true, 3));
+        // Classic: orphans + progress
+        assert!(should_spawn_cluster_link_follow_up(2, 0, 1, false, 1));
+        // Zero-incoming residual + progress (origin C)
+        assert!(should_spawn_cluster_link_follow_up(0, 3, 2, false, 1));
+        // Pure zero-incoming without progress — no re-round
+        assert!(!should_spawn_cluster_link_follow_up(0, 3, 0, false, 1));
+        // Focus still zero forces re-round even with links_added == 0
+        assert!(should_spawn_cluster_link_follow_up(0, 1, 0, true, 1));
+        // Focus still zero with progress
+        assert!(should_spawn_cluster_link_follow_up(0, 0, 1, true, 2));
+        // Healthy
+        assert!(!should_spawn_cluster_link_follow_up(0, 0, 0, false, 1));
+        assert!(!should_spawn_cluster_link_follow_up(0, 0, 5, false, 1));
+    }
+
+    #[test]
+    fn cluster_link_post_action_spawns_on_zero_incoming_residual() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('proj1', 'Test', '/tmp/pa_cl', 1, 'workspace')",
+            [],
+        )
+        .unwrap();
+
+        let mut task = make_task();
+        task.id = "cluster-round-1".to_string();
+        task.task_type = "cluster_and_link".to_string();
+        task.project_id = "proj1".to_string();
+        task.status = TaskStatus::Done;
+        task.title = Some("Cluster and link: fresh article".to_string());
+        task.artifacts = vec![
+            crate::models::task::TaskArtifact {
+                key: "focus_slug".to_string(),
+                path: None,
+                artifact_type: Some("text".to_string()),
+                source: Some("write_spawn".to_string()),
+                content: Some("fresh-article".to_string()),
+            },
+            crate::models::task::TaskArtifact {
+                key: "cluster_link_apply".to_string(),
+                path: None,
+                artifact_type: Some("json".to_string()),
+                source: None,
+                content: Some(
+                    serde_json::json!({
+                        "files_modified": 1,
+                        "links_added": 2,
+                        "orphans_remaining": 0,
+                        "zero_incoming_remaining": 1,
+                        "focus_still_zero_incoming": true,
+                    })
+                    .to_string(),
+                ),
+            },
+        ];
+        crate::engine::task_store::create_task(&conn, &task).unwrap();
+
+        let follow_ups = after_task_success(&PostTaskContext {
+            conn: &conn,
+            task: &task,
+            project_path: "/tmp/pa_cl",
+            progress: &[],
+        });
+        assert_eq!(follow_ups.len(), 1, "expected residual follow-up: {:?}", follow_ups);
+        let child = crate::engine::task_store::get_task(&conn, &follow_ups[0]).unwrap();
+        assert_eq!(child.task_type, "cluster_and_link");
+        assert!(
+            child
+                .title
+                .as_deref()
+                .unwrap_or("")
+                .contains("zero-incoming"),
+            "title should mention residual debt: {:?}",
+            child.title
+        );
+        let focus = child
+            .artifacts
+            .iter()
+            .find(|a| a.key == "focus_slug")
+            .and_then(|a| a.content.as_deref());
+        assert_eq!(focus, Some("fresh-article"), "focus_slug must propagate");
+    }
+
+    #[test]
     fn classify_topic_health_promising_when_quality_and_traffic_signals_are_strong() {
         let (status, score) = classify_topic_health(75, 2, 5.0, 500.0);
         assert_eq!(status, "promising");
