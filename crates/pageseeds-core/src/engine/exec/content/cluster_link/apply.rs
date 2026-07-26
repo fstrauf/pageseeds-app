@@ -7,6 +7,10 @@ use crate::models::task::Task;
 /// Reads `links_to_add.json` produced by the strategy step, groups links by
 /// source article, and appends a `## Related Articles` section to each MDX
 /// file that does not already have one.
+///
+/// Always re-scans residual orphans / zero-incoming after finishing — even when
+/// zero files were modified — so post-actions can decide residual follow-ups
+/// honestly (issue #196).
 pub(crate) fn exec_cluster_link_apply(
     task: &Task,
     project_path: &str,
@@ -29,10 +33,31 @@ pub(crate) fn exec_cluster_link_apply(
     let links_to_add = links_doc["links_to_add"].as_array().unwrap_or(&empty_arr);
 
     if links_to_add.is_empty() {
+        let residuals = rescan_link_residuals(task, project_path);
+        let summary = serde_json::json!({
+            "files_modified": 0,
+            "links_added": 0,
+            "changes": [],
+            "orphans_remaining": residuals.orphans_remaining,
+            "zero_incoming_remaining": residuals.zero_incoming_remaining,
+            "focus_still_zero_incoming": residuals.focus_still_zero_incoming,
+            "skipped": {
+                "missing_source_mapping": 0,
+                "missing_target_slug": 0,
+                "unknown_target_slug": 0,
+                "source_file_not_found": 0,
+                "source_file_read_error": 0,
+                "link_already_exists": 0,
+            },
+            "recommendations_count": 0,
+        });
         return crate::engine::workflows::StepResult {
             success: true,
-            message: "No links to add — strategy found no gaps".to_string(),
-            output: Some(r#"{"files_modified":0,"links_added":0,"changes":[]}"#.to_string()),
+            message: format!(
+                "No links to add — strategy found no gaps (orphans_remaining={}, zero_incoming_remaining={})",
+                residuals.orphans_remaining, residuals.zero_incoming_remaining
+            ),
+            output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
             artifact_key: None,
         };
     }
@@ -299,63 +324,17 @@ pub(crate) fn exec_cluster_link_apply(
         }
     }
 
-    // Re-scan the link graph after applying changes so the next drift
-    // detection or cluster_and_link run sees the updated state.
-    let (orphans_remaining, zero_incoming_remaining) = if files_modified > 0 {
-        let mut orphans = 0i32;
-        let mut zero_incoming = 0i32;
-        if let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) {
-            if let Ok(articles) =
-                crate::content::article_index::list_articles(&db, &task.project_id)
-            {
-                let articles: Vec<_> = articles
-                    .into_iter()
-                    .filter(|a| !a.file.is_empty())
-                    .collect();
-                let resolution = crate::content::locator::resolve(Path::new(project_path), None);
-                if let Some(content_dir) = resolution.selected {
-                    match crate::content::linking::scan_links(&content_dir, &articles) {
-                        Ok(result) => {
-                            let json = serde_json::to_string_pretty(&result).unwrap_or_default();
-                            let paths = ProjectPaths::from_path(project_path);
-                            let scan_path = paths.automation_dir.join("link_scan.json");
-                            if let Err(e) = std::fs::write(&scan_path, &json) {
-                                log::warn!("[cluster_link_apply] failed to write updated link_scan.json: {}", e);
-                            } else {
-                                log::info!(
-                                    "[cluster_link_apply] re-scanned and saved link_scan.json: {} articles, {} orphans, {} zero-incoming",
-                                    result.total_articles,
-                                    result.orphan_ids.len(),
-                                    result.zero_incoming_ids.len()
-                                );
-                            }
-                            orphans = result.orphan_ids.len() as i32;
-                            zero_incoming = result.zero_incoming_ids.len() as i32;
-                        }
-                        Err(e) => {
-                            log::warn!("[cluster_link_apply] re-scan failed: {}", e);
-                        }
-                    }
-                } else {
-                    log::warn!("[cluster_link_apply] could not locate content dir for re-scan");
-                }
-            } else {
-                log::warn!("[cluster_link_apply] failed to load articles for re-scan");
-            }
-        } else {
-            log::warn!("[cluster_link_apply] failed to open DB for re-scan");
-        }
-        (orphans, zero_incoming)
-    } else {
-        (0, 0)
-    };
+    // Always re-scan residuals (including when files_modified == 0) so follow-up
+    // decisions and desk reports stay honest after a no-op apply.
+    let residuals = rescan_link_residuals(task, project_path);
 
     let summary = serde_json::json!({
         "files_modified": files_modified,
         "links_added": links_added,
         "changes": change_log,
-        "orphans_remaining": orphans_remaining,
-        "zero_incoming_remaining": zero_incoming_remaining,
+        "orphans_remaining": residuals.orphans_remaining,
+        "zero_incoming_remaining": residuals.zero_incoming_remaining,
+        "focus_still_zero_incoming": residuals.focus_still_zero_incoming,
         "skipped": {
             "missing_source_mapping": skipped_missing_source,
             "missing_target_slug": skipped_missing_target,
@@ -368,9 +347,271 @@ pub(crate) fn exec_cluster_link_apply(
     });
     crate::engine::workflows::StepResult {
         success: true,
-        message: format!("Applied {} links to {} files ({} recommendations, {} skipped)", links_added, files_modified, links_to_add.len(),
-            skipped_missing_source + skipped_missing_target + skipped_unknown_slug + skipped_source_not_found + skipped_read_error + skipped_already_linked),
+        message: format!("Applied {} links to {} files ({} recommendations, {} skipped); residuals: orphans={}, zero_incoming={}", links_added, files_modified, links_to_add.len(),
+            skipped_missing_source + skipped_missing_target + skipped_unknown_slug + skipped_source_not_found + skipped_read_error + skipped_already_linked,
+            residuals.orphans_remaining, residuals.zero_incoming_remaining),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
         artifact_key: None,
+    }
+}
+
+/// Residual counts from a post-apply (or no-op) link graph re-scan.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LinkResiduals {
+    pub orphans_remaining: i32,
+    pub zero_incoming_remaining: i32,
+    /// Set only when the task has a `focus_slug` artifact: true if that article
+    /// still has zero inbound `/blog/` links after re-scan.
+    pub focus_still_zero_incoming: Option<bool>,
+}
+
+/// Re-scan the MDX link graph and persist `link_scan.json`.
+///
+/// Always runs when called — callers use this even after zero file mods so
+/// residual debt is honest for post_actions follow-up decisions.
+pub(crate) fn rescan_link_residuals(task: &Task, project_path: &str) -> LinkResiduals {
+    use std::path::Path;
+
+    let mut residuals = LinkResiduals::default();
+    let focus_slug = super::task_focus_slug(task);
+
+    let Ok(db) = rusqlite::Connection::open(crate::db::default_db_path()) else {
+        log::warn!("[cluster_link_apply] failed to open DB for re-scan");
+        return residuals;
+    };
+    let Ok(articles_raw) = crate::content::article_index::list_articles(&db, &task.project_id)
+    else {
+        log::warn!("[cluster_link_apply] failed to load articles for re-scan");
+        return residuals;
+    };
+    let articles: Vec<_> = articles_raw
+        .into_iter()
+        .filter(|a| !a.file.is_empty())
+        .collect();
+    let resolution = crate::content::locator::resolve(Path::new(project_path), None);
+    let Some(content_dir) = resolution.selected else {
+        log::warn!("[cluster_link_apply] could not locate content dir for re-scan");
+        return residuals;
+    };
+
+    match crate::content::linking::scan_links(&content_dir, &articles) {
+        Ok(result) => {
+            let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+            let paths = ProjectPaths::from_path(project_path);
+            let scan_path = paths.automation_dir.join("link_scan.json");
+            if let Err(e) = std::fs::write(&scan_path, &json) {
+                log::warn!(
+                    "[cluster_link_apply] failed to write updated link_scan.json: {}",
+                    e
+                );
+            } else {
+                log::info!(
+                    "[cluster_link_apply] re-scanned and saved link_scan.json: {} articles, {} orphans, {} zero-incoming",
+                    result.total_articles,
+                    result.orphan_ids.len(),
+                    result.zero_incoming_ids.len()
+                );
+            }
+            residuals.orphans_remaining = result.orphan_ids.len() as i32;
+            residuals.zero_incoming_remaining = result.zero_incoming_ids.len() as i32;
+
+            if focus_slug.is_some() {
+                let focus_id = super::resolve_focus_article_id(focus_slug.as_deref(), &articles);
+                residuals.focus_still_zero_incoming = Some(match focus_id {
+                    Some(id) => result.zero_incoming_ids.contains(&id),
+                    // Unknown focus slug: treat as still-zero when any residual zero-incoming exists
+                    None => residuals.zero_incoming_remaining > 0,
+                });
+            }
+        }
+        Err(e) => {
+            log::warn!("[cluster_link_apply] re-scan failed: {}", e);
+        }
+    }
+    residuals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskArtifact, TaskReviewSurface, TaskRun,
+        TaskRunPolicy, TaskStatus,
+    };
+    use std::fs;
+    use uuid::Uuid;
+
+    fn make_task(project_id: &str, focus_slug: Option<&str>) -> Task {
+        let mut artifacts = vec![];
+        if let Some(slug) = focus_slug {
+            artifacts.push(TaskArtifact {
+                key: "focus_slug".to_string(),
+                path: None,
+                artifact_type: Some("text".to_string()),
+                source: Some("write_spawn".to_string()),
+                content: Some(slug.to_string()),
+            });
+        }
+        Task {
+            id: format!("task-{}", Uuid::new_v4()),
+            task_type: "cluster_and_link".to_string(),
+            phase: "implementation".to_string(),
+            status: TaskStatus::InProgress,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::BackendAuto,
+            agent_policy: AgentPolicy::Required,
+            title: Some("Cluster and link: test".to_string()),
+            description: None,
+            project_id: project_id.to_string(),
+            depends_on: vec![],
+            artifacts,
+            run: TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+        }
+    }
+
+    /// Origin B: apply with empty recommendations / zero file mods must still
+    /// report real residual counts when the graph has orphans/zero-incoming.
+    #[test]
+    fn apply_empty_links_still_reports_honest_residuals() {
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("pageseeds-cl-apply-{}", Uuid::new_v4()));
+        let content_dir = dir.join("content").join("blog");
+        let automation = dir.join(".github").join("automation");
+        fs::create_dir_all(&content_dir).unwrap();
+        fs::create_dir_all(&automation).unwrap();
+
+        // Two disconnected articles → 2 orphans, 2 zero-incoming.
+        fs::write(
+            content_dir.join("1_hub.mdx"),
+            "---\ntitle: \"Hub\"\n---\n\n# Hub\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(
+            content_dir.join("2_spoke.mdx"),
+            "---\ntitle: \"Spoke\"\n---\n\n# Spoke\n\nBody.\n",
+        )
+        .unwrap();
+
+        fs::write(
+            automation.join("links_to_add.json"),
+            r#"{"generated_at":"","links_to_add":[]}"#,
+        )
+        .unwrap();
+
+        let db_path = dir.join("test.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            crate::db::init_with_conn(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, active, project_mode)
+                 VALUES ('proj1', 'Test', ?1, 1, 'workspace')",
+                rusqlite::params![dir.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+            for (id, title, slug, file) in [
+                (1i64, "Hub", "hub", "content/blog/1_hub.mdx"),
+                (2i64, "Spoke", "spoke", "content/blog/2_spoke.mdx"),
+            ] {
+                conn.execute(
+                    "INSERT INTO articles (
+                        id, project_id, title, url_slug, file, status,
+                        content_gaps_addressed, target_volume, word_count, review_count
+                     ) VALUES (?1, 'proj1', ?2, ?3, ?4, 'draft', '[]', 0, 0, 0)",
+                    rusqlite::params![id, title, slug, file],
+                )
+                .unwrap();
+            }
+        }
+
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", &db_path);
+
+        let task = make_task("proj1", Some("spoke"));
+        let result = exec_cluster_link_apply(&task, dir.to_string_lossy().as_ref());
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.success, "apply failed: {}", result.message);
+        let out: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(out["files_modified"].as_u64(), Some(0));
+        assert_eq!(out["links_added"].as_u64(), Some(0));
+        assert_eq!(out["orphans_remaining"].as_i64(), Some(2));
+        assert_eq!(out["zero_incoming_remaining"].as_i64(), Some(2));
+        assert_eq!(out["focus_still_zero_incoming"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn apply_rejects_unknown_target_slug_via_valid_link_targets() {
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("pageseeds-cl-apply-unk-{}", Uuid::new_v4()));
+        let content_dir = dir.join("content").join("blog");
+        let automation = dir.join(".github").join("automation");
+        fs::create_dir_all(&content_dir).unwrap();
+        fs::create_dir_all(&automation).unwrap();
+
+        fs::write(
+            content_dir.join("1_hub.mdx"),
+            "---\ntitle: \"Hub\"\n---\n\n# Hub\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(
+            automation.join("links_to_add.json"),
+            r#"{"links_to_add":[{"source_article_id":1,"target_article_id":99,"target_title":"Ghost","target_slug":"ghost-redirected","reason":"test"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            automation.join("article_id_to_file.json"),
+            r#"[{"id":1,"file":"1_hub.mdx"}]"#,
+        )
+        .unwrap();
+
+        let db_path = dir.join("test.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            crate::db::init_with_conn(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, active, project_mode)
+                 VALUES ('proj1', 'Test', ?1, 1, 'workspace')",
+                rusqlite::params![dir.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO articles (
+                    id, project_id, title, url_slug, file, status,
+                    content_gaps_addressed, target_volume, word_count, review_count
+                 ) VALUES (1, 'proj1', 'Hub', 'hub', 'content/blog/1_hub.mdx', 'draft', '[]', 0, 0, 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", &db_path);
+
+        let task = make_task("proj1", None);
+        let result = exec_cluster_link_apply(&task, dir.to_string_lossy().as_ref());
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(result.success, "apply failed: {}", result.message);
+        let out: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(out["files_modified"].as_u64(), Some(0));
+        assert_eq!(out["links_added"].as_u64(), Some(0));
+        assert_eq!(out["skipped"]["unknown_target_slug"].as_u64(), Some(1));
     }
 }

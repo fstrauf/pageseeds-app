@@ -75,6 +75,11 @@ pub(crate) fn exec_cluster_link_strategy(
         .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
         .unwrap_or_default();
 
+    // Write-spawned cluster tasks attach focus_slug so we must-cover inbound
+    // TO the newly written article even when the rest of the graph looks healthy.
+    let focus_slug = super::task_focus_slug(task);
+    let focus_id = resolve_focus_article_id(focus_slug.as_deref(), &articles);
+
     // Compact article index (id, title, slug).
     // We intentionally omit `file` here; it adds ~35 bytes/article and is only
     // needed by the apply step, not the agent's reasoning. A separate
@@ -89,11 +94,18 @@ pub(crate) fn exec_cluster_link_strategy(
             })
         })
         .collect();
-    // Prioritize orphans and under-connected articles so they appear first
-    // in the index. The agent can only link articles it can see.
+    // Prioritize focus article, then orphans / under-connected so they appear
+    // first in the index. The agent can only link articles it can see.
     index_entries.sort_by(|a, b| {
         let a_id = a["id"].as_i64().unwrap_or(0);
         let b_id = b["id"].as_i64().unwrap_or(0);
+        let a_is_focus = focus_id == Some(a_id);
+        let b_is_focus = focus_id == Some(b_id);
+        match (a_is_focus, b_is_focus) {
+            (true, false) => return std::cmp::Ordering::Less,
+            (false, true) => return std::cmp::Ordering::Greater,
+            _ => {}
+        }
         let a_is_orphan = orphan_ids.contains(&a_id);
         let b_is_orphan = orphan_ids.contains(&b_id);
         match (a_is_orphan, b_is_orphan) {
@@ -109,6 +121,27 @@ pub(crate) fn exec_cluster_link_strategy(
     let orphan_count = orphan_ids.len();
     let max_index = std::cmp::max(orphan_count, 50).min(120);
     index_entries.truncate(max_index);
+    // Ensure focus stays in the index even after truncation.
+    if let Some(fid) = focus_id {
+        if !index_entries
+            .iter()
+            .any(|e| e["id"].as_i64() == Some(fid))
+        {
+            if let Some(a) = articles.iter().find(|a| a.id == fid) {
+                index_entries.insert(
+                    0,
+                    serde_json::json!({
+                        "id": a.id,
+                        "title": a.title,
+                        "slug": a.url_slug,
+                    }),
+                );
+                if index_entries.len() > max_index {
+                    index_entries.truncate(max_index.max(1));
+                }
+            }
+        }
+    }
     let index_json = serde_json::to_string(&index_entries).unwrap_or_default();
 
     // Build id → file mapping for the apply step (resolves source_article_id → file).
@@ -135,13 +168,23 @@ pub(crate) fn exec_cluster_link_strategy(
     // the actual link targets come from the index.
     let empty_profiles: Vec<serde_json::Value> = Vec::new();
     let profiles_arr = scan["profiles"].as_array().unwrap_or(&empty_profiles);
-    let compact_profiles: Vec<serde_json::Value> = profiles_arr
+
+    let focus_incoming = focus_id.and_then(|id| {
+        profiles_arr
+            .iter()
+            .find(|p| p["id"].as_i64() == Some(id))
+            .map(|p| p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0))
+    });
+    // Must-cover: focus with zero inbound must not early-exit as "healthy".
+    let focus_needs_inbound = matches!(focus_incoming, Some(0));
+
+    let mut compact_profiles: Vec<serde_json::Value> = profiles_arr
         .iter()
         .filter(|p| {
+            let id = p["id"].as_i64();
             let incoming = p["incoming_ids"].as_array().map(|a| a.len()).unwrap_or(0);
-            incoming < 2
+            incoming < 2 || (focus_id.is_some() && id == focus_id)
         })
-        .take(20)
         .map(|p| {
             serde_json::json!({
                 "id": p["id"],
@@ -152,9 +195,56 @@ pub(crate) fn exec_cluster_link_strategy(
             })
         })
         .collect();
+    // Focus first in under-connected list.
+    if let Some(fid) = focus_id {
+        compact_profiles.sort_by(|a, b| {
+            let a_focus = a["id"].as_i64() == Some(fid);
+            let b_focus = b["id"].as_i64() == Some(fid);
+            match (a_focus, b_focus) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let a_in = a["incoming_count"].as_u64().unwrap_or(0);
+                    let b_in = b["incoming_count"].as_u64().unwrap_or(0);
+                    a_in.cmp(&b_in)
+                }
+            }
+        });
+    }
+    compact_profiles.truncate(20);
+
+    // If focus is zero-incoming but missing from profiles (stale edge), synthesize.
+    if focus_needs_inbound {
+        if let Some(fid) = focus_id {
+            if !compact_profiles
+                .iter()
+                .any(|p| p["id"].as_i64() == Some(fid))
+            {
+                if let Some(a) = articles.iter().find(|a| a.id == fid) {
+                    let file_basename = std::path::Path::new(&a.file)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&a.file);
+                    compact_profiles.insert(
+                        0,
+                        serde_json::json!({
+                            "id": a.id,
+                            "title": a.title,
+                            "file": file_basename,
+                            "incoming_count": 0,
+                            "outgoing_count": 0,
+                        }),
+                    );
+                    compact_profiles.truncate(20);
+                }
+            }
+        }
+    }
+
     let under_json = serde_json::to_string(&compact_profiles).unwrap_or_default();
 
-    if compact_profiles.is_empty() {
+    // Do not early-exit healthy when focus still needs at least one inbound link.
+    if should_skip_strategy_as_healthy(compact_profiles.len(), focus_needs_inbound) {
         return crate::engine::workflows::StepResult {
             success: true,
             message: "No under-connected articles found — link graph is healthy".to_string(),
@@ -197,6 +287,20 @@ pub(crate) fn exec_cluster_link_strategy(
     let orphan_list_json = serde_json::to_string(&orphan_ids).unwrap_or_default();
     let zero_incoming_list_json = serde_json::to_string(&zero_incoming_ids).unwrap_or_default();
 
+    let focus_must_cover = if focus_needs_inbound {
+        let slug = focus_slug.as_deref().unwrap_or("");
+        let fid = focus_id.map(|id| id.to_string()).unwrap_or_else(|| "?".into());
+        format!(
+            "\n## MUST-COVER (post-write focus)\n\
+             - Focus article id={fid}, slug=`{slug}` currently has **zero incoming** MDX peer links.\n\
+             - You MUST recommend ≥1 link TO this slug (target_slug=`{slug}` / target_article_id={fid}) \
+             from a thematically related peer source that is NOT the focus article itself.\n\
+             - Prefer a source that already has content; do not leave focus undiscoverable.\n"
+        )
+    } else {
+        String::new()
+    };
+
     let prompt = format!(
         r#"You are an SEO specialist analysing the internal link structure of a blog.
 
@@ -206,7 +310,7 @@ pub(crate) fn exec_cluster_link_strategy(
 - Articles with at least one incoming link: {with_inc}
 - Orphan article IDs (no links in or out): {orphan_list_json}
 - Zero-incoming article IDs (Google cannot discover — no pages link TO them): {zero_incoming_list_json}
-
+{focus_must_cover}
 ## Article index (id, title, url slug)
 
 {index_json}
@@ -224,9 +328,10 @@ Each entry shows an article ID and the IDs of articles it already links TO.
 ## Task
 
 Identify the top 20 most valuable internal links to add. Priorities:
-1. Give every orphan article at least one incoming link from a thematically related article.
-2. Link hub articles (broad topics) DOWN to relevant spoke articles.
-3. Link spoke articles UP to their parent hub when relevant.
+1. MUST-COVER first: if a focus article is listed above with zero incoming, add ≥1 inbound link TO it.
+2. Give every orphan article at least one incoming link from a thematically related article.
+3. Link hub articles (broad topics) DOWN to relevant spoke articles.
+4. Link spoke articles UP to their parent hub when relevant.
 
 Return ONLY a valid JSON object — no markdown fences, no commentary.
 
@@ -397,5 +502,214 @@ Requirements:
         ),
         output: Some(serde_json::to_string_pretty(&links_json).unwrap_or_default()),
         artifact_key: None,
+    }
+}
+
+/// Whether strategy may short-circuit as "healthy" with no recommendations.
+///
+/// Focus articles with zero inbound must never early-exit even if the under-
+/// connected list would otherwise be empty (issue #196).
+pub(crate) fn should_skip_strategy_as_healthy(
+    under_connected_count: usize,
+    focus_needs_inbound: bool,
+) -> bool {
+    under_connected_count == 0 && !focus_needs_inbound
+}
+
+/// Resolve focus article id from catalog articles given a focus_slug artifact value.
+pub(crate) fn resolve_focus_article_id(
+    focus_slug: Option<&str>,
+    articles: &[crate::models::article::Article],
+) -> Option<i64> {
+    let slug = focus_slug
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(crate::content::slug::normalize_url_slug)?;
+    articles.iter().find(|a| {
+        crate::content::slug::normalize_url_slug(&a.url_slug) == slug
+            || crate::content::slug::normalize_url_slug(
+                &crate::content::ops::slug_from_filename(&a.file),
+            ) == slug
+    }).map(|a| a.id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, TaskArtifact, TaskReviewSurface, TaskRun,
+        TaskRunPolicy, TaskStatus,
+    };
+    use std::fs;
+    use uuid::Uuid;
+
+    #[test]
+    fn should_skip_strategy_as_healthy_respects_focus_zero_inbound() {
+        assert!(should_skip_strategy_as_healthy(0, false));
+        assert!(!should_skip_strategy_as_healthy(0, true));
+        assert!(!should_skip_strategy_as_healthy(3, false));
+        assert!(!should_skip_strategy_as_healthy(1, true));
+    }
+
+    #[test]
+    fn resolve_focus_article_id_matches_url_slug_and_file_stem() {
+        let articles = vec![crate::models::article::Article {
+            id: 7,
+            title: "Focus".into(),
+            url_slug: "focus-topic".into(),
+            file: "content/blog/07_focus_topic.mdx".into(),
+            target_keyword: None,
+            keyword_difficulty: None,
+            target_volume: 0,
+            published_date: None,
+            word_count: 0,
+            status: "draft".into(),
+            review_status: None,
+            review_started_at: None,
+            last_reviewed_at: None,
+            review_count: 0,
+            content_gaps_addressed: vec![],
+            estimated_traffic_monthly: None,
+            project_id: "p".into(),
+            quality_score: None,
+            quality_grade: None,
+            quality_rated_at: None,
+            publishing_ready: None,
+            quality_breakdown: None,
+            page_type: None,
+            content_hash: None,
+            last_edited_at: None,
+        }];
+        assert_eq!(
+            resolve_focus_article_id(Some("focus-topic"), &articles),
+            Some(7)
+        );
+        assert_eq!(
+            resolve_focus_article_id(Some("focus_topic"), &articles),
+            Some(7)
+        );
+        assert_eq!(resolve_focus_article_id(Some("missing"), &articles), None);
+        assert_eq!(resolve_focus_article_id(None, &articles), None);
+    }
+
+    /// When focus has zero inbound, strategy must not early-exit as healthy
+    /// (must-cover path). We assert by writing a graph where every non-focus
+    /// article is well-connected except focus is zero-incoming, and verifying
+    /// the healthy-skip helper + that strategy does not return the healthy message.
+    #[test]
+    fn strategy_does_not_early_healthy_exit_when_focus_zero_incoming() {
+        let _env_guard = crate::test_support::ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("pageseeds-cl-strat-{}", Uuid::new_v4()));
+        let content_dir = dir.join("content").join("blog");
+        let automation = dir.join(".github").join("automation");
+        fs::create_dir_all(&content_dir).unwrap();
+        fs::create_dir_all(&automation).unwrap();
+
+        // Hub links to spoke; focus has zero inbound.
+        fs::write(
+            content_dir.join("1_hub.mdx"),
+            "---\ntitle: \"Hub\"\n---\n\n# Hub\n\nSee [Spoke](/blog/spoke).\n",
+        )
+        .unwrap();
+        fs::write(
+            content_dir.join("2_spoke.mdx"),
+            "---\ntitle: \"Spoke\"\n---\n\n# Spoke\n\nSee [Hub](/blog/hub).\n",
+        )
+        .unwrap();
+        fs::write(
+            content_dir.join("3_focus.mdx"),
+            "---\ntitle: \"Focus\"\n---\n\n# Focus\n\nBrand new article.\n",
+        )
+        .unwrap();
+
+        let db_path = dir.join("test.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            crate::db::init_with_conn(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, active, project_mode)
+                 VALUES ('proj1', 'Test', ?1, 1, 'workspace')",
+                rusqlite::params![dir.to_string_lossy().as_ref()],
+            )
+            .unwrap();
+            for (id, title, slug, file) in [
+                (1i64, "Hub", "hub", "content/blog/1_hub.mdx"),
+                (2i64, "Spoke", "spoke", "content/blog/2_spoke.mdx"),
+                (3i64, "Focus", "focus", "content/blog/3_focus.mdx"),
+            ] {
+                conn.execute(
+                    "INSERT INTO articles (
+                        id, project_id, title, url_slug, file, status,
+                        content_gaps_addressed, target_volume, word_count, review_count
+                     ) VALUES (?1, 'proj1', ?2, ?3, ?4, 'draft', '[]', 0, 0, 0)",
+                    rusqlite::params![id, title, slug, file],
+                )
+                .unwrap();
+            }
+        }
+
+        let old_db = std::env::var("PAGESEEDS_DB_PATH").ok();
+        std::env::set_var("PAGESEEDS_DB_PATH", &db_path);
+
+        let task = Task {
+            id: "cluster-1".into(),
+            project_id: "proj1".into(),
+            task_type: "cluster_and_link".into(),
+            phase: "implementation".into(),
+            status: TaskStatus::InProgress,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::BackendAuto,
+            agent_policy: AgentPolicy::Required,
+            title: Some("Cluster and link: Focus".into()),
+            description: None,
+            depends_on: vec![],
+            artifacts: vec![TaskArtifact {
+                key: "focus_slug".into(),
+                path: None,
+                artifact_type: Some("text".into()),
+                source: Some("write_spawn".into()),
+                content: Some("focus".into()),
+            }],
+            run: TaskRun::default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            not_before: None,
+        };
+
+        // Produce a fresh scan (same as step 1).
+        let scan_result = crate::engine::exec::content::exec_cluster_link_scan(
+            &task,
+            dir.to_string_lossy().as_ref(),
+        );
+        assert!(scan_result.success, "scan failed: {}", scan_result.message);
+        let scan: serde_json::Value =
+            serde_json::from_str(scan_result.output.as_deref().unwrap()).unwrap();
+        assert!(
+            scan["zero_incoming_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_i64() == Some(3)),
+            "focus should be zero-incoming"
+        );
+
+        // Without a live agent we only assert the early-exit gate + focus resolve.
+        // Under-connected includes focus (incoming 0), so healthy skip is false.
+        assert!(!should_skip_strategy_as_healthy(1, true));
+        assert_eq!(
+            resolve_focus_article_id(Some("focus"), &{
+                let conn = rusqlite::Connection::open(crate::db::default_db_path()).unwrap();
+                crate::content::article_index::list_articles(&conn, "proj1").unwrap()
+            }),
+            Some(3)
+        );
+
+        match old_db {
+            Some(v) => std::env::set_var("PAGESEEDS_DB_PATH", v),
+            None => std::env::remove_var("PAGESEEDS_DB_PATH"),
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }

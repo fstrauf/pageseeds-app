@@ -480,25 +480,30 @@ Soft transitive topical cohesion (e.g. mono-niche theme bags) never becomes a to
 ```
 Task: cluster_and_link
   ↓
-Handler: ClusterLinkHandler
+Handler: ClusterLinkHandler (3 steps)
   ↓
 Step 1: cluster_link_scan (deterministic)
-  ├─ Build link graph from all MDX files
-  ├─ Identify orphaned articles
-  ├─ Find semantic clusters
-  └─ Output: link_graph.json
+  ├─ Always rescans MDX peer /blog/ links (no short-lived cache)
+  ├─ under-connected = incoming < 2; orphans = zero in + zero out
+  └─ Output: link_scan.json
   ↓
-Step 2: cluster_link_generate (agentic)
-  ├─ Generate "Related Articles" sections
-  └─ Suggest hub/spoke relationships
+Step 2: cluster_link_strategy (agentic)
+  ├─ Interprets scan + recommends inbound Related Articles links
+  ├─ Write-spawned tasks carry focus_slug → prioritize / must-cover ≥1 inbound TO focus when zero-incoming
+  └─ Output: links_to_add.json
   ↓
 Step 3: cluster_link_apply (deterministic)
-  └─ Append related sections to MDX files
+  ├─ Append/merge ## Related Articles on source MDX (valid targets only)
+  └─ Always re-scan residuals (orphans_remaining, zero_incoming_remaining, focus_still_zero_incoming)
 ```
 
+### Post-write focus invariant
+After `write_article` / Path B submit, auto-spawned `cluster_and_link` attaches `focus_slug`. When peer MDX sources exist, strategy should recommend ≥1 inbound link TO that slug; apply reports honest residuals; post_actions may re-round (cap 3) when residual discovery debt remains (`orphans` or `zero_incoming` or focus still zero-inbound) and progress was made or focus still needs cover.
+
 ### Key Files
-- `engine/exec/content/cluster_link.rs` — link graph + application
-- `content/linking.rs` — link scanning
+- `engine/exec/content/cluster_link/` — scan, strategy, apply
+- `content/linking.rs` — link scanning (MDX peer `/blog/` only, not site chrome)
+- `engine/post_actions/mod.rs` — residual-aware follow-up rounds
 
 ---
 

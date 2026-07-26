@@ -28,6 +28,28 @@ use topic_health::{find_written_article_file, run_topic_health_reducer};
 
 // Path B / external callers: CTR change-event recorder (no review-task fan-out).
 pub use ctr_outcome::{path_b_ctr_fix_task_id, record_ctr_change_event};
+
+/// Residual-aware follow-up gate for `cluster_and_link` / `interlinking`.
+///
+/// Re-round when discovery debt remains (orphans, zero-incoming, or focus still
+/// zero-inbound) and either progress was made (`links_added > 0`) or focus still
+/// needs an inbound link (force another attempt). Cap is applied by the caller
+/// (`current_round >= 3` stops the chain) — this helper assumes `current_round < 3`.
+pub(crate) fn should_spawn_cluster_link_follow_up(
+    orphans_remaining: i64,
+    zero_incoming_remaining: i64,
+    links_added: i64,
+    focus_still_zero: bool,
+    current_round: u32,
+) -> bool {
+    if current_round >= 3 {
+        return false;
+    }
+    let residual =
+        orphans_remaining > 0 || zero_incoming_remaining > 0 || focus_still_zero;
+    residual && (links_added > 0 || focus_still_zero)
+}
+
 // ─── Post-step context ───────────────────────────────────────────────────────
 
 pub struct PostStepContext<'a> {
@@ -393,7 +415,8 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
         follow_up_ids.extend(spawned);
     }
 
-    // cluster_and_link / interlinking → spawn follow-up if orphans remain
+    // cluster_and_link / interlinking → residual-aware follow-up (orphans +
+    // zero-incoming + focus still zero inbound). Cap 3 rounds (issue #196).
     if matches!(
         ctx.task.task_type.as_str(),
         "cluster_and_link" | "interlinking"
@@ -407,7 +430,13 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
             if let Some(content) = artifact.content.as_deref() {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
                     let orphans = val["orphans_remaining"].as_i64().unwrap_or(0);
+                    let zero_incoming = val["zero_incoming_remaining"].as_i64().unwrap_or(0);
                     let links_added = val["links_added"].as_i64().unwrap_or(0);
+                    // Apply always emits focus_still_zero_incoming when focus is set;
+                    // trust the contract (missing key ⇒ false).
+                    let focus_still_zero = val["focus_still_zero_incoming"]
+                        .as_bool()
+                        .unwrap_or(false);
                     // Cap follow-ups at 3 rounds total to avoid infinite loops
                     let current_round = ctx
                         .task
@@ -419,31 +448,77 @@ pub fn after_task_success(ctx: &PostTaskContext<'_>) -> Vec<String> {
                         })
                         .unwrap_or(1);
                     if current_round >= 3 {
-                        log::info!("[post_actions] cluster_and_link reached round {} — stopping follow-up chain", current_round);
-                    } else if orphans > 0 && links_added > 0 {
+                        log::info!(
+                            "[post_actions] cluster_and_link reached round {} — stopping follow-up chain (residual discovery debt may remain)",
+                            current_round
+                        );
+                    } else if should_spawn_cluster_link_follow_up(
+                        orphans,
+                        zero_incoming,
+                        links_added,
+                        focus_still_zero,
+                        current_round,
+                    ) {
                         let next_round = current_round + 1;
                         log::info!(
-                            "[post_actions] cluster_and_link round {} finished with {} orphans remaining and {} links added — spawning round {}",
-                            current_round, orphans, links_added, next_round
+                            "[post_actions] cluster_and_link round {} finished with residual discovery debt \
+                             (orphans={}, zero_incoming={}, focus_still_zero={}, links_added={}) — spawning round {}",
+                            current_round, orphans, zero_incoming, focus_still_zero, links_added, next_round
                         );
                         if let Ok(task) = task_store::get_task(ctx.conn, &ctx.task.id) {
                             let title = format!(
-                                "Cluster and link: round {} ({} orphans remain)",
-                                next_round, orphans
+                                "Cluster and link: round {} ({} orphans, {} zero-incoming remain{})",
+                                next_round,
+                                orphans,
+                                zero_incoming,
+                                if focus_still_zero {
+                                    ", focus still zero-inbound"
+                                } else {
+                                    ""
+                                }
                             );
-                            if let Ok(Some(follow_up)) =
-                                crate::engine::spawner::TaskSpawner::spawn_follow_up(
-                                    ctx.conn,
-                                    &task,
-                                    &ctx.task.task_type,
-                                    &title,
-                                )
+                            // Preserve focus_slug so subsequent rounds keep must-cover.
+                            let mut artifacts = Vec::new();
+                            if let Some(focus) =
+                                task.artifacts.iter().find(|a| a.key == "focus_slug")
                             {
-                                follow_up_ids.push(follow_up.id);
+                                artifacts.push(focus.clone());
+                            }
+                            let idempotency_key = format!(
+                                "followup:{}:{}:{}",
+                                task.id, ctx.task.task_type, title
+                            );
+                            use crate::engine::spawner::{TaskSpawner, TaskSpec};
+                            use crate::models::task::{AgentPolicy, Priority};
+                            let spec = TaskSpec {
+                                project_id: task.project_id.clone(),
+                                task_type: ctx.task.task_type.clone(),
+                                title: Some(title),
+                                description: Some(format!(
+                                    "Follow-up from task {} — residual discovery debt (orphans + zero_incoming)",
+                                    task.id
+                                )),
+                                depends_on: vec![task.id.clone()],
+                                idempotency_key: Some(idempotency_key),
+                                priority: Priority::Medium,
+                                agent_policy: AgentPolicy::Optional,
+                                artifacts,
+                                ..Default::default()
+                            };
+                            match TaskSpawner::spawn(ctx.conn, spec) {
+                                Ok(follow_up) => follow_up_ids.push(follow_up.id),
+                                Err(e) => log::warn!(
+                                    "[post_actions] failed to spawn cluster_and_link residual round: {}",
+                                    e
+                                ),
                             }
                         }
                     } else {
-                        log::info!("[post_actions] cluster_and_link round {} finished with {} orphans remaining, {} links added — no follow-up needed", current_round, orphans, links_added);
+                        log::info!(
+                            "[post_actions] cluster_and_link round {} finished with orphans={}, zero_incoming={}, \
+                             focus_still_zero={}, links_added={} — no residual follow-up",
+                            current_round, orphans, zero_incoming, focus_still_zero, links_added
+                        );
                     }
                 }
             }
