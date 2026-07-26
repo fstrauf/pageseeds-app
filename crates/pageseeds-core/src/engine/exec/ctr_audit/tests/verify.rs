@@ -5,11 +5,14 @@
         let path = test_dir();
         setup_project(&path);
 
-        // Write a healthy file
+        // Write a healthy file (machine-readable frontmatter faq: — not markdown-only)
         let mdx = r#"---
 title: "Good Title"
 description: "This is a very good meta description that is definitely longer than one hundred and thirty characters so it passes the strict health check."
 date: "2024-01-01"
+faq:
+  - question: "What?"
+    answer: "This."
 ---
 
 # Good Title
@@ -18,7 +21,8 @@ One two three four five six seven eight nine ten eleven twelve thirteen fourteen
 
 ## FAQ
 
-Q: What?\nA: This.
+### What?
+This.
 "#;
         std::fs::write(
             std::path::Path::new(&path)
