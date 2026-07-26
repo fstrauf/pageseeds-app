@@ -108,7 +108,7 @@ Breaking these fails the run.
 | 2 | **No product source edits** under `pageseeds-app` product crates (unless explicitly requested). |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
-| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`; Path B fix uses `fix-context` / `fix-submit` when available. |
+| 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`; Path B fix uses `fix-context` / `fix-submit`. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
 | 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
@@ -201,20 +201,21 @@ plateau tool prose without GSC numbers.
 
 #### Candidate sources (priority order)
 
-1. **When present:** `site-overview.striking_distance` (or equivalent sample)
-   from **#204** — cite the overview sample in task `-r`.
-2. **Interim (until #204 lands):** client-side filter of desk data already
-   available:
+1. **Primary:** `site-overview.striking_distance` (count + sample from #204) —
+   cite overview rows in task `-r`. Empty sample with fresh GSC tape means
+   no band inventory this window, not “feature missing.”
+2. **Fallback only** when overview sample is empty/degraded but you still
+   suspect band opportunity (e.g. stale overview, need higher bar):
    - `articles -m 200` (or higher) → keep rows with `gsc.avg_position` in 7–13
    - and/or `gsc-performance` rows with position in band + meaningful impressions
-   - Deep-read **≤2–3** top candidates with `article -S` + `gsc-queries -u`
+3. Deep-read **≤2–3** top candidates with `article -S` + `gsc-queries -u`
 
 Do **not** require position-band CLI flags or a new campaign task type.
 
 Operator path:
 
 ```text
-desk (prefer #204 field when present; else interim filter)
+desk (site-overview.striking_distance first; fallback filter only if needed)
   → rank candidates by impact (impressions × need)
   → deep-read ≤2–3 (article -S + gsc-queries -u)
   → create ≤2 actions from existing types (or skip if better levers win)
@@ -360,7 +361,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 
 | Tool | Role |
 |------|------|
-| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints |
+| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints, plus `zero_impression` / `striking_distance` / `hard_cannibalization` inventory (#204) |
 | `articles` | GSC-aware catalog list (filters: status, min impressions, period) |
 | `article` | Full package for one slug: frontmatter, body outline, top queries, neighbors (`-S`/`--slug`) |
 | `gsc-performance` | Site/page traffic, CTR, impressions (`-l`, default 50, max 200) |
@@ -369,8 +370,9 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `list-tasks` / `get-task` | Open work, artifacts, review state |
 | `create-task` / `execute-task` | Act within may-create + budgets |
 | Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
-| Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path) |
-| Path B merge | `merge-context` / `merge-submit` — outer-agent merge after approved keep+redirects (preferred CLI path) |
+| Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path); successful submit schedules +30d `content_outcome_review` (#203) |
+| Path B fix | `fix-context` / `fix-submit` — preferred targeted content/CTR edits; content kind schedules +30d outcome review; CTR records `ctr_outcomes` only |
+| Path B merge | `merge-context` / `merge-submit` — outer-agent merge after approved keep+redirects; successful submit schedules keeper outcome review (#203) |
 
 #### Optional / secondary (NOT ground truth, not required path)
 
@@ -399,13 +401,15 @@ tool without a new hypothesis.
 
 #### Soft hints (priors only — never forced weekly actions)
 
-Priors from desk data and (when present) new overview fields. **Do not** require
-DataForSEO, Clarity, Reddit, full `ctr_audit`, full `indexing_health_campaign`,
-or `content_review` as strategy brain for these signals.
+Priors from desk data including first-class overview inventory fields
+(`zero_impression`, `striking_distance`, `hard_cannibalization` — #204).
+**Do not** require DataForSEO, Clarity, Reddit, full `ctr_audit`, full
+`indexing_health_campaign`, or `content_review` as strategy brain for these
+signals. Empty or `degraded_reason` (e.g. `gsc_missing`) is not a force create.
 
 | Pattern from desk | Action preference |
 |-------------------|-------------------|
-| High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; Path B fix when available. **Not** full `ctr_audit` first (see CTR policy); **not** `content_review` as strategy brain |
+| High impressions + low CTR + weak title/meta | Desk → targeted `fix_content_article` (`-S`) for top waste URLs; Path B fix preferred. **Not** full `ctr_audit` first (see CTR policy); **not** `content_review` as strategy brain |
 | High GSC impressions/clicks + high bounce / low engagement (PostHog) on same URL | Prefer that slug for `fix_content_article -S` — intent/content mismatch more likely; cite both GSC + PostHog in `-r` |
 | Strong organic landing (GSC) but weak conversion path (PostHog funnel/path) | SEO action still content/SERP; note product/UX friction in report — do **not** invent non-SEO tasks mid-run |
 | Same query on **2+ URLs** (`gsc-queries`) or same intent competing | Optionally `cannibalization_audit` **only with hard evidence**; never treat soft clusters as ground truth |
@@ -417,16 +421,16 @@ or `content_review` as strategy brain for these signals.
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
 
-##### When `site-overview` exposes new desk signals (#204)
+##### `site-overview` inventory signals (#204)
 
-Field names match desk surfaces when they land; until then treat as **“when
-field present”** — optional priors only, not mandatory creates every week.
+Always read these on overview. Optional priors only — never mandatory creates
+every week.
 
-| Pattern (when field present) | Preference |
-|------------------------------|------------|
-| High `zero_impression` count / sample | Optional: cache-first dead-weight path ([below](#dead-weight--winnability-secondary)) — **not** mandatory create every week; never weekly re-score loop |
-| Striking-distance band (pos ~7–13 + meaningful impr) | See **[Striking-distance preferred path](#striking-distance-preferred-path)** — ≤2 creates; overview sample when present, else interim `articles`/`gsc-performance` filter; **not** mandatory |
-| Hard same-query cannibal samples | Optional scoped `cannibalization_audit` **only with hard multi-URL query evidence** — soft clusters still non-authority |
+| Pattern | Preference |
+|---------|------------|
+| High `zero_impression` count / sample (and not degraded) | Optional: cache-first dead-weight path ([below](#dead-weight--winnability-secondary)) — **not** mandatory; never weekly re-score loop |
+| `striking_distance` count / sample (pos ~7–13 + meaningful impr) | See **[Striking-distance preferred path](#striking-distance-preferred-path)** — ≤2 creates; overview sample first; fallback filter only if needed; **not** mandatory |
+| `hard_cannibalization` samples (and not degraded) | Optional scoped `cannibalization_audit` **only with hard multi-URL query evidence** — soft clusters still non-authority |
 
 ### Dead-weight / winnability (secondary)
 
@@ -619,7 +623,12 @@ leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 
 - Selection → `write_article` tasks created for provenance — **complete via Path B**
   (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
-- Path B `write-submit` → marks write task done + spawns `cluster_and_link`
+- Path B `write-submit` → marks write task done + spawns `cluster_and_link` +
+  schedules +30d `content_outcome_review` (GSC closed-loop; #203)
+- Path B `fix-submit -k content` → schedules +30d `content_outcome_review`;
+  `-k ctr` → sparse `ctr_outcomes` change event only (no content outcome review)
+- Path B `merge-submit` → keeper redirects applied + schedules keeper
+  `content_outcome_review`
 - Approved merge → `consolidate_cluster` tasks for provenance — **complete via Path B merge**
   (`merge-context` / write merged MDX / `merge-submit`), not `execute-task consolidate_cluster`
 - Desktop nested writer still auto-spawns quality review + cluster link on success
@@ -675,7 +684,8 @@ pageseeds-cli write-context -i <id> -p <path> \
 pageseeds-cli write-submit -i <id> -p <path> \
   -f <target_file> [-I <write_task_id>] [-K "<keyword>"]
 # → ok:false + checks → expand and resubmit (file kept)
-# → ok:true → article registered; write_article marked done; cluster_and_link spawned
+# → ok:true → article registered; write_article marked done;
+#   cluster_and_link + content_outcome_review (+30d) spawned
 ```
 
 | Rule | Path B |
@@ -685,9 +695,10 @@ pageseeds-cli write-submit -i <id> -p <path> \
 | **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** instead |
 | **Budget** | Each `write-submit` attempt counts toward the **15** execution budget |
 | **Provenance** | `select-keywords` may still spawn `write_article`; Path B completes them via submit |
+| **Closed-loop** | Successful submit schedules system `content_outcome_review` — never create those tasks yourself |
 
 
-### Path B — CLI fix package (when tools available)
+### Path B — CLI fix package (preferred for targeted content/CTR)
 
 Preferred for targeted content/CTR edits with full file context:
 
@@ -695,9 +706,12 @@ Preferred for targeted content/CTR edits with full file context:
 pageseeds-cli fix-context -i <id> -p <path> -S <slug> -k content|ctr [-g goals]
 # session agent edits full file using package
 pageseeds-cli fix-submit -i <id> -p <path> -S <slug> -k content|ctr [--file mdx]
+# → content: +30d content_outcome_review scheduled
+# → ctr: ctr_outcomes change event only (desk re-read later)
 ```
 
-Until tools land: `create-task fix_content_article -S <slug>` + `execute-task` with desk evidence.
+Nested fallback when needed: `create-task fix_content_article -S <slug>` +
+`execute-task` with desk evidence (still prefer Path B when practical).
 Do **not** use `content_review` as middleman. Do **not** use fix_content for Path B write length recovery.
 
 ### Path B — CLI merge package (happy path after approved consolidate)
@@ -725,7 +739,8 @@ pageseeds-cli merge-context -i <id> -p <path> \
 pageseeds-cli merge-submit -i <id> -p <path> \
   -I <consolidate-task-id> [-y]
 # → ok:false + checks → fix keeper and resubmit (no redirects applied yet)
-# → ok:true → redirects.csv, inbound rewrites, sources redirected, task done
+# → ok:true → redirects.csv, inbound rewrites, sources redirected, task done;
+#   content_outcome_review (+30d) for keeper slug
 ```
 
 | Rule | Path B merge |
@@ -779,7 +794,7 @@ match / user skip).
 ## Skipped (and why)
 - Including research skip vs “not run” honesty rule.
 - PostHog skip reason if not already covered above.
-- Soft desk signals noticed (zero-impr / striking / hard-cannibal) or “fields not present yet”.
+- Soft desk signals noticed (zero-impr / striking / hard-cannibal counts) or degraded/empty (e.g. `gsc_missing`).
 - Striking-distance candidates seen but not acted on (and why — budget, better lever, stale tape, thin evidence).
 - Future `not_before` `content_outcome_review` rows left for later (do not execute early).
 
@@ -822,11 +837,11 @@ match / user skip).
 - Installed `pageseeds-cli` only — never product `cargo run`.  
 - No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
-- **Due `content_outcome_review` preferred when present** (≤1–2 exec toward ≤15; not creates). Never create these tasks.  
-- Soft new desk fields (zero-impr / striking / hard-cannibal) are **never mandatory** actions.  
+- **Due `content_outcome_review` preferred when present** (≤1–2 exec toward ≤15; not creates). Never create these tasks. Path B write/merge/content-fix submit schedules them (#203).  
+- Overview inventory fields (zero-impr / striking / hard-cannibal) are **never mandatory** actions; honor `degraded_reason` when tape is missing.  
 - Dead-weight scoring is **secondary / cache-first** (`--from-cache`); not default spine; no weekly re-score loop; no auto bulk noindex.  
 
-- Striking-distance (pos **7–13**, impr ≥ ~200): optional soft prior → ≤**2** existing actions; no campaign type / DataForSEO / default full IHC or `ctr_audit`.  
+- Striking-distance (pos **7–13**, impr ≥ ~200): read `site-overview.striking_distance` first; optional soft prior → ≤**2** existing actions; no campaign type / DataForSEO / default full IHC or `ctr_audit`.  
 - Outcomes = **GSC windows** (`gsc_page_daily`), not live SERP / DataForSEO.  
 - `ctr_outcome_review` cancel/ignore; `content_outcome_review` execute when due — do not conflate.  
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
@@ -850,18 +865,20 @@ weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
 CLI weekly indexing: catalog-aware `not_indexed_sample` → targeted link/content
 fixes; full `indexing_health_campaign` is rare/scoped, not CLI default.
 
-**Closed-loop measurement (#209):** prefer due system-spawned
+**Closed-loop measurement (#209 / #203):** prefer due system-spawned
 `content_outcome_review` (≤1–2) early in the weekly path — GSC snapshot windows
-only. Keep `ctr_outcome_review` cancel-or-ignore (#152). Soft overview signals
-(zero-impression / striking-distance / hard cannibal) are optional priors when
-present (#204); never mandatory weekly actions; budgets ≤5 / ≤15 / ≤3 unchanged.
+only. Nested success and Path B write/merge/content-fix submit both schedule
+these (+30d). Keep `ctr_outcome_review` cancel-or-ignore (#152). Overview
+inventory fields (zero-impression / striking-distance / hard cannibal, #204)
+are optional priors; never mandatory weekly actions; budgets ≤5 / ≤15 / ≤3
+unchanged.
 
-**Striking-distance (#205):** preferred weekly path is skill-only — GSC band
-filter (overview sample when present, else interim `articles` /
-`gsc-performance`) → deep-read ≤2–3 → ≤2 existing fix/link creates. No
-`striking_distance_campaign`, no DataForSEO, no default full IHC/`ctr_audit`
-for ranking push. Soft prior only; one URL one targeted fix (no CTR + striking
-double-create).
+**Striking-distance (#205):** preferred weekly path is skill-only —
+`site-overview.striking_distance` first (fallback `articles` /
+`gsc-performance` only if needed) → deep-read ≤2–3 → ≤2 existing fix/link
+creates. No `striking_distance_campaign`, no DataForSEO, no default full
+IHC/`ctr_audit` for ranking push. Soft prior only; one URL one targeted fix
+(no CTR + striking double-create).
 
 **Dead-weight (#206 / #208):** `score-zero-impression-articles` persists
 winnability to `article_metadata`; prefer `--from-cache` / `--list`; live score
