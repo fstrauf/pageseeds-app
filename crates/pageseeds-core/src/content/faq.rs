@@ -4,9 +4,10 @@
 //! FAQPage JSON-LD emission from that list. Markdown `## FAQ` alone is visible
 //! prose, not a machine-readable schema source.
 //!
-//! Prefer [`assess_faq_source`] over ad-hoc string scans. Call sites that only
-//! need a boolean should use `machine_readable` (or the thin wrappers in
-//! `engine::exec::audit_health`).
+//! Prefer [`assess_faq_source`] when you need the full verdict (machine_readable
+//! + reasons). Hot paths that only need frontmatter or inline JSON-LD should use
+//! the focused helpers ([`frontmatter_faq_count`], [`has_frontmatter_faq`],
+//! [`has_inline_json_ld_faq`]) so they do not re-run the full assessment.
 
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
@@ -28,12 +29,19 @@ pub struct FaqSourceAssessment {
 }
 
 /// Assess FAQ sources in an MDX document (frontmatter + body). Pure, no I/O.
+///
+/// Use this for the complete machine-readable verdict and diagnostic reasons.
+/// Prefer [`frontmatter_faq_count`] / [`has_inline_json_ld_faq`] on hot paths
+/// that only need one source.
 pub fn assess_faq_source(mdx: &str) -> FaqSourceAssessment {
     let mut reasons = Vec::new();
 
     let (frontmatter_count, fm_state) = assess_frontmatter_faq(mdx);
     match fm_state {
         FrontmatterFaqState::Missing => {
+            // Always keep this diagnostic when frontmatter `faq:` is absent —
+            // including when machine-readable via JSON-LD alone (preferred SoT
+            // is still frontmatter). Callers treat reasons as soft signals.
             reasons.push("missing_frontmatter_faq".to_string());
         }
         FrontmatterFaqState::EmptyOrInvalid => {
@@ -59,12 +67,6 @@ pub fn assess_faq_source(mdx: &str) -> FaqSourceAssessment {
         reasons.push("visible_without_machine_readable".to_string());
     }
 
-    // Drop missing_frontmatter_faq when machine-readable via JSON-LD alone —
-    // still note missing frontmatter as soft signal only when not machine-readable
-    // or when frontmatter is the preferred SoT path. Keep the reason always when
-    // frontmatter is absent; callers treat reasons as diagnostic.
-    // (No de-dupe needed beyond what we already push.)
-
     FaqSourceAssessment {
         machine_readable,
         frontmatter_count,
@@ -72,6 +74,27 @@ pub fn assess_faq_source(mdx: &str) -> FaqSourceAssessment {
         has_inline_faqpage,
         reasons,
     }
+}
+
+/// Count valid non-empty frontmatter `{question, answer}` pairs only.
+///
+/// Frontmatter parse only — does not scan the body or JSON-LD. Prefer this
+/// (or [`has_frontmatter_faq`]) over [`assess_faq_source`] on CTR hot paths.
+pub fn frontmatter_faq_count(mdx: &str) -> usize {
+    assess_frontmatter_faq(mdx).0
+}
+
+/// True when frontmatter `faq:` has at least one valid non-empty Q/A pair.
+pub fn has_frontmatter_faq(mdx: &str) -> bool {
+    frontmatter_faq_count(mdx) > 0
+}
+
+/// True when the body has parseable inline FAQPage JSON-LD with ≥1 mainEntity.
+///
+/// Inline script extraction + JSON parse only — does not parse frontmatter or
+/// scan for visible FAQ headings.
+pub fn has_inline_json_ld_faq(content: &str) -> bool {
+    assess_inline_json_ld(content).0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -481,5 +504,57 @@ faq:
         assert_eq!(a.frontmatter_count, 3);
         assert!(!a.reasons.iter().any(|r| r == "empty_qa"));
         assert!(!a.reasons.iter().any(|r| r == "count_out_of_band"));
+    }
+
+    #[test]
+    fn focused_helpers_match_full_assessment_fields() {
+        let with_fm = r#"---
+title: "With FAQ"
+description: "Article with frontmatter FAQ only for focused helper parity"
+date: "2024-01-01"
+faq:
+  - question: "Q1?"
+    answer: "A1"
+  - question: "Q2?"
+    answer: "A2"
+---
+
+# With FAQ
+"#;
+        let a = assess_faq_source(with_fm);
+        assert_eq!(frontmatter_faq_count(with_fm), a.frontmatter_count);
+        assert_eq!(has_frontmatter_faq(with_fm), a.frontmatter_count > 0);
+        assert_eq!(has_inline_json_ld_faq(with_fm), a.has_inline_faqpage);
+
+        let with_inline = r#"---
+title: "JSON-LD FAQ"
+description: "Inline schema only for focused helper parity check"
+date: "2024-01-01"
+---
+
+# JSON-LD FAQ
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is this?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "This is a test."
+      }
+    }
+  ]
+}
+</script>
+"#;
+        let b = assess_faq_source(with_inline);
+        assert_eq!(frontmatter_faq_count(with_inline), b.frontmatter_count);
+        assert!(!has_frontmatter_faq(with_inline));
+        assert_eq!(has_inline_json_ld_faq(with_inline), b.has_inline_faqpage);
+        assert!(has_inline_json_ld_faq(with_inline));
     }
 }

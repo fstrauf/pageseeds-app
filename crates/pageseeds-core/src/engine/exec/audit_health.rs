@@ -275,32 +275,24 @@ pub fn read_article_excerpt(
     (title, meta_description, first_paragraph, h1, has_faq, true)
 }
 
-// Re-export FAQ assessment types so existing callers can use one import path.
-pub use crate::content::faq::{assess_faq_source, FaqSourceAssessment};
+// Re-export FAQ assessment types/helpers so existing callers can use one path.
+pub use crate::content::faq::{
+    assess_faq_source, frontmatter_faq_count, has_frontmatter_faq, has_inline_json_ld_faq,
+    FaqSourceAssessment,
+};
 
 /// Schema readiness: machine-readable FAQ source for theme-owned JSON-LD.
 ///
-/// Returns true only when frontmatter has valid non-empty `{question, answer}`
-/// pairs and/or the body has parseable inline FAQPage JSON-LD with ≥1 entity.
+/// Full assessment (frontmatter + visible section + inline JSON-LD). Returns
+/// true only when frontmatter has valid non-empty `{question, answer}` pairs
+/// and/or the body has parseable inline FAQPage JSON-LD with ≥1 entity.
 /// A markdown `## FAQ` heading alone does **not** count — apply/verify act on
 /// frontmatter `faq:` only.
+///
+/// For frontmatter-only or inline-only checks, use [`has_frontmatter_faq`] /
+/// [`frontmatter_faq_count`] / [`has_inline_json_ld_faq`] instead.
 pub fn has_faq_schema(content: &str) -> bool {
     assess_faq_source(content).machine_readable
-}
-
-/// True when frontmatter `faq:` has at least one valid non-empty Q/A pair.
-pub fn has_frontmatter_faq(content: &str) -> bool {
-    assess_faq_source(content).frontmatter_count > 0
-}
-
-/// Count valid non-empty Q/A pairs in frontmatter `faq:` (empty fields ignored).
-pub fn frontmatter_faq_count(content: &str) -> usize {
-    assess_faq_source(content).frontmatter_count
-}
-
-/// True when the body has parseable inline FAQPage JSON-LD with ≥1 mainEntity.
-pub fn has_inline_json_ld_faq(content: &str) -> bool {
-    assess_faq_source(content).has_inline_faqpage
 }
 
 /// Check for markdown FAQ headings in the body (visible prose, not schema SoT).

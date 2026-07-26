@@ -235,10 +235,10 @@ pub(crate) fn exec_ctr_build_context(
             crate::engine::exec::audit_health::resolve_content_file(repo_root, &file_ref)
                 .and_then(|p| std::fs::read_to_string(&p).ok())
                 .unwrap_or_default();
-        let has_frontmatter_faq =
-            crate::engine::exec::audit_health::has_frontmatter_faq(&file_content);
+        // Frontmatter-only path (one parse); do not re-run full assess_faq_source.
         let faq_question_count =
             crate::engine::exec::audit_health::frontmatter_faq_count(&file_content);
+        let has_frontmatter_faq = faq_question_count > 0;
 
         // Compute content hash for change detection (includes FAQ/schema state)
         let content_hash = crate::engine::exec::audit_health::compute_content_hash(
