@@ -424,28 +424,34 @@ pub fn list_from_cache(conn: &Connection, project_id: &str) -> Result<ScoreRunRe
 
 // ─── Score + persist ─────────────────────────────────────────────────────────
 
-/// Score low-impression candidates with an injected assessor (unit-testable;
-/// no live SERP). Persists new scores; includes still-fresh cached scores so
-/// bucket inventory reflects the full candidate set without re-paying SERP.
+/// Outcome of assessing one candidate that needs a (re)score.
 ///
-/// Cap (`max_live`) applies only to **new** live assessments.
-pub fn score_and_persist(
-    conn: &Connection,
-    project_id: &str,
-    opts: &ScoreOptions,
-    mut assess_fn: impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
-) -> Result<ScoreRunResult> {
-    let now = Utc::now();
-    score_and_persist_at(conn, project_id, opts, now, &mut assess_fn)
+/// Shared by the injected-assessor path and the live provider path so inventory
+/// rules (freshness / force / max_live / stale-cache surface / persist / buckets)
+/// live in a single loop.
+enum AssessOutcome {
+    /// Persist this assessment. `source` drives `cache_hits` / `live_calls`
+    /// counters when set (provider path); injected assessors pass `None`.
+    Scored {
+        assessment: WinnabilityAssessment,
+        source: Option<SerpSource>,
+    },
+    /// Daily SERP budget hit — **not** Avoid, do not persist. Core loop sets
+    /// budget-exhausted and skips the rest of the batch without further network.
+    BudgetSkip,
 }
 
-/// Same as [`score_and_persist`] with an explicit `now` (tests inject clock).
-pub fn score_and_persist_at(
+/// Single scoring loop: freshness / force / max_live / budget / persist / buckets.
+///
+/// `assess` is only invoked for candidates that still need a new score (not
+/// fresh, under cap, budget not yet exhausted). After the first `BudgetSkip`,
+/// remaining candidates are budget-skipped without calling `assess`.
+fn score_candidates_loop(
     conn: &Connection,
     project_id: &str,
     opts: &ScoreOptions,
     now: DateTime<Utc>,
-    assess_fn: &mut impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
+    mut assess: impl FnMut(&DeadWeightCandidate) -> AssessOutcome,
 ) -> Result<ScoreRunResult> {
     let candidates =
         load_low_impression_candidates(conn, project_id, opts.max_impressions)?;
@@ -463,7 +469,8 @@ pub fn score_and_persist_at(
     }
 
     let mut result = ScoreRunResult::empty(false, opts.ttl_days, opts.max_live, None);
-    let mut live_count = 0usize;
+    let mut assess_count = 0usize;
+    let mut budget_exhausted = false;
 
     for candidate in &candidates {
         let stored = load_stored_score(conn, project_id, candidate.article_id)?;
@@ -483,7 +490,21 @@ pub fn score_and_persist_at(
             }
         }
 
-        if live_count >= opts.max_live {
+        // After first budget hit: skip rest without network; surface stale cache.
+        if budget_exhausted {
+            result.skipped_budget += 1;
+            if let Some(ref s) = stored {
+                result.push_entry(entry_from_stored(
+                    candidate.article_id,
+                    &candidate.title,
+                    &candidate.slug,
+                    s,
+                ));
+            }
+            continue;
+        }
+
+        if assess_count >= opts.max_live {
             result.skipped_cap += 1;
             // Surface stale cache if present so inventory is still useful.
             if let Some(ref s) = stored {
@@ -497,27 +518,82 @@ pub fn score_and_persist_at(
             continue;
         }
 
-        let assessment = assess_fn(candidate);
-        persist_score(
-            conn,
-            project_id,
-            candidate.article_id,
-            &assessment,
-            candidate.impressions,
-            now,
-        )?;
-        live_count += 1;
-        result.scored += 1;
-        result.push_entry(entry_from_assessment(
-            candidate,
-            &assessment,
-            &now.to_rfc3339(),
-            candidate.impressions,
-        ));
+        match assess(candidate) {
+            AssessOutcome::BudgetSkip => {
+                budget_exhausted = true;
+                result.skipped_budget += 1;
+                if let Some(ref s) = stored {
+                    result.push_entry(entry_from_stored(
+                        candidate.article_id,
+                        &candidate.title,
+                        &candidate.slug,
+                        s,
+                    ));
+                }
+            }
+            AssessOutcome::Scored {
+                assessment,
+                source,
+            } => {
+                match source {
+                    Some(SerpSource::Cache) => result.cache_hits += 1,
+                    Some(SerpSource::Live) => result.live_calls += 1,
+                    None => {}
+                }
+                persist_score(
+                    conn,
+                    project_id,
+                    candidate.article_id,
+                    &assessment,
+                    candidate.impressions,
+                    now,
+                )?;
+                assess_count += 1;
+                result.scored += 1;
+                result.push_entry(entry_from_assessment(
+                    candidate,
+                    &assessment,
+                    &now.to_rfc3339(),
+                    candidate.impressions,
+                ));
+            }
+        }
     }
 
-    result.truncated = result.skipped_cap > 0;
+    result.truncated = result.skipped_cap > 0 || result.skipped_budget > 0;
     Ok(result)
+}
+
+/// Score low-impression candidates with an injected assessor (unit-testable;
+/// no live SERP). Persists new scores; includes still-fresh cached scores so
+/// bucket inventory reflects the full candidate set without re-paying SERP.
+///
+/// Cap (`max_live`) applies only to **new** live assessments.
+/// No budget path — assessor always yields a score.
+pub fn score_and_persist(
+    conn: &Connection,
+    project_id: &str,
+    opts: &ScoreOptions,
+    mut assess_fn: impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
+) -> Result<ScoreRunResult> {
+    let now = Utc::now();
+    score_and_persist_at(conn, project_id, opts, now, &mut assess_fn)
+}
+
+/// Same as [`score_and_persist`] with an explicit `now` (tests inject clock).
+pub fn score_and_persist_at(
+    conn: &Connection,
+    project_id: &str,
+    opts: &ScoreOptions,
+    now: DateTime<Utc>,
+    assess_fn: &mut impl FnMut(&DeadWeightCandidate) -> WinnabilityAssessment,
+) -> Result<ScoreRunResult> {
+    score_candidates_loop(conn, project_id, opts, now, |candidate| {
+        AssessOutcome::Scored {
+            assessment: assess_fn(candidate),
+            source: None,
+        }
+    })
 }
 
 /// Real provider SERP failure → Avoid with risk_score 99 (stable CLI shape).
@@ -553,70 +629,7 @@ pub fn score_and_persist_with_provider(
     runtime: &tokio::runtime::Handle,
 ) -> Result<ScoreRunResult> {
     let now = Utc::now();
-    let candidates =
-        load_low_impression_candidates(conn, project_id, opts.max_impressions)?;
-
-    if candidates.is_empty() {
-        return Ok(ScoreRunResult::empty(
-            false,
-            opts.ttl_days,
-            opts.max_live,
-            Some(
-                "no low-impression published articles with target keywords found"
-                    .to_string(),
-            ),
-        ));
-    }
-
-    let mut result = ScoreRunResult::empty(false, opts.ttl_days, opts.max_live, None);
-    let mut assess_count = 0usize;
-    let mut budget_exhausted = false;
-    let mut budget_logged = false;
-
-    for candidate in &candidates {
-        let stored = load_stored_score(conn, project_id, candidate.article_id)?;
-
-        if !opts.force {
-            if let Some(ref s) = stored {
-                if is_score_fresh(s, opts.ttl_days, now) {
-                    result.skipped_fresh += 1;
-                    result.push_entry(entry_from_stored(
-                        candidate.article_id,
-                        &candidate.title,
-                        &candidate.slug,
-                        s,
-                    ));
-                    continue;
-                }
-            }
-        }
-
-        if budget_exhausted {
-            result.skipped_budget += 1;
-            if let Some(ref s) = stored {
-                result.push_entry(entry_from_stored(
-                    candidate.article_id,
-                    &candidate.title,
-                    &candidate.slug,
-                    s,
-                ));
-            }
-            continue;
-        }
-
-        if assess_count >= opts.max_live {
-            result.skipped_cap += 1;
-            if let Some(ref s) = stored {
-                result.push_entry(entry_from_stored(
-                    candidate.article_id,
-                    &candidate.title,
-                    &candidate.slug,
-                    s,
-                ));
-            }
-            continue;
-        }
-
+    score_candidates_loop(conn, project_id, opts, now, |candidate| {
         let lookup = match runtime.block_on(fetch_serp_features(
             conn,
             project_id,
@@ -626,54 +639,22 @@ pub fn score_and_persist_with_provider(
         )) {
             Ok(lookup) => lookup,
             Err(e) if is_budget_error(&e) => {
-                if !budget_logged {
-                    log::warn!(
-                        "[dead_weight] SERP daily live-call budget hit for project {}: {}. \
-                         Remaining candidates skipped without Avoid.",
-                        project_id,
-                        e
-                    );
-                    budget_logged = true;
-                }
-                budget_exhausted = true;
-                result.skipped_budget += 1;
-                if let Some(ref s) = stored {
-                    result.push_entry(entry_from_stored(
-                        candidate.article_id,
-                        &candidate.title,
-                        &candidate.slug,
-                        s,
-                    ));
-                }
-                continue;
+                log::warn!(
+                    "[dead_weight] SERP daily live-call budget hit for project {}: {}. \
+                     Remaining candidates skipped without Avoid.",
+                    project_id,
+                    e
+                );
+                return AssessOutcome::BudgetSkip;
             }
             Err(e) => {
                 // Real provider failure — existing Avoid mapping (not budget).
-                let assessment = serp_error_assessment(&candidate.target_keyword, &e);
-                persist_score(
-                    conn,
-                    project_id,
-                    candidate.article_id,
-                    &assessment,
-                    candidate.impressions,
-                    now,
-                )?;
-                assess_count += 1;
-                result.scored += 1;
-                result.push_entry(entry_from_assessment(
-                    candidate,
-                    &assessment,
-                    &now.to_rfc3339(),
-                    candidate.impressions,
-                ));
-                continue;
+                return AssessOutcome::Scored {
+                    assessment: serp_error_assessment(&candidate.target_keyword, &e),
+                    source: None,
+                };
             }
         };
-
-        match lookup.source {
-            SerpSource::Cache => result.cache_hits += 1,
-            SerpSource::Live => result.live_calls += 1,
-        }
 
         let kd = candidate
             .keyword_difficulty
@@ -685,26 +666,11 @@ pub fn score_and_persist_with_provider(
             kd,
             None,
         );
-        persist_score(
-            conn,
-            project_id,
-            candidate.article_id,
-            &assessment,
-            candidate.impressions,
-            now,
-        )?;
-        assess_count += 1;
-        result.scored += 1;
-        result.push_entry(entry_from_assessment(
-            candidate,
-            &assessment,
-            &now.to_rfc3339(),
-            candidate.impressions,
-        ));
-    }
-
-    result.truncated = result.skipped_cap > 0 || result.skipped_budget > 0;
-    Ok(result)
+        AssessOutcome::Scored {
+            assessment,
+            source: Some(lookup.source),
+        }
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
