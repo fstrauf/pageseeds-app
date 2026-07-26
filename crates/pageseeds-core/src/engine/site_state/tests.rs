@@ -1128,7 +1128,7 @@ fn hard_cannibalization_below_impression_floor_not_grouped() {
     )
     .unwrap();
 
-    // Same query on two articles but both under HARD_CANNIBAL_MIN_QUERY_IMPRESSIONS (10).
+    // Same query on two articles but both under SHARED_QUERY_MIN_IMPRESSIONS (10).
     crate::db::set_ctr_query_metrics(
         &conn,
         "proj1",

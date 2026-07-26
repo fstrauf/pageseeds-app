@@ -9,7 +9,8 @@ use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 
 /// Max pages in any merge candidate (exact-keyword groups, shared-query groups, near-dupe pairs).
-const MAX_CANDIDATE_PAGES: usize = 4;
+/// Shared-query cap SoT is `db::SHARED_QUERY_MAX_PAGES` — keep these aligned.
+const MAX_CANDIDATE_PAGES: usize = crate::db::SHARED_QUERY_MAX_PAGES;
 
 /// Pairwise TF-IDF cosine similarity required to emit a near_dupe candidate
 /// when embedding neighbors are unavailable.
@@ -20,7 +21,8 @@ const PAIR_CANDIDATE_SIMILARITY_THRESHOLD: f64 = 0.45;
 const EMBEDDING_NEAR_DUPE_MIN_SIMILARITY: f64 = 0.85;
 
 /// Min impressions per page for a GSC query to count toward the shared_query lane.
-const SHARED_QUERY_MIN_IMPRESSIONS: f64 = 10.0;
+/// SoT: [`crate::db::SHARED_QUERY_MIN_IMPRESSIONS`].
+const SHARED_QUERY_MIN_IMPRESSIONS: f64 = crate::db::SHARED_QUERY_MIN_IMPRESSIONS;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Step 3: Select Candidates
@@ -312,40 +314,46 @@ fn inject_exact_keyword_dupe_candidates(
 
 /// Pure shared-query grouping used by the emit path and unit tests.
 ///
-/// `rows` is `(lowercased_query, article_id, impressions, page_url)`.
-/// Filters rows below [`SHARED_QUERY_MIN_IMPRESSIONS`], dedupes article_ids per
-/// query, requires ≥2 pages, sorts groups by total impressions desc, and caps
-/// each group at [`MAX_CANDIDATE_PAGES`].
+/// Thin wrapper over [`crate::db::group_shared_query_articles`]: reattaches
+/// `page_url` after the shared `(query, article_id, impressions)` grouper runs.
+/// `rows` is `(query, article_id, impressions, page_url)` (query may be mixed
+/// case — the shared grouper lowercases).
 pub(crate) fn group_shared_query_rows(
     rows: impl IntoIterator<Item = (String, i64, f64, String)>,
 ) -> Vec<(String, Vec<(i64, f64, String)>)> {
-    let mut by_query: HashMap<String, Vec<(i64, f64, String)>> = HashMap::new();
+    let mut url_by: HashMap<(String, i64), (f64, String)> = HashMap::new();
+    let mut simple: Vec<(String, i64, f64)> = Vec::new();
     for (q, article_id, impressions, page_url) in rows {
-        if impressions < SHARED_QUERY_MIN_IMPRESSIONS {
-            continue;
-        }
-        let entry = by_query.entry(q).or_default();
-        if entry.iter().any(|(id, _, _)| *id == article_id) {
-            continue;
-        }
-        entry.push((article_id, impressions, page_url));
+        let q_lower = q.to_lowercase();
+        // Prefer page_url from the highest-impressions row (matches max-imp dedupe).
+        url_by
+            .entry((q_lower.clone(), article_id))
+            .and_modify(|(imp, url)| {
+                if impressions > *imp {
+                    *imp = impressions;
+                    *url = page_url.clone();
+                }
+            })
+            .or_insert((impressions, page_url));
+        simple.push((q, article_id, impressions));
     }
 
-    let mut query_groups: Vec<(String, Vec<(i64, f64, String)>)> = by_query
+    crate::db::group_shared_query_articles(simple)
         .into_iter()
-        .filter(|(_, pages)| pages.len() >= 2)
-        .collect();
-    query_groups.sort_by(|a, b| {
-        let ta: f64 = a.1.iter().map(|(_, imp, _)| *imp).sum();
-        let tb: f64 = b.1.iter().map(|(_, imp, _)| *imp).sum();
-        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
-    });
-    for (_, pages) in &mut query_groups {
-        pages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        pages.truncate(MAX_CANDIDATE_PAGES);
-    }
-    query_groups.retain(|(_, pages)| pages.len() >= 2);
-    query_groups
+        .map(|(query, pages)| {
+            let with_url: Vec<(i64, f64, String)> = pages
+                .into_iter()
+                .map(|(id, imp)| {
+                    let url = url_by
+                        .get(&(query.clone(), id))
+                        .map(|(_, u)| u.clone())
+                        .unwrap_or_default();
+                    (id, imp, url)
+                })
+                .collect();
+            (query, with_url)
+        })
+        .collect()
 }
 
 /// Emit shared_query lane candidates from `ctr_query_metrics`.

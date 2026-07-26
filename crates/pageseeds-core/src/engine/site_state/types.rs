@@ -24,11 +24,8 @@ pub const STRIKING_POS_MAX: f64 = 13.0;
 /// Minimum recent-window impressions for striking-distance inventory.
 pub const STRIKING_MIN_IMPRESSIONS: f64 = 200.0;
 
-/// Per-article query impression floor for hard same-query cannibalization
-/// (matches `SHARED_QUERY_MIN_IMPRESSIONS` in cannibalization/candidates.rs).
-pub const HARD_CANNIBAL_MIN_QUERY_IMPRESSIONS: f64 = 10.0;
-/// Max slugs listed per hard-cannibal query group in the overview sample.
-pub const HARD_CANNIBAL_MAX_SLUGS_PER_QUERY: usize = 4;
+// Hard same-query floor/cap live in `db::ctr_query` (shared with cannibalization
+// audit): `SHARED_QUERY_MIN_IMPRESSIONS` / `SHARED_QUERY_MAX_PAGES`.
 /// Sample size cap shared by zero-impression, striking-distance, and hard-cannibal groups.
 pub const OVERVIEW_INVENTORY_SAMPLE_CAP: usize = 10;
 

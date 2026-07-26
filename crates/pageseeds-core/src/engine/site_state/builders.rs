@@ -627,38 +627,21 @@ fn build_query_cannibalization(
         .map(|a| (a.id, normalize_url_slug(&a.url_slug)))
         .collect();
 
-    // Load all project query metrics once for best-effort cannibalization.
-    let mut stmt = conn.prepare(
-        "SELECT article_id, query, impressions, clicks
-         FROM ctr_query_metrics
-         WHERE project_id = ?1",
-    )?;
-    let all_rows: Vec<(i64, String, f64, f64)> = stmt
-        .query_map(rusqlite::params![project_id], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, f64>(2)?,
-                row.get::<_, f64>(3)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+    // Shared project-wide load (db::list_ctr_query_metrics_for_project).
+    let all_rows = db::list_ctr_query_metrics_for_project(conn, project_id)?;
 
     let mut out = Vec::new();
     for q in queries.iter().take(20) {
         let q_lower = q.query.to_lowercase();
         let mut others: Vec<CannibalSlugMetric> = all_rows
             .iter()
-            .filter(|(aid, query, _, _)| {
-                *aid != article_id && query.to_lowercase() == q_lower
-            })
-            .filter_map(|(aid, _, imps, clicks)| {
-                let slug = slug_by_id.get(aid)?.clone();
+            .filter(|row| row.article_id != article_id && row.query.to_lowercase() == q_lower)
+            .filter_map(|row| {
+                let slug = slug_by_id.get(&row.article_id)?.clone();
                 Some(CannibalSlugMetric {
                     slug,
-                    impressions: *imps,
-                    clicks: *clicks,
+                    impressions: row.impressions,
+                    clicks: row.clicks,
                 })
             })
             .collect();
@@ -682,6 +665,10 @@ fn build_query_cannibalization(
 ///
 /// Soft TF-IDF / clusters are intentionally out of scope. Never fails the
 /// overview: empty or unreadable metrics degrade to `ctr_query_metrics_empty`.
+///
+/// Grouping floor/cap/sort live in [`db::group_shared_query_articles`] (shared
+/// with cannibalization audit). Desk maps article_ids → slugs + clicks and
+/// truncates sample groups with [`OVERVIEW_INVENTORY_SAMPLE_CAP`].
 fn build_hard_cannibalization_inventory(
     conn: &Connection,
     project_id: &str,
@@ -692,13 +679,9 @@ fn build_hard_cannibalization_inventory(
         .map(|a| (a.id, normalize_url_slug(&a.url_slug)))
         .collect();
 
-    let mut stmt = match conn.prepare(
-        "SELECT article_id, query, impressions, clicks
-         FROM ctr_query_metrics
-         WHERE project_id = ?1",
-    ) {
-        Ok(s) => s,
-        Err(_) => {
+    let all_rows = match db::list_ctr_query_metrics_for_project(conn, project_id) {
+        Ok(rows) if !rows.is_empty() => rows,
+        _ => {
             return HardCannibalizationInventory {
                 count: 0,
                 sample: vec![],
@@ -707,81 +690,46 @@ fn build_hard_cannibalization_inventory(
         }
     };
 
-    let all_rows: Vec<(i64, String, f64, f64)> = match stmt.query_map(
-        rusqlite::params![project_id],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, f64>(2)?,
-                row.get::<_, f64>(3)?,
-            ))
-        },
-    ) {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(_) => {
-            return HardCannibalizationInventory {
-                count: 0,
-                sample: vec![],
-                degraded_reason: Some("ctr_query_metrics_empty".into()),
-            };
-        }
-    };
-
-    if all_rows.is_empty() {
-        return HardCannibalizationInventory {
-            count: 0,
-            sample: vec![],
-            degraded_reason: Some("ctr_query_metrics_empty".into()),
-        };
-    }
-
-    // Group by lowercased query; keep one row per article_id (max impressions).
-    // (article_id, impressions, clicks)
-    let mut by_query: HashMap<String, HashMap<i64, (f64, f64)>> = HashMap::new();
-    for (article_id, query, impressions, clicks) in all_rows {
-        if impressions < HARD_CANNIBAL_MIN_QUERY_IMPRESSIONS {
-            continue;
-        }
-        let q_lower = query.to_lowercase();
-        let entry = by_query.entry(q_lower).or_default();
-        entry
-            .entry(article_id)
+    // Clicks for the highest-impressions row per (query_lower, article_id).
+    let mut clicks_for_best: HashMap<(String, i64), (f64, f64)> = HashMap::new();
+    for row in &all_rows {
+        let q_lower = row.query.to_lowercase();
+        let key = (q_lower, row.article_id);
+        clicks_for_best
+            .entry(key)
             .and_modify(|(imp, clk)| {
-                if impressions > *imp {
-                    *imp = impressions;
-                    *clk = clicks;
+                if row.impressions > *imp {
+                    *imp = row.impressions;
+                    *clk = row.clicks;
                 }
             })
-            .or_insert((impressions, clicks));
+            .or_insert((row.impressions, row.clicks));
     }
 
-    let mut groups: Vec<(String, Vec<HardCannibalSlugMetric>)> = by_query
+    let groups = db::group_shared_query_articles(
+        all_rows
+            .iter()
+            .map(|r| (r.query.clone(), r.article_id, r.impressions)),
+    );
+
+    let mut sample_groups: Vec<(String, Vec<HardCannibalSlugMetric>)> = groups
         .into_iter()
-        .filter_map(|(query, by_article)| {
-            if by_article.len() < 2 {
-                return None;
-            }
-            let mut slugs: Vec<HardCannibalSlugMetric> = by_article
+        .filter_map(|(query, pages)| {
+            let slugs: Vec<HardCannibalSlugMetric> = pages
                 .into_iter()
-                .filter_map(|(aid, (imp, clk))| {
+                .filter_map(|(aid, imp)| {
                     let slug = slug_by_id.get(&aid)?.clone();
+                    let clicks = clicks_for_best
+                        .get(&(query.clone(), aid))
+                        .map(|(_, c)| *c);
                     Some(HardCannibalSlugMetric {
                         slug,
                         impressions: imp,
-                        clicks: Some(clk),
+                        clicks,
                     })
                 })
                 .collect();
-            if slugs.len() < 2 {
-                return None;
-            }
-            slugs.sort_by(|a, b| {
-                b.impressions
-                    .partial_cmp(&a.impressions)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            slugs.truncate(HARD_CANNIBAL_MAX_SLUGS_PER_QUERY);
+            // Drop groups that lose cardinality after slug resolution.
             if slugs.len() < 2 {
                 return None;
             }
@@ -789,15 +737,9 @@ fn build_hard_cannibalization_inventory(
         })
         .collect();
 
-    groups.sort_by(|a, b| {
-        let ta: f64 = a.1.iter().map(|s| s.impressions).sum();
-        let tb: f64 = b.1.iter().map(|s| s.impressions).sum();
-        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let count = groups.len();
-    groups.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
-    let sample = groups
+    let count = sample_groups.len();
+    sample_groups.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
+    let sample = sample_groups
         .into_iter()
         .map(|(query, slugs)| HardCannibalizationSample { query, slugs })
         .collect();

@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::error::Result;
 
 pub mod content_audit;
+pub mod ctr_query;
 pub mod export;
 pub mod global_settings;
 pub mod gsc_join;
@@ -15,6 +16,12 @@ pub mod seo_discovery;
 pub use gsc_join::{
     build_page_index, merge_window_metrics, pages_for_slug, previous_window, recent_window,
     rollup_for_slug, rollup_impressions_for_slug,
+};
+
+// Re-export shared CTR query primitives (desk + cannibalization SoT).
+pub use ctr_query::{
+    group_shared_query_articles, list_ctr_query_metrics_for_project, CtrQueryRow,
+    SHARED_QUERY_MAX_PAGES, SHARED_QUERY_MIN_IMPRESSIONS,
 };
 
 /// Get the default database path based on platform conventions.
