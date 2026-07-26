@@ -281,6 +281,8 @@ under soft path A.
 | `striking_distance_campaign` (or any new ranking-push campaign type) (#205) | Skill path only — desk band filter → ≤2 existing `fix_content_article -S` / `cluster_and_link` / `interlinking` |
 | DataForSEO / paid SERP rank tracker for ranking push | GSC `avg_position` + impressions only; never invent ranks |
 | Full IHC / full `ctr_audit` as default for striking-distance (WS5) | See [Striking-distance preferred path](#striking-distance-preferred-path) |
+| Link building / outreach product (task types, competitor backlink acquisition, outreach automation) (#202 / #210) | Human/PR outside CLI; only automated off-site path is Reddit (`reddit_opportunity_search`) when configured. Report gap — do not implement product mid-run |
+| Rank-tracker / SERP position as weekly outcome (Accuranker-class) (#202 / #210) | Measure with GSC desk + `gsc_page_daily` tape; SERP only if research/diagnostic path already justified |
 | Nested `execute-task` LLM for write/fix/merge when Path B tools exist | Path B package → session edit → submit |
 | `create-task content_outcome_review` / may-create addition | System spawn only; execute **due** rows (see soft path A) |
 | `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; desk re-read for CTR closed-loop |
@@ -574,6 +576,8 @@ prefer shortlist **promising** themes/seeds and re-run research; pick only
 | `gsc-movers` ~30 rows | Default limit — raise `-l 100`/`200` or cross-check `gsc-performance` |
 | Empty `gsc_page_daily` | Run `collect_gsc` + execute if day-level series needed; movers use live API windows |
 | No SERP scrape tool | Infer from position deltas + query mix only; use research for gaps |
+| No link-building / outreach product (#202 / #210) | Human/PR outside CLI; only automated off-site is Reddit when configured — escalate/report, do not invent tasks |
+| No Accuranker-class rank tracker as outcome (#202 / #210) | GSC desk + daily tape only; SERP only when research/diagnostic path already justified |
 | Top 3–4 URLs are the problem | Deep-dive each with `article` + `gsc-queries` **now**, then fix tasks |
 
 **Anti-pattern:** parking “deep-dive later” when tools + budgets allow it now.

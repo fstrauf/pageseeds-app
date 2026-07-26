@@ -349,15 +349,21 @@ These are feature recommendations for the PageSeeds app based on gaps identified
 
 **Why it matters**: Missing FAQ schema alone cost Days to Expiry +25-40% CTR. Automated schema detection would have caught this.
 
-### Priority 7: Link Building Opportunity Finder
+### Out of product scope / non-goals
 
-**What it should do**:
+Not product priorities. Valid human SEO activity; **not** PageSeeds CLI/product workstreams. Canonical boundaries: [TOOL_CATALOG — Non-goals / not in product](./TOOL_CATALOG.md#non-goals--not-in-product) (epic #202 / #210).
+
+#### Link building / outreach (human/PR only)
+
+Prefer natural linkability via content/tools; do not file Accuranker-style rank trackers or outreach automation as weekly SEO.
+
+Useful human/PR checklist (outside product):
 - Identify sites linking to competitors but not to you
 - Find broken links on relevant finance sites where your content could replace
 - Track unlinked brand mentions
 - Generate outreach email templates
 
-**Why it matters**: Off-site SEO is the biggest gap for Days to Expiry and most PageSeeds users. Currently no link building features exist.
+**Why it matters**: Off-site SEO is a real growth lever for Days to Expiry and many operators — but it stays a **human/PR process**, not an in-product task type or weekly hard action.
 
 ---
 

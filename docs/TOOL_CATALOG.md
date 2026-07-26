@@ -155,11 +155,26 @@ Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI b
 
 ### Off-site engagement
 
+Reddit only. For link-building / outreach / rank trackers, see [Non-goals / not in product](#non-goals--not-in-product).
+
 | Field | `reddit_opportunity_search` |
 |---|---|
 | **Does** | Searches subreddits for posts to engage with and saves pending opportunities. |
 | **When** | Weekly audience engagement. Runs automatically on `AutoEnqueue`. |
 | **After completion** | `RedditPicker` → user picks posts → spawns `reddit_reply` children (`UserSelection`). |
+
+### Non-goals / not in product
+
+Product boundaries for agents and operators (epic [#202](https://github.com/fstrauf/pageseeds-app/issues/202) / [#210](https://github.com/fstrauf/pageseeds-app/issues/210)). Do **not** invent Accuranker-style trackers or link-building outreach as weekly SEO or in-product work.
+
+| Non-goal | Truth in product |
+|---|---|
+| **Outcomes** | **GSC** owns post-ship outcomes (`gsc_page_daily`, desk tools: `site-overview` / `articles` / `gsc-*`). Not paid position APIs. |
+| **SERP / DataForSEO** | Research, winnability, optional diagnostics only — cost-capped (`serp_guard`). **Never** weekly outcome ground truth. |
+| **Link building / outreach / competitor backlink acquisition** | Human/PR process **outside** the product. No task type. Do not invent weekly hard actions for it. Only automated off-site path is Reddit (`reddit_opportunity_search`) when configured. |
+| **Continuous competitive rank tracker** (Accuranker-class) | **Not** in product and **not** planned in epic #202. |
+
+`crates/pageseeds-core/src/seo/backlinks.rs` is a CapSolver/Ahrefs free-tool scraper **not wired** to any task, CLI, or weekly path — do not treat it as a feature to finish for weekly SEO.
 
 ### Repo hygiene — fix the files, not the strategy
 

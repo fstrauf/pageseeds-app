@@ -1,6 +1,8 @@
 # SEO Growth Strategy — Days to Expiry (daystoexpiry.com)
 
 > Last updated: 2026-07-07 — 5 workstreams, 2 complete, 3 ready to execute.
+>
+> Product non-goals (link-building outreach, Accuranker-class rank trackers): see [TOOL_CATALOG — Non-goals / not in product](./TOOL_CATALOG.md#non-goals--not-in-product) and epic #202 / #210.
 
 ---
 
