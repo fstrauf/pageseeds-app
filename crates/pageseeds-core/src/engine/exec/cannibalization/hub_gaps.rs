@@ -7,6 +7,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+use crate::content::slug::{hub_topic_from_slug, is_hub_like_slug};
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::StepResult;
 use crate::models::task::{FollowUpPolicy, Task, TaskReviewSurface};
@@ -43,21 +44,23 @@ pub(crate) fn detect_hub_gaps(
                         if let Some(kw) = kw.filter(|s| !s.is_empty()) {
                             existing_hubs.insert(kw.trim().to_lowercase());
                         }
-                        // Derive topic from slug
-                        let stripped = if slug.starts_with("hub/") {
-                            &slug[4..]
-                        } else if slug.starts_with("guide/") {
-                            &slug[6..]
-                        } else if slug.starts_with("hub_") {
-                            &slug[4..]
-                        } else if slug.starts_with("guide_") {
-                            &slug[6..]
+                        // Derive topic from hub-like slug; non-prefixed hubs
+                        // (page_type already hub) fall back to the full slug.
+                        if let Some(topic) = hub_topic_from_slug(&slug) {
+                            existing_hubs.insert(topic);
                         } else {
-                            &slug
-                        };
-                        let stripped = stripped.trim().replace('_', " ").replace('-', " ").to_lowercase();
-                        if !stripped.is_empty() {
-                            existing_hubs.insert(stripped);
+                            let fallback = slug
+                                .trim()
+                                .replace('_', " ")
+                                .replace('-', " ")
+                                .to_lowercase();
+                            let fallback = fallback
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            if !fallback.is_empty() {
+                                existing_hubs.insert(fallback);
+                            }
                         }
                         // Title topic
                         let title_topic = title
@@ -86,10 +89,7 @@ pub(crate) fn detect_hub_gaps(
     for r in records {
         let is_hub_explicit = r.page_type.as_deref() == Some("hub");
         let is_hub_heuristic = !is_hub_explicit
-            && (r.url_slug.starts_with("hub/")
-                || r.url_slug.starts_with("guide/")
-                || r.url_slug.starts_with("hub_")
-                || r.url_slug.starts_with("guide_")
+            && (is_hub_like_slug(&r.url_slug)
                 || r.title.to_lowercase().contains("complete guide")
                 || r.title.to_lowercase().contains("ultimate guide"));
 
@@ -101,25 +101,8 @@ pub(crate) fn detect_hub_gaps(
         if !kw.is_empty() {
             existing_hubs.insert(kw);
         }
-        let slug = &r.url_slug;
-        let stripped = if slug.starts_with("hub/") {
-            &slug[4..]
-        } else if slug.starts_with("guide/") {
-            &slug[6..]
-        } else if slug.starts_with("hub_") {
-            &slug[4..]
-        } else if slug.starts_with("guide_") {
-            &slug[6..]
-        } else {
-            ""
-        };
-        let stripped = stripped
-            .trim()
-            .replace('_', " ")
-            .replace('-', " ")
-            .to_lowercase();
-        if !stripped.is_empty() {
-            existing_hubs.insert(stripped);
+        if let Some(topic) = hub_topic_from_slug(&r.url_slug) {
+            existing_hubs.insert(topic);
         }
         let title_topic = r
             .title
@@ -172,7 +155,8 @@ pub(crate) fn detect_hub_gaps(
         gaps.push(serde_json::json!({
             "cluster_id": &cluster.cluster_id,
             "theme": &cluster.theme,
-            "suggested_url": format!("/hub/{}", cluster.cluster_id.replace('_', "-")),
+            // Single-segment hub convention: hub-{topic}, never hub/{topic} or /hub/...
+            "suggested_url": format!("hub-{}", cluster.cluster_id.replace('_', "-")),
             "suggested_title": format!("{}: Complete Guide", capitalize_words(&cluster.theme)),
             "spoke_count": cluster.page_ids.len(),
             "total_impressions": cluster.total_impressions,

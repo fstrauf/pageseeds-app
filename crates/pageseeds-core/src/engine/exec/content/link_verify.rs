@@ -289,6 +289,44 @@ mod tests {
     }
 
     #[test]
+    fn repairs_multi_segment_hub_path_form_when_hyphen_target_exists() {
+        let dir = temp_content_dir();
+        let file = dir.join("1_new.mdx");
+        std::fs::write(&file, "[hub](/blog/hub/coffee) and [ok](/blog/other-post)\n").unwrap();
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        let result = verify_links_in_file(
+            &file,
+            &content,
+            &valid_set(&["hub-coffee", "other-post"]),
+        );
+
+        assert!(result.success, "hub path form should repair: {}", result.message);
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.contains("[hub](/blog/hub-coffee)"));
+        assert!(!written.contains("/blog/hub/coffee"));
+        assert!(written.contains("[ok](/blog/other-post)"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn does_not_invent_hub_when_hyphen_target_missing() {
+        let dir = temp_content_dir();
+        let file = dir.join("1_new.mdx");
+        let original = "[hub](/blog/hub/coffee)\n";
+        std::fs::write(&file, original).unwrap();
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        let result = verify_links_in_file(&file, &content, &valid_set(&["other-post"]));
+
+        assert!(!result.success);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn fails_with_per_link_report_when_unresolvable() {
         let dir = temp_content_dir();
         let file = dir.join("1_new.mdx");

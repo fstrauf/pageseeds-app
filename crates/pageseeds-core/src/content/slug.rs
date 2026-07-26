@@ -65,15 +65,52 @@ impl std::fmt::Display for SlugIssue {
 // Normalization
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/// Map product hub/guide **path form** to the single-segment hyphen form.
+///
+/// Product convention: hub identities are single-segment (`hub-coffee`), never
+/// path form (`hub/coffee`). Path form was historically emitted and nginx 301s
+/// `/blog/hub/coffee` → `/blog/hub-coffee`, which creates Ahrefs links-to-redirect noise.
+///
+/// This runs **before** last-segment stripping so `hub/coffee` becomes
+/// `hub-coffee` (not `coffee`).
+///
+/// | Input | Output |
+/// |---|---|
+/// | `hub/coffee` | `Some("hub-coffee")` |
+/// | `blog/hub/coffee` | `Some("hub-coffee")` |
+/// | `guide/foo` | `Some("guide-foo")` |
+/// | `hub/a/b` | `Some("hub-a-b")` |
+/// | `blog/my-post` | `None` (not a hub/guide path) |
+/// | `hub-coffee` | `None` (already single-segment) |
+fn hygienize_hub_guide_path(slug: &str) -> Option<String> {
+    let segments: Vec<&str> = slug.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    // First path component that is the product hub/guide prefix.
+    let pos = segments.iter().position(|s| {
+        let lower = s.to_lowercase();
+        lower == "hub" || lower == "guide"
+    })?;
+    // Need at least one topic segment after hub/guide (path form).
+    if pos + 1 >= segments.len() {
+        return None;
+    }
+    let kind = segments[pos].to_lowercase();
+    let rest = segments[pos + 1..].join("-");
+    Some(format!("{}-{}", kind, rest))
+}
+
 /// Canonical slug normalizer.
 ///
 /// Applies the following rules in order:
 /// 1. Trim whitespace
 /// 2. Strip leading/trailing slashes
-/// 3. Take the final path segment (`blog/my-post` → `my-post`)
-/// 4. Strip leading numeric prefix (`001_` or `001-`)
-/// 5. Replace underscores with dashes
-/// 6. Lowercase
+/// 3. **Hub/guide path hygiene** — `hub/coffee` → `hub-coffee` (before last-segment strip)
+/// 4. Otherwise take the final path segment (`blog/my-post` → `my-post`)
+/// 5. Strip leading numeric prefix (`001_` or `001-`)
+/// 6. Replace underscores with dashes
+/// 7. Lowercase
 ///
 /// # Examples
 ///
@@ -87,24 +124,29 @@ impl std::fmt::Display for SlugIssue {
 /// assert_eq!(normalize_url_slug("My_Post"), "my-post");
 /// assert_eq!(normalize_url_slug("my-post.mdx"), "my-post");
 /// assert_eq!(normalize_url_slug("/blog/my-post.md"), "my-post");
+/// assert_eq!(normalize_url_slug("hub/coffee"), "hub-coffee");
+/// assert_eq!(normalize_url_slug("/blog/hub/coffee"), "hub-coffee");
 /// ```
 pub fn normalize_url_slug(slug: &str) -> String {
     let slug = slug.trim();
     let slug = slug.trim_start_matches('/').trim_end_matches('/');
-    let slug = slug.rsplit('/').next().unwrap_or(slug);
+    // Hub/guide path form → single-segment hyphen form BEFORE last-segment
+    // destruction (hub/coffee → hub-coffee, not coffee).
+    let mut slug = if let Some(hygienized) = hygienize_hub_guide_path(slug) {
+        hygienized
+    } else {
+        slug.rsplit('/').next().unwrap_or(slug).to_string()
+    };
     // Strip a Markdown extension an agent may have copied from a filename
     // (`my-post.mdx` → `my-post`) — a URL slug never has one.
     let lower = slug.to_lowercase();
-    let slug = if lower.ends_with(".mdx") {
-        &slug[..slug.len() - ".mdx".len()]
+    if lower.ends_with(".mdx") {
+        slug.truncate(slug.len() - ".mdx".len());
     } else if lower.ends_with(".md") {
-        &slug[..slug.len() - ".md".len()]
-    } else {
-        slug
-    };
+        slug.truncate(slug.len() - ".md".len());
+    }
     // Strip ALL leading numeric prefixes (e.g. 2025-08-01- → "")
     let re = numeric_prefix_re();
-    let mut slug = slug.to_string();
     while re.is_match(&slug) {
         let next = re.replace(&slug, "").to_string();
         if next == slug {
@@ -154,6 +196,82 @@ pub fn resolve_slug(slug: &str, valid: &std::collections::HashSet<String>) -> Op
         return Some(normalized);
     }
     None
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Hub-like slug detection (URL identity only — page_type checks stay at call sites)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Live product convention for hub identities is the single-segment `hub-{topic}`
+/// form (e.g. `hub-coffee`). Dirty catalog-debt forms are still recognized so
+/// detection stays correct against unhygienized rows:
+/// - path: `hub/{topic}`, `guide/{topic}`
+/// - underscore: `hub_{topic}`, `guide_{topic}`
+///
+/// Bare `guide-` is **not** hub-like: ordinary posts such as `guide-to-espresso`
+/// must not be classified as hubs by URL alone. Call sites that already have
+/// `page_type == "hub"` may still treat the article as a hub without using this
+/// helper for the URL decision.
+///
+/// # Examples
+///
+/// ```
+/// use pageseeds_core::content::slug::is_hub_like_slug;
+///
+/// assert!(is_hub_like_slug("hub-coffee"));
+/// assert!(is_hub_like_slug("hub/coffee"));
+/// assert!(is_hub_like_slug("guide/foo"));
+/// assert!(is_hub_like_slug("hub_x"));
+/// assert!(is_hub_like_slug("guide_x"));
+/// assert!(!is_hub_like_slug("guide-to-espresso"));
+/// assert!(!is_hub_like_slug("guide-coffee"));
+/// assert!(!is_hub_like_slug("my-post"));
+/// ```
+pub fn is_hub_like_slug(slug: &str) -> bool {
+    let s = slug.trim().to_lowercase();
+    s.starts_with("hub-")
+        || s.starts_with("hub/")
+        || s.starts_with("hub_")
+        || s.starts_with("guide/")
+        || s.starts_with("guide_")
+}
+
+/// Extract the topic fragment from a hub-like slug, space-normalized.
+///
+/// Strips the same prefixes as [`is_hub_like_slug`] (live `hub-` plus dirty
+/// `hub/`/`hub_`/`guide/`/`guide_`). Returns `None` when the slug is not
+/// hub-like — including bare `guide-*` posts.
+///
+/// The returned topic has `_`/`-` turned into spaces and is lowercased, matching
+/// the form used when matching against cluster themes / keywords.
+///
+/// # Examples
+///
+/// ```
+/// use pageseeds_core::content::slug::hub_topic_from_slug;
+///
+/// assert_eq!(hub_topic_from_slug("hub-coffee"), Some("coffee".to_string()));
+/// assert_eq!(hub_topic_from_slug("hub/cash_secured_puts"), Some("cash secured puts".to_string()));
+/// assert_eq!(hub_topic_from_slug("guide/foo"), Some("foo".to_string()));
+/// assert_eq!(hub_topic_from_slug("guide-to-espresso"), None);
+/// assert_eq!(hub_topic_from_slug("my-post"), None);
+/// ```
+pub fn hub_topic_from_slug(slug: &str) -> Option<String> {
+    let s = slug.trim().to_lowercase();
+    let rest = if s.starts_with("hub/") || s.starts_with("hub-") || s.starts_with("hub_") {
+        &s[4..]
+    } else if s.starts_with("guide/") || s.starts_with("guide_") {
+        &s[6..]
+    } else {
+        return None;
+    };
+    let topic = rest.trim().replace('_', " ").replace('-', " ");
+    let topic = topic.split_whitespace().collect::<Vec<_>>().join(" ");
+    if topic.is_empty() {
+        None
+    } else {
+        Some(topic)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -305,6 +423,46 @@ mod tests {
     }
 
     #[test]
+    fn normalize_url_slug_hygienizes_hub_guide_path_form() {
+        // Path form → single-segment hyphen form (not last-segment-only).
+        assert_eq!(normalize_url_slug("hub/coffee"), "hub-coffee");
+        assert_eq!(normalize_url_slug("blog/hub/coffee"), "hub-coffee");
+        assert_eq!(normalize_url_slug("/blog/hub/coffee"), "hub-coffee");
+        assert_eq!(normalize_url_slug("guide/foo"), "guide-foo");
+        assert_eq!(normalize_url_slug("hub/a/b"), "hub-a-b");
+        assert_eq!(normalize_url_slug("hub/cash_secured_puts"), "hub-cash-secured-puts");
+        // Already clean single-segment form is unchanged.
+        assert_eq!(normalize_url_slug("hub-coffee"), "hub-coffee");
+    }
+
+    #[test]
+    fn format_blog_link_hub_path_form_yields_final_url() {
+        assert_eq!(format_blog_link("hub/coffee"), "/blog/hub-coffee");
+        assert_eq!(format_blog_link("/blog/hub/coffee"), "/blog/hub-coffee");
+        assert_eq!(format_blog_link("hub-coffee"), "/blog/hub-coffee");
+    }
+
+    #[test]
+    fn resolve_slug_hub_path_form_to_hyphen_form() {
+        let valid: std::collections::HashSet<String> =
+            ["hub-coffee".to_string()].into_iter().collect();
+        assert_eq!(
+            resolve_slug("hub/coffee", &valid),
+            Some("hub-coffee".to_string())
+        );
+        assert_eq!(
+            resolve_slug("/blog/hub/coffee", &valid),
+            Some("hub-coffee".to_string())
+        );
+        // Fail closed when the hygienized target is not in the set.
+        assert_eq!(resolve_slug("hub/missing", &valid), None);
+        assert_eq!(
+            resolve_slug("hub/missing", &std::collections::HashSet::new()),
+            None
+        );
+    }
+
+    #[test]
     fn extract_slug_from_url_variants() {
         assert_eq!(
             extract_slug_from_url("https://example.com/blog/my-post"),
@@ -381,5 +539,40 @@ mod tests {
         );
         assert_eq!(resolve_slug("ghost-slug", &valid), None);
         assert_eq!(resolve_slug("", &valid), None);
+    }
+
+    #[test]
+    fn is_hub_like_slug_live_hub_prefix_only_for_hyphen_form() {
+        // Live single-segment canonical: only hub-
+        assert!(is_hub_like_slug("hub-coffee"));
+        assert!(is_hub_like_slug("Hub-Coffee"));
+        // Dirty catalog-debt forms still recognized
+        assert!(is_hub_like_slug("hub/coffee"));
+        assert!(is_hub_like_slug("guide/foo"));
+        assert!(is_hub_like_slug("hub_x"));
+        assert!(is_hub_like_slug("guide_x"));
+        // Bare guide- is a normal post, not hub-like
+        assert!(!is_hub_like_slug("guide-to-espresso"));
+        assert!(!is_hub_like_slug("guide-coffee"));
+        assert!(!is_hub_like_slug("guide-to-french-press"));
+        assert!(!is_hub_like_slug("my-post"));
+        assert!(!is_hub_like_slug("complete-guide-to-coffee"));
+    }
+
+    #[test]
+    fn hub_topic_from_slug_strips_hub_like_prefixes() {
+        assert_eq!(hub_topic_from_slug("hub-coffee"), Some("coffee".to_string()));
+        assert_eq!(
+            hub_topic_from_slug("hub/cash_secured_puts"),
+            Some("cash secured puts".to_string())
+        );
+        assert_eq!(hub_topic_from_slug("hub_x"), Some("x".to_string()));
+        assert_eq!(hub_topic_from_slug("guide/foo"), Some("foo".to_string()));
+        assert_eq!(hub_topic_from_slug("guide_bar"), Some("bar".to_string()));
+        // Bare guide- is not hub-like → no topic
+        assert_eq!(hub_topic_from_slug("guide-to-espresso"), None);
+        assert_eq!(hub_topic_from_slug("my-post"), None);
+        assert_eq!(hub_topic_from_slug("hub-"), None);
+        assert_eq!(hub_topic_from_slug("hub/"), None);
     }
 }
