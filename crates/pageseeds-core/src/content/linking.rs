@@ -65,10 +65,13 @@ pub struct LinkScanResult {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Canonical `[anchor](/blog/slug)` links.
-/// Groups: 1 = anchor text, 2 = full href as written, 3 = slug segment.
+/// Groups: 1 = anchor text, 2 = full href as written, 3 = path after `/blog/`
+/// (may be multi-segment, e.g. `hub/coffee` for dirty path-form hubs).
 pub(crate) fn canonical_blog_link_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\[([^\]]+)\]\((/blog/([^/)]+)/?[^)]*)\)").unwrap())
+    // Allow multi-segment paths under /blog/ so path-form hubs (`/blog/hub/coffee`)
+    // extract as `hub/coffee` and can be hygienized via normalize_url_slug.
+    RE.get_or_init(|| Regex::new(r"\[([^\]]+)\]\((/blog/([^)\s]+?))\)").unwrap())
 }
 
 /// Malformed `[anchor] /blog/slug` links (missing parentheses around the URL).
@@ -78,13 +81,24 @@ pub(crate) fn malformed_blog_link_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\[([^\]]*)\]([ \t]*)(/blog/[^)\s]*)").unwrap())
 }
 
+/// Path after `/blog/` with trailing slash stripped. Preserves multi-segment
+/// path form (e.g. `hub/coffee`) so callers can hygienize via normalize/resolve.
+fn slug_from_blog_href(raw_href: &str) -> String {
+    raw_href
+        .trim_start_matches("/blog/")
+        .trim_end_matches('/')
+        .to_string()
+}
+
 /// Extract every internal `/blog/` link from markdown/MDX content.
 ///
 /// Returns one `(anchor_text, raw_href, slug_as_written)` entry per distinct
 /// href. Covers canonical `[text](/blog/slug)` links and malformed
 /// `[text]/blog/slug` links (missing parentheses). `slug_as_written` is the
-/// first path segment after `/blog/` exactly as written — NOT normalized —
-/// so callers can decide between exact-match and normalized resolution.
+/// path after `/blog/` exactly as written (trailing slash stripped) — NOT
+/// normalized — so callers can decide between exact-match and normalized
+/// resolution. Multi-segment paths like `hub/coffee` are preserved for
+/// hub/guide path-form hygiene in [`crate::content::slug::normalize_url_slug`].
 pub fn extract_blog_link_hrefs(content: &str) -> Vec<(String, String, String)> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -92,18 +106,14 @@ pub fn extract_blog_link_hrefs(content: &str) -> Vec<(String, String, String)> {
     for cap in canonical_blog_link_re().captures_iter(content) {
         let raw_href = cap[2].to_string();
         if seen.insert(raw_href.clone()) {
-            out.push((cap[1].to_string(), raw_href, cap[3].to_string()));
+            let slug = slug_from_blog_href(&raw_href);
+            out.push((cap[1].to_string(), raw_href, slug));
         }
     }
     for cap in malformed_blog_link_re().captures_iter(content) {
         let raw_href = cap[3].to_string();
         if seen.insert(raw_href.clone()) {
-            let slug = raw_href
-                .trim_start_matches("/blog/")
-                .split('/')
-                .next()
-                .unwrap_or("")
-                .to_string();
+            let slug = slug_from_blog_href(&raw_href);
             out.push((cap[1].to_string(), raw_href, slug));
         }
     }
@@ -457,6 +467,23 @@ Broken: [stale link] /blog/old_legacy_post here.
             .expect("malformed link extracted");
         assert_eq!(malformed.0, "stale link");
         assert_eq!(malformed.2, "old_legacy_post");
+    }
+
+    #[test]
+    fn extract_blog_link_hrefs_preserves_multi_segment_hub_path() {
+        let content = "[hub](/blog/hub/coffee) and [nested](/blog/hub/a/b)\n";
+        let links = extract_blog_link_hrefs(content);
+        assert_eq!(links.len(), 2);
+        let hub = links
+            .iter()
+            .find(|(_, href, _)| href == "/blog/hub/coffee")
+            .expect("multi-segment hub path extracted");
+        assert_eq!(hub.2, "hub/coffee");
+        let nested = links
+            .iter()
+            .find(|(_, href, _)| href == "/blog/hub/a/b")
+            .expect("nested hub path extracted");
+        assert_eq!(nested.2, "hub/a/b");
     }
 
     #[test]

@@ -43,10 +43,11 @@ pub(crate) fn detect_hub_gaps(
                         if let Some(kw) = kw.filter(|s| !s.is_empty()) {
                             existing_hubs.insert(kw.trim().to_lowercase());
                         }
-                        // Derive topic from slug
-                        let stripped = if slug.starts_with("hub/") {
+                        // Derive topic from slug (hyphen form is live canonical;
+                        // path/underscore forms are dirty catalog debt).
+                        let stripped = if slug.starts_with("hub/") || slug.starts_with("hub-") {
                             &slug[4..]
-                        } else if slug.starts_with("guide/") {
+                        } else if slug.starts_with("guide/") || slug.starts_with("guide-") {
                             &slug[6..]
                         } else if slug.starts_with("hub_") {
                             &slug[4..]
@@ -88,6 +89,8 @@ pub(crate) fn detect_hub_gaps(
         let is_hub_heuristic = !is_hub_explicit
             && (r.url_slug.starts_with("hub/")
                 || r.url_slug.starts_with("guide/")
+                || r.url_slug.starts_with("hub-")
+                || r.url_slug.starts_with("guide-")
                 || r.url_slug.starts_with("hub_")
                 || r.url_slug.starts_with("guide_")
                 || r.title.to_lowercase().contains("complete guide")
@@ -102,9 +105,10 @@ pub(crate) fn detect_hub_gaps(
             existing_hubs.insert(kw);
         }
         let slug = &r.url_slug;
-        let stripped = if slug.starts_with("hub/") {
+        // Hyphen form is live canonical; path/underscore forms are dirty catalog debt.
+        let stripped = if slug.starts_with("hub/") || slug.starts_with("hub-") {
             &slug[4..]
-        } else if slug.starts_with("guide/") {
+        } else if slug.starts_with("guide/") || slug.starts_with("guide-") {
             &slug[6..]
         } else if slug.starts_with("hub_") {
             &slug[4..]
@@ -172,7 +176,8 @@ pub(crate) fn detect_hub_gaps(
         gaps.push(serde_json::json!({
             "cluster_id": &cluster.cluster_id,
             "theme": &cluster.theme,
-            "suggested_url": format!("/hub/{}", cluster.cluster_id.replace('_', "-")),
+            // Single-segment hub convention: hub-{topic}, never hub/{topic} or /hub/...
+            "suggested_url": format!("hub-{}", cluster.cluster_id.replace('_', "-")),
             "suggested_title": format!("{}: Complete Guide", capitalize_words(&cluster.theme)),
             "spoke_count": cluster.page_ids.len(),
             "total_impressions": cluster.total_impressions,

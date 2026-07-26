@@ -1,6 +1,6 @@
 # Hub Page Writer
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Generate a comprehensive pillar / hub page MDX document that connects a cluster of spoke articles under a single broad topic.
 
@@ -8,7 +8,7 @@ Generate a comprehensive pillar / hub page MDX document that connects a cluster 
 
 You receive a JSON `HubBrief` containing:
 - `topic`: The broad topic this hub covers
-- `suggested_url`: Target URL slug for the hub
+- `suggested_url`: Target URL slug for the hub — **single segment only** (e.g. `hub-coffee`), never path form (`hub/coffee` or `/hub/coffee`)
 - `suggested_title`: Proposed H1 / title
 - `intent`: Search intent (informational, navigational, etc.)
 - `target_keyword`: Primary keyword to target
@@ -18,7 +18,7 @@ You receive a JSON `HubBrief` containing:
 ## Output
 
 A complete MDX string with:
-1. YAML frontmatter (title, date, description, type: hub, hub_topic)
+1. YAML frontmatter (title, date, description, type: hub, hub_topic, **url_slug as single segment** e.g. `hub-coffee`)
 2. An H1 matching the suggested title
 3. A broad, educational introduction (300+ words)
 4. A "What You'll Learn" or overview section
@@ -28,8 +28,9 @@ A complete MDX string with:
 
 ## Constraints
 
+- **Hub `url_slug` is a single segment:** `hub-{topic}` (e.g. `hub-coffee`). Never write `hub/{topic}`, `/hub/{topic}`, or multi-segment paths. Internal links are always `/blog/{single-segment}` only (e.g. `/blog/hub-coffee`).
 - Write in a pillar tone: broad, authoritative, introductory. Do not go as deep as the spokes.
-- Every spoke MUST be linked with descriptive anchor text. Format: `[descriptive text](/blog/{url_slug})`
+- Every spoke MUST be linked with descriptive anchor text. Format: `[descriptive text](/blog/{url_slug})` where `{url_slug}` is a single segment.
 - Do NOT repeat the full content of spokes — summarize and entice the reader to click through.
 - Include the target keyword naturally in the first 100 words.
 - Use `type: hub` and `hub_topic: "{topic}"` in frontmatter.

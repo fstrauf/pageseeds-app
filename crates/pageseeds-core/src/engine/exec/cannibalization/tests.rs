@@ -1908,7 +1908,7 @@ Some content here.
             "hub_gaps": [
                 {
                     "theme": "cash secured puts",
-                    "suggested_url": "/hub/cash-secured-puts",
+                    "suggested_url": "hub-cash-secured-puts",
                     "suggested_title": "Cash Secured Puts: Complete Guide",
                     "spoke_pages": [{"id": 1, "url": "/blog/a", "title": "A"}],
                     "reason": "No hub exists"

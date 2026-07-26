@@ -22,7 +22,7 @@ use rusqlite::{Connection, OptionalExtension};
 /// Detect existing hub-like pages and persist `page_type = "hub"` in the DB + articles.json.
 ///
 /// Heuristics used:
-/// - URL slug starts with `hub/`, `guide/`, `hub_`, or `guide_`
+/// - URL slug starts with `hub-`/`guide-` (canonical), or dirty `hub/`/`guide/`/`hub_`/`guide_`
 /// - Title contains "complete guide" or "ultimate guide"
 /// - Word count > 2000 AND target_keyword is broad (3+ words or generic single word)
 ///
@@ -42,6 +42,8 @@ pub fn backfill_hub_page_types(db: &Connection, project_id: &str) -> Result<usiz
 
         let is_hub_url = slug.starts_with("hub/")
             || slug.starts_with("guide/")
+            || slug.starts_with("hub-")
+            || slug.starts_with("guide-")
             || slug.starts_with("hub_")
             || slug.starts_with("guide_");
 
@@ -839,7 +841,7 @@ mod tests {
             "hub_recommendations": [
                 {
                     "topic": "risk-management",
-                    "suggested_url": "/hub/risk-management",
+                    "suggested_url": "hub-risk-management",
                     "suggested_title": "Risk Management Hub",
                     "spoke_pages": [1, 2],
                     "reason": "Gap detected"

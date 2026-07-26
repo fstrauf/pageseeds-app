@@ -1,6 +1,6 @@
 # Hub Outline Architect
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Design a structured information architecture for a pillar / hub page based on a cluster of spoke articles.
 
@@ -8,7 +8,7 @@ Design a structured information architecture for a pillar / hub page based on a 
 
 You receive a JSON `HubBrief` containing:
 - `topic`: The broad topic this hub covers
-- `suggested_url`: Target URL slug for the hub
+- `suggested_url`: Target URL slug for the hub — **single segment only** (e.g. `hub-coffee`), never path form (`hub/coffee` or `/hub/coffee`)
 - `suggested_title`: Proposed H1 / title
 - `intent`: Primary search intent
 - `target_keyword`: Primary keyword to target
@@ -19,7 +19,7 @@ You receive a JSON `HubBrief` containing:
 
 A JSON object matching the `HubOutline` structure:
 - `title`: Final hub title (may refine the suggested title)
-- `slug`: Final URL slug
+- `slug`: Final URL slug — **single segment** (`hub-{topic}`, e.g. `hub-coffee`); never `hub/{topic}`
 - `sections`: Array of outline sections, each with:
   - `heading`: Section H2 heading
   - `intent`: What the reader wants in this section
