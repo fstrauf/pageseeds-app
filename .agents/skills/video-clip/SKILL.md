@@ -51,7 +51,7 @@ without that.
 | **Capability** | `pageseeds-cli video-clip-context` (free desk read), `pageseeds-cli video-clip-render` (operator tier) |
 | **Craft** | Embedded `video-script` skill (schema v1 clip definition) — load/reference; do **not** duplicate long craft rules |
 | **Policy** | This skill — rails, path conventions, quality gate, report |
-| **Config** | Target repo `video.config.json` + `video/clips/` + `video/out/` |
+| **Config** | Target repo `video.config.json` + `video/clips/` (outputs are central — see below) |
 | **Product source** | **Out of scope** — never patch `pageseeds-app` mid-run |
 
 ---
@@ -62,7 +62,7 @@ without that.
 |------|-----------|-----------|
 | **This skill** | Customer project / neutral cwd | Clip JSON under `video/clips/`, optional short automation report; **after publish**, source MDX **body** embed at `source.content_path` (customer content only) |
 | **pageseeds-cli** | N/A (binary on PATH) | Context JSON stdout; render via operator-tier engine |
-| **video-engine** | pageseeds-app checkout | Outputs under target `video/out/`; successful publish writes `published.youtube` / `published.tiktok` / `published.instagram` back into the clip JSON |
+| **video-engine** | pageseeds-app checkout | Outputs to central `~/01_code/video-clip-backup/<project_id>/` (never the repo); successful publish writes `published.youtube` / `published.tiktok` / `published.instagram` back into the clip JSON |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs / new `ui_targets` |
 
 If the session is inside the product repo *to implement features*, stop this
@@ -98,7 +98,7 @@ All tools print **JSON** on success. Never invent paths, durations, or packaging
 |------|------|
 | `video.config.json` | Engine config: `base_url`, `dev_servers[]`, `ui_targets`, brand |
 | `video/clips/<slug>.json` | Clip definition (schema v1) — you write this |
-| `video/out/` | Render outputs (engine-owned) |
+| `~/01_code/video-clip-backup/<project_id>/` | Render outputs (engine-owned, central — not the repo) |
 
 Spec: `docs/video_clip_spec.md`. Engine README: `video-engine/README.md` in the
 pageseeds-app checkout.
@@ -119,7 +119,7 @@ Breaking these fails the run.
 | 3 | **Never invent `video.config.json`** — stop with gap report + docs link. |
 | 4 | **Never modify the webapp** (or product code in the target repo) “for a shot.” New UI moments = product gap. |
 | 5 | **Demo / config-declared targets only** — `timing_map[].ui_target` ⊆ config `ui_targets` (+ builtin `end_card`). Prefer stable demo routes (e.g. `/demo-portfolio`). |
-| 6 | Clip path **`video/clips/<slug>.json`**; outputs under **`video/out/`** (engine SoT). Not bare `clips/`. |
+| 6 | Clip path **`video/clips/<slug>.json`**; outputs central at **`~/01_code/video-clip-backup/<project_id>/`** (engine SoT). Not bare `clips/`. |
 | 7 | **Verify frames + ffprobe** before claiming success. |
 | 8 | Ground `spoken_script` in article body/context — no invented figures (`video-script` rule). |
 | 9 | Operator-tier render assumes **dev machine** with node/ffmpeg + pageseeds-app `video-engine/`. Fail with install hints; do not paper over. |
@@ -487,7 +487,7 @@ list.
 
 - Config gate first; never invent `video.config.json`.
 - CLI context + render only; craft via `video-script`; policy here.
-- Paths: `video/clips/` in, `video/out/` out.
+- Paths: `video/clips/` in, `~/01_code/video-clip-backup/<project_id>/` out.
 - Demo/config `ui_targets` only; no webapp edits for shots.
 - One slug per run; operator-tier deps required for render.
 - ffprobe 1080×1920 / 40–50s / audio + ≥5 frames before success.
