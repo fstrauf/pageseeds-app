@@ -128,38 +128,62 @@ The timing_map in the clip JSON references these names via `ui_target`.
    overlays via **Pillow** (no ffmpeg drawtext dependency), muxes
    loudness-normalized voiceover, exports MP4 + thumbnail.
 
-## Publish (YouTube)
+## Publish (YouTube + TikTok inbox)
 
-Phase D (#228): optional upload of a rendered short to YouTube. **YouTube only** —
-no TikTok/Instagram. Stdlib Python (`urllib`); no extra pip deps.
+Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
+(`urllib` / `http.client`); no extra pip deps. Platforms:
+
+| Platform | Mode | Issue |
+|---|---|---|
+| **YouTube** | Data API v3 resumable upload (`privacyStatus=private`) | #228 |
+| **TikTok** | Content Posting API **Inbox Upload** (drafts; user finishes in app) | #231 |
+
+**Not supported:** Instagram (#232), TikTok Direct Post (`video.publish`).
 
 ```bash
 # Dry-run (no network; secrets not required)
 .venv/bin/python publish.py <clip.json> --platforms youtube --dry-run
+.venv/bin/python publish.py <clip.json> --platforms tiktok --dry-run
+.venv/bin/python publish.py <clip.json> --platforms youtube,tiktok --dry-run
 
 # Real upload
 .venv/bin/python publish.py <clip.json> --platforms youtube [--video path/to.mp4]
+.venv/bin/python publish.py <clip.json> --platforms tiktok [--video path/to.mp4]
+.venv/bin/python publish.py <clip.json> --platforms youtube,tiktok [--video path/to.mp4]
 ```
 
 - **Metadata** comes from the clip `packaging` block (`title`, `description`, `hashtags`).
-  Description may be long-form SEO copy (see `docs/video_clip_spec.md`); if over 5,000
-  chars, `publish.py` **warns on stderr** and does not truncate. `--dry-run` plan JSON
-  includes `description_chars` (int) next to the metadata dump.
+  - **YouTube:** sent as snippet/tags. Description may be long-form SEO copy (see
+    `docs/video_clip_spec.md`); if over 5,000 chars, `publish.py` **warns on stderr**
+    and does not truncate. `--dry-run` plan JSON includes `description_chars`.
+  - **TikTok inbox:** packaging is **operator preview only** — inbox init does **not**
+    accept `post_info` / title / privacy. Caption is set by the creator in the app.
 - **Video path:** `--video`, else `…/video/out/<slug>.mp4` when the clip lives under
   `video/clips/`, else `video-engine/out/<slug>.mp4`.
-- **Stdout:** JSON (`status=ok` + `url`, or `status=dry_run` plan).
-- **Clip write-back:** a successful (non-dry-run) upload writes `published.youtube`
-  (`video_id`, `url`, `published_at`, `privacy`) into the clip JSON; dry-run does not
-  mutate the file. Stdout success JSON includes the same `published.youtube` block.
-- **Exit codes:** `0` ok · `1` upload/API failed · `2` bad args / config / missing secrets.
+- **Stdout:** single-platform → one JSON object; multi-platform →
+  `{"results":[...]}`. Each entry has `status=ok|dry_run|error`.
+- **Clip write-back:** successful (non-dry-run) uploads merge into `published` without
+  wiping other platform keys:
+  - `published.youtube` — `video_id`, `url`, `published_at`, `privacy`
+  - `published.tiktok` — `publish_id`, `mode` (`inbox`), `published_at`, `note`
+  Dry-run does not mutate the file.
+- **Multi-platform:** each platform runs independently; failure of one does not skip
+  the other.
+- **Exit codes:** `0` all succeeded (or dry-run) · `1` any platform failed after
+  shared preflight · `2` bad args / unknown platform / unresolvable clip|video.
 
-### Auth setup (one-time)
+Secrets chain (same as PageSeeds `EnvResolver`):  
+`~/.config/automation/secrets.env` → repo `.env.local` → repo `.env` → process env.  
+First file wins per key. Missing credentials print a one-line stderr hint (no stacktrace)
+and mark that platform as failed.
+
+### YouTube auth setup (one-time)
 
 1. Google Cloud project → enable **YouTube Data API v3**.
 2. Create **OAuth client** type **Desktop / installed app**.
 3. Mint a refresh token once (OAuth playground or a small installed-app consent flow)
    with scope `https://www.googleapis.com/auth/youtube.upload`.
-4. Store credentials (highest priority path shown; same chain as PageSeeds secrets):
+4. Store credentials:
 
 ```bash
 # ~/.config/automation/secrets.env
@@ -168,13 +192,39 @@ YOUTUBE_CLIENT_SECRET=...
 YOUTUBE_REFRESH_TOKEN=...
 ```
 
-Fallback files (first file wins per key, then process env): repo `.env.local`, repo `.env`.
-
 Uploads use **`privacyStatus=private`** until the OAuth app is verified by Google
 (unverified apps cannot set public without quota/app review friction). Change privacy
 in YouTube Studio after upload if needed.
 
-Missing credentials print a one-line stderr hint and exit `2` (no stacktrace).
+### TikTok auth setup (one-time) — Inbox Upload only
+
+1. [TikTok for Developers](https://developers.tiktok.com/) → create / open an app.
+2. Add the **Content Posting API** product.
+3. Request scope **`video.upload`** only (inbox / drafts).  
+   **Do not** use `video.publish` / Direct Post for this adapter — that path is out of
+   scope and requires app audit.
+4. Complete OAuth (user consent) and store a **refresh token**:
+
+```bash
+# ~/.config/automation/secrets.env
+TIKTOK_CLIENT_KEY=...
+TIKTOK_CLIENT_SECRET=...
+TIKTOK_REFRESH_TOKEN=...
+```
+
+5. **Flow:** refresh access token → `POST /v2/post/publish/inbox/video/init/` with
+   `source_info` only (`FILE_UPLOAD` + size/chunk fields; **no** `post_info`) →
+   `PUT` binary chunks to the returned `upload_url` → optional status fetch → write
+   `published.tiktok`. The creator finishes caption, privacy, and post in the **TikTok app**
+   (inbox notification).
+6. **Pending-share limit:** TikTok allows roughly **~5 unposted API uploads per 24h**
+   per user (`spam_risk_too_many_pending_share`). Finish or discard drafts in-app before
+   uploading more.
+7. **Chunk rules** (media transfer guide): files **&lt; 5 MB** must be one chunk
+   (`chunk_size = video_size`); **5–64 MB** may be a single chunk; **&gt; 64 MB** multi-chunk
+   (chunk 5–64 MB, final chunk up to 128 MB). See `publish.py` `tiktok_source_info`.
+
+Live TikTok upload is verified owner-side (not CI). Never commit secrets to the repo.
 
 ## Known limitations
 
