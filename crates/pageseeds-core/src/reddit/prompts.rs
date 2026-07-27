@@ -22,7 +22,8 @@ pub fn build_draft_reply_prompt(
 ) -> String {
     let stance_instruction = match mention_stance {
         "REQUIRED" => format!(
-            "REQUIRED: The reply MUST contain the exact product name \"{}\" — no vague substitutes like 'a tool' or 'the app'.",
+            "REQUIRED: If you produce a reply, it MUST contain the exact product name \"{}\" — no vague substitutes like 'a tool' or 'the app'. \
+             If no value-first reply with a natural mention is possible, return empty `reply_text`.",
             product_name
         ),
         "RECOMMENDED" => format!(

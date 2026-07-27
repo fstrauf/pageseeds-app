@@ -1,5 +1,55 @@
 use super::{load_search_params_from_artifact, parse_config_fallback};
 use crate::models::task::Task;
+use rusqlite::Connection;
+use std::collections::HashSet;
+use std::path::Path;
+
+/// Build the search-time handled set: history file IDs ∪ SQLite
+/// `posted`/`skipped` for this project. Works when `_posted_history.json`
+/// is missing — SQLite alone is enough to suppress re-surface.
+pub(crate) fn collect_handled_post_ids(
+    conn: &Connection,
+    project_path: &str,
+    project_id: &str,
+) -> HashSet<String> {
+    let history_manager = crate::reddit::history::RedditHistoryManager::new(Path::new(project_path));
+    let mut handled = history_manager.get_all_handled_ids();
+    union_db_handled_ids(conn, project_id, &mut handled);
+    handled
+}
+
+/// Add SQLite `post_id`s with `reply_status IN ('posted','skipped')` into `handled`.
+pub(crate) fn union_db_handled_ids(
+    conn: &Connection,
+    project_id: &str,
+    handled: &mut HashSet<String>,
+) {
+    let mut stmt = match conn.prepare(
+        "SELECT post_id FROM reddit_opportunities \
+         WHERE project_id=?1 AND reply_status IN ('posted','skipped')",
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!(
+                "[reddit_search] failed to prepare DB handled query: {}",
+                e
+            );
+            return;
+        }
+    };
+    let rows = match stmt.query_map(rusqlite::params![project_id], |row| {
+        row.get::<_, String>(0)
+    }) {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[reddit_search] failed to query DB handled ids: {}", e);
+            return;
+        }
+    };
+    for id in rows.flatten() {
+        handled.insert(id);
+    }
+}
 
 /// Compute engagement, accessibility, and overall scores.
 ///
@@ -46,18 +96,24 @@ pub(crate) fn compute_scores(
 ///
 /// Reads queries/subreddits from the structured search params artifact (produced by
 /// reddit_config_parse_stage), calls the Reddit API, applies the 14-day filter and
-/// MEDIUM+ score filter, deduplicates, and returns the full filtered candidate pool.
+/// MEDIUM+ score filter, deduplicates (history file ∪ SQLite posted/skipped), and
+/// returns the full filtered candidate pool.
+///
+/// `handled_ids` should be built via [`collect_handled_post_ids`] (registry loads
+/// it from `ctx.conn` before the async future so `&Connection` is not held across await).
 pub(crate) async fn exec_reddit_search(
     task: &Task,
     project_path: &str,
+    handled_ids: HashSet<String>,
 ) -> crate::engine::workflows::StepResult {
     const MAX_AGE_DAYS: i64 = 14;
     const MAX_SEARCH_PAIRS: usize = 50;
 
     log::info!(
-        "[reddit_search] starting for project={} path={}",
+        "[reddit_search] starting for project={} path={} handled_ids={}",
         task.project_id,
-        project_path
+        project_path,
+        handled_ids.len()
     );
 
     // Try to load structured search params from artifact (produced by reddit_config_parse_stage)
@@ -139,10 +195,6 @@ pub(crate) async fn exec_reddit_search(
     let mut below_threshold = 0usize;
     let mut history_filtered = 0usize;
     let mut subreddit_capped = 0usize;
-
-    let history_manager =
-        crate::reddit::history::RedditHistoryManager::new(std::path::Path::new(project_path));
-    let handled_ids = history_manager.get_all_handled_ids();
 
     // Resolve Reddit OAuth credentials if available — OAuth search avoids the
     // aggressive bot detection that blocks the public JSON API.
