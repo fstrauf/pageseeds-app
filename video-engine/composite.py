@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""composite.py — assemble the final vertical MP4 from recorded segments.
+
+Usage: composite.py <clip.json> [--config <video.config.json|dir>] [--out <dir>]
+
+Pipeline:
+  1. Trim per-segment recordings (<out>/segments/) to durations scaled to the
+     actual voiceover length (timing_map proportions), concat into a base video.
+  2. Render caption PNGs from voice.srt (word-level -> short phrases) plus the
+     hook keyword caption and an end card PNG (Pillow). Every phrase caption
+     gets a semi-opaque dark rounded-rectangle background for contrast.
+     End-card domain/colors come from the config's "brand" section.
+  3. Overlay captions + hook + top progress bar, mux loudness-normalized
+     voiceover, export H.264 1080x1920 30fps ~8Mbps MP4 + thumbnail jpg.
+
+drawtext is intentionally NOT used: the local ffmpeg build lacks libfreetype,
+so all text is rendered to PNG with Pillow and overlaid.
+
+Exit codes: 0 ok · 1 ffmpeg/pipeline failure · 2 bad args / config error
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+W, H = 1080, 1920
+FPS = 30
+FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+END_CARD_TAIL_S = 1.5  # extra seconds the end card holds after the voice ends
+CAPTION_BOX_RGBA = (0, 0, 0, 178)  # ~70% opaque black behind phrase captions
+CAPTION_BOX_RADIUS = 18
+
+DEFAULT_BRAND = {
+    "domain": "example.com",
+    "progress_bar_color": [140, 180, 255],
+    "end_card": {
+        "bg": [11, 16, 32],
+        "accent": [140, 180, 255],
+        "text": [235, 240, 255],
+        "muted": [150, 160, 185],
+        "subtitle": "",
+    },
+}
+
+
+def run(cmd: list[str]) -> None:
+    print("+", " ".join(str(c) for c in cmd[:6]), "..." if len(cmd) > 6 else "")
+    subprocess.run([str(c) for c in cmd], check=True)
+
+
+def ffprobe_duration(path: Path) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(out.stdout.strip())
+
+
+def resolve_config(p: str | None) -> dict:
+    if not p:
+        return {}
+    path = Path(p).resolve()
+    if path.is_dir():
+        path = path / "video.config.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"composite: cannot read config at {path}: {e}")
+
+
+def brand_config(config: dict) -> dict:
+    b = {**DEFAULT_BRAND, **config.get("brand", {})}
+    b["end_card"] = {**DEFAULT_BRAND["end_card"], **config.get("brand", {}).get("end_card", {})}
+    return b
+
+
+# --- SRT -> phrases ------------------------------------------------------------
+
+SRT_TS = re.compile(r"(\d+):(\d+):(\d+),(\d+)")
+
+
+def parse_srt(path: Path) -> list[dict]:
+    cues = []
+    for block in re.split(r"\n\s*\n", path.read_text(encoding="utf-8").strip()):
+        lines = [l for l in block.strip().splitlines() if l.strip()]
+        if len(lines) < 3:
+            continue
+        m = re.findall(SRT_TS, lines[1])
+        if len(m) != 2:
+            continue
+        to_s = lambda g: int(g[0]) * 3600 + int(g[1]) * 60 + int(g[2]) + int(g[3]) / 1000
+        cues.append({"start": to_s(m[0]), "end": to_s(m[1]),
+                     "text": " ".join(lines[2:]).strip()})
+    return cues
+
+
+def group_phrases(words: list[dict], max_words=3, max_dur=2.2) -> list[dict]:
+    """Group word-level cues into short caption phrases."""
+    phrases, cur = [], []
+    for w in words:
+        cur.append(w)
+        text = " ".join(x["text"] for x in cur)
+        dur = cur[-1]["end"] - cur[0]["start"]
+        if len(cur) >= max_words or dur >= max_dur or re.search(r"[.,!?—:;]$", w["text"]):
+            phrases.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": text})
+            cur = []
+    if cur:
+        phrases.append({"start": cur[0]["start"], "end": cur[-1]["end"],
+                        "text": " ".join(x["text"] for x in cur)})
+    # avoid 1-frame gaps between consecutive phrases
+    for a, b in zip(phrases, phrases[1:]):
+        if b["start"] > a["end"]:
+            a["end"] = b["start"]
+    return phrases
+
+
+# --- PNG rendering (Pillow) ------------------------------------------------------
+
+def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> list[str]:
+    lines, cur = [], ""
+    for word in text.split():
+        trial = f"{cur} {word}".strip()
+        if font.getbbox(trial)[2] <= max_w or not cur:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def render_caption_png(text: str, path: Path, fontsize=64, box=False) -> int:
+    """Render a 1080-wide transparent caption strip. Returns canvas height.
+
+    box=False: one semi-opaque dark rounded rect behind the whole text block
+               (default for phrase captions — contrast over busy UI).
+    box=True:  per-line rounded rects (kept for the extra-large hook caption).
+    """
+    font = ImageFont.truetype(FONT, fontsize)
+    lines = wrap_text(text, font, max_w=940)
+    line_h = int(fontsize * 1.32)
+    pad = 24
+    canvas_h = line_h * len(lines) + 2 * pad
+    img = Image.new("RGBA", (W, canvas_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    if not box:
+        # measure the widest line to size a single background block
+        max_tw = max(font.getbbox(l)[2] - font.getbbox(l)[0] for l in lines)
+        x0 = (W - max_tw) // 2 - 28
+        x1 = (W + max_tw) // 2 + 28
+        draw.rounded_rectangle([x0, 8, x1, canvas_h - 8],
+                               radius=CAPTION_BOX_RADIUS, fill=CAPTION_BOX_RGBA)
+    y = pad
+    for line in lines:
+        bbox = font.getbbox(line)
+        x = (W - (bbox[2] - bbox[0])) // 2
+        if box:
+            draw.rounded_rectangle(
+                [x - 28, y - 12, x + (bbox[2] - bbox[0]) + 28, y + line_h],
+                radius=18, fill=(0, 0, 0, 130))
+        draw.text((x, y), line, font=font, fill="white",
+                  stroke_width=max(4, fontsize // 12), stroke_fill="black")
+        y += line_h
+    img.save(path)
+    return canvas_h
+
+
+def render_end_card_png(clip: dict, brand: dict, path: Path) -> None:
+    ec = brand["end_card"]
+    bg, accent = tuple(ec["bg"]), tuple(ec["accent"])
+    img = Image.new("RGB", (W, H), bg)
+    draw = ImageDraw.Draw(img)
+    # accent rule
+    draw.rectangle([W // 2 - 120, 700, W // 2 + 120, 708], fill=accent)
+    cta_font = ImageFont.truetype(FONT, 62)
+    y = 800
+    for line in wrap_text(clip["cta"]["text"], cta_font, max_w=880):
+        bbox = cta_font.getbbox(line)
+        draw.text(((W - (bbox[2] - bbox[0])) // 2, y), line, font=cta_font,
+                  fill=tuple(ec["text"]))
+        y += 84
+    dom_font = ImageFont.truetype(FONT, 116)
+    domain = brand["domain"]
+    bbox = dom_font.getbbox(domain)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, y + 70), domain, font=dom_font,
+              fill=accent)
+    if ec.get("subtitle"):
+        sub_font = ImageFont.truetype(FONT, 40)
+        bbox = sub_font.getbbox(ec["subtitle"])
+        draw.text(((W - (bbox[2] - bbox[0])) // 2, y + 260), ec["subtitle"],
+                  font=sub_font, fill=tuple(ec["muted"]))
+    img.save(path)
+
+
+def render_bar_png(brand: dict, path: Path) -> None:
+    Image.new("RGB", (W, 10), tuple(brand["progress_bar_color"])).save(path)
+
+
+# --- main -------------------------------------------------------------------------
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Assemble the final vertical MP4 for a clip.")
+    ap.add_argument("clip", help="clip definition JSON")
+    ap.add_argument("--config", help="video.config.json or a directory containing it")
+    ap.add_argument("--out", default=str(Path(__file__).resolve().parent / "out"))
+    args = ap.parse_args()
+
+    try:
+        clip = json.loads(Path(args.clip).read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"composite: cannot read clip at {args.clip}: {e}")
+    brand = brand_config(resolve_config(args.config))
+    out_dir = Path(args.out).resolve()
+
+    slug = clip["source"]["slug"]
+    manifest_path = out_dir / "segments/segments.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"composite: cannot read segments manifest at {manifest_path}: {e} — run record.mjs first")
+    segs_by_index = {m["index"]: m for m in manifest}
+
+    voice_dur = ffprobe_duration(out_dir / "voice.mp3")
+    intent_total = clip["timing_map"][-1]["to_s"]
+    scale = voice_dur / intent_total
+    total = voice_dur + END_CARD_TAIL_S
+    print(f"[composite] voice {voice_dur:.2f}s, intent {intent_total}s, scale {scale:.3f}, total {total:.2f}s")
+
+    parts_dir = out_dir / "parts"
+    parts_dir.mkdir(exist_ok=True)
+    part_files, seg_bounds = [], []
+    t = 0.0
+    for i, seg in enumerate(clip["timing_map"]):
+        dur = (seg["to_s"] - seg["from_s"]) * scale
+        is_end_card = seg["ui_target"] == "end_card"
+        if is_end_card:
+            dur += END_CARD_TAIL_S
+        part = parts_dir / f"part{i:02d}.mp4"
+        if i in segs_by_index:
+            m = segs_by_index[i]
+            src = out_dir / "segments" / m["file"]
+            run(["ffmpeg", "-y", "-ss", f"{m['ready_offset_s']:.2f}", "-t", f"{dur:.3f}",
+                 "-i", src,
+                 "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,fps={FPS},setsar=1",
+                 "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-an", part])
+        elif is_end_card:
+            card = parts_dir / "endcard.png"
+            render_end_card_png(clip, brand, card)
+            run(["ffmpeg", "-y", "-loop", "1", "-t", f"{dur:.3f}", "-i", card,
+                 "-vf", f"fps={FPS},setsar=1", "-c:v", "libx264", "-preset", "medium",
+                 "-crf", "18", "-an", part])
+        else:
+            sys.exit(f"[composite] no recording for ui_target {seg['ui_target']}")
+        part_files.append(part)
+        seg_bounds.append({"index": i, "ui_target": seg["ui_target"], "start": t, "end": t + dur})
+        t += dur
+
+    concat_list = parts_dir / "concat.txt"
+    concat_list.write_text("".join(f"file '{p}'\n" for p in part_files))
+    base = parts_dir / "base.mp4"
+    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", base])
+
+    # captions
+    cap_dir = out_dir / "captions"
+    cap_dir.mkdir(exist_ok=True)
+    phrases = group_phrases(parse_srt(out_dir / "voice.srt"))
+    print(f"[composite] {len(phrases)} caption phrases")
+    inputs = [str(base), str(out_dir / "voice.mp3")]
+    chain = "[0:v]"
+    for j, ph in enumerate(phrases):
+        png = cap_dir / f"cue{j:03d}.png"
+        ch = render_caption_png(ph["text"], png)
+        inputs.append(str(png))
+        idx = j + 2
+        y = 1650 - ch
+        chain += f"[{idx}:v]overlay=0:{y}:enable='between(t,{ph['start']:.3f},{ph['end']:.3f})'[c{j}];[c{j}]"
+    # hook keyword, first 3s
+    hook = cap_dir / "hook.png"
+    render_caption_png(clip["keywords"][0].upper(), hook, fontsize=104, box=True)
+    inputs.append(str(hook))
+    hi = len(inputs) - 1
+    hook_y = 760
+    chain += f"[{hi}:v]overlay=0:{hook_y}:enable='between(t,0,3)'[hk];[hk]"
+    # progress bar
+    bar = cap_dir / "bar.png"
+    render_bar_png(brand, bar)
+    inputs.append(str(bar))
+    bi = len(inputs) - 1
+    chain += f"[{bi}:v]overlay=x='-{W}+{W}*t/{total:.3f}':y=0[vout]"
+
+    audio = (f"[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,apad,atrim=0:{total:.3f},"
+             f"asetpts=PTS-STARTPTS[aout]")
+
+    cmd = ["ffmpeg", "-y"]
+    for inp in inputs:
+        cmd += ["-i", inp]
+    cmd += ["-filter_complex", chain + ";" + audio,
+            "-map", "[vout]", "-map", "[aout]",
+            "-c:v", "libx264", "-preset", "medium", "-b:v", "8M", "-maxrate", "9M",
+            "-bufsize", "16M", "-pix_fmt", "yuv420p", "-r", str(FPS),
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            "-t", f"{total:.3f}", out_dir / f"{slug}.mp4"]
+    run(cmd)
+
+    # thumbnail from the middle of the scanner segment (fallback: middle of video)
+    thumb_t = next((b["start"] + (b["end"] - b["start"]) / 2
+                    for b in seg_bounds if b["ui_target"] == "scanner_results"), total / 2)
+    run(["ffmpeg", "-y", "-ss", f"{thumb_t:.2f}", "-i", out_dir / f"{slug}.mp4",
+         "-frames:v", "1", "-update", "1", "-q:v", "2", out_dir / f"{slug}.jpg"])
+
+    print(f"[composite] done -> {out_dir / (slug + '.mp4')}")
+
+
+if __name__ == "__main__":
+    main()

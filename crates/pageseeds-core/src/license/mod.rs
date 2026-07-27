@@ -96,6 +96,22 @@ pub fn paid_tools() -> &'static [&'static str] {
     PAID_TOOLS
 }
 
+/// Operator-tier CLI tools — dev-machine only, **not** part of the commercial
+/// free/paid boundary (docs/CLI_COMMERCIAL.md "Operator tier"). They require
+/// external toolchains and a source checkout, need no license, and are never
+/// sold to customers.
+static OPERATOR_TOOLS: &[&str] = &["video-clip-render"];
+
+/// Whether `tool` is an operator-tier tool (no license, outside free/paid).
+pub fn is_operator_tool(tool: &str) -> bool {
+    OPERATOR_TOOLS.contains(&tool)
+}
+
+/// Operator-tier tool names. Exposed for inventory invariant tests.
+pub fn operator_tools() -> &'static [&'static str] {
+    OPERATOR_TOOLS
+}
+
 /// Activate: verify JWT (signature + claims) then persist raw token string.
 pub fn activate(token: &str) -> Result<(), String> {
     let token = token.trim();
@@ -437,7 +453,21 @@ mod tests {
         assert!(!requires_paid_license("gsc-queries"));
         assert!(!requires_paid_license("research-context"));
         assert!(!requires_paid_license("license"));
+        assert!(!requires_paid_license("video-clip-render"));
         assert!(!requires_paid_license("unknown-tool-xyz"));
+    }
+
+    #[test]
+    fn operator_tier_is_disjoint_from_paid() {
+        assert!(is_operator_tool("video-clip-render"));
+        assert!(!is_operator_tool("write-context"));
+        assert!(!is_operator_tool("site-overview"));
+        for tool in operator_tools() {
+            assert!(
+                !requires_paid_license(tool),
+                "operator tool '{tool}' must not require a license"
+            );
+        }
     }
 
     #[test]
