@@ -1,9 +1,10 @@
 # Video Clip Generation Spec
 
 Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B: [#221](https://github.com/fstrauf/pageseeds-app/issues/221)
-Status: **Phase A complete**; **Phase B landing** (#221 / PR) — context command +
-`video-script` skill + operator-tier render via in-repo `video-engine/`. Phase C
-still optional. PoC project: daystoexpiry
+Status: **Phase A complete**; **Phase B landed** (#221) — context command +
+`video-script` skill + operator-tier render via in-repo `video-engine/`.
+**Operator path:** `.agents/skills/video-clip/SKILL.md` (`/video-clip`, #222).
+Phase C still optional. PoC project: daystoexpiry
 
 ## Purpose
 
@@ -122,19 +123,42 @@ part of the contract.
 
 ## Workflow phases
 
-### Phase A — PoC, zero Rust changes (complete)
+### Canonical operator path (product)
+
+**Source of truth for article → clip JSON → render → quality gate:**  
+[`.agents/skills/video-clip/SKILL.md`](../.agents/skills/video-clip/SKILL.md)
+(`/video-clip`). Grok discovery: `.grok/skills/video-clip/SKILL.md` is a symlink
+to that file — edit only the `.agents` path.
+
+Sequence:
+
+1. Gate on target-repo `video.config.json` (never invent it).
+2. Free desk: `pageseeds-cli video-clip-context -S <slug>`.
+3. Agentic craft via embedded `video-script` → write `video/clips/<slug>.json`
+   (schema v1 in this doc).
+4. Preflight `dev_servers` / `base_url` from config.
+5. Operator tier: `pageseeds-cli video-clip-render --clip video/clips/<slug>.json`.
+6. Quality gate: ffprobe (1080×1920, 40–50s, audio) + ≥5 visual frames.
+7. Report MP4 path + packaging block (no auto-upload).
+
+Weekly SEO may **electively** suggest `/video-clip <slug>` after a Path B ship
+when config exists (0–1 candidates, default 0) — not a weekly spine action and
+not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
+
+### Phase A — PoC, zero Rust changes (complete; historical)
 
 1. Pick one article with clear visual potential (income/wheel/calculator piece).
 2. Build a **stable mocked demo portfolio** in the project repo — Playwright journeys must
    never fail on empty or boring data. This is the biggest PoC risk; solve it first.
-3. Project-level `video-clip` skill in the project repo: reads the article via
-   `pageseeds-cli article --slug …`, drafts the clip definition JSON, runs the render
-   scripts, reports friction.
+3. Project-level `video-clip` skill in the **customer** repo was a **historical PoC** —
+   reads via desk tools, drafts clip JSON, runs render scripts. **Product operator
+   policy now lives in pageseeds-app** (`.agents/skills/video-clip/`); do not re-home
+   the canonical skill under customer `.github/skills/`.
 4. Render pipeline PoC in the project repo (`tools/video/`): Playwright record → edge-tts +
    faster-whisper → FFmpeg composite → `generate-clip --definition clip.json`.
 5. Deliverable: one finished MP4 + documented friction notes.
 
-### Phase B — Productize in PageSeeds (landing on this branch, #221)
+### Phase B — Productize in PageSeeds (#221 landed; operator skill #222)
 
 1. Finalize this spec from PoC learnings.
 2. Embedded `video-script` skill in `crates/pageseeds-core/skills/video-script/SKILL.md`
@@ -148,6 +172,8 @@ part of the contract.
    (AGENTS.md §5 subprocess-by-tier). Requires a source checkout + Node/FFmpeg on PATH;
    project owns `video.config.json` and clip JSON.
 5. Document in `docs/TOOL_CATALOG.md` + `docs/CLI_COMMERCIAL.md`; ship with `pnpm test:cli`.
+6. **Operator skill** `.agents/skills/video-clip/SKILL.md` sequences the packaged path
+   and links from weekly-seo as elective post-publish only (#222).
 
 ### Phase C — Optional task type + outcomes (after 3–5 videos)
 

@@ -21,8 +21,8 @@ You get structured JSON: `project_id`, `slug`, `title`, `h1`, `file_path`,
 
 ## Output
 
-Write one clip definition file (e.g. `clips/<slug>.json` in the project repo)
-matching **schema v1**. Required shape:
+Write one clip definition file at `video/clips/<slug>.json` in the project repo
+(engine SoT — not bare `clips/`) matching **schema v1**. Required shape:
 
 ```json
 {
@@ -73,8 +73,10 @@ matching **schema v1**. Required shape:
 ## Then render (operator tier)
 
 ```
-pageseeds-cli video-clip-render --clip clips/<slug>.json
+pageseeds-cli video-clip-render --clip video/clips/<slug>.json
 ```
 
 Requires node/ffmpeg and the project's `video.config.json`
-(docs/CLI_COMMERCIAL.md "Operator tier").
+(docs/CLI_COMMERCIAL.md "Operator tier"). For the full operator runbook
+(config gate, servers, ffprobe/frame quality gate, packaging report), use
+`.agents/skills/video-clip/SKILL.md` (`/video-clip`).
