@@ -128,7 +128,7 @@ The timing_map in the clip JSON references these names via `ui_target`.
    overlays via **Pillow** (no ffmpeg drawtext dependency), muxes
    loudness-normalized voiceover, exports MP4 + thumbnail.
 
-## Publish (YouTube + TikTok inbox)
+## Publish (YouTube + TikTok inbox + Instagram Reels)
 
 Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
 (`urllib` / `http.client`); no extra pip deps. Platforms:
@@ -137,18 +137,23 @@ Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
 |---|---|---|
 | **YouTube** | Data API v3 resumable upload (`privacyStatus=private`) | #228 |
 | **TikTok** | Content Posting API **Inbox Upload** (drafts; user finishes in app) | #231 |
+| **Instagram** | Graph API **Reels** (resumable container + rupload + `media_publish`) | #232 |
 
-**Not supported:** Instagram (#232), TikTok Direct Post (`video.publish`).
+**Not supported:** TikTok Direct Post (`video.publish`).
 
 ```bash
 # Dry-run (no network; secrets not required)
 .venv/bin/python publish.py <clip.json> --platforms youtube --dry-run
 .venv/bin/python publish.py <clip.json> --platforms tiktok --dry-run
+.venv/bin/python publish.py <clip.json> --platforms instagram --dry-run
+.venv/bin/python publish.py <clip.json> --platforms youtube,instagram --dry-run
 .venv/bin/python publish.py <clip.json> --platforms youtube,tiktok --dry-run
 
 # Real upload
 .venv/bin/python publish.py <clip.json> --platforms youtube [--video path/to.mp4]
 .venv/bin/python publish.py <clip.json> --platforms tiktok [--video path/to.mp4]
+.venv/bin/python publish.py <clip.json> --platforms instagram [--video path/to.mp4]
+.venv/bin/python publish.py <clip.json> --platforms youtube,instagram [--video path/to.mp4]
 .venv/bin/python publish.py <clip.json> --platforms youtube,tiktok [--video path/to.mp4]
 ```
 
@@ -158,6 +163,9 @@ Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
     and does not truncate. `--dry-run` plan JSON includes `description_chars`.
   - **TikTok inbox:** packaging is **operator preview only** — inbox init does **not**
     accept `post_info` / title / privacy. Caption is set by the creator in the app.
+  - **Instagram Reels:** title + blank line + description + hashtags as `#tag`, hard
+    limit **2200** chars (prefer drop trailing hashtags before hard truncate).
+    `--dry-run` plan JSON includes `caption_preview` / `caption_chars`.
 - **Video path:** `--video`, else `…/video/out/<slug>.mp4` when the clip lives under
   `video/clips/`, else `video-engine/out/<slug>.mp4`.
 - **Stdout:** single-platform → one JSON object; multi-platform →
@@ -166,6 +174,7 @@ Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
   wiping other platform keys:
   - `published.youtube` — `video_id`, `url`, `published_at`, `privacy`
   - `published.tiktok` — `publish_id`, `mode` (`inbox`), `published_at`, `note`
+  - `published.instagram` — `media_id`, `url` (permalink or `""`), `published_at`
   Dry-run does not mutate the file.
 - **Multi-platform:** each platform runs independently; failure of one does not skip
   the other.
@@ -225,6 +234,46 @@ TIKTOK_REFRESH_TOKEN=...
    (chunk 5–64 MB, final chunk up to 128 MB). See `publish.py` `tiktok_source_info`.
 
 Live TikTok upload is verified owner-side (not CI). Never commit secrets to the repo.
+
+### Instagram auth setup (one-time) — Graph API Reels
+
+1. [Meta for Developers](https://developers.facebook.com/) → create / open an app.
+2. Add the **Instagram Graph API** product (Facebook Login for Business path for
+   content publish).
+3. Permission **`instagram_content_publish`** (plus the usual IG business graph
+   scopes your app needs to read the user/page).
+4. Use an **Instagram Business or Creator** account linked to a Facebook Page.
+5. Mint a **long-lived user access token** that can act on that IG account, then
+   store credentials:
+
+```bash
+# ~/.config/automation/secrets.env
+META_ACCESS_TOKEN=...
+IG_USER_ID=...
+# optional session extend (long-lived exchange for this run only; not written back):
+META_APP_ID=...
+META_APP_SECRET=...
+```
+
+6. **Flow** (local MP4 — **no public host required**):
+   - Optional token extend: `GET …/oauth/access_token?grant_type=fb_exchange_token&…`
+     when `META_APP_ID` + `META_APP_SECRET` are set (soft-warn and continue with the
+     original token on failure).
+   - Create REELS resumable container:
+     `POST graph.facebook.com/{version}/{ig-user-id}/media`
+     with `media_type=REELS`, `upload_type=resumable`, `caption=…`
+     (`Authorization: Bearer {token}`).
+   - Rupload bytes:
+     `POST rupload.facebook.com/ig-api-upload/{version}/{container_id}`
+     with raw MP4 body, headers `Authorization: OAuth {token}`, `offset: 0`,
+     `file_size: {bytes}`.
+   - Poll `GET …/{container_id}?fields=status_code` until `FINISHED`
+     (error on `ERROR`/`EXPIRED` or ~8 min timeout).
+   - Publish: `POST …/{ig-user-id}/media_publish` with `creation_id={container_id}`.
+   - Optional permalink: `GET …/{media_id}?fields=permalink` (empty `url` if it fails).
+   - Write `published.instagram` (`media_id`, `url`, `published_at`).
+
+Live Instagram publish is owner-side (not CI). Never commit secrets to the repo.
 
 ## Known limitations
 
