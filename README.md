@@ -98,8 +98,8 @@ pageseeds-cli site-overview
 | [Agent Integration](./docs/AGENT_INTEGRATION.md) | How LLM agents are invoked and responses normalized |
 | [Agent Development Playbook](./docs/AGENT_DEVELOPMENT_PLAYBOOK.md) | Scenario-based guide for common development tasks |
 | [CONTRACTS.md](./CONTRACTS.md) | Runtime invariants and hidden rules |
-| [AGENTS.md](./AGENTS.md) | Agent orientation, core rules, DRY catalog, and pre-change checklist |
-| [AI Quick Start](./AI_QUICK_START.md) | TL;DR orientation for AI agents working in this repo |
+| [AGENTS.md](./AGENTS.md) | Agent boot rules: non-negotiables, lifecycle, where code goes |
+| [AI Quick Start](./AI_QUICK_START.md) | Thin index → AGENTS.md and deep docs |
 
 ---
 

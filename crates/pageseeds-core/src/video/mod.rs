@@ -9,7 +9,7 @@
 //! `video_clip_render` is an **operator-tier** tool (docs/CLI_COMMERCIAL.md):
 //! dev-machine only, not part of the commercial free/paid promise. It spawns
 //! the external render engine (`video-engine/generate-clip.sh`, Node/FFmpeg
-//! toolchain) per the AGENTS.md §5 operator-tier subprocess allowance.
+//! toolchain) per the AGENTS.md operator-tier subprocess allowance.
 
 use std::io::BufRead;
 use std::path::{Path, PathBuf};

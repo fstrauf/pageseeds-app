@@ -3,7 +3,7 @@
 Scenario-based guide for the most common agent tasks in this repo.
 
 > **When to use this:** You know what you're building and need the concrete file path + validation step.  
-> **When to use AGENTS.md instead:** You need architecture context, the full directory map, or the pre-change checklist.
+> **When to use AGENTS.md instead:** Boot rules — non-negotiables, lifecycle lanes, where code goes.
 
 ---
 
@@ -64,7 +64,7 @@ cargo test -p pageseeds-core skills::
 cargo test -p pageseeds-core task_definitions
 ```
 
-**Anti-pattern:** See AGENTS.md "Anti-Pattern Case Study: Hub Page Creation" for what happens when you ignore this.
+**Anti-pattern:** See AGENTS.md **Anti-Pattern** — do not rebuild article writing as a new pipeline.
 
 ---
 
@@ -373,7 +373,7 @@ pnpm run check:cli-contract
 
 ## See Also
 
-- [`AGENTS.md`](../AGENTS.md) — Agent orientation, core rules, DRY catalog, pre-change checklist
+- [`AGENTS.md`](../AGENTS.md) — Agent boot rules (non-negotiables, lifecycle, placement)
 - [`WORKFLOW_ENGINE.md`](./WORKFLOW_ENGINE.md) — How handlers, steps, and the executor interact
 - [`DATA_PERSISTENCE.md`](./DATA_PERSISTENCE.md) — SQLite and JSON repo data architecture
 - [`AGENT_INTEGRATION.md`](./AGENT_INTEGRATION.md) — LLM integration with Rig

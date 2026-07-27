@@ -2,7 +2,7 @@
 
 PageSeeds uses LLM agents for judgment-heavy tasks. This document covers how agents are invoked, how prompts are structured, and how responses are normalized.
 
-For the rules that govern when to use agents vs. deterministic code, see [`AGENTS.md`](../AGENTS.md) → **Choose Execution Mode Deliberately** and **RIG / LLM Integration**.
+For the rules that govern when to use agents vs. deterministic code, see [`AGENTS.md`](../AGENTS.md) → **Deterministic vs Agentic** and **Non-Negotiables** (structured extractors / Rig).
 
 ---
 

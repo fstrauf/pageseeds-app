@@ -28,8 +28,8 @@ This directory contains consolidated documentation for the PageSeeds App. This R
 | How to build features | [Agent Development Playbook](./AGENT_DEVELOPMENT_PLAYBOOK.md) |
 | CLI free vs paid tools (commercial boundary) | [CLI Commercial](./CLI_COMMERCIAL.md) |
 | The critical rules | [CONTRACTS.md](../CONTRACTS.md) |
-| Agent rules and orientation | [AGENTS.md](../AGENTS.md) |
-| Quick orientation | [AI_QUICK_START.md](../AI_QUICK_START.md) |
+| Agent rules (canonical) | [AGENTS.md](../AGENTS.md) |
+| Agent doc index | [AI_QUICK_START.md](../AI_QUICK_START.md) |
 
 ---
 
@@ -84,8 +84,8 @@ docs/
 
 ```
 ├── README.md                       # App overview, business objective, quick start
-├── AI_QUICK_START.md               # Entry point for AI agents
-├── AGENTS.md                       # Agent orientation, core rules, DRY catalog, pre-change checklist
+├── AI_QUICK_START.md               # Thin index → AGENTS.md + deep docs
+├── AGENTS.md                       # Agent boot rules (canonical)
 ├── CONTRACTS.md                    # Runtime invariants (critical)
 └── QUEUE_DEBUG.md                  # Debugging guide
 ```
@@ -118,8 +118,8 @@ docs/
 
 ### Update If Relevant
 - [README.md](../README.md) — When app capabilities or business positioning changes
-- [AI_QUICK_START.md](../AI_QUICK_START.md) — When directory structure changes
-- [AGENTS.md](../AGENTS.md) — When adding new patterns or changing conventions
+- [AGENTS.md](../AGENTS.md) — When non-negotiables, lifecycle, or placement rules change
+- [AI_QUICK_START.md](../AI_QUICK_START.md) — Only if the doc index links change
 
 ---
 

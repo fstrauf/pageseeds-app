@@ -28,8 +28,8 @@ production), and the phased path from one manual-scripted video to batch generat
 | **Generic engine** — Playwright journey, screen recording, TTS, word timestamps, captions, composite | Node/Python subprocess tooling (Playwright, edge-tts, whisper, FFmpeg) | **pageseeds-app `video-engine/`**, invoked only by **operator-tier** `video-clip-render` |
 | **Target project repo** | Project config + clip artifacts | Owns `video.config.json`, clip definition JSON, journeys/out — **not** a second full engine tree for the packaged operator path |
 
-**Subprocess policy:** Commercial free/paid tools remain pure Rust (AGENTS.md §5
-subprocess-by-tier; `docs/CLI_COMMERCIAL.md`). Operator-tier tools may spawn external
+**Subprocess policy:** Commercial free/paid tools remain pure Rust (AGENTS.md subprocess-by-tier;
+`docs/CLI_COMMERCIAL.md`). Operator-tier tools may spawn external
 processes when the capability cannot be Rust-native. `video-clip-render` is operator-tier:
 it shells out to `video-engine/generate-clip.sh` (Node/FFmpeg) on a source checkout of
 pageseeds-app. The prebuilt customer binary does not promise this path.
@@ -176,7 +176,7 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
    definition via the `video-script` skill (deterministic context, agentic prose — the
    canonical hybrid).
 4. Operator-tier `video-clip-render`: spawns in-repo `video-engine/generate-clip.sh`
-   (AGENTS.md §5 subprocess-by-tier). Requires a source checkout + Node/FFmpeg on PATH;
+   (AGENTS.md subprocess-by-tier). Requires a source checkout + Node/FFmpeg on PATH;
    project owns `video.config.json` and clip JSON. Stdout contract:
    `video-engine: output=` / `video-engine: thumbnail=` (parsed by core; bare `OUTPUT:`
    is not contractual).
@@ -221,9 +221,9 @@ YouTube-only MVP for publishing rendered shorts. No TikTok/Instagram. No Rust ch
 ## Non-goals
 
 - Commercial free/paid tools remain pure Rust — no Playwright/FFmpeg/Node on that surface.
-  Operator-tier may spawn the in-repo `video-engine/` (AGENTS.md §5 subprocess-by-tier;
+  Operator-tier may spawn the in-repo `video-engine/` (AGENTS.md subprocess-by-tier;
   `docs/CLI_COMMERCIAL.md` Operator tier). Do not treat operator render as a commercial promise.
-- No new task type or handler in Phases A–B — skill first, per the AGENTS.md golden rule.
+- No new task type or handler in Phases A–B — skill first, per AGENTS.md (prefer skill over task type).
   (Phase C is the optional task-type lane.)
 - No scheduler, batch runner, or cross-project orchestration.
 - No AI avatar PiP in v1 (revisit after retention data exists).

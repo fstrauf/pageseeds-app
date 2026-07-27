@@ -375,7 +375,7 @@ The executor updates task/step status in the SQLite store and surfaces progress 
 
 ## Adding a New Workflow
 
-> **Before adding:** Check the "DRY: Core Reusable Functions" catalog in [`AGENTS.md`](../AGENTS.md). If the workflow produces an MDX article, adds internal links, audits content, or exports `articles.json`, reuse the existing handler/step — do not create a new one.
+> **Before adding:** Search `content/`, `db/export`, `engine/spawner`, and existing `engine/exec/` modules first (see [`AGENTS.md`](../AGENTS.md) non-negotiables). If the workflow produces an MDX article, adds internal links, audits content, or exports `articles.json`, reuse the existing handler/step — do not create a new one.
 
 1. **Create handler** in `engine/workflows/handlers.rs`:
    ```rust
