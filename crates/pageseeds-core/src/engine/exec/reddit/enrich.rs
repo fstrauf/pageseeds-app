@@ -1,7 +1,48 @@
 use super::{extract_user_context_from_description, load_search_params_from_artifact};
 use crate::models::task::Task;
 use rusqlite::Connection;
+use serde::Deserialize;
 use std::path::Path;
+
+/// Max Unicode scalars of post selftext included in the enrich agent context.
+pub(crate) const ENRICH_SELFTEXT_MAX_CHARS: usize = 2000;
+
+/// Max Unicode scalars of post title included in the enrich agent context.
+pub(crate) const ENRICH_TITLE_MAX_CHARS: usize = 200;
+
+/// Typed enrich-agent item (answer-first contract, skill-version ≥ 3).
+#[derive(Debug, Deserialize)]
+struct RedditEnrichItem {
+    post_id: String,
+    #[serde(default)]
+    relevance_score: Option<f64>,
+    #[serde(default)]
+    why_relevant: Option<String>,
+    #[serde(default)]
+    key_pain_points: Option<Vec<String>>,
+    #[serde(default)]
+    website_fit: Option<String>,
+    #[serde(default)]
+    reply_text: Option<String>,
+    /// Model comprehension of OP (skill contract); not persisted — no column.
+    #[serde(default)]
+    #[allow(dead_code)]
+    op_question: Option<String>,
+    #[serde(default)]
+    answers_op_question: Option<bool>,
+}
+
+/// Clean and truncate selftext for the enrich posts block (UTF-8 safe).
+pub(crate) fn format_post_body_for_enrich(selftext: &str) -> String {
+    let cleaned = selftext.replace('"', "'").replace('\n', " ");
+    crate::engine::text::char_prefix(&cleaned, ENRICH_SELFTEXT_MAX_CHARS).to_string()
+}
+
+/// Clean and truncate title for the enrich posts block (UTF-8 safe).
+pub(crate) fn format_post_title_for_enrich(title: &str) -> String {
+    let cleaned = title.replace('"', "'");
+    crate::engine::text::char_prefix(&cleaned, ENRICH_TITLE_MAX_CHARS).to_string()
+}
 
 // ─── Persist ─────────────────────────────────────────────────────────────────
 
@@ -349,50 +390,39 @@ pub fn exec_reddit_enrich(
 
     let stance_instruction = match mention_stance_str.as_str() {
         "REQUIRED" => format!(
-            "REQUIRED: If you produce a reply, it MUST contain the exact product name \"{}\" — no vague substitutes. \
-             If no value-first reply with a natural mention is possible, return empty `reply_text`.",
+            "REQUIRED: If you produce a non-empty reply, it MUST contain the exact product name \"{}\" exactly once, \
+             late in the reply (not in the first 1–2 sentences). Answer the OP fully first. \
+             If no answer-first reply with a natural late mention is possible, return empty `reply_text`.",
             product_name
         ),
         "RECOMMENDED" => format!(
-            "RECOMMENDED: Mention \"{}\" by name if the topic is a natural fit.",
+            "RECOMMENDED: After answering the OP, you may mention \"{}\" by name if it fits naturally.",
             product_name
         ),
         "OPTIONAL" => format!(
-            "OPTIONAL: You may mention \"{}\" if it fits naturally.",
+            "OPTIONAL: After answering the OP, you may mention \"{}\" if it fits naturally.",
             product_name
         ),
-        "OMIT" =>
-            "OMIT: Do NOT mention any product name in this reply.".to_string(),
+        "OMIT" => "OMIT: Do NOT mention any product name in this reply.".to_string(),
         _ => format!(
-            "OPTIONAL: You may mention \"{}\" if it fits naturally.",
+            "OPTIONAL: After answering the OP, you may mention \"{}\" if it fits naturally.",
             product_name
         ),
     };
 
+    // POSTS before product rules so the model sees the question before product pressure (#241).
     let posts_block: String = rows
         .iter()
         .enumerate()
         .map(|(i, (pid, title, sub, selftext, _, _))| {
-            let body = selftext
-                .as_deref()
-                .unwrap_or("")
-                .replace('"', "'")
-                .replace('\n', " ")
-                .chars()
-                .take(500)
-                .collect::<String>();
+            let body = format_post_body_for_enrich(selftext.as_deref().unwrap_or(""));
+            let title_s = format_post_title_for_enrich(title.as_deref().unwrap_or("(no title)"));
             format!(
                 "{}. post_id=\"{}\"  subreddit=\"{}\"  title=\"{}\"  body=\"{}\"",
                 i + 1,
                 pid,
                 sub.as_deref().unwrap_or("unknown"),
-                title
-                    .as_deref()
-                    .unwrap_or("(no title)")
-                    .replace('"', "'")
-                    .chars()
-                    .take(200)
-                    .collect::<String>(),
+                title_s,
                 body
             )
         })
@@ -412,20 +442,20 @@ pub fn exec_reddit_enrich(
          ## REDDIT CONFIG\n{reddit_config_raw}\n\n\
          {user_focus_block}\
          ## REPLY GUARDRAILS\n{guardrails}\n\n\
+         ## POSTS (title + body)\n\
+         {posts_block}\n\n\
          ## PRODUCT MENTION RULES\n\
          Product name: {product_name}\n\
          Mention stance: {mention_stance_str}\n\
-         {stance_instruction}\n\n\
-         ## POSTS (title + body)\n\
-         {posts_block}",
+         {stance_instruction}",
         project_context = project_context,
         reddit_config_raw = reddit_config_raw,
         user_focus_block = user_focus_block,
         guardrails = guardrails,
+        posts_block = posts_block,
         product_name = product_name,
         mention_stance_str = mention_stance_str,
         stance_instruction = stance_instruction,
-        posts_block = posts_block,
     );
 
     let repo_root = Path::new(project_path);
@@ -444,56 +474,43 @@ pub fn exec_reddit_enrich(
         }
     };
 
-    let enrichments: Vec<serde_json::Value> = match crate::engine::text::extract_json(&output) {
-        Some(value) => match value {
-            serde_json::Value::Array(arr) => arr,
-            _ => {
+    let enrichments: Vec<RedditEnrichItem> =
+        match crate::engine::text::extract_json_as::<Vec<RedditEnrichItem>>(&output) {
+            Some(items) => items,
+            None => {
                 let preview = crate::engine::text::char_prefix(&output, 300);
-                log::warn!("[reddit_enrich] agent output is not a JSON array — first 300 chars: {:?}",
-                    preview);
+                log::warn!(
+                    "[reddit_enrich] could not extract typed enrich JSON array — first 300 chars: {:?}",
+                    preview
+                );
                 return;
             }
-        },
-        None => {
-            let preview = crate::engine::text::char_prefix(&output, 300);
-            log::warn!("[reddit_enrich] could not extract JSON from agent output — first 300 chars: {:?}",
-                preview);
-            return;
-        }
-    };
+        };
 
     let now = chrono::Utc::now().to_rfc3339();
     let mut updated = 0usize;
     let mut skipped = 0usize;
 
     for item in &enrichments {
-        let post_id = match item.get("post_id").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => continue,
-        };
+        let post_id = item.post_id.as_str();
+        if post_id.is_empty() {
+            continue;
+        }
 
         let relevance_score = item
-            .get("relevance_score")
-            .and_then(|v| v.as_f64())
+            .relevance_score
             .unwrap_or(5.0)
             .max(0.0)
             .min(10.0);
 
-        let why_relevant = item
-            .get("why_relevant")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let website_fit = item
-            .get("website_fit")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let reply_text = item
-            .get("reply_text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let why_relevant = item.why_relevant.as_deref().unwrap_or("");
+        let website_fit = item.website_fit.as_deref().unwrap_or("");
+        let reply_text = item.reply_text.as_deref().unwrap_or("");
+        // Fail-closed: missing answers_op_question → false (quality gate #241).
+        let answers_op_question = item.answers_op_question.unwrap_or(false);
         let pain_points_json = item
-            .get("key_pain_points")
-            .and_then(|v| v.as_array())
+            .key_pain_points
+            .as_ref()
             .map(|arr| serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string()))
             .unwrap_or_else(|| "[]".to_string());
 
@@ -514,10 +531,10 @@ pub fn exec_reddit_enrich(
             "LOW"
         };
 
-        // Deterministic post-enrich gate (#236): low relevance or empty draft →
-        // skipped (scores/why kept, reply_text NULL) so the row never re-enters
-        // the enrich loop as pending draft-less work.
-        let skip_draft = should_skip_draft(relevance_score, reply_text);
+        // Deterministic post-enrich gate (#236 + #241): low relevance, empty draft,
+        // or model did not attest that the reply answers OP → skipped (scores/why
+        // kept, reply_text NULL) so the row never re-enters the enrich loop.
+        let skip_draft = should_skip_draft(relevance_score, reply_text, answers_op_question);
         let (reply_status, stored_reply): (&str, Option<&str>) = if skip_draft {
             ("skipped", None)
         } else {
@@ -558,7 +575,7 @@ pub fn exec_reddit_enrich(
     }
 
     log::info!(
-        "[reddit_enrich] enriched {}/{} posts ({} skipped low-relevance/empty draft) project={}",
+        "[reddit_enrich] enriched {}/{} posts ({} skipped low-relevance/empty/unanswered draft) project={}",
         updated,
         rows.len(),
         skipped,
@@ -566,17 +583,24 @@ pub fn exec_reddit_enrich(
     );
 }
 
-// ─── Post-enrich draft gate (#236) ────────────────────────────────────────────
+// ─── Post-enrich draft gate (#236 + #241) ─────────────────────────────────────
 
 /// Minimum relevance_score required to keep a draft as `pending`.
-/// Below this (or empty reply_text), the row is stored as `skipped` so it does
-/// not re-enter the enrich loop.
+/// Below this, empty reply_text, or answers_op_question=false, the row is stored
+/// as `skipped` so it does not re-enter the enrich loop.
 pub const MIN_DRAFT_RELEVANCE: f64 = 4.0;
 
-/// Pure gate: skip when relevance is below the draft threshold or the model
-/// produced no usable reply text.
-pub(crate) fn should_skip_draft(relevance_score: f64, reply_text: &str) -> bool {
-    relevance_score < MIN_DRAFT_RELEVANCE || reply_text.trim().is_empty()
+/// Pure gate: skip when relevance is below the draft threshold, the model
+/// produced no usable reply text, or the model did not attest that the reply
+/// answers the OP's question (answer-quality gate #241).
+pub(crate) fn should_skip_draft(
+    relevance_score: f64,
+    reply_text: &str,
+    answers_op_question: bool,
+) -> bool {
+    relevance_score < MIN_DRAFT_RELEVANCE
+        || reply_text.trim().is_empty()
+        || !answers_op_question
 }
 
 /// Apply enrich model output to a single opportunity row (scores + draft gate).
@@ -590,9 +614,10 @@ pub(crate) fn apply_enrich_gate_update(
     relevance_score: f64,
     reply_text: &str,
     why_relevant: &str,
+    answers_op_question: bool,
 ) -> crate::error::Result<(String, Option<String>)> {
     let relevance_score = relevance_score.max(0.0).min(10.0);
-    let skip = should_skip_draft(relevance_score, reply_text);
+    let skip = should_skip_draft(relevance_score, reply_text, answers_op_question);
     let (reply_status, stored_reply): (&str, Option<&str>) = if skip {
         ("skipped", None)
     } else {

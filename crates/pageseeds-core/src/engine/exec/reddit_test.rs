@@ -734,27 +734,67 @@ Helpful, technical, and concise.
         assert_eq!(handled, 2, "history rows must be preserved");
     }
 
-    // ─── Issue #236: enrich gate + DB∪history dedup + fetch hygiene ───────────
+    // ─── Issue #236 + #241: enrich gate + DB∪history dedup + fetch hygiene ────
 
     #[test]
     fn should_skip_draft_gate_thresholds() {
         use crate::engine::exec::reddit::{should_skip_draft, MIN_DRAFT_RELEVANCE};
 
-        assert!(should_skip_draft(0.0, "some draft"), "relevance 0 skips");
-        assert!(should_skip_draft(3.9, "some draft"), "below 4.0 skips");
         assert!(
-            !should_skip_draft(MIN_DRAFT_RELEVANCE, "some draft"),
-            "exactly 4.0 keeps draft"
+            should_skip_draft(0.0, "some draft", true),
+            "relevance 0 skips"
         );
-        assert!(!should_skip_draft(8.0, "value-first draft"), "high keeps");
         assert!(
-            should_skip_draft(9.0, ""),
+            should_skip_draft(3.9, "some draft", true),
+            "below 4.0 skips"
+        );
+        assert!(
+            !should_skip_draft(MIN_DRAFT_RELEVANCE, "some draft", true),
+            "exactly 4.0 keeps draft when answers OP"
+        );
+        assert!(
+            !should_skip_draft(8.0, "value-first draft", true),
+            "high keeps when answers OP"
+        );
+        assert!(
+            should_skip_draft(9.0, "", true),
             "empty reply skips even if high relevance"
         );
         assert!(
-            should_skip_draft(9.0, "   \t\n"),
+            should_skip_draft(9.0, "   \t\n", true),
             "whitespace-only reply skips"
         );
+        // #241 answer-quality gate
+        assert!(
+            should_skip_draft(9.0, "pitchy non-answer", false),
+            "answers_op_question=false skips even when relevance ≥ 4 and text non-empty"
+        );
+        assert!(
+            !should_skip_draft(4.0, "helpful answer to OP", true),
+            "keeps draft when relevance ≥ 4, non-empty, answers_op_question=true"
+        );
+    }
+
+    #[test]
+    fn format_post_body_for_enrich_truncates_to_2000() {
+        use crate::engine::exec::reddit::{
+            format_post_body_for_enrich, ENRICH_SELFTEXT_MAX_CHARS,
+        };
+
+        let long: String = "a".repeat(2500);
+        let out = format_post_body_for_enrich(&long);
+        assert_eq!(out.chars().count(), ENRICH_SELFTEXT_MAX_CHARS);
+        assert_eq!(out, "a".repeat(ENRICH_SELFTEXT_MAX_CHARS));
+
+        let short: String = "b".repeat(1500);
+        let out_short = format_post_body_for_enrich(&short);
+        assert_eq!(out_short.chars().count(), 1500);
+        assert_eq!(out_short, short);
+
+        // Newlines → spaces; quotes normalized
+        let messy = "line1\nline2 \"quoted\"";
+        let cleaned = format_post_body_for_enrich(messy);
+        assert_eq!(cleaned, "line1 line2 'quoted'");
     }
 
     #[test]
@@ -777,6 +817,7 @@ Helpful, technical, and concise.
             2.0,
             "Would have been a draft",
             "Barely related",
+            true,
         )
         .expect("gate update");
 
@@ -815,7 +856,7 @@ Helpful, technical, and concise.
         )
         .unwrap();
 
-        let draft = "I ran into the same issue — ProductX helped me automate that workflow.";
+        let draft = "I ran into the same issue — here is what worked. ProductX helped me automate that workflow.";
         let (status, reply) = crate::engine::exec::reddit::apply_enrich_gate_update(
             &conn,
             &project_id,
@@ -823,6 +864,7 @@ Helpful, technical, and concise.
             8.5,
             draft,
             "Direct product fit",
+            true,
         )
         .expect("gate update");
 
@@ -860,6 +902,7 @@ Helpful, technical, and concise.
             9.0,
             "  ",
             "Relevant but no value-first mention possible",
+            true,
         )
         .expect("gate update");
 
@@ -887,6 +930,51 @@ Helpful, technical, and concise.
     }
 
     #[test]
+    fn enrich_apply_gate_answers_op_false_skipped() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_gate_unanswered");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO reddit_opportunities \
+             (post_id, project_id, title, reply_status, created_at, updated_at) \
+             VALUES ('gate_unanswered', ?1, 'Real question', 'pending', ?2, ?2)",
+            rusqlite::params![project_id, now],
+        )
+        .unwrap();
+
+        let (status, reply) = crate::engine::exec::reddit::apply_enrich_gate_update(
+            &conn,
+            &project_id,
+            "gate_unanswered",
+            8.0,
+            "Check out our product — it solves everything!",
+            "Relevant but pitch-shaped",
+            false,
+        )
+        .expect("gate update");
+
+        assert_eq!(status, "skipped");
+        assert!(reply.is_none());
+
+        let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
+        let fetched: Vec<serde_json::Value> =
+            serde_json::from_str(&result.output.expect("output")).expect("json");
+        assert!(
+            fetched.is_empty(),
+            "answers_op_question=false must not be a picker candidate"
+        );
+
+        let status_db: String = conn
+            .query_row(
+                "SELECT reply_status FROM reddit_opportunities WHERE post_id='gate_unanswered'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status_db, "skipped");
+    }
+
+    #[test]
     fn relevance_zero_cannot_appear_as_draft_candidate() {
         let conn = in_memory_db();
         let project_id = create_test_project(&conn, "/tmp/ps_reddit_gate_zero");
@@ -906,6 +994,7 @@ Helpful, technical, and concise.
             0.0,
             "Should not stick",
             "Not relevant",
+            true,
         )
         .unwrap();
 
