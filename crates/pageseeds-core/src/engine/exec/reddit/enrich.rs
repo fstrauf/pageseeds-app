@@ -349,7 +349,8 @@ pub fn exec_reddit_enrich(
 
     let stance_instruction = match mention_stance_str.as_str() {
         "REQUIRED" => format!(
-            "REQUIRED: The reply MUST contain the exact product name \"{}\" — no vague substitutes.",
+            "REQUIRED: If you produce a reply, it MUST contain the exact product name \"{}\" — no vague substitutes. \
+             If no value-first reply with a natural mention is possible, return empty `reply_text`.",
             product_name
         ),
         "RECOMMENDED" => format!(
@@ -463,6 +464,7 @@ pub fn exec_reddit_enrich(
 
     let now = chrono::Utc::now().to_rfc3339();
     let mut updated = 0usize;
+    let mut skipped = 0usize;
 
     for item in &enrichments {
         let post_id = match item.get("post_id").and_then(|v| v.as_str()) {
@@ -512,30 +514,107 @@ pub fn exec_reddit_enrich(
             "LOW"
         };
 
+        // Deterministic post-enrich gate (#236): low relevance or empty draft →
+        // skipped (scores/why kept, reply_text NULL) so the row never re-enters
+        // the enrich loop as pending draft-less work.
+        let skip_draft = should_skip_draft(relevance_score, reply_text);
+        let (reply_status, stored_reply): (&str, Option<&str>) = if skip_draft {
+            ("skipped", None)
+        } else {
+            ("pending", Some(reply_text))
+        };
+
         match conn.execute(
             "UPDATE reddit_opportunities \
              SET relevance_score=?1, why_relevant=?2, key_pain_points=?3, website_fit=?4, \
-                 final_score=?5, severity=?6, reply_text=?7, mention_stance=?8, product_name=?9, updated_at=?10 \
-             WHERE post_id=?11 AND project_id=?12",
+                 final_score=?5, severity=?6, reply_text=?7, reply_status=?8, \
+                 mention_stance=?9, product_name=?10, updated_at=?11 \
+             WHERE post_id=?12 AND project_id=?13",
             rusqlite::params![
-                relevance_score, why_relevant, pain_points_json, website_fit,
-                final_score, severity,
-                if reply_text.is_empty() { None } else { Some(reply_text) },
+                relevance_score,
+                why_relevant,
+                pain_points_json,
+                website_fit,
+                final_score,
+                severity,
+                stored_reply,
+                reply_status,
                 &mention_stance_str,
                 &product_name,
-                now, post_id, project_id
+                now,
+                post_id,
+                project_id
             ],
         ) {
-            Ok(n) if n > 0 => { updated += 1; }
+            Ok(n) if n > 0 => {
+                updated += 1;
+                if skip_draft {
+                    skipped += 1;
+                }
+            }
             Ok(_) => log::warn!("[reddit_enrich] post_id={} not found in DB", post_id),
             Err(e) => log::warn!("[reddit_enrich] update failed for {}: {}", post_id, e),
         }
     }
 
     log::info!(
-        "[reddit_enrich] enriched+drafted {}/{} posts project={}",
+        "[reddit_enrich] enriched {}/{} posts ({} skipped low-relevance/empty draft) project={}",
         updated,
         rows.len(),
+        skipped,
         project_id
     );
+}
+
+// ─── Post-enrich draft gate (#236) ────────────────────────────────────────────
+
+/// Minimum relevance_score required to keep a draft as `pending`.
+/// Below this (or empty reply_text), the row is stored as `skipped` so it does
+/// not re-enter the enrich loop.
+pub const MIN_DRAFT_RELEVANCE: f64 = 4.0;
+
+/// Pure gate: skip when relevance is below the draft threshold or the model
+/// produced no usable reply text.
+pub(crate) fn should_skip_draft(relevance_score: f64, reply_text: &str) -> bool {
+    relevance_score < MIN_DRAFT_RELEVANCE || reply_text.trim().is_empty()
+}
+
+/// Apply enrich model output to a single opportunity row (scores + draft gate).
+///
+/// Extracted for unit tests; production path uses the same SQL shape.
+#[cfg(test)]
+pub(crate) fn apply_enrich_gate_update(
+    conn: &Connection,
+    project_id: &str,
+    post_id: &str,
+    relevance_score: f64,
+    reply_text: &str,
+    why_relevant: &str,
+) -> crate::error::Result<(String, Option<String>)> {
+    let relevance_score = relevance_score.max(0.0).min(10.0);
+    let skip = should_skip_draft(relevance_score, reply_text);
+    let (reply_status, stored_reply): (&str, Option<&str>) = if skip {
+        ("skipped", None)
+    } else {
+        ("pending", Some(reply_text.trim()))
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE reddit_opportunities \
+         SET relevance_score=?1, why_relevant=?2, reply_text=?3, reply_status=?4, updated_at=?5 \
+         WHERE post_id=?6 AND project_id=?7",
+        rusqlite::params![
+            relevance_score,
+            why_relevant,
+            stored_reply,
+            reply_status,
+            now,
+            post_id,
+            project_id
+        ],
+    )?;
+    Ok((
+        reply_status.to_string(),
+        stored_reply.map(|s| s.to_string()),
+    ))
 }

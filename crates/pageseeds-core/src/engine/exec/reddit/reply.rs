@@ -25,7 +25,10 @@ pub fn exec_reddit_fetch_results(
                 reply_text, reply_url, reply_upvotes, reply_replies, posted_at,
                 project_id, created_at, updated_at, selftext
          FROM reddit_opportunities
-         WHERE project_id=?1 AND reply_status='pending'
+         WHERE project_id=?1
+           AND reply_status='pending'
+           AND reply_text IS NOT NULL
+           AND TRIM(reply_text) != ''
          ORDER BY final_score DESC NULLS LAST, relevance_score DESC NULLS LAST
          LIMIT 20"
     ) {
@@ -223,26 +226,49 @@ pub fn exec_reddit_post_reply(
                 log::warn!("[reddit_post_reply] failed to mark posted in DB: {}", e);
             }
 
-            // Update history file
+            // Update history file — comment already posted; keep step success but
+            // surface history write failure loudly in message + output (#236).
             let history_manager = crate::reddit::history::RedditHistoryManager::new(
                 std::path::Path::new(project_path),
             );
-            if let Err(e) = history_manager.mark_posted(&post_id) {
-                log::warn!("[reddit_post_reply] failed to write history: {}", e);
-            }
+            let history_error = match history_manager.mark_posted(&post_id) {
+                Ok(()) => None,
+                Err(e) => {
+                    log::warn!("[reddit_post_reply] failed to write history: {}", e);
+                    Some(e)
+                }
+            };
 
             log::info!(
                 "[reddit_post_reply] successfully posted comment {}",
                 comment_result.comment_id
             );
 
+            let mut message = format!("Posted reply to Reddit: {}", reply_url);
+            if let Some(ref err) = history_error {
+                message.push_str(&format!(
+                    " WARNING: posted successfully but failed to write _posted_history.json: {}",
+                    err
+                ));
+            }
+
+            let output = if let Some(ref err) = history_error {
+                serde_json::json!({
+                    "comment_id": comment_result.comment_id,
+                    "permalink": reply_url,
+                    "history_write_error": err,
+                })
+            } else {
+                serde_json::json!({
+                    "comment_id": comment_result.comment_id,
+                    "permalink": reply_url,
+                })
+            };
+
             crate::engine::workflows::StepResult {
                 success: true,
-                message: format!("Posted reply to Reddit: {}", reply_url),
-                output: Some(format!(
-                    "{{\"comment_id\":\"{}\",\"permalink\":\"{}\"}}",
-                    comment_result.comment_id, reply_url
-                )),
+                message,
+                output: Some(output.to_string()),
                 artifact_key: None,
             }
         }

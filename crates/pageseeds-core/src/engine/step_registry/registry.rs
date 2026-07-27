@@ -137,8 +137,20 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
             Box::new(|_step, ctx| {
                 let task = ctx.task;
                 let project_path = ctx.project_path;
+                // Collect handled set from SQLite ∪ history while we have conn
+                // (do not hold &Connection across the async Reddit API awaits).
+                let handled_ids = crate::engine::exec::reddit::collect_handled_post_ids(
+                    ctx.conn,
+                    project_path,
+                    &task.project_id,
+                );
                 Box::pin(async move {
-                    crate::engine::exec::reddit::exec_reddit_search(task, project_path).await
+                    crate::engine::exec::reddit::exec_reddit_search(
+                        task,
+                        project_path,
+                        handled_ids,
+                    )
+                    .await
                 })
             }),
         );

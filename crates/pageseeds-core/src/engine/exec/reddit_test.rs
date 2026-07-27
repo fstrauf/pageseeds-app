@@ -354,6 +354,7 @@ Helpful, technical, and concise.
     }
 
     /// Test that opportunities can be persisted to and fetched from the database.
+    /// Fetch only returns pending rows with non-empty reply_text (#236).
     #[test]
     fn reddit_opportunities_persist_and_fetch() {
         use crate::models::reddit::RedditOpportunity;
@@ -445,21 +446,12 @@ Helpful, technical, and concise.
         let fetched: Vec<RedditOpportunity> =
             serde_json::from_str(&output).expect("Should parse JSON");
 
-        assert_eq!(fetched.len(), 2, "Should fetch 2 opportunities");
-        assert!(
-            fetched.iter().any(|o| o.post_id == "post1"),
-            "Should include post1"
-        );
-        assert!(
-            fetched.iter().any(|o| o.post_id == "post2"),
-            "Should include post2"
-        );
-
-        // Verify enriched data is preserved
-        let post1 = fetched.iter().find(|o| o.post_id == "post1").unwrap();
-        assert!(post1.reply_text.is_some(), "Should have drafted reply");
+        // Only post1 has a non-empty draft — post2 must not appear in the picker.
+        assert_eq!(fetched.len(), 1, "Should fetch only drafted pending rows");
+        assert_eq!(fetched[0].post_id, "post1");
+        assert!(fetched[0].reply_text.is_some(), "Should have drafted reply");
         assert_eq!(
-            post1.why_relevant.as_deref(),
+            fetched[0].why_relevant.as_deref(),
             Some("Discusses test automation tools")
         );
     }
@@ -553,9 +545,9 @@ Helpful, technical, and concise.
 
     // ─── Issue #71: persistence regression tests ──────────────────────────────
 
-    /// A search-shaped payload must persist N pending rows and the results step
-    /// must return a non-empty feed — the picker must never come up empty after
-    /// a successful search.
+    /// A search-shaped payload must persist N pending rows. Fetch only lists
+    /// pending rows that already have a draft (#236); pre-enrich pending
+    /// without reply_text are stored but hidden from the picker.
     #[test]
     fn persist_search_payload_yields_pending_results() {
         let conn = in_memory_db();
@@ -586,16 +578,30 @@ Helpful, technical, and concise.
             .unwrap();
         assert_eq!(pending, 2, "both posts must land as pending rows");
 
+        // Pre-enrich: no drafts yet → fetch returns empty feed (not draft candidates).
         let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
         assert!(result.success, "fetch failed: {}", result.message);
         let output = result.output.expect("fetch must return output");
         let fetched: Vec<serde_json::Value> =
             serde_json::from_str(&output).expect("fetch output must be a JSON array");
-        assert_eq!(
-            fetched.len(),
-            2,
-            "picker feed must not be empty after a successful search"
+        assert!(
+            fetched.is_empty(),
+            "picker must not list draft-less pending rows"
         );
+
+        // After a draft is written, the row appears in fetch.
+        conn.execute(
+            "UPDATE reddit_opportunities SET reply_text=?1, why_relevant=?2 \
+             WHERE post_id=?3 AND project_id=?4",
+            rusqlite::params!["Helpful drafted reply mentioning ProductX.", "Fits automation", "p71_a", project_id],
+        )
+        .unwrap();
+        let result2 = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
+        assert!(result2.success, "fetch failed: {}", result2.message);
+        let fetched2: Vec<serde_json::Value> =
+            serde_json::from_str(&result2.output.expect("output")).expect("json");
+        assert_eq!(fetched2.len(), 1);
+        assert_eq!(fetched2[0]["post_id"], "p71_a");
     }
 
     /// Against a pre-V47 schema (reddit_opportunities without `selftext`) the
@@ -726,5 +732,278 @@ Helpful, technical, and concise.
             )
             .unwrap();
         assert_eq!(handled, 2, "history rows must be preserved");
+    }
+
+    // ─── Issue #236: enrich gate + DB∪history dedup + fetch hygiene ───────────
+
+    #[test]
+    fn should_skip_draft_gate_thresholds() {
+        use crate::engine::exec::reddit::{should_skip_draft, MIN_DRAFT_RELEVANCE};
+
+        assert!(should_skip_draft(0.0, "some draft"), "relevance 0 skips");
+        assert!(should_skip_draft(3.9, "some draft"), "below 4.0 skips");
+        assert!(
+            !should_skip_draft(MIN_DRAFT_RELEVANCE, "some draft"),
+            "exactly 4.0 keeps draft"
+        );
+        assert!(!should_skip_draft(8.0, "value-first draft"), "high keeps");
+        assert!(
+            should_skip_draft(9.0, ""),
+            "empty reply skips even if high relevance"
+        );
+        assert!(
+            should_skip_draft(9.0, "   \t\n"),
+            "whitespace-only reply skips"
+        );
+    }
+
+    #[test]
+    fn enrich_apply_gate_low_relevance_skipped_null_reply() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_gate_low");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO reddit_opportunities \
+             (post_id, project_id, title, reply_status, created_at, updated_at) \
+             VALUES ('gate_low', ?1, 'Off-topic', 'pending', ?2, ?2)",
+            rusqlite::params![project_id, now],
+        )
+        .unwrap();
+
+        let (status, reply) = crate::engine::exec::reddit::apply_enrich_gate_update(
+            &conn,
+            &project_id,
+            "gate_low",
+            2.0,
+            "Would have been a draft",
+            "Barely related",
+        )
+        .expect("gate update");
+
+        assert_eq!(status, "skipped");
+        assert!(reply.is_none());
+
+        let (db_status, db_reply, db_why, db_score): (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<f64>,
+        ) = conn
+            .query_row(
+                "SELECT reply_status, reply_text, why_relevant, relevance_score \
+                 FROM reddit_opportunities WHERE post_id='gate_low'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(db_status, "skipped");
+        assert!(db_reply.is_none());
+        assert_eq!(db_why.as_deref(), Some("Barely related"));
+        assert_eq!(db_score, Some(2.0));
+    }
+
+    #[test]
+    fn enrich_apply_gate_high_relevance_pending_with_draft() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_gate_high");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO reddit_opportunities \
+             (post_id, project_id, title, reply_status, created_at, updated_at) \
+             VALUES ('gate_high', ?1, 'Great fit', 'pending', ?2, ?2)",
+            rusqlite::params![project_id, now],
+        )
+        .unwrap();
+
+        let draft = "I ran into the same issue — ProductX helped me automate that workflow.";
+        let (status, reply) = crate::engine::exec::reddit::apply_enrich_gate_update(
+            &conn,
+            &project_id,
+            "gate_high",
+            8.5,
+            draft,
+            "Direct product fit",
+        )
+        .expect("gate update");
+
+        assert_eq!(status, "pending");
+        assert_eq!(reply.as_deref(), Some(draft));
+
+        // High-relevance draft must appear in fetch results.
+        let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
+        assert!(result.success, "{}", result.message);
+        let fetched: Vec<serde_json::Value> =
+            serde_json::from_str(&result.output.expect("output")).expect("json");
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(fetched[0]["post_id"], "gate_high");
+        assert_eq!(fetched[0]["reply_text"], draft);
+        assert_eq!(fetched[0]["reply_status"], "pending");
+    }
+
+    #[test]
+    fn enrich_apply_gate_empty_reply_skipped_even_if_high_relevance() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_gate_empty");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO reddit_opportunities \
+             (post_id, project_id, title, reply_status, created_at, updated_at) \
+             VALUES ('gate_empty', ?1, 'Ok topic', 'pending', ?2, ?2)",
+            rusqlite::params![project_id, now],
+        )
+        .unwrap();
+
+        let (status, reply) = crate::engine::exec::reddit::apply_enrich_gate_update(
+            &conn,
+            &project_id,
+            "gate_empty",
+            9.0,
+            "  ",
+            "Relevant but no value-first mention possible",
+        )
+        .expect("gate update");
+
+        assert_eq!(status, "skipped");
+        assert!(reply.is_none());
+
+        // Must not appear as a draft candidate in fetch.
+        let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
+        let fetched: Vec<serde_json::Value> =
+            serde_json::from_str(&result.output.expect("output")).expect("json");
+        assert!(
+            fetched.is_empty(),
+            "relevance-high empty draft must not be a picker candidate"
+        );
+
+        // And must not re-enter enrich (status != pending).
+        let status_db: String = conn
+            .query_row(
+                "SELECT reply_status FROM reddit_opportunities WHERE post_id='gate_empty'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status_db, "skipped");
+    }
+
+    #[test]
+    fn relevance_zero_cannot_appear_as_draft_candidate() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_gate_zero");
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO reddit_opportunities \
+             (post_id, project_id, title, reply_status, created_at, updated_at) \
+             VALUES ('gate_zero', ?1, 'Noise', 'pending', ?2, ?2)",
+            rusqlite::params![project_id, now],
+        )
+        .unwrap();
+
+        crate::engine::exec::reddit::apply_enrich_gate_update(
+            &conn,
+            &project_id,
+            "gate_zero",
+            0.0,
+            "Should not stick",
+            "Not relevant",
+        )
+        .unwrap();
+
+        let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
+        let fetched: Vec<serde_json::Value> =
+            serde_json::from_str(&result.output.expect("output")).expect("json");
+        assert!(
+            fetched.is_empty(),
+            "relevance-0 must not appear in reddit_results_stage"
+        );
+    }
+
+    #[test]
+    fn search_handled_set_unions_db_posted_skipped_without_history_file() {
+        let conn = in_memory_db();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ps_reddit_handled_{}",
+            Utc::now().timestamp_millis()
+        ));
+        // Intentionally no _posted_history.json — only SQLite.
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let project_id = create_test_project(&conn, &temp_dir.to_string_lossy());
+
+        for (post_id, status) in [
+            ("db_posted_1", "posted"),
+            ("db_skipped_1", "skipped"),
+            ("db_pending_1", "pending"),
+        ] {
+            conn.execute(
+                "INSERT INTO reddit_opportunities \
+                 (post_id, project_id, title, reply_status, created_at, updated_at) \
+                 VALUES (?1, ?2, 't', ?3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                rusqlite::params![post_id, project_id, status],
+            )
+            .unwrap();
+        }
+
+        let handled = crate::engine::exec::reddit::collect_handled_post_ids(
+            &conn,
+            &temp_dir.to_string_lossy(),
+            &project_id,
+        );
+
+        assert!(
+            handled.contains("db_posted_1"),
+            "posted must be in handled set even without history file"
+        );
+        assert!(
+            handled.contains("db_skipped_1"),
+            "skipped must be in handled set even without history file"
+        );
+        assert!(
+            !handled.contains("db_pending_1"),
+            "pending must not be treated as handled"
+        );
+
+        // Pure helper: history ids ∪ DB ids
+        let mut from_history = std::collections::HashSet::new();
+        from_history.insert("hist_only".to_string());
+        crate::engine::exec::reddit::union_db_handled_ids(&conn, &project_id, &mut from_history);
+        assert!(from_history.contains("hist_only"));
+        assert!(from_history.contains("db_posted_1"));
+        assert!(from_history.contains("db_skipped_1"));
+        assert!(!from_history.contains("db_pending_1"));
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn fetch_only_returns_pending_with_non_empty_reply_text() {
+        let conn = in_memory_db();
+        let project_id = create_test_project(&conn, "/tmp/ps_reddit_fetch_hygiene");
+        let now = Utc::now().to_rfc3339();
+
+        let rows = [
+            ("f_ok", "pending", Some("Real draft here")),
+            ("f_null", "pending", None),
+            ("f_empty", "pending", Some("")),
+            ("f_ws", "pending", Some("   ")),
+            ("f_skipped", "skipped", Some("old draft")),
+            ("f_posted", "posted", Some("was posted")),
+        ];
+        for (post_id, status, reply) in rows {
+            conn.execute(
+                "INSERT INTO reddit_opportunities \
+                 (post_id, project_id, title, reply_status, reply_text, final_score, \
+                  created_at, updated_at) \
+                 VALUES (?1, ?2, 't', ?3, ?4, 8.0, ?5, ?5)",
+                rusqlite::params![post_id, project_id, status, reply, now],
+            )
+            .unwrap();
+        }
+
+        let result = crate::engine::exec::reddit::exec_reddit_fetch_results(&conn, &project_id);
+        assert!(result.success, "{}", result.message);
+        let fetched: Vec<serde_json::Value> =
+            serde_json::from_str(&result.output.expect("output")).expect("json");
+        assert_eq!(fetched.len(), 1, "only non-empty pending draft");
+        assert_eq!(fetched[0]["post_id"], "f_ok");
     }
 }
