@@ -4,15 +4,17 @@ Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · P
 Status: **Phase A complete**; **Phase B landed** (#221) and **Phase B validated**
 (#223, 2026-07-27) — one-command packaged path on `days_to_expiry` video worktree:
 `video-clip-render -p <worktree> --clip video/clips/best-stocks-csp.json` → exit 0,
-`output_path` …/video/out/best-stocks-csp.mp4, `duration_s` ≈ 42.57, ffprobe
-1080×1920 + audio. Context smoke: `video-clip-context -S best-stocks-csp` returns
-body + `frontmatter.faq` / `target_keyword` + `packaging_hints`.
+`duration_s` ≈ 42.57, ffprobe 1080×1920 + audio. Context smoke:
+`video-clip-context -S best-stocks-csp` returns body + `frontmatter.faq` /
+`target_keyword` + `packaging_hints`.
 **Phase D (#228 + #231 + #232):** `video-engine/publish.py` — YouTube resumable upload + TikTok
 **Inbox Upload** (drafts via Content Posting API `video.upload`) + Instagram Graph API
 **Reels** (resumable container + rupload; stdlib urllib; optional skill step).
 **Operator path:** `.agents/skills/video-clip/SKILL.md` (`/video-clip`, #222).
-**Target footprint:** `video.config.json` + `video/clips/` + `video/out/` only (engine
-lives in pageseeds-app `video-engine/`, not the customer repo).
+**Target footprint:** `video.config.json` + `video/clips/` only (engine lives in
+pageseeds-app `video-engine/`; outputs go to the central
+`~/01_code/video-clip-backup/<project_id>/`, never the repo — config
+`output_dir` overrides).
 Phase C still optional. PoC project: daystoexpiry
 
 ## Purpose
@@ -327,8 +329,8 @@ upload (local MP4 via rupload — no public host required).
      **no** `post_info` / title / privacy.
    - **Instagram Reels:** packaging → caption (title + description + `#hashtags`,
      hard limit 2200 chars).
-3. **MP4 path:** `--video` or convention `video/clips/<slug>.json` → `video/out/<slug>.mp4`
-   (fallback `video-engine/out/<slug>.mp4`).
+3. **MP4 path:** `--video` or the central output dir
+   (`~/01_code/video-clip-backup/<project_id>/<slug>.mp4`, or config `output_dir`).
 4. **Secrets** via env-file chain (same precedence as Rust `EnvResolver`):  
    `~/.config/automation/secrets.env` → repo `.env.local` → repo `.env` → process env.  
    YouTube: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`.  

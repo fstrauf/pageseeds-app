@@ -5,9 +5,11 @@ finished vertical MP4 (9:16, 1080×1920, 40–50s) with screen-recorded UI, TTS
 voiceover, burned-in captions, hook caption, progress bar, and branded end card.
 
 Generic: everything target-specific lives in the **target repo's**
-`video.config.json`. Clip definitions (`video/clips/*.json`) and outputs
-(`video/out/`) also live in the target repo. This directory holds only the
-engine and its runtime.
+`video.config.json`. Clip definitions (`video/clips/*.json`) also live in the
+target repo. **Outputs are publish artifacts, not repo content** — they go to
+`~/01_code/video-clip-backup/<project_id>/` (central, outside any repo, safe
+from automation git-cleans; config `output_dir` overrides). This directory
+holds only the engine and its runtime.
 
 ## Prerequisites
 
@@ -108,11 +110,11 @@ The timing_map in the clip JSON references these names via `ui_target`.
 
 1. Add `video.config.json` at the repo root (copy `days_to_expiry`'s as a
    template; adjust `base_url`, `dev_servers`, `brand`, `overlays`,
-   `ui_targets`).
+   `ui_targets`; optional `output_dir` to override the central default).
 2. Add clip definitions under `video/clips/`.
-3. Add `video/out/` to the repo's `.gitignore`.
-4. Validate without recording: `node record.mjs <clip.json> --config <repo> --check`.
-5. Start the repo's dev servers, then `./generate-clip.sh <repo> <clip.json>`.
+3. Validate without recording: `node record.mjs <clip.json> --config <repo> --check`.
+4. Start the repo's dev servers, then `./generate-clip.sh <repo> <clip.json>`
+   — outputs land in `~/01_code/video-clip-backup/<project_id>/`.
 
 ## How it works
 
@@ -171,8 +173,9 @@ Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
   - **Instagram Reels:** title + blank line + description + hashtags as `#tag`, hard
     limit **2200** chars (prefer drop trailing hashtags before hard truncate).
     `--dry-run` plan JSON includes `caption_preview` / `caption_chars`.
-- **Video path:** `--video`, else `…/video/out/<slug>.mp4` when the clip lives under
-  `video/clips/`, else `video-engine/out/<slug>.mp4`.
+- **Video path:** `--video`, else the central output dir
+  (`~/01_code/video-clip-backup/<project_id>/<slug>.mp4`, or config
+  `output_dir`).
 - **Stdout:** single-platform → one JSON object; multi-platform →
   `{"results":[...]}`. Each entry has `status=ok|dry_run|error`.
 - **Clip write-back:** successful (non-dry-run) uploads merge into `published` without

@@ -4,7 +4,9 @@
 # Usage: generate-clip.sh <target-repo-path> <clip-json-path> [--skip-server-check]
 #
 # Config:  <target-repo-path>/video.config.json
-# Outputs: <target-repo-path>/video/out/<slug>.mp4 + .jpg
+# Outputs: ~/01_code/video-clip-backup/<project_id>/<slug>.mp4 + .jpg
+#          (central, outside any repo — loop git-cleans can't wipe them;
+#           config "output_dir" overrides the default)
 #
 # Stdout contract (parsed by `pageseeds-cli video-clip-render`):
 #   video-engine: stage=<record|voice|composite> status=start
@@ -44,11 +46,20 @@ fi
 TARGET="$(cd "${POSITIONAL[0]}" 2>/dev/null && pwd)" || err args "target_repo_not_found:_${POSITIONAL[0]}" 2
 CLIP="$(cd "$(dirname "${POSITIONAL[1]}")" 2>/dev/null && pwd)/$(basename "${POSITIONAL[1]}")"
 CONFIG="$TARGET/video.config.json"
-OUT="$TARGET/video/out"
 
 [[ -f "$CONFIG" ]] || err args "config_not_found:_$CONFIG" 2
 [[ -f "$CLIP" ]] || err args "clip_not_found:_$CLIP" 2
 "$PY" -c "import json,sys; json.load(open(sys.argv[1]))" "$CONFIG" || err args "config_invalid_json:_$CONFIG" 2
+
+# Central output dir, outside the target repo (renders are publish artifacts,
+# not repo content; repo-local out/ dirs get wiped by automation git-cleans).
+OUT="$("$PY" -c "
+import json, sys, os
+c = json.load(open(sys.argv[1]))
+print(c.get('output_dir') or os.path.expanduser(
+    f\"~/01_code/video-clip-backup/{c.get('project_id', 'unknown')}\"))
+" "$CONFIG")"
+mkdir -p "$OUT"
 
 # Dev-server reachability check (base_url + first ready_path from config).
 if [[ $SKIP_SERVER_CHECK -eq 0 ]]; then
