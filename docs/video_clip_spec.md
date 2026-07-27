@@ -1,13 +1,14 @@
 # Video Clip Generation Spec
 
-Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B toolchain: [#221](https://github.com/fstrauf/pageseeds-app/issues/221) · E2E: [#223](https://github.com/fstrauf/pageseeds-app/issues/223) · Phase D publish: [#228](https://github.com/fstrauf/pageseeds-app/issues/228)
+Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B toolchain: [#221](https://github.com/fstrauf/pageseeds-app/issues/221) · E2E: [#223](https://github.com/fstrauf/pageseeds-app/issues/223) · Phase D publish: [#228](https://github.com/fstrauf/pageseeds-app/issues/228) · TikTok inbox: [#231](https://github.com/fstrauf/pageseeds-app/issues/231)
 Status: **Phase A complete**; **Phase B landed** (#221) and **Phase B validated**
 (#223, 2026-07-27) — one-command packaged path on `days_to_expiry` video worktree:
 `video-clip-render -p <worktree> --clip video/clips/best-stocks-csp.json` → exit 0,
 `output_path` …/video/out/best-stocks-csp.mp4, `duration_s` ≈ 42.57, ffprobe
 1080×1920 + audio. Context smoke: `video-clip-context -S best-stocks-csp` returns
 body + `frontmatter.faq` / `target_keyword` + `packaging_hints`.
-**Phase D (#228):** YouTube-only `video-engine/publish.py` (stdlib urllib; packaging block payload; optional skill step).
+**Phase D (#228 + #231):** `video-engine/publish.py` — YouTube resumable upload + TikTok
+**Inbox Upload** (drafts via Content Posting API `video.upload`; stdlib urllib; optional skill step).
 **Operator path:** `.agents/skills/video-clip/SKILL.md` (`/video-clip`, #222).
 **Target footprint:** `video.config.json` + `video/clips/` + `video/out/` only (engine
 lives in pageseeds-app `video-engine/`, not the customer repo).
@@ -54,7 +55,7 @@ The single artifact passed from content intelligence to the renderer.
 | `timing_map` | object[] | Ordered segments, see below. Total duration must cover the voiceover length (target 40–50s final cut). |
 | `cta` | object | `{ text, url, subtitle? }` — end card call to action. `subtitle` (optional) renders under the domain and is per-clip; it overrides the config `brand.end_card.subtitle` default. |
 | `packaging` | object | `{ title, description, hashtags, thumbnail_hint }` — upload metadata. `description` is long-form SEO copy grounded in the article (see below), not a 1–2 sentence teaser. |
-| `published` | object (optional) | Post-upload platform linkage. Platform keys (e.g. `youtube`). Written by `publish.py` after a successful upload; absent until then. |
+| `published` | object (optional) | Post-upload platform linkage. Platform keys (`youtube`, `tiktok`, …). Written by `publish.py` after a successful upload; absent until then. |
 
 ### `packaging.description`
 
@@ -103,14 +104,29 @@ does not touch the clip file. Stdout success JSON includes the same block.
 | `published_at` | string | ISO-8601 UTC timestamp of the successful upload write-back. |
 | `privacy` | string | Upload privacy (`private` until OAuth app is verified; see #234). |
 
+### `published.tiktok` (post-upload, #231)
+
+Written by `video-engine/publish.py` after a successful (non-dry-run) TikTok
+**Inbox Upload**. The video lands in the creator’s TikTok inbox/drafts; the human
+finishes caption, privacy, and post in the TikTok app. Re-publish overwrites
+this object. Dry-run does not touch the clip file. Other `published.*` keys
+are preserved on write-back.
+
+| Field | Type | Description |
+|---|---|---|
+| `publish_id` | string | TikTok publish id from inbox init (`data.publish_id`). |
+| `mode` | string | Always `"inbox"` for this adapter (not Direct Post). |
+| `published_at` | string | ISO-8601 UTC timestamp of the successful upload write-back. |
+| `note` | string | Human note, e.g. `"finish in TikTok app"`. |
+
 ### Article embed (skill-owned, not engine)
 
-After publish, the operator skill (`.agents/skills/video-clip/SKILL.md`) may
+After **YouTube** publish, the operator skill (`.agents/skills/video-clip/SKILL.md`) may
 insert a portable responsive iframe embed into the source MDX body at
 `source.content_path` (customer content only). Position: after the intro /
 first paragraph, before the first `## ` H2. Idempotent on
 `youtube.com/embed/{video_id}` / `youtu.be/{video_id}`. Not part of the render
-engine; no `LazyYouTubeEmbed` requirement.
+engine; no `LazyYouTubeEmbed` requirement. **Do not** auto-embed TikTok into MDX.
 
 ### Moment templates (v1)
 
@@ -164,6 +180,12 @@ Optional post-upload block (written by `publish.py`; not present at craft time):
       "url": "https://youtu.be/dQw4w9WgXcQ",
       "published_at": "2026-07-27T12:00:00Z",
       "privacy": "private"
+    },
+    "tiktok": {
+      "publish_id": "v_inbox_file~v2.123456789",
+      "mode": "inbox",
+      "published_at": "2026-07-27T12:05:00Z",
+      "note": "finish in TikTok app"
     }
   }
 }
@@ -209,9 +231,11 @@ Sequence:
 4. Preflight `dev_servers` / `base_url` from config.
 5. Operator tier: `pageseeds-cli video-clip-render --clip video/clips/<slug>.json`.
 6. Quality gate: ffprobe (1080×1920, 40–50s, audio) + ≥5 visual frames.
-7. Report MP4 path + packaging block; optional YouTube publish via `video-engine/publish.py` (ask first).
-8. After successful publish: clip gets `published.youtube` write-back; skill embeds
-   the short into source MDX (see skill post-publish section).
+7. Report MP4 path + packaging block; optional YouTube and/or TikTok inbox publish via
+   `video-engine/publish.py` (ask first per platform).
+8. After successful YouTube publish: clip gets `published.youtube` write-back; skill embeds
+   the short into source MDX (see skill post-publish section). TikTok write-back is
+   `published.tiktok` only — no MDX embed.
 
 Weekly SEO may **electively** suggest `/video-clip <slug>` after a Path B ship
 when config exists (0–1 candidates, default 0) — not a weekly spine action and
@@ -264,31 +288,43 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
    desk model.
 3. Only then consider video as a hard action in the weekly-seo desk model.
 
-### Phase D — YouTube publish (#228) + post-publish linkage (#235)
+### Phase D — YouTube publish (#228) + TikTok inbox (#231) + post-publish linkage (#235)
 
-YouTube-only MVP for publishing rendered shorts. No TikTok/Instagram. No Rust changes.
+Publish adapters for rendered shorts. No Instagram. No Rust changes. TikTok is
+**Inbox Upload only** (drafts); not Direct Post / `video.publish`.
 
-1. **`video-engine/publish.py`** — stdlib only (`urllib`). CLI:
-   `publish.py <clip.json> --platforms youtube [--video <mp4>] [--dry-run]`.
-2. **Payload:** clip `packaging` block (`title`, `description`, `hashtags` → tags with `#` stripped).
+1. **`video-engine/publish.py`** — stdlib only (`urllib` / `http.client`). CLI:
+   `publish.py <clip.json> --platforms youtube[,tiktok] [--video <mp4>] [--dry-run]`.
+   Soft multi-platform runner: each platform independent; failure of one does not skip
+   the other. Exit `0` all ok · `1` any platform failed · `2` bad args / unknown platform /
+   unresolvable paths.
+2. **Payload:**
+   - **YouTube:** clip `packaging` → snippet/tags (`hashtags` with `#` stripped).
+   - **TikTok inbox:** packaging is operator preview only; inbox init body is
+     `source_info` only (`FILE_UPLOAD`, `video_size`, `chunk_size`, `total_chunk_count`) —
+     **no** `post_info` / title / privacy.
 3. **MP4 path:** `--video` or convention `video/clips/<slug>.json` → `video/out/<slug>.mp4`
    (fallback `video-engine/out/<slug>.mp4`).
 4. **Secrets** via env-file chain (same precedence as Rust `EnvResolver`):  
    `~/.config/automation/secrets.env` → repo `.env.local` → repo `.env` → process env.  
-   Keys: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`.
-5. **Upload:** OAuth refresh_token grant → YouTube Data API v3 resumable upload;
+   YouTube: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`.  
+   TikTok: `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REFRESH_TOKEN`.
+5. **YouTube upload:** OAuth refresh_token grant → Data API v3 resumable upload;
    `privacyStatus=private` until the OAuth app is verified.
-6. **`--dry-run`:** prints request plan JSON (no network; secrets not required; does
-   **not** write `published` into the clip file).
-7. **Clip write-back (#235):** on successful upload, `publish.py` merges
-   `published.youtube` (`video_id`, `url`, `published_at`, `privacy`) into the clip
-   JSON (indent=2 + trailing newline). Re-publish overwrites. Stdout includes the
-   same `published.youtube` block alongside top-level `video_id` / `url` / `privacy`.
-8. **Skill:** `.agents/skills/video-clip/SKILL.md` may offer optional publish after the
-   quality gate — **always ask first**; report the returned URL. After publish, ensure
-   clip has `published.youtube`, then embed a portable YouTube iframe into the source
-   MDX body (`source.content_path`) — skill-owned, not engine. Live upload is verified
-   owner-side (not CI). Auth setup: `video-engine/README.md` Publish section.
+6. **TikTok inbox upload (#231):** OAuth refresh →
+   `POST /v2/post/publish/inbox/video/init/` → `PUT` chunks to `upload_url` → optional
+   `POST /v2/post/publish/status/fetch/`. Scope **`video.upload`** only. Creator finishes
+   in the TikTok app (~5 pending API shares / 24h).
+7. **`--dry-run`:** prints request plan JSON per platform (no network; secrets not required;
+   does **not** write `published` into the clip file).
+8. **Clip write-back:** on success, merge platform key into `published` (indent=2 +
+   trailing newline) without wiping siblings:
+   - `published.youtube` — `video_id`, `url`, `published_at`, `privacy` (#235)
+   - `published.tiktok` — `publish_id`, `mode: "inbox"`, `published_at`, human `note`
+9. **Skill:** `.agents/skills/video-clip/SKILL.md` may offer optional YouTube and/or
+   TikTok publish after the quality gate — **always ask first**. YouTube: report URL +
+   embed into source MDX. TikTok: report `publish_id` + “finish in TikTok app”; **no**
+   MDX embed. Live upload is verified owner-side (not CI). Auth: `video-engine/README.md`.
 
 ## Non-goals
 
