@@ -128,6 +128,48 @@ The timing_map in the clip JSON references these names via `ui_target`.
    overlays via **Pillow** (no ffmpeg drawtext dependency), muxes
    loudness-normalized voiceover, exports MP4 + thumbnail.
 
+## Publish (YouTube)
+
+Phase D (#228): optional upload of a rendered short to YouTube. **YouTube only** —
+no TikTok/Instagram. Stdlib Python (`urllib`); no extra pip deps.
+
+```bash
+# Dry-run (no network; secrets not required)
+.venv/bin/python publish.py <clip.json> --platforms youtube --dry-run
+
+# Real upload
+.venv/bin/python publish.py <clip.json> --platforms youtube [--video path/to.mp4]
+```
+
+- **Metadata** comes from the clip `packaging` block (`title`, `description`, `hashtags`).
+- **Video path:** `--video`, else `…/video/out/<slug>.mp4` when the clip lives under
+  `video/clips/`, else `video-engine/out/<slug>.mp4`.
+- **Stdout:** JSON (`status=ok` + `url`, or `status=dry_run` plan).
+- **Exit codes:** `0` ok · `1` upload/API failed · `2` bad args / config / missing secrets.
+
+### Auth setup (one-time)
+
+1. Google Cloud project → enable **YouTube Data API v3**.
+2. Create **OAuth client** type **Desktop / installed app**.
+3. Mint a refresh token once (OAuth playground or a small installed-app consent flow)
+   with scope `https://www.googleapis.com/auth/youtube.upload`.
+4. Store credentials (highest priority path shown; same chain as PageSeeds secrets):
+
+```bash
+# ~/.config/automation/secrets.env
+YOUTUBE_CLIENT_ID=....apps.googleusercontent.com
+YOUTUBE_CLIENT_SECRET=...
+YOUTUBE_REFRESH_TOKEN=...
+```
+
+Fallback files (first file wins per key, then process env): repo `.env.local`, repo `.env`.
+
+Uploads use **`privacyStatus=private`** until the OAuth app is verified by Google
+(unverified apps cannot set public without quota/app review friction). Change privacy
+in YouTube Studio after upload if needed.
+
+Missing credentials print a one-line stderr hint and exit `2` (no stacktrace).
+
 ## Known limitations
 
 - Text is rendered with Pillow to PNGs and overlaid (the local ffmpeg build
