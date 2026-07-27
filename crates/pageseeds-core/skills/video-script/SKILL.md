@@ -80,7 +80,8 @@ Write one clip definition file at `video/clips/<slug>.json` in the project repo
 
   1. **Lines 1–2 (above the fold):** hook sentence + **full canonical article
      URL** (`packaging_hints.canonical_url` / `cta.url`). The URL must appear
-     in the first two lines.
+     in the first two **non-empty** lines (hook, then URL on the next line —
+     no blank line between them).
   2. **Body (~150–300 words):** condensed facts, steps, and data from the
      article. When `frontmatter.target_keyword` is present, put it in the
      **first ~150 characters** of the description.

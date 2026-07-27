@@ -259,8 +259,9 @@ do not reimplement the pipeline.
    JSON — before claiming success / before optional publish):**
    - **Hard fail** if empty.
    - **Hard fail** if the canonical URL (`packaging_hints.canonical_url` or
-     `cta.url`) is **not** present in the **first two lines** of the
-     description.
+     `cta.url`) is **not** present in the **first two non-empty lines** of the
+     description (ignore blank lines when counting; preferred craft shape is
+     hook on line 1, URL on line 2 with no intervening blank line).
    - **Hard fail** if `frontmatter.target_keyword` was available in context
      and does **not** appear in the description (case-insensitive).
    - **Hard fail / flag** if length **> 5,000** characters (YouTube hard
@@ -307,7 +308,7 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 ## Quality gate
 - ffprobe: 1080×1920 / 40–50s / audio: pass|fail
 - Frames inspected: n (notes)
-- packaging.description: URL in first 2 lines pass|fail · keyword present pass|fail|n/a · chars={n} (≤5000; soft-warn if <~800)
+- packaging.description: URL in first 2 non-empty lines pass|fail · keyword present pass|fail|n/a · chars={n} (≤5000; soft-warn if <~800)
 
 ## Friction / gaps
 - …
