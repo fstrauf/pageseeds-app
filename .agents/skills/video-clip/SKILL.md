@@ -174,6 +174,13 @@ Cannot invent config. See docs/video_clip_spec.md and video-engine/README.md.
 Also read `ui_targets` (and `dev_servers`, `base_url`, `ready_path`) so later
 `timing_map` keys stay valid.
 
+**Target review (multi-clip sessions):** before drafting several clips,
+check every planned `timing_map` moment against `ui_targets`. Add missing
+targets to `video.config.json` in ONE deliberate committed edit up front —
+never invent a target mid-run. Prefer fine-grained anchors on the same page
+(`scroll_to_text` to distinct sections) so adjacent segments look like
+different shots.
+
 ### D. Context (free desk)
 
 ```bash

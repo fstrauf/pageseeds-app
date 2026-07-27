@@ -33,6 +33,7 @@ FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
 END_CARD_TAIL_S = 1.5  # extra seconds the end card holds after the voice ends
 CAPTION_BOX_RGBA = (0, 0, 0, 178)  # ~70% opaque black behind phrase captions
 CAPTION_BOX_RADIUS = 18
+ZOOM_PCT = "0.08"  # slow push-in on alternating segments (keeps static UI alive)
 
 DEFAULT_BRAND = {
     "domain": "example.com",
@@ -61,14 +62,15 @@ def ffprobe_duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
-def resolve_config(p: str | None) -> dict:
+def resolve_config(p: str | None) -> tuple[dict, Path | None]:
+    """Return (config dict, config file's parent dir for resolving relative paths)."""
     if not p:
-        return {}
+        return {}, None
     path = Path(p).resolve()
     if path.is_dir():
         path = path / "video.config.json"
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text()), path.parent
     except (OSError, json.JSONDecodeError) as e:
         sys.exit(f"composite: cannot read config at {path}: {e}")
 
@@ -171,15 +173,31 @@ def render_caption_png(text: str, path: Path, fontsize=64, box=False) -> int:
     return canvas_h
 
 
-def render_end_card_png(clip: dict, brand: dict, path: Path) -> None:
+def render_end_card_png(clip: dict, brand: dict, path: Path, config_dir: Path | None) -> None:
     ec = brand["end_card"]
     bg, accent = tuple(ec["bg"]), tuple(ec["accent"])
     img = Image.new("RGB", (W, H), bg)
     draw = ImageDraw.Draw(img)
+    # optional brand logo above the CTA (brand.logo_path, relative to config dir)
+    y_rule, y_cta = 700, 800
+    logo_ref = brand.get("logo_path")
+    if logo_ref:
+        lp = Path(logo_ref)
+        if not lp.is_absolute() and config_dir:
+            lp = config_dir / lp
+        try:
+            logo = Image.open(lp).convert("RGBA")
+            lw = int(brand.get("logo_width", 200))
+            lh = int(logo.height * lw / logo.width)
+            logo = logo.resize((lw, lh), Image.LANCZOS)
+            img.paste(logo, ((W - lw) // 2, 500), logo)
+            y_rule, y_cta = 740, 840
+        except OSError:
+            pass  # missing logo is not fatal — text-only card
     # accent rule
-    draw.rectangle([W // 2 - 120, 700, W // 2 + 120, 708], fill=accent)
+    draw.rectangle([W // 2 - 120, y_rule, W // 2 + 120, y_rule + 8], fill=accent)
     cta_font = ImageFont.truetype(FONT, 62)
-    y = 800
+    y = y_cta
     for line in wrap_text(clip["cta"]["text"], cta_font, max_w=880):
         bbox = cta_font.getbbox(line)
         draw.text(((W - (bbox[2] - bbox[0])) // 2, y), line, font=cta_font,
@@ -190,10 +208,12 @@ def render_end_card_png(clip: dict, brand: dict, path: Path) -> None:
     bbox = dom_font.getbbox(domain)
     draw.text(((W - (bbox[2] - bbox[0])) // 2, y + 70), domain, font=dom_font,
               fill=accent)
-    if ec.get("subtitle"):
+    # per-clip subtitle (cta.subtitle) wins over the brand default
+    subtitle = (clip.get("cta") or {}).get("subtitle") or ec.get("subtitle")
+    if subtitle:
         sub_font = ImageFont.truetype(FONT, 40)
-        bbox = sub_font.getbbox(ec["subtitle"])
-        draw.text(((W - (bbox[2] - bbox[0])) // 2, y + 260), ec["subtitle"],
+        bbox = sub_font.getbbox(subtitle)
+        draw.text(((W - (bbox[2] - bbox[0])) // 2, y + 260), subtitle,
                   font=sub_font, fill=tuple(ec["muted"]))
     img.save(path)
 
@@ -243,7 +263,8 @@ def main() -> None:
         clip = json.loads(Path(args.clip).read_text())
     except (OSError, json.JSONDecodeError) as e:
         sys.exit(f"composite: cannot read clip at {args.clip}: {e}")
-    brand = brand_config(resolve_config(args.config))
+    config, config_dir = resolve_config(args.config)
+    brand = brand_config(config)
     out_dir = Path(args.out).resolve()
 
     slug = clip["source"]["slug"]
@@ -273,14 +294,28 @@ def main() -> None:
         if i in segs_by_index:
             m = segs_by_index[i]
             src = out_dir / "segments" / m["file"]
+            base_vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                       f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black")
+            if i % 2 == 1:
+                # alternating segments get a slow 0→8% push-in so back-to-back
+                # segments on the same page don't look like one static shot.
+                # fps MUST be set before and inside zoompan (a trailing fps=30
+                # after zoompan mis-times frames and balloons duration ~40x).
+                frames = max(int(dur * FPS), 1)
+                vf = (base_vf
+                      + f",fps={FPS}"
+                      + f",zoompan=z='1+{ZOOM_PCT}*on/{frames}':"
+                        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:fps={FPS}:s={W}x{H}"
+                      + f",setsar=1")
+            else:
+                vf = base_vf + f",fps={FPS},setsar=1"
             run(["ffmpeg", "-y", "-ss", f"{m['ready_offset_s']:.2f}", "-t", f"{dur:.3f}",
                  "-i", src,
-                 "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                        f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,fps={FPS},setsar=1",
+                 "-vf", vf,
                  "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-an", part])
         elif is_end_card:
             card = parts_dir / "endcard.png"
-            render_end_card_png(clip, brand, card)
+            render_end_card_png(clip, brand, card, config_dir)
             run(["ffmpeg", "-y", "-loop", "1", "-t", f"{dur:.3f}", "-i", card,
                  "-vf", f"fps={FPS},setsar=1", "-c:v", "libx264", "-preset", "medium",
                  "-crf", "18", "-an", part])
