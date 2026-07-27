@@ -142,6 +142,9 @@ no TikTok/Instagram. Stdlib Python (`urllib`); no extra pip deps.
 ```
 
 - **Metadata** comes from the clip `packaging` block (`title`, `description`, `hashtags`).
+  Description may be long-form SEO copy (see `docs/video_clip_spec.md`); if over 5,000
+  chars, `publish.py` **warns on stderr** and does not truncate. `--dry-run` plan JSON
+  includes `description_chars` (int) next to the metadata dump.
 - **Video path:** `--video`, else `…/video/out/<slug>.mp4` when the clip lives under
   `video/clips/`, else `video-engine/out/<slug>.mp4`.
 - **Stdout:** JSON (`status=ok` + `url`, or `status=dry_run` plan).

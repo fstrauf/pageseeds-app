@@ -153,6 +153,13 @@ def build_metadata(packaging: dict) -> dict:
     if not title:
         die("publish: packaging.title is required")
     description = (packaging.get("description") or "").strip()
+    # YouTube description hard limit 5000 — warn only; do not truncate or fail
+    if len(description) > 5000:
+        print(
+            f"publish: warning: packaging.description is {len(description)} chars "
+            f"(YouTube limit 5000); not truncating",
+            file=sys.stderr,
+        )
     tags = tags_from_hashtags(packaging.get("hashtags") or [])
     # YouTube title hard limit 100
     if len(title) > 100:
@@ -301,10 +308,12 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> None:
     metadata = build_metadata(packaging)
 
     if dry_run:
+        description = metadata["snippet"]["description"]
         plan = {
             "platform": "youtube",
             "status": "dry_run",
             "video_path": str(video_path),
+            "description_chars": len(description),
             "metadata": metadata,
             "plan": [
                 "refresh_token",

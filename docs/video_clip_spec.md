@@ -53,8 +53,33 @@ The single artifact passed from content intelligence to the renderer.
 | `keywords` | string[] | 4–6 target phrases from the article. First entry is the hook keyword shown as a big caption in the first 3 seconds. |
 | `timing_map` | object[] | Ordered segments, see below. Total duration must cover the voiceover length (target 40–50s final cut). |
 | `cta` | object | `{ text, url, subtitle? }` — end card call to action. `subtitle` (optional) renders under the domain and is per-clip; it overrides the config `brand.end_card.subtitle` default. |
-| `packaging` | object | `{ title, description, hashtags, thumbnail_hint }` — derived from article keywords for upload metadata. |
+| `packaging` | object | `{ title, description, hashtags, thumbnail_hint }` — upload metadata. `description` is long-form SEO copy grounded in the article (see below), not a 1–2 sentence teaser. |
 | `published` | object (optional) | Post-upload platform linkage. Platform keys (e.g. `youtube`). Written by `publish.py` after a successful upload; absent until then. |
+
+### `packaging.description`
+
+Same string field as schema v1 — richer semantics for YouTube SEO. Craft
+rules live in `crates/pageseeds-core/skills/video-script/SKILL.md`; quality
+gates in `.agents/skills/video-clip/SKILL.md`.
+
+| Zone | Content |
+|---|---|
+| **Lines 1–2 (above the fold)** | Hook sentence + **full canonical article URL** (`packaging_hints.canonical_url` / `cta.url`). URL must appear in the first two lines. |
+| **Body** | ~150–300 words condensed from the article (facts, steps, data grounded in `body` / FAQ — same substance as the script; no invented figures). Put `frontmatter.target_keyword` in the **first ~150 characters** when present. |
+| **CTA block** | Product/site link(s) from context — free-form text inside the description string, not new JSON fields. |
+| **Footer** | 3–5 hashtags (may mirror `packaging.hashtags`) + canonical URL again. |
+
+**Limits**
+
+| Limit | Rule |
+|---|---|
+| Hard | **5,000 characters** (YouTube). `publish.py` warns on stderr if over; does not hard-truncate or fail. |
+| Soft target | Roughly **1,500–4,000 chars** when the article has enough substance. |
+| Thin source | Shorter only if the article is thin — never pad with fluff. Empty description is invalid. |
+| Soft warn band | Operator quality gate flags descriptions under ~800 chars as "too thin". |
+
+Draft from **article body**, not generic marketing blurbs. The description
+should let a searcher/reader get value without watching the short.
 
 ### `timing_map` segment
 
@@ -122,7 +147,7 @@ are added to this spec and the project's Playwright journey together.
   "cta": { "text": "Stock list + portfolio scanner", "url": "https://daystoexpiry.com/blog/best-stocks-cash-secured-puts-2026", "subtitle": "the full CSP stock list" },
   "packaging": {
     "title": "3 filters before every cash-secured put",
-    "description": "The exact checklist I run before selling puts, plus the ticker passing all three right now. Full article on daystoexpiry.com.",
+    "description": "Cash-secured puts can print income — or blow up accounts when you pick the wrong underlyings. Here are the three filters I run before every CSP, plus the one ticker clearing all three right now.\n\nhttps://daystoexpiry.com/blog/best-stocks-cash-secured-puts-2026\n\nFilter one: liquidity. I want tight bid-ask spreads and enough open interest that filling (and rolling) is not a lottery. Filter two: fundamental quality — businesses I would actually own if assigned, not lottery tickets. Filter three: options premium that pays for the risk without chasing meme IV crush.\n\nIn the full guide I walk through how to score a shortlist, what fails each filter in practice, and how a portfolio scanner surfaces names that pass all three in one pass. You will also see a put calculator moment: inputs in, expected credit and assignment price out, so the risk is concrete before you click sell.\n\nIf you are new to the wheel, start with cash-secured puts on names you already understand, size so assignment is survivable, and treat the premium as compensation for obligation — not free money.\n\nFull stock list, filter checklist, and free DTE tracking:\nhttps://daystoexpiry.com/blog/best-stocks-cash-secured-puts-2026\n\n#options #cashsecuredputs #wheelstrategy #passiveincome #putselling\n\nhttps://daystoexpiry.com/blog/best-stocks-cash-secured-puts-2026",
     "hashtags": ["#options", "#cashsecuredputs", "#wheelstrategy", "#passiveincome"],
     "thumbnail_hint": "scanner_results top row"
   }

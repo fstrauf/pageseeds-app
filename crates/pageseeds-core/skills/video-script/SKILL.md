@@ -1,6 +1,6 @@
 # Video Script Skill
 
-<!-- skill-version: 1 -->
+<!-- skill-version: 2 -->
 
 Turn one article into a **clip definition JSON** (schema v1, docs/video_clip_spec.md)
 for the external video render engine.
@@ -72,6 +72,26 @@ Write one clip definition file at `video/clips/<slug>.json` in the project repo
 - `packaging.hashtags`: start from `packaging_hints.hashtags`, add 1–2
   topic tags if needed.
 - `packaging.thumbnail_hint`: the moment/frame worth thumbnailing.
+- **`packaging.description` — long-form YouTube SEO** (same string field;
+  not a 1–2 sentence teaser). Draft from the **article body** / FAQ — same
+  substance as the script; no invented figures; never generic marketing fluff.
+
+  Structure the multi-paragraph string as:
+
+  1. **Lines 1–2 (above the fold):** hook sentence + **full canonical article
+     URL** (`packaging_hints.canonical_url` / `cta.url`). The URL must appear
+     in the first two lines.
+  2. **Body (~150–300 words):** condensed facts, steps, and data from the
+     article. When `frontmatter.target_keyword` is present, put it in the
+     **first ~150 characters** of the description.
+  3. **CTA block:** product/site link(s) from context as free-form text inside
+     the description string (no new JSON fields).
+  4. **Footer:** 3–5 hashtags (may mirror `packaging.hashtags`) + canonical
+     URL again.
+
+  **Length:** hard limit 5,000 characters (YouTube). Soft target band roughly
+  1,500–4,000 when the article has enough substance; shorter only if the
+  source is thin — never pad. See `docs/video_clip_spec.md` § packaging.description.
 
 ## Then render (operator tier)
 
