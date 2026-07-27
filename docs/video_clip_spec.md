@@ -1,9 +1,15 @@
 # Video Clip Generation Spec
 
-Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B: [#221](https://github.com/fstrauf/pageseeds-app/issues/221)
-Status: **Phase A complete**; **Phase B landed** (#221) — context command +
-`video-script` skill + operator-tier render via in-repo `video-engine/`.
+Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B toolchain: [#221](https://github.com/fstrauf/pageseeds-app/issues/221) · E2E: [#223](https://github.com/fstrauf/pageseeds-app/issues/223)
+Status: **Phase A complete**; **Phase B landed** (#221) and **Phase B validated**
+(#223, 2026-07-27) — one-command packaged path on `days_to_expiry` video worktree:
+`video-clip-render -p <worktree> --clip video/clips/best-stocks-csp.json` → exit 0,
+`output_path` …/video/out/best-stocks-csp.mp4, `duration_s` ≈ 42.57, ffprobe
+1080×1920 + audio. Context smoke: `video-clip-context -S best-stocks-csp` returns
+body + `frontmatter.faq` / `target_keyword` + `packaging_hints`.
 **Operator path:** `.agents/skills/video-clip/SKILL.md` (`/video-clip`, #222).
+**Target footprint:** `video.config.json` + `video/clips/` + `video/out/` only (engine
+lives in pageseeds-app `video-engine/`, not the customer repo).
 Phase C still optional. PoC project: daystoexpiry
 
 ## Purpose
@@ -158,7 +164,7 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
    faster-whisper → FFmpeg composite → `generate-clip --definition clip.json`.
 5. Deliverable: one finished MP4 + documented friction notes.
 
-### Phase B — Productize in PageSeeds (#221 landed; operator skill #222)
+### Phase B — Productize in PageSeeds (#221 landed; #223 E2E validated; skill #222)
 
 1. Finalize this spec from PoC learnings.
 2. Embedded `video-script` skill in `crates/pageseeds-core/skills/video-script/SKILL.md`
@@ -170,10 +176,15 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
    canonical hybrid).
 4. Operator-tier `video-clip-render`: spawns in-repo `video-engine/generate-clip.sh`
    (AGENTS.md §5 subprocess-by-tier). Requires a source checkout + Node/FFmpeg on PATH;
-   project owns `video.config.json` and clip JSON.
+   project owns `video.config.json` and clip JSON. Stdout contract:
+   `video-engine: output=` / `video-engine: thumbnail=` (parsed by core; bare `OUTPUT:`
+   is not contractual).
 5. Document in `docs/TOOL_CATALOG.md` + `docs/CLI_COMMERCIAL.md`; ship with `pnpm test:cli`.
 6. **Operator skill** `.agents/skills/video-clip/SKILL.md` sequences the packaged path
    and links from weekly-seo as elective post-publish only (#222).
+7. **E2E gate (#223):** packaged path proven on target worktree without daystoexpiry-local
+   `tools/video/` PoC tree. Quality bar matches Phase A PoC (boxed captions, hook caption,
+   scanner segment, end card). Wipe-safe mirror: `~/01_code/video-clip-backup/daystoexpiry/`.
 
 ### Phase C — Optional task type + outcomes (after 3–5 videos)
 
@@ -203,3 +214,13 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
 - Playwright recording repeatable on the mocked demo portfolio.
 - Captions + voiceover clean and timed.
 - Process documented and ≥70–80% scripted; clear path from one video to a batch of five.
+
+## Success criteria (Phase B — packaged path)
+
+- [x] Toolchain on main (#221): `video-clip-context`, `video-clip-render`, `video-engine/`.
+- [x] Engine ↔ CLI stdout contract aligned (`video-engine: output=` / `thumbnail=`).
+- [x] Context desk smoke returns body + keyword/faq + packaging_hints.
+- [x] One-command render from clip JSON → exit 0 JSON with `output_path` + `duration_s`.
+- [x] ffprobe 1080×1920, 40–50s, audio; visual frames: hook caption, boxed captions,
+  scanner, end card — comparable to PoC backup.
+- [x] Spec status Phase B validated; architecture matches operator-tier (not “never FFmpeg”).
