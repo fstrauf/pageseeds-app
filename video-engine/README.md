@@ -15,14 +15,15 @@ engine and its runtime.
 |---|---|
 | Node + pnpm | repo standard |
 | ffmpeg + ffprobe | `brew install ffmpeg` |
-| Playwright chromium | reuses a cached browser (`~/Library/Caches/ms-playwright`) or `npx playwright install chromium` |
+| Playwright chromium | `playwright-core` ≥1.59 (pinned in `package.json`); browser via `pnpm exec playwright-core install chromium` (cached under `~/Library/Caches/ms-playwright`) |
 | Python 3 venv | see setup below |
 
 One-time engine setup:
 
 ```bash
 cd video-engine
-pnpm install            # playwright-core
+pnpm install            # playwright-core (≥1.59, pinned)
+pnpm exec playwright-core install chromium   # browser build matching the pin
 python3 -m venv .venv
 .venv/bin/pip install edge-tts pillow
 ```
@@ -116,9 +117,13 @@ The timing_map in the clip JSON references these names via `ui_target`.
 ## How it works
 
 1. **record.mjs** (Playwright): per timing_map segment, opens the target page
-   at 1080×1920, runs ready steps, performs the motion preset for
-   `to_s - from_s + 4s` while recording. Writes ready offsets so composite can
-   trim past page load.
+   at 1080×1920 and runs ready steps — this warmup is **not** filmed. Recording
+   then starts via `page.screencast` (Playwright ≥1.59) and the motion preset
+   runs for `to_s - from_s + 4s`. `ready_offset_s` in `segments.json` is
+   therefore always `0`. Segments with locator-driven steps (`click_role`,
+   `scroll_to_text`, `input_tweak`, `hover_text`, `interactions`) get
+   `showActions` cursor/highlight annotations (bottom-right); dwell segments
+   keep the freehand mouse wander.
 2. **voice.py**: edge-tts → `voice.mp3` + word-level `voice.srt`; retries with
    a computed speech rate if the voiceover lands outside 40–45.5s.
 3. **composite.py**: scales segment durations to actual voiceover length,
