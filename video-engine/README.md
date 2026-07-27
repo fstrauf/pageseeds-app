@@ -145,6 +145,9 @@ no TikTok/Instagram. Stdlib Python (`urllib`); no extra pip deps.
 - **Video path:** `--video`, else `…/video/out/<slug>.mp4` when the clip lives under
   `video/clips/`, else `video-engine/out/<slug>.mp4`.
 - **Stdout:** JSON (`status=ok` + `url`, or `status=dry_run` plan).
+- **Clip write-back:** a successful (non-dry-run) upload writes `published.youtube`
+  (`video_id`, `url`, `published_at`, `privacy`) into the clip JSON; dry-run does not
+  mutate the file. Stdout success JSON includes the same `published.youtube` block.
 - **Exit codes:** `0` ok · `1` upload/API failed · `2` bad args / config / missing secrets.
 
 ### Auth setup (one-time)
