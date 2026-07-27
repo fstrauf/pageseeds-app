@@ -7,10 +7,10 @@
  * All target-specific knowledge (URLs, ready selectors, interactions, overlay
  * dismissal) lives in the target repo's video.config.json — see README.md for
  * the schema. For each timing_map segment with a configured ui_target, opens
- * the mapped page at 1080x1920, runs its ready steps, then performs its motion
- * preset for (to_s - from_s) + PAD seconds while Playwright records video.
- * Writes <out>/segments/seg{NN}_{ui_target}.webm plus segments.json with
- * per-segment ready offsets so composite.py can trim past page load.
+ * the mapped page at 1080x1920, runs its ready steps (not filmed), then starts
+ * page.screencast and performs its motion preset for (to_s - from_s) + PAD
+ * seconds. Writes <out>/segments/seg{NN}_{ui_target}.webm plus segments.json
+ * (ready_offset_s is always 0 — recording starts after the page is ready).
  *
  * Exit codes: 0 ok · 2 bad args / config error
  */
@@ -138,17 +138,26 @@ async function scrollLocatorIntoView(page, locator, maxRounds = 40) {
   return false;
 }
 
-async function newRecordingPage(browser, overlays, segDir) {
+async function newRecordingPage(browser, overlays) {
   const context = await browser.newContext({
     viewport: VP,
     deviceScaleFactor: 1,
-    recordVideo: { dir: segDir, size: VP },
   });
   if (overlays.block_routes) {
     await context.route(new RegExp(overlays.block_routes), (route) => route.abort());
   }
   const page = await context.newPage();
   return { context, page };
+}
+
+/** True when the target performs locator-driven steps Playwright can annotate. */
+function hasLocatorSteps(target) {
+  return Boolean(
+    target.input_tweak ||
+    target.hover_text ||
+    target.interactions.length ||
+    target.ready.some((s) => s.click_role || s.scroll_to || s.scroll_to_text)
+  );
 }
 
 // --- ready steps + interactions (config primitives) --------------------------------
@@ -292,28 +301,36 @@ for (const { i, seg, isBuiltin, target } of plan) {
   const needS = seg.to_s - seg.from_s + PAD_S;
   console.log(`[record] seg ${i}: ${seg.ui_target} (${needS}s)`);
 
-  const { context, page } = await newRecordingPage(browser, overlays, SEG_DIR);
-  const t0 = Date.now();
+  const { context, page } = await newRecordingPage(browser, overlays);
   await page.goto(target.url(), { waitUntil: 'domcontentloaded', timeout: 120000 });
   await dismissOverlays(page, overlays);
   await runSteps(page, target.ready);
   await dismissOverlays(page, overlays, 1200);
-  const readyOffsetS = Math.max(0, (Date.now() - t0) / 1000 - 0.5);
 
   const motion = MOTIONS[target.motion];
   if (!motion) {
     console.error(`record: unknown motion preset "${target.motion}" for ${seg.ui_target}`);
     process.exit(2);
   }
-  await motion(page, needS, target);
 
-  const video = page.video();
-  await context.close();
-  const rawPath = await video.path();
+  // Ready-steps are done — only now start filming (no warmup in the footage).
   const file = `seg${String(i).padStart(2, '0')}_${seg.ui_target}.webm`;
-  fs.renameSync(rawPath, path.join(SEG_DIR, file));
-  manifest.push({ index: i, ui_target: seg.ui_target, file, ready_offset_s: readyOffsetS });
-  console.log(`[record]   -> ${file} (ready at ${readyOffsetS.toFixed(1)}s)`);
+  const filePath = path.join(SEG_DIR, file);
+  if (hasLocatorSteps(target)) {
+    await page.screencast.showActions({ position: 'bottom-right' });
+  }
+  await page.screencast.start({ path: filePath, size: VP });
+  await motion(page, needS, target);
+  await page.screencast.stop();
+  await context.close();
+
+  // screencast writes the webm on stop(); verify it landed before manifesting.
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).size < 10_000) {
+    console.error(`record: screencast produced no usable video at ${filePath}`);
+    process.exit(2);
+  }
+  manifest.push({ index: i, ui_target: seg.ui_target, file, ready_offset_s: 0 });
+  console.log(`[record]   -> ${file}`);
 }
 
 fs.writeFileSync(path.join(SEG_DIR, 'segments.json'), JSON.stringify(manifest, null, 2));

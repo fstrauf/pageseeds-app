@@ -8,6 +8,6 @@
     "record": "node record.mjs"
   },
   "dependencies": {
-    "playwright-core": "1.56.1"
+    "playwright-core": "1.62.0"
   }
 }
