@@ -1,29 +1,36 @@
 # Video Clip Generation Spec
 
-Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220)
-Status: **Phase A complete (2026-07-26)** — first video produced from `best-stocks-csp`
-(`call-analyzer/tools/video/out/best-stocks-csp.mp4`, 42.6s). Pipeline + operator skill live
-in the daystoexpiry repo (`tools/video/`, `.github/skills/video-clip/`). Phase B pending user review.
-PoC project: daystoexpiry
+Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B: [#221](https://github.com/fstrauf/pageseeds-app/issues/221)
+Status: **Phase A complete**; **Phase B landing** (#221 / PR) — context command +
+`video-script` skill + operator-tier render via in-repo `video-engine/`. Phase C
+still optional. PoC project: daystoexpiry
 
 ## Purpose
 
 Produce 40–50 second vertical videos (YouTube Shorts / Reels / TikTok) from existing blog
 posts, with as much of the pipeline scripted and repeatable as possible. This spec defines
-the contract between PageSeeds (content intelligence) and the external renderer (video
+the contract between PageSeeds (content intelligence) and the generic render engine (video
 production), and the phased path from one manual-scripted video to batch generation.
 
 ## Architectural Boundary
 
 | Half | What | Where |
 |---|---|---|
-| **Content intelligence** — article → spoken script, timing map, keywords, clip definition JSON, packaging metadata | Judgment over repo content; matches the existing Path B package/submit and skill patterns | **pageseeds-app** (core + CLI + skills) |
-| **Rendering** — Playwright journey, screen recording, TTS, word timestamps, captions, composite | Node/Python subprocess tooling (Playwright, edge-tts, whisper, Remotion/FFmpeg) | **The project repo** (e.g. daystoexpiry `tools/video/`) |
+| **Content intelligence** — article → spoken script, timing map, keywords, clip definition JSON, packaging metadata | Judgment over repo content; matches the existing Path B package/submit and skill patterns | **pageseeds-core / CLI / skill** (free desk + paid-safe surface) |
+| **Generic engine** — Playwright journey, screen recording, TTS, word timestamps, captions, composite | Node/Python subprocess tooling (Playwright, edge-tts, whisper, FFmpeg) | **pageseeds-app `video-engine/`**, invoked only by **operator-tier** `video-clip-render` |
+| **Target project repo** | Project config + clip artifacts | Owns `video.config.json`, clip definition JSON, journeys/out — **not** a second full engine tree for the packaged operator path |
 
-PageSeeds **never** invokes Playwright/FFmpeg/Node. AGENTS.md §5 forbids subprocess calls
-outside the agent compatibility layer, and there is no precedent for it in `crates/`.
-The renderer consumes the clip definition JSON; PageSeeds produces it. This mirrors the
-Path B split: Rust emits a deterministic, versioned package; the outside world consumes it.
+**Subprocess policy:** Commercial free/paid tools remain pure Rust (AGENTS.md §5
+subprocess-by-tier; `docs/CLI_COMMERCIAL.md`). Operator-tier tools may spawn external
+processes when the capability cannot be Rust-native. `video-clip-render` is operator-tier:
+it shells out to `video-engine/generate-clip.sh` (Node/FFmpeg) on a source checkout of
+pageseeds-app. The prebuilt customer binary does not promise this path.
+
+Content intelligence produces the versioned clip definition JSON; the engine consumes it
+and emits contractual stdout lines (`video-engine: output=…`, `video-engine: thumbnail=…`).
+This mirrors the Path B split: Rust emits a deterministic, versioned package; the outside
+toolchain consumes it — with the operator-tier exception that pageseeds-core may *invoke*
+that toolchain when the operator opts in.
 
 ## Clip Definition JSON — schema v1
 
@@ -99,9 +106,23 @@ are added to this spec and the project's Playwright journey together.
 - Optional: subtle logo, progress bar, end card with CTA
 - First 3 seconds: visually strong moment + big caption with the hook keyword
 
+### Engine stdout contract
+
+Only lines starting with `video-engine: ` are contractual (`video-engine/generate-clip.sh`).
+pageseeds-core parses:
+
+```
+video-engine: output=<absolute path to final mp4>
+video-engine: thumbnail=<absolute path to thumbnail jpg>
+```
+
+Last matching line of each key wins. Stage progress lines
+(`video-engine: stage=… status=…`) are informational. Bare `OUTPUT:` markers are **not**
+part of the contract.
+
 ## Workflow phases
 
-### Phase A — PoC, zero Rust changes (current)
+### Phase A — PoC, zero Rust changes (complete)
 
 1. Pick one article with clear visual potential (income/wheel/calculator piece).
 2. Build a **stable mocked demo portfolio** in the project repo — Playwright journeys must
@@ -109,21 +130,24 @@ are added to this spec and the project's Playwright journey together.
 3. Project-level `video-clip` skill in the project repo: reads the article via
    `pageseeds-cli article --slug …`, drafts the clip definition JSON, runs the render
    scripts, reports friction.
-4. Render pipeline in the project repo (`tools/video/`): Playwright record → edge-tts +
-   faster-whisper → Remotion or FFmpeg composite → `generate-clip --definition clip.json`.
+4. Render pipeline PoC in the project repo (`tools/video/`): Playwright record → edge-tts +
+   faster-whisper → FFmpeg composite → `generate-clip --definition clip.json`.
 5. Deliverable: one finished MP4 + documented friction notes.
 
-### Phase B — Productize in PageSeeds (after video #1 proves the contract)
+### Phase B — Productize in PageSeeds (landing on this branch, #221)
 
 1. Finalize this spec from PoC learnings.
 2. Embedded `video-script` skill in `crates/pageseeds-core/skills/video-script/SKILL.md`
    (version marker + input/output contract), registered in `engine/skills.rs`.
-3. New free-tier desk command `video-clip-context`: emits structured article context JSON
-   (body, frontmatter, keyword metadata) built with `content::ops::load_article_by_slug`,
-   `frontmatter::split_mdx`, `count_words`. Free tier per `docs/CLI_COMMERCIAL.md`
-   (local reads only). The session agent turns context → clip definition via the
-   `video-script` skill (deterministic context, agentic prose — the canonical hybrid).
-4. Document in `docs/TOOL_CATALOG.md` + `docs/CLI_COMMERCIAL.md`; ship with `pnpm test:cli`.
+3. Free-tier desk command `video-clip-context`: emits structured article context JSON
+   (body, frontmatter, keyword metadata) built with content ops helpers. Free tier per
+   `docs/CLI_COMMERCIAL.md` (local reads only). The session agent turns context → clip
+   definition via the `video-script` skill (deterministic context, agentic prose — the
+   canonical hybrid).
+4. Operator-tier `video-clip-render`: spawns in-repo `video-engine/generate-clip.sh`
+   (AGENTS.md §5 subprocess-by-tier). Requires a source checkout + Node/FFmpeg on PATH;
+   project owns `video.config.json` and clip JSON.
+5. Document in `docs/TOOL_CATALOG.md` + `docs/CLI_COMMERCIAL.md`; ship with `pnpm test:cli`.
 
 ### Phase C — Optional task type + outcomes (after 3–5 videos)
 
@@ -131,7 +155,7 @@ are added to this spec and the project's Playwright journey together.
    (`UserEnqueue` / `ArtifactReview` / `follow_up_policy: None`), canonical 4-step pipeline:
    deterministic context → agentic generate via `extract_with_backend::<ClipDefinition>()`
    (typed `serde` + `schemars` struct in `models/`) → deterministic write → verify.
-   The task artifact is the clip definition; rendering still runs outside.
+   The task artifact is the clip definition; rendering still runs via operator-tier tool.
 2. Outcome tracking: reuse `insert_content_outcome_result` / `list_content_outcome_results`
    for per-video retention metrics, feeding "which moments hold attention" back into the
    desk model.
@@ -139,12 +163,15 @@ are added to this spec and the project's Playwright journey together.
 
 ## Non-goals
 
-- No Playwright/FFmpeg/Node invocation from `pageseeds-core`.
+- Commercial free/paid tools remain pure Rust — no Playwright/FFmpeg/Node on that surface.
+  Operator-tier may spawn the in-repo `video-engine/` (AGENTS.md §5 subprocess-by-tier;
+  `docs/CLI_COMMERCIAL.md` Operator tier). Do not treat operator render as a commercial promise.
 - No new task type or handler in Phases A–B — skill first, per the AGENTS.md golden rule.
+  (Phase C is the optional task-type lane.)
 - No scheduler, batch runner, or cross-project orchestration.
 - No AI avatar PiP in v1 (revisit after retention data exists).
 
-## Success criteria (PoC)
+## Success criteria (PoC / Phase A)
 
 - One publishable 40–50s vertical MP4 from a real daystoexpiry blog post.
 - Playwright recording repeatable on the mocked demo portfolio.

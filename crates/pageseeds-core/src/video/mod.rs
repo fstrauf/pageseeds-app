@@ -66,9 +66,10 @@ pub struct VideoClipPackagingHints {
 #[derive(Debug, Clone, Serialize)]
 pub struct VideoClipRenderResult {
     /// Absolute path of the rendered MP4 (parsed from the engine's
-    /// `OUTPUT: <path>` stdout contract line).
+    /// `video-engine: output=<path>` stdout contract line).
     pub output_path: String,
-    /// Sibling thumbnail file (`<stem>.png` / `.jpg`) when the engine produced one.
+    /// Thumbnail path from `video-engine: thumbnail=<path>` when present;
+    /// otherwise a sibling filesystem guess (`png`/`jpg` next to the output).
     pub thumbnail_path: Option<String>,
     /// Duration in seconds via ffprobe; `None` when ffprobe is unavailable.
     pub duration_s: Option<f64>,
@@ -263,7 +264,8 @@ pub fn video_clip_render(project_path: &Path, clip_path: &Path) -> Result<VideoC
         .unwrap_or_else(|| PathBuf::from("."));
 
     // stdout is piped and tee'd to the operator's terminal (progress), stderr
-    // inherited; lines are kept to parse the `OUTPUT:` contract at the end.
+    // inherited; lines are kept to parse the `video-engine: output=` /
+    // `video-engine: thumbnail=` contract at the end.
     let mut child = Command::new("bash")
         .arg(&engine)
         .arg(project_path)
@@ -304,18 +306,22 @@ pub fn video_clip_render(project_path: &Path, clip_path: &Path) -> Result<VideoC
 
     let output_path = parse_output_path(&lines).ok_or_else(|| {
         Error::Other(
-            "render succeeded but no `OUTPUT: <path>` line found on engine stdout — \
-             stdout contract (docs/video_clip_spec.md) violated"
+            "render succeeded but no `video-engine: output=<path>` line found on engine stdout — \
+             stdout contract (video-engine/generate-clip.sh) violated"
                 .to_string(),
         )
     })?;
 
     let output = PathBuf::from(&output_path);
-    let thumbnail_path = ["png", "jpg"]
-        .iter()
-        .map(|ext| output.with_extension(ext))
-        .find(|p| p.is_file())
-        .map(|p| p.to_string_lossy().to_string());
+    // Prefer the engine's contractual thumbnail line; fall back to a sibling
+    // filesystem guess only when the engine did not print one.
+    let thumbnail_path = parse_thumbnail_path(&lines).or_else(|| {
+        ["png", "jpg"]
+            .iter()
+            .map(|ext| output.with_extension(ext))
+            .find(|p| p.is_file())
+            .map(|p| p.to_string_lossy().to_string())
+    });
 
     Ok(VideoClipRenderResult {
         output_path,
@@ -390,15 +396,34 @@ fn require_tool_on_path(tool: &str, install_hint: &str) -> Result<()> {
     Ok(())
 }
 
-/// Last `OUTPUT: <path>` line wins (engine stdout contract).
+/// Last `video-engine: output=<path>` line wins (engine stdout contract).
+///
+/// Only matches the `output=` key after the `video-engine: ` prefix so stage
+/// lines like `video-engine: stage=record status=ok` are ignored. Bare
+/// `OUTPUT: …` markers are not contractual and are rejected.
 fn parse_output_path(lines: &[String]) -> Option<String> {
-    lines
-        .iter()
-        .rev()
-        .filter_map(|l| l.trim().strip_prefix("OUTPUT:"))
-        .map(str::trim)
-        .find(|p| !p.is_empty())
-        .map(str::to_string)
+    parse_video_engine_kv(lines, "output=")
+}
+
+/// Last `video-engine: thumbnail=<path>` line wins (engine stdout contract).
+fn parse_thumbnail_path(lines: &[String]) -> Option<String> {
+    parse_video_engine_kv(lines, "thumbnail=")
+}
+
+/// Shared parser for `video-engine: <key>=<value>` contract lines.
+/// `key_prefix` is the key including `=`, e.g. `"output="`.
+fn parse_video_engine_kv(lines: &[String], key_prefix: &str) -> Option<String> {
+    lines.iter().rev().find_map(|l| {
+        let trimmed = l.trim();
+        let rest = trimmed.strip_prefix("video-engine: ")?;
+        let value = rest.strip_prefix(key_prefix)?;
+        let value = value.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    })
 }
 
 /// ffprobe duration in seconds; `None` when ffprobe is not installed or the
@@ -551,15 +576,57 @@ Filter one. Filter two.
     }
 
     #[test]
-    fn parse_output_path_last_line_wins() {
+    fn parse_output_path_last_video_engine_line_wins() {
         let lines = vec![
-            "rendering…".to_string(),
-            "OUTPUT: /tmp/first.mp4".to_string(),
-            "more work".to_string(),
-            "OUTPUT: /tmp/final.mp4".to_string(),
+            "video-engine: stage=record status=start".to_string(),
+            "video-engine: output=/tmp/first.mp4".to_string(),
+            "video-engine: stage=composite status=ok".to_string(),
+            "video-engine: output=/tmp/final.mp4".to_string(),
         ];
         assert_eq!(parse_output_path(&lines).as_deref(), Some("/tmp/final.mp4"));
         assert!(parse_output_path(&["no marker here".to_string()]).is_none());
+        // Stage lines must not be mistaken for output=.
+        assert!(parse_output_path(&[
+            "video-engine: stage=record status=ok".to_string()
+        ])
+        .is_none());
+    }
+
+    #[test]
+    fn parse_output_path_rejects_bare_output_marker() {
+        // Legacy / non-contractual marker — must not be accepted.
+        let lines = vec!["OUTPUT: /tmp/x.mp4".to_string()];
+        assert!(
+            parse_output_path(&lines).is_none(),
+            "bare OUTPUT: is not the video-engine stdout contract"
+        );
+        // Mixed: bare OUTPUT: ignored, contractual line wins.
+        let mixed = vec![
+            "OUTPUT: /tmp/legacy.mp4".to_string(),
+            "video-engine: output=/tmp/contract.mp4".to_string(),
+        ];
+        assert_eq!(
+            parse_output_path(&mixed).as_deref(),
+            Some("/tmp/contract.mp4")
+        );
+    }
+
+    #[test]
+    fn parse_thumbnail_path_last_video_engine_line_wins() {
+        let lines = vec![
+            "video-engine: output=/tmp/final.mp4".to_string(),
+            "video-engine: thumbnail=/tmp/first.jpg".to_string(),
+            "video-engine: thumbnail=/tmp/final.jpg".to_string(),
+        ];
+        assert_eq!(
+            parse_thumbnail_path(&lines).as_deref(),
+            Some("/tmp/final.jpg")
+        );
+        assert!(parse_thumbnail_path(&["no marker".to_string()]).is_none());
+        assert!(parse_thumbnail_path(&[
+            "video-engine: output=/tmp/only.mp4".to_string()
+        ])
+        .is_none());
     }
 
     #[test]
