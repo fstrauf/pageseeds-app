@@ -31,6 +31,16 @@ Deterministic package + session prose + submit gates. Operator policy lives in t
 
 Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI best-path when the matching package tools exist.
 
+### CLI video clip tools
+
+Article → short-form vertical video ([video clip spec](./video_clip_spec.md)). Content intelligence lives in PageSeeds; rendering lives in the external engine.
+
+| Tools | Status | Role |
+|---|---|---|
+| `video-clip-context` | **Shipped** (free desk read) | Structured article context JSON (body, frontmatter, keyword, packaging hints) for one slug — the deterministic half of the video workflow. |
+| `video-script` skill | **Shipped** (embedded) | Agentic half: session agent turns the context into a clip definition JSON (schema v1: spoken_script, keywords, timing_map, cta, packaging). |
+| `video-clip-render` | **Shipped** (operator tier) | Dev-machine only, no license, not sold: runs `video-engine/generate-clip.sh <project> <clip>` (requires node/ffmpeg + `video.config.json`). |
+
 ## Decision guide: which tool when?
 
 ```

@@ -1,0 +1,13 @@
+{
+  "name": "pageseeds-video-engine",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Video render pipeline PoC: clip definition JSON -> vertical MP4 (Playwright + edge-tts + ffmpeg)",
+  "type": "module",
+  "scripts": {
+    "record": "node record.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

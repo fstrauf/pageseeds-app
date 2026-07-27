@@ -85,7 +85,7 @@ scripts/
 - **Business logic lives in `pageseeds-core` modules** — never in the CLI binary
 - **CLI is thin**: parse args → call core → print JSON / errors
 - **One error type**: `error::Error` and `error::Result<T>` everywhere in domain
-- **No subprocess calls** — use Rust crates directly (`reqwest`, `rusqlite`, etc.)
+- **Subprocess by tier** — commercial-surface tools are pure Rust (`reqwest`, `rusqlite`, etc.); operator-tier tools (see `docs/CLI_COMMERCIAL.md`) may spawn node/ffmpeg/python with PATH detection + clear errors
 - **SQLite migrations**: Never alter existing migration blocks — add new `MIGRATION_VN` constants
 
 ### 2. Workflow Steps
@@ -173,7 +173,7 @@ Use `config::env_resolver::EnvResolver` — never `std::env::var()` directly.
 - [ ] New SQLite columns added via new migration (not altering existing)
 - [ ] No business logic added to `crates/pageseeds-cli` beyond arg parse / I/O
 - [ ] No secrets or absolute paths in source code
-- [ ] No `subprocess` / shell calls outside agent compatibility
+- [ ] Subprocess only in operator-tier tools or agent compatibility; commercial surface stays pure Rust
 - [ ] Reviewed CONTRACTS.md for affected contracts
 - [ ] Every new agentic step has: (a) specific input context, (b) output contract comment, (c) why-not-deterministic comment
 - [ ] `pnpm run test:cli` green

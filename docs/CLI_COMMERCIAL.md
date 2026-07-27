@@ -27,7 +27,7 @@ Owner decision 2026-07-25. Do not re-open in docs-only or gate PRs without a pro
 
 ---
 
-## Free (no license) — 25 tools (+ meta)
+## Free (no license) — 26 tools (+ meta)
 
 Meta help/version/license stay free. Setup/list/create are match-arm free tools (no paid gate, no `-i`/`-p` required up front).
 
@@ -53,6 +53,7 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `article-title-scan` | Title scan |
 | `article-link-graph` | Internal link graph |
 | `framework-files` | Framework / skill files |
+| `video-clip-context` | Article context JSON for the `video-script` skill (local reads only) |
 
 ### GSC / health reads
 
@@ -77,8 +78,8 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `get-task` | Get one task |
 | `validate-article` | Validate article structure |
 
-**Free tool names (25):**  
-`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `list-tasks`, `get-task`, `validate-article`
+**Free tool names (26):**  
+`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `list-tasks`, `get-task`, `validate-article`
 
 ---
 
@@ -138,6 +139,24 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 
 ---
 
+## Operator tier (no license, dev-machine only) — 1 tool
+
+A third category **outside the commercial free/paid boundary**. Operator-tier
+tools are neither free-desk nor paid: they are **not sold to customers**, are
+not part of the single-prebuilt-binary promise, and may spawn external
+subprocesses (node, ffmpeg, python — AGENTS.md §5) with PATH detection and
+clear install-hint errors. They assume a **source checkout of pageseeds-app**
+on a developer machine. Code: `OPERATOR_TOOLS` in
+[`crates/pageseeds-core/src/license/mod.rs`](../crates/pageseeds-core/src/license/mod.rs)
+(disjoint from `PAID_TOOLS`; the CLI inventory test asserts
+free ∪ paid ∪ operator = all tools).
+
+| Tool | Notes |
+|------|--------|
+| `video-clip-render` | Renders one clip definition via `<pageseeds-app>/video-engine/generate-clip.sh`. Requires node + ffmpeg on PATH and `video.config.json` in the project ([video clip spec](./video_clip_spec.md)). The free `video-clip-context` + embedded `video-script` skill produce the clip definition; rendering stays operator-side. |
+
+---
+
 ## Rule of thumb (new subcommands)
 
 | If the command… | Then |
@@ -147,6 +166,7 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | Spawns or advances tasks that do real work | **Paid** |
 | Calls paid third-party research APIs (e.g. Ahrefs pull) | **Paid** |
 | Is meta / license / help / version | **Free** |
+| Spawns external toolchains (node/ffmpeg/python) on a dev machine; not part of the commercial promise | **Operator tier** |
 
 When in doubt: free = observe; paid = act or mutate.
 
@@ -156,15 +176,15 @@ When in doubt: free = observe; paid = act or mutate.
 
 When adding a CLI match arm in [`crates/pageseeds-cli/src/main.rs`](../crates/pageseeds-cli/src/main.rs):
 
-1. Update **this file** (free or paid list + counts).
-2. Update `PAID_TOOLS` in `crates/pageseeds-core/src/license/mod.rs` in the same PR.
+1. Update **this file** (free, paid, or operator list + counts).
+2. Update `PAID_TOOLS` (paid) or `OPERATOR_TOOLS` (operator tier) in `crates/pageseeds-core/src/license/mod.rs` in the same PR.
 3. Keep help `TOOLS` / `print_help` in sync with match arms.
 
 Inventory check for implementers:
 
-- free ∪ paid = all match-arm tools
-- free ∩ paid = empty
-- Current lock: **22 free + 24 paid = 46** tools (verified against match arms ~41–256; ignore status enum matches like `done` / `cancelled`)
+- free ∪ paid ∪ operator = all match-arm tools
+- free ∩ paid = empty; operator ∩ (free ∪ paid) = empty
+- Current lock: **26 free + 24 paid = 50** commercial tools (+ meta) and **1 operator-tier** tool (`video-clip-render`, outside the commercial boundary) = 51 total (verified against match arms; ignore status enum matches like `done` / `cancelled`)
 
 ---
 

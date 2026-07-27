@@ -44,6 +44,7 @@ const EMBEDDED_SKILL_NAMES: &[&str] = &[
     "merge-content",
     "reddit-enrich",
     "territory-strategy",
+    "video-script",
 ];
 
 fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
@@ -69,6 +70,7 @@ fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
         "merge-content" => include_str!("../../skills/merge-content/SKILL.md"),
         "reddit-enrich" => include_str!("../../skills/reddit-enrich/SKILL.md"),
         "territory-strategy" => include_str!("../../skills/territory-strategy/SKILL.md"),
+        "video-script" => include_str!("../../skills/video-script/SKILL.md"),
         _ => return None,
     };
 

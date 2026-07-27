@@ -325,6 +325,28 @@ Buy: https://pageseeds.com"
         }
         "compare-rendered" => compare_rendered(&require_project_path(), &args),
         "write-feature-spec" => write_spec(&require_project_path(), &args),
+
+        // ── Video clips (context = free desk read; render = operator tier) ──
+        "video-clip-context" => {
+            let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
+            let path = require_project_path();
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                pageseeds_core::video::video_clip_context(&conn, &project_id, &path, &slug)
+                    .map(|r| serde_json::to_value(r).unwrap_or_default())
+                    .map_err(|e| e.to_string())
+            })
+        }
+        "video-clip-render" => {
+            // Operator tier (docs/CLI_COMMERCIAL.md): no license gate; dev-machine only.
+            let clip = flag(&args, "--clip", "-c").unwrap_or_else(|| exit("--clip required"));
+            let path = require_project_path();
+            pageseeds_core::video::video_clip_render(
+                std::path::Path::new(&path),
+                std::path::Path::new(&clip),
+            )
+            .map(|r| serde_json::to_value(r).unwrap_or_default())
+            .map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown tool '{}'. Run with --help for list.", tool)),
     };
 
@@ -1797,6 +1819,19 @@ const TOOLS: &[ToolHelp] = &[
         example: "write-feature-spec -p <path> -T \"title\" [-s severity] [-m impact]",
         section: "Audits / reports",
     },
+    // Video clips (context = free desk read; render = operator tier, dev-machine only)
+    ToolHelp {
+        name: "video-clip-context",
+        purpose: "Article context JSON for the video-script skill (desk read)",
+        example: "video-clip-context -i <id> -p <path> -S <slug>",
+        section: "Video clips",
+    },
+    ToolHelp {
+        name: "video-clip-render",
+        purpose: "Render one clip definition via video-engine (operator tier — requires node/ffmpeg)",
+        example: "video-clip-render -p <path> --clip <clip.json>",
+        section: "Video clips",
+    },
 ];
 
 fn print_help() {
@@ -1939,11 +1974,14 @@ mod tests {
         assert!(!wants_help(&real));
     }
 
-    /// Free ∪ paid must cover the help inventory; every paid name must be a real tool.
-    /// Prevents silently ungating a paid tool (or leaving a dead paid name) on rename/add.
+    /// Free ∪ paid ∪ operator must cover the help inventory; every paid name must be a real
+    /// tool. Prevents silently ungating a paid tool (or leaving a dead paid name) on rename/add.
+    /// Operator-tier tools (docs/CLI_COMMERCIAL.md) sit outside the commercial free/paid
+    /// boundary: no license, but excluded from the free count.
     #[test]
     fn free_paid_inventory_matches_tools() {
         let paid = pageseeds_core::license::paid_tools();
+        let operator = pageseeds_core::license::operator_tools();
         let tool_names: Vec<&str> = TOOLS.iter().map(|t| t.name).collect();
 
         for name in paid {
@@ -1952,10 +1990,23 @@ mod tests {
                 "paid tool '{name}' missing from TOOLS help inventory"
             );
         }
+        for name in operator {
+            assert!(
+                tool_names.contains(name),
+                "operator tool '{name}' missing from TOOLS help inventory"
+            );
+            assert!(
+                !paid.contains(name),
+                "operator tool '{name}' must not be in the paid set"
+            );
+        }
 
         let free_count = tool_names
             .iter()
-            .filter(|n| !pageseeds_core::license::requires_paid_license(n))
+            .filter(|n| {
+                !pageseeds_core::license::requires_paid_license(n)
+                    && !pageseeds_core::license::is_operator_tool(n)
+            })
             .count();
         let paid_in_tools = tool_names
             .iter()
@@ -1969,15 +2020,19 @@ mod tests {
         );
         assert_eq!(
             TOOLS.len(),
-            free_count + paid_in_tools,
-            "every TOOLS entry must be free or paid (no double-count / gaps)"
+            free_count + paid_in_tools + operator.len(),
+            "every TOOLS entry must be free, paid, or operator (no double-count / gaps)"
         );
         assert_eq!(
             TOOLS.len(),
-            free_count + paid.len(),
-            "TOOLS.len() must equal free + paid (paid ⊆ TOOLS)"
+            free_count + paid.len() + operator.len(),
+            "TOOLS.len() must equal free + paid + operator (paid ∪ operator ⊆ TOOLS)"
         );
-        assert_eq!(TOOLS.len(), 49, "TOOLS inventory size (free+paid commercial boundary)");
+        assert_eq!(
+            TOOLS.len(),
+            51,
+            "TOOLS inventory size (free+paid commercial boundary + operator tier)"
+        );
         assert_eq!(paid.len(), 24, "paid set size must match docs/CLI_COMMERCIAL.md");
         for meta in ["list-projects", "create-project", "setup"] {
             assert!(
