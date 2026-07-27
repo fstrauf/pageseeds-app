@@ -20,6 +20,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -305,8 +306,22 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> None:
             "status": "dry_run",
             "video_path": str(video_path),
             "metadata": metadata,
-            "plan": ["refresh_token", "resumable_init", "upload_bytes"],
-            "note": "real upload needs YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN",
+            "plan": [
+                "refresh_token",
+                "resumable_init",
+                "upload_bytes",
+                "write_published_youtube_to_clip",
+            ],
+            "published": {
+                "youtube": {
+                    "video_id": "<id>",
+                    "url": "https://youtu.be/<id>",
+                    "published_at": "<ISO-8601 UTC>",
+                    "privacy": PRIVACY,
+                }
+            },
+            "note": "real upload needs YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN; "
+            "dry-run does not write published.youtube to the clip file",
         }
         print(json.dumps(plan, indent=2))
         return
@@ -326,12 +341,34 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> None:
     if not video_id:
         die("publish: upload succeeded but no video id in response", code=1)
 
+    published_at = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    youtube_published = {
+        "video_id": video_id,
+        "url": f"https://youtu.be/{video_id}",
+        "published_at": published_at,
+        "privacy": PRIVACY,
+    }
+    published = clip.get("published")
+    if not isinstance(published, dict):
+        published = {}
+    published["youtube"] = youtube_published
+    clip["published"] = published
+    clip_path.write_text(
+        json.dumps(clip, indent=2) + "\n", encoding="utf-8"
+    )
+
     out = {
         "platform": "youtube",
         "status": "ok",
         "video_id": video_id,
         "url": f"https://youtu.be/{video_id}",
         "privacy": PRIVACY,
+        "published": {"youtube": youtube_published},
     }
     print(json.dumps(out, indent=2))
 

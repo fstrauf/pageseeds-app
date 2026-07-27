@@ -60,9 +60,9 @@ without that.
 
 | Role | Workspace | May write |
 |------|-----------|-----------|
-| **This skill** | Customer project / neutral cwd | Clip JSON under `video/clips/`, optional short automation report |
+| **This skill** | Customer project / neutral cwd | Clip JSON under `video/clips/`, optional short automation report; **after publish**, source MDX **body** embed at `source.content_path` (customer content only) |
 | **pageseeds-cli** | N/A (binary on PATH) | Context JSON stdout; render via operator-tier engine |
-| **video-engine** | pageseeds-app checkout | Outputs under target `video/out/` |
+| **video-engine** | pageseeds-app checkout | Outputs under target `video/out/`; successful YouTube publish writes `published.youtube` back into the clip JSON |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs / new `ui_targets` |
 
 If the session is inside the product repo *to implement features*, stop this
@@ -138,6 +138,10 @@ resolve project → pick one slug → gate video.config.json
   → ffprobe + ≥5 frames quality gate
   → packaging report
   → optional YouTube publish (ask first) via video-engine/publish.py
+  → (if published) ensure clip has published.youtube
+       (publish.py write-back; if older publish.py, skill may write it once from stdout)
+  → embed into source MDX (default yes after user said publish; ask only if unclear)
+  → report article path + embed status
 ```
 
 ### A. Resolve project
@@ -311,8 +315,72 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 
 **Quality gate:** ffprobe + frames {pass|fail notes}
 
-**Next:** optional YouTube publish via video-engine/publish.py (ask before publishing; report URL). TikTok/Reels remain manual — no auto-upload for those.
+**Publish:** {skipped|url + privacy} · clip published.youtube {written|n/a}
+**Article embed:** {inserted|skipped (already present)|skipped (no publish)|path + note}
+
+**Next:** optional YouTube publish via video-engine/publish.py (ask before publishing;
+report URL). After publish: confirm clip write-back + embed status. TikTok/Reels
+remain manual — no auto-upload for those.
 ```
+
+### J. Post-publish — clip ledger + source MDX embed
+
+Run only after a **successful** YouTube publish (user already said yes). Dry-run
+does not trigger this path.
+
+#### 1. Ensure `published.youtube` on the clip
+
+`video-engine/publish.py` (current) writes this back into `video/clips/<slug>.json`
+after a real upload. Confirm the clip file has:
+
+```json
+"published": {
+  "youtube": {
+    "video_id": "<id>",
+    "url": "https://youtu.be/<id>",
+    "published_at": "<ISO-8601 UTC>",
+    "privacy": "private"
+  }
+}
+```
+
+If the installed `publish.py` is older and only returned these fields on **stdout**,
+the skill may write `published.youtube` **once** from that stdout into the clip
+JSON (merge; do not wipe other keys). Prefer engine write-back when available.
+Re-publish overwrites `published.youtube` with the latest successful upload (no
+multi-version history).
+
+#### 2. Embed into source MDX
+
+| Rule | Detail |
+|------|--------|
+| **Path** | `source.content_path` from the clip JSON, relative to the **customer project root** |
+| **Position** | After intro / first paragraph block, **before the first `## ` H2** |
+| **Snippet** | Portable responsive iframe to `https://www.youtube.com/embed/{video_id}` + short "Watch the short" lead-in; raw HTML/JSX OK. Do **not** require `LazyYouTubeEmbed` or `BlogTrialCta` |
+| **Idempotency** | If body already contains `youtube.com/embed/{video_id}` or `youtu.be/{video_id}`, **skip** (no duplicate embeds) |
+| **Frontmatter** | Leave frontmatter untouched; only body insert |
+| **Privacy** | If privacy is `private`, **warn** that the public site will not play until the video is public (#234). Still allow insert unless the user aborts |
+| **Scope** | Customer content file only; still ban product/webapp source edits |
+| **Default** | After the user already approved publish → embed **yes** by default; ask only if unclear |
+
+Concrete portable snippet (replace `VIDEO_ID`):
+
+```mdx
+## Watch the short
+
+<div style={{ position: "relative", paddingBottom: "177.78%", height: 0, overflow: "hidden", maxWidth: "100%" }}>
+  <iframe
+    src="https://www.youtube.com/embed/VIDEO_ID"
+    title="Watch the short"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+    allowFullScreen
+    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 }}
+  />
+</div>
+```
+
+Report: article absolute/relative path + embed status (`inserted` | `skipped —
+already present` | `skipped — user aborted` | `failed` with reason).
 
 ---
 
@@ -356,6 +424,7 @@ list.
 - One slug per run; operator-tier deps required for render.
 - ffprobe 1080×1920 / 40–50s / audio + ≥5 frames before success.
 - Optional YouTube publish via `video-engine/publish.py` after quality gate — **ask first**, never publish without confirmation. TikTok/IG stay manual (packaging block only).
+- After publish: ensure `published.youtube` on clip (engine write-back or one-time skill merge from stdout); embed portable iframe into source MDX body (idempotent; privacy warn if private). Customer content only.
 - No product source edits; missing tools → report gap.
 
 ---
@@ -368,8 +437,10 @@ video-clip-context (free desk)
   → video-clip-render (operator tier → video-engine/generate-clip.sh)
   → ffprobe + frame gate
   → packaging report
+  → optional YouTube publish (ask first)
+  → published.youtube write-back (publish.py) + source MDX embed (skill)
 ```
 
 This skill is the **operator policy** layer (epic #220 / #222). Phase C task type
 (`generate_video_clip`) is deliberately out of scope until several videos prove
-the loop. Spec SoT: `docs/video_clip_spec.md`.
+the loop. Spec SoT: `docs/video_clip_spec.md`. Post-publish linkage: #235.

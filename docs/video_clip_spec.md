@@ -47,13 +47,14 @@ The single artifact passed from content intelligence to the renderer.
 
 | Field | Type | Description |
 |---|---|---|
-| `schema_version` | integer | Currently `1`. Renderers must reject unknown versions. |
+| `schema_version` | integer | Currently `1`. Renderers must reject unknown versions. Additive optional fields (e.g. `published`) do not bump the version. |
 | `source` | object | `{ project_id, slug, title, content_path }` — the origin article. |
 | `spoken_script` | string | 35–45s spoken voiceover. Strong hook in the first 3 seconds, one clear takeaway, soft CTA at the end. Plain text, no markup. |
 | `keywords` | string[] | 4–6 target phrases from the article. First entry is the hook keyword shown as a big caption in the first 3 seconds. |
 | `timing_map` | object[] | Ordered segments, see below. Total duration must cover the voiceover length (target 40–50s final cut). |
 | `cta` | object | `{ text, url, subtitle? }` — end card call to action. `subtitle` (optional) renders under the domain and is per-clip; it overrides the config `brand.end_card.subtitle` default. |
 | `packaging` | object | `{ title, description, hashtags, thumbnail_hint }` — derived from article keywords for upload metadata. |
+| `published` | object (optional) | Post-upload platform linkage. Platform keys (e.g. `youtube`). Written by `publish.py` after a successful upload; absent until then. |
 
 ### `timing_map` segment
 
@@ -63,6 +64,28 @@ The single artifact passed from content intelligence to the renderer.
 | `moment_template` | string | One of the moment templates below. |
 | `caption_text` | string | On-screen caption for the segment (short phrase; renderer handles word-level timing from whisper). |
 | `ui_target` | string | Logical name of the UI view/element to show (e.g. `income_dashboard`, `scanner_results`, `put_calculator`). Interpreted by the project's Playwright journey. |
+
+### `published.youtube` (post-upload)
+
+Written by `video-engine/publish.py` after a successful (non-dry-run) YouTube
+upload. Re-publish overwrites this object (no multi-version history). Dry-run
+does not touch the clip file. Stdout success JSON includes the same block.
+
+| Field | Type | Description |
+|---|---|---|
+| `video_id` | string | YouTube video id from the upload response. |
+| `url` | string | Canonical short URL, `https://youtu.be/{video_id}`. |
+| `published_at` | string | ISO-8601 UTC timestamp of the successful upload write-back. |
+| `privacy` | string | Upload privacy (`private` until OAuth app is verified; see #234). |
+
+### Article embed (skill-owned, not engine)
+
+After publish, the operator skill (`.agents/skills/video-clip/SKILL.md`) may
+insert a portable responsive iframe embed into the source MDX body at
+`source.content_path` (customer content only). Position: after the intro /
+first paragraph, before the first `## ` H2. Idempotent on
+`youtube.com/embed/{video_id}` / `youtu.be/{video_id}`. Not part of the render
+engine; no `LazyYouTubeEmbed` requirement.
 
 ### Moment templates (v1)
 
@@ -102,6 +125,21 @@ are added to this spec and the project's Playwright journey together.
     "description": "The exact checklist I run before selling puts, plus the ticker passing all three right now. Full article on daystoexpiry.com.",
     "hashtags": ["#options", "#cashsecuredputs", "#wheelstrategy", "#passiveincome"],
     "thumbnail_hint": "scanner_results top row"
+  }
+}
+```
+
+Optional post-upload block (written by `publish.py`; not present at craft time):
+
+```json
+{
+  "published": {
+    "youtube": {
+      "video_id": "dQw4w9WgXcQ",
+      "url": "https://youtu.be/dQw4w9WgXcQ",
+      "published_at": "2026-07-27T12:00:00Z",
+      "privacy": "private"
+    }
   }
 }
 ```
@@ -147,6 +185,8 @@ Sequence:
 5. Operator tier: `pageseeds-cli video-clip-render --clip video/clips/<slug>.json`.
 6. Quality gate: ffprobe (1080×1920, 40–50s, audio) + ≥5 visual frames.
 7. Report MP4 path + packaging block; optional YouTube publish via `video-engine/publish.py` (ask first).
+8. After successful publish: clip gets `published.youtube` write-back; skill embeds
+   the short into source MDX (see skill post-publish section).
 
 Weekly SEO may **electively** suggest `/video-clip <slug>` after a Path B ship
 when config exists (0–1 candidates, default 0) — not a weekly spine action and
@@ -199,7 +239,7 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
    desk model.
 3. Only then consider video as a hard action in the weekly-seo desk model.
 
-### Phase D — YouTube publish (#228)
+### Phase D — YouTube publish (#228) + post-publish linkage (#235)
 
 YouTube-only MVP for publishing rendered shorts. No TikTok/Instagram. No Rust changes.
 
@@ -213,9 +253,16 @@ YouTube-only MVP for publishing rendered shorts. No TikTok/Instagram. No Rust ch
    Keys: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`.
 5. **Upload:** OAuth refresh_token grant → YouTube Data API v3 resumable upload;
    `privacyStatus=private` until the OAuth app is verified.
-6. **`--dry-run`:** prints request plan JSON (no network; secrets not required).
-7. **Skill:** `.agents/skills/video-clip/SKILL.md` may offer optional publish after the
-   quality gate — **always ask first**; report the returned URL. Live upload is verified
+6. **`--dry-run`:** prints request plan JSON (no network; secrets not required; does
+   **not** write `published` into the clip file).
+7. **Clip write-back (#235):** on successful upload, `publish.py` merges
+   `published.youtube` (`video_id`, `url`, `published_at`, `privacy`) into the clip
+   JSON (indent=2 + trailing newline). Re-publish overwrites. Stdout includes the
+   same `published.youtube` block alongside top-level `video_id` / `url` / `privacy`.
+8. **Skill:** `.agents/skills/video-clip/SKILL.md` may offer optional publish after the
+   quality gate — **always ask first**; report the returned URL. After publish, ensure
+   clip has `published.youtube`, then embed a portable YouTube iframe into the source
+   MDX body (`source.content_path`) — skill-owned, not engine. Live upload is verified
    owner-side (not CI). Auth setup: `video-engine/README.md` Publish section.
 
 ## Non-goals
