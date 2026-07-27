@@ -137,6 +137,7 @@ resolve project → pick one slug → gate video.config.json
   → video-clip-render --clip video/clips/<slug>.json
   → ffprobe + ≥5 frames quality gate
   → packaging report
+  → optional YouTube publish (ask first) via video-engine/publish.py
 ```
 
 ### A. Resolve project
@@ -303,7 +304,7 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 
 **Quality gate:** ffprobe + frames {pass|fail notes}
 
-**Next:** upload manually (YouTube/TikTok/Reels) — this skill does not upload.
+**Next:** optional YouTube publish via video-engine/publish.py (ask before publishing; report URL). TikTok/Reels remain manual — no auto-upload for those.
 ```
 
 ---
@@ -318,7 +319,7 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 | Bare `clips/<slug>.json` path | `video/clips/<slug>.json` |
 | Multi-clip batch / scheduler | One slug; user re-invokes |
 | Claim success without ffprobe + frames | Run quality gate |
-| Upload automation (YouTube/TikTok) | Packaging block only |
+| TikTok/IG auto-upload; publish without asking | Optional YouTube via `video-engine/publish.py` only after quality gate + explicit user yes; packaging block for other platforms |
 | `create-task generate_video_clip` | Out of scope (#224); skill path only |
 | Patch `pageseeds-app` for missing tools | Report product gap |
 | Weekly SEO may-create expansion | Elective handoff only (see weekly-seo) |
@@ -347,7 +348,7 @@ list.
 - Demo/config `ui_targets` only; no webapp edits for shots.
 - One slug per run; operator-tier deps required for render.
 - ffprobe 1080×1920 / 40–50s / audio + ≥5 frames before success.
-- Packaging block for human upload — no auto-publish.
+- Optional YouTube publish via `video-engine/publish.py` after quality gate — **ask first**, never publish without confirmation. TikTok/IG stay manual (packaging block only).
 - No product source edits; missing tools → report gap.
 
 ---

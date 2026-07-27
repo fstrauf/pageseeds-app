@@ -1,12 +1,13 @@
 # Video Clip Generation Spec
 
-Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B toolchain: [#221](https://github.com/fstrauf/pageseeds-app/issues/221) · E2E: [#223](https://github.com/fstrauf/pageseeds-app/issues/223)
+Tracking issue: [#220](https://github.com/fstrauf/pageseeds-app/issues/220) · Phase B toolchain: [#221](https://github.com/fstrauf/pageseeds-app/issues/221) · E2E: [#223](https://github.com/fstrauf/pageseeds-app/issues/223) · Phase D publish: [#228](https://github.com/fstrauf/pageseeds-app/issues/228)
 Status: **Phase A complete**; **Phase B landed** (#221) and **Phase B validated**
 (#223, 2026-07-27) — one-command packaged path on `days_to_expiry` video worktree:
 `video-clip-render -p <worktree> --clip video/clips/best-stocks-csp.json` → exit 0,
 `output_path` …/video/out/best-stocks-csp.mp4, `duration_s` ≈ 42.57, ffprobe
 1080×1920 + audio. Context smoke: `video-clip-context -S best-stocks-csp` returns
 body + `frontmatter.faq` / `target_keyword` + `packaging_hints`.
+**Phase D (#228):** YouTube-only `video-engine/publish.py` (stdlib urllib; packaging block payload; optional skill step).
 **Operator path:** `.agents/skills/video-clip/SKILL.md` (`/video-clip`, #222).
 **Target footprint:** `video.config.json` + `video/clips/` + `video/out/` only (engine
 lives in pageseeds-app `video-engine/`, not the customer repo).
@@ -145,7 +146,7 @@ Sequence:
 4. Preflight `dev_servers` / `base_url` from config.
 5. Operator tier: `pageseeds-cli video-clip-render --clip video/clips/<slug>.json`.
 6. Quality gate: ffprobe (1080×1920, 40–50s, audio) + ≥5 visual frames.
-7. Report MP4 path + packaging block (no auto-upload).
+7. Report MP4 path + packaging block; optional YouTube publish via `video-engine/publish.py` (ask first).
 
 Weekly SEO may **electively** suggest `/video-clip <slug>` after a Path B ship
 when config exists (0–1 candidates, default 0) — not a weekly spine action and
@@ -197,6 +198,25 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
    for per-video retention metrics, feeding "which moments hold attention" back into the
    desk model.
 3. Only then consider video as a hard action in the weekly-seo desk model.
+
+### Phase D — YouTube publish (#228)
+
+YouTube-only MVP for publishing rendered shorts. No TikTok/Instagram. No Rust changes.
+
+1. **`video-engine/publish.py`** — stdlib only (`urllib`). CLI:
+   `publish.py <clip.json> --platforms youtube [--video <mp4>] [--dry-run]`.
+2. **Payload:** clip `packaging` block (`title`, `description`, `hashtags` → tags with `#` stripped).
+3. **MP4 path:** `--video` or convention `video/clips/<slug>.json` → `video/out/<slug>.mp4`
+   (fallback `video-engine/out/<slug>.mp4`).
+4. **Secrets** via env-file chain (same precedence as Rust `EnvResolver`):  
+   `~/.config/automation/secrets.env` → repo `.env.local` → repo `.env` → process env.  
+   Keys: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`.
+5. **Upload:** OAuth refresh_token grant → YouTube Data API v3 resumable upload;
+   `privacyStatus=private` until the OAuth app is verified.
+6. **`--dry-run`:** prints request plan JSON (no network; secrets not required).
+7. **Skill:** `.agents/skills/video-clip/SKILL.md` may offer optional publish after the
+   quality gate — **always ask first**; report the returned URL. Live upload is verified
+   owner-side (not CI). Auth setup: `video-engine/README.md` Publish section.
 
 ## Non-goals
 
