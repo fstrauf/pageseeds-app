@@ -202,6 +202,34 @@ def render_bar_png(brand: dict, path: Path) -> None:
     Image.new("RGB", (W, 10), tuple(brand["progress_bar_color"])).save(path)
 
 
+def resolve_thumbnail_time(
+    clip: dict, brand: dict, seg_bounds: list[dict], total: float
+) -> float:
+    """Pick a thumbnail frame time without product-specific ui_target hardcodes.
+
+    Order:
+      1. packaging.thumbnail_hint as numeric seconds (if parseable and in range)
+      2. brand.thumbnail_ui_target matching a segment's ui_target (mid-segment)
+      3. midpoint of the full video
+    """
+    hint = (clip.get("packaging") or {}).get("thumbnail_hint")
+    if hint is not None:
+        try:
+            t = float(str(hint).strip())
+            if 0 <= t <= total:
+                return t
+        except (TypeError, ValueError):
+            pass
+
+    target = brand.get("thumbnail_ui_target")
+    if isinstance(target, str) and target:
+        for b in seg_bounds:
+            if b["ui_target"] == target:
+                return b["start"] + (b["end"] - b["start"]) / 2
+
+    return total / 2
+
+
 # --- main -------------------------------------------------------------------------
 
 def main() -> None:
@@ -309,9 +337,11 @@ def main() -> None:
             "-t", f"{total:.3f}", out_dir / f"{slug}.mp4"]
     run(cmd)
 
-    # thumbnail from the middle of the scanner segment (fallback: middle of video)
-    thumb_t = next((b["start"] + (b["end"] - b["start"]) / 2
-                    for b in seg_bounds if b["ui_target"] == "scanner_results"), total / 2)
+    # Thumbnail frame time (generic — no product-specific ui_target names):
+    # 1) packaging.thumbnail_hint as numeric seconds, if parseable
+    # 2) brand.thumbnail_ui_target matching a timing_map segment mid-point
+    # 3) midpoint of the full video
+    thumb_t = resolve_thumbnail_time(clip, brand, seg_bounds, total)
     run(["ffmpeg", "-y", "-ss", f"{thumb_t:.2f}", "-i", out_dir / f"{slug}.mp4",
          "-frames:v", "1", "-update", "1", "-q:v", "2", out_dir / f"{slug}.jpg"])
 

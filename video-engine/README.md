@@ -80,6 +80,7 @@ video-engine: stage=<stage> status=error message=<one_line_underscored_message>
 | `brand.domain` | string | Domain shown big on the end card. |
 | `brand.progress_bar_color` | `[r,g,b]` | Top progress bar color. |
 | `brand.end_card` | object | `bg`, `accent`, `text`, `muted` (all `[r,g,b]`), `subtitle` (string, may be empty). |
+| `brand.thumbnail_ui_target` | string | Optional. `ui_target` name whose segment midpoint is used for the thumbnail frame. Prefer clip `packaging.thumbnail_hint` as numeric seconds when set; otherwise this; else video midpoint. |
 | `tts` | object | Optional. `voices` (edge-tts voice fallbacks, first that works wins), `target_s` (voiceover target seconds, default 42.5). |
 | `overlays.hide_css` | string | CSS selector list hidden during recording (dev overlays, chat widgets). |
 | `overlays.dismiss_button_pattern` | string | Regex for buttons to best-effort click away (cookie/consent/info banners). |

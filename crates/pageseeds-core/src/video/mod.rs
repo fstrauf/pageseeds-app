@@ -26,6 +26,8 @@ use crate::error::{Error, Result};
 /// Structured article context for the `video-script` skill (schema input).
 #[derive(Debug, Clone, Serialize)]
 pub struct VideoClipContext {
+    /// PageSeeds project id — use for clip `source.project_id`.
+    pub project_id: String,
     pub slug: String,
     pub title: String,
     /// First `# ` heading in the body, if present.
@@ -119,6 +121,7 @@ pub fn video_clip_context(
         .and_then(|p| p.site_base_url());
 
     Ok(build_context(
+        project_id,
         &article.url_slug,
         &article.title,
         article.published_date.clone(),
@@ -135,6 +138,7 @@ pub fn video_clip_context(
 /// unit-testable without fixtures.
 #[allow(clippy::too_many_arguments)]
 fn build_context(
+    project_id: &str,
     slug: &str,
     title: &str,
     published_at: Option<String>,
@@ -189,6 +193,7 @@ fn build_context(
     });
 
     VideoClipContext {
+        project_id: project_id.to_string(),
         slug: slug.to_string(),
         title: title.to_string(),
         h1,
@@ -246,8 +251,8 @@ fn derive_hashtags(target_keyword: &str) -> Vec<String> {
 /// crate's manifest. Not part of the commercial free/paid boundary; the
 /// prebuilt customer binary does not promise it.
 ///
-/// Pre-flight fails fast with install hints when the Node/FFmpeg toolchain,
-/// the engine script, or the project's `video.config.json` is missing.
+/// Pre-flight fails fast with install hints when the Node/FFmpeg/Python venv
+/// toolchain, the engine script, or the project's `video.config.json` is missing.
 pub fn video_clip_render(project_path: &Path, clip_path: &Path) -> Result<VideoClipRenderResult> {
     let engine = resolve_engine_script()?;
     check_video_config(project_path)?;
@@ -256,6 +261,7 @@ pub fn video_clip_render(project_path: &Path, clip_path: &Path) -> Result<VideoC
         "install Node.js (https://nodejs.org or `brew install node`)",
     )?;
     require_tool_on_path("ffmpeg", "install FFmpeg (`brew install ffmpeg`)")?;
+    require_engine_venv(&engine)?;
     let clip_abs = resolve_clip_path(project_path, clip_path)?;
 
     let engine_dir = engine
@@ -263,9 +269,10 @@ pub fn video_clip_render(project_path: &Path, clip_path: &Path) -> Result<VideoC
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // stdout is piped and tee'd to the operator's terminal (progress), stderr
-    // inherited; lines are kept to parse the `video-engine: output=` /
-    // `video-engine: thumbnail=` contract at the end.
+    // Engine stdout is piped and tee'd to **stderr** (operator progress) so
+    // the CLI can keep success JSON pure on process stdout. Lines are also
+    // kept to parse the `video-engine: output=` / `video-engine: thumbnail=`
+    // contract at the end. Engine stderr is inherited.
     let mut child = Command::new("bash")
         .arg(&engine)
         .arg(project_path)
@@ -281,7 +288,7 @@ pub fn video_clip_render(project_path: &Path, clip_path: &Path) -> Result<VideoC
         for line in std::io::BufReader::new(stdout).lines() {
             match line {
                 Ok(l) => {
-                    println!("{l}");
+                    eprintln!("{l}");
                     lines.push(l);
                 }
                 Err(_) => break,
@@ -345,6 +352,29 @@ fn resolve_engine_script() -> Result<PathBuf> {
         )));
     }
     Ok(engine)
+}
+
+/// Pre-flight: engine Python venv must exist next to `generate-clip.sh`.
+///
+/// `voice.py` / `composite.py` use `<engine_dir>/.venv/bin/python` (edge-tts,
+/// pillow). Fail early with the README setup commands rather than a late
+/// obscure spawn failure mid-render.
+fn require_engine_venv(engine_script: &Path) -> Result<()> {
+    let engine_dir = engine_script
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let python = engine_dir.join(".venv/bin/python");
+    if !python.is_file() {
+        return Err(Error::Other(format!(
+            "video-engine Python venv not found at {} — set up once:\n\
+             cd video-engine && python3 -m venv .venv && .venv/bin/pip install edge-tts pillow\n\
+             (see video-engine/README.md). video-clip-render is an operator-tier tool \
+             (docs/CLI_COMMERCIAL.md)",
+            python.display()
+        )));
+    }
+    Ok(())
 }
 
 /// The project's `video.config.json` (engine input) must exist.
@@ -477,6 +507,7 @@ Filter one. Filter two.
 
     fn ctx(keyword: Option<&str>, site: Option<String>) -> VideoClipContext {
         build_context(
+            "proj-test",
             "best-stocks-csp",
             "Best Stocks for Selling Cash-Secured Puts in 2026",
             Some("2026-06-15".to_string()),
@@ -487,6 +518,12 @@ Filter one. Filter two.
             Path::new("/proj"),
             site,
         )
+    }
+
+    #[test]
+    fn context_includes_project_id() {
+        let c = ctx(None, None);
+        assert_eq!(c.project_id, "proj-test");
     }
 
     #[test]
@@ -521,6 +558,7 @@ Filter one. Filter two.
     fn db_keyword_is_fallback_when_frontmatter_missing() {
         let raw = "---\ntitle: T\n---\n\n# T\n\nBody words here.\n";
         let c = build_context(
+            "p1",
             "s",
             "T",
             None,
@@ -531,6 +569,7 @@ Filter one. Filter two.
             Path::new("/p"),
             None,
         );
+        assert_eq!(c.project_id, "p1");
         assert_eq!(c.frontmatter.target_keyword.as_deref(), Some("db keyword"));
         assert!(c.packaging_hints.hashtags.contains(&"#dbkeyword".to_string()));
     }
@@ -545,6 +584,7 @@ Filter one. Filter two.
         // Explicit frontmatter canonical wins over the derived URL.
         let raw = "---\ntitle: T\ncanonical: https://other.com/x\n---\n\nBody.\n";
         let c2 = build_context(
+            "p1",
             "s",
             "T",
             None,
@@ -559,6 +599,29 @@ Filter one. Filter two.
             c2.packaging_hints.canonical_url.as_deref(),
             Some("https://other.com/x")
         );
+    }
+
+    #[test]
+    fn require_engine_venv_missing_errors_with_setup_hint() {
+        let dir = std::env::temp_dir().join(format!(
+            "pageseeds-video-venv-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake_script = dir.join("generate-clip.sh");
+        std::fs::write(&fake_script, "#!/bin/bash\n").unwrap();
+        let err = require_engine_venv(&fake_script).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(".venv/bin/python"), "unexpected: {msg}");
+        assert!(msg.contains("edge-tts"), "unexpected: {msg}");
+        assert!(msg.contains("video-engine/README.md"), "unexpected: {msg}");
+        // Presence of the python binary is enough for preflight.
+        let venv_bin = dir.join(".venv/bin");
+        std::fs::create_dir_all(&venv_bin).unwrap();
+        std::fs::write(venv_bin.join("python"), "").unwrap();
+        assert!(require_engine_venv(&fake_script).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

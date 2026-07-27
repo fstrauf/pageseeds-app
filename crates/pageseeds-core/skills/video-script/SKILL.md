@@ -13,10 +13,11 @@ Run the free desk read first:
 pageseeds-cli video-clip-context -S <slug>
 ```
 
-You get structured JSON: `slug`, `title`, `h1`, `file_path`, `published_at`,
-`status`, `word_count`, `frontmatter` (`target_keyword`, `description`,
-`summary`, `canonical`, `faq`, `last_updated`), `body` (frontmatter stripped),
-`site_base_url`, `packaging_hints` (`hashtags`, `canonical_url`).
+You get structured JSON: `project_id`, `slug`, `title`, `h1`, `file_path`,
+`published_at`, `status`, `word_count`, `frontmatter` (`target_keyword`,
+`description`, `summary`, `canonical`, `faq`, `last_updated`), `body`
+(frontmatter stripped), `site_base_url`, `packaging_hints` (`hashtags`,
+`canonical_url`). Use `project_id` for clip `source.project_id`.
 
 ## Output
 
