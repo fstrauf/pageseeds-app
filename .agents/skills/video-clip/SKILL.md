@@ -3,17 +3,18 @@ name: video-clip
 description: >-
   Produce one vertical short (40–50s MP4) from a PageSeeds article via
   pageseeds-cli: video-clip-context → video-script craft → video-clip-render →
-  quality gate → packaging report. Use when the user wants a video clip, short
-  from an article, YouTube Short / Reels / TikTok package, or /video-clip.
-  Operator only — never edit pageseeds-app source.
+  quality gate → packaging report → default YouTube + Instagram publish.
+  Use when the user wants a video clip, short from an article, YouTube Short /
+  Reels / TikTok package, or /video-clip. Operator only — never edit
+  pageseeds-app source.
 when-to-use: >-
   Triggers on "/video-clip", "video clip", "make a short from this article",
   "render video clip", "article to short", "YouTube Shorts from blog",
-  "vertical video for this post".
+  "vertical video for this post", "publish short to Instagram".
 argument-hint: "[project-name-or-id] [slug]"
 user-invocable: true
 metadata:
-  short-description: "Article → clip JSON → render → quality gate (one short)"
+  short-description: "Article → clip → render → YT + IG publish (one short)"
 ---
 
 # Video Clip — CLI Operator Bible
@@ -137,15 +138,14 @@ resolve project → pick one slug → gate video.config.json
   → video-clip-render --clip video/clips/<slug>.json
   → ffprobe + ≥5 frames quality gate
   → packaging report
-  → optional YouTube / TikTok inbox / Instagram Reels publish (ask first per platform)
-       via video-engine/publish.py
+  → default publish: YouTube + Instagram Reels (one confirm)
+       via video-engine/publish.py --platforms youtube,instagram
   → (if YouTube published) ensure clip has published.youtube
        (publish.py write-back; if older publish.py, skill may write it once from stdout)
-       → embed into source MDX (default yes after user said YouTube publish; ask only if unclear)
-  → (if TikTok published) ensure clip has published.tiktok; report publish_id +
-       “finish in TikTok app” — do NOT embed TikTok into MDX
+       → embed into source MDX (default yes after default YT+IG publish; ask only if unclear)
   → (if Instagram published) ensure clip has published.instagram; report media_id +
        permalink — do NOT embed Instagram into MDX
+  → (optional TikTok inbox — only if user asks; not in default pair)
   → report article path + embed status
 ```
 
@@ -338,50 +338,70 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 
 **Publish:**
 - YouTube: {skipped|url + privacy} · clip published.youtube {written|n/a}
-- TikTok: {skipped|publish_id + “finish in TikTok app”} · clip published.tiktok {written|n/a}
 - Instagram: {skipped|media_id + permalink} · clip published.instagram {written|n/a}
+- TikTok: {skipped|publish_id + “finish in TikTok app”} · clip published.tiktok {written|n/a}
 **Article embed:** {inserted|skipped (already present)|skipped (no YouTube publish)|path + note}
   (YouTube only — never auto-embed TikTok or Instagram)
 
-**Next:** optional YouTube / TikTok inbox / Instagram Reels publish via
-video-engine/publish.py (ask before each platform). YouTube: report URL + clip
-write-back + MDX embed. TikTok: report publish_id + finish in app; no MDX embed.
-Instagram: report media_id + permalink; no MDX embed.
+**Next:** default is YouTube + Instagram via
+`publish.py --platforms youtube,instagram` (one confirm after quality gate).
+YouTube: report URL + clip write-back + MDX embed. Instagram: report media_id +
+permalink; no MDX embed. TikTok only if user asks.
 ```
 
 ### J. Post-publish — clip ledger + source MDX embed
 
-#### Optional platform publish (ask first)
+#### Default platform publish (YouTube + Instagram)
 
-After the quality gate, you may offer publish — **always ask before each platform**:
+After a **passing** quality gate, the default distribution step is **YouTube Shorts
++ Instagram Reels** in one multi-platform run. Secrets live in
+`~/.config/automation/secrets.env` (`YOUTUBE_*`, `META_ACCESS_TOKEN`, `IG_USER_ID`).
 
-| Platform | Command | Report | MDX embed? |
-|----------|---------|--------|------------|
-| YouTube | `publish.py <clip> --platforms youtube` | URL + privacy | Yes (below) |
-| TikTok inbox | `publish.py <clip> --platforms tiktok` | `publish_id` + “finish in TikTok app” | **No** |
-| Instagram Reels | `publish.py <clip> --platforms instagram` | `media_id` + permalink | **No** |
-| Multi | `--platforms youtube,tiktok,instagram` (any subset) | per-platform results | YouTube only |
+| Policy | Detail |
+|--------|--------|
+| **Default platforms** | `youtube,instagram` |
+| **Confirmation** | **One** yes/no after quality gate (not per-platform). Default intent when the user already said “publish” / “ship the short” / full `/video-clip` with publish expected: proceed. If unclear, ask once: “Publish to YouTube + Instagram?” |
+| **Skip** | User says no / “local only” / “don’t publish” → report packaging only |
+| **Partial** | User may override: YouTube only, Instagram only, or add TikTok |
+| **TikTok** | **Not** in the default pair (inbox drafts; separate auth). Only if user explicitly asks |
+| **Failure isolation** | Platforms run independently; one failure does not skip the other. Report each status |
 
-TikTok uses **Inbox Upload** (`video.upload`): the short lands in the creator’s
-TikTok drafts/inbox; the human finishes caption and post in the TikTok app.
-Confirm `published.tiktok` on the clip after a real upload:
+```bash
+# From a pageseeds-app checkout that has video-engine/ (not the customer repo).
+# Prefer the same checkout used for video-clip-render.
+PAGESEEDS_APP="${PAGESEEDS_APP:-$HOME/01_code/pageseeds-app}"
+CLIP="<absolute path to video/clips/<slug>.json>"
+VIDEO="<absolute path to rendered mp4>"   # or omit if publish.py can resolve it
 
-```json
-"published": {
-  "tiktok": {
-    "publish_id": "<id>",
-    "mode": "inbox",
-    "published_at": "<ISO-8601 UTC>",
-    "note": "finish in TikTok app"
-  }
-}
+"$PAGESEEDS_APP/video-engine/.venv/bin/python" \
+  "$PAGESEEDS_APP/video-engine/publish.py" \
+  "$CLIP" \
+  --platforms youtube,instagram \
+  --video "$VIDEO"
 ```
 
-Instagram uses Graph API **Reels** (resumable container + rupload). Confirm
-`published.instagram` on the clip after a real upload:
+| Platform | Command subset | Report | MDX embed? |
+|----------|----------------|--------|------------|
+| **YouTube + Instagram (default)** | `--platforms youtube,instagram` | YT URL + privacy; IG `media_id` + permalink | YouTube only |
+| YouTube only | `--platforms youtube` | URL + privacy | Yes (below) |
+| Instagram Reels only | `--platforms instagram` | `media_id` + permalink | **No** |
+| TikTok inbox (opt-in) | `--platforms tiktok` | `publish_id` + “finish in TikTok app” | **No** |
+
+**Instagram Login path (current operator setup):** tokens starting with `IGAA…`
+use `graph.instagram.com`. Local MP4 is staged to a short-lived public URL unless
+`INSTAGRAM_VIDEO_URL` is set. See `video-engine/README.md`. Facebook Login
+resumable rupload still works for classic `EAA…` tokens.
+
+Confirm write-backs after a real upload:
 
 ```json
 "published": {
+  "youtube": {
+    "video_id": "<id>",
+    "url": "https://youtu.be/<id>",
+    "published_at": "<ISO-8601 UTC>",
+    "privacy": "private"
+  },
   "instagram": {
     "media_id": "<id>",
     "url": "<permalink or empty>",
@@ -389,6 +409,9 @@ Instagram uses Graph API **Reels** (resumable container + rupload). Confirm
   }
 }
 ```
+
+TikTok (opt-in only) uses **Inbox Upload** (`video.upload`): drafts in the TikTok
+app. Confirm `published.tiktok` (`publish_id`, `mode: "inbox"`, note) if used.
 
 Dry-run does not write the clip file. Re-publish overwrites that platform key only.
 
@@ -461,7 +484,7 @@ already present` | `skipped — user aborted` | `failed` with reason).
 | Bare `clips/<slug>.json` path | `video/clips/<slug>.json` |
 | Multi-clip batch / scheduler | One slug; user re-invokes |
 | Claim success without ffprobe + frames | Run quality gate |
-| Publish without asking | Optional YouTube / TikTok inbox / Instagram Reels via `video-engine/publish.py` only after quality gate + **explicit user yes per platform** |
+| Publish without any confirmation when intent is unclear | Default pair is YouTube + Instagram after quality gate; **one** confirm if unclear; honor “don’t publish” / platform overrides |
 | Auto-embed TikTok or Instagram into MDX | YouTube iframe embed only; TikTok report `publish_id` + finish in app; Instagram report `media_id` + permalink |
 | `create-task generate_video_clip` | Out of scope (#224); skill path only |
 | Patch `pageseeds-app` for missing tools | Report product gap |
@@ -491,10 +514,12 @@ list.
 - Demo/config `ui_targets` only; no webapp edits for shots.
 - One slug per run; operator-tier deps required for render.
 - ffprobe 1080×1920 / 40–50s / audio + ≥5 frames before success.
-- Optional YouTube / TikTok inbox / Instagram Reels publish via `video-engine/publish.py` after quality gate — **ask first per platform**, never publish without confirmation.
+- **Default publish** after quality gate: YouTube + Instagram via
+  `publish.py --platforms youtube,instagram` (one confirm if intent unclear).
+  TikTok remains opt-in only.
 - After YouTube publish: ensure `published.youtube` on clip (engine write-back or one-time skill merge from stdout); embed portable iframe into source MDX body (idempotent; privacy warn if private). Customer content only.
-- After TikTok publish: ensure `published.tiktok` (`publish_id`, `mode: inbox`, note); report “finish in TikTok app”. **Do not** auto-embed TikTok into MDX.
 - After Instagram publish: ensure `published.instagram` (`media_id`, `url`, `published_at`); report permalink. **Do not** auto-embed Instagram into MDX.
+- After TikTok publish (opt-in): ensure `published.tiktok` (`publish_id`, `mode: inbox`, note); report “finish in TikTok app”. **Do not** auto-embed TikTok into MDX.
 - No product source edits; missing tools → report gap.
 
 ---
@@ -507,13 +532,13 @@ video-clip-context (free desk)
   → video-clip-render (operator tier → video-engine/generate-clip.sh)
   → ffprobe + frame gate
   → packaging report
-  → optional YouTube / TikTok inbox / Instagram Reels publish (ask first per platform)
+  → default publish: YouTube + Instagram (one confirm; publish.py --platforms youtube,instagram)
   → published.youtube write-back + source MDX embed (YouTube only)
-  → published.tiktok write-back (inbox; finish in app; no MDX embed)
   → published.instagram write-back (media_id + permalink; no MDX embed)
+  → optional TikTok inbox only if user asks
 ```
 
 This skill is the **operator policy** layer (epic #220 / #222). Phase C task type
 (`generate_video_clip`) is deliberately out of scope until several videos prove
 the loop. Spec SoT: `docs/video_clip_spec.md`. Post-publish linkage: #235. TikTok
-inbox adapter: #231. Instagram Reels adapter: #232.
+inbox adapter: #231. Instagram Reels adapter: #232 (Instagram Login path supported).

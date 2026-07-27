@@ -144,7 +144,7 @@ Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
 |---|---|---|
 | **YouTube** | Data API v3 resumable upload (`privacyStatus=private`) | #228 |
 | **TikTok** | Content Posting API **Inbox Upload** (drafts; user finishes in app) | #231 |
-| **Instagram** | Graph API **Reels** (resumable container + rupload + `media_publish`) | #232 |
+| **Instagram** | Graph API **Reels** (Instagram Login `video_url` / stage, or FB Login rupload + `media_publish`) | #232 |
 
 **Not supported:** TikTok Direct Post (`video.publish`).
 
@@ -245,43 +245,69 @@ Live TikTok upload is verified owner-side (not CI). Never commit secrets to the 
 
 ### Instagram auth setup (one-time) — Graph API Reels
 
-1. [Meta for Developers](https://developers.facebook.com/) → create / open an app.
-2. Add the **Instagram Graph API** product (Facebook Login for Business path for
-   content publish).
-3. Permission **`instagram_content_publish`** (plus the usual IG business graph
-   scopes your app needs to read the user/page).
-4. Use an **Instagram Business or Creator** account linked to a Facebook Page.
-5. Mint a **long-lived user access token** that can act on that IG account, then
-   store credentials:
+Two login paths are supported. **`publish.py` auto-selects from the token shape.**
+
+| Path | Token | Graph host | Local MP4 |
+|---|---|---|---|
+| **Instagram Login** (recommended when Facebook Login is blocked) | starts with `IGAA…` | `graph.instagram.com` | staged to a short-lived **public** URL (Meta fetches it), or set `INSTAGRAM_VIDEO_URL` |
+| **Facebook Login** | classic `EAA…` user token | `graph.facebook.com` + `rupload.facebook.com` | **resumable rupload** (no public host) |
+
+#### A) Instagram Login (current operator default)
+
+1. [Meta for Developers](https://developers.facebook.com/) → app → **API setup with Instagram login**.
+2. Add yourself as **Instagram Tester** (App roles → Instagram Tester → accept invite in IG
+   [manage access](https://www.instagram.com/accounts/manage_access/)).
+3. Connect the Business/Creator account (`dte_options`, etc.) and copy:
+   - **Access token** (`IGAA…`)
+   - **Instagram user id** — prefer the id from `GET graph.instagram.com/me?fields=id`
+     (not always the same number shown next to the Page in some UIs).
+4. Store credentials:
 
 ```bash
 # ~/.config/automation/secrets.env
-META_ACCESS_TOKEN=...
-IG_USER_ID=...
-# optional session extend (long-lived exchange for this run only; not written back):
-META_APP_ID=...
+META_ACCESS_TOKEN=IGAA...          # Instagram Login user token
+IG_USER_ID=2771...                 # from /me (or API setup UI if it matches /me)
+# optional — short→long exchange (refresh of long-lived tokens needs no secret):
 META_APP_SECRET=...
+META_APP_ID=...                    # unused for IG Login refresh; kept for FB path
 ```
 
-6. **Flow** (local MP4 — **no public host required**):
-   - Optional token extend: `GET …/oauth/access_token?grant_type=fb_exchange_token&…`
-     when `META_APP_ID` + `META_APP_SECRET` are set (soft-warn and continue with the
-     original token on failure).
-   - Create REELS resumable container:
-     `POST graph.facebook.com/{version}/{ig-user-id}/media`
-     with `media_type=REELS`, `upload_type=resumable`, `caption=…`
-     (`Authorization: Bearer {token}`).
-   - Rupload bytes:
-     `POST rupload.facebook.com/ig-api-upload/{version}/{container_id}`
-     with raw MP4 body, headers `Authorization: OAuth {token}`, `offset: 0`,
-     `file_size: {bytes}`.
-   - Poll `GET …/{container_id}?fields=status_code` until `FINISHED`
-     (error on `ERROR`/`EXPIRED` or ~8 min timeout).
-   - Publish: `POST …/{ig-user-id}/media_publish` with `creation_id={container_id}`.
-   - Optional permalink: `GET …/{media_id}?fields=permalink` (empty `url` if it fails).
+5. **Flow** (Instagram Login):
+   - Optional: refresh long-lived token via
+     `GET graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&…`
+     or exchange short-lived with `ig_exchange_token` when `META_APP_SECRET` is set.
+   - Resolve public `video_url`: env `INSTAGRAM_VIDEO_URL` **or** stage the local MP4
+     to litterbox (1h TTL) unless `INSTAGRAM_STAGE_HOST=none`.
+   - Create REELS container:
+     `POST graph.instagram.com/{version}/{ig-user-id}/media`
+     with `media_type=REELS`, `video_url=…`, `caption=…`.
+   - Poll `GET …/{container_id}?fields=status_code` until `FINISHED`.
+   - Publish: `POST …/{ig-user-id}/media_publish` with `creation_id=…`.
    - Write `published.instagram` (`media_id`, `url`, `published_at`).
 
+Optional env for staging:
+
+| Env | Default | Meaning |
+|---|---|---|
+| `INSTAGRAM_VIDEO_URL` | (unset) | Skip staging; Meta fetches this HTTPS URL |
+| `INSTAGRAM_STAGE_HOST` | `litterbox` | `litterbox` or `none` |
+| `INSTAGRAM_STAGE_TTL` | `1h` | litterbox TTL (`1h` / `12h` / `24h` / `72h`) |
+| `INSTAGRAM_STAGE_ENDPOINT` | litterbox API URL | override staging endpoint |
+
+#### B) Facebook Login (resumable rupload, no public host)
+
+1. Same Meta app → **Facebook Login** healthy (not “Feature Unavailable”).
+2. Graph API Explorer (or OAuth) → long-lived **user** token with
+   `instagram_basic`, `instagram_content_publish`, `pages_show_list`,
+   `pages_read_engagement`.
+3. `IG_USER_ID` from `me/accounts?fields=instagram_business_account`.
+4. Store `META_ACCESS_TOKEN` + `IG_USER_ID` (+ optional `META_APP_ID` /
+   `META_APP_SECRET` for `fb_exchange_token`).
+5. **Flow:** resumable container on `graph.facebook.com` → binary
+   `rupload.facebook.com` → poll → `media_publish` (unchanged from #232).
+
 Live Instagram publish is owner-side (not CI). Never commit secrets to the repo.
+Graph API Explorer is optional when using Instagram Login tokens.
 
 ## Known limitations
 

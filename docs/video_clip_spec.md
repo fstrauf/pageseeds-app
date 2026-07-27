@@ -9,7 +9,8 @@ Status: **Phase A complete**; **Phase B landed** (#221) and **Phase B validated*
 `target_keyword` + `packaging_hints`.
 **Phase D (#228 + #231 + #232):** `video-engine/publish.py` — YouTube resumable upload + TikTok
 **Inbox Upload** (drafts via Content Posting API `video.upload`) + Instagram Graph API
-**Reels** (resumable container + rupload; stdlib urllib; optional skill step).
+**Reels** (Instagram Login `video_url` path or Facebook Login resumable rupload;
+stdlib urllib; optional skill step).
 **Operator path:** `.agents/skills/video-clip/SKILL.md` (`/video-clip`, #222).
 **Target footprint:** `video.config.json` + `video/clips/` only (engine lives in
 pageseeds-app `video-engine/`; outputs go to the central
@@ -314,8 +315,9 @@ not may-create. See `.agents/skills/weekly-seo/SKILL.md`.
 
 Publish adapters for rendered shorts. No Rust changes. Platforms:
 `youtube`, `tiktok`, `instagram`. TikTok is **Inbox Upload only** (drafts); not
-Direct Post / `video.publish`. Instagram uses Graph API **Reels** resumable
-upload (local MP4 via rupload — no public host required).
+Direct Post / `video.publish`. Instagram uses Graph API **Reels**: Instagram Login
+tokens (`IGAA…` → `graph.instagram.com` + public `video_url` / temp stage) or
+Facebook Login tokens (resumable rupload on `graph.facebook.com`).
 
 1. **`video-engine/publish.py`** — stdlib only (`urllib` / `http.client`). CLI:
    `publish.py <clip.json> --platforms youtube[,tiktok][,instagram] [--video <mp4>] [--dry-run]`.
@@ -343,11 +345,13 @@ upload (local MP4 via rupload — no public host required).
    `POST /v2/post/publish/inbox/video/init/` → `PUT` chunks to `upload_url` → optional
    `POST /v2/post/publish/status/fetch/`. Scope **`video.upload`** only. Creator finishes
    in the TikTok app (~5 pending API shares / 24h).
-7. **Instagram Reels upload (#232):** optional long-lived token exchange →
-   `POST /{ig-user-id}/media` (`media_type=REELS`, `upload_type=resumable`, `caption`) →
-   `POST rupload.facebook.com/ig-api-upload/{version}/{container_id}` (raw MP4) →
-   poll `status_code` until `FINISHED` → `POST /{ig-user-id}/media_publish` → optional
-   permalink. Permission `instagram_content_publish`.
+7. **Instagram Reels upload (#232):** auto path from token shape.
+   - **Instagram Login (`IGAA…`):** optional `ig_refresh_token` / `ig_exchange_token` →
+     public `video_url` (`INSTAGRAM_VIDEO_URL` or short-lived litterbox stage of local
+     MP4) → `POST graph.instagram.com/{ig-user-id}/media` (`media_type=REELS`,
+     `video_url`, `caption`) → poll → `media_publish` → optional permalink.
+   - **Facebook Login:** optional `fb_exchange_token` → resumable container →
+     `rupload.facebook.com` → poll → `media_publish`.
 8. **`--dry-run`:** prints request plan JSON per platform (no network; secrets not required;
    does **not** write `published` into the clip file).
 9. **Clip write-back:** on success, merge platform key into `published` (indent=2 +

@@ -9,7 +9,8 @@ and uploads via:
   - YouTube Data API v3 (OAuth refresh + resumable upload)
   - TikTok Content Posting API **Inbox Upload** (scope video.upload only —
     lands in creator drafts; user finishes in the TikTok app). Not Direct Post.
-  - Instagram Graph API Reels (resumable container + rupload + media_publish)
+  - Instagram Graph API Reels (Instagram Login video_url path, or Facebook
+    Login resumable rupload)
 
 Stdlib only (urllib / http.client).
 
