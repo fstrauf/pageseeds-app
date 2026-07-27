@@ -255,8 +255,23 @@ do not reimplement the pipeline.
    - **Audio** stream present
 2. Extract **≥5** frames (early hook, mid segments, pre-end-card).
 3. **Visually** inspect: hook caption / UI moment / end card look intentional.
+4. **`packaging.description` (deterministic string checks on the written clip
+   JSON — before claiming success / before optional publish):**
+   - **Hard fail** if empty.
+   - **Hard fail** if the canonical URL (`packaging_hints.canonical_url` or
+     `cta.url`) is **not** present in the **first two non-empty lines** of the
+     description (ignore blank lines when counting; preferred craft shape is
+     hook on line 1, URL on line 2 with no intervening blank line).
+   - **Hard fail** if `frontmatter.target_keyword` was available in context
+     and does **not** appear in the description (case-insensitive).
+   - **Hard fail / flag** if length **> 5,000** characters (YouTube hard
+     limit). Report the char count; do not claim a clean packaging pass.
+   - **Soft warn** if length **< ~800** characters ("too thin" for SEO
+     packaging) — soft fail / report unless empty (empty is hard fail). Soft
+     target band when substance allows: ~1,500–4,000 chars (see
+     `docs/video_clip_spec.md` § packaging.description).
 
-Any fail → report failure with evidence; do not claim a publishable short.
+Any hard fail → report failure with evidence; do not claim a publishable short.
 
 ```bash
 ffprobe -v error -select_streams v:0 -show_entries stream=width,height \
@@ -293,6 +308,7 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 ## Quality gate
 - ffprobe: 1080×1920 / 40–50s / audio: pass|fail
 - Frames inspected: n (notes)
+- packaging.description: URL in first 2 non-empty lines pass|fail · keyword present pass|fail|n/a · chars={n} (≤5000; soft-warn if <~800)
 
 ## Friction / gaps
 - …
@@ -313,7 +329,7 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 - Description: …
 - Hashtags: …
 
-**Quality gate:** ffprobe + frames {pass|fail notes}
+**Quality gate:** ffprobe + frames + packaging.description (URL/keyword/length) {pass|fail notes}
 
 **Publish:** {skipped|url + privacy} · clip published.youtube {written|n/a}
 **Article embed:** {inserted|skipped (already present)|skipped (no publish)|path + note}
