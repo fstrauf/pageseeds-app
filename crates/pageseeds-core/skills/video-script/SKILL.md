@@ -66,6 +66,9 @@ Write one clip definition file at `video/clips/<slug>.json` in the project repo
 ### `cta` + `packaging`
 
 - `cta.url`: prefer `packaging_hints.canonical_url`.
+- `cta.subtitle`: always set — short reinforcement line under the end-card
+  domain (e.g. "free 21 DTE guide + DTE tracking"). Per-clip; beats the
+  config brand default.
 - `packaging.hashtags`: start from `packaging_hints.hashtags`, add 1–2
   topic tags if needed.
 - `packaging.thumbnail_hint`: the moment/frame worth thumbnailing.

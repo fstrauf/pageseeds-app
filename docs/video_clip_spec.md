@@ -52,7 +52,7 @@ The single artifact passed from content intelligence to the renderer.
 | `spoken_script` | string | 35–45s spoken voiceover. Strong hook in the first 3 seconds, one clear takeaway, soft CTA at the end. Plain text, no markup. |
 | `keywords` | string[] | 4–6 target phrases from the article. First entry is the hook keyword shown as a big caption in the first 3 seconds. |
 | `timing_map` | object[] | Ordered segments, see below. Total duration must cover the voiceover length (target 40–50s final cut). |
-| `cta` | object | `{ text, url }` — end card call to action. |
+| `cta` | object | `{ text, url, subtitle? }` — end card call to action. `subtitle` (optional) renders under the domain and is per-clip; it overrides the config `brand.end_card.subtitle` default. |
 | `packaging` | object | `{ title, description, hashtags, thumbnail_hint }` — derived from article keywords for upload metadata. |
 
 ### `timing_map` segment
@@ -96,7 +96,7 @@ are added to this spec and the project's Playwright journey together.
     { "from_s": 22, "to_s": 38, "moment_template": "calculator_demo", "caption_text": "the one ticker passing all three", "ui_target": "put_calculator" },
     { "from_s": 38, "to_s": 45, "moment_template": "income_snapshot", "caption_text": "full list on daystoexpiry.com", "ui_target": "end_card" }
   ],
-  "cta": { "text": "Full list + free scanner", "url": "https://daystoexpiry.com/blog/best-stocks-cash-secured-puts-2026" },
+  "cta": { "text": "Stock list + portfolio scanner", "url": "https://daystoexpiry.com/blog/best-stocks-cash-secured-puts-2026", "subtitle": "the full CSP stock list" },
   "packaging": {
     "title": "3 filters before every cash-secured put",
     "description": "The exact checklist I run before selling puts, plus the ticker passing all three right now. Full article on daystoexpiry.com.",
