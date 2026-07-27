@@ -35,7 +35,8 @@ Concise orientation and rules for AI agents working in this repo.
 | **Sync article state to repo JSON** | Use `db::export::write_articles_to_repo()` or `content::ops::sync_and_validate()`. | Write raw SQL + manual `fs::write` of `articles.json` |
 | **Add a new workflow step** | Add `StepKind` variant → register in `step_registry.rs` → add match arm in `executor.rs` → implement in `engine/exec/`. | Put business logic in the CLI binary or the handler |
 
-> **weekly-seo skill source of truth:** Canonical path is `.agents/skills/weekly-seo/SKILL.md`. `.grok/skills/weekly-seo/SKILL.md` is a symlink for Grok discovery — edit only the `.agents` file.
+> **weekly-seo skill source of truth:** Canonical path is `.agents/skills/weekly-seo/SKILL.md`. `.grok/skills/weekly-seo/SKILL.md` is a symlink for Grok discovery — edit only the `.agents` file.  
+> **video-clip skill:** Article → short via `/video-clip` (`.agents/skills/video-clip/SKILL.md`; `.grok` symlink). Edit only the `.agents` file.
 
 **Golden rules:**
 1. A new skill file is ~20 lines. A new task type + handler + exec module is ~200+ lines. **Prefer the skill.**
@@ -144,6 +145,7 @@ The operator tool catalog is **task types**, not raw function calls — enqueue/
 | Situation | Tool (task type) |
 |---|---|
 | Weekly organic growth / explore then act | weekly-seo skill **desk only**: site-overview → articles/article + GSC → hard actions (e.g. `fix_content_article -S`) |
+| Make a vertical short from an article | `/video-clip` skill (`.agents/skills/video-clip/`) — context → craft → render → quality gate |
 | Need new blog/informational topics | `research_keywords` |
 | Need new conversion/landing pages | `research_landing_pages` |
 | "Something is underperforming" (unknown cause) | **CLI:** desk reads → targeted `fix_content_article`. **UI/unattended:** `content_review` umbrella when a nested task is wanted — not every specialist audit |

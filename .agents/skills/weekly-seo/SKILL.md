@@ -287,6 +287,7 @@ under soft path A.
 | Nested `execute-task` LLM for write/fix/merge when Path B tools exist | Path B package → session edit → submit |
 | `create-task content_outcome_review` / may-create addition | System spawn only; execute **due** rows (see soft path A) |
 | `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; desk re-read for CTR closed-loop |
+| Video clips as weekly spine / may-create / multi-clip batch (#222) | Elective via `/video-clip` only — see [Optional post-publish video](#optional-post-publish-video-elective) |
 
 ## Soft guidance (default path)
 
@@ -753,6 +754,24 @@ pageseeds-cli merge-submit -i <id> -p <path> \
 
 ---
 
+## Optional post-publish video (elective)
+
+**Not** part of the weekly spine. Video clips are elective via **`/video-clip`**;
+not may-create; not a `create-task` type (Phase C / #224 is separate).
+
+| Rule | Detail |
+|------|--------|
+| **When** | After a successful Path B `write-submit` (or another clearly shipped new/updated article this run) **and** `<project-path>/video.config.json` exists |
+| **Budget** | **0–1** video candidates per weekly run. Default = **0** |
+| **Default action** | Name the slug + packaging reason under **Recommended next actions** / **Optional video** and suggest `/video-clip <slug>` — **do not** burn the weekly session on Playwright render |
+| **If user explicitly wants video now** | Invoke the video-clip skill path for that one slug; weekly hard rails unchanged (≤5 creates / ≤15 exec — video is **not** a create-task) |
+| **Never** | Add video tools to may-create; treat video as mandatory when config exists; multi-clip batch mid weekly |
+
+Missing `video.config.json` → skip silently (or one line under Skipped). Full
+operator runbook: `.agents/skills/video-clip/SKILL.md`.
+
+---
+
 ## F. Report
 
 `<project-path>/.github/automation/weekly_seo_{YYYYMMDD_HHMMSS}.md`
@@ -803,6 +822,10 @@ match / user skip).
 
 ## Recommended next actions
 …
+
+## Optional video (if any)
+- Candidate slug + why (or “none — default 0” / config missing).
+- Suggest `/video-clip <slug>` rather than mid-pass render unless user asked.
 ```
 
 ### Final user message (no JSON dumps)
@@ -851,7 +874,8 @@ match / user skip).
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
 - Mechanical reviews only; only write the weekly report file.  
-- Idempotent re-runs: recency + spawner keys.
+- Idempotent re-runs: recency + spawner keys.  
+- **Video clips are elective via `/video-clip`**; not weekly spine / not may-create.
 
 ---
 
