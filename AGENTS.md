@@ -83,7 +83,7 @@ For the full tree and per-folder responsibilities, see [`AI_QUICK_START.md`](./A
 2. **One error type**. Use `error::Error` and `error::Result<T>` throughout the domain crate.
 3. **SQLite is the operator runtime store**. All mutable state goes through `engine/task_store.rs`. Schema changes require a new migration constant in `db/mod.rs` — never alter existing SQL migration blocks.
 4. **Task creation goes through `engine::spawner::TaskSpawner`**. Never call `task_store::create_task` directly for programmatic task creation. The spawner enforces idempotency and dependency validation.
-5. **No subprocess calls**. All I/O uses Rust crates directly (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.). The only CLI fallback is inside the agent compatibility layer and is legacy.
+5. **Subprocess by tier**. Commercial-surface tools (free desk + paid) are pure Rust — they must work from the single prebuilt binary (`reqwest`, `rusqlite`, `walkdir`, `regex`, etc.). **Operator-tier tools** (marked in `docs/CLI_COMMERCIAL.md`; dev-machine only, not part of the commercial promise) may spawn external processes (node, ffmpeg, python) when the capability cannot be Rust-native — detect deps on PATH and fail with a clear install hint. The agent compatibility layer keeps its CLI fallbacks, and the LLM still gets no arbitrary shell (`docs/AGENT_INTEGRATION.md` "No Shell Escapes").
 
 ### RIG / LLM Integration
 
@@ -351,7 +351,7 @@ When the output is an MDX article, the answer is almost always **reuse `write_ar
 - [ ] Settings placed correctly: user preferences → `global_settings`; project config → `projects`
 - [ ] No business logic added to `crates/pageseeds-cli` beyond arg parse / I/O
 - [ ] No secrets or absolute machine paths in source code
-- [ ] No `subprocess` / shell calls outside the agent compatibility layer
+- [ ] Subprocess only in operator-tier tools or the agent compatibility layer; commercial-surface tools stay pure Rust
 - [ ] Reviewed `CONTRACTS.md` for affected implicit contracts
 - [ ] New task types added to `config/task_definitions.rs` before wiring handlers
 - [ ] Every new agentic step has specific input context, output contract, and a comment explaining why it cannot be deterministic
