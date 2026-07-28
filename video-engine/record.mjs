@@ -316,14 +316,9 @@ async function recordScriptedSegment(browser, overlays, target, motionName, need
   // silent no-op) and needs an explicit cursor + duration to be visible —
   // validated against call-analyzer#983's working recorder.
   await page.screencast.start({ path: filePath, size: VP });
-  let actions = null;
-  if (hasLocatorSteps(target)) {
-    actions = await page.screencast.showActions({
-      cursor: 'none', duration: 1200, fontSize: 18, position: 'bottom-right',
-    });
-  }
+  // No showActions: its action-point marker (red dot) is NOT controlled by the
+  // cursor option and reads as bot telemetry. Clean footage = just the page.
   await motion(page, needS, target);
-  if (actions) await actions.dispose().catch(() => {});
   await page.screencast.stop();
   await context.close();
 
