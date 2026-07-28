@@ -167,9 +167,17 @@ worktree explicitly.
 ### B. Pick slug
 
 - User arg / `--slug` / `-S` wins.
-- Else choose **one** article with clear visual potential from desk
-  (`articles` / `article -S`) — calculators, dashboards, scanners, step demos.
+- **No slug given → pick from the ledger, not from memory:**
+  1. List existing clips: `ls <project-path>/video/clips/*.json` — every slug there
+     already has a clip (drafted, rendered, or published via the `published` block).
+  2. Desk `articles` → rank candidates by GSC traction (clicks, then impressions).
+  3. Take the highest-traction article **not** in the ledger with clear visual
+     potential (calculators, dashboards, scanners, step demos, numbered rules).
+  4. Skip near-duplicates of existing clips (same topic family — e.g. two
+     "best CSP stocks" posts) unless the user asks for a series.
 - Prefer recently shipped posts when the user says “after publish.”
+- State the pick in one line before drafting (article, clicks/impressions,
+  why it wins) so the user can veto by replying, then proceed.
 
 ### C. Config gate
 
