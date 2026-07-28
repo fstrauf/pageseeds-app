@@ -208,8 +208,10 @@ pub(crate) fn exec_indexing_diagnostics(
         let reason = record.reason_code.as_deref().unwrap_or("unknown");
         let action = record.action.as_deref().unwrap_or("");
         let verdict = record.verdict.as_deref().unwrap_or("");
-        // indexed_pass + alternate_with_canonical: no auto content/link spawn (issue #250)
+        // Non-actionable (indexed_pass + alternate_with_canonical): no auto spawn (issue #250).
+        // True pass is only indexed_pass — used for consecutive_passes / resolution counts.
         let is_non_actionable = crate::gsc::indexing::is_non_actionable_reason(reason);
+        let is_true_pass = reason == "indexed_pass";
 
         let previous = status_map.get(&record.url);
         let prev_reason = previous
@@ -220,12 +222,13 @@ pub(crate) fn exec_indexing_diagnostics(
             .unwrap_or(false);
 
         // Determine if this is a change worth noting
+        // Issue/spawn gates use is_non_actionable; resolution/passes use true pass only.
         let is_new_issue = !is_non_actionable && (previous.is_none() || prev_non_actionable);
         let is_regression = !is_non_actionable
             && previous.is_some()
             && Some(reason) != prev_reason
             && !prev_non_actionable;
-        let is_resolved = is_non_actionable && previous.is_some() && !prev_non_actionable;
+        let is_resolved = is_true_pass && previous.is_some() && !prev_non_actionable;
         let is_unchanged_issue =
             !is_non_actionable && previous.is_some() && Some(reason) == prev_reason;
 
@@ -295,8 +298,8 @@ pub(crate) fn exec_indexing_diagnostics(
             }
         }
 
-        // Update or insert status record
-        let consecutive_passes = if is_non_actionable {
+        // Update or insert status record — only true indexed_pass advances pass streak
+        let consecutive_passes = if is_true_pass {
             previous.as_ref().map(|s| s.consecutive_passes).unwrap_or(0) + 1
         } else {
             0

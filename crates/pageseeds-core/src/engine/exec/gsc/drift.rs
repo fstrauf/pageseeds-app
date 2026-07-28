@@ -506,8 +506,15 @@ fn categorize_sitemap_urls(
 
     for (norm, (original_url, lastmod)) in sitemap_map {
         if let Some(gsc_item) = gsc_map.get(norm) {
-            if gsc_item.reason_code.as_deref() == Some("indexed_pass") {
+            let reason = gsc_item.reason_code.as_deref().unwrap_or("");
+            // True pass only increments indexed_count. Other non-actionable
+            // reasons (e.g. alternate_with_canonical hygiene) are neither
+            // indexed_pass nor not_indexed — omit them from not_indexed so
+            // IHC/recovery never treat them as "needs work".
+            if reason == "indexed_pass" {
                 buckets.indexed_count += 1;
+            } else if crate::gsc::indexing::is_non_actionable_reason(reason) {
+                // hygiene / non-actionable — leave out of not_indexed
             } else {
                 buckets.not_indexed.push(DriftUrl {
                     url: original_url.clone(),
@@ -618,15 +625,12 @@ fn build_candidate(
 ) -> Option<ResubmitCandidate> {
     let reason = drift_url.reason_code.as_deref().unwrap_or("unknown");
 
-    // Skip technical blockers / alternate-canonical hygiene — resubmission won't help
-    if matches!(
+    // Skip non-actionable reasons + technical blockers — resubmission won't help
+    let technical_blocker = matches!(
         reason,
-        "robots_blocked"
-            | "noindex"
-            | "fetch_error"
-            | "canonical_mismatch"
-            | "alternate_with_canonical"
-    ) {
+        "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch"
+    );
+    if crate::gsc::indexing::is_non_actionable_reason(reason) || technical_blocker {
         return None;
     }
 
