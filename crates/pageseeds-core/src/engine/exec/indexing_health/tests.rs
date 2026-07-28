@@ -164,6 +164,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
         assert_eq!(action, "fix_indexing");
     }
 
+    #[test]
+    fn determine_action_alternate_with_canonical_no_action_even_if_zero_links() {
+        let ctx = dummy_target_ctx("good", 0, true, "alternate_with_canonical");
+        let action = determine_action(&ctx, None, &[]);
+        assert_eq!(action, "no_action");
+    }
+
+    #[test]
+    fn determine_action_alternate_with_canonical_no_action_even_if_poor_health() {
+        let ctx = dummy_target_ctx("poor", 3, true, "alternate_with_canonical");
+        let action = determine_action(&ctx, None, &[]);
+        assert_eq!(action, "no_action");
+    }
+
+    #[test]
+    fn determine_action_not_indexed_discovered_zero_links_still_add_links() {
+        // Regression: legitimate discovery + zero links must still get interlinking.
+        let ctx = dummy_target_ctx("good", 0, true, "not_indexed_discovered");
+        let action = determine_action(&ctx, None, &[]);
+        assert_eq!(action, "add_links");
+    }
+
     // ─── slugify_url tests ──────────────────────────────────────────────────────
 
     #[test]
@@ -623,6 +645,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
         assert_eq!(fallback_spawn_for_reason("noindex"), None);
         assert_eq!(fallback_spawn_for_reason("fetch_error"), None);
         assert_eq!(fallback_spawn_for_reason("canonical_mismatch"), None);
+        assert_eq!(fallback_spawn_for_reason("alternate_with_canonical"), None);
         assert_eq!(fallback_spawn_for_reason(""), None);
     }
 

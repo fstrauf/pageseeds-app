@@ -618,10 +618,14 @@ fn build_candidate(
 ) -> Option<ResubmitCandidate> {
     let reason = drift_url.reason_code.as_deref().unwrap_or("unknown");
 
-    // Skip technical blockers — resubmission won't help
+    // Skip technical blockers / alternate-canonical hygiene — resubmission won't help
     if matches!(
         reason,
-        "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch"
+        "robots_blocked"
+            | "noindex"
+            | "fetch_error"
+            | "canonical_mismatch"
+            | "alternate_with_canonical"
     ) {
         return None;
     }

@@ -146,6 +146,12 @@ pub(crate) fn determine_action(
     verdict: Option<&DistinctivenessVerdict>,
     _dupe_keywords: &[String],
 ) -> String {
+    // Alternate-with-canonical is multi-URL hygiene only — never content/link fixes (issue #250).
+    // Must run before poor-health / zero-links so we do not still add_links.
+    if ctx.target.reason_code == "alternate_with_canonical" {
+        return "no_action".to_string();
+    }
+
     // Priority order from spec
     if ctx.target.content_audit_health == "poor" {
         return "fix_content".to_string();

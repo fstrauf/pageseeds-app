@@ -74,12 +74,13 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
             })
             .unwrap_or_default();
 
-    // 5. Technical blockers that should not create link tasks
+    // 5. Technical blockers / non-eligible hygiene that should not create link tasks
     let technical_blockers: HashSet<&str> = [
         "robots_blocked",
         "noindex",
         "fetch_error",
         "canonical_mismatch",
+        "alternate_with_canonical", // multi-URL hygiene only — no link recovery (issue #250)
         "api_error",
     ]
     .iter()

@@ -12,6 +12,11 @@ For `not_indexed_crawled` / `not_indexed_discovered` / `not_indexed_other`:
 - Add a clear meta description
 - Rewrite the intro (first paragraph) when it is thin or overlaps with siblings
 
+For `alternate_with_canonical` (GSC “Alternative page with proper canonical tag”):
+- **Not a content-fix target.** Do not rewrite body, title, H1, or interlinks on the alternate URL.
+- Hygiene only: confirm 301 from legacy → clean canonical, internal links and sitemap list the Google-selected canonical only.
+- If this reason is still in context, say so in `diagnosis` and avoid inventing content changes.
+
 For `robots_blocked` / `noindex` / `fetch_error` / `canonical_mismatch`:
 - Plan the technical root-cause fix as frontmatter changes (e.g. set `robots`
   to `index, follow`, set or fix `canonical`) via `frontmatter` edits

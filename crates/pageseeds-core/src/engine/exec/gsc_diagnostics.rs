@@ -143,7 +143,7 @@ pub(crate) fn exec_indexing_diagnostics(
                 let has_issue = status
                     .last_reason_code
                     .as_deref()
-                    .map(|r| r != "indexed_pass")
+                    .map(|r| !crate::gsc::indexing::is_non_actionable_reason(r))
                     .unwrap_or(false);
 
                 is_stale || has_issue
@@ -208,20 +208,26 @@ pub(crate) fn exec_indexing_diagnostics(
         let reason = record.reason_code.as_deref().unwrap_or("unknown");
         let action = record.action.as_deref().unwrap_or("");
         let verdict = record.verdict.as_deref().unwrap_or("");
-        let is_pass = reason == "indexed_pass";
+        // indexed_pass + alternate_with_canonical: no auto content/link spawn (issue #250)
+        let is_non_actionable = crate::gsc::indexing::is_non_actionable_reason(reason);
 
         let previous = status_map.get(&record.url);
         let prev_reason = previous
             .as_ref()
             .and_then(|s| s.last_reason_code.as_deref());
-        let prev_pass = prev_reason == Some("indexed_pass");
+        let prev_non_actionable = prev_reason
+            .map(crate::gsc::indexing::is_non_actionable_reason)
+            .unwrap_or(false);
 
         // Determine if this is a change worth noting
-        let is_new_issue = !is_pass && (previous.is_none() || prev_pass);
-        let is_regression =
-            !is_pass && previous.is_some() && Some(reason) != prev_reason && !prev_pass;
-        let is_resolved = is_pass && previous.is_some() && !prev_pass;
-        let is_unchanged_issue = !is_pass && previous.is_some() && Some(reason) == prev_reason;
+        let is_new_issue = !is_non_actionable && (previous.is_none() || prev_non_actionable);
+        let is_regression = !is_non_actionable
+            && previous.is_some()
+            && Some(reason) != prev_reason
+            && !prev_non_actionable;
+        let is_resolved = is_non_actionable && previous.is_some() && !prev_non_actionable;
+        let is_unchanged_issue =
+            !is_non_actionable && previous.is_some() && Some(reason) == prev_reason;
 
         if is_new_issue {
             new_issue_count += 1;
@@ -234,10 +240,10 @@ pub(crate) fn exec_indexing_diagnostics(
         }
 
         // Spawn fix task only if:
-        //   - URL has an issue (not pass)
+        //   - URL has an actionable issue (not pass / not alternate-with-canonical)
         //   - AND there is no active fix task already for this URL
         //   - AND the URL maps to an actual MDX file we can edit
-        if !is_pass {
+        if !is_non_actionable {
             let has_mdx = has_mdx_for_url(project_path, &record.url);
             if !has_mdx {
                 log::info!(
@@ -290,7 +296,7 @@ pub(crate) fn exec_indexing_diagnostics(
         }
 
         // Update or insert status record
-        let consecutive_passes = if is_pass {
+        let consecutive_passes = if is_non_actionable {
             previous.as_ref().map(|s| s.consecutive_passes).unwrap_or(0) + 1
         } else {
             0
@@ -462,6 +468,11 @@ fn spawn_fix_task(
     verdict: &str,
     priority_val: i32,
 ) -> Option<String> {
+    // Defense in depth: never spawn for non-actionable reasons (issue #250).
+    if crate::gsc::indexing::is_non_actionable_reason(reason) {
+        return None;
+    }
+
     let task_type = match reason {
         "robots_blocked" | "noindex" | "fetch_error" | "canonical_mismatch" => "fix_technical",
         "not_indexed_other" => "interlinking",

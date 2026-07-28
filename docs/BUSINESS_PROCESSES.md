@@ -305,8 +305,8 @@ User confirms → Apply publish:
 **Operation A: URL Inspection (`collect_gsc`)**
 - Fetch sitemap URLs
 - Call GSC URL Inspection API for each
-- Classify: robots_blocked, noindex, fetch_error, canonical_mismatch, etc.
-- Spawn fix tasks based on reason codes
+- Classify reason codes in `gsc/indexing.rs`: `robots_blocked`, `noindex`, `fetch_error`, `canonical_mismatch`, `alternate_with_canonical`, `not_indexed_crawled` / `not_indexed_discovered` / `not_indexed_other`, `indexed_pass`
+- Actionable issues may route to fix tasks; **`alternate_with_canonical` does not auto-spawn** content or interlinking work (multi-URL hygiene only — verify 301 + sitemap/internal links point at the Google-selected canonical)
 
 **Operation B: Analytics Sync (`gsc_sync_articles`)**
 - Fetch Search Analytics (clicks, impressions, CTR)
@@ -320,6 +320,7 @@ User confirms → Apply publish:
 **Operation D: Indexing Recovery (`gsc_indexing_recovery`)**
 - Systematic recovery workflow for not-indexed pages
 - Internal link fixes, content improvements, re-submission
+- Skips technical blockers and `alternate_with_canonical` (not eligible for link recovery)
 
 ### Process Flow (URL Inspection)
 
@@ -335,18 +336,18 @@ Step: collect_gsc_inspect (deterministic)
   ├─ Classify into reason_codes with priorities
   └─ Write gsc_collection.json artifact
   ↓
-Auto-spawns fix tasks (up to 20):
-  ├─ robots_blocked, noindex, fetch_error → fix_technical
-  ├─ not_indexed_* → fix_indexing
+Downstream fix routing (indexing diagnostics / health campaign; not collect_gsc itself):
+  ├─ robots_blocked, noindex, fetch_error, canonical_mismatch → fix_technical
+  ├─ not_indexed_* → fix_indexing / interlinking / content (as mapped)
+  ├─ alternate_with_canonical → no auto-spawn (hygiene only)
   ├─ api_error → fix_gsc_access
-  └─ All indexed → investigate_gsc (one task)
+  └─ All indexed / non-actionable → investigate_gsc (one task) or no work
 ```
 
 ### Key Files
-- `engine/exec/gsc.rs` — GSC task execution
-- `gsc/indexing.rs` — URL Inspection API
+- `engine/exec/gsc/` — GSC task execution (collect, sync, drift, recovery)
+- `gsc/indexing.rs` — URL Inspection API + reason_code classification
 - `gsc/analytics.rs` — Search Analytics API
-- `gsc/classification.rs` — reason_code classification
 
 ### Artifacts
 - `gsc_collection.json` — URL inspection results
