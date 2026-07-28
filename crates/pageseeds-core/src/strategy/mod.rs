@@ -395,18 +395,18 @@ pub fn matches_do_not_expand(keyword: &str, strategy: &ProjectStrategy) -> bool 
         .any(|p| keyword_matches_phrase(keyword, p))
 }
 
-/// True when the keyword clearly maps to a LEGACY cluster.
+/// True when the keyword clearly maps to a LEGACY cluster (hard drop).
 ///
-/// Mapping rule (v1): case-insensitive substring match against any listed
-/// cluster keyword, **or** against the cluster name when the name is at least
-/// 4 characters (short names are ignored as name-only matches). Also true when
-/// ≥2 significant tokens from the cluster name appear in the keyword.
+/// Hard mapping only: listed cluster keywords (substring phrase policy) and/or
+/// multi-token name overlap (`token_overlap_match`, ≥2 significant tokens).
+/// Single-token / short name substring matching is **not** used here — a LEGACY
+/// cluster named `"Services"` must not ban every keyword containing `"services"`.
 pub fn matches_legacy_cluster(keyword: &str, strategy: &ProjectStrategy) -> bool {
     strategy
         .clusters
         .iter()
         .filter(|c| c.status == ClusterStatus::Legacy)
-        .any(|c| maps_to_cluster(keyword, c))
+        .any(|c| maps_to_cluster_hard(keyword, c))
 }
 
 /// True when the keyword maps to a MAINTAIN cluster (deprioritize, not drop).
@@ -415,7 +415,7 @@ pub fn matches_maintain_cluster(keyword: &str, strategy: &ProjectStrategy) -> bo
         .clusters
         .iter()
         .filter(|c| c.status == ClusterStatus::Maintain)
-        .any(|c| maps_to_cluster(keyword, c))
+        .any(|c| maps_to_cluster_soft(keyword, c))
 }
 
 /// True when the keyword aligns with ACTIVE cluster keywords or primary keywords.
@@ -431,10 +431,23 @@ pub fn matches_active_or_primary(keyword: &str, strategy: &ProjectStrategy) -> b
         .clusters
         .iter()
         .filter(|c| c.status == ClusterStatus::Active)
-        .any(|c| maps_to_cluster(keyword, c))
+        .any(|c| maps_to_cluster_soft(keyword, c))
 }
 
-fn maps_to_cluster(keyword: &str, cluster: &StrategyCluster) -> bool {
+/// Hard cluster map (LEGACY / hard reject): explicit keyword bullets + multi-token
+/// name overlap only. No single-token name substring.
+fn maps_to_cluster_hard(keyword: &str, cluster: &StrategyCluster) -> bool {
+    for k in &cluster.keywords {
+        if keyword_matches_phrase(keyword, k) {
+            return true;
+        }
+    }
+    token_overlap_match(keyword, cluster.name.trim())
+}
+
+/// Soft cluster map (MAINTAIN/ACTIVE rank hints): keyword bullets, name substring
+/// when the name is ≥4 chars, and multi-token name overlap.
+fn maps_to_cluster_soft(keyword: &str, cluster: &StrategyCluster) -> bool {
     for k in &cluster.keywords {
         if keyword_matches_phrase(keyword, k) {
             return true;
@@ -769,6 +782,71 @@ mod tests {
             .any(|(k, r)| *k == "random unrelated keyword" && *r == StrategyRank::Neutral));
         assert!(!kept.iter().any(|(k, _)| k.contains("custom web design")));
         assert!(!kept.iter().any(|(k, _)| k.contains("web design packages")));
+    }
+
+    #[test]
+    fn legacy_hard_drop_ignores_single_token_cluster_name() {
+        // LEGACY cluster "Services" must not ban every keyword containing "services".
+        // Only explicit bullet phrases (and multi-token name overlap) hard-drop.
+        let strategy = ProjectStrategy {
+            clusters: vec![StrategyCluster {
+                name: "Services".to_string(),
+                status: ClusterStatus::Legacy,
+                keywords: vec!["web design packages".to_string()],
+            }],
+            ..Default::default()
+        };
+
+        assert!(
+            !matches_legacy_cluster("cloud services pricing", &strategy),
+            "single-token name substring must not hard-drop"
+        );
+        assert!(
+            !matches_legacy_cluster("managed services checklist", &strategy),
+            "unrelated *services* keyword must not hard-drop"
+        );
+        assert!(
+            matches_legacy_cluster("web design packages pricing", &strategy),
+            "explicit bullet phrase must still hard-drop"
+        );
+        assert!(
+            matches_legacy_cluster("best web design packages", &strategy),
+            "substring of bullet phrase must still hard-drop"
+        );
+
+        let outcome = apply_strategy_filter(
+            vec![
+                "cloud services pricing".to_string(),
+                "managed services checklist".to_string(),
+                "web design packages guide".to_string(),
+            ],
+            &strategy,
+            |s| s.as_str(),
+        );
+        assert_eq!(outcome.strategy_rejected_count, 1);
+        let kept: Vec<&str> = outcome.kept.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(kept.contains(&"cloud services pricing"));
+        assert!(kept.contains(&"managed services checklist"));
+        assert!(!kept.iter().any(|k| k.contains("web design packages")));
+    }
+
+    #[test]
+    fn legacy_hard_drop_uses_multi_token_name_overlap() {
+        let strategy = ProjectStrategy {
+            clusters: vec![StrategyCluster {
+                name: "Custom Web Design".to_string(),
+                status: ClusterStatus::Legacy,
+                keywords: vec![],
+            }],
+            ..Default::default()
+        };
+        // ≥2 significant tokens from the multi-word name → hard drop.
+        assert!(matches_legacy_cluster(
+            "custom web design agency near me",
+            &strategy
+        ));
+        // Only one token in common → keep.
+        assert!(!matches_legacy_cluster("custom furniture pricing", &strategy));
     }
 
     #[test]
