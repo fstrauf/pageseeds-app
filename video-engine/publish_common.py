@@ -85,8 +85,13 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def load_secrets(repo_root: Path | None) -> dict[str, str]:
-    """Env-file chain matching Rust EnvResolver: first file wins per key, then process env."""
+def load_secrets(repo_root: Path | None, project_id: str | None = None) -> dict[str, str]:
+    """Env-file chain matching Rust EnvResolver: first file wins per key, then process env.
+
+    Multi-brand: keys may be namespaced per project as {PROJECT_ID_UPPER}_{KEY}
+    (e.g. COFFEE_YOUTUBE_REFRESH_TOKEN). A namespaced value wins over the
+    un-namespaced default for that project only.
+    """
     files: list[Path] = []
     home = Path.home()
     secrets = home / ".config" / "automation" / "secrets.env"
@@ -109,6 +114,13 @@ def load_secrets(repo_root: Path | None) -> dict[str, str]:
             env_val = os.environ.get(key, "").strip()
             if env_val:
                 resolved[key] = env_val
+
+    if project_id:
+        prefix = project_id.upper().replace("-", "_") + "_"
+        for key in ALL_SECRET_KEYS:
+            namespaced = resolved.get(prefix + key) or os.environ.get(prefix + key, "").strip()
+            if namespaced:
+                resolved[key] = namespaced
     return resolved
 
 

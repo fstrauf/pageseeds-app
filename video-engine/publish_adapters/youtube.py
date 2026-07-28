@@ -188,7 +188,8 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> dict:
         }
 
     repo_root = find_repo_root(clip_path) or find_repo_root(Path.cwd())
-    creds = load_secrets(repo_root)
+    project_id = (clip.get("source") or {}).get("project_id")
+    creds = load_secrets(repo_root, project_id=project_id)
     missing = [k for k in YOUTUBE_KEYS if not creds.get(k)]
     if missing:
         raise PublishError(
