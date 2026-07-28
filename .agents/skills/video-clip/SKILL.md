@@ -252,7 +252,8 @@ for each timing_map seg whose ui_target has motion=agentic:
   trim_deadair.py on the raw take → place under
     ~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_{ui_target}.mp4
   verify: ffprobe duration + ≥1 frame view; retry once with tighter brief; else leave missing → record fallback
-then: normal video-clip-render / generate-clip (record reuses agentic files → voice → composite)
+then: normal video-clip-render / generate-clip
+  (record reuses agentic .mp4 only → voice → composite; leftover scripted .webm is ignored)
 quality gate unchanged
 ```
 
@@ -264,9 +265,10 @@ quality gate unchanged
 | **MCP profile** | Copy `video-engine/mcp-recording.example.json` into host MCP config (Kimi/Grok). Set `--output-dir` to `~/01_code/video-clip-backup/<project_id>/agentic/`. Blocked origins: crisp/intercom/hotjar/fullstory (align with `overlays.block_routes`). Do **not** auto-edit the user’s global MCP file from product scripts. |
 | **Brief rails** | Demo/read-only pages only; consent dismiss OK; **no** forms, auth, purchases, or real mutations; on page error → navigate back / continue; include a **hard time cap** (e.g. “finish in ≤12s of action”); start/stop video **per segment**. |
 | **Trim** | From a pageseeds-app checkout: `video-engine/.venv/bin/python video-engine/trim_deadair.py <raw> --out ~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_{ui_target}.mp4` |
-| **Naming** | `seg{NN}_{ui_target}.mp4` with zero-padded index matching `timing_map` order (same as `record.mjs`). |
+| **Naming** | `seg{NN}_{ui_target}.mp4` with zero-padded index matching `timing_map` order (same as `record.mjs`). Skill places **`.mp4` only** for agentic takes. |
+| **Reuse invariant** | `record.mjs` reuses agentic media **only** as `.mp4` (≥ ~10 KB). A leftover scripted fallback sibling `.webm` in the same `segments/` tree is **ignored** and cannot shadow a fresh agentic `.mp4`. Optional: remove stale `seg{NN}_{ui_target}.webm` when placing a new agentic take (not required for correct reuse). |
 | **Verify** | `ffprobe` duration + extract ≥1 frame and view. Retry **once** with a tighter brief on failure; else leave the file missing so `record.mjs` scripted fallback runs. |
-| **Fallback** | Missing/unusable agentic file → `record.mjs` logs fallback and records with `dwell` (if interactions/hover) or `dwell_scroll`. Do not reimplement composite/voice. |
+| **Fallback** | Missing/unusable agentic `.mp4` → `record.mjs` logs fallback and records scripted `.webm` with `dwell` (if interactions/hover) or `dwell_scroll`. Do not reimplement composite/voice. |
 | **Timing** | Raw MCP takes may overrun the brief; `trim_deadair` then composite `-t` scale handle duration. No engine rewrite needed. |
 
 Do **not** nest `kimi` or MCP inside `generate-clip.sh` / `record.mjs`. Judgment stays in this skill; the engine stays deterministic reuse/fallback.

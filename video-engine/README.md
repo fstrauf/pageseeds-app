@@ -114,7 +114,7 @@ Optional per-`ui_target` path for natural, resilient UI footage. **Scripted moti
 | Step | Who | What |
 |------|-----|------|
 | 1. Pre-pass | Operator skill (`/video-clip`) | For each timing_map segment whose `ui_target` has `motion: "agentic"`, record via host Playwright MCP (or `kimi -p` with the recording profile), run `trim_deadair.py`, place media under `~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_{ui_target}.mp4` |
-| 2. Record | `record.mjs` | If that file (`.webm` or `.mp4`, ≥ ~10 KB) exists → **reuse** it (`ready_offset_s: 0`), do not overwrite. Else → **scripted fallback** (`dwell` if `interactions` / `hover_text` present, else `dwell_scroll`) and log clearly |
+| 2. Record | `record.mjs` | If that **`.mp4`** exists and is usable (≥ ~10 KB) → **reuse** it (`ready_offset_s: 0`), do not overwrite. Sibling `.webm` (e.g. leftover scripted fallback) is **ignored** for agentic reuse. Else → **scripted fallback** writes `.webm` (`dwell` if `interactions` / `hover_text` present, else `dwell_scroll`) and log clearly |
 | 3. Rest | voice → composite | Unchanged |
 
 **Config validation:** `node record.mjs … --check` exits 2 if any non-builtin target has `motion: "agentic"` and missing/empty `agentic_goal`.
@@ -157,10 +157,10 @@ Then run the normal pipeline (`generate-clip.sh` / `video-clip-render`). Composi
    `scroll_to_text`, `input_tweak`, `hover_text`, `interactions`) get
    `showActions` cursor/highlight annotations (bottom-right); dwell segments
    keep the freehand mouse wander. For `motion: "agentic"`, reuses a pre-placed
-   file under `OUT/segments/` when present (no overwrite); otherwise scripted
-   fallback — see [Agentic motion](#agentic-motion-motion-agentic). Browser
-   launch is lazy (skipped entirely when every non-builtin segment reuses
-   agentic media).
+   `.mp4` under `OUT/segments/` when present (no overwrite; sibling `.webm` is
+   ignored); otherwise scripted fallback writes `.webm` — see
+   [Agentic motion](#agentic-motion-motion-agentic). Browser launch is lazy
+   (skipped entirely when every non-builtin segment reuses agentic media).
 2. **voice.py**: edge-tts → `voice.mp3` + word-level `voice.srt`; retries with
    a computed speech rate if the voiceover lands outside 40–45.5s.
 3. **composite.py**: scales segment durations to actual voiceover length,

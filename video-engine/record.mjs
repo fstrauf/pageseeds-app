@@ -12,10 +12,12 @@
  * seconds. Writes <out>/segments/seg{NN}_{ui_target}.webm plus segments.json
  * (ready_offset_s is always 0 — recording starts after the page is ready).
  *
- * motion: "agentic" is opt-in: if OUT/segments/seg{NN}_{ui_target}.{webm|mp4}
+ * motion: "agentic" is opt-in: if OUT/segments/seg{NN}_{ui_target}.mp4
  * already exists and is usable, it is reused (no browser for that segment).
- * Otherwise a deterministic scripted fallback runs. Agentic takes are produced
- * by the operator skill + host Playwright MCP — never by an in-process LLM here.
+ * Sibling .webm (e.g. leftover scripted fallback) is ignored for agentic reuse.
+ * Otherwise a deterministic scripted fallback runs (writes .webm). Agentic takes
+ * are produced by the operator skill + host Playwright MCP — never by an
+ * in-process LLM here.
  *
  * Exit codes: 0 ok · 2 bad args / config error
  */
@@ -270,16 +272,15 @@ function scriptedFallbackMotionName(target) {
 
 /**
  * Prefer an existing pre-placed agentic take under OUT/segments.
- * Prefer webm if both exist; only files ≥ MIN_SEGMENT_BYTES count as usable.
+ * Agentic reuse accepts only .mp4 (operator skill / trim_deadair place .mp4).
+ * Sibling .webm from a prior scripted fallback is intentionally ignored so it
+ * cannot shadow a fresh agentic .mp4. Only files ≥ MIN_SEGMENT_BYTES count.
  */
 function findUsableAgenticFile(segDir, index, uiTarget) {
-  const base = `seg${String(index).padStart(2, '0')}_${uiTarget}`;
-  for (const ext of ['.webm', '.mp4']) {
-    const file = `${base}${ext}`;
-    const filePath = path.join(segDir, file);
-    if (fs.existsSync(filePath) && fs.statSync(filePath).size >= MIN_SEGMENT_BYTES) {
-      return file;
-    }
+  const file = `seg${String(index).padStart(2, '0')}_${uiTarget}.mp4`;
+  const filePath = path.join(segDir, file);
+  if (fs.existsSync(filePath) && fs.statSync(filePath).size >= MIN_SEGMENT_BYTES) {
+    return file;
   }
   return null;
 }
