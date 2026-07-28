@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::db::research_shortlist::{self, ResearchShortlistEntry};
-use crate::engine::keyword_selection::extract_selectable_keywords;
+use crate::engine::keyword_selection::{
+    extract_selectable_keywords, find_research_selection_artifact, parse_artifact_json,
+};
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::models::research::FilterFunnel;
@@ -415,21 +417,10 @@ fn extract_selectable_if_any(task: &Task) -> Option<Vec<String>> {
 }
 
 /// Extract `filter_funnel` from the final-selection artifact when present.
+/// Reuses the canonical selection-artifact helpers (fence-stripping + key chain).
 fn extract_filter_funnel(task: &Task) -> Option<FilterFunnel> {
-    const KEYS: &[&str] = &["research_final_selection", "final_selection"];
-    for artifact in &task.artifacts {
-        if !KEYS.contains(&artifact.key.as_str()) {
-            continue;
-        }
-        let content = artifact.content.as_deref()?;
-        let value: serde_json::Value = serde_json::from_str(content).ok()?;
-        if let Some(ff) = value.get("filter_funnel") {
-            if let Ok(funnel) = serde_json::from_value::<FilterFunnel>(ff.clone()) {
-                return Some(funnel);
-            }
-        }
-    }
-    None
+    let v = parse_artifact_json(task, find_research_selection_artifact(task))?;
+    serde_json::from_value(v.get("filter_funnel")?.clone()).ok()
 }
 
 /// When the selectable pool is thin but non-empty, append a short funnel note
