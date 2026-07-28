@@ -262,7 +262,9 @@ pub(crate) fn exec_collect_gsc(
 
     let issues_found = records
         .iter()
-        .filter(|r| r.reason_code.as_deref().unwrap_or("") != "indexed_pass")
+        .filter(|r| {
+            !crate::gsc::indexing::is_non_actionable_reason(r.reason_code.as_deref().unwrap_or(""))
+        })
         .count();
 
     let mut items: Vec<serde_json::Value> = records

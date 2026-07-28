@@ -146,6 +146,13 @@ pub(crate) fn determine_action(
     verdict: Option<&DistinctivenessVerdict>,
     _dupe_keywords: &[String],
 ) -> String {
+    // Non-actionable reasons (indexed_pass, alternate_with_canonical hygiene) —
+    // never content/link fixes (issue #250). Shared list via is_non_actionable_reason.
+    // Must run before poor-health / zero-links so we do not still add_links.
+    if crate::gsc::indexing::is_non_actionable_reason(&ctx.target.reason_code) {
+        return "no_action".to_string();
+    }
+
     // Priority order from spec
     if ctx.target.content_audit_health == "poor" {
         return "fix_content".to_string();

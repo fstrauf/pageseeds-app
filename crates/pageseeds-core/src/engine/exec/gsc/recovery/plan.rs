@@ -75,6 +75,8 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
             .unwrap_or_default();
 
     // 5. Technical blockers that should not create link tasks
+    // (alternate_with_canonical is hygiene, not a technical blocker — filtered via
+    // is_non_actionable_reason / eligible_reasons below, not this set.)
     let technical_blockers: HashSet<&str> = [
         "robots_blocked",
         "noindex",
@@ -120,6 +122,17 @@ pub(crate) fn exec_gsc_recovery_plan(task: &Task, project_path: &str) -> StepRes
                 url: candidate.url.clone(),
                 reason_code: reason.to_string(),
                 skip_reason: "technical blocker; internal links are not the right fix".to_string(),
+            });
+            continue;
+        }
+
+        // Belt-and-suspenders: non-actionable hygiene (e.g. alternate_with_canonical)
+        // must not enter link recovery even if it slipped past build_candidate.
+        if crate::gsc::indexing::is_non_actionable_reason(reason) {
+            skipped.push(SkippedTarget {
+                url: candidate.url.clone(),
+                reason_code: reason.to_string(),
+                skip_reason: "non-actionable reason; not eligible for link recovery".to_string(),
             });
             continue;
         }

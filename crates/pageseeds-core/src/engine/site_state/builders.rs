@@ -150,7 +150,11 @@ pub fn build_site_overview(
     let indexing = crate::gsc::db::list_by_project(conn, project_id).unwrap_or_default();
     let not_indexed_rows: Vec<_> = indexing
         .iter()
-        .filter(|s| s.last_reason_code.as_deref() != Some("indexed_pass"))
+        .filter(|s| {
+            !crate::gsc::indexing::is_non_actionable_reason(
+                s.last_reason_code.as_deref().unwrap_or(""),
+            )
+        })
         .collect();
     // Global GSC count may include live-site-only paths; sample is catalog-only
     // so create-task -S can act on every sample slug (issue #179 residual D).

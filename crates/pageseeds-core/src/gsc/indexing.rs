@@ -76,6 +76,7 @@ fn parse_inspection_record(url: &str, resp: &serde_json::Value) -> InspectionRec
     let user_canonical = index["userDeclaredCanonical"].as_str().map(String::from);
 
     let (reason_code, action) = classify_record(
+        url,
         crawl_allowed,
         &robots_txt_state,
         indexing_allowed,
@@ -113,14 +114,33 @@ fn parse_inspection_record(url: &str, resp: &serde_json::Value) -> InspectionRec
     }
 }
 
+/// Normalize a URL for reason-code comparison (scheme/www strip, lower, no trailing `/`).
+///
+/// Kept private next to classification so `gsc` does not depend on `engine`.
+/// Same spirit as `engine::exec::gsc::normalize_url_for_comparison` plus trailing-slash trim.
+fn normalize_url_for_reason(url: &str) -> String {
+    let lower = url.to_lowercase();
+    let without_scheme = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(&lower);
+    let without_www = without_scheme
+        .strip_prefix("www.")
+        .unwrap_or(without_scheme);
+    without_www.trim_end_matches('/').to_string()
+}
+
 /// Classify an inspection record into a stable reason code and action description.
 ///
-/// Inputs are the individual fields extracted from the API response.
-/// Returns `(reason_code, action_description)`.  
+/// Inputs are the individual fields extracted from the API response plus the
+/// inspected URL (needed to detect alternate-with-canonical pages).
+/// Returns `(reason_code, action_description)`.
 /// Priority order: first match wins (most critical first).
 ///
-/// Mirrors the Python CLI `classify_record()` in `seo/gsc/indexing.py`.
+/// Mirrors the Python CLI `classify_record()` in `seo/gsc/indexing.py`, with
+/// issue #250 alternate-canonical hygiene.
 pub fn classify_record(
+    inspected_url: &str,
     crawl_allowed: bool,
     robots_txt_state: &str,
     indexing_allowed: bool,
@@ -159,10 +179,10 @@ pub fn classify_record(
         );
     }
 
-    // 4. Canonical mismatch
+    // 4. Canonical mismatch (user-declared ≠ Google-selected) — wins over alternate
     if let (Some(user), Some(google)) = (user_canonical, google_canonical) {
-        let user_norm = user.trim_end_matches('/').to_lowercase();
-        let google_norm = google.trim_end_matches('/').to_lowercase();
+        let user_norm = normalize_url_for_reason(user);
+        let google_norm = normalize_url_for_reason(google);
         if !user_norm.is_empty() && !google_norm.is_empty() && user_norm != google_norm {
             return (
                 "canonical_mismatch",
@@ -171,7 +191,20 @@ pub fn classify_record(
         }
     }
 
-    // 5. Non-PASS verdict — differentiate by coverage state
+    // 5. Alternate page with proper canonical (inspected URL ≠ Google-selected canonical)
+    //    Not a content/interlinking fix target — consolidation/hygiene only (issue #250).
+    if let Some(google) = google_canonical {
+        let inspected_norm = normalize_url_for_reason(inspected_url);
+        let google_norm = normalize_url_for_reason(google);
+        if !google_norm.is_empty() && !inspected_norm.is_empty() && inspected_norm != google_norm {
+            return (
+                "alternate_with_canonical",
+                "Consolidation/hygiene only — do not rewrite content on the alternate; verify 301 redirects, internal links, and sitemap list the Google-selected canonical.",
+            );
+        }
+    }
+
+    // 6. Non-PASS verdict — differentiate by coverage state
     if verdict.to_uppercase() != "PASS" {
         let cov_lower = coverage_state.to_lowercase();
         if cov_lower.contains("crawled") && cov_lower.contains("not") {
@@ -192,8 +225,15 @@ pub fn classify_record(
         );
     }
 
-    // 6. Indexed — no action needed
+    // 7. Indexed — no action needed
     ("indexed_pass", "No action needed (indexed).")
+}
+
+/// Reasons that must not auto-spawn content/link fix work or inflate "needs work" counts.
+///
+/// Use at filter/spawn gates so callers share one list instead of divergent string matches.
+pub fn is_non_actionable_reason(code: &str) -> bool {
+    matches!(code, "indexed_pass" | "alternate_with_canonical")
 }
 
 /// Calculate priority for sorting.  Lower = more urgent.
@@ -207,6 +247,112 @@ pub fn priority_for_record(reason_code: &str) -> i32 {
         "not_indexed_crawled" => 40,
         "not_indexed_discovered" => 50,
         "not_indexed_other" => 70,
-        _ => 999, // indexed_pass and unknown
+        // Low urgency: indexed OK and alternate-with-canonical hygiene (issue #250)
+        "indexed_pass" | "alternate_with_canonical" => 999,
+        _ => 999,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn classify(
+        inspected: &str,
+        user: Option<&str>,
+        google: Option<&str>,
+        verdict: &str,
+        coverage: &str,
+    ) -> (&'static str, &'static str) {
+        classify_record(
+            inspected,
+            true,
+            "ALLOWED",
+            true,
+            "SUCCESSFUL",
+            user,
+            google,
+            verdict,
+            coverage,
+        )
+    }
+
+    #[test]
+    fn alternate_when_inspected_differs_from_google_canonical() {
+        // Clean-slug migration: legacy URL inspected; user + Google agree on clean canonical.
+        let (code, action) = classify(
+            "https://example.com/old-slug",
+            Some("https://example.com/clean-slug"),
+            Some("https://example.com/clean-slug"),
+            "NEUTRAL",
+            "Alternative page with proper canonical tag",
+        );
+        assert_eq!(code, "alternate_with_canonical");
+        assert!(action.contains("hygiene") || action.contains("Consolidation"));
+        assert_eq!(priority_for_record(code), 999);
+        assert!(is_non_actionable_reason(code));
+    }
+
+    #[test]
+    fn alternate_normalizes_scheme_www_and_trailing_slash() {
+        let (code, _) = classify(
+            "https://www.example.com/old-slug/",
+            None,
+            Some("http://example.com/clean-slug"),
+            "NEUTRAL",
+            "Excluded",
+        );
+        assert_eq!(code, "alternate_with_canonical");
+    }
+
+    #[test]
+    fn canonical_mismatch_wins_over_alternate() {
+        // user-declared ≠ google-selected, and inspected also ≠ google
+        let (code, _) = classify(
+            "https://example.com/page-a",
+            Some("https://example.com/page-a"),
+            Some("https://example.com/page-b"),
+            "NEUTRAL",
+            "Excluded",
+        );
+        assert_eq!(code, "canonical_mismatch");
+        assert!(!is_non_actionable_reason(code));
+        assert_eq!(priority_for_record(code), 20);
+    }
+
+    #[test]
+    fn inspected_equals_google_non_pass_still_not_indexed() {
+        let (code, _) = classify(
+            "https://example.com/clean-slug",
+            Some("https://example.com/clean-slug"),
+            Some("https://example.com/clean-slug"),
+            "NEUTRAL",
+            "Crawled - currently not indexed",
+        );
+        assert_eq!(code, "not_indexed_crawled");
+        assert!(!is_non_actionable_reason(code));
+    }
+
+    #[test]
+    fn inspected_equals_google_pass_is_indexed_pass() {
+        let (code, _) = classify(
+            "https://example.com/clean-slug/",
+            Some("https://example.com/clean-slug"),
+            Some("https://www.example.com/clean-slug"),
+            "PASS",
+            "Submitted and indexed",
+        );
+        assert_eq!(code, "indexed_pass");
+        assert!(is_non_actionable_reason(code));
+    }
+
+    #[test]
+    fn is_non_actionable_only_pass_and_alternate() {
+        assert!(is_non_actionable_reason("indexed_pass"));
+        assert!(is_non_actionable_reason("alternate_with_canonical"));
+        assert!(!is_non_actionable_reason("not_indexed_other"));
+        assert!(!is_non_actionable_reason("not_indexed_discovered"));
+        assert!(!is_non_actionable_reason("canonical_mismatch"));
+        assert!(!is_non_actionable_reason(""));
     }
 }

@@ -392,6 +392,7 @@ pub(crate) fn build_rewrite_spec(
 /// (same spec as the `fix_content` action).
 /// Returns None when the reason code does not clearly map.
 pub(crate) fn fallback_spawn_for_reason(reason_code: &str) -> Option<&'static str> {
+    // alternate_with_canonical intentionally maps to None (hygiene only; issue #250).
     match reason_code {
         "not_indexed_discovered" | "not_indexed_other" => Some("add_links"),
         "not_indexed_crawled" => Some("fix_content"),
