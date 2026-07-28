@@ -5,7 +5,9 @@
 #[cfg(test)]
 mod tests {
     use crate::engine::exec::research::final_selection::*;
-    use crate::models::research::{KeywordPipelineOutput, ScoredKeyword, SelectedKeyword};
+    use crate::models::research::{
+        FilterFunnel, KeywordPipelineOutput, ScoredKeyword, SelectedKeyword,
+    };
 
     fn kw(
         keyword: &str,
@@ -59,6 +61,7 @@ mod tests {
             total_candidates: total,
             filtered_out: 0,
             strategy_rejected: 0,
+            filter_funnel: FilterFunnel::default(),
         }
     }
 
@@ -81,6 +84,8 @@ mod tests {
             competitor_insights: vec![],
             total_candidates: 0,
             with_data_count: 0,
+            volume_dropped: 0,
+            volume_unknown_kept: 0,
         }
     }
 
@@ -144,6 +149,53 @@ mod tests {
             "error should explain the failure: {}",
             err
         );
+        assert!(
+            err.contains("filter_funnel:") && err.contains("no_data_or_kd_dropped=2"),
+            "empty fail path must include funnel summary: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn filter_funnel_counts_selection_stages() {
+        let mut pipeline = build_pipeline(vec![
+            kw("how to sell covered calls", 1200, 25.0, "informational"), // keep
+            kw("covered call tracker", 800, 25.0, "commercial"),         // intent drop (blog)
+            kw("hard keyword", 500, 55.0, "informational"),               // kd drop
+            kw("nav keyword", 900, 10.0, "navigational"),                 // intent drop
+        ]);
+        // Pipeline-stage volume stats (carried through from native pipeline).
+        pipeline.volume_dropped = 3;
+        pipeline.volume_unknown_kept = 2;
+        pipeline.keywords[0].has_data = Some(true);
+        // no_data among remaining after intent: force one has_data=false after intent.
+        // "hard keyword" already fails KD; add a separate no-data informational.
+        pipeline.keywords.push(ScoredKeyword {
+            keyword: "no data kw".into(),
+            volume: Some(100),
+            kd: Some(10.0),
+            intent: Some("informational".into()),
+            traffic: None,
+            has_data: Some(false),
+            intent_confidence: None,
+            gap_score: None,
+            cpc: None,
+        });
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
+        let f = &output.filter_funnel;
+        assert_eq!(f.pre_filter, 5);
+        assert_eq!(f.volume_dropped, 3);
+        assert_eq!(f.volume_unknown_kept, 2);
+        assert_eq!(f.intent_dropped, 2); // commercial + navigational
+        assert_eq!(f.no_data_or_kd_dropped, 2); // hard kd + no data
+        assert_eq!(f.strategy_rejected, 0);
+        assert_eq!(f.final_selected, 1);
+        assert_eq!(f.winnability_avoid_dropped, 0); // filled later in exec path
+        // Funnel always serializes for operator JSON.
+        let v = serde_json::to_value(&output).unwrap();
+        assert!(v.get("filter_funnel").is_some());
+        assert_eq!(v["filter_funnel"]["pre_filter"], 5);
     }
 
     #[test]

@@ -16,6 +16,8 @@ net-negative:
   Pre-filtering candidates saves nothing. Worse, 1–3 seeds per theme × 2 paid
   calls per seed (`related_keywords` + `keyword_suggestions`) costs *more*
   than querying the raw themes directly (2 calls per theme).
+  Client-side volume filter keeps unknown volume (`None`) and drops only known
+  volume below 50 (#263); operators see stage dropoff via `filter_funnel`.
 - **It narrows discovery before data can vet it.** Autocomplete top-4 is
   popularity-biased toward head terms and mainstream phrasings. The entire
   paid discovery phase only explores neighborhoods around those few popular
