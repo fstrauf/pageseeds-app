@@ -371,7 +371,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `list-tasks` / `get-task` | Open work, artifacts, review state |
 | `create-task` / `execute-task` | Act within may-create + budgets |
 | Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
-| Path B write | `write-context` / `write-submit` — outer-agent prose after keyword selection (preferred CLI path); successful submit schedules +30d `content_outcome_review` (#203) |
+| Path B write | `write-context` / `write-submit` → `publish-content -S` — outer-agent prose after keyword selection (preferred CLI path); submit leaves catalog draft; publish is explicit (#257); successful submit schedules +30d `content_outcome_review` (#203) |
 | Path B fix | `fix-context` / `fix-submit` — preferred targeted content/CTR edits; content kind schedules +30d outcome review; CTR records `ctr_outcomes` only |
 | Path B merge | `merge-context` / `merge-submit` — outer-agent merge after approved keep+redirects; successful submit schedules keeper outcome review (#203) |
 
@@ -637,7 +637,8 @@ leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 - Selection → `write_article` tasks created for provenance — **complete via Path B**
   (`write-context` / write MDX / `write-submit`), not `execute-task write_article`
 - Path B `write-submit` → marks write task done + spawns `cluster_and_link` +
-  schedules +30d `content_outcome_review` (GSC closed-loop; #203)
+  schedules +30d `content_outcome_review` (GSC closed-loop; #203); catalog stays
+  **draft** until `publish-content -S <slug>` (#257)
 - Path B `fix-submit -k content` → schedules +30d `content_outcome_review`;
   `-k ctr` → sparse `ctr_outcomes` change event only (no content outcome review)
 - Path B `merge-submit` → keeper redirects applied + schedules keeper
@@ -697,16 +698,22 @@ pageseeds-cli write-context -i <id> -p <path> \
 pageseeds-cli write-submit -i <id> -p <path> \
   -f <target_file> [-I <write_task_id>] [-K "<keyword>"]
 # → ok:false + checks → expand and resubmit (file kept)
-# → ok:true → article registered; write_article marked done;
+# → ok:true → article registered as catalog **draft**; write_article marked done;
 #   cluster_and_link + content_outcome_review (+30d) spawned
+
+# 4. Explicit catalog publish (required before treating post as catalog-live)
+pageseeds-cli publish-content -i <id> -p <path> -S <slug>
+# → draft/ready_to_publish → published + articles.json export
+# → already published = skip/no-op; year-mismatch/blocked leave status unchanged
 ```
 
 | Rule | Path B |
 |------|--------|
-| **Do** | `write-context` → write MDX to `target_file` → `write-submit` until `ok` |
+| **Do** | `write-context` → write MDX to `target_file` → `write-submit` until `ok` → `publish-content -S <slug>` |
 | **Ban** | `execute-task write_article` on the happy path |
 | **Ban** | `fix_content_article` for min_word_count / length recovery — expand and **resubmit** instead |
-| **Budget** | Each `write-submit` attempt counts toward the **15** execution budget |
+| **Ban** | Treating write-submit alone as catalog-live / published |
+| **Budget** | Each `write-submit` / `publish-content` attempt counts toward the **15** execution budget |
 | **Provenance** | `select-keywords` may still spawn `write_article`; Path B completes them via submit |
 | **Closed-loop** | Successful submit schedules system `content_outcome_review` — never create those tasks yourself |
 

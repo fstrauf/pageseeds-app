@@ -142,6 +142,8 @@ Path B write (paid):
 ```bash
 pageseeds-cli write-context -I <research-task-id> -K "<keyword>"
 pageseeds-cli write-submit -f <mdx-path>
+# Catalog stays draft until explicit publish:
+pageseeds-cli publish-content -S <slug>
 ```
 
 ---

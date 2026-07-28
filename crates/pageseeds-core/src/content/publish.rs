@@ -332,6 +332,241 @@ pub fn apply_publish(
     }
 }
 
+// ─── Slug-oriented publish entry (CLI Path B second step, issue #257) ─────────
+
+/// Per-slug outcome when a candidate is not applied (skip / block / year mismatch).
+#[derive(Debug, Serialize)]
+pub struct PublishSlugItem {
+    pub slug: String,
+    pub article_id: Option<i64>,
+    pub title: Option<String>,
+    pub catalog_status: Option<String>,
+    pub reason: String,
+}
+
+/// Successfully published (or already-published no-op when listed under skipped).
+#[derive(Debug, Serialize)]
+pub struct PublishSlugPublished {
+    pub slug: String,
+    pub article_id: i64,
+    pub title: String,
+    pub published_date: String,
+    pub catalog_status: String,
+}
+
+/// Title/year mismatch left unresolved in v1 (status unchanged).
+#[derive(Debug, Serialize)]
+pub struct PublishSlugYearMismatch {
+    pub slug: String,
+    pub article_id: i64,
+    pub title: String,
+    pub title_year: i32,
+    pub publish_year: i32,
+    pub catalog_status: String,
+    pub reason: String,
+}
+
+/// JSON-friendly result of [`publish_by_slugs`].
+#[derive(Debug, Serialize)]
+pub struct PublishBySlugsResult {
+    pub ok: bool,
+    pub published: Vec<PublishSlugPublished>,
+    pub skipped: Vec<PublishSlugItem>,
+    pub blocked: Vec<PublishSlugItem>,
+    pub year_mismatches: Vec<PublishSlugYearMismatch>,
+    pub errors: Vec<String>,
+}
+
+/// Publish catalog articles by URL slug: resolve → preflight → apply.
+///
+/// Accepts only `draft` / `ready_to_publish` candidates. Already-`published`
+/// is a no-op skip (not an error). Missing slugs and non-publishable statuses
+/// are structured errors. Year mismatches are reported and left unchanged
+/// (no LLM resolution in v1). `needs_date_fix` articles are passed to
+/// [`apply_publish`] with empty date_fixes so apply auto-assigns dates.
+///
+/// Content dir is `project_path.join("content")`.
+pub fn publish_by_slugs(
+    conn: &Connection,
+    project_id: &str,
+    project_path: &Path,
+    slugs: &[String],
+) -> Result<PublishBySlugsResult, String> {
+    let mut cleaned: Vec<String> = Vec::new();
+    for raw in slugs {
+        let s = raw.trim();
+        if s.is_empty() {
+            continue;
+        }
+        // Allow comma-separated values inside a single list entry.
+        for part in s.split(',') {
+            let p = part.trim();
+            if !p.is_empty() {
+                cleaned.push(p.to_string());
+            }
+        }
+    }
+    if cleaned.is_empty() {
+        return Err("at least one slug is required".to_string());
+    }
+
+    let content_dir = project_path.join("content");
+    let all_articles = task_store::list_articles(conn, project_id).map_err(|e| e.to_string())?;
+
+    let mut published = Vec::new();
+    let mut skipped = Vec::new();
+    let mut blocked = Vec::new();
+    let mut year_mismatches = Vec::new();
+    let mut errors = Vec::new();
+    let mut candidates: Vec<Article> = Vec::new();
+    // Preserve first occurrence order; skip duplicate slug requests.
+    let mut seen_ids: HashSet<i64> = HashSet::new();
+    let mut seen_request_slugs: HashSet<String> = HashSet::new();
+
+    for slug in &cleaned {
+        let slug_norm = crate::content::slug::normalize_url_slug(slug);
+        if !seen_request_slugs.insert(slug_norm.clone()) {
+            continue;
+        }
+
+        let article = all_articles.iter().find(|a| {
+            a.url_slug == *slug
+                || crate::content::slug::normalize_url_slug(&a.url_slug) == slug_norm
+        });
+
+        let Some(article) = article else {
+            errors.push(format!("No article found for slug '{slug}'"));
+            continue;
+        };
+
+        if !seen_ids.insert(article.id) {
+            continue;
+        }
+
+        match article.status.as_str() {
+            "published" => {
+                skipped.push(PublishSlugItem {
+                    slug: article.url_slug.clone(),
+                    article_id: Some(article.id),
+                    title: Some(article.title.clone()),
+                    catalog_status: Some(article.status.clone()),
+                    reason: "already published".to_string(),
+                });
+            }
+            "draft" | "ready_to_publish" => {
+                candidates.push(article.clone());
+            }
+            other => {
+                errors.push(format!(
+                    "slug '{}' has catalog status '{other}' (only draft or ready_to_publish can be published)",
+                    article.url_slug
+                ));
+            }
+        }
+    }
+
+    if !candidates.is_empty() {
+        let preflight_result = preflight(&candidates, &all_articles, &content_dir);
+
+        for ym in &preflight_result.year_mismatches {
+            let art = candidates
+                .iter()
+                .find(|a| a.id == ym.article_id)
+                .or_else(|| all_articles.iter().find(|a| a.id == ym.article_id));
+            year_mismatches.push(PublishSlugYearMismatch {
+                slug: art.map(|a| a.url_slug.clone()).unwrap_or_default(),
+                article_id: ym.article_id,
+                title: ym.title.clone(),
+                title_year: ym.title_year,
+                publish_year: ym.publish_year,
+                catalog_status: art
+                    .map(|a| a.status.clone())
+                    .unwrap_or_else(|| "draft".into()),
+                reason: format!(
+                    "title year {} vs publish year {} — leave status unchanged (no agent resolution in v1)",
+                    ym.title_year, ym.publish_year
+                ),
+            });
+        }
+
+        for b in &preflight_result.blocked {
+            blocked.push(PublishSlugItem {
+                slug: b.article.url_slug.clone(),
+                article_id: Some(b.article.id),
+                title: Some(b.article.title.clone()),
+                catalog_status: Some(b.article.status.clone()),
+                reason: b.issue.clone(),
+            });
+        }
+
+        // ready + needs_date_fix → apply (empty date_fixes / resolutions).
+        let mut apply_ids: Vec<i64> = preflight_result.ready.iter().map(|a| a.id).collect();
+        apply_ids.extend(preflight_result.needs_date_fix.iter().map(|a| a.article.id));
+
+        if !apply_ids.is_empty() {
+            let apply_result = apply_publish(
+                conn,
+                project_id,
+                &apply_ids,
+                &HashMap::new(),
+                &[],
+                &content_dir,
+                project_path,
+            );
+
+            // Map published rows back to slugs.
+            let post_articles =
+                task_store::list_articles(conn, project_id).unwrap_or_else(|_| all_articles.clone());
+            let by_id: HashMap<i64, &Article> =
+                post_articles.iter().map(|a| (a.id, a)).collect();
+
+            for p in apply_result.published {
+                let slug = by_id
+                    .get(&p.id)
+                    .map(|a| a.url_slug.clone())
+                    .unwrap_or_default();
+                let catalog_status = by_id
+                    .get(&p.id)
+                    .map(|a| a.status.clone())
+                    .unwrap_or_else(|| "published".into());
+                published.push(PublishSlugPublished {
+                    slug,
+                    article_id: p.id,
+                    title: p.title,
+                    published_date: p.published_date,
+                    catalog_status,
+                });
+            }
+
+            for s in apply_result.skipped {
+                skipped.push(PublishSlugItem {
+                    slug: s.article.url_slug.clone(),
+                    article_id: Some(s.article.id),
+                    title: Some(s.article.title.clone()),
+                    catalog_status: Some(s.article.status.clone()),
+                    reason: s.issue,
+                });
+            }
+
+            errors.extend(apply_result.errors);
+        }
+    }
+
+    let ok = errors.is_empty()
+        && blocked.is_empty()
+        && year_mismatches.is_empty()
+        && (!published.is_empty() || !skipped.is_empty());
+
+    Ok(PublishBySlugsResult {
+        ok,
+        published,
+        skipped,
+        blocked,
+        year_mismatches,
+        errors,
+    })
+}
+
 // ─── Agent call for year mismatch ─────────────────────────────────────────────
 
 /// Call the configured LLM agent to decide how to resolve a title/year mismatch.
@@ -567,5 +802,185 @@ mod tests {
             assigned_date,
             mdx_content
         );
+    }
+
+    fn insert_project(conn: &rusqlite::Connection, dir: &std::path::Path) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('p1', 'Test', ?1, 1, 'workspace')",
+            [dir.to_str().unwrap()],
+        )
+        .unwrap();
+    }
+
+    fn insert_article(
+        conn: &rusqlite::Connection,
+        id: i64,
+        title: &str,
+        slug: &str,
+        file: &str,
+        status: &str,
+        published_date: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO articles (id, title, url_slug, file, status, published_date, content_gaps_addressed, project_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', 'p1')",
+            rusqlite::params![id, title, slug, file, status, published_date],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn publish_by_slugs_draft_to_published_and_exports() {
+        let dir = unique_temp_dir("ps_publish_by_slug_happy");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            r#"{"nextArticleId":2,"articles":[{"id":1,"title":"Happy","file":"./content/001_happy.mdx","published_date":"2024-06-01","status":"draft"}]}"#,
+        )
+        .unwrap();
+        write_mdx(&content_dir.join("001_happy.mdx"), "Happy");
+
+        let conn = in_memory_db();
+        insert_project(&conn, &dir);
+        insert_article(
+            &conn,
+            1,
+            "Happy",
+            "happy",
+            "./content/001_happy.mdx",
+            "draft",
+            Some("2024-06-01"),
+        );
+
+        let result =
+            publish_by_slugs(&conn, "p1", &dir, &["happy".into()]).expect("publish_by_slugs");
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert_eq!(result.published.len(), 1);
+        assert_eq!(result.published[0].slug, "happy");
+        assert_eq!(result.published[0].catalog_status, "published");
+        assert!(result.errors.is_empty());
+        assert!(result.blocked.is_empty());
+        assert!(result.year_mismatches.is_empty());
+
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM articles WHERE id = 1 AND project_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "published");
+
+        let json_on_disk = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&json_on_disk).unwrap();
+        assert_eq!(doc["articles"][0]["status"].as_str().unwrap(), "published");
+    }
+
+    #[test]
+    fn publish_by_slugs_already_published_is_skip_noop() {
+        let dir = unique_temp_dir("ps_publish_by_slug_skip");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
+        write_mdx(&content_dir.join("001_live.mdx"), "Live");
+
+        let conn = in_memory_db();
+        insert_project(&conn, &dir);
+        insert_article(
+            &conn,
+            1,
+            "Live",
+            "live",
+            "./content/001_live.mdx",
+            "published",
+            Some("2024-01-15"),
+        );
+
+        let result =
+            publish_by_slugs(&conn, "p1", &dir, &["live".into()]).expect("publish_by_slugs");
+
+        assert!(result.ok);
+        assert!(result.published.is_empty());
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!(result.skipped[0].reason, "already published");
+        assert_eq!(
+            result.skipped[0].catalog_status.as_deref(),
+            Some("published")
+        );
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn publish_by_slugs_missing_slug_is_error() {
+        let dir = unique_temp_dir("ps_publish_by_slug_missing");
+        std::fs::create_dir_all(dir.join("content")).unwrap();
+        let conn = in_memory_db();
+        insert_project(&conn, &dir);
+
+        let result =
+            publish_by_slugs(&conn, "p1", &dir, &["no-such-slug".into()]).expect("result ok");
+
+        assert!(!result.ok);
+        assert!(result.published.is_empty());
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("No article found for slug 'no-such-slug'")));
+    }
+
+    #[test]
+    fn publish_by_slugs_year_mismatch_leaves_status_unchanged() {
+        let dir = unique_temp_dir("ps_publish_by_slug_year");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
+        // Title year far behind publish year (>1) → year mismatch.
+        write_mdx(&content_dir.join("001_guide_2020.mdx"), "Guide 2020");
+
+        let conn = in_memory_db();
+        insert_project(&conn, &dir);
+        let today = chrono::Utc::now().date_naive();
+        let publish_date = format!("{}-01-15", today.year());
+        insert_article(
+            &conn,
+            1,
+            "Guide 2020",
+            "guide-2020",
+            "./content/001_guide_2020.mdx",
+            "draft",
+            Some(&publish_date),
+        );
+
+        let result =
+            publish_by_slugs(&conn, "p1", &dir, &["guide-2020".into()]).expect("publish_by_slugs");
+
+        assert!(!result.ok);
+        assert!(result.published.is_empty());
+        assert_eq!(result.year_mismatches.len(), 1);
+        assert_eq!(result.year_mismatches[0].title_year, 2020);
+        assert_eq!(result.year_mismatches[0].catalog_status, "draft");
+
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM articles WHERE id = 1 AND project_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "draft");
+    }
+
+    #[test]
+    fn publish_by_slugs_empty_slugs_err() {
+        let dir = unique_temp_dir("ps_publish_by_slug_empty");
+        let conn = in_memory_db();
+        insert_project(&conn, &dir);
+        let err = publish_by_slugs(&conn, "p1", &dir, &[]).unwrap_err();
+        assert!(err.contains("slug"));
     }
 }

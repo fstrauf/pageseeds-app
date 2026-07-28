@@ -13,10 +13,11 @@ use std::path::PathBuf;
 /// (pageseeds repo / commercial backend) — never shipped in this binary.
 const PRODUCTION_PUBLIC_KEY_PEM: &str = include_str!("public_key.pem");
 
-/// Paid CLI tools — must match `docs/CLI_COMMERCIAL.md` (24 tools).
+/// Paid CLI tools — must match `docs/CLI_COMMERCIAL.md` (25 tools).
 static PAID_TOOLS: &[&str] = &[
     "write-context",
     "write-submit",
+    "publish-content",
     "fix-context",
     "fix-submit",
     "merge-context",
@@ -472,12 +473,12 @@ mod tests {
 
     #[test]
     fn paid_set_has_exact_count() {
-        assert_eq!(paid_tools().len(), 24, "must match docs/CLI_COMMERCIAL.md");
+        assert_eq!(paid_tools().len(), 25, "must match docs/CLI_COMMERCIAL.md");
         // uniqueness
         let mut v = paid_tools().to_vec();
         v.sort();
         v.dedup();
-        assert_eq!(v.len(), 24);
+        assert_eq!(v.len(), 25);
     }
 
     #[test]

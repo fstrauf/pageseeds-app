@@ -80,7 +80,7 @@ research-pull -K "seed1,seed2,..."  → custom_keyword_research
   ↓
 select-keywords -I <task> -K kw1,kw2  (max 3)
   ↓
-write Path B (write-context → MDX → write-submit)
+write Path B (write-context → MDX → write-submit → publish-content)
 ```
 
 `custom_keyword_research` plan: `ensure_coverage_fresh` → `research_ahrefs_pipeline`
@@ -145,9 +145,12 @@ Session agent writes full MDX to target_file (uses package skill + brief)
   ↓
 write-submit (-f path | -S slug) until validation ok
   → structural gates (validate_article, ≥800 words)
-  → ingest_orphans + force catalog `draft` (until publish_content / apply_publish; #168)
+  → ingest_orphans + force catalog `draft` (#168; never auto-publish)
   → keyword tag + mark write_article done
   → spawn cluster_and_link
+  ↓
+publish-content (-S slug[,slug2,...]) — explicit second step (#257)
+  → preflight + apply_publish → catalog `published` + articles.json export
 ```
 
 Path B avoids nested `execute-task write_article` under a weak global provider
@@ -268,7 +271,9 @@ Step 4: ctr_verify_fix (deterministic)
 ### Process Flow
 
 ```
-User selects articles in UI → clicks Publish
+CLI: publish-content -S <slug>[,slug2,...]  (#257 — Path B second step)
+  ↓
+Resolve slugs in catalog (draft / ready_to_publish only; published = skip/no-op)
   ↓
 Preflight (deterministic):
   ├─ Structural scan (duplicate H1s, missing frontmatter)
@@ -276,21 +281,20 @@ Preflight (deterministic):
   ├─ Calculate date redistribution (2-day spacing for recent dates)
   └─ Detect year mismatches (title year vs publish year)
   ↓
-If year mismatches exist:
-  └─ Agentic resolution (update title vs backdate publish)
-  ↓
-User confirms → Apply publish:
+Apply publish for ready + needs_date_fix:
   ├─ Fix structural issues
-  ├─ Apply date fixes and resolutions
+  ├─ Auto-assign dates when missing/future
   ├─ Set status = "published"
   ├─ Patch MDX frontmatter
   └─ Export updated articles.json
+  ↓
+Year mismatches (v1): reported in JSON; status left unchanged (no agent resolution)
 ```
 
 ### Key Files
-- `content/publish.rs` — preflight + apply logic
+- `content/publish.rs` — preflight + apply + `publish_by_slugs` (CLI entry)
 - `content/dates.rs` — date calculation
-- `components/articles/PublishPanel.tsx` — UI
+- `pageseeds-cli` — `publish-content` subcommand
 
 ---
 

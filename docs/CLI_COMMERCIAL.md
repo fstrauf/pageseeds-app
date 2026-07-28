@@ -84,14 +84,15 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 
 ---
 
-## Paid (license required) — 24 tools
+## Paid (license required) — 25 tools
 
 ### Path B package / submit
 
 | Tool | Notes |
 |------|--------|
 | `write-context` | Package write context |
-| `write-submit` | Submit write |
+| `write-submit` | Submit write (catalog `draft`; does not publish) |
+| `publish-content` | Explicit second step: catalog draft/ready → published (`-S` slug(s)) |
 | `fix-context` | Package fix context |
 | `fix-submit` | Submit fix |
 | `merge-context` | Package merge context |
@@ -135,8 +136,8 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `write-feature-spec` | Generate feature spec |
 | `compare-rendered` | Compare rendered output |
 
-**Paid tool names (24):**  
-`write-context`, `write-submit`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit`, `research-pull`, `create-articles-from-keywords`, `create-task`, `execute-task`, `cancel-tasks`, `update-task-status`, `set-task-status`, `select-keywords`, `select-content-review`, `select-cannibalization`, `create-tasks-from-approved`, `set-review-status`, `create-reddit-replies`, `run-content-audit`, `cannibalization-strategy`, `score-zero-impression-articles`, `write-feature-spec`, `compare-rendered`
+**Paid tool names (25):**  
+`write-context`, `write-submit`, `publish-content`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit`, `research-pull`, `create-articles-from-keywords`, `create-task`, `execute-task`, `cancel-tasks`, `update-task-status`, `set-task-status`, `select-keywords`, `select-content-review`, `select-cannibalization`, `create-tasks-from-approved`, `set-review-status`, `create-reddit-replies`, `run-content-audit`, `cannibalization-strategy`, `score-zero-impression-articles`, `write-feature-spec`, `compare-rendered`
 
 ---
 
@@ -185,7 +186,7 @@ Inventory check for implementers:
 
 - free ∪ paid ∪ operator = all match-arm tools
 - free ∩ paid = empty; operator ∩ (free ∪ paid) = empty
-- Current lock: **27 free + 24 paid = 51** commercial tools (+ meta) and **1 operator-tier** tool (`video-clip-render`, outside the commercial boundary) = 52 total (verified against match arms; ignore status enum matches like `done` / `cancelled`)
+- Current lock: **27 free + 25 paid = 52** commercial tools (+ meta) and **1 operator-tier** tool (`video-clip-render`, outside the commercial boundary) = 53 total (verified against match arms; ignore status enum matches like `done` / `cancelled`)
 
 ---
 
@@ -206,9 +207,9 @@ Inventory check for implementers:
 ## Explicit contract for #156
 
 - **SoT for free vs paid names:** this document.
-- **#156** implements a static paid set that **must match** the 24 paid tools listed above (plus any later tools classified paid via the rule of thumb and updated here in the same PR).
+- **#156** implements a static paid set that **must match** the 25 paid tools listed above (plus any later tools classified paid via the rule of thumb and updated here in the same PR).
 - Free tools and meta (`--help`, `license` / `version`) must remain ungated.
-- No free Path B trial in v1: `write-context`, `write-submit`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit` stay paid.
+- No free Path B trial in v1: `write-context`, `write-submit`, `publish-content`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit` stay paid.
 
 ---
 

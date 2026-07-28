@@ -25,7 +25,8 @@ Deterministic package + session prose + submit gates. Operator policy lives in t
 
 | Tools | Status | Role |
 |---|---|---|
-| `write-context` / `write-submit` | **Shipped** (#135) | After `select-keywords`: package brief → session writes MDX → submit gates (≥800 words, validate_article). Registers catalog `draft` until `publish_content` / `apply_publish` (#168; FM status ignored on submit). |
+| `write-context` / `write-submit` | **Shipped** (#135) | After `select-keywords`: package brief → session writes MDX → submit gates (≥800 words, validate_article). Registers catalog `draft` (#168; FM status ignored on submit). |
+| `publish-content` | **Shipped** (#257) | Explicit second step after Path B write-submit: catalog `draft`/`ready_to_publish` → `published` via preflight + `apply_publish` (`-S` slug or comma-separated). Does **not** auto-run on submit. |
 | `fix-context` / `fix-submit` | Path B child (#137) | Package slug + goals → session edits → submit. Catalog `articles.target_keyword` updates only with explicit `-K` / `--keyword` or content-patch `changes.target_keyword` (#165). |
 | `merge-context` / `merge-submit` | Path B child (#138) | When present: package members → session merges → submit (high-traffic confirm). Until then: mechanical cannibalization picker only |
 
