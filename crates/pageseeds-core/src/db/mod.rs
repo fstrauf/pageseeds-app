@@ -1534,6 +1534,16 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 51 {
+        // ALTER ADD COLUMN is not idempotent in SQLite — tolerate "duplicate
+        // column" for re-runs, but log loudly (issue #71 pattern).
+        run_tolerated_migration(conn, 51, MIGRATION_V51);
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (51, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1689,6 +1699,14 @@ CREATE TABLE IF NOT EXISTS serp_daily_usage (
     live_calls INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (project_id, day)
 );
+"#;
+
+static MIGRATION_V51: &str = r#"
+-- Strategy cluster annotation on research_shortlist (issue #255).
+-- territory_analysis tags each upserted theme with the matched project.md
+-- cluster name + status; NULL when no cluster matches or no strategy exists.
+ALTER TABLE research_shortlist ADD COLUMN strategy_cluster TEXT;
+ALTER TABLE research_shortlist ADD COLUMN strategy_status TEXT;
 "#;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2899,6 +2917,24 @@ mod tests {
         // Newest first.
         assert_eq!(results[0].classification, "improved");
         assert_eq!(results[1].classification, "neutral");
+    }
+
+    #[test]
+    fn migration_v51_adds_shortlist_strategy_columns_idempotently() {
+        // Full init already applies V51; re-running the migration SQL via the
+        // tolerated path must not fail and must leave the columns intact.
+        let conn = in_memory_db();
+        run_tolerated_migration(&conn, 51, MIGRATION_V51);
+
+        for column in ["strategy_cluster", "strategy_status"] {
+            let has_col: bool = conn
+                .prepare("SELECT COUNT(*) FROM pragma_table_info('research_shortlist') WHERE name = ?1")
+                .unwrap()
+                .query_row([column], |r| r.get::<_, i64>(0))
+                .unwrap()
+                > 0;
+            assert!(has_col, "research_shortlist.{} must exist", column);
+        }
     }
 
     #[test]

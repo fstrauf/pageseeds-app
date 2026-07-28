@@ -139,25 +139,29 @@ pub fn run_territory_analysis(
     // 2. Run analysis
     let analysis = analyze_territories(&load.articles);
 
-    // 3. Sync open / mid-coverage / saturated to shortlist
+    // 3. Sync open / mid-coverage / saturated to shortlist, annotated with the
+    // project.md strategy cluster the theme maps to (issue #255). Best-effort:
+    // missing/empty strategy leaves the annotation NULL, never fails analysis.
+    let strategy = crate::strategy::load_for_project(conn, project_id);
+
     let open_territories = analysis.open_territories.clone();
     let mid_coverage_themes = analysis.mid_coverage_themes.clone();
     let saturated_themes = analysis.saturated_themes.clone();
 
     let mut synced = 0usize;
     for territory in &open_territories {
-        if sync_theme_to_shortlist(conn, project_id, territory, "high", "pending") {
+        if sync_theme_to_shortlist(conn, project_id, territory, "high", "pending", &strategy) {
             synced += 1;
         }
     }
     for theme in &mid_coverage_themes {
-        if sync_theme_to_shortlist(conn, project_id, theme, "medium", "pending") {
+        if sync_theme_to_shortlist(conn, project_id, theme, "medium", "pending", &strategy) {
             synced += 1;
         }
     }
     for theme in &saturated_themes {
         // Saturated themes get a special status so keyword research can deprioritize them
-        if sync_theme_to_shortlist(conn, project_id, theme, "medium", "saturated") {
+        if sync_theme_to_shortlist(conn, project_id, theme, "medium", "saturated", &strategy) {
             synced += 1;
         }
     }
@@ -319,6 +323,7 @@ fn sync_theme_to_shortlist(
     theme: &TerritoryTheme,
     priority: &str,
     status: &str,
+    strategy: &crate::strategy::ProjectStrategy,
 ) -> bool {
     let mut entry = ResearchShortlistEntry::new(
         project_id,
@@ -330,6 +335,10 @@ fn sync_theme_to_shortlist(
         Some(theme.total_impressions),
     );
     entry.status = status.to_string();
+    if let Some((cluster, cluster_status)) = crate::strategy::match_cluster(strategy, &theme.theme) {
+        entry.strategy_cluster = Some(cluster.to_string());
+        entry.strategy_status = Some(cluster_status.as_str().to_string());
+    }
     match upsert_entry(conn, &entry) {
         Ok(_) => true,
         Err(e) => {
@@ -864,5 +873,96 @@ mod tests {
         );
         assert_eq!(analysis.mid_coverage_themes[0].theme, "mid theme kw");
         assert!(analysis.saturated_themes.is_empty());
+    }
+
+    // ── Strategy cluster annotation (issue #255) ────────────────────────────
+
+    fn insert_project_with_path(conn: &Connection, id: &str, path: &str) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, 'Test', ?2, 1, 'workspace')",
+            rusqlite::params![id, path],
+        )
+        .unwrap();
+    }
+
+    fn strategy_project_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pageseeds-territory-strategy-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let automation = dir.join(".github").join("automation");
+        std::fs::create_dir_all(&automation).unwrap();
+        std::fs::write(
+            automation.join("project.md"),
+            r#"# Test Project
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+
+### Cluster 2: Old Services (LEGACY)
+- web design packages
+"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn run_territory_analysis_annotates_shortlist_with_strategy_cluster() {
+        let conn = load_fixture_db();
+        let project_dir = strategy_project_dir();
+        insert_project_with_path(&conn, "proj1", &project_dir.to_string_lossy());
+
+        // Mid-coverage themes (2 articles each): one ACTIVE, one LEGACY, one unmatched.
+        insert_article(&conn, "proj1", 1, "tech-seo-a", "technical seo");
+        insert_article(&conn, "proj1", 2, "tech-seo-b", "technical seo");
+        insert_article(&conn, "proj1", 3, "webdesign-a", "web design packages");
+        insert_article(&conn, "proj1", 4, "webdesign-b", "web design packages");
+        insert_article(&conn, "proj1", 5, "random-a", "random unmatched topic");
+        insert_article(&conn, "proj1", 6, "random-b", "random unmatched topic");
+
+        let diag = run_territory_analysis(&conn, "proj1").unwrap();
+        assert_eq!(diag.synced_to_shortlist, 3);
+
+        let entries = crate::db::research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        let by_theme = |t: &str| entries.iter().find(|e| e.theme == t).unwrap();
+
+        let active = by_theme("technical seo");
+        assert_eq!(active.strategy_cluster.as_deref(), Some("SEO Fundamentals"));
+        assert_eq!(active.strategy_status.as_deref(), Some("active"));
+
+        let legacy = by_theme("web design packages");
+        assert_eq!(legacy.strategy_cluster.as_deref(), Some("Old Services"));
+        assert_eq!(legacy.strategy_status.as_deref(), Some("legacy"));
+
+        let unmatched = by_theme("random unmatched topic");
+        assert_eq!(unmatched.strategy_cluster, None);
+        assert_eq!(unmatched.strategy_status, None);
+
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
+    #[test]
+    fn run_territory_analysis_without_strategy_leaves_annotation_null() {
+        let conn = load_fixture_db();
+        // '/tmp/territory-test' has no project.md → empty strategy → NULLs.
+        insert_project(&conn, "proj1");
+        insert_article(&conn, "proj1", 1, "tech-seo-a", "technical seo");
+        insert_article(&conn, "proj1", 2, "tech-seo-b", "technical seo");
+
+        let diag = run_territory_analysis(&conn, "proj1").unwrap();
+        assert_eq!(diag.synced_to_shortlist, 1);
+
+        let entries = crate::db::research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].strategy_cluster, None);
+        assert_eq!(entries[0].strategy_status, None);
     }
 }

@@ -130,6 +130,7 @@ Buy: https://pageseeds.com"
         "write-context" => write_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "write-submit" => write_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "research-context" => research_context(&db.to_string_lossy(), &project_id),
+        "strategy" => strategy_cmd(&require_project_path()),
         "research-pull" => research_pull(&db.to_string_lossy(), &project_id, &args),
         "merge-context" => merge_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "merge-submit" => merge_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
@@ -697,6 +698,15 @@ fn research_context(db_path: &str, project_id: &str) -> Result<serde_json::Value
         pageseeds_core::engine::research_package::RESEARCH_SHORTLIST_MAX_AGE_DAYS,
     )?;
     serde_json::to_value(package).map_err(|e| e.to_string())
+}
+
+/// Read-only: print the parsed project.md content strategy (keywords, clusters
+/// with lifecycle status, do_not_expand) as JSON. Empty strategy when no
+/// project.md exists — never an error.
+fn strategy_cmd(project_path: &str) -> Result<serde_json::Value, String> {
+    let strategy =
+        pageseeds_core::strategy::load_project_strategy_from_project_path(project_path);
+    serde_json::to_value(strategy).map_err(|e| e.to_string())
 }
 
 /// Path B research pull: session-owned seeds → custom_keyword_research (no nested theme LLM).
@@ -1616,6 +1626,12 @@ const TOOLS: &[ToolHelp] = &[
         section: "Path B research",
     },
     ToolHelp {
+        name: "strategy",
+        purpose: "Read-only: parsed project.md content strategy as JSON",
+        example: "strategy -i <id> -p <path>",
+        section: "Path B research",
+    },
+    ToolHelp {
         name: "research-pull",
         purpose: "Path B seeds → custom_keyword_research (create+execute)",
         example: "research-pull -i <id> -K seed1,seed2 [--no-execute]",
@@ -2030,7 +2046,7 @@ mod tests {
         );
         assert_eq!(
             TOOLS.len(),
-            51,
+            52,
             "TOOLS inventory size (free+paid commercial boundary + operator tier)"
         );
         assert_eq!(paid.len(), 24, "paid set size must match docs/CLI_COMMERCIAL.md");

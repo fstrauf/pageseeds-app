@@ -20,11 +20,10 @@ use sha2::{Digest, Sha256};
 
 use crate::db::research_shortlist::{self, ResearchShortlistEntry};
 use crate::engine::keyword_selection::extract_selectable_keywords;
-use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
-use crate::strategy::{load_project_strategy, ContentStrategySummary, ProjectStrategy};
+use crate::strategy::ContentStrategySummary;
 
 // Re-export refresh surface so callers can use `research_package::*` paths.
 pub use crate::engine::research_shortlist_refresh::{
@@ -174,21 +173,7 @@ pub fn build_research_strategy_package(
 
 /// Load structured content strategy for a project (graceful empty).
 fn load_content_strategy_summary(conn: &Connection, project_id: &str) -> ContentStrategySummary {
-    let strategy = match task_store::get_project(conn, project_id) {
-        Ok(project) => {
-            let paths = ProjectPaths::from_project(&project);
-            load_project_strategy(paths.automation_dir())
-        }
-        Err(e) => {
-            log::info!(
-                "[research_package] could not resolve project {} for content strategy: {} — empty",
-                project_id,
-                e
-            );
-            ProjectStrategy::default()
-        }
-    };
-    ContentStrategySummary::from(&strategy)
+    ContentStrategySummary::from(&crate::strategy::load_for_project(conn, project_id))
 }
 
 fn count_shortlist_health(entries: &[ResearchShortlistEntry]) -> ShortlistHealthCounts {
@@ -445,6 +430,8 @@ mod tests {
             total_impressions REAL,
             signal_score REAL,
             health_status TEXT NOT NULL,
+            strategy_cluster TEXT,
+            strategy_status TEXT,
             last_reviewed_at TEXT,
             added_at TEXT NOT NULL,
             researched_at TEXT,

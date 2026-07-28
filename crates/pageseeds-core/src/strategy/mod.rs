@@ -139,6 +139,27 @@ pub fn load_project_strategy_from_project_path(project_path: &str) -> ProjectStr
     load_project_strategy(paths.automation_dir())
 }
 
+/// Canonical loader for call sites that have a DB connection + project id
+/// (research-context package, territory analysis). Resolves the project,
+/// derives the automation dir, and loads `project.md`. Graceful empty on any
+/// failure — strategy must never fail the surrounding workflow.
+pub fn load_for_project(conn: &rusqlite::Connection, project_id: &str) -> ProjectStrategy {
+    match crate::engine::task_store::get_project(conn, project_id) {
+        Ok(project) => {
+            let paths = crate::engine::project_paths::ProjectPaths::from_project(&project);
+            load_project_strategy(paths.automation_dir())
+        }
+        Err(e) => {
+            log::info!(
+                "[strategy] could not resolve project {} — strategy empty: {}",
+                project_id,
+                e
+            );
+            ProjectStrategy::default()
+        }
+    }
+}
+
 // ─── Parse ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
@@ -432,6 +453,37 @@ pub fn matches_active_or_primary(keyword: &str, strategy: &ProjectStrategy) -> b
         .iter()
         .filter(|c| c.status == ClusterStatus::Active)
         .any(|c| maps_to_cluster_soft(keyword, c))
+}
+
+/// Best-matching cluster for a keyword, for annotation (shortlist rows,
+/// diagnostics). Returns `None` when nothing matches or the strategy is empty.
+///
+/// Match policy: soft map (keyword bullets, name substring ≥4 chars,
+/// multi-token name overlap) — the same policy as the rank hints in
+/// [`apply_strategy_filter`]. On multiple matches, status precedence is
+/// Active > Maintain > Planned > Legacy > Unknown, so a LEGACY cluster never
+/// shadows an ACTIVE match for the same theme.
+pub fn match_cluster<'a>(
+    strategy: &'a ProjectStrategy,
+    keyword: &str,
+) -> Option<(&'a str, ClusterStatus)> {
+    const PRECEDENCE: [ClusterStatus; 5] = [
+        ClusterStatus::Active,
+        ClusterStatus::Maintain,
+        ClusterStatus::Planned,
+        ClusterStatus::Legacy,
+        ClusterStatus::Unknown,
+    ];
+    for status in PRECEDENCE {
+        if let Some(c) = strategy
+            .clusters
+            .iter()
+            .find(|c| c.status == status && maps_to_cluster_soft(keyword, c))
+        {
+            return Some((c.name.as_str(), c.status));
+        }
+    }
+    None
 }
 
 /// Hard cluster map (LEGACY / hard reject): explicit keyword bullets + multi-token
@@ -871,6 +923,53 @@ mod tests {
         assert_eq!(summary.legacy_clusters.len(), 1);
         assert_eq!(summary.planned_clusters.len(), 1);
         assert_eq!(summary.do_not_expand.len(), 2);
+    }
+
+    #[test]
+    fn match_cluster_annotates_name_and_status() {
+        let s = parse_project_strategy(FIXTURE);
+        assert_eq!(
+            match_cluster(&s, "on-page seo checklist"),
+            Some(("SEO Fundamentals", ClusterStatus::Active))
+        );
+        assert_eq!(
+            match_cluster(&s, "competitor alternatives list"),
+            Some(("Alternatives", ClusterStatus::Maintain))
+        );
+        assert_eq!(
+            match_cluster(&s, "web design packages pricing"),
+            Some(("Services", ClusterStatus::Legacy))
+        );
+        assert_eq!(
+            match_cluster(&s, "ai content ops guide"),
+            Some(("New Pillar", ClusterStatus::Planned))
+        );
+        assert_eq!(match_cluster(&s, "totally unrelated topic"), None);
+        assert_eq!(match_cluster(&ProjectStrategy::default(), "anything"), None);
+    }
+
+    #[test]
+    fn match_cluster_prefers_active_over_legacy_on_overlap() {
+        let s = ProjectStrategy {
+            clusters: vec![
+                StrategyCluster {
+                    name: "Old Services".to_string(),
+                    status: ClusterStatus::Legacy,
+                    keywords: vec!["web design packages".to_string()],
+                },
+                StrategyCluster {
+                    name: "Design Growth".to_string(),
+                    status: ClusterStatus::Active,
+                    keywords: vec!["web design packages".to_string()],
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            match_cluster(&s, "web design packages pricing"),
+            Some(("Design Growth", ClusterStatus::Active)),
+            "ACTIVE match must win over LEGACY for the same keyword"
+        );
     }
 
     fn tempfile_dir(tag: &str) -> std::path::PathBuf {

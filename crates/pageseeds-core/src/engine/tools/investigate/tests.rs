@@ -158,7 +158,9 @@ mod tests {
     }
 
     fn temp_db_path(suffix: &str) -> String {
-        let dir = std::env::current_dir().unwrap();
+        // Temp dir, not current_dir: a panicking test must never leave a
+        // stray .db artifact in the crate root.
+        let dir = std::env::temp_dir();
         let name = format!("pageseeds_test_{}_{}.db", std::process::id(), suffix);
         dir.join(name).to_string_lossy().to_string()
     }
@@ -186,6 +188,8 @@ mod tests {
                 total_impressions REAL,
                 signal_score REAL,
                 health_status TEXT NOT NULL,
+                strategy_cluster TEXT,
+                strategy_status TEXT,
                 last_reviewed_at TEXT,
                 added_at TEXT NOT NULL,
                 researched_at TEXT,

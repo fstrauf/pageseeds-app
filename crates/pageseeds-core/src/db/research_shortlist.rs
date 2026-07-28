@@ -29,6 +29,10 @@ pub struct ResearchShortlistEntry {
     pub total_impressions: Option<f64>,
     pub signal_score: Option<f64>,
     pub health_status: String,
+    /// Strategy cluster the theme maps to (project.md), NULL when unmatched.
+    pub strategy_cluster: Option<String>,
+    /// Lifecycle status of the matched cluster: active/maintain/legacy/planned.
+    pub strategy_status: Option<String>,
     pub last_reviewed_at: Option<String>,
     pub added_at: String,
     pub researched_at: Option<String>,
@@ -57,6 +61,8 @@ impl ResearchShortlistEntry {
             total_impressions,
             signal_score: None,
             health_status: "unproven".to_string(),
+            strategy_cluster: None,
+            strategy_status: None,
             last_reviewed_at: None,
             added_at: chrono::Utc::now().to_rfc3339(),
             researched_at: None,
@@ -97,6 +103,8 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                  signal_score = ?5,
                  health_status = ?6,
                  last_reviewed_at = ?7,
+                 strategy_cluster = ?10,
+                 strategy_status = ?11,
                  status = CASE
                      WHEN ?8 = 'saturated' THEN 'saturated'
                      WHEN status = 'covered' THEN 'pending'
@@ -104,7 +112,7 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                      ELSE status
                  END,
                  added_at = ?9
-             WHERE id = ?10",
+             WHERE id = ?12",
             rusqlite::params![
                 &seeds_json,
                 &entry.priority,
@@ -115,6 +123,8 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                 entry.last_reviewed_at.as_ref(),
                 &entry.status,
                 &entry.added_at,
+                entry.strategy_cluster.as_ref(),
+                entry.strategy_status.as_ref(),
                 id,
             ],
         )?;
@@ -122,8 +132,8 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
     } else {
         conn.execute(
             "INSERT INTO research_shortlist
-             (project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             (project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, strategy_cluster, strategy_status, last_reviewed_at, added_at, researched_at, covered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 &entry.project_id,
                 &entry.theme,
@@ -135,6 +145,8 @@ pub fn upsert_entry(conn: &Connection, entry: &ResearchShortlistEntry) -> Result
                 entry.total_impressions,
                 entry.signal_score,
                 &entry.health_status,
+                entry.strategy_cluster.as_ref(),
+                entry.strategy_status.as_ref(),
                 entry.last_reviewed_at.as_ref(),
                 &entry.added_at,
                 entry.researched_at.as_ref(),
@@ -180,12 +192,12 @@ pub fn list_entries(
     status_filter: Option<&str>,
 ) -> Result<Vec<ResearchShortlistEntry>> {
     let sql = if status_filter.is_some() {
-        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at
+        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, strategy_cluster, strategy_status, last_reviewed_at, added_at, researched_at, covered_at
          FROM research_shortlist
          WHERE project_id = ?1 AND status = ?2
          ORDER BY priority DESC, total_impressions DESC"
     } else {
-        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at
+        "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, strategy_cluster, strategy_status, last_reviewed_at, added_at, researched_at, covered_at
          FROM research_shortlist
          WHERE project_id = ?1
          ORDER BY priority DESC, total_impressions DESC"
@@ -302,7 +314,7 @@ pub fn list_pending_excluding_depleted(
     conn: &Connection,
     project_id: &str,
 ) -> Result<Vec<ResearchShortlistEntry>> {
-    let sql = "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, last_reviewed_at, added_at, researched_at, covered_at
+    let sql = "SELECT id, project_id, theme, seeds, source, status, priority, article_count, total_impressions, signal_score, health_status, strategy_cluster, strategy_status, last_reviewed_at, added_at, researched_at, covered_at
          FROM research_shortlist
          WHERE project_id = ?1 AND status = 'pending' AND health_status != 'depleted'
          ORDER BY CASE WHEN health_status = 'promising' THEN 0 ELSE 1 END,
@@ -343,10 +355,12 @@ fn map_row(row: &rusqlite::Row) -> std::result::Result<ResearchShortlistEntry, r
         total_impressions: row.get(8)?,
         signal_score: row.get(9)?,
         health_status: row.get(10)?,
-        last_reviewed_at: row.get(11)?,
-        added_at: row.get(12)?,
-        researched_at: row.get(13)?,
-        covered_at: row.get(14)?,
+        strategy_cluster: row.get(11)?,
+        strategy_status: row.get(12)?,
+        last_reviewed_at: row.get(13)?,
+        added_at: row.get(14)?,
+        researched_at: row.get(15)?,
+        covered_at: row.get(16)?,
     })
 }
 
@@ -369,6 +383,8 @@ mod tests {
                 total_impressions REAL,
                 signal_score REAL,
                 health_status TEXT NOT NULL,
+                strategy_cluster TEXT,
+                strategy_status TEXT,
                 last_reviewed_at TEXT,
                 added_at TEXT NOT NULL,
                 researched_at TEXT,
@@ -505,6 +521,52 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].seeds.len(), 2);
         assert_eq!(entries[0].health_status, "promising");
+    }
+
+    #[test]
+    fn upsert_entry_persists_strategy_annotation_on_insert_and_update() {
+        let conn = in_memory_db();
+        let mut entry = ResearchShortlistEntry::new(
+            "proj1",
+            "technical seo",
+            vec!["technical seo".to_string()],
+            "territory_analysis",
+            "high",
+            Some(2),
+            Some(1200.0),
+        );
+        entry.strategy_cluster = Some("SEO Fundamentals".to_string());
+        entry.strategy_status = Some("active".to_string());
+        let id = upsert_entry(&conn, &entry).unwrap();
+
+        let rows = list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows[0].strategy_cluster.as_deref(), Some("SEO Fundamentals"));
+        assert_eq!(rows[0].strategy_status.as_deref(), Some("active"));
+
+        // Re-upsert with a changed annotation (cluster re-classified) must refresh.
+        entry.strategy_cluster = Some("Old Services".to_string());
+        entry.strategy_status = Some("legacy".to_string());
+        assert_eq!(upsert_entry(&conn, &entry).unwrap(), id);
+        let rows = list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].strategy_cluster.as_deref(), Some("Old Services"));
+        assert_eq!(rows[0].strategy_status.as_deref(), Some("legacy"));
+
+        // No annotation → NULL round-trip.
+        let plain = ResearchShortlistEntry::new(
+            "proj1",
+            "unmatched theme",
+            vec![],
+            "territory_analysis",
+            "medium",
+            None,
+            None,
+        );
+        upsert_entry(&conn, &plain).unwrap();
+        let rows = list_entries(&conn, "proj1", None).unwrap();
+        let unmatched = rows.iter().find(|e| e.theme == "unmatched theme").unwrap();
+        assert_eq!(unmatched.strategy_cluster, None);
+        assert_eq!(unmatched.strategy_status, None);
     }
 
     #[test]

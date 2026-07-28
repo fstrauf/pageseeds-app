@@ -288,6 +288,10 @@ pub(crate) fn exec_keyword_research_native(
         log::info!("[keyword_research_native] no coverage analysis found, skipping gap filtering");
     }
 
+    // ── Load project.md strategy for the gap-score LEGACY/MAINTAIN cap ───────
+    // Graceful empty when missing — an empty strategy leaves scores untouched.
+    let strategy = crate::strategy::load_project_strategy_from_project_path(project_path);
+
     // ── Pre-parse validated seeds (needs task borrow, must happen before thread spawn) ──
     let validated_seeds = parse_validated_seeds_artifact(task);
 
@@ -330,6 +334,7 @@ pub(crate) fn exec_keyword_research_native(
     let existing_keywords_thread = existing_keywords.clone();
     let agent_competitors_thread = agent_competitors.clone();
     let coverage_clusters_thread = coverage_clusters.clone();
+    let strategy_thread = strategy.clone();
     let seo_provider_thread = seo_provider.to_string();
     let project_path_thread = project_path.to_string();
     let validated_seeds_thread = validated_seeds;
@@ -521,6 +526,7 @@ pub(crate) fn exec_keyword_research_native(
                     candidates,
                     &coverage_clusters_thread,
                     &existing_keywords_thread,
+                    Some(&strategy_thread),
                 );
                 log::info!(
                     "[keyword_research_native] coverage gap filter: {} → {} candidates",
@@ -586,7 +592,7 @@ pub(crate) fn exec_keyword_research_native(
                     }
                 }
                 if !coverage_clusters_thread.is_empty() {
-                    candidates = super::filter_by_coverage_gap(candidates, &coverage_clusters_thread, &existing_keywords_thread);
+                    candidates = super::filter_by_coverage_gap(candidates, &coverage_clusters_thread, &existing_keywords_thread, Some(&strategy_thread));
                 }
             }
 

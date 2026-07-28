@@ -27,7 +27,7 @@ Owner decision 2026-07-25. Do not re-open in docs-only or gate PRs without a pro
 
 ---
 
-## Free (no license) — 26 tools (+ meta)
+## Free (no license) — 27 tools (+ meta)
 
 Meta help/version/license stay free. Setup/list/create are match-arm free tools (no paid gate, no `-i`/`-p` required up front).
 
@@ -69,6 +69,7 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `research-shortlist` | **Read existing shortlist only** |
 | `article-quality-reviews` | Quality review list |
 | `research-context` | **Package/inspect only — no pull** |
+| `strategy` | **Read only** — parsed project.md content strategy as JSON |
 
 ### Inspect
 
@@ -78,8 +79,8 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `get-task` | Get one task |
 | `validate-article` | Validate article structure |
 
-**Free tool names (26):**  
-`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `list-tasks`, `get-task`, `validate-article`
+**Free tool names (27):**  
+`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `list-tasks`, `get-task`, `validate-article`
 
 ---
 
@@ -184,7 +185,7 @@ Inventory check for implementers:
 
 - free ∪ paid ∪ operator = all match-arm tools
 - free ∩ paid = empty; operator ∩ (free ∪ paid) = empty
-- Current lock: **26 free + 24 paid = 50** commercial tools (+ meta) and **1 operator-tier** tool (`video-clip-render`, outside the commercial boundary) = 51 total (verified against match arms; ignore status enum matches like `done` / `cancelled`)
+- Current lock: **27 free + 24 paid = 51** commercial tools (+ meta) and **1 operator-tier** tool (`video-clip-render`, outside the commercial boundary) = 52 total (verified against match arms; ignore status enum matches like `done` / `cancelled`)
 
 ---
 
