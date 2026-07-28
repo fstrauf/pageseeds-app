@@ -73,6 +73,16 @@ page). Prefer targets with real interactions (search boxes, filters, toggles)
 over static pages. Name the topic → target mapping in your draft output so the
 operator can sanity-check it.
 
+**Linger on the hero moment.** The screen is *evidence*, not content — the
+voiceover is the content; the app just needs to prove the thing exists and
+stay on-topic. So when one target is the obvious hero (strongest topic match,
+rich on-screen content), structure the clip as: hook into it → **linger there
+for the bulk of the video** (20–35s slow scroll/dwell through its cards,
+rows, charts) → optional second moment only if it is *equally* on-topic →
+end card. Do NOT hop across 4–5 loosely-related pages to fill time; a
+meandering tour of tangential screens is worse than one relevant place
+explored properly. Two or three segments is typical; 4–6 is the exception.
+
 ### `cta` + `packaging`
 
 - `cta.url`: prefer `packaging_hints.canonical_url`.
