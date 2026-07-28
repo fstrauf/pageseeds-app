@@ -93,7 +93,7 @@ should let a searcher/reader get value without watching the short.
 | `from_s` / `to_s` | number | Segment bounds in seconds, contiguous from 0. |
 | `moment_template` | string | One of the moment templates below. |
 | `caption_text` | string | On-screen caption for the segment (short phrase; renderer handles word-level timing from whisper). |
-| `ui_target` | string | Logical name of the UI view/element to show (e.g. `income_dashboard`, `scanner_results`, `put_calculator`). Interpreted by the project's Playwright journey. |
+| `ui_target` | string | Logical name of the UI view/element to show (e.g. `income_dashboard`, `scanner_results`, `put_calculator`). Interpreted by the project's Playwright journey. Targets in `video.config.json` may carry a `description` (what the page does) and `topics` (keyword list) — the capability map the drafter uses to match article topics to app moments. |
 
 ### `published.youtube` (post-upload)
 

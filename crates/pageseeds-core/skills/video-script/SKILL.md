@@ -63,6 +63,16 @@ Write one clip definition file at `video/clips/<slug>.json` in the project repo
 - `ui_target`: logical UI view name the project's Playwright journey understands.
 - Last segment: end card with the CTA.
 
+**Choosing `ui_target`s (topic matching, not vibes):** the project's
+`video.config.json` carries a `description` and `topics` list per target —
+a capability map of what the app can do and where it lands. Read them, then
+match the article's `target_keyword` and core topic to the targets whose
+`topics` overlap. The hook segment goes to the strongest match (e.g. a decaf
+article → the directory whose search can type "decaf", not a generic library
+page). Prefer targets with real interactions (search boxes, filters, toggles)
+over static pages. Name the topic → target mapping in your draft output so the
+operator can sanity-check it.
+
 ### `cta` + `packaging`
 
 - `cta.url`: prefer `packaging_hints.canonical_url`.
