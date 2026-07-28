@@ -317,6 +317,11 @@ fn build_skip_reasons(
 
 /// Upsert one territory theme into the research shortlist.
 /// Returns true when the row was written successfully.
+///
+/// Hard-blocked themes (`do_not_expand` / LEGACY via
+/// [`crate::strategy::strategy_blocks_expansion`]) are **not** written as
+/// expandable `pending` research fuel (issue #258). Saturated inventory rows
+/// are still annotated for package visibility.
 fn sync_theme_to_shortlist(
     conn: &Connection,
     project_id: &str,
@@ -325,6 +330,18 @@ fn sync_theme_to_shortlist(
     status: &str,
     strategy: &crate::strategy::ProjectStrategy,
 ) -> bool {
+    // Produce-side gate: never leave hard-blocked themes as pending fuel.
+    // Consume-side uses the same helper so residual rows stay out of seeds.
+    if status == "pending"
+        && crate::strategy::strategy_blocks_expansion(&theme.theme, strategy)
+    {
+        log::info!(
+            "[territory_analysis] shortlist_strategy_skipped theme='{}' (do_not_expand/LEGACY; not pending fuel)",
+            theme.theme
+        );
+        return false;
+    }
+
     let mut entry = ResearchShortlistEntry::new(
         project_id,
         &theme.theme,
@@ -929,24 +946,78 @@ mod tests {
         insert_article(&conn, "proj1", 6, "random-b", "random unmatched topic");
 
         let diag = run_territory_analysis(&conn, "proj1").unwrap();
-        assert_eq!(diag.synced_to_shortlist, 3);
+        // LEGACY mid-coverage is skipped as pending research fuel (issue #258).
+        assert_eq!(diag.synced_to_shortlist, 2);
 
         let entries = crate::db::research_shortlist::list_entries(&conn, "proj1", None).unwrap();
-        let by_theme = |t: &str| entries.iter().find(|e| e.theme == t).unwrap();
+        let by_theme = |t: &str| entries.iter().find(|e| e.theme == t);
 
-        let active = by_theme("technical seo");
+        let active = by_theme("technical seo").expect("ACTIVE theme must sync");
         assert_eq!(active.strategy_cluster.as_deref(), Some("SEO Fundamentals"));
         assert_eq!(active.strategy_status.as_deref(), Some("active"));
+        assert_eq!(active.status, "pending");
 
-        let legacy = by_theme("web design packages");
-        assert_eq!(legacy.strategy_cluster.as_deref(), Some("Old Services"));
-        assert_eq!(legacy.strategy_status.as_deref(), Some("legacy"));
+        // Hard-blocked LEGACY must not become pending research fuel.
+        assert!(
+            by_theme("web design packages").is_none(),
+            "LEGACY theme must not sync as pending shortlist fuel"
+        );
 
-        let unmatched = by_theme("random unmatched topic");
+        let unmatched = by_theme("random unmatched topic").expect("unmatched still syncs");
         assert_eq!(unmatched.strategy_cluster, None);
         assert_eq!(unmatched.strategy_status, None);
 
         let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
+    #[test]
+    fn run_territory_analysis_skips_do_not_expand_pending_fuel() {
+        let conn = load_fixture_db();
+        let dir = std::env::temp_dir().join(format!(
+            "pageseeds-territory-dne-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let automation = dir.join(".github").join("automation");
+        std::fs::create_dir_all(&automation).unwrap();
+        std::fs::write(
+            automation.join("project.md"),
+            r#"# Test Project
+
+## Search Keywords
+
+### Primary Keywords
+- technical seo
+
+### Legacy Service Keywords (do not expand)
+- custom web design
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+"#,
+        )
+        .unwrap();
+        insert_project_with_path(&conn, "proj1", &dir.to_string_lossy());
+
+        insert_article(&conn, "proj1", 1, "tech-a", "technical seo");
+        insert_article(&conn, "proj1", 2, "tech-b", "technical seo");
+        insert_article(&conn, "proj1", 3, "cwd-a", "custom web design");
+        insert_article(&conn, "proj1", 4, "cwd-b", "custom web design");
+
+        let diag = run_territory_analysis(&conn, "proj1").unwrap();
+        assert_eq!(diag.synced_to_shortlist, 1);
+
+        let entries = crate::db::research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].theme, "technical seo");
+        assert_eq!(entries[0].status, "pending");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

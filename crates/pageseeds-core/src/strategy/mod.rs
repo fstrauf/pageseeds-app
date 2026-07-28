@@ -430,6 +430,21 @@ pub fn matches_legacy_cluster(keyword: &str, strategy: &ProjectStrategy) -> bool
         .any(|c| maps_to_cluster_hard(keyword, c))
 }
 
+/// Hard-block policy for shortlist themes/seeds used as research expansion fuel.
+///
+/// Same gates as [`apply_strategy_filter`]: `do_not_expand` + LEGACY cluster map.
+/// Empty strategy → `false` (no-op; full shortlist, never falsely empty).
+///
+/// Shared by produce (`sync_theme_to_shortlist`) and consume (`read_pending_shortlist`)
+/// so the two sides cannot drift from final selection policy.
+pub fn strategy_blocks_expansion(theme_or_seed: &str, strategy: &ProjectStrategy) -> bool {
+    if strategy.is_empty() {
+        return false;
+    }
+    matches_do_not_expand(theme_or_seed, strategy)
+        || matches_legacy_cluster(theme_or_seed, strategy)
+}
+
 /// True when the keyword maps to a MAINTAIN cluster (deprioritize, not drop).
 pub fn matches_maintain_cluster(keyword: &str, strategy: &ProjectStrategy) -> bool {
     strategy
@@ -912,6 +927,32 @@ mod tests {
             .kept
             .iter()
             .all(|(_, r)| *r == StrategyRank::Neutral));
+    }
+
+    #[test]
+    fn strategy_blocks_expansion_matches_final_selection_hard_gates() {
+        let strategy = parse_project_strategy(FIXTURE);
+        // do_not_expand
+        assert!(strategy_blocks_expansion("custom web design agency", &strategy));
+        // LEGACY cluster bullet
+        assert!(strategy_blocks_expansion("web design packages pricing", &strategy));
+        // ACTIVE / primary / unmatched → not blocked
+        assert!(!strategy_blocks_expansion("technical seo checklist", &strategy));
+        assert!(!strategy_blocks_expansion("seo tools guide", &strategy));
+        assert!(!strategy_blocks_expansion("random unrelated", &strategy));
+        // MAINTAIN is deprioritize, not hard block
+        assert!(!strategy_blocks_expansion(
+            "competitor alternatives list",
+            &strategy
+        ));
+    }
+
+    #[test]
+    fn strategy_blocks_expansion_empty_strategy_is_noop() {
+        let strategy = ProjectStrategy::default();
+        assert!(!strategy_blocks_expansion("custom web design", &strategy));
+        assert!(!strategy_blocks_expansion("web design packages", &strategy));
+        assert!(!strategy_blocks_expansion("anything", &strategy));
     }
 
     #[test]

@@ -176,15 +176,167 @@ pub(crate) fn read_pending_shortlist(task: &Task) -> Vec<crate::db::research_sho
     };
     match crate::db::research_shortlist::list_pending_excluding_depleted(&conn, &task.project_id) {
         Ok(entries) => {
+            let strategy = crate::strategy::load_for_project(&conn, &task.project_id);
+            let filtered = filter_pending_shortlist_by_strategy(entries, &strategy);
             log::info!(
-                "[keyword_research_native] loaded {} pending shortlist entries (depleted themes filtered)",
-                entries.len()
+                "[keyword_research_native] loaded {} pending shortlist entries (depleted + strategy-blocked filtered)",
+                filtered.len()
             );
-            entries
+            filtered
         }
         Err(e) => {
             log::warn!("[keyword_research_native] Failed to read shortlist: {}", e);
             Vec::new()
         }
+    }
+}
+
+/// Drop themes/seeds hard-blocked by live content strategy (issue #258).
+///
+/// Uses [`crate::strategy::strategy_blocks_expansion`] so produce, consume, and
+/// final selection share one policy. Empty strategy → no-op (full shortlist).
+pub(crate) fn filter_pending_shortlist_by_strategy(
+    entries: Vec<crate::db::research_shortlist::ResearchShortlistEntry>,
+    strategy: &crate::strategy::ProjectStrategy,
+) -> Vec<crate::db::research_shortlist::ResearchShortlistEntry> {
+    if strategy.is_empty() {
+        return entries;
+    }
+
+    let before = entries.len();
+    let mut kept = Vec::with_capacity(entries.len());
+    let mut themes_skipped = 0usize;
+    let mut seeds_skipped = 0usize;
+
+    for mut entry in entries {
+        if crate::strategy::strategy_blocks_expansion(&entry.theme, strategy) {
+            themes_skipped += 1;
+            continue;
+        }
+        let seed_before = entry.seeds.len();
+        entry
+            .seeds
+            .retain(|s| !crate::strategy::strategy_blocks_expansion(s, strategy));
+        seeds_skipped += seed_before.saturating_sub(entry.seeds.len());
+        // No seeds left → research_pipeline would mark_researched with zero pairs.
+        if entry.seeds.is_empty() {
+            themes_skipped += 1;
+            continue;
+        }
+        kept.push(entry);
+    }
+
+    if themes_skipped > 0 || seeds_skipped > 0 {
+        log::info!(
+            "[keyword_research_native] shortlist_strategy_skipped themes={} seeds={} (kept {} of {} pending entries)",
+            themes_skipped,
+            seeds_skipped,
+            kept.len(),
+            before
+        );
+    }
+    kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::research_shortlist::ResearchShortlistEntry;
+    use crate::strategy::{ClusterStatus, ProjectStrategy, StrategyCluster};
+
+    fn entry(theme: &str, seeds: &[&str]) -> ResearchShortlistEntry {
+        ResearchShortlistEntry::new(
+            "proj1",
+            theme,
+            seeds.iter().map(|s| s.to_string()).collect(),
+            "test",
+            "medium",
+            None,
+            None,
+        )
+    }
+
+    fn fixture_strategy() -> ProjectStrategy {
+        ProjectStrategy {
+            do_not_expand: vec!["custom web design".to_string()],
+            clusters: vec![
+                StrategyCluster {
+                    name: "SEO Fundamentals".to_string(),
+                    status: ClusterStatus::Active,
+                    keywords: vec!["technical seo".to_string()],
+                },
+                StrategyCluster {
+                    name: "Old Services".to_string(),
+                    status: ClusterStatus::Legacy,
+                    keywords: vec!["web design packages".to_string()],
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn filter_drops_legacy_and_do_not_expand_themes() {
+        let strategy = fixture_strategy();
+        let entries = vec![
+            entry("technical seo", &["technical seo checklist"]),
+            entry("web design packages", &["web design packages pricing"]),
+            entry("custom web design", &["custom web design agency"]),
+            entry("unrelated theme", &["random seed"]),
+        ];
+        let kept = filter_pending_shortlist_by_strategy(entries, &strategy);
+        let themes: Vec<&str> = kept.iter().map(|e| e.theme.as_str()).collect();
+        assert_eq!(themes, vec!["technical seo", "unrelated theme"]);
+    }
+
+    #[test]
+    fn filter_strips_blocked_seeds_within_allowed_theme() {
+        let strategy = fixture_strategy();
+        let entries = vec![entry(
+            "mixed theme",
+            &[
+                "technical seo tips",
+                "web design packages guide",
+                "custom web design near me",
+                "ok seed",
+            ],
+        )];
+        let kept = filter_pending_shortlist_by_strategy(entries, &strategy);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            kept[0].seeds,
+            vec!["technical seo tips".to_string(), "ok seed".to_string()]
+        );
+    }
+
+    #[test]
+    fn filter_empty_strategy_keeps_full_shortlist() {
+        let strategy = ProjectStrategy::default();
+        let entries = vec![
+            entry("web design packages", &["web design packages"]),
+            entry("custom web design", &["custom web design"]),
+        ];
+        let kept = filter_pending_shortlist_by_strategy(entries, &strategy);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].seeds.len(), 1);
+        assert_eq!(kept[1].seeds.len(), 1);
+    }
+
+    #[test]
+    fn filter_all_seeds_blocked_drops_entry() {
+        // Theme itself is allowed, but every seed is hard-blocked → entry not kept
+        // (avoids mark_researched with zero research pairs).
+        let strategy = fixture_strategy();
+        let entries = vec![
+            entry(
+                "mixed but all blocked",
+                &["web design packages guide", "custom web design near me"],
+            ),
+            entry("technical seo", &["technical seo checklist"]),
+        ];
+        let kept = filter_pending_shortlist_by_strategy(entries, &strategy);
+        let themes: Vec<&str> = kept.iter().map(|e| e.theme.as_str()).collect();
+        assert_eq!(themes, vec!["technical seo"]);
+        assert!(!kept.iter().any(|e| e.seeds.is_empty()));
     }
 }

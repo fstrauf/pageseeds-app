@@ -296,9 +296,9 @@ Every article produced by `write_article`, `create_hub_page`, or `refresh_hub_pa
 
 ## Topic Health Reducer
 
-The research shortlist is filled by `research_territory_analysis` (open / mid-coverage / saturated themes) using desk tape `gsc_page_daily` impressions — not by final keyword selection.
+The research shortlist is filled by `research_territory_analysis` (open / mid-coverage / saturated themes) using desk tape `gsc_page_daily` impressions — not by final keyword selection. Territory produce also skips hard-blocked themes (`do_not_expand` / LEGACY via `strategy_blocks_expansion`) so they never land as expandable `pending` research fuel (issue #258). Sources: `territory_analysis`, `manual`, and documented future `coverage_gap` (no writer yet).
 
-**Path B `research-context` (issue #192):** CLI calls `build_research_context` (max age 7 days), which runs `ensure_research_shortlist_fresh` then pure `build_research_strategy_package` into a typed `ResearchContextPackage` envelope. When the shortlist is empty or territory rows are stale, ensure runs the same territory core (`run_territory_analysis(conn, project_id)`) used by `update_research_shortlist` / the research step. Package JSON includes `shortlist_refreshed`, `shortlist_refresh_reason` (`empty` | `stale` | `skipped_fresh` | `failed`), and territory diagnostics when a refresh ran. `custom_keyword_research` / `research-pull` still does **not** write shortlist.
+**Path B `research-context` (issues #192 / #258):** CLI calls `build_research_context` (max age 7 days), which runs `ensure_research_shortlist_fresh`, then **re-annotates** existing shortlist rows' `strategy_cluster` / `strategy_status` from live `project.md` (cheap; no full territory re-run), then pure `build_research_strategy_package` into a typed `ResearchContextPackage` envelope. When the shortlist is empty or territory rows are stale, ensure runs the same territory core (`run_territory_analysis(conn, project_id)`) used by `update_research_shortlist` / the research step. Package JSON includes `shortlist_refreshed`, `shortlist_refresh_reason` (`empty` | `stale` | `skipped_fresh` | `failed`), territory diagnostics when a refresh ran, and per-row `strategy_cluster` / `strategy_status` when matched. Empty/missing strategy is a no-op (full shortlist; no false empty). `custom_keyword_research` / `research-pull` still does **not** write shortlist.
 
 After `content_review` or `content_audit` completes, a deterministic reducer loads the latest audit from SQLite (via `load_audit_snapshot`), aggregates signals by `target_keyword`, and updates `research_shortlist.health_status`.
 
@@ -318,8 +318,8 @@ signal_score = avg_quality + (clicks * 10) + (impressions / 100)
 
 ### Consumption
 
-- Keyword research reads pending shortlist entries with `list_pending_excluding_depleted`, so depleted themes are filtered out of new article production. This applies to both the deterministic seed pipeline (`keywords/parsing.rs`) and the agentic seed-extraction prompt (`research/prompts.rs::build_shortlist_summary`) — depleted themes are never presented to the LLM as priority territories.
-- The `research_shortlist.signal_score` and `health_status` columns feed future prioritization UIs.
+- Keyword research reads pending shortlist entries with `list_pending_excluding_depleted`, then **strategy-gates** them with live `load_for_project` + `strategy_blocks_expansion` (`do_not_expand` / LEGACY — same policy as final selection). Depleted and strategy-blocked themes are filtered out of paid DataForSEO seeds. Blocked seeds inside an allowed theme are stripped when practical. Applies to both the deterministic seed pipeline (`keywords/parsing.rs::read_pending_shortlist`) and the agentic seed-extraction prompt (`research/prompts.rs::build_shortlist_summary`).
+- The `research_shortlist.signal_score` and `health_status` columns feed future prioritization UIs. Package shortlist rows also carry `strategy_cluster` / `strategy_status` for operator visibility.
 
 ---
 
