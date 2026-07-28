@@ -30,7 +30,7 @@ from PIL import Image, ImageDraw, ImageFont
 W, H = 1080, 1920
 FPS = 30
 FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
-END_CARD_TAIL_S = 1.5  # extra seconds the end card holds after the voice ends
+END_CARD_TAIL_S = 3.0  # extra seconds the end card holds after the voice ends
 CAPTION_BOX_RGBA = (0, 0, 0, 178)  # ~70% opaque black behind phrase captions
 CAPTION_BOX_RADIUS = 18
 ZOOM_PCT = "0.08"  # slow push-in on alternating segments (keeps static UI alive)

@@ -319,7 +319,7 @@ async function recordScriptedSegment(browser, overlays, target, motionName, need
   let actions = null;
   if (hasLocatorSteps(target)) {
     actions = await page.screencast.showActions({
-      cursor: 'pointer', duration: 1200, fontSize: 18, position: 'bottom-right',
+      cursor: 'none', duration: 1200, fontSize: 18, position: 'bottom-right',
     });
   }
   await motion(page, needS, target);
