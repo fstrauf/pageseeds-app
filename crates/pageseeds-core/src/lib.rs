@@ -24,6 +24,7 @@ pub mod reddit;
 pub mod rig;
 pub mod seo;
 pub mod social;
+pub mod strategy;
 pub mod video;
 
 // Embedded prompt templates live under `src/prompts/` and are included via

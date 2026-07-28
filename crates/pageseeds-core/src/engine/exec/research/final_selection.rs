@@ -1,6 +1,9 @@
 use crate::engine::workflows::StepResult;
 use crate::models::research::{KeywordPipelineOutput, LandingPageCandidate, SelectedKeyword};
 use crate::models::task::Task;
+use crate::strategy::{
+    apply_strategy_filter, load_project_strategy_from_project_path, ProjectStrategy,
+};
 
 /// Output format matching what the frontend KeywordPicker expects.
 ///
@@ -15,6 +18,13 @@ pub struct KeywordPickerOutput {
     pub difficulty: Option<DifficultyWrapper>,
     pub total_candidates: usize,
     pub filtered_out: usize,
+    /// Hard-dropped by project.md strategy (`do_not_expand` + LEGACY clusters).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub strategy_rejected: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -34,8 +44,11 @@ pub struct DifficultyWrapper {
 /// - Filter to keywords with data, acceptable KD, non-navigational intent, and
 ///   intent aligned with the workflow (informational for blog, commercial for
 ///   landing pages).
-/// - Sort by volume (desc), then difficulty (asc), then coverage-gap score
-///   (desc, `None` last among equals).
+/// - Apply project.md strategy gates (`do_not_expand` + LEGACY hard drop;
+///   MAINTAIN deprioritize; ACTIVE/primary mild tiebreak boost). Empty
+///   strategy is a no-op — pass `None` or `&ProjectStrategy::default()`.
+/// - Sort by volume (desc), then difficulty (asc), then strategy rank, then
+///   coverage-gap score (desc, `None` last among equals).
 /// - Take top `max_results` (callers may overshoot to leave room for the
 ///   downstream relevance check to drop off-domain candidates).
 /// - Generate recommended titles based on keyword type.
@@ -43,6 +56,7 @@ pub fn select_keywords_deterministic(
     pipeline_json: &str,
     is_landing_page: bool,
     max_results: usize,
+    strategy: Option<&ProjectStrategy>,
 ) -> Result<(KeywordPickerOutput, bool), String> {
     // Parse pipeline output
     let pipeline: KeywordPipelineOutput = serde_json::from_str(pipeline_json)
@@ -50,9 +64,11 @@ pub fn select_keywords_deterministic(
 
     let target_kd = 30i64; // 0-100 scale (DataForSEO/Ahrefs unified)
     let total_candidates = pipeline.keywords.len();
+    let empty_strategy = ProjectStrategy::default();
+    let strategy = strategy.unwrap_or(&empty_strategy);
 
     // Primary filter: data + KD + non-navigational + workflow-aligned intent.
-    let mut candidates: Vec<_> = pipeline
+    let candidates: Vec<_> = pipeline
         .keywords
         .clone()
         .into_iter()
@@ -69,17 +85,36 @@ pub fn select_keywords_deterministic(
         })
         .collect();
 
+    // Strategy hard gate (do_not_expand + LEGACY) + rank hints for sort.
+    // Match policy: case-insensitive substring (see strategy::keyword_matches_phrase).
+    let filtered = apply_strategy_filter(candidates, strategy, |k| k.keyword.as_str());
+    let strategy_rejected = filtered.strategy_rejected_count;
+    if strategy_rejected > 0 {
+        log::info!(
+            "[research_final_selection] strategy-rejected {} candidates (do_not_expand / LEGACY)",
+            strategy_rejected
+        );
+    }
+
     // No fallback. If strict filtering yields nothing, the task fails with an
     // actionable message rather than silently relaxing the quality bar. The
     // user iterates on seed keywords rather than accepting low-quality
     // candidates that would become dead-weight articles.
-    if candidates.is_empty() {
+    if filtered.kept.is_empty() {
+        let strategy_note = if strategy_rejected > 0 {
+            format!(
+                " Additionally, {} candidate(s) were strategy-rejected (do_not_expand / LEGACY clusters).",
+                strategy_rejected
+            )
+        } else {
+            String::new()
+        };
         return Err(format!(
             "No keywords met the quality bar after filtering {} candidates. \
              Criteria: KD ≤ {}, non-navigational intent, with verified search data. \
              Try different seed keywords, broaden the territory, or lower the \
-             difficulty expectation for this workflow.",
-            total_candidates, target_kd
+             difficulty expectation for this workflow.{}",
+            total_candidates, target_kd, strategy_note
         ));
     }
 
@@ -88,9 +123,10 @@ pub fn select_keywords_deterministic(
     // Sort: landing page candidates rank by commercial value (volume × CPC) —
     // the standard proxy for conversion-page value — falling back to plain
     // volume when CPC is unavailable. Blog candidates rank by volume. Ties
-    // break by KD asc, then coverage-gap score desc, preserving the
-    // "prioritize thin clusters" intent from the coverage filter.
-    candidates.sort_by(|a, b| {
+    // break by KD asc, then strategy rank (ACTIVE boost / MAINTAIN sink),
+    // then coverage-gap score desc.
+    let mut ranked = filtered.kept;
+    ranked.sort_by(|(a, rank_a), (b, rank_b)| {
         if is_landing_page {
             let val_cmp = commercial_value(b)
                 .partial_cmp(&commercial_value(a))
@@ -109,11 +145,19 @@ pub fn select_keywords_deterministic(
         if kd_cmp != std::cmp::Ordering::Equal {
             return kd_cmp;
         }
+        let rank_cmp = rank_a.cmp(rank_b);
+        if rank_cmp != std::cmp::Ordering::Equal {
+            return rank_cmp;
+        }
         cmp_gap_desc(a.gap_score, b.gap_score)
     });
 
-    // Take top N
-    let selected: Vec<_> = candidates.into_iter().take(max_results).collect();
+    // Take top N (drop rank hints after sort).
+    let selected: Vec<_> = ranked
+        .into_iter()
+        .take(max_results)
+        .map(|(k, _)| k)
+        .collect();
     let filtered_out = total_candidates.saturating_sub(selected.len());
 
     if is_landing_page {
@@ -170,6 +214,7 @@ pub fn select_keywords_deterministic(
             difficulty: None,
             total_candidates,
             filtered_out,
+            strategy_rejected,
         }, used_fallback))
     } else {
         let results: Vec<_> = selected
@@ -204,6 +249,7 @@ pub fn select_keywords_deterministic(
             }),
             total_candidates,
             filtered_out,
+            strategy_rejected,
         }, used_fallback))
     }
 }
@@ -391,14 +437,24 @@ pub fn exec_research_final_selection(
 
     let is_landing_page = task.task_type == "research_landing_pages";
 
+    // Load project.md strategy (graceful empty when missing — never fails research).
+    let strategy = load_project_strategy_from_project_path(project_path);
+
     log::info!(
-        "[research_final_selection] Running deterministic selection for {} (landing_page={})",
+        "[research_final_selection] Running deterministic selection for {} (landing_page={}, strategy_empty={})",
         task.task_type,
-        is_landing_page
+        is_landing_page,
+        strategy.is_empty()
     );
 
-    match select_keywords_deterministic(pipeline_json, is_landing_page, RELEVANCE_OVERSHOOT) {
+    match select_keywords_deterministic(
+        pipeline_json,
+        is_landing_page,
+        RELEVANCE_OVERSHOOT,
+        Some(&strategy),
+    ) {
         Ok((mut output, used_fallback)) => {
+            let strategy_rejected = output.strategy_rejected;
             // Agentic relevance check: DataForSEO expansion can return
             // same-vocabulary but off-domain candidates (e.g. "assignment risk
             // ao3" from an options-trading seed). Cannot be deterministic:
@@ -432,6 +488,8 @@ pub fn exec_research_final_selection(
             trim_to_final(&mut output, FINAL_RESULTS);
             let final_count = selected_count(&output);
             output.filtered_out = output.total_candidates.saturating_sub(final_count);
+            // Preserve strategy_rejected through post-filters so operators see it.
+            output.strategy_rejected = strategy_rejected;
 
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
@@ -445,15 +503,20 @@ pub fn exec_research_final_selection(
             } else {
                 String::new()
             };
+            let strategy_note = if strategy_rejected > 0 {
+                format!(", {} strategy-rejected", strategy_rejected)
+            } else {
+                String::new()
+            };
             let msg = if used_fallback {
                 format!(
-                    "Selected {} keywords (API data unavailable; showing best candidates without KD/volume filters{})",
-                    final_count, relevance_note
+                    "Selected {} keywords (API data unavailable; showing best candidates without KD/volume filters{}{})",
+                    final_count, relevance_note, strategy_note
                 )
             } else {
                 format!(
-                    "Selected {} keywords deterministically (KD <= 30, winnability-aware ranking{})",
-                    final_count, relevance_note
+                    "Selected {} keywords deterministically (KD <= 30, winnability-aware ranking{}{})",
+                    final_count, relevance_note, strategy_note
                 )
             };
 

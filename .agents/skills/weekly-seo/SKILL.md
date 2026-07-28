@@ -544,7 +544,7 @@ Always prefer `filterTestAccounts` / project defaults that exclude internal user
 - Burning exploration budget on replay deep-dives
 
 
-### Research strategy package (#141)
+### Research strategy package (#141 / #255)
 
 Session owns themes/seeds; CLI owns Ahrefs pull:
 
@@ -564,6 +564,18 @@ when empty/stale via territory) then health (`promising` / `depleted` /
   territory rows older than 7d → territory analysis). Read
   `shortlist_refreshed` / `shortlist_refresh_reason` and territory
   `skip_reasons` when still empty after refresh — not “mystery empty.”
+- **Content strategy (`content_strategy` in research-context JSON, #255):**
+  Prefer structured strategy from `research-context` when present (primary
+  keywords, ACTIVE/MAINTAIN/LEGACY/PLANNED clusters, `do_not_expand`). If
+  missing/empty, read `<project-path>/.github/automation/project.md` Search
+  Keywords + Content Clusters sections yourself.
+- **Seeds only from Primary / ACTIVE** (and intentional PLANNED when expanding
+  a planned pillar). Never seed `do_not_expand` phrases or LEGACY clusters.
+  Deprioritize MAINTAIN vs ACTIVE/primary.
+- **After pull (belt after Rust gate):** reject / do **not** `select-keywords`
+  for LEGACY / do-not-expand candidates even if API ranked them high.
+  Final selection also hard-drops those in-core (`strategy_rejected` in the
+  picker artifact / step message).
 - **Manual fallback only:** If `research-context` fails or you need a force
   re-fill, create+execute `update_research_shortlist`. Do **not** treat empty
   shortlist after Path B pull alone as proof there are no research gaps.
