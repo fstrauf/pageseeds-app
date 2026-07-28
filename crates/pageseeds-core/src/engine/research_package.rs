@@ -20,9 +20,11 @@ use sha2::{Digest, Sha256};
 
 use crate::db::research_shortlist::{self, ResearchShortlistEntry};
 use crate::engine::keyword_selection::extract_selectable_keywords;
+use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
+use crate::strategy::{load_project_strategy, ContentStrategySummary, ProjectStrategy};
 
 // Re-export refresh surface so callers can use `research_package::*` paths.
 pub use crate::engine::research_shortlist_refresh::{
@@ -88,13 +90,19 @@ pub struct ResearchStrategyPackage {
     pub open_research_task_ids: Vec<String>,
     /// Static operator guidance (no LLM).
     pub guidance: Vec<String>,
+    /// Structured content strategy from `project.md` (Search Keywords + clusters).
+    /// Always present; fields may be empty when project.md is missing or incomplete.
+    /// Named `content_strategy` to avoid clashing with this outer strategy package.
+    pub content_strategy: ContentStrategySummary,
 }
 
 const STRATEGY_GUIDANCE: &[&str] = &[
     "Propose 2–6 seed themes from desk (site-overview/articles/GSC) + shortlist + brand context.",
-    "Prefer shortlist health_status=promising and status=pending; avoid depleted themes.",
+    "Prefer content_strategy from this package when present: seed from Primary keywords and ACTIVE clusters only (intentional PLANNED pillars OK when expanding a planned pillar).",
+    "Never seed or expand do_not_expand phrases or LEGACY clusters — even if API volume ranks them high.",
+    "Prefer shortlist health_status=promising and status=pending; avoid depleted themes. Deprioritize MAINTAIN clusters vs ACTIVE/primary.",
     "Pull candidates with research-pull -K \"seed1,seed2,...\" (deterministic custom_keyword_research; no nested theme LLM).",
-    "After pull, select-keywords -I <task-id> -K kw1,kw2 (max 3), then write-context / write-submit Path B.",
+    "After pull, reject LEGACY / do_not_expand candidates before select-keywords; then select-keywords -I <task-id> -K kw1,kw2 (max 3), then write-context / write-submit Path B.",
     "Desktop research_keywords (nested seed extraction) remains available for UI; prefer research-pull on CLI weekly path.",
 ];
 
@@ -152,6 +160,7 @@ pub fn build_research_strategy_package(
     let shortlist: Vec<ShortlistSummaryEntry> = entries.iter().map(ShortlistSummaryEntry::from).collect();
 
     let open_research_task_ids = list_open_research_task_ids(conn, project_id)?;
+    let content_strategy = load_content_strategy_summary(conn, project_id);
 
     Ok(ResearchStrategyPackage {
         project_id: project_id.to_string(),
@@ -159,7 +168,27 @@ pub fn build_research_strategy_package(
         health_counts,
         open_research_task_ids,
         guidance: STRATEGY_GUIDANCE.iter().map(|s| (*s).to_string()).collect(),
+        content_strategy,
     })
+}
+
+/// Load structured content strategy for a project (graceful empty).
+fn load_content_strategy_summary(conn: &Connection, project_id: &str) -> ContentStrategySummary {
+    let strategy = match task_store::get_project(conn, project_id) {
+        Ok(project) => {
+            let paths = ProjectPaths::from_project(&project);
+            load_project_strategy(paths.automation_dir())
+        }
+        Err(e) => {
+            log::info!(
+                "[research_package] could not resolve project {} for content strategy: {} — empty",
+                project_id,
+                e
+            );
+            ProjectStrategy::default()
+        }
+    };
+    ContentStrategySummary::from(&strategy)
 }
 
 fn count_shortlist_health(entries: &[ResearchShortlistEntry]) -> ShortlistHealthCounts {
@@ -739,6 +768,7 @@ mod tests {
         assert!(obj.contains_key("health_counts"));
         assert!(obj.contains_key("open_research_task_ids"));
         assert!(obj.contains_key("guidance"));
+        assert!(obj.contains_key("content_strategy"));
         assert_eq!(obj["shortlist_refreshed"], false);
         assert_eq!(obj["shortlist_refresh_reason"], "skipped_fresh");
         assert!(!obj.contains_key("territory"));
@@ -764,6 +794,7 @@ mod tests {
                 health_counts: ShortlistHealthCounts::default(),
                 open_research_task_ids: vec![],
                 guidance: vec![],
+                content_strategy: ContentStrategySummary::default(),
             },
             shortlist_refreshed: false,
             shortlist_refresh_reason: shortlist_refresh_reason::FAILED.to_string(),

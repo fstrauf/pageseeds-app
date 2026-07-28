@@ -58,6 +58,7 @@ mod tests {
             }),
             total_candidates: total,
             filtered_out: 0,
+            strategy_rejected: 0,
         }
     }
 
@@ -91,7 +92,7 @@ mod tests {
             kw("what is a covered call", 3000, 20.0, "informational"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
         let results = output.difficulty.unwrap().results;
         assert!(
             results.iter().any(|r| r.keyword == "how to sell covered calls"),
@@ -111,7 +112,7 @@ mod tests {
             kw("best covered call screener", 600, 30.0, "commercial"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, true, 10, None).unwrap();
         let candidates = output.landing_page_candidates;
         assert!(
             candidates.iter().any(|c| c.keyword == "covered call tracker"),
@@ -132,7 +133,7 @@ mod tests {
             kw("covered call strike selection", 400, 50.0, "informational"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let result = select_keywords_deterministic(&json, false, 10);
+        let result = select_keywords_deterministic(&json, false, 10, None);
         assert!(
             result.is_err(),
             "should fail (not fallback) when no keywords met the KD bar"
@@ -177,7 +178,7 @@ mod tests {
         high_volume.cpc = Some(0.30); // 3000 × $0.30 = 900
         let pipeline = build_pipeline(vec![high_volume, high_value]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, true, 10, None).unwrap();
         let candidates = output.landing_page_candidates;
         assert_eq!(candidates[0].keyword, "options profit calculator");
         assert_eq!(candidates[0].cpc, Some(5.0));
@@ -194,7 +195,7 @@ mod tests {
         low.cpc = Some(0.5); // 500 → ratio 0.125 → low
         let pipeline = build_pipeline(vec![low, mid, top]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, true, 10, None).unwrap();
         let candidates = output.landing_page_candidates;
         assert_eq!(candidates[0].opportunity_score, "high");
         assert_eq!(candidates[1].opportunity_score, "medium");
@@ -211,7 +212,7 @@ mod tests {
         avoid.cpc = Some(9.0);
         let pipeline = build_pipeline(vec![target, avoid]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, true, 10, None).unwrap();
         // Simulate enrichment: the high-value keyword is SERP-dominated.
         output.landing_page_candidates[0].winnability = Some("avoid".to_string());
         output.landing_page_candidates[1].winnability = Some("target".to_string());
@@ -231,7 +232,7 @@ mod tests {
             kw("iv crush meaning", 210, 0.0, "informational"),
         ]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
 
         // Production lowercases flagged keywords before building the set.
         let off_domain: std::collections::HashSet<String> =
@@ -248,7 +249,7 @@ mod tests {
     fn off_domain_filter_empty_set_is_noop() {
         let pipeline = build_pipeline(vec![kw("what is iv crush", 260, 0.0, "informational")]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
 
         let removed = apply_off_domain_filter(&mut output, &std::collections::HashSet::new());
         assert_eq!(removed, 0);
@@ -265,7 +266,7 @@ mod tests {
             .collect();
         let pipeline = build_pipeline(kws);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, false, 15).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, false, 15, None).unwrap();
         assert_eq!(selected_count(&output), 15);
 
         trim_to_final(&mut output, FINAL_RESULTS);
@@ -287,7 +288,7 @@ mod tests {
         covered.gap_score = Some(20.0);
         let pipeline = build_pipeline(vec![covered, thin]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (output, _) = select_keywords_deterministic(&json, false, 10).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
         let results = output.difficulty.unwrap().results;
         assert_eq!(results[0].keyword, "thin cluster keyword");
         assert_eq!(results[0].gap_score, Some(80.0));
@@ -431,7 +432,7 @@ mod tests {
         avoid2.cpc = Some(8.0);
         let pipeline = build_pipeline(vec![target, target2, target3, avoid, avoid2]);
         let json = serde_json::to_string(&pipeline).unwrap();
-        let (mut output, _) = select_keywords_deterministic(&json, true, 10).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, true, 10, None).unwrap();
 
         for c in &mut output.landing_page_candidates {
             if c.keyword.contains("authority") || c.keyword.contains("aio") {
@@ -493,5 +494,76 @@ mod tests {
         sort_by_winnability(&mut first);
         sort_by_winnability(&mut second);
         assert_eq!(result_keywords(&first), result_keywords(&second));
+    }
+
+    /// Fixture-shaped strategy for final-selection integration tests.
+    fn test_strategy() -> crate::strategy::ProjectStrategy {
+        crate::strategy::parse_project_strategy(
+            r#"
+## Search Keywords
+### Primary Keywords
+- seo tools
+### Legacy Service Keywords (do not expand)
+- custom web design
+## Content Clusters And Priorities
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- on-page seo
+### Cluster 2: Alternatives (MAINTAIN)
+- competitor alternatives
+### Cluster 3: Services (LEGACY)
+- web design packages
+"#,
+        )
+    }
+
+    #[test]
+    fn strategy_hard_drops_do_not_expand_and_legacy() {
+        let pipeline = build_pipeline(vec![
+            kw("seo tools checklist", 1000, 10.0, "informational"),
+            kw("best custom web design", 5000, 10.0, "informational"),
+            kw("web design packages guide", 4000, 10.0, "informational"),
+            kw("on-page seo tips", 800, 10.0, "informational"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let strategy = test_strategy();
+        let (output, _) =
+            select_keywords_deterministic(&json, false, 10, Some(&strategy)).unwrap();
+        let results = output.difficulty.unwrap().results;
+        assert_eq!(output.strategy_rejected, 2);
+        assert!(results.iter().any(|r| r.keyword == "seo tools checklist"));
+        assert!(results.iter().any(|r| r.keyword == "on-page seo tips"));
+        assert!(!results.iter().any(|r| r.keyword.contains("custom web design")));
+        assert!(!results.iter().any(|r| r.keyword.contains("web design packages")));
+    }
+
+    #[test]
+    fn strategy_deprioritizes_maintain_on_volume_ties() {
+        // Same volume + KD: ACTIVE/primary should rank above MAINTAIN.
+        let pipeline = build_pipeline(vec![
+            kw("competitor alternatives list", 1000, 10.0, "informational"),
+            kw("seo tools overview", 1000, 10.0, "informational"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let strategy = test_strategy();
+        let (output, _) =
+            select_keywords_deterministic(&json, false, 10, Some(&strategy)).unwrap();
+        let results = output.difficulty.unwrap().results;
+        assert_eq!(results[0].keyword, "seo tools overview");
+        assert_eq!(results[1].keyword, "competitor alternatives list");
+    }
+
+    #[test]
+    fn strategy_none_is_noop_like_empty() {
+        let pipeline = build_pipeline(vec![
+            kw("custom web design agency", 2000, 10.0, "informational"),
+            kw("seo tools", 1000, 10.0, "informational"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
+        let results = output.difficulty.unwrap().results;
+        assert_eq!(output.strategy_rejected, 0);
+        assert_eq!(results.len(), 2);
+        // Highest volume first with no strategy gate.
+        assert_eq!(results[0].keyword, "custom web design agency");
     }
 }
