@@ -1,5 +1,7 @@
 use crate::engine::workflows::StepResult;
-use crate::models::research::{KeywordPipelineOutput, LandingPageCandidate, SelectedKeyword};
+use crate::models::research::{
+    FilterFunnel, KeywordPipelineOutput, LandingPageCandidate, SelectedKeyword,
+};
 use crate::models::task::Task;
 use crate::strategy::{
     apply_strategy_filter, load_project_strategy_from_project_path, ProjectStrategy,
@@ -10,7 +12,7 @@ use crate::strategy::{
 /// The frontend expects either:
 /// - `landing_page_candidates` for landing page research
 /// - `difficulty.results` for keyword research (wrapped in difficulty object)
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KeywordPickerOutput {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub landing_page_candidates: Vec<LandingPageCandidate>,
@@ -21,13 +23,16 @@ pub struct KeywordPickerOutput {
     /// Hard-dropped by project.md strategy (`do_not_expand` + LEGACY clusters).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub strategy_rejected: usize,
+    /// Aggregate stage dropoff counts for operators (#263). Always present.
+    #[serde(default)]
+    pub filter_funnel: FilterFunnel,
 }
 
 fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DifficultyWrapper {
     pub total: usize,
     pub successful: usize,
@@ -67,21 +72,31 @@ pub fn select_keywords_deterministic(
     let empty_strategy = ProjectStrategy::default();
     let strategy = strategy.unwrap_or(&empty_strategy);
 
-    // Primary filter: data + KD + non-navigational + workflow-aligned intent.
+    // Volume stage stats originate in the pipeline (client volume filter).
+    let volume_dropped = pipeline.volume_dropped;
+    let volume_unknown_kept = pipeline.volume_unknown_kept;
+
+    // Primary filter with sequential stage counters (no double-counting):
+    // 1) intent (workflow-aligned + non-navigational via matches_workflow_intent)
+    // 2) has_data + KD bar
+    let mut intent_dropped = 0usize;
+    let mut no_data_or_kd_dropped = 0usize;
     let candidates: Vec<_> = pipeline
         .keywords
         .clone()
         .into_iter()
-        .filter(|k| matches_workflow_intent(k, is_landing_page))
         .filter(|k| {
+            if !matches_workflow_intent(k, is_landing_page) {
+                intent_dropped += 1;
+                return false;
+            }
             let has_data = k.has_data.unwrap_or(false);
             let kd_ok = k.kd.map(|d| d as i64 <= target_kd).unwrap_or(false);
-            let intent_ok = k
-                .intent
-                .as_deref()
-                .map(|i| !i.eq_ignore_ascii_case("navigational"))
-                .unwrap_or(true);
-            has_data && kd_ok && intent_ok
+            if !(has_data && kd_ok) {
+                no_data_or_kd_dropped += 1;
+                return false;
+            }
+            true
         })
         .collect();
 
@@ -95,6 +110,17 @@ pub fn select_keywords_deterministic(
             strategy_rejected
         );
     }
+
+    let mut filter_funnel = FilterFunnel {
+        pre_filter: total_candidates,
+        volume_dropped,
+        volume_unknown_kept,
+        no_data_or_kd_dropped,
+        intent_dropped,
+        strategy_rejected,
+        winnability_avoid_dropped: 0,
+        final_selected: 0,
+    };
 
     // No fallback. If strict filtering yields nothing, the task fails with an
     // actionable message rather than silently relaxing the quality bar. The
@@ -113,8 +139,11 @@ pub fn select_keywords_deterministic(
             "No keywords met the quality bar after filtering {} candidates. \
              Criteria: KD ≤ {}, non-navigational intent, with verified search data. \
              Try different seed keywords, broaden the territory, or lower the \
-             difficulty expectation for this workflow.{}",
-            total_candidates, target_kd, strategy_note
+             difficulty expectation for this workflow.{} ({})",
+            total_candidates,
+            target_kd,
+            strategy_note,
+            filter_funnel.summary_line()
         ));
     }
 
@@ -159,6 +188,7 @@ pub fn select_keywords_deterministic(
         .map(|(k, _)| k)
         .collect();
     let filtered_out = total_candidates.saturating_sub(selected.len());
+    filter_funnel.final_selected = selected.len();
 
     if is_landing_page {
         // Opportunity tiers derive from the same commercial-value score used
@@ -215,6 +245,7 @@ pub fn select_keywords_deterministic(
             total_candidates,
             filtered_out,
             strategy_rejected,
+            filter_funnel,
         }, used_fallback))
     } else {
         let results: Vec<_> = selected
@@ -250,6 +281,7 @@ pub fn select_keywords_deterministic(
             total_candidates,
             filtered_out,
             strategy_rejected,
+            filter_funnel,
         }, used_fallback))
     }
 }
@@ -484,12 +516,14 @@ pub fn exec_research_final_selection(
             // enough non-avoid candidates exist, then trim. Residual avoids
             // remain (badged, at the bottom) only as last resort.
             sort_by_winnability(&mut output);
-            apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
+            let avoid_dropped = apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
             trim_to_final(&mut output, FINAL_RESULTS);
             let final_count = selected_count(&output);
             output.filtered_out = output.total_candidates.saturating_sub(final_count);
             // Preserve strategy_rejected through post-filters so operators see it.
             output.strategy_rejected = strategy_rejected;
+            output.filter_funnel.winnability_avoid_dropped = avoid_dropped;
+            output.filter_funnel.final_selected = final_count;
 
             let json = match serde_json::to_string_pretty(&output) {
                 Ok(j) => j,
@@ -573,7 +607,8 @@ fn is_avoid_bucket(winnability: Option<&str>) -> bool {
 /// - Else keeps residual avoids (already sorted last) as last resort.
 ///
 /// Call after `sort_by_winnability` and before `trim_to_final`.
-pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid: usize) {
+/// Returns the number of hard-dropped avoid rows (0 when policy does not fire).
+pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid: usize) -> usize {
     let non_avoid = if !output.landing_page_candidates.is_empty() {
         output
             .landing_page_candidates
@@ -594,9 +629,10 @@ pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid
     };
 
     if non_avoid < min_non_avoid {
-        return;
+        return 0;
     }
 
+    let before = selected_count(output);
     output
         .landing_page_candidates
         .retain(|c| !is_avoid_bucket(c.winnability.as_deref()));
@@ -606,6 +642,7 @@ pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid
         d.total = d.results.len();
         d.successful = d.results.len();
     }
+    before.saturating_sub(selected_count(output))
 }
 
 /// Winnability bucket sort rank: `target` and unknown/missing buckets rank 0

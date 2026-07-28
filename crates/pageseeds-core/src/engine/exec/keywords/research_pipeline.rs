@@ -15,6 +15,17 @@ pub enum ResearchMode {
     Commercial,
 }
 
+/// Result of the native keyword-research worker thread (join payload).
+struct NativeResearchThreadResult {
+    with_data: Vec<serde_json::Value>,
+    no_data: Vec<serde_json::Value>,
+    analyzed_count: usize,
+    pre_filter_count: usize,
+    competitor_insights: Vec<crate::models::research::CompetitorInsight>,
+    volume_dropped: usize,
+    volume_unknown_kept: usize,
+}
+
 impl ResearchMode {
     /// Determine research mode from task type string.
     pub fn from_task_type(task_type: &str) -> Self {
@@ -535,66 +546,29 @@ pub(crate) fn exec_keyword_research_native(
                 );
             }
 
-            // Step 3 — Volume filter (only meaningful when we have volume data)
-            const MIN_VOLUME: i64 = 50;
+            // Step 3 — Volume filter: drop known volume < MIN_VOLUME; keep unknown
+            // (`None`). Previously unknown was rejected via unwrap_or(false), which
+            // silently emptied Ahrefs-style pools and thinned primary seeds (#263).
             let pre_volume_count = candidates.len();
-            candidates = candidates
-                .into_iter()
-                .filter(|c| {
-                    c.volume
-                        .map(|v| v >= MIN_VOLUME)
-                        .unwrap_or(false) // reject unknown volumes
-                })
-                .collect();
+            let (filtered, volume_stats) = super::filter_candidates_by_volume(candidates);
+            candidates = filtered;
+            let volume_dropped = volume_stats.volume_dropped;
+            let volume_unknown_kept = volume_stats.volume_unknown_kept;
 
             log::info!(
-                "[keyword_research_native] volume filter: {} → {} candidates (dropped {} below {} or unknown)",
+                "[keyword_research_native] volume filter: {} → {} candidates \
+                 (dropped {} known below {}, kept {} unknown-volume)",
                 pre_volume_count,
                 candidates.len(),
-                pre_volume_count - candidates.len(),
-                MIN_VOLUME,
+                volume_dropped,
+                super::MIN_VOLUME,
+                volume_unknown_kept,
             );
 
-            // If DataForSEO returned zero candidates after volume filter, that's the real count.
-            // For Ahrefs path (no volume data), volume filter drops everything — skip it and use all candidates.
-            if !is_dataforseo && candidates.is_empty() && pre_volume_count > 0 {
-                log::info!("[keyword_research_native] Ahrefs path: no volume data available, using all {} candidates", pre_volume_count);
-                // Re-filter without volume requirement for Ahrefs path
-                candidates = Vec::new(); // will rebuild below
-            }
-
-            // Rebuild candidates for Ahrefs path if volume filter emptied the list
-            if !is_dataforseo && candidates.is_empty() && pre_filter_count > 0 {
-                // Re-run without volume filter
-                let mut seen2: HashSet<String> = HashSet::new();
-                for theme in &themes_thread {
-                    match crate::seo::google_autocomplete::get_keyword_ideas_google(theme, "us", "Google").await {
-                        Ok(result) => {
-                            for suggestion in result.ideas.iter().chain(result.question_ideas.iter()) {
-                                let kw_lower = suggestion.keyword.to_lowercase();
-                                if existing_keywords_thread.contains(&kw_lower) || seen2.contains(&kw_lower) {
-                                    continue;
-                                }
-                                seen2.insert(kw_lower);
-                                candidates.push(Candidate {
-                                    keyword: suggestion.keyword.clone(),
-                                    source_theme: theme.clone(),
-                                    is_question: suggestion.suggestion_type == crate::seo::google_autocomplete::SuggestionType::Question,
-                                    volume: None,
-                                    kd: None,
-                                    intent: None,
-                                    cpc: None,
-                                    gap_score: None,
-                                });
-                            }
-                        }
-                        Err(_) => {}
-                    }
-                }
-                if !coverage_clusters_thread.is_empty() {
-                    candidates = super::filter_by_coverage_gap(candidates, &coverage_clusters_thread, &existing_keywords_thread, Some(&strategy_thread));
-                }
-            }
+            // Keep-unknown volume semantics preserve pure-None (Ahrefs) pools, so the
+            // former “volume emptied → rebuild autocomplete” safety net is gone: it
+            // could repopulate candidates while funnel stats still described the
+            // discarded list.
 
             // Smart sample: limit to 50 for Ahrefs KD checks; DataForSEO can take all
             let sampled = if is_dataforseo {
@@ -716,20 +690,36 @@ pub(crate) fn exec_keyword_research_native(
                 }
             }
 
-            Ok::<_, crate::error::Error>((with_data_results, no_data_results, analyzed_count, pre_filter_count, competitor_insights))
+            Ok::<_, crate::error::Error>(NativeResearchThreadResult {
+                with_data: with_data_results,
+                no_data: no_data_results,
+                analyzed_count,
+                pre_filter_count,
+                competitor_insights,
+                volume_dropped,
+                volume_unknown_kept,
+            })
         })
     }).join();
 
-    let (with_data_results, no_data_results, analyzed_count, total_candidates, competitor_insights) =
-        match thread_result {
-            Ok(Ok(result)) => result,
-            Ok(Err(e)) => {
-                return crate::engine::workflows::StepResult::fail(format!("Keyword research failed: {}", e));
-            }
-            Err(_) => {
-                return crate::engine::workflows::StepResult::fail("Keyword research thread panicked".to_string());
-            }
-        };
+    let thread_out = match thread_result {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            return crate::engine::workflows::StepResult::fail(format!("Keyword research failed: {}", e));
+        }
+        Err(_) => {
+            return crate::engine::workflows::StepResult::fail("Keyword research thread panicked".to_string());
+        }
+    };
+    let NativeResearchThreadResult {
+        with_data: with_data_results,
+        no_data: no_data_results,
+        analyzed_count,
+        pre_filter_count: total_candidates,
+        competitor_insights,
+        volume_dropped,
+        volume_unknown_kept,
+    } = thread_out;
 
     // Mark shortlist entries as researched
     if !pending_shortlist_ids.is_empty() {
@@ -804,6 +794,8 @@ pub(crate) fn exec_keyword_research_native(
         competitor_insights,
         total_candidates,
         with_data_count,
+        volume_dropped,
+        volume_unknown_kept,
     };
 
     crate::engine::workflows::StepResult {

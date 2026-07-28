@@ -97,6 +97,52 @@ pub struct CompetitorInsight {
     pub top_keywords: Vec<CompetitorTopKeyword>,
 }
 
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Aggregate stage dropoff counters for research selection / pull (#263).
+///
+/// Surfaces where the candidate pool shrank so operators can diagnose thin
+/// primary-seed results without reading logs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct FilterFunnel {
+    /// Candidates entering final selection (`pipeline.keywords.len()`).
+    pub pre_filter: usize,
+    /// Known volume strictly below the client MIN_VOLUME threshold (pipeline).
+    pub volume_dropped: usize,
+    /// Candidates kept despite missing volume (pipeline).
+    pub volume_unknown_kept: usize,
+    /// Dropped for missing data or KD above the target bar (after intent).
+    pub no_data_or_kd_dropped: usize,
+    /// Failed workflow-aligned intent (or navigational).
+    pub intent_dropped: usize,
+    /// Hard-dropped by project.md strategy (`do_not_expand` / LEGACY).
+    pub strategy_rejected: usize,
+    /// Hard-dropped by winnability `avoid` policy.
+    pub winnability_avoid_dropped: usize,
+    /// Final shortlist size after selection / avoid / trim.
+    pub final_selected: usize,
+}
+
+impl FilterFunnel {
+    /// Compact one-line summary for error messages and thin-result notes.
+    pub fn summary_line(&self) -> String {
+        format!(
+            "filter_funnel: volume_dropped={}, volume_unknown_kept={}, \
+             no_data_or_kd_dropped={}, intent_dropped={}, strategy_rejected={}, \
+             winnability_avoid_dropped={}, final_selected={}",
+            self.volume_dropped,
+            self.volume_unknown_kept,
+            self.no_data_or_kd_dropped,
+            self.intent_dropped,
+            self.strategy_rejected,
+            self.winnability_avoid_dropped,
+            self.final_selected
+        )
+    }
+}
+
 /// Output from Step 2: research_ahrefs_pipeline
 ///
 /// The deterministic step calls Ahrefs API for each theme,
@@ -117,6 +163,12 @@ pub struct KeywordPipelineOutput {
     pub total_candidates: usize,
     /// Number of keywords with full data (KD + volume)
     pub with_data_count: usize,
+    /// Known volume below client MIN_VOLUME dropped in the pipeline (#263).
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub volume_dropped: usize,
+    /// Candidates kept with unknown volume (`volume == None`) (#263).
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub volume_unknown_kept: usize,
 }
 
 /// A selected keyword candidate for final output

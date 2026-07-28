@@ -68,3 +68,38 @@ pub(crate) struct Candidate {
     /// `None` when no coverage analysis was available for the project.
     pub(crate) gap_score: Option<f64>,
 }
+
+/// Minimum known monthly search volume to keep a candidate.
+///
+/// Unknown volume (`None`) is **kept** — only known volume strictly below this
+/// threshold is dropped. See #263.
+pub(crate) const MIN_VOLUME: i64 = 50;
+
+/// Aggregate counters from [`filter_candidates_by_volume`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct VolumeFilterStats {
+    /// Known volume strictly below [`MIN_VOLUME`].
+    pub volume_dropped: usize,
+    /// `volume == None` kept (not treated as below threshold).
+    pub volume_unknown_kept: usize,
+}
+
+/// Keep candidates with `volume >= MIN_VOLUME` **or** `volume == None`.
+/// Drop only known low volume (`Some(v) if v < MIN_VOLUME`).
+pub(crate) fn filter_candidates_by_volume(
+    candidates: Vec<Candidate>,
+) -> (Vec<Candidate>, VolumeFilterStats) {
+    let mut kept = Vec::with_capacity(candidates.len());
+    let mut stats = VolumeFilterStats::default();
+    for c in candidates {
+        match c.volume {
+            Some(v) if v >= MIN_VOLUME => kept.push(c),
+            Some(_) => stats.volume_dropped += 1,
+            None => {
+                stats.volume_unknown_kept += 1;
+                kept.push(c);
+            }
+        }
+    }
+    (kept, stats)
+}

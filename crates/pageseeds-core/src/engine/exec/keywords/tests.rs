@@ -1000,6 +1000,66 @@ mod keyword_workflow_tests {
 }
 
 #[cfg(test)]
+mod volume_filter_tests {
+    use crate::engine::exec::keywords::{
+        filter_candidates_by_volume, Candidate, MIN_VOLUME, VolumeFilterStats,
+    };
+
+    fn make(volume: Option<i64>) -> Candidate {
+        Candidate {
+            keyword: format!("kw-{:?}", volume),
+            source_theme: "t".into(),
+            is_question: false,
+            volume,
+            kd: None,
+            intent: None,
+            cpc: None,
+            gap_score: None,
+        }
+    }
+
+    #[test]
+    fn keeps_unknown_volume_and_drops_only_known_low() {
+        let input = vec![
+            make(None),
+            make(Some(0)),
+            make(Some(49)),
+            make(Some(50)),
+            make(Some(100)),
+        ];
+        let (kept, stats) = filter_candidates_by_volume(input);
+        let volumes: Vec<Option<i64>> = kept.iter().map(|c| c.volume).collect();
+        assert_eq!(volumes, vec![None, Some(50), Some(100)]);
+        assert_eq!(
+            stats,
+            VolumeFilterStats {
+                volume_dropped: 2,
+                volume_unknown_kept: 1,
+            }
+        );
+        assert_eq!(MIN_VOLUME, 50);
+    }
+
+    #[test]
+    fn all_unknown_kept_none_dropped() {
+        let input = vec![make(None), make(None), make(None)];
+        let (kept, stats) = filter_candidates_by_volume(input);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(stats.volume_dropped, 0);
+        assert_eq!(stats.volume_unknown_kept, 3);
+    }
+
+    #[test]
+    fn all_known_low_dropped() {
+        let input = vec![make(Some(1)), make(Some(49))];
+        let (kept, stats) = filter_candidates_by_volume(input);
+        assert!(kept.is_empty());
+        assert_eq!(stats.volume_dropped, 2);
+        assert_eq!(stats.volume_unknown_kept, 0);
+    }
+}
+
+#[cfg(test)]
 mod sampling_tests {
     use crate::engine::exec::keywords::{smart_sample_candidates, Candidate};
 

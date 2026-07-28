@@ -19,9 +19,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::db::research_shortlist::{self, ResearchShortlistEntry};
-use crate::engine::keyword_selection::extract_selectable_keywords;
+use crate::engine::keyword_selection::{
+    extract_selectable_keywords, find_research_selection_artifact, parse_artifact_json,
+};
 use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
+use crate::models::research::FilterFunnel;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
 use crate::strategy::ContentStrategySummary;
 
@@ -253,6 +256,9 @@ pub struct ResearchPullResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execute_success: Option<bool>,
     pub message: String,
+    /// Aggregate selection funnel when available from the final-selection artifact (#263).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_funnel: Option<FilterFunnel>,
 }
 
 /// Normalize seeds: trim, drop empty, dedupe case-insensitively (first spelling wins).
@@ -332,6 +338,7 @@ pub async fn research_pull(
             executed: false,
             execute_success: None,
             message: "Created custom_keyword_research task (not executed). Run execute-task or research-pull without --no-execute.".to_string(),
+            filter_funnel: extract_filter_funnel(&task),
         });
     }
 
@@ -339,6 +346,12 @@ pub async fn research_pull(
     if matches!(task.status, TaskStatus::Review | TaskStatus::Done) {
         let kws = extract_selectable_if_any(&task);
         if kws.as_ref().map(|k| !k.is_empty()).unwrap_or(false) {
+            let funnel = extract_filter_funnel(&task);
+            let message = thin_result_message(
+                "Reused existing research task already in review/done with selectable keywords.",
+                kws.as_ref().map(|k| k.len()).unwrap_or(0),
+                funnel.as_ref(),
+            );
             return Ok(ResearchPullResult {
                 task_id: task.id.clone(),
                 task_type: task.task_type.clone(),
@@ -347,7 +360,8 @@ pub async fn research_pull(
                 selectable_keywords: kws,
                 executed: false,
                 execute_success: Some(true),
-                message: "Reused existing research task already in review/done with selectable keywords.".to_string(),
+                message,
+                filter_funnel: funnel,
             });
         }
     }
@@ -358,16 +372,26 @@ pub async fn research_pull(
 
     let fresh = task_store::get_task(conn, &task.id).map_err(|e| e.to_string())?;
     let selectable = extract_selectable_if_any(&fresh);
+    let funnel = extract_filter_funnel(&fresh);
+    let selectable_count = selectable.as_ref().map(|k| k.len()).unwrap_or(0);
 
     let message = if exec.success {
-        format!(
+        let base = format!(
             "Research pull completed (status={}). {} selectable keyword(s). Use select-keywords -I {} -K ...",
             fresh.status.as_str(),
-            selectable.as_ref().map(|k| k.len()).unwrap_or(0),
+            selectable_count,
             fresh.id
-        )
+        );
+        thin_result_message(&base, selectable_count, funnel.as_ref())
     } else {
-        format!("Research pull execution failed: {}", exec.message)
+        // Empty / failed path: surface funnel summary when present on the error message.
+        let base = format!("Research pull execution failed: {}", exec.message);
+        match funnel.as_ref() {
+            Some(f) if !exec.message.contains("filter_funnel:") => {
+                format!("{} ({})", base, f.summary_line())
+            }
+            _ => base,
+        }
     };
 
     Ok(ResearchPullResult {
@@ -379,6 +403,7 @@ pub async fn research_pull(
         executed: true,
         execute_success: Some(exec.success),
         message,
+        filter_funnel: funnel,
     })
 }
 
@@ -388,6 +413,25 @@ fn extract_selectable_if_any(task: &Task) -> Option<Vec<String>> {
         None
     } else {
         Some(kws)
+    }
+}
+
+/// Extract `filter_funnel` from the final-selection artifact when present.
+/// Reuses the canonical selection-artifact helpers (fence-stripping + key chain).
+fn extract_filter_funnel(task: &Task) -> Option<FilterFunnel> {
+    let v = parse_artifact_json(task, find_research_selection_artifact(task))?;
+    serde_json::from_value(v.get("filter_funnel")?.clone()).ok()
+}
+
+/// When the selectable pool is thin but non-empty, append a short funnel note
+/// so operators see stage dropoff without digging into the full artifact.
+fn thin_result_message(base: &str, selectable_count: usize, funnel: Option<&FilterFunnel>) -> String {
+    const THIN_THRESHOLD: usize = 3;
+    match funnel {
+        Some(f) if selectable_count > 0 && selectable_count <= THIN_THRESHOLD => {
+            format!("{} ({})", base, f.summary_line())
+        }
+        _ => base.to_string(),
     }
 }
 
@@ -827,6 +871,16 @@ mod tests {
                                     "winnability": "target"
                                 }
                             ]
+                        },
+                        "filter_funnel": {
+                            "pre_filter": 12,
+                            "volume_dropped": 4,
+                            "volume_unknown_kept": 2,
+                            "no_data_or_kd_dropped": 3,
+                            "intent_dropped": 1,
+                            "strategy_rejected": 0,
+                            "winnability_avoid_dropped": 1,
+                            "final_selected": 3
                         }
                     })
                     .to_string(),
@@ -839,5 +893,56 @@ mod tests {
         };
         let kws = extract_selectable_keywords(&task);
         assert_eq!(kws, vec!["delta hedge strategy".to_string()]);
+        let funnel = extract_filter_funnel(&task).expect("funnel from artifact");
+        assert_eq!(funnel.pre_filter, 12);
+        assert_eq!(funnel.volume_dropped, 4);
+        assert_eq!(funnel.volume_unknown_kept, 2);
+        assert_eq!(funnel.final_selected, 3);
+    }
+
+    #[test]
+    fn research_pull_result_serializes_filter_funnel() {
+        let result = ResearchPullResult {
+            task_id: "t1".into(),
+            task_type: "custom_keyword_research".into(),
+            status: "review".into(),
+            seeds: vec!["delta".into()],
+            selectable_keywords: Some(vec!["kw a".into(), "kw b".into()]),
+            executed: true,
+            execute_success: Some(true),
+            message: "thin".into(),
+            filter_funnel: Some(FilterFunnel {
+                pre_filter: 10,
+                volume_dropped: 2,
+                volume_unknown_kept: 1,
+                no_data_or_kd_dropped: 3,
+                intent_dropped: 1,
+                strategy_rejected: 0,
+                winnability_avoid_dropped: 0,
+                final_selected: 2,
+            }),
+        };
+        let v = serde_json::to_value(&result).unwrap();
+        assert_eq!(v["filter_funnel"]["volume_unknown_kept"], 1);
+        assert_eq!(v["filter_funnel"]["final_selected"], 2);
+    }
+
+    #[test]
+    fn thin_result_message_appends_funnel_when_small_pool() {
+        let f = FilterFunnel {
+            pre_filter: 20,
+            volume_dropped: 5,
+            volume_unknown_kept: 2,
+            no_data_or_kd_dropped: 8,
+            intent_dropped: 2,
+            strategy_rejected: 1,
+            winnability_avoid_dropped: 0,
+            final_selected: 2,
+        };
+        let msg = thin_result_message("base", 2, Some(&f));
+        assert!(msg.starts_with("base (filter_funnel:"));
+        assert!(msg.contains("volume_dropped=5"));
+        // Large pool: no funnel note.
+        assert_eq!(thin_result_message("base", 10, Some(&f)), "base");
     }
 }
