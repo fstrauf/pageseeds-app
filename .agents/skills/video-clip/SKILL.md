@@ -125,6 +125,7 @@ Breaking these fails the run.
 | 8 | Ground `spoken_script` in article body/context — no invented figures (`video-script` rule). |
 | 9 | Operator-tier render assumes **dev machine** with node/ffmpeg + pageseeds-app `video-engine/`. Fail with install hints; do not paper over. |
 | 10 | **One slug per run** unless the user explicitly forces more. |
+| 11 | **Agentic segment media exception:** optional pre-pass may write segment media under the **central backup OUT only** (`~/01_code/video-clip-backup/<project_id>/segments/` and optional `…/agentic/` staging). Still **ban** product source edits mid operator run; still **ban** reimplementing voice/composite. Agentic is opt-in per config `ui_target`; scripted remains default. |
 
 ---
 
@@ -135,7 +136,10 @@ resolve project → pick one slug → gate video.config.json
   → video-clip-context -S <slug>
   → draft clip JSON (video-script craft) → video/clips/<slug>.json
   → preflight dev servers from config
+  → (if any timing_map ui_target has motion=agentic) agentic segment pre-pass
+       → place trimmed media under central OUT/segments/
   → video-clip-render --clip video/clips/<slug>.json
+       (record.mjs reuses agentic files → voice → composite)
   → ffprobe + ≥5 frames quality gate
   → packaging report
   → default publish: YouTube + Instagram Reels (one confirm)
@@ -230,6 +234,44 @@ Ensure `base_url` (+ `ready_path` if set) responds before render.
 
 Do **not** start a half-render hoping servers appear. If servers cannot be
 started in this session, report the exact commands and stop.
+
+### F2. Agentic segment pre-pass (optional)
+
+**Default remains fully scripted.** Run this only when the clip’s
+`timing_map` references a `ui_target` with `motion: "agentic"` in
+`video.config.json`. Requires `agentic_goal` on that target (`record.mjs
+--check` enforces). Engine docs: `video-engine/README.md` (Agentic motion);
+MCP profile example: `video-engine/mcp-recording.example.json`.
+
+```text
+for each timing_map seg whose ui_target has motion=agentic:
+  build brief from agentic_goal + caption_text + rails
+    (demo/read-only pages; consent dismiss OK; no forms/auth; on page error → navigate back / continue)
+  record via host Playwright MCP (preferred) OR `kimi -p "<brief>"` with recording MCP profile
+    (hard time cap language in brief; start/stop video per segment)
+  trim_deadair.py on the raw take → place under
+    ~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_{ui_target}.mp4
+  verify: ffprobe duration + ≥1 frame view; retry once with tighter brief; else leave missing → record fallback
+then: normal video-clip-render / generate-clip
+  (record reuses agentic .mp4 only → voice → composite; leftover scripted .webm is ignored)
+quality gate unchanged
+```
+
+| Detail | Rule |
+|--------|------|
+| **When** | After preflight (F), **before** G. Render, when ≥1 used target has `motion: "agentic"` |
+| **Host MCP preferred** | If this session already has a `playwright-recording` (or equivalent) MCP server with **startup** `--viewport-size 1080x1920`, use those tools. Mid-session resize is **not** enough — video stays at the MCP default (e.g. 800×450). |
+| **Alternate headless** | `kimi -p "<brief>"` with the recording MCP profile merged into host config. Use **`kimi -p` only** — not `-p --auto` / `-p --yolo` (both rejected by the CLI). |
+| **MCP profile** | Copy `video-engine/mcp-recording.example.json` into host MCP config (Kimi/Grok). Set `--output-dir` to `~/01_code/video-clip-backup/<project_id>/agentic/`. Blocked origins: crisp/intercom/hotjar/fullstory (align with `overlays.block_routes`). Do **not** auto-edit the user’s global MCP file from product scripts. |
+| **Brief rails** | Demo/read-only pages only; consent dismiss OK; **no** forms, auth, purchases, or real mutations; on page error → navigate back / continue; include a **hard time cap** (e.g. “finish in ≤12s of action”); start/stop video **per segment**. |
+| **Trim** | From a pageseeds-app checkout: `video-engine/.venv/bin/python video-engine/trim_deadair.py <raw> --out ~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_{ui_target}.mp4` |
+| **Naming** | `seg{NN}_{ui_target}.mp4` with zero-padded index matching `timing_map` order (same as `record.mjs`). Skill places **`.mp4` only** for agentic takes. |
+| **Reuse invariant** | `record.mjs` reuses agentic media **only** as `.mp4` (≥ ~10 KB). A leftover scripted fallback sibling `.webm` in the same `segments/` tree is **ignored** and cannot shadow a fresh agentic `.mp4`. Optional: remove stale `seg{NN}_{ui_target}.webm` when placing a new agentic take (not required for correct reuse). |
+| **Verify** | `ffprobe` duration + extract ≥1 frame and view. Retry **once** with a tighter brief on failure; else leave the file missing so `record.mjs` scripted fallback runs. |
+| **Fallback** | Missing/unusable agentic `.mp4` → `record.mjs` logs fallback and records scripted `.webm` with `dwell` (if interactions/hover) or `dwell_scroll`. Do not reimplement composite/voice. |
+| **Timing** | Raw MCP takes may overrun the brief; `trim_deadair` then composite `-t` scale handle duration. No engine rewrite needed. |
+
+Do **not** nest `kimi` or MCP inside `generate-clip.sh` / `record.mjs`. Judgment stays in this skill; the engine stays deterministic reuse/fallback.
 
 ### G. Render (operator tier)
 
@@ -480,7 +522,8 @@ already present` | `skipped — user aborted` | `failed` with reason).
 |-----|------------|
 | Invent `video.config.json` / new `ui_targets` mid-run | Stop + gap report |
 | Edit webapp / product for a shot | Product gap / separate PR |
-| Reimplement record/voice/composite in the skill | `video-clip-render` only |
+| Reimplement record/voice/composite in the skill | `video-clip-render` only (agentic pre-pass may write **segment media** under central OUT only) |
+| Nest `kimi` / MCP inside `generate-clip` or `record.mjs` | Host MCP or operator `kimi -p` **before** render; engine reuses files |
 | Bare `clips/<slug>.json` path | `video/clips/<slug>.json` |
 | Multi-clip batch / scheduler | One slug; user re-invokes |
 | Claim success without ffprobe + frames | Run quality gate |
@@ -511,6 +554,7 @@ list.
 - Config gate first; never invent `video.config.json`.
 - CLI context + render only; craft via `video-script`; policy here.
 - Paths: `video/clips/` in, `~/01_code/video-clip-backup/<project_id>/` out.
+- Optional agentic pre-pass (F2) may write segment media under central OUT only.
 - Demo/config `ui_targets` only; no webapp edits for shots.
 - One slug per run; operator-tier deps required for render.
 - ffprobe 1080×1920 / 40–50s / audio + ≥5 frames before success.
@@ -529,7 +573,10 @@ list.
 ```text
 video-clip-context (free desk)
   → agent + video-script craft → video/clips/<slug>.json
+  → (optional) agentic segment pre-pass: host MCP / kimi -p → trim_deadair
+       → ~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_*.mp4
   → video-clip-render (operator tier → video-engine/generate-clip.sh)
+       record reuses agentic files or scripted fallback → voice → composite
   → ffprobe + frame gate
   → packaging report
   → default publish: YouTube + Instagram (one confirm; publish.py --platforms youtube,instagram)

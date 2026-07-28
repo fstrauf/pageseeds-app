@@ -97,7 +97,8 @@ video-engine: stage=<stage> status=error message=<one_line_underscored_message>
 | `path` | string | URL path appended to `base_url`. |
 | `builtin` | string | If set (e.g. `"end_card"`), the target is rendered in composite, never recorded. |
 | `ready[]` | object[] | Ordered steps run before the recording window starts: `{"wait_text": "..."}`, `{"scroll_to": "<css>"}`, `{"scroll_to_text": "..."}`, `{"click_role": {"role": "button", "name": "...", "exact": false}}`, `{"sleep_ms": 500}`. |
-| `motion` | string | Motion preset during the recording window: `dwell` (stay put + wander), `dwell_scroll` (gentle down-scrolls), `slow_scroll` (scroll to `dwell_text`, dwell there). |
+| `motion` | string | Motion preset during the recording window: `dwell` (stay put + wander), `dwell_scroll` (gentle down-scrolls), `slow_scroll` (scroll to `dwell_text`, dwell there), `agentic` (reuse pre-placed segment media from operator MCP take; see below). |
+| `agentic_goal` | string | **Required when `motion` is `agentic`.** Free-text intent the operator agent executes (caption + UI goal). `ready[]` remains the scripted fallback path. |
 | `dwell_text` | string | `slow_scroll`: text to scroll toward and dwell on. |
 | `input_tweak` | object | `slow_scroll`: best-effort input edit while dwelling: `{"selector": "<css>", "index": 0, "value": "30"}`. |
 | `hover_text` | string | `dwell`: exact text to hover the mouse over. |
@@ -105,6 +106,36 @@ video-engine: stage=<stage> status=error message=<one_line_underscored_message>
 
 The timing_map in the clip JSON references these names via `ui_target`.
 `end_card` is the built-in branded end card (config `brand`), always available.
+
+### Agentic motion (`motion: "agentic"`)
+
+Optional per-`ui_target` path for natural, resilient UI footage. **Scripted motions remain the default.** The engine never runs an LLM or MCP session — the operator skill produces takes; `record.mjs` only **reuses** or **falls back**.
+
+| Step | Who | What |
+|------|-----|------|
+| 1. Pre-pass | Operator skill (`/video-clip`) | For each timing_map segment whose `ui_target` has `motion: "agentic"`, record via host Playwright MCP (or `kimi -p` with the recording profile), run `trim_deadair.py`, place media under `~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_{ui_target}.mp4` |
+| 2. Record | `record.mjs` | If that **`.mp4`** exists and is usable (≥ ~10 KB) → **reuse** it (`ready_offset_s: 0`), do not overwrite. Sibling `.webm` (e.g. leftover scripted fallback) is **ignored** for agentic reuse. Else → **scripted fallback** writes `.webm` (`dwell` if `interactions` / `hover_text` present, else `dwell_scroll`) and log clearly |
+| 3. Rest | voice → composite | Unchanged |
+
+**Config validation:** `node record.mjs … --check` exits 2 if any non-builtin target has `motion: "agentic"` and missing/empty `agentic_goal`.
+
+**MCP recording profile:** copy [`mcp-recording.example.json`](./mcp-recording.example.json) into your host MCP config (Kimi/Grok/etc.). Do **not** auto-mutate `~/.kimi-code/mcp.json` from product code. Key args:
+
+| Arg | Why |
+|-----|-----|
+| `--viewport-size 1080x1920` | Must be set at **startup** — mid-session resize leaves video at the small default (e.g. 800×450) |
+| `--headless` + `--isolated` | Clean recording sessions |
+| `--blocked-origins crisp.chat;intercom;fullstory;hotjar;…` | Aligns with target `overlays.block_routes` intent (third-party chat/analytics) |
+| `--output-dir …/video-clip-backup/<project_id>/agentic/` | Staging for raw MCP takes before trim + move into `segments/` |
+
+**Dead-air trim:** MCP takes often freeze while the agent thinks. After recording, run:
+
+```bash
+.venv/bin/python trim_deadair.py <raw-take.webm> --out \
+  ~/01_code/video-clip-backup/<project_id>/segments/seg{NN}_{ui_target}.mp4
+```
+
+Then run the normal pipeline (`generate-clip.sh` / `video-clip-render`). Composite still scales segment duration to voiceover (`-t`); raw MCP duration may overrun the brief — trim first, then let composite scale. Full operator protocol: `.agents/skills/video-clip/SKILL.md` (agentic segment path).
 
 ## Onboarding a new target repo
 
@@ -125,7 +156,11 @@ The timing_map in the clip JSON references these names via `ui_target`.
    therefore always `0`. Segments with locator-driven steps (`click_role`,
    `scroll_to_text`, `input_tweak`, `hover_text`, `interactions`) get
    `showActions` cursor/highlight annotations (bottom-right); dwell segments
-   keep the freehand mouse wander.
+   keep the freehand mouse wander. For `motion: "agentic"`, reuses a pre-placed
+   `.mp4` under `OUT/segments/` when present (no overwrite; sibling `.webm` is
+   ignored); otherwise scripted fallback writes `.webm` — see
+   [Agentic motion](#agentic-motion-motion-agentic). Browser launch is lazy
+   (skipped entirely when every non-builtin segment reuses agentic media).
 2. **voice.py**: edge-tts → `voice.mp3` + word-level `voice.srt`; retries with
    a computed speech rate if the voiceover lands outside 40–45.5s.
 3. **composite.py**: scales segment durations to actual voiceover length,
