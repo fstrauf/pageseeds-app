@@ -129,6 +129,7 @@ Buy: https://pageseeds.com"
         "select-keywords" => select_keywords(&db.to_string_lossy(), &args),
         "write-context" => write_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "write-submit" => write_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
+        "publish-content" => publish_content(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "research-context" => research_context(&db.to_string_lossy(), &project_id),
         "strategy" => strategy_cmd(&require_project_path()),
         "research-pull" => research_pull(&db.to_string_lossy(), &project_id, &args),
@@ -574,6 +575,39 @@ fn write_submit(
             write_task_id,
             keyword,
         },
+    )?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+/// Path B second step: catalog draft/ready_to_publish → published via preflight + apply_publish.
+/// Slugs: `-S slug` or comma-separated `-S slug1,slug2`. Explicit only — never auto on write-submit.
+fn publish_content(
+    db_path: &str,
+    project_id: &str,
+    project_path: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    if project_id.is_empty() {
+        exit("--project-id required");
+    }
+    let raw = flag(args, "--slug", "-S").unwrap_or_else(|| {
+        exit("--slug (-S) required (comma-separated for multiple: -S slug1,slug2)")
+    });
+    let slugs: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if slugs.is_empty() {
+        exit("--slug (-S) must not be empty");
+    }
+
+    let conn = open_db(db_path)?;
+    let result = pageseeds_core::content::publish::publish_by_slugs(
+        &conn,
+        project_id,
+        std::path::Path::new(project_path),
+        &slugs,
     )?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
@@ -1620,6 +1654,12 @@ const TOOLS: &[ToolHelp] = &[
         section: "Path B write",
     },
     ToolHelp {
+        name: "publish-content",
+        purpose: "Catalog draft/ready → published (preflight+apply; explicit second step)",
+        example: "publish-content -i <id> -p <path> -S <slug>[,slug2,...]",
+        section: "Path B write",
+    },
+    ToolHelp {
         name: "research-context",
         purpose: "Path B research strategy package; refreshes shortlist when empty/stale",
         example: "research-context -i <id>",
@@ -1921,6 +1961,7 @@ mod tests {
             "create-reddit-replies",
             "write-submit",
             "write-context",
+            "publish-content",
             "fix-context",
             "fix-submit",
             "merge-context",
@@ -2046,10 +2087,10 @@ mod tests {
         );
         assert_eq!(
             TOOLS.len(),
-            52,
+            53,
             "TOOLS inventory size (free+paid commercial boundary + operator tier)"
         );
-        assert_eq!(paid.len(), 24, "paid set size must match docs/CLI_COMMERCIAL.md");
+        assert_eq!(paid.len(), 25, "paid set size must match docs/CLI_COMMERCIAL.md");
         for meta in ["list-projects", "create-project", "setup"] {
             assert!(
                 tool_names.contains(&meta),

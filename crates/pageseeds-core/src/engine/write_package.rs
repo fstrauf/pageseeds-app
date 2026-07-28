@@ -108,9 +108,9 @@ struct RegisterOutcome {
     catalog_status: Option<String>,
 }
 
-/// Stable reason when Path B forces new catalog rows to draft (issue #168).
+/// Stable reason when Path B forces new catalog rows to draft (issue #168 / #257).
 const CATALOG_DRAFT_UNTIL_PUBLISH_REASON: &str =
-    "new articles stay draft until publish_content / apply_publish";
+    "new articles stay draft until publish-content -S <slug>";
 
 // ─── build_write_package ─────────────────────────────────────────────────────
 
@@ -432,7 +432,7 @@ pub fn submit_written_article(
         None
     };
     let message = if outcome.newly_ingested {
-        "Article validated and registered. Catalog status is draft until publish_content / apply_publish."
+        "Article validated and registered. Catalog status is draft until publish-content -S <slug>."
             .to_string()
     } else {
         "Article validated and registered.".to_string()
@@ -613,8 +613,8 @@ fn register_submitted_article(
     let has_keyword_meta = keyword.is_some() || kd_str.is_some() || vol != 0;
 
     // NOTE: catalog draft until publish; FM status ignored here (issue #168).
-    // Always demote newly ingested Path B articles to draft until publish_content /
-    // apply_publish — not only when keyword meta is present.
+    // Always demote newly ingested Path B articles to draft until CLI
+    // `publish-content` (#257) — not only when keyword meta is present.
     if summary.ingested > 0 {
         for filename in &summary.files {
             if has_keyword_meta {
@@ -1155,7 +1155,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap_or("")
-                .contains("draft until publish_content"),
+                .contains("draft until publish-content"),
             "message={:?}",
             result.message
         );
@@ -1223,7 +1223,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap_or("")
-                .contains("draft until publish_content"),
+                .contains("draft until publish-content"),
             "message={:?}",
             result.message
         );
