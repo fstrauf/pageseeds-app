@@ -115,7 +115,11 @@ fn build_shortlist_summary(project_id: &str) -> String {
         Err(_) => return "(shortlist unavailable)".to_string(),
     };
     let entries = match crate::db::research_shortlist::list_pending_excluding_depleted(&conn, project_id) {
-        Ok(e) => e,
+        Ok(e) => {
+            // Same strategy gate as deterministic seed path (issue #258).
+            let strategy = crate::strategy::load_for_project(&conn, project_id);
+            crate::engine::exec::keywords::filter_pending_shortlist_by_strategy(e, &strategy)
+        }
         Err(_) => return "(shortlist unavailable)".to_string(),
     };
 

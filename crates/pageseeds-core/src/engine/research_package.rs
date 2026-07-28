@@ -52,6 +52,12 @@ pub struct ShortlistSummaryEntry {
     pub total_impressions: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub article_count: Option<i64>,
+    /// Strategy cluster the theme maps to (project.md), when matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy_cluster: Option<String>,
+    /// Lifecycle status of the matched cluster: active/maintain/legacy/planned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy_status: Option<String>,
 }
 
 impl From<&ResearchShortlistEntry> for ShortlistSummaryEntry {
@@ -67,6 +73,8 @@ impl From<&ResearchShortlistEntry> for ShortlistSummaryEntry {
             signal_score: e.signal_score,
             total_impressions: e.total_impressions,
             article_count: e.article_count,
+            strategy_cluster: e.strategy_cluster.clone(),
+            strategy_status: e.strategy_status.clone(),
         }
     }
 }
@@ -127,14 +135,19 @@ pub struct ResearchContextPackage {
 
 /// Ensure shortlist freshness then build the pure strategy package into one envelope.
 ///
-/// Side effects only via [`ensure_research_shortlist_fresh`]. CLI should call this
-/// and `serde_json::to_value` only — no package field composition in the binary.
+/// Side effects via [`ensure_research_shortlist_fresh`] and cheap strategy
+/// re-annotation ([`reannotate_shortlist_strategy`]) so `project.md` edits show
+/// up on shortlist rows without waiting for the 7-day territory TTL (issue #258).
+/// CLI should call this and `serde_json::to_value` only — no package field
+/// composition in the binary.
 pub fn build_research_context(
     conn: &Connection,
     project_id: &str,
     max_age_days: i64,
 ) -> Result<ResearchContextPackage, String> {
     let refresh = ensure_research_shortlist_fresh(conn, project_id, max_age_days);
+    // Always re-annotate strategy columns from live project.md (no-op when empty).
+    let _ = reannotate_shortlist_strategy(conn, project_id);
     let strategy = build_research_strategy_package(conn, project_id)?;
     Ok(ResearchContextPackage {
         strategy,
@@ -145,8 +158,60 @@ pub fn build_research_context(
     })
 }
 
+/// Re-annotate `strategy_cluster` / `strategy_status` on existing shortlist rows
+/// from live `project.md` strategy (issue #258 approach A).
+///
+/// Cheap: no territory re-run. Empty/missing strategy is a no-op (leaves columns).
+/// Returns the number of rows whose annotation changed.
+pub fn reannotate_shortlist_strategy(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<usize, String> {
+    if project_id.trim().is_empty() {
+        return Ok(0);
+    }
+    let strategy = crate::strategy::load_for_project(conn, project_id);
+    if strategy.is_empty() {
+        return Ok(0);
+    }
+
+    let entries = research_shortlist::list_entries(conn, project_id, None)
+        .map_err(|e| e.to_string())?;
+    let mut updated = 0usize;
+
+    for entry in entries {
+        let Some(id) = entry.id else { continue };
+        let (new_cluster, new_status) = match crate::strategy::match_cluster(&strategy, &entry.theme)
+        {
+            Some((name, status)) => (Some(name.to_string()), Some(status.as_str().to_string())),
+            None => (None, None),
+        };
+        if entry.strategy_cluster == new_cluster && entry.strategy_status == new_status {
+            continue;
+        }
+        research_shortlist::update_strategy_annotation(
+            conn,
+            id,
+            new_cluster.as_deref(),
+            new_status.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+        updated += 1;
+    }
+
+    if updated > 0 {
+        log::info!(
+            "[research_package] reannotated {} shortlist row(s) with live content_strategy for project {}",
+            updated,
+            project_id
+        );
+    }
+    Ok(updated)
+}
+
 /// Build a strategy package from research_shortlist + open research tasks.
-/// No LLM. No side effects (read-only). Refresh lives in [`ensure_research_shortlist_fresh`].
+/// No LLM. Prefer [`build_research_context`] when strategy re-annotation and
+/// shortlist refresh side effects are desired.
 pub fn build_research_strategy_package(
     conn: &Connection,
     project_id: &str,
@@ -158,8 +223,30 @@ pub fn build_research_strategy_package(
     let entries = research_shortlist::list_entries(conn, project_id, None)
         .map_err(|e| e.to_string())?;
 
+    // Live recompute strategy tags so package JSON reflects current project.md
+    // even if re-annotate was skipped (e.g. pure package callers). Empty strategy
+    // leaves stored columns (or None) — never fabricates blocks.
+    let live_strategy = crate::strategy::load_for_project(conn, project_id);
     let health_counts = count_shortlist_health(&entries);
-    let shortlist: Vec<ShortlistSummaryEntry> = entries.iter().map(ShortlistSummaryEntry::from).collect();
+    let shortlist: Vec<ShortlistSummaryEntry> = entries
+        .iter()
+        .map(|e| {
+            let mut summary = ShortlistSummaryEntry::from(e);
+            if !live_strategy.is_empty() {
+                match crate::strategy::match_cluster(&live_strategy, &e.theme) {
+                    Some((name, status)) => {
+                        summary.strategy_cluster = Some(name.to_string());
+                        summary.strategy_status = Some(status.as_str().to_string());
+                    }
+                    None => {
+                        summary.strategy_cluster = None;
+                        summary.strategy_status = None;
+                    }
+                }
+            }
+            summary
+        })
+        .collect();
 
     let open_research_task_ids = list_open_research_task_ids(conn, project_id)?;
     let content_strategy = load_content_strategy_summary(conn, project_id);
@@ -603,6 +690,218 @@ mod tests {
         assert_eq!(pkg.health_counts.covered, 1);
         assert!(!pkg.guidance.is_empty());
         assert!(pkg.open_research_task_ids.is_empty());
+        // No project.md → empty strategy → strategy fields absent (serde skip).
+        assert!(pkg.shortlist.iter().all(|e| e.strategy_cluster.is_none()));
+        assert!(pkg.shortlist.iter().all(|e| e.strategy_status.is_none()));
+    }
+
+    /// Full schema so strategy can resolve project path + project.md.
+    fn strategy_fixture_db(project_md: &str) -> (Connection, std::path::PathBuf) {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "pageseeds-research-pkg-strategy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let automation = dir.join(".github").join("automation");
+        std::fs::create_dir_all(&automation).unwrap();
+        std::fs::write(automation.join("project.md"), project_md).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('proj1', 'Test', ?1, 1, 'workspace')",
+            rusqlite::params![dir.to_string_lossy()],
+        )
+        .unwrap();
+        (conn, dir)
+    }
+
+    #[test]
+    fn strategy_package_surfaces_strategy_cluster_and_status() {
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Test
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+
+### Cluster 2: Old Services (LEGACY)
+- web design packages
+"#,
+        );
+        // Seed DB with stale/wrong annotation; package must live-recompute.
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status,
+              strategy_cluster, strategy_status, added_at)
+             VALUES ('proj1', 'technical seo', '[]', 'test', 'pending', 'high', 'promising',
+                     'Stale Cluster', 'legacy', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status, added_at)
+             VALUES ('proj1', 'web design packages', '[]', 'test', 'pending', 'medium', 'unproven', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let pkg = build_research_strategy_package(&conn, "proj1").unwrap();
+        let by = |t: &str| pkg.shortlist.iter().find(|e| e.theme == t).unwrap();
+
+        let active = by("technical seo");
+        assert_eq!(active.strategy_cluster.as_deref(), Some("SEO Fundamentals"));
+        assert_eq!(active.strategy_status.as_deref(), Some("active"));
+
+        let legacy = by("web design packages");
+        assert_eq!(legacy.strategy_cluster.as_deref(), Some("Old Services"));
+        assert_eq!(legacy.strategy_status.as_deref(), Some("legacy"));
+
+        // Serde includes strategy fields when present.
+        let value = serde_json::to_value(&pkg).unwrap();
+        let rows = value["shortlist"].as_array().unwrap();
+        let clusters: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["strategy_cluster"].as_str())
+            .collect();
+        assert!(clusters.contains(&"SEO Fundamentals"));
+        assert!(clusters.contains(&"Old Services"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reannotate_shortlist_strategy_updates_stale_columns_without_ttl() {
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Test
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+
+### Cluster 2: Old Services (LEGACY)
+- web design packages
+"#,
+        );
+        // Stale annotation as if strategy was edited after territory write.
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status,
+              strategy_cluster, strategy_status, added_at)
+             VALUES ('proj1', 'technical seo', '[]', 'territory_analysis', 'pending', 'high',
+                     'unproven', NULL, NULL, ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status,
+              strategy_cluster, strategy_status, added_at)
+             VALUES ('proj1', 'web design packages', '[]', 'territory_analysis', 'pending', 'medium',
+                     'unproven', 'Old Name', 'active', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let n = reannotate_shortlist_strategy(&conn, "proj1").unwrap();
+        assert_eq!(n, 2);
+
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        let by = |t: &str| rows.iter().find(|e| e.theme == t).unwrap();
+        assert_eq!(
+            by("technical seo").strategy_cluster.as_deref(),
+            Some("SEO Fundamentals")
+        );
+        assert_eq!(by("technical seo").strategy_status.as_deref(), Some("active"));
+        assert_eq!(
+            by("web design packages").strategy_cluster.as_deref(),
+            Some("Old Services")
+        );
+        assert_eq!(
+            by("web design packages").strategy_status.as_deref(),
+            Some("legacy")
+        );
+
+        // Idempotent second pass.
+        assert_eq!(reannotate_shortlist_strategy(&conn, "proj1").unwrap(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reannotate_empty_strategy_is_noop() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('proj1', 'Test', '/tmp/no-project-md-here', 1, 'workspace')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status,
+              strategy_cluster, strategy_status, added_at)
+             VALUES ('proj1', 'theme', '[]', 'test', 'pending', 'medium', 'unproven',
+                     'Keep Me', 'active', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        assert_eq!(reannotate_shortlist_strategy(&conn, "proj1").unwrap(), 0);
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows[0].strategy_cluster.as_deref(), Some("Keep Me"));
+        assert_eq!(rows[0].strategy_status.as_deref(), Some("active"));
+    }
+
+    #[test]
+    fn research_context_reannotates_on_fresh_shortlist() {
+        // Even when territory TTL skips, build_research_context re-annotates.
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Test
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+"#,
+        );
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status,
+              strategy_cluster, strategy_status, added_at)
+             VALUES ('proj1', 'technical seo', '[]', 'territory_analysis', 'pending', 'high',
+                     'promising', NULL, NULL, ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+
+        let envelope =
+            build_research_context(&conn, "proj1", RESEARCH_SHORTLIST_MAX_AGE_DAYS).unwrap();
+        assert!(!envelope.shortlist_refreshed);
+        assert_eq!(
+            envelope.shortlist_refresh_reason,
+            shortlist_refresh_reason::SKIPPED_FRESH
+        );
+        let row = &envelope.strategy.shortlist[0];
+        assert_eq!(row.strategy_cluster.as_deref(), Some("SEO Fundamentals"));
+        assert_eq!(row.strategy_status.as_deref(), Some("active"));
+
+        // DB columns also updated (re-annotate side effect).
+        let db_rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(
+            db_rows[0].strategy_cluster.as_deref(),
+            Some("SEO Fundamentals")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

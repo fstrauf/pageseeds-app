@@ -5,11 +5,13 @@
 ///   - territory_analysis: open / mid-coverage / saturated themes from desk
 ///     GSC tape (`gsc_page_daily`); fills shortlist for research (not final selection)
 ///   - coverage_gap: thin clusters from keyword coverage analysis
+///     (**documented future source** — no writer in-repo yet)
 ///   - manual: user-added entries
 ///
 /// Consumers:
-///   - research_keywords: reads pending entries, validates through DataForSEO,
-///     marks as researched
+///   - research_keywords: reads pending entries (strategy-gated: LEGACY /
+///     do_not_expand excluded via live `content_strategy`), validates through
+///     DataForSEO, marks as researched
 ///   - write_article: marks entries as covered when an article is published
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -305,6 +307,26 @@ pub fn update_health(
     Ok(affected)
 }
 
+/// Update only strategy annotation columns on a shortlist row (issue #258).
+///
+/// Used by re-annotate after `project.md` strategy edits without a full territory
+/// re-run. Does not touch status, seeds, or freshness clocks.
+pub fn update_strategy_annotation(
+    conn: &Connection,
+    id: i64,
+    strategy_cluster: Option<&str>,
+    strategy_status: Option<&str>,
+) -> Result<usize> {
+    let affected = conn.execute(
+        "UPDATE research_shortlist
+         SET strategy_cluster = ?1,
+             strategy_status = ?2
+         WHERE id = ?3",
+        rusqlite::params![strategy_cluster, strategy_status, id],
+    )?;
+    Ok(affected)
+}
+
 /// List pending shortlist entries for a project, excluding depleted themes.
 ///
 /// Prefer `health_status = 'promising'` first so product-adjacent themes that
@@ -521,6 +543,46 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].seeds.len(), 2);
         assert_eq!(entries[0].health_status, "promising");
+    }
+
+    #[test]
+    fn update_strategy_annotation_rewrites_only_strategy_columns() {
+        let conn = in_memory_db();
+        let mut entry = ResearchShortlistEntry::new(
+            "proj1",
+            "technical seo",
+            vec!["technical seo".to_string()],
+            "territory_analysis",
+            "high",
+            Some(2),
+            Some(1200.0),
+        );
+        entry.status = "pending".to_string();
+        entry.strategy_cluster = Some("Stale".to_string());
+        entry.strategy_status = Some("active".to_string());
+        let id = upsert_entry(&conn, &entry).unwrap();
+
+        let n = update_strategy_annotation(
+            &conn,
+            id,
+            Some("SEO Fundamentals"),
+            Some("legacy"),
+        )
+        .unwrap();
+        assert_eq!(n, 1);
+
+        let rows = list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows[0].strategy_cluster.as_deref(), Some("SEO Fundamentals"));
+        assert_eq!(rows[0].strategy_status.as_deref(), Some("legacy"));
+        // Status / seeds untouched.
+        assert_eq!(rows[0].status, "pending");
+        assert_eq!(rows[0].seeds, vec!["technical seo".to_string()]);
+
+        // Clear annotation to NULL.
+        update_strategy_annotation(&conn, id, None, None).unwrap();
+        let rows = list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows[0].strategy_cluster, None);
+        assert_eq!(rows[0].strategy_status, None);
     }
 
     #[test]
