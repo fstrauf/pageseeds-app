@@ -218,6 +218,11 @@ pub(crate) fn filter_pending_shortlist_by_strategy(
             .seeds
             .retain(|s| !crate::strategy::strategy_blocks_expansion(s, strategy));
         seeds_skipped += seed_before.saturating_sub(entry.seeds.len());
+        // No seeds left → research_pipeline would mark_researched with zero pairs.
+        if entry.seeds.is_empty() {
+            themes_skipped += 1;
+            continue;
+        }
         kept.push(entry);
     }
 
@@ -315,5 +320,23 @@ mod tests {
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].seeds.len(), 1);
         assert_eq!(kept[1].seeds.len(), 1);
+    }
+
+    #[test]
+    fn filter_all_seeds_blocked_drops_entry() {
+        // Theme itself is allowed, but every seed is hard-blocked → entry not kept
+        // (avoids mark_researched with zero research pairs).
+        let strategy = fixture_strategy();
+        let entries = vec![
+            entry(
+                "mixed but all blocked",
+                &["web design packages guide", "custom web design near me"],
+            ),
+            entry("technical seo", &["technical seo checklist"]),
+        ];
+        let kept = filter_pending_shortlist_by_strategy(entries, &strategy);
+        let themes: Vec<&str> = kept.iter().map(|e| e.theme.as_str()).collect();
+        assert_eq!(themes, vec!["technical seo"]);
+        assert!(!kept.iter().any(|e| e.seeds.is_empty()));
     }
 }
