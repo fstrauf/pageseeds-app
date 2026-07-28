@@ -316,11 +316,18 @@ for (const { i, seg, isBuiltin, target } of plan) {
   // Ready-steps are done — only now start filming (no warmup in the footage).
   const file = `seg${String(i).padStart(2, '0')}_${seg.ui_target}.webm`;
   const filePath = path.join(SEG_DIR, file);
-  if (hasLocatorSteps(target)) {
-    await page.screencast.showActions({ position: 'bottom-right' });
-  }
+  // showActions must attach AFTER screencast.start (attaching before is a
+  // silent no-op) and needs an explicit cursor + duration to be visible —
+  // validated against call-analyzer#983's working recorder.
   await page.screencast.start({ path: filePath, size: VP });
+  let actions = null;
+  if (hasLocatorSteps(target)) {
+    actions = await page.screencast.showActions({
+      cursor: 'pointer', duration: 1200, fontSize: 18, position: 'bottom-right',
+    });
+  }
   await motion(page, needS, target);
+  if (actions) await actions.dispose().catch(() => {});
   await page.screencast.stop();
   await context.close();
 
