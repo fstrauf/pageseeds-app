@@ -197,10 +197,26 @@ async function runSteps(page, steps) {
 
 // --- motion presets ---------------------------------------------------------------
 
+/** Click + type into a single input on camera (char-by-char reads as real typing).
+ *  Applied at the START of every motion so the typed state lands inside the
+ *  composite trim window. Best-effort: never fails the segment. */
+async function applyInputTweak(page, tweak) {
+  if (!tweak) return;
+  try {
+    const inp = page.locator(tweak.selector).nth(tweak.index ?? 0);
+    if (await inp.isVisible({ timeout: 3000 })) {
+      await inp.click({ timeout: 1500 });
+      await inp.pressSequentially(String(tweak.value), { delay: 70 });
+      await sleep(800);
+    }
+  } catch { /* input tweak is best-effort */ }
+}
+
 const MOTIONS = {
   /** Gentle down-only scrolling + mouse wander (headers auto-hide). */
-  async dwell_scroll(page, needS) {
+  async dwell_scroll(page, needS, target) {
     const end = Date.now() + needS * 1000;
+    await applyInputTweak(page, target.input_tweak);
     await wander(page, 2);
     while (Date.now() < end) {
       await humanScrollDown(page, 150 + Math.random() * 150);
@@ -211,20 +227,11 @@ const MOTIONS = {
   /** Slow scroll to `dwell_text`, then dwell there; optional one-input tweak. */
   async slow_scroll(page, needS, target) {
     const end = Date.now() + needS * 1000;
+    await applyInputTweak(page, target.input_tweak);
     const dwellLocator = target.dwell_text ? page.getByText(target.dwell_text, { exact: false }).first() : null;
     while (Date.now() < end) {
       const box = dwellLocator ? await dwellLocator.boundingBox().catch(() => null) : null;
       if (box && box.y > 140 && box.y < 900) {
-        if (target.input_tweak) {
-          try {
-            const inp = page.locator(target.input_tweak.selector).nth(target.input_tweak.index ?? 0);
-            if (await inp.isVisible({ timeout: 1500 })) {
-              await inp.click({ timeout: 1500 });
-              await inp.fill(String(target.input_tweak.value));
-              await sleep(600);
-            }
-          } catch { /* input tweak is best-effort */ }
-        }
         await wander(page, 2);
         await sleep(700);
       } else {
@@ -237,6 +244,7 @@ const MOTIONS = {
   /** Stay put: wander, optional hover, optional timed interactions, wander. */
   async dwell(page, needS, target) {
     const end = Date.now() + needS * 1000;
+    await applyInputTweak(page, target.input_tweak);
     await wander(page, 2);
     if (target.hover_text) {
       try {
