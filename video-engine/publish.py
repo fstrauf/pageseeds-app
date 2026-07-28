@@ -67,6 +67,11 @@ def main() -> None:
         action="store_true",
         help="print request plan as JSON; no network calls",
     )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="republish even when the clip already has published.<platform>",
+    )
     args = ap.parse_args()
 
     platforms = [p.strip().lower() for p in args.platforms.split(",") if p.strip()]
@@ -102,7 +107,27 @@ def main() -> None:
     results: list[dict] = []
     any_failed = False
 
+    # Idempotency gate: the clip's `published` block is the ledger — never
+    # upload the same clip to the same platform twice unless --force.
+    try:
+        clip_doc = json.loads(clip_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        clip_doc = {}
+    already = clip_doc.get("published") if isinstance(clip_doc.get("published"), dict) else {}
+
     for platform in platforms:
+        existing = already.get(platform)
+        if isinstance(existing, dict) and existing.get("url") and not args.force:
+            results.append(
+                {
+                    "platform": platform,
+                    "status": "skipped",
+                    "reason": "already_published",
+                    "url": existing["url"],
+                    "note": "pass --force to republish",
+                }
+            )
+            continue
         handler = PLATFORM_HANDLERS[platform]
         try:
             result = handler(clip_path, video_path, args.dry_run)

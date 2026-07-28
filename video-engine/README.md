@@ -199,6 +199,10 @@ Phase D: optional upload of a rendered short via `publish.py`. Stdlib Python
 .venv/bin/python publish.py <clip.json> --platforms youtube,tiktok [--video path/to.mp4]
 ```
 
+- **Idempotency:** the clip's `published` block is the ledger. A platform with
+  an existing `published.<platform>.url` is **skipped** (`status: "skipped"`,
+  `reason: "already_published"`) — re-running a publish pass is always safe.
+  Pass `--force` to republish a platform deliberately.
 - **Metadata** comes from the clip `packaging` block (`title`, `description`, `hashtags`).
   - **YouTube:** sent as snippet/tags. Description may be long-form SEO copy (see
     `docs/video_clip_spec.md`); if over 5,000 chars, `publish.py` **warns on stderr**

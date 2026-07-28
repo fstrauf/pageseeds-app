@@ -395,6 +395,8 @@ Prefer a **concise final user message** (paths + packaging). Optional file:
 
 **Next:** default is YouTube + Instagram via
 `publish.py --platforms youtube,instagram` (one confirm after quality gate).
+Re-runs are safe: platforms with an existing `published.<platform>.url` are
+skipped (`--force` overrides) — never delete the block to force a re-upload.
 YouTube: report URL + clip write-back + MDX embed. Instagram: report media_id +
 permalink; no MDX embed. TikTok only if user asks.
 ```
