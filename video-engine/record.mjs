@@ -12,6 +12,11 @@
  * seconds. Writes <out>/segments/seg{NN}_{ui_target}.webm plus segments.json
  * (ready_offset_s is always 0 — recording starts after the page is ready).
  *
+ * motion: "agentic" is opt-in: if OUT/segments/seg{NN}_{ui_target}.{webm|mp4}
+ * already exists and is usable, it is reused (no browser for that segment).
+ * Otherwise a deterministic scripted fallback runs. Agentic takes are produced
+ * by the operator skill + host Playwright MCP — never by an in-process LLM here.
+ *
  * Exit codes: 0 ok · 2 bad args / config error
  */
 import { chromium } from 'playwright-core';
@@ -21,6 +26,7 @@ import path from 'node:path';
 const PAD_S = 4; // extra footage per segment so composite can trim
 const VP = { width: 1080, height: 1920 };
 const BUILTIN_TARGETS = new Set(['end_card']); // rendered in composite, never recorded
+const MIN_SEGMENT_BYTES = 10_000; // usable screencast / agentic take size gate
 
 // --- args ----------------------------------------------------------------------
 
@@ -84,6 +90,7 @@ function buildPlan(config) {
       url: () => `${baseUrl}${t.path}`,
       ready: t.ready ?? [],
       motion: t.motion ?? 'dwell',
+      agentic_goal: t.agentic_goal ?? null,
       dwell_text: t.dwell_text ?? null,
       input_tweak: t.input_tweak ?? null,
       hover_text: t.hover_text ?? null,
@@ -253,6 +260,71 @@ const MOTIONS = {
   },
 };
 
+const BUILTIN_MOTIONS = new Set(Object.keys(MOTIONS));
+
+/** Prefer dwell when the target has locator-driven mid-window actions; else dwell_scroll. */
+function scriptedFallbackMotionName(target) {
+  if (target.interactions.length || target.hover_text) return 'dwell';
+  return 'dwell_scroll';
+}
+
+/**
+ * Prefer an existing pre-placed agentic take under OUT/segments.
+ * Prefer webm if both exist; only files ≥ MIN_SEGMENT_BYTES count as usable.
+ */
+function findUsableAgenticFile(segDir, index, uiTarget) {
+  const base = `seg${String(index).padStart(2, '0')}_${uiTarget}`;
+  for (const ext of ['.webm', '.mp4']) {
+    const file = `${base}${ext}`;
+    const filePath = path.join(segDir, file);
+    if (fs.existsSync(filePath) && fs.statSync(filePath).size >= MIN_SEGMENT_BYTES) {
+      return file;
+    }
+  }
+  return null;
+}
+
+function hasAgenticGoal(target) {
+  return typeof target.agentic_goal === 'string' && target.agentic_goal.trim().length > 0;
+}
+
+/** Record one segment with a named MOTIONS preset (ready steps first; not filmed). */
+async function recordScriptedSegment(browser, overlays, target, motionName, needS, filePath) {
+  const motion = MOTIONS[motionName];
+  if (!motion) {
+    console.error(`record: unknown motion preset "${motionName}"`);
+    process.exit(2);
+  }
+
+  const { context, page } = await newRecordingPage(browser, overlays);
+  await page.goto(target.url(), { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await dismissOverlays(page, overlays);
+  await runSteps(page, target.ready);
+  await dismissOverlays(page, overlays, 1200);
+
+  // Ready-steps are done — only now start filming (no warmup in the footage).
+  // showActions must attach AFTER screencast.start (attaching before is a
+  // silent no-op) and needs an explicit cursor + duration to be visible —
+  // validated against call-analyzer#983's working recorder.
+  await page.screencast.start({ path: filePath, size: VP });
+  let actions = null;
+  if (hasLocatorSteps(target)) {
+    actions = await page.screencast.showActions({
+      cursor: 'pointer', duration: 1200, fontSize: 18, position: 'bottom-right',
+    });
+  }
+  await motion(page, needS, target);
+  if (actions) await actions.dispose().catch(() => {});
+  await page.screencast.stop();
+  await context.close();
+
+  // screencast writes the webm on stop(); verify it landed before manifesting.
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).size < MIN_SEGMENT_BYTES) {
+    console.error(`record: screencast produced no usable video at ${filePath}`);
+    process.exit(2);
+  }
+}
+
 // --- main -------------------------------------------------------------------------
 
 const args = parseArgs(process.argv.slice(2));
@@ -275,9 +347,28 @@ for (let i = 0; i < clip.timing_map.length; i++) {
 
 if (args.check) {
   for (const { i, seg, isBuiltin, target } of plan) {
-    if (isBuiltin) console.log(`[check] seg ${i}: ${seg.ui_target} -> builtin (rendered in composite)`);
-    else if (!target) { console.error(`[check] seg ${i}: no ui_target "${seg.ui_target}" in ${configPath}`); process.exit(2); }
-    else console.log(`[check] seg ${i}: ${seg.ui_target} -> ${config.base_url}${config.ui_targets[seg.ui_target].path} (motion: ${target.motion})`);
+    if (isBuiltin) {
+      console.log(`[check] seg ${i}: ${seg.ui_target} -> builtin (rendered in composite)`);
+    } else if (!target) {
+      console.error(`[check] seg ${i}: no ui_target "${seg.ui_target}" in ${configPath}`);
+      process.exit(2);
+    } else if (target.motion === 'agentic') {
+      if (!hasAgenticGoal(target)) {
+        console.error(
+          `[check] seg ${i}: ui_target "${seg.ui_target}" has motion "agentic" but agentic_goal is missing or empty`,
+        );
+        process.exit(2);
+      }
+      console.log(
+        `[check] seg ${i}: ${seg.ui_target} -> ${config.base_url}${config.ui_targets[seg.ui_target].path}` +
+          ` (motion: agentic, reuse path; goal: ${target.agentic_goal.trim().slice(0, 80)})`,
+      );
+    } else {
+      console.log(
+        `[check] seg ${i}: ${seg.ui_target} -> ${config.base_url}${config.ui_targets[seg.ui_target].path}` +
+          ` (motion: ${target.motion})`,
+      );
+    }
   }
   console.log('[check] ok');
   process.exit(0);
@@ -289,9 +380,32 @@ for (const { i, seg, isBuiltin, target } of plan) {
   process.exit(2);
 }
 
+// Validate non-agentic motions early (agentic is handled via reuse / scripted fallback).
+for (const { i, seg, isBuiltin, target } of plan) {
+  if (isBuiltin || !target) continue;
+  if (target.motion === 'agentic') {
+    if (!hasAgenticGoal(target)) {
+      console.error(
+        `record: ui_target "${seg.ui_target}" has motion "agentic" but agentic_goal is missing or empty`,
+      );
+      process.exit(2);
+    }
+    continue;
+  }
+  if (!BUILTIN_MOTIONS.has(target.motion)) {
+    console.error(`record: unknown motion preset "${target.motion}" for ${seg.ui_target}`);
+    process.exit(2);
+  }
+}
+
 fs.mkdirSync(SEG_DIR, { recursive: true });
-const browser = await chromium.launch();
 const manifest = [];
+let browser = null;
+
+async function ensureBrowser() {
+  if (!browser) browser = await chromium.launch();
+  return browser;
+}
 
 for (const { i, seg, isBuiltin, target } of plan) {
   if (isBuiltin) {
@@ -299,47 +413,34 @@ for (const { i, seg, isBuiltin, target } of plan) {
     continue;
   }
   const needS = seg.to_s - seg.from_s + PAD_S;
+  const webmFile = `seg${String(i).padStart(2, '0')}_${seg.ui_target}.webm`;
+  const webmPath = path.join(SEG_DIR, webmFile);
+
+  if (target.motion === 'agentic') {
+    const existing = findUsableAgenticFile(SEG_DIR, i, seg.ui_target);
+    if (existing) {
+      // Critical: do not overwrite pre-placed agentic media.
+      console.log(`[record] seg ${i}: ${seg.ui_target} (agentic) reusing existing ${existing}`);
+      manifest.push({ index: i, ui_target: seg.ui_target, file: existing, ready_offset_s: 0 });
+      continue;
+    }
+    const fallback = scriptedFallbackMotionName(target);
+    console.log(
+      `[record] seg ${i}: ${seg.ui_target} agentic take missing under ${SEG_DIR} — ` +
+        `scripted fallback (motion: ${fallback}, ${needS}s)`,
+    );
+    await recordScriptedSegment(await ensureBrowser(), overlays, target, fallback, needS, webmPath);
+    manifest.push({ index: i, ui_target: seg.ui_target, file: webmFile, ready_offset_s: 0 });
+    console.log(`[record]   -> ${webmFile} (scripted fallback)`);
+    continue;
+  }
+
   console.log(`[record] seg ${i}: ${seg.ui_target} (${needS}s)`);
-
-  const { context, page } = await newRecordingPage(browser, overlays);
-  await page.goto(target.url(), { waitUntil: 'domcontentloaded', timeout: 120000 });
-  await dismissOverlays(page, overlays);
-  await runSteps(page, target.ready);
-  await dismissOverlays(page, overlays, 1200);
-
-  const motion = MOTIONS[target.motion];
-  if (!motion) {
-    console.error(`record: unknown motion preset "${target.motion}" for ${seg.ui_target}`);
-    process.exit(2);
-  }
-
-  // Ready-steps are done — only now start filming (no warmup in the footage).
-  const file = `seg${String(i).padStart(2, '0')}_${seg.ui_target}.webm`;
-  const filePath = path.join(SEG_DIR, file);
-  // showActions must attach AFTER screencast.start (attaching before is a
-  // silent no-op) and needs an explicit cursor + duration to be visible —
-  // validated against call-analyzer#983's working recorder.
-  await page.screencast.start({ path: filePath, size: VP });
-  let actions = null;
-  if (hasLocatorSteps(target)) {
-    actions = await page.screencast.showActions({
-      cursor: 'pointer', duration: 1200, fontSize: 18, position: 'bottom-right',
-    });
-  }
-  await motion(page, needS, target);
-  if (actions) await actions.dispose().catch(() => {});
-  await page.screencast.stop();
-  await context.close();
-
-  // screencast writes the webm on stop(); verify it landed before manifesting.
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).size < 10_000) {
-    console.error(`record: screencast produced no usable video at ${filePath}`);
-    process.exit(2);
-  }
-  manifest.push({ index: i, ui_target: seg.ui_target, file, ready_offset_s: 0 });
-  console.log(`[record]   -> ${file}`);
+  await recordScriptedSegment(await ensureBrowser(), overlays, target, target.motion, needS, webmPath);
+  manifest.push({ index: i, ui_target: seg.ui_target, file: webmFile, ready_offset_s: 0 });
+  console.log(`[record]   -> ${webmFile}`);
 }
 
 fs.writeFileSync(path.join(SEG_DIR, 'segments.json'), JSON.stringify(manifest, null, 2));
-await browser.close();
+if (browser) await browser.close();
 console.log('[record] done');

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "playwright-recording": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated",
+        "--viewport-size",
+        "1080x1920",
+        "--blocked-origins",
+        "crisp.chat;intercom;fullstory;hotjar;us-assets.i.posthog.com",
+        "--output-dir",
+        "~/01_code/video-clip-backup/<project_id>/agentic/",
+        "--caps=devtools"
+      ]
+    }
+  }
+}

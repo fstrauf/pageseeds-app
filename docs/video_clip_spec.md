@@ -146,6 +146,21 @@ first paragraph, before the first `## ` H2. Idempotent on
 engine; no `LazyYouTubeEmbed` requirement. **Do not** auto-embed TikTok or Instagram
 into MDX.
 
+### Agentic segments (optional)
+
+Opt-in natural UI motion for selected `ui_targets` without nesting LLM/MCP inside
+the render engine. Schema v1 stays additive — no version bump.
+
+| Layer | Detail |
+|-------|--------|
+| **Config** | Target `video.config.json`: `ui_targets.<name>.motion: "agentic"` + required `agentic_goal` (string). `ready[]` remains the scripted fallback. No `timing_map[].motion` override in v1. |
+| **Pre-pass** | Operator skill records via host Playwright MCP (preferred) or `kimi -p`, runs `video-engine/trim_deadair.py`, places `seg{NN}_{ui_target}.mp4` under central `~/01_code/video-clip-backup/<project_id>/segments/`. |
+| **Engine** | `record.mjs` **reuses** that file when usable (≥ ~10 KB) or falls back to scripted motion. Does not call MCP/LLM. `composite.py` / `generate-clip.sh` / voice unchanged. |
+| **MCP profile** | Reference: `video-engine/mcp-recording.example.json` (viewport **1080×1920 at startup**, blocked origins, output-dir). Merge into host MCP config manually. |
+
+SoT for motion enum, reuse/fallback, and MCP args: [`video-engine/README.md`](../video-engine/README.md).  
+Operator protocol + rails: [`.agents/skills/video-clip/SKILL.md`](../.agents/skills/video-clip/SKILL.md).
+
 ### Moment templates (v1)
 
 | Template | Visual |
