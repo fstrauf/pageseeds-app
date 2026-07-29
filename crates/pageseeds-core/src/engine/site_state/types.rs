@@ -162,9 +162,10 @@ pub struct Freshness {
     /// Recovery guidance when [`Self::stale`]; omitted when fresh.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
-    /// Always null until evidence index (#119).
+    /// Newest `article_evidence.updated_at` for the project, or null when empty.
     pub evidence_index_at: Option<String>,
-    /// Always 0.0 until evidence index (#119).
+    /// Fraction of live catalog articles with an evidence row (`0.0`–`1.0`),
+    /// from [`crate::content::article_evidence::coverage`] (`pct_indexed / 100`).
     pub evidence_coverage: f64,
 }
 

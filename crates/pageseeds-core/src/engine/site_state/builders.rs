@@ -787,8 +787,12 @@ fn build_hard_cannibalization_inventory(
 ///
 /// Does **not** consult `ctr_query_metrics` — live `gsc-*` tools are the
 /// dual-path for API freshness; desk rollups expose tape usability here.
+///
+/// Evidence fields come from `article_evidence::coverage` (#119 / #262).
 fn build_gsc_freshness(conn: &Connection, project_id: &str) -> Freshness {
     use crate::engine::exec::common::GSC_METRICS_MAX_AGE_DAYS;
+
+    let (evidence_index_at, evidence_coverage) = evidence_fields(conn, project_id);
 
     let page_max: Option<String> = conn
         .query_row(
@@ -809,8 +813,8 @@ fn build_gsc_freshness(conn: &Connection, project_id: &str) -> Freshness {
                 "Desk GSC tape empty — use gsc-performance / gsc-queries or run collect_gsc then re-read desk"
                     .into(),
             ),
-            evidence_index_at: None,
-            evidence_coverage: 0.0,
+            evidence_index_at,
+            evidence_coverage,
         };
     };
 
@@ -840,9 +844,36 @@ fn build_gsc_freshness(conn: &Connection, project_id: &str) -> Freshness {
         stale,
         source: "gsc_page_daily".into(),
         hint,
-        evidence_index_at: None,
-        evidence_coverage: 0.0,
+        evidence_index_at,
+        evidence_coverage,
     }
+}
+
+/// Wire desk evidence fields from the existing coverage helper (#119 / #262).
+///
+/// `evidence_coverage` is the fraction `0.0`–`1.0` (`pct_indexed / 100`).
+/// `evidence_index_at` is `MAX(updated_at)` over the project's evidence rows.
+fn evidence_fields(conn: &Connection, project_id: &str) -> (Option<String>, f64) {
+    let coverage = match crate::content::article_evidence::coverage(conn, project_id) {
+        Ok(c) => c.pct_indexed / 100.0,
+        Err(e) => {
+            log::warn!(
+                "[site_state] article_evidence::coverage failed project={}: {}",
+                project_id,
+                e
+            );
+            0.0
+        }
+    };
+    let index_at: Option<String> = conn
+        .query_row(
+            "SELECT MAX(updated_at) FROM article_evidence WHERE project_id = ?1",
+            rusqlite::params![project_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+    (index_at, coverage)
 }
 
 fn indexing_status_map(conn: &Connection, project_id: &str) -> HashMap<String, String> {
@@ -931,8 +962,11 @@ fn build_hints(
     if non_catalog_gsc.count > 0 {
         hints.push("Non-catalog residual GSC present".into());
     }
-    // Always until #119
-    hints.push("Evidence index not available".into());
+    // Only when no live articles are covered by the evidence index (#119 / #262).
+    // `pct_indexed` is 100 when total_live==0, so coverage==0 implies live>0 & indexed==0.
+    if freshness.evidence_coverage <= 0.0 {
+        hints.push("Evidence index not available".into());
+    }
     hints
 }
 
