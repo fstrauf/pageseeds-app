@@ -23,6 +23,12 @@ pub struct KeywordPickerOutput {
     /// Hard-dropped by project.md strategy (`do_not_expand` + LEGACY clusters).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub strategy_rejected: usize,
+    /// Per-candidate strategy hard-drop telemetry (keyword + reason).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strategy_rejected_items: Vec<crate::strategy::StrategyRejection>,
+    /// Candidates surviving the strategy hard gate before top-N / post-filters.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub strategy_kept: usize,
     /// Aggregate stage dropoff counts for operators (#263). Always present.
     #[serde(default)]
     pub filter_funnel: FilterFunnel,
@@ -104,6 +110,8 @@ pub fn select_keywords_deterministic(
     // Match policy: case-insensitive substring (see strategy::keyword_matches_phrase).
     let filtered = apply_strategy_filter(candidates, strategy, |k| k.keyword.as_str());
     let strategy_rejected = filtered.strategy_rejected_count;
+    let strategy_rejected_items = filtered.rejected;
+    let strategy_kept = filtered.kept.len();
     if strategy_rejected > 0 {
         log::info!(
             "[research_final_selection] strategy-rejected {} candidates (do_not_expand / LEGACY)",
@@ -245,6 +253,8 @@ pub fn select_keywords_deterministic(
             total_candidates,
             filtered_out,
             strategy_rejected,
+            strategy_rejected_items,
+            strategy_kept,
             filter_funnel,
         }, used_fallback))
     } else {
@@ -281,6 +291,8 @@ pub fn select_keywords_deterministic(
             total_candidates,
             filtered_out,
             strategy_rejected,
+            strategy_rejected_items,
+            strategy_kept,
             filter_funnel,
         }, used_fallback))
     }
@@ -486,7 +498,10 @@ pub fn exec_research_final_selection(
         Some(&strategy),
     ) {
         Ok((mut output, used_fallback)) => {
+            // Preserve strategy telemetry through post-filters so operators see it.
             let strategy_rejected = output.strategy_rejected;
+            let strategy_rejected_items = output.strategy_rejected_items.clone();
+            let strategy_kept = output.strategy_kept;
             // Agentic relevance check: DataForSEO expansion can return
             // same-vocabulary but off-domain candidates (e.g. "assignment risk
             // ao3" from an options-trading seed). Cannot be deterministic:
@@ -520,8 +535,9 @@ pub fn exec_research_final_selection(
             trim_to_final(&mut output, FINAL_RESULTS);
             let final_count = selected_count(&output);
             output.filtered_out = output.total_candidates.saturating_sub(final_count);
-            // Preserve strategy_rejected through post-filters so operators see it.
             output.strategy_rejected = strategy_rejected;
+            output.strategy_rejected_items = strategy_rejected_items;
+            output.strategy_kept = strategy_kept;
             output.filter_funnel.winnability_avoid_dropped = avoid_dropped;
             output.filter_funnel.final_selected = final_count;
 

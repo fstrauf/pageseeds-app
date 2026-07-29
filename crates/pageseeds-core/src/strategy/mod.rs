@@ -557,12 +557,30 @@ pub enum StrategyRank {
     Maintain = 2,
 }
 
+/// Why a candidate was hard-dropped by the strategy gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyRejectReason {
+    DoNotExpand,
+    LegacyCluster,
+}
+
+/// One hard-dropped candidate with the reason operators can cite in reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyRejection {
+    pub keyword: String,
+    pub reason: StrategyRejectReason,
+}
+
 /// Result of applying hard strategy gates to a candidate list.
 #[derive(Debug, Clone)]
 pub struct StrategyFilterOutcome<T> {
     pub kept: Vec<(T, StrategyRank)>,
     /// Count of candidates hard-dropped (do_not_expand + LEGACY).
+    /// Always equal to `rejected.len()`.
     pub strategy_rejected_count: usize,
+    /// Per-candidate hard-drop telemetry (keyword + reason).
+    pub rejected: Vec<StrategyRejection>,
 }
 
 /// Apply strategy hard gates and rank hints to candidates.
@@ -572,6 +590,9 @@ pub struct StrategyFilterOutcome<T> {
 /// - MAINTAIN map → keep with [`StrategyRank::Maintain`]
 /// - ACTIVE / primary alignment → [`StrategyRank::ActiveBoost`]
 /// - Empty strategy → all kept as [`StrategyRank::Neutral`] (no-op)
+///
+/// Evaluation order for dual matches: **do_not_expand first**, then LEGACY
+/// (if both match, reason is [`StrategyRejectReason::DoNotExpand`]).
 ///
 /// `keyword_of` extracts the phrase used for matching.
 pub fn apply_strategy_filter<T, F>(
@@ -590,16 +611,28 @@ where
         return StrategyFilterOutcome {
             kept,
             strategy_rejected_count: 0,
+            rejected: Vec::new(),
         };
     }
 
     let mut kept = Vec::new();
-    let mut strategy_rejected_count = 0usize;
+    let mut rejected = Vec::new();
 
     for c in candidates {
         let kw = keyword_of(&c);
-        if matches_do_not_expand(kw, strategy) || matches_legacy_cluster(kw, strategy) {
-            strategy_rejected_count += 1;
+        // do_not_expand first so dual matches record DoNotExpand (not Legacy).
+        if matches_do_not_expand(kw, strategy) {
+            rejected.push(StrategyRejection {
+                keyword: kw.to_string(),
+                reason: StrategyRejectReason::DoNotExpand,
+            });
+            continue;
+        }
+        if matches_legacy_cluster(kw, strategy) {
+            rejected.push(StrategyRejection {
+                keyword: kw.to_string(),
+                reason: StrategyRejectReason::LegacyCluster,
+            });
             continue;
         }
         let rank = if matches_maintain_cluster(kw, strategy) {
@@ -612,9 +645,11 @@ where
         kept.push((c, rank));
     }
 
+    let strategy_rejected_count = rejected.len();
     StrategyFilterOutcome {
         kept,
         strategy_rejected_count,
+        rejected,
     }
 }
 
@@ -830,6 +865,16 @@ mod tests {
         ];
         let outcome = apply_strategy_filter(candidates, &strategy, |s| s.as_str());
         assert_eq!(outcome.strategy_rejected_count, 2);
+        assert_eq!(outcome.rejected.len(), 2);
+        assert_eq!(outcome.strategy_rejected_count, outcome.rejected.len());
+        assert!(outcome.rejected.iter().any(|r| {
+            r.keyword == "custom web design packages"
+                && r.reason == StrategyRejectReason::DoNotExpand
+        }));
+        assert!(outcome.rejected.iter().any(|r| {
+            r.keyword == "web design packages pricing"
+                && r.reason == StrategyRejectReason::LegacyCluster
+        }));
         let kept: Vec<_> = outcome
             .kept
             .iter()
@@ -849,6 +894,27 @@ mod tests {
             .any(|(k, r)| *k == "random unrelated keyword" && *r == StrategyRank::Neutral));
         assert!(!kept.iter().any(|(k, _)| k.contains("custom web design")));
         assert!(!kept.iter().any(|(k, _)| k.contains("web design packages")));
+    }
+
+    #[test]
+    fn strategy_reject_reason_serde_snake_case() {
+        let dne = StrategyRejection {
+            keyword: "custom web design packages".to_string(),
+            reason: StrategyRejectReason::DoNotExpand,
+        };
+        let leg = StrategyRejection {
+            keyword: "web design packages pricing".to_string(),
+            reason: StrategyRejectReason::LegacyCluster,
+        };
+        let dne_json = serde_json::to_value(&dne).unwrap();
+        let leg_json = serde_json::to_value(&leg).unwrap();
+        assert_eq!(dne_json["reason"], "do_not_expand");
+        assert_eq!(leg_json["reason"], "legacy_cluster");
+        // Round-trip
+        let dne_back: StrategyRejection = serde_json::from_value(dne_json).unwrap();
+        let leg_back: StrategyRejection = serde_json::from_value(leg_json).unwrap();
+        assert_eq!(dne_back, dne);
+        assert_eq!(leg_back, leg);
     }
 
     #[test]
@@ -922,6 +988,7 @@ mod tests {
         let candidates = vec!["a".to_string(), "b".to_string()];
         let outcome = apply_strategy_filter(candidates, &strategy, |s| s.as_str());
         assert_eq!(outcome.strategy_rejected_count, 0);
+        assert!(outcome.rejected.is_empty());
         assert_eq!(outcome.kept.len(), 2);
         assert!(outcome
             .kept
