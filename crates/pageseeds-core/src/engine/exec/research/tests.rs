@@ -61,6 +61,8 @@ mod tests {
             total_candidates: total,
             filtered_out: 0,
             strategy_rejected: 0,
+            strategy_rejected_items: Vec::new(),
+            strategy_kept: 0,
             filter_funnel: FilterFunnel::default(),
         }
     }
@@ -570,6 +572,8 @@ mod tests {
 
     #[test]
     fn strategy_hard_drops_do_not_expand_and_legacy() {
+        use crate::strategy::StrategyRejectReason;
+
         let pipeline = build_pipeline(vec![
             kw("seo tools checklist", 1000, 10.0, "informational"),
             kw("best custom web design", 5000, 10.0, "informational"),
@@ -580,8 +584,19 @@ mod tests {
         let strategy = test_strategy();
         let (output, _) =
             select_keywords_deterministic(&json, false, 10, Some(&strategy)).unwrap();
-        let results = output.difficulty.unwrap().results;
+        let results = output.difficulty.as_ref().unwrap().results.clone();
         assert_eq!(output.strategy_rejected, 2);
+        assert_eq!(output.strategy_rejected_items.len(), 2);
+        // Two survivors after hard gate (max 10 so both remain selected).
+        assert_eq!(output.strategy_kept, 2);
+        assert!(output.strategy_rejected_items.iter().any(|r| {
+            r.keyword.contains("custom web design")
+                && r.reason == StrategyRejectReason::DoNotExpand
+        }));
+        assert!(output.strategy_rejected_items.iter().any(|r| {
+            r.keyword.contains("web design packages")
+                && r.reason == StrategyRejectReason::LegacyCluster
+        }));
         assert!(results.iter().any(|r| r.keyword == "seo tools checklist"));
         assert!(results.iter().any(|r| r.keyword == "on-page seo tips"));
         assert!(!results.iter().any(|r| r.keyword.contains("custom web design")));
@@ -614,6 +629,8 @@ mod tests {
         let (output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
         let results = output.difficulty.unwrap().results;
         assert_eq!(output.strategy_rejected, 0);
+        assert!(output.strategy_rejected_items.is_empty());
+        assert_eq!(output.strategy_kept, 2);
         assert_eq!(results.len(), 2);
         // Highest volume first with no strategy gate.
         assert_eq!(results[0].keyword, "custom web design agency");
