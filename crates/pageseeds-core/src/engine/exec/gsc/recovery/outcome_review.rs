@@ -65,8 +65,14 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
         }
     };
 
-    // Resolve site_url (GSC property) from manifest
-    let site_url = resolve_site_url(project_path);
+    // Resolve site_url (GSC property): manifest → seo_workspace → projects DB
+    let site_url = resolve_site_url(&task.project_id, project_path);
+    if site_url.is_empty() {
+        return StepResult::fail(format!(
+            "No site_url configured for project '{}' — set projects.site_url or add gsc_site/url to manifest.json",
+            task.project_id
+        ));
+    }
 
     // Inspect the URL
     let rt = match tokio::runtime::Runtime::new() {

@@ -23,6 +23,7 @@ pub mod runtime;
 pub mod scheduler;
 pub mod setup_check;
 pub mod site_state;
+pub mod site_url_sync;
 pub mod skills;
 pub mod skills_search;
 pub mod spawner;

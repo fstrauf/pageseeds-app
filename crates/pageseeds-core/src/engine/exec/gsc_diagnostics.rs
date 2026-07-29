@@ -9,7 +9,6 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 
 use crate::config::env_resolver::EnvResolver;
-use crate::engine::project_paths::ProjectPaths;
 use crate::engine::spawner::{TaskSpawner, TaskSpec};
 use crate::engine::workflows::StepResult;
 use crate::gsc::db::{self, UrlIndexingStatus};
@@ -32,37 +31,16 @@ pub(crate) fn exec_indexing_diagnostics(
     _gsc_token: Option<&str>,
     conn: &Connection,
 ) -> StepResult {
-    let paths = ProjectPaths::from_path(project_path);
     let resolver = EnvResolver::new(project_path);
 
-    // 1. manifest.json → site_url + sitemap_url
-    let manifest_path = paths.automation_dir.join("manifest.json");
-    let manifest: serde_json::Value =
-        match crate::engine::exec::common::read_json(&manifest_path, "manifest.json") {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-
-    let site_url = match manifest
-        .get("gsc_site")
-        .or_else(|| manifest.get("url"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
+    // 1. site_url + sitemap_url (manifest → seo_workspace → projects DB)
+    let site_cfg = match crate::engine::exec::gsc::resolve_site_config(&task.project_id, project_path)
     {
-        Some(u) => u,
-        None => {
-            return StepResult::fail("No 'url' or 'gsc_site' field in manifest.json".to_string())
-        }
+        Ok(cfg) => cfg,
+        Err(msg) => return StepResult::fail(msg),
     };
-
-    let sitemap_url = manifest
-        .get("sitemap")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| {
-            let base = crate::models::project::site_base_url(&site_url);
-            format!("{}/sitemap.xml", base)
-        });
+    let site_url = site_cfg.site_url;
+    let sitemap_url = site_cfg.sitemap_url;
 
     // 2. Credentials
     let sa_path = match resolver

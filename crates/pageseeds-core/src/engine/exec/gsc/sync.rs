@@ -68,25 +68,12 @@ pub(crate) fn exec_gsc_sync_articles(
         }
     };
 
-    // 4. site_url from manifest.json
-    let site_url: String = {
-        let manifest_path = paths.automation_dir.join("manifest.json");
-        let from_manifest = std::fs::read_to_string(&manifest_path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| {
-                v.get("gsc_site")
-                    .or_else(|| v.get("url"))
-                    .and_then(|u| u.as_str())
-                    .map(String::from)
-            });
-        match from_manifest {
-            Some(u) => u,
-            None => {
-                return StepResult::fail("No site_url found in manifest.json — add 'url' or 'gsc_site' field"
-                        .to_string())
-            }
-        }
+    // 4. site_url: manifest → seo_workspace → projects.site_url (shared resolver).
+    // Live GSC tools already use the DB; requiring only manifest.json was a
+    // false "missing site_url" failure for projects configured via CLI.
+    let site_url = match super::resolve_site_url(&task.project_id, project_path) {
+        Ok(u) => u,
+        Err(msg) => return StepResult::fail(msg),
     };
 
     // `site_url` may be a GSC property ID (sc-domain:…) — convert for fetching.

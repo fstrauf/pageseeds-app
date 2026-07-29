@@ -54,6 +54,10 @@ fn main() {
         run_setup(&args);
         return;
     }
+    if tool == "sync-site-urls" {
+        run_sync_site_urls(&args);
+        return;
+    }
 
     // Gate paid tools before any DB / project work. Unknown tools skip the gate
     // so they still hit the existing "Unknown tool" path.
@@ -1343,6 +1347,44 @@ fn exit(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Free meta: one-off consolidation of site URLs into `projects.site_url`.
+///
+/// Gathers candidates from the projects table, manifest.json, and
+/// seo_workspace.json; picks a winner (prefer `sc-domain:…`); writes the DB.
+/// Idempotent. Optional `-i <project-id>` limits to one project.
+fn run_sync_site_urls(args: &[String]) {
+    let project_id = flag(args, "--project-id", "-i");
+    let db = pageseeds_core::db::default_db_path();
+    let conn = match open_db(&db.to_string_lossy()) {
+        Ok(c) => c,
+        Err(e) => exit(&format!("failed to open project database: {e}")),
+    };
+
+    let payload = if let Some(id) = project_id {
+        match pageseeds_core::engine::site_url_sync::sync_site_url_for_id(&conn, &id) {
+            Ok(row) => serde_json::json!({
+                "mode": "single",
+                "projects_scanned": 1,
+                "projects_updated": if row.changed { 1 } else { 0 },
+                "projects_already_ok": if !row.changed && row.site_url.is_some() { 1 } else { 0 },
+                "projects_missing": if row.site_url.is_none() { 1 } else { 0 },
+                "results": [row],
+            }),
+            Err(e) => exit(&format!("sync-site-urls failed: {e}")),
+        }
+    } else {
+        match pageseeds_core::engine::site_url_sync::sync_all_site_urls(&conn) {
+            Ok(report) => serde_json::to_value(report).unwrap_or_default(),
+            Err(e) => exit(&format!("sync-site-urls failed: {e}")),
+        }
+    };
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
+}
+
 /// Free meta: list registered projects as JSON (same DB as desktop).
 fn run_list_projects() {
     let db = pageseeds_core::db::default_db_path();
@@ -1577,6 +1619,12 @@ const TOOLS: &[ToolHelp] = &[
         name: "setup",
         purpose: "Link/create project, write defaults, first desk win (idempotent)",
         example: "setup --path . --yes [--skip-first-win] [--status] [--license KEY]",
+        section: "Meta",
+    },
+    ToolHelp {
+        name: "sync-site-urls",
+        purpose: "One-off: gather site_url from manifest/workspace/DB → write projects.site_url",
+        example: "sync-site-urls [-i <project-id>]",
         section: "Meta",
     },
     // GSC
@@ -2087,11 +2135,11 @@ mod tests {
         );
         assert_eq!(
             TOOLS.len(),
-            53,
+            54,
             "TOOLS inventory size (free+paid commercial boundary + operator tier)"
         );
         assert_eq!(paid.len(), 25, "paid set size must match docs/CLI_COMMERCIAL.md");
-        for meta in ["list-projects", "create-project", "setup"] {
+        for meta in ["list-projects", "create-project", "setup", "sync-site-urls"] {
             assert!(
                 tool_names.contains(&meta),
                 "meta free tool '{meta}' missing from TOOLS"

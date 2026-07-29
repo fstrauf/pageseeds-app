@@ -38,14 +38,20 @@ pub(crate) fn manifest_configured(path: &Path) -> (bool, String) {
     let has_site = json
         .get("gsc_site")
         .or_else(|| json.get("url"))
+        .or_else(|| json.get("site_url"))
         .and_then(|v| v.as_str())
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
 
     if has_site {
-        (true, "Configured (url/gsc_site present)".to_string())
+        (true, "Configured (url/gsc_site/site_url present)".to_string())
     } else {
-        (false, "Missing 'url' or 'gsc_site'".to_string())
+        // Optional on disk: GSC steps also fall back to seo_workspace.json and
+        // projects.site_url. Missing manifest fields alone is not a hard fail.
+        (
+            false,
+            "Missing url/gsc_site/site_url (optional if projects.site_url is set)".to_string(),
+        )
     }
 }
 

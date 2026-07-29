@@ -45,8 +45,11 @@ pub(crate) async fn exec_gsc_drift(
 ) -> Result<GscDriftReport, crate::error::Error> {
     let paths = ProjectPaths::from_path(project_path);
 
-    // 1. Resolve site config
-    let (site_url, sitemap_url) = resolve_site_config(project_id, project_path)?;
+    // 1. Resolve site config (manifest → seo_workspace → projects DB)
+    let site_cfg = super::resolve_site_config(project_id, project_path)
+        .map_err(crate::error::Error::Other)?;
+    let site_url = site_cfg.site_url;
+    let sitemap_url = site_cfg.sitemap_url;
 
     // 2. Fetch sitemap entries with lastmod (high limit — drift detection needs completeness)
     let sitemap_entries = crate::gsc::sitemap::fetch_sitemap_entries(&sitemap_url, 5000).await?;
@@ -225,57 +228,7 @@ pub(crate) async fn exec_gsc_drift(
 // Data loaders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn resolve_site_config(
-    project_id: &str,
-    project_path: &str,
-) -> Result<(String, String), crate::error::Error> {
-    let paths = ProjectPaths::from_path(project_path);
-    let manifest_path = paths.automation_dir.join("manifest.json");
 
-    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
-        if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(site_url) = manifest
-                .get("gsc_site")
-                .or_else(|| manifest.get("url"))
-                .and_then(|v| v.as_str())
-                .map(String::from)
-            {
-                let sitemap_url = manifest
-                    .get("sitemap")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| {
-                        let base = crate::models::project::site_base_url(&site_url);
-                        format!("{}/sitemap.xml", base)
-                    });
-                return Ok((site_url, sitemap_url));
-            }
-        }
-    }
-
-    // Fallback: query projects table
-    let db_path = crate::db::default_db_path();
-    let conn = rusqlite::Connection::open(&db_path)?;
-    let project = crate::engine::task_store::get_project(&conn, project_id)?;
-
-    let site_url = project
-        .site_url
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| crate::error::Error::Other("No site_url configured".to_string()))?;
-
-    let sitemap_url = project
-        .sitemap_url
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            // `site_url` may be a GSC property ID (sc-domain:…) — convert for fetching.
-            format!(
-                "{}/sitemap.xml",
-                crate::models::project::site_base_url(&site_url)
-            )
-        });
-
-    Ok((site_url, sitemap_url))
-}
 
 /// Inspection-coverage metadata written by `collect_gsc` into
 /// `gsc_collection.json` (issue #26).

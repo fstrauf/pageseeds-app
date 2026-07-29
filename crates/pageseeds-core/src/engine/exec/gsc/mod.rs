@@ -10,6 +10,7 @@ mod collect;
 mod drift;
 mod investigate;
 mod recovery;
+mod site_config;
 mod sync;
 mod task_spawner;
 
@@ -27,6 +28,7 @@ pub(crate) use collect::*;
 pub(crate) use drift::*;
 pub(crate) use investigate::*;
 pub(crate) use recovery::*;
+pub(crate) use site_config::{resolve_site_config, resolve_site_url, ResolvedSiteConfig, SiteConfigSource};
 pub(crate) use sync::*;
 
 /// Normalize a URL for domain comparison by stripping scheme and www.

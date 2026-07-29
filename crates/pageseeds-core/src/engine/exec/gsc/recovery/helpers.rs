@@ -20,22 +20,11 @@ pub(crate) fn extract_slug(url: &str) -> String {
         .to_string()
 }
 
-/// Resolve the site URL (GSC property) from manifest.json.
-pub(crate) fn resolve_site_url(project_path: &str) -> String {
-    let paths = ProjectPaths::from_path(project_path);
-    let manifest_path = paths.automation_dir.join("manifest.json");
-    if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
-        if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(site_url) = manifest
-                .get("gsc_site")
-                .or_else(|| manifest.get("url"))
-                .and_then(|v| v.as_str())
-            {
-                return site_url.to_string();
-            }
-        }
-    }
-    String::new()
+/// Resolve the site URL (GSC property) via shared helper.
+///
+/// Returns empty string when unresolved (callers treat that as skip/fail).
+pub(crate) fn resolve_site_url(project_id: &str, project_path: &str) -> String {
+    crate::engine::exec::gsc::resolve_site_url(project_id, project_path).unwrap_or_default()
 }
 
 pub(crate) fn file_age_hours(path: &std::path::Path) -> Option<u64> {

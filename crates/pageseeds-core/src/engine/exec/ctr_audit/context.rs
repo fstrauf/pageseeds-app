@@ -431,24 +431,12 @@ fn enrich_with_query_metrics(
     conn: &rusqlite::Connection,
     article_records: &mut [serde_json::Value],
 ) -> usize {
-    use crate::engine::project_paths::ProjectPaths;
-
-    let paths = ProjectPaths::from_path(project_path);
-
-    // 1. Resolve site_url from manifest.json
-    let manifest_path = paths.automation_dir.join("manifest.json");
-    let site_url: String = match std::fs::read_to_string(&manifest_path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| {
-            v.get("gsc_site")
-                .or_else(|| v.get("url"))
-                .and_then(|u| u.as_str())
-                .map(String::from)
-        }) {
-        Some(u) => u,
-        None => {
-            log::info!("[ctr_audit] No site_url in manifest.json — skipping query fetch");
+    // 1. Resolve site_url (manifest → seo_workspace → projects DB)
+    let site_url: String = match crate::engine::exec::gsc::resolve_site_url(project_id, project_path)
+    {
+        Ok(u) => u,
+        Err(msg) => {
+            log::info!("[ctr_audit] {} — skipping query fetch", msg);
             return 0;
         }
     };

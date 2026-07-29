@@ -23,13 +23,12 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
 ) -> StepResult {
     let paths = ProjectPaths::from_path(project_path);
 
-    // Resolve site_url from manifest.json
-    let site_url: String = match resolve_site_url(&paths.automation_dir) {
-        Some(u) => u,
-        None => {
-            return StepResult::fail("No site_url in manifest.json — skipping rendered audit".to_string());
-        }
-    };
+    // Resolve site_url (manifest → seo_workspace → projects DB)
+    let site_url: String =
+        match crate::engine::exec::gsc::resolve_site_url(&task.project_id, project_path) {
+            Ok(u) => u,
+            Err(msg) => return StepResult::fail(msg),
+        };
 
     let base_url = normalize_base_url(&site_url);
     let content_path_prefix = normalize_path_prefix(&resolve_content_path_prefix(&paths.automation_dir));
@@ -164,8 +163,15 @@ pub(crate) fn exec_ctr_rendered_serp_audit(
 /// and reports discrepancies. Returns JSON suitable for CLI or agent consumption.
 pub fn compare_rendered_titles(project_path: &str, max_pages: usize) -> Result<serde_json::Value, String> {
     let paths = ProjectPaths::from_path(project_path);
-    let site_url = resolve_site_url(&paths.automation_dir)
-        .ok_or_else(|| "No site_url in manifest.json".to_string())?;
+    let project_id = project_id_for_path(project_path).unwrap_or_default();
+    let site_url = crate::engine::exec::gsc::resolve_site_url(&project_id, project_path)
+        .or_else(|_| {
+            // Path may not be registered; still allow pure-manifest workspaces.
+            resolve_site_url_from_manifest(&paths.automation_dir)
+                .ok_or_else(|| {
+                    "No site_url configured (manifest/seo_workspace/projects.site_url)".to_string()
+                })
+        })?;
     let base_url = normalize_base_url(&site_url);
     let content_path_prefix = normalize_path_prefix(&resolve_content_path_prefix(&paths.automation_dir));
 
@@ -237,7 +243,16 @@ pub(crate) fn fetch_rendered_title(url: &str) -> Result<String, String> {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-fn resolve_site_url(automation_dir: &std::path::Path) -> Option<String> {
+fn project_id_for_path(project_path: &str) -> Option<String> {
+    let db_path = crate::db::default_db_path();
+    let conn = rusqlite::Connection::open(db_path).ok()?;
+    crate::engine::task_store::find_project_by_path(&conn, project_path)
+        .ok()
+        .flatten()
+        .map(|p| p.id)
+}
+
+fn resolve_site_url_from_manifest(automation_dir: &std::path::Path) -> Option<String> {
     let manifest_path = automation_dir.join("manifest.json");
     std::fs::read_to_string(&manifest_path)
         .ok()
@@ -245,7 +260,10 @@ fn resolve_site_url(automation_dir: &std::path::Path) -> Option<String> {
         .and_then(|v| {
             v.get("gsc_site")
                 .or_else(|| v.get("url"))
+                .or_else(|| v.get("site_url"))
                 .and_then(|u| u.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
                 .map(String::from)
         })
 }
