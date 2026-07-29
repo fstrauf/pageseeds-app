@@ -386,14 +386,26 @@ pub fn scan_links(content_dir: &Path, articles: &[Article]) -> Result<LinkScanRe
         .iter()
         .filter(|p| !p.incoming_ids.is_empty())
         .count();
+
+    // Primary residual lists are discovery debt for live pages only; drafts are
+    // unpublished and must not drive post_actions re-rounds. Full `profiles`
+    // still cover every scanned article (graph truth).
+    let published_ids: HashSet<i64> = articles
+        .iter()
+        .filter(|a| a.status.eq_ignore_ascii_case("published"))
+        .map(|a| a.id)
+        .collect();
+
     let orphan_ids: Vec<i64> = profiles
         .iter()
         .filter(|p| p.incoming_ids.is_empty() && p.outgoing_ids.is_empty())
+        .filter(|p| published_ids.contains(&p.id))
         .map(|p| p.id)
         .collect();
     let zero_incoming_ids: Vec<i64> = profiles
         .iter()
         .filter(|p| p.incoming_ids.is_empty())
+        .filter(|p| published_ids.contains(&p.id))
         .map(|p| p.id)
         .collect();
 
@@ -631,6 +643,174 @@ Broken: [stale link] /blog/old_legacy_post here.
         assert_eq!(result.unresolved_links.len(), 1);
         assert_eq!(result.unresolved_links[0].file, "1_post.mdx");
         assert_eq!(result.unresolved_links[0].target, "ghost");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_links_residuals_exclude_drafts_from_discovery_debt() {
+        let dir = std::env::temp_dir().join(format!(
+            "pageseeds-linking-draft-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Draft with zero links — must stay out of residual discovery lists.
+        std::fs::write(
+            dir.join("1_draft_orphan.mdx"),
+            "---\ntitle: Draft Orphan\n---\n\n# Draft\n\nNo links yet.\n",
+        )
+        .unwrap();
+        // Published with zero links — remains discovery debt.
+        std::fs::write(
+            dir.join("2_live_orphan.mdx"),
+            "---\ntitle: Live Orphan\n---\n\n# Live\n\nNo links yet.\n",
+        )
+        .unwrap();
+        // Published with a mutual link so it is neither orphan nor zero-incoming alone.
+        std::fs::write(
+            dir.join("3_hub.mdx"),
+            "---\ntitle: Hub\n---\n\n# Hub\n\nSee [Spoke](/blog/spoke).\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("4_spoke.mdx"),
+            "---\ntitle: Spoke\n---\n\n# Spoke\n\nSee [Hub](/blog/hub).\n",
+        )
+        .unwrap();
+
+        let articles = vec![
+            crate::models::article::Article {
+                id: 1,
+                title: "Draft Orphan".to_string(),
+                url_slug: "draft-orphan".to_string(),
+                file: "1_draft_orphan.mdx".to_string(),
+                target_keyword: None,
+                keyword_difficulty: None,
+                target_volume: 0,
+                published_date: None,
+                word_count: 0,
+                status: "draft".to_string(),
+                review_status: None,
+                review_started_at: None,
+                last_reviewed_at: None,
+                review_count: 0,
+                content_gaps_addressed: vec![],
+                estimated_traffic_monthly: None,
+                project_id: "p1".to_string(),
+                quality_score: None,
+                quality_grade: None,
+                quality_rated_at: None,
+                publishing_ready: None,
+                quality_breakdown: None,
+                content_hash: None,
+                last_edited_at: None,
+                page_type: None,
+            },
+            crate::models::article::Article {
+                id: 2,
+                title: "Live Orphan".to_string(),
+                url_slug: "live-orphan".to_string(),
+                file: "2_live_orphan.mdx".to_string(),
+                target_keyword: None,
+                keyword_difficulty: None,
+                target_volume: 0,
+                published_date: None,
+                word_count: 0,
+                status: "published".to_string(),
+                review_status: None,
+                review_started_at: None,
+                last_reviewed_at: None,
+                review_count: 0,
+                content_gaps_addressed: vec![],
+                estimated_traffic_monthly: None,
+                project_id: "p1".to_string(),
+                quality_score: None,
+                quality_grade: None,
+                quality_rated_at: None,
+                publishing_ready: None,
+                quality_breakdown: None,
+                content_hash: None,
+                last_edited_at: None,
+                page_type: None,
+            },
+            crate::models::article::Article {
+                id: 3,
+                title: "Hub".to_string(),
+                url_slug: "hub".to_string(),
+                file: "3_hub.mdx".to_string(),
+                target_keyword: None,
+                keyword_difficulty: None,
+                target_volume: 0,
+                published_date: None,
+                word_count: 0,
+                status: "published".to_string(),
+                review_status: None,
+                review_started_at: None,
+                last_reviewed_at: None,
+                review_count: 0,
+                content_gaps_addressed: vec![],
+                estimated_traffic_monthly: None,
+                project_id: "p1".to_string(),
+                quality_score: None,
+                quality_grade: None,
+                quality_rated_at: None,
+                publishing_ready: None,
+                quality_breakdown: None,
+                content_hash: None,
+                last_edited_at: None,
+                page_type: None,
+            },
+            crate::models::article::Article {
+                id: 4,
+                title: "Spoke".to_string(),
+                url_slug: "spoke".to_string(),
+                file: "4_spoke.mdx".to_string(),
+                target_keyword: None,
+                keyword_difficulty: None,
+                target_volume: 0,
+                published_date: None,
+                word_count: 0,
+                status: "published".to_string(),
+                review_status: None,
+                review_started_at: None,
+                last_reviewed_at: None,
+                review_count: 0,
+                content_gaps_addressed: vec![],
+                estimated_traffic_monthly: None,
+                project_id: "p1".to_string(),
+                quality_score: None,
+                quality_grade: None,
+                quality_rated_at: None,
+                publishing_ready: None,
+                quality_breakdown: None,
+                content_hash: None,
+                last_edited_at: None,
+                page_type: None,
+            },
+        ];
+
+        let result = scan_links(&dir, &articles).unwrap();
+        // Graph truth: draft still has a profile.
+        assert!(
+            result.profiles.iter().any(|p| p.id == 1),
+            "draft must remain in profiles"
+        );
+        assert!(
+            !result.zero_incoming_ids.contains(&1),
+            "draft with zero incoming must not appear in zero_incoming_ids"
+        );
+        assert!(
+            !result.orphan_ids.contains(&1),
+            "draft orphan must not appear in orphan_ids"
+        );
+        assert!(
+            result.zero_incoming_ids.contains(&2),
+            "published orphan must remain in zero_incoming_ids"
+        );
+        assert!(
+            result.orphan_ids.contains(&2),
+            "published orphan must remain in orphan_ids"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
