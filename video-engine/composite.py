@@ -31,6 +31,7 @@ W, H = 1080, 1920
 FPS = 30
 FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
 END_CARD_TAIL_S = 3.0  # extra seconds the end card holds after the voice ends
+HOOK_CARD_S = 1.5  # branded hook card prepended at frame 0 (the Shorts "thumbnail")
 CAPTION_BOX_RGBA = (0, 0, 0, 178)  # ~70% opaque black behind phrase captions
 CAPTION_BOX_RADIUS = 18
 ZOOM_PCT = "0.08"  # slow push-in on alternating segments (keeps static UI alive)
@@ -173,6 +174,43 @@ def render_caption_png(text: str, path: Path, fontsize=64, box=False) -> int:
     return canvas_h
 
 
+def render_hook_card_png(clip: dict, brand: dict, path: Path, config_dir: Path | None) -> None:
+    """Branded frame-0 hook card: logo, accent rule, big hook text, domain.
+    Text = clip.hook_text (optional, punchy) else keywords[0] uppercased."""
+    ec = brand["end_card"]
+    bg, accent, text_c, muted = tuple(ec["bg"]), tuple(ec["accent"]), tuple(ec["text"]), tuple(ec["muted"])
+    img = Image.new("RGB", (W, H), bg)
+    draw = ImageDraw.Draw(img)
+    y_rule = 760
+    logo_ref = brand.get("logo_path")
+    if logo_ref:
+        lp = Path(logo_ref)
+        if not lp.is_absolute() and config_dir:
+            lp = config_dir / lp
+        try:
+            logo = Image.open(lp).convert("RGBA")
+            lw = int(brand.get("logo_width", 200)) + 60
+            lh = int(logo.height * lw / logo.width)
+            logo = logo.resize((lw, lh), Image.LANCZOS)
+            img.paste(logo, ((W - lw) // 2, 470), logo)
+            y_rule = 800
+        except OSError:
+            pass
+    draw.rectangle([W // 2 - 120, y_rule, W // 2 + 120, y_rule + 8], fill=accent)
+    hook_text = (clip.get("hook_text") or "").strip() or (clip.get("keywords") or [""])[0].upper()
+    hook_font = ImageFont.truetype(FONT, 92)
+    y = y_rule + 90
+    for line in wrap_text(hook_text, hook_font, max_w=920):
+        bbox = hook_font.getbbox(line)
+        draw.text(((W - (bbox[2] - bbox[0])) // 2, y), line, font=hook_font, fill=text_c)
+        y += 118
+    dom_font = ImageFont.truetype(FONT, 46)
+    dom = brand["domain"]
+    bbox = dom_font.getbbox(dom)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, H - 260), dom, font=dom_font, fill=muted)
+    img.save(path)
+
+
 def render_end_card_png(clip: dict, brand: dict, path: Path, config_dir: Path | None) -> None:
     ec = brand["end_card"]
     bg, accent = tuple(ec["bg"]), tuple(ec["accent"])
@@ -278,13 +316,22 @@ def main() -> None:
     voice_dur = ffprobe_duration(out_dir / "voice.mp3")
     intent_total = clip["timing_map"][-1]["to_s"]
     scale = voice_dur / intent_total
-    total = voice_dur + END_CARD_TAIL_S
+    total = voice_dur + END_CARD_TAIL_S + HOOK_CARD_S
     print(f"[composite] voice {voice_dur:.2f}s, intent {intent_total}s, scale {scale:.3f}, total {total:.2f}s")
 
     parts_dir = out_dir / "parts"
     parts_dir.mkdir(exist_ok=True)
-    part_files, seg_bounds = [], []
-    t = 0.0
+
+    # Frame-0 hook card (branded; also becomes the thumbnail file)
+    hook_card = parts_dir / "hookcard.png"
+    render_hook_card_png(clip, brand, hook_card, config_dir)
+    hook_part = parts_dir / "part_hook.mp4"
+    run(["ffmpeg", "-y", "-loop", "1", "-t", f"{HOOK_CARD_S:.3f}", "-i", hook_card,
+         "-vf", f"fps={FPS},setsar=1", "-c:v", "libx264", "-preset", "medium",
+         "-crf", "18", "-an", hook_part])
+
+    part_files, seg_bounds = [hook_part], []
+    t = HOOK_CARD_S
     for i, seg in enumerate(clip["timing_map"]):
         dur = (seg["to_s"] - seg["from_s"]) * scale
         is_end_card = seg["ui_target"] == "end_card"
@@ -343,14 +390,16 @@ def main() -> None:
         inputs.append(str(png))
         idx = j + 2
         y = 1650 - ch
-        chain += f"[{idx}:v]overlay=0:{y}:enable='between(t,{ph['start']:.3f},{ph['end']:.3f})'[c{j}];[c{j}]"
-    # hook keyword, first 3s
+        cs, ce = ph["start"] + HOOK_CARD_S, ph["end"] + HOOK_CARD_S
+        chain += f"[{idx}:v]overlay=0:{y}:enable='between(t,{cs:.3f},{ce:.3f})'[c{j}];[c{j}]"
+    # hook keyword, first 3s of app footage (after the hook card)
     hook = cap_dir / "hook.png"
     render_caption_png(clip["keywords"][0].upper(), hook, fontsize=104, box=True)
     inputs.append(str(hook))
     hi = len(inputs) - 1
     hook_y = 760
-    chain += f"[{hi}:v]overlay=0:{hook_y}:enable='between(t,0,3)'[hk];[hk]"
+    he = HOOK_CARD_S + 3
+    chain += f"[{hi}:v]overlay=0:{hook_y}:enable='between(t,{HOOK_CARD_S:.3f},{he:.3f})'[hk];[hk]"
     # progress bar
     bar = cap_dir / "bar.png"
     render_bar_png(brand, bar)
@@ -361,9 +410,13 @@ def main() -> None:
     audio = (f"[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,apad,atrim=0:{total:.3f},"
              f"asetpts=PTS-STARTPTS[aout]")
 
-    cmd = ["ffmpeg", "-y"]
-    for inp in inputs:
-        cmd += ["-i", inp]
+    # caption/bar/hook PNGs are single frames that EOF after 0.04s; without
+    # -loop 1 the overlay silently stops compositing them after their first
+    # frame (discovered 2026-07-29: captions vanished from the whole video)
+    cmd = ["ffmpeg", "-y", "-i", inputs[0], "-itsoffset", f"{HOOK_CARD_S:.3f}",
+           "-i", inputs[1]]
+    for inp in inputs[2:]:
+        cmd += ["-loop", "1", "-framerate", str(FPS), "-i", inp]
     cmd += ["-filter_complex", chain + ";" + audio,
             "-map", "[vout]", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "medium", "-b:v", "8M", "-maxrate", "9M",
@@ -372,13 +425,9 @@ def main() -> None:
             "-t", f"{total:.3f}", out_dir / f"{slug}.mp4"]
     run(cmd)
 
-    # Thumbnail frame time (generic — no product-specific ui_target names):
-    # 1) packaging.thumbnail_hint as numeric seconds, if parseable
-    # 2) brand.thumbnail_ui_target matching a timing_map segment mid-point
-    # 3) midpoint of the full video
-    thumb_t = resolve_thumbnail_time(clip, brand, seg_bounds, total)
-    run(["ffmpeg", "-y", "-ss", f"{thumb_t:.2f}", "-i", out_dir / f"{slug}.mp4",
-         "-frames:v", "1", "-update", "1", "-q:v", "2", out_dir / f"{slug}.jpg"])
+    # Thumbnail = the hook card itself (consistent, punchy channel grid)
+    run(["ffmpeg", "-y", "-i", hook_card, "-frames:v", "1", "-update", "1",
+         "-q:v", "2", out_dir / f"{slug}.jpg"])
 
     print(f"[composite] done -> {out_dir / (slug + '.mp4')}")
 
