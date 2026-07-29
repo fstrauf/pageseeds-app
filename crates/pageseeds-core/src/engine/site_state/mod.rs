@@ -9,6 +9,7 @@
 //! neighbors (#119) ship empty-safe until that lands.
 
 mod builders;
+mod residual_inventory;
 mod types;
 
 #[cfg(test)]

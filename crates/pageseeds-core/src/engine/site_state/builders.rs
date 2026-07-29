@@ -11,7 +11,7 @@ use chrono::{Duration, Utc};
 use rusqlite::Connection;
 
 use crate::content::ops::count_words;
-use crate::content::redirects::load_redirect_source_slugs;
+use crate::content::redirects::{load_redirect_map, load_redirect_source_slugs};
 use crate::content::slug::{extract_slug_from_url, normalize_url_slug, resolve_slug};
 use crate::db::{
     self, build_page_index, pages_for_slug, previous_window, recent_window, rollup_for_slug,
@@ -21,6 +21,7 @@ use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::article::Article;
 
+use super::residual_inventory::{build_non_catalog_gsc_inventory, build_redirect_equity_inventory};
 use super::types::*;
 
 // ── Public builders ──────────────────────────────────────────────────────────
@@ -35,10 +36,16 @@ pub fn build_site_overview(
     let period_days = period_days.unwrap_or(DEFAULT_PERIOD_DAYS).max(1);
     let generated_at = Utc::now().to_rfc3339();
     let articles = task_store::list_articles(conn, project_id)?;
-    let redirected = load_redirect_source_slugs(project_path);
+    let redirect_map = load_redirect_map(project_path);
+    let redirected: HashSet<String> = redirect_map.keys().cloned().collect();
     let live: Vec<&Article> = articles
         .iter()
         .filter(|a| !is_redirected(&a.url_slug, &redirected))
+        .collect();
+    let live_catalog_slugs: HashSet<String> = live
+        .iter()
+        .map(|a| normalize_url_slug(&a.url_slug))
+        .filter(|s| !s.is_empty())
         .collect();
 
     let page_index = build_page_index(conn, project_id)?;
@@ -219,6 +226,20 @@ pub fn build_site_overview(
 
     let hard_cannibalization = build_hard_cannibalization_inventory(conn, project_id, &articles);
 
+    // Residual equity on redirect sources + never-catalog high-impr GSC (#261).
+    let redirect_equity = build_redirect_equity_inventory(
+        &redirect_map,
+        &page_index,
+        &recent_by_page,
+        &live_catalog_slugs,
+    );
+    let non_catalog_gsc = build_non_catalog_gsc_inventory(
+        &page_index,
+        &recent_by_page,
+        &live_catalog_slugs,
+        &redirected,
+    );
+
     let hints = build_hints(
         has_any_gsc,
         &freshness,
@@ -227,6 +248,8 @@ pub fn build_site_overview(
         &zero_impression,
         &striking_distance,
         &hard_cannibalization,
+        &redirect_equity,
+        &non_catalog_gsc,
     );
 
     Ok(SiteOverview {
@@ -254,6 +277,8 @@ pub fn build_site_overview(
         zero_impression,
         striking_distance,
         hard_cannibalization,
+        redirect_equity,
+        non_catalog_gsc,
         hints,
     })
 }
@@ -868,6 +893,8 @@ fn build_hints(
     zero_impression: &ZeroImpressionInventory,
     striking_distance: &StrikingDistanceInventory,
     hard_cannibalization: &HardCannibalizationInventory,
+    redirect_equity: &RedirectEquityInventory,
+    non_catalog_gsc: &NonCatalogGscInventory,
 ) -> Vec<String> {
     let mut hints = Vec::new();
     // Always surface missing/stale tape for agents scanning hints only (#164).
@@ -896,6 +923,13 @@ fn build_hints(
     }
     if hard_cannibalization.count > 0 && hard_cannibalization.degraded_reason.is_none() {
         hints.push("Hard same-query cannibal samples present".into());
+    }
+    // Residual equity inventories (#261).
+    if redirect_equity.count > 0 {
+        hints.push("Redirect residual equity present".into());
+    }
+    if non_catalog_gsc.count > 0 {
+        hints.push("Non-catalog residual GSC present".into());
     }
     // Always until #119
     hints.push("Evidence index not available".into());
