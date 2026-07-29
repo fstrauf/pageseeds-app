@@ -1158,3 +1158,235 @@ fn hard_cannibalization_below_impression_floor_not_grouped() {
 
     let _ = fs::remove_dir_all(&project);
 }
+
+// ── Issue #261: redirect_equity / non_catalog_gsc residual inventory ─────────
+
+#[test]
+fn redirect_equity_maps_residual_source_to_keeper_metrics() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // Keeper B is live catalog; source A is redirected (may still have catalog row).
+    insert_article(
+        &conn, "proj1", 1, "keeper-b", "Keeper B", "content/b.mdx", "published", 200,
+    );
+    insert_article(
+        &conn, "proj1", 2, "source-a", "Source A", "content/a.mdx", "published", 100,
+    );
+    fs::write(
+        project.join(".github/automation/redirects.csv"),
+        "source,destination,status\n/blog/source-a,/blog/keeper-b,301\n",
+    )
+    .unwrap();
+
+    let (d1, _) = recent_dates();
+    let rows = vec![
+        // Residual demand still on redirected source A.
+        daily_row("https://example.com/blog/source-a", &d1, 12.0, 400.0),
+        // Keeper B also has traffic.
+        daily_row("https://example.com/blog/keeper-b", &d1, 30.0, 800.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+
+    assert_eq!(overview.redirect_equity.count, 1);
+    assert_eq!(overview.redirect_equity.sample.len(), 1);
+    let sample = &overview.redirect_equity.sample[0];
+    assert_eq!(sample.source_slug, "source-a");
+    assert_eq!(sample.destination_slug, "keeper-b");
+    assert_eq!(sample.source_impressions, 400.0);
+    assert_eq!(sample.source_clicks, 12.0);
+    assert_eq!(sample.destination_impressions, 800.0);
+    assert_eq!(sample.destination_clicks, 30.0);
+    assert!(sample.destination_in_catalog);
+    assert!(overview
+        .hints
+        .iter()
+        .any(|h| h == "Redirect residual equity present"));
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn non_catalog_gsc_includes_never_catalog_excludes_mapped_redirect_sources() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    insert_article(
+        &conn, "proj1", 1, "live-post", "Live Post", "content/l.mdx", "published", 100,
+    );
+    fs::write(
+        project.join(".github/automation/redirects.csv"),
+        "source,destination,status\n/blog/old-landing,/blog/live-post,301\n",
+    )
+    .unwrap();
+
+    let (d1, _) = recent_dates();
+    let rows = vec![
+        daily_row("https://example.com/blog/live-post", &d1, 5.0, 100.0),
+        // Mapped redirect source with residual — belongs in redirect_equity only.
+        daily_row("https://example.com/blog/old-landing", &d1, 8.0, 300.0),
+        // Never-catalog high-impr page → non_catalog_gsc.
+        daily_row("https://example.com/blog/copy-ai-alternative", &d1, 20.0, 773.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+
+    // Redirect equity has the mapped source.
+    assert_eq!(overview.redirect_equity.count, 1);
+    assert_eq!(overview.redirect_equity.sample[0].source_slug, "old-landing");
+
+    // Non-catalog has never-catalog only — not the mapped redirect source.
+    assert_eq!(overview.non_catalog_gsc.count, 1);
+    assert_eq!(overview.non_catalog_gsc.sample.len(), 1);
+    assert_eq!(overview.non_catalog_gsc.sample[0].slug, "copy-ai-alternative");
+    assert_eq!(overview.non_catalog_gsc.sample[0].impressions, 773.0);
+    assert_eq!(overview.non_catalog_gsc.sample[0].clicks, 20.0);
+    assert_eq!(overview.non_catalog_gsc.sample[0].kind, "unknown");
+    assert!(
+        !overview
+            .non_catalog_gsc
+            .sample
+            .iter()
+            .any(|s| s.slug == "old-landing"),
+        "mapped redirect source must not duplicate into non_catalog_gsc"
+    );
+    assert!(overview
+        .hints
+        .iter()
+        .any(|h| h == "Non-catalog residual GSC present"));
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn top_pages_still_live_only_excludes_redirected_source_residual() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    insert_article(
+        &conn, "proj1", 1, "keeper", "Keeper", "content/k.mdx", "published", 100,
+    );
+    insert_article(
+        &conn, "proj1", 2, "dead-source", "Dead Source", "content/d.mdx", "published", 50,
+    );
+    fs::write(
+        project.join(".github/automation/redirects.csv"),
+        "source,destination,status\n/blog/dead-source,/blog/keeper,301\n",
+    )
+    .unwrap();
+
+    let (d1, _) = recent_dates();
+    // Redirected source has higher residual than keeper.
+    let rows = vec![
+        daily_row("https://example.com/blog/dead-source", &d1, 50.0, 5000.0),
+        daily_row("https://example.com/blog/keeper", &d1, 5.0, 100.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+
+    // top_pages / totals stay live-catalog only.
+    assert_eq!(overview.totals.articles_live, 1);
+    assert_eq!(overview.totals.impressions, 100.0);
+    assert_eq!(overview.totals.clicks, 5.0);
+    assert!(
+        !overview.top_pages.iter().any(|p| p.slug == "dead-source"),
+        "redirected source must not appear in top_pages: {:?}",
+        overview.top_pages
+    );
+    assert_eq!(overview.top_pages.len(), 1);
+    assert_eq!(overview.top_pages[0].slug, "keeper");
+    // Residual still visible via redirect_equity.
+    assert_eq!(overview.redirect_equity.count, 1);
+    assert_eq!(overview.redirect_equity.sample[0].source_impressions, 5000.0);
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn redirect_equity_skips_zero_residual_source() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    insert_article(
+        &conn, "proj1", 1, "keeper", "Keeper", "content/k.mdx", "published", 100,
+    );
+    fs::write(
+        project.join(".github/automation/redirects.csv"),
+        "source,destination,status\n\
+         /blog/zero-source,/blog/keeper,301\n\
+         /blog/hot-source,/blog/keeper,301\n",
+    )
+    .unwrap();
+
+    let (d1, _) = recent_dates();
+    let rows = vec![
+        daily_row("https://example.com/blog/keeper", &d1, 2.0, 50.0),
+        // Zero residual on source — skip.
+        daily_row("https://example.com/blog/zero-source", &d1, 0.0, 0.0),
+        // Positive residual — include.
+        daily_row("https://example.com/blog/hot-source", &d1, 3.0, 120.0),
+        // No GSC rows at all for a third source would also skip (not listed).
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.redirect_equity.count, 1);
+    assert_eq!(overview.redirect_equity.sample[0].source_slug, "hot-source");
+    assert!(
+        !overview
+            .redirect_equity
+            .sample
+            .iter()
+            .any(|s| s.source_slug == "zero-source")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn non_catalog_below_min_impressions_floor_excluded() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    insert_article(
+        &conn, "proj1", 1, "live", "Live", "content/l.mdx", "published", 100,
+    );
+
+    let (d1, _) = recent_dates();
+    let rows = vec![
+        daily_row("https://example.com/blog/live", &d1, 1.0, 20.0),
+        // Below NON_CATALOG_GSC_MIN_IMPRESSIONS (50).
+        daily_row("https://example.com/blog/orphan-low", &d1, 1.0, 49.0),
+        // At floor — included.
+        daily_row("https://example.com/blog/orphan-ok", &d1, 2.0, 50.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.non_catalog_gsc.count, 1);
+    assert_eq!(overview.non_catalog_gsc.sample[0].slug, "orphan-ok");
+    assert_eq!(overview.non_catalog_gsc.sample[0].impressions, 50.0);
+    assert!(
+        !overview
+            .non_catalog_gsc
+            .sample
+            .iter()
+            .any(|s| s.slug == "orphan-low")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}

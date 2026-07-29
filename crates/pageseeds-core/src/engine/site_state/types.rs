@@ -26,8 +26,12 @@ pub const STRIKING_MIN_IMPRESSIONS: f64 = 200.0;
 
 // Hard same-query floor/cap live in `db::ctr_query` (shared with cannibalization
 // audit): `SHARED_QUERY_MIN_IMPRESSIONS` / `SHARED_QUERY_MAX_PAGES`.
-/// Sample size cap shared by zero-impression, striking-distance, and hard-cannibal groups.
+/// Sample size cap shared by zero-impression, striking-distance, hard-cannibal,
+/// redirect-equity, and non-catalog GSC inventory groups.
 pub const OVERVIEW_INVENTORY_SAMPLE_CAP: usize = 10;
+
+/// Minimum recent-window impressions for non-catalog residual GSC inventory (#261).
+pub const NON_CATALOG_GSC_MIN_IMPRESSIONS: f64 = 50.0;
 
 // ── site_overview ────────────────────────────────────────────────────────────
 
@@ -46,6 +50,10 @@ pub struct SiteOverview {
     pub striking_distance: StrikingDistanceInventory,
     /// Hard same-query multi-URL cannibal samples from `ctr_query_metrics` (#204).
     pub hard_cannibalization: HardCannibalizationInventory,
+    /// Residual GSC on redirect sources with map destination metrics (#261).
+    pub redirect_equity: RedirectEquityInventory,
+    /// High-impression GSC pages outside live catalog and redirect map (#261).
+    pub non_catalog_gsc: NonCatalogGscInventory,
     /// Deterministic flag strings only (no soft-cluster prose).
     pub hints: Vec<String>,
 }
@@ -105,6 +113,42 @@ pub struct HardCannibalSlugMetric {
     pub impressions: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clicks: Option<f64>,
+}
+
+/// Residual demand still landing on redirect sources (#261).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RedirectEquityInventory {
+    pub count: usize,
+    pub sample: Vec<RedirectEquitySample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedirectEquitySample {
+    pub source_slug: String,
+    pub destination_slug: String,
+    pub source_impressions: f64,
+    pub source_clicks: f64,
+    pub destination_impressions: f64,
+    pub destination_clicks: f64,
+    /// True when the destination slug is a live (non-redirected) catalog article.
+    pub destination_in_catalog: bool,
+}
+
+/// High-impression GSC pages not in live catalog and not mapped redirects (#261).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NonCatalogGscInventory {
+    pub count: usize,
+    pub sample: Vec<NonCatalogGscSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NonCatalogGscSample {
+    /// Normalized slug (or page URL identity when slug extraction is empty).
+    pub slug: String,
+    pub impressions: f64,
+    pub clicks: f64,
+    /// `"redirect_source_missing_map"` | `"unknown"`.
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

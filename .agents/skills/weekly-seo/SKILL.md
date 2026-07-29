@@ -362,7 +362,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 
 | Tool | Role |
 |------|------|
-| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints, plus `zero_impression` / `striking_distance` / `hard_cannibalization` inventory (#204) |
+| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints, plus `zero_impression` / `striking_distance` / `hard_cannibalization` inventory (#204) and `redirect_equity` / `non_catalog_gsc` residual inventory (#261) |
 | `articles` | GSC-aware catalog list (filters: status, min impressions, period) |
 | `article` | Full package for one slug: frontmatter, body outline, top queries, neighbors (`-S`/`--slug`) |
 | `gsc-performance` | Site/page traffic, CTR, impressions (`-l`, default 50, max 200) |
@@ -403,7 +403,8 @@ tool without a new hypothesis.
 #### Soft hints (priors only — never forced weekly actions)
 
 Priors from desk data including first-class overview inventory fields
-(`zero_impression`, `striking_distance`, `hard_cannibalization` — #204).
+(`zero_impression`, `striking_distance`, `hard_cannibalization` — #204;
+`redirect_equity`, `non_catalog_gsc` — #261).
 **Do not** require DataForSEO, Clarity, Reddit, full `ctr_audit`, full
 `indexing_health_campaign`, or `content_review` as strategy brain for these
 signals. Empty or `degraded_reason` (e.g. `gsc_missing`) is not a force create.
@@ -422,7 +423,7 @@ signals. Empty or `degraded_reason` (e.g. `gsc_missing`) is not a force create.
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
 
-##### `site-overview` inventory signals (#204)
+##### `site-overview` inventory signals (#204 / #261)
 
 Always read these on overview. Optional priors only — never mandatory creates
 every week.
@@ -432,6 +433,8 @@ every week.
 | High `zero_impression` count / sample (and not degraded) | Optional: cache-first dead-weight path ([below](#dead-weight--winnability-secondary)) — **not** mandatory; never weekly re-score loop |
 | `striking_distance` count / sample (pos ~7–13 + meaningful impr) | See **[Striking-distance preferred path](#striking-distance-preferred-path)** — ≤2 creates; overview sample first; fallback filter only if needed; **not** mandatory |
 | `hard_cannibalization` samples (and not degraded) | Optional scoped `cannibalization_audit` **only with hard multi-URL query evidence** — soft clusters still non-authority |
+| `redirect_equity` sample (residual GSC on 301 sources → destinations) | After merges: attribute residual landings to keepers before ignoring source URLs; cite source/dest impressions in report — **not** auto-merge |
+| `non_catalog_gsc` sample (high-impr never-catalog pages) | Note residual demand outside live catalog; investigate map gaps or content opportunities — do **not** invent keepers without evidence |
 
 ### Dead-weight / winnability (secondary)
 
