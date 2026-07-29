@@ -111,12 +111,13 @@ pub(crate) fn exec_gsc_sync_articles(
         let fetch_result = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move {
+                // row_limit=0 → full startRow pagination until exhausted (#262).
                 let pages = crate::gsc::analytics::fetch_page_rows(
                     &token_inner,
                     &site_url_inner,
                     &start_inner,
                     &end_inner,
-                    1000,
+                    0,
                 )
                 .await?;
                 let queries = crate::gsc::analytics::fetch_page_query_rows(
@@ -124,7 +125,7 @@ pub(crate) fn exec_gsc_sync_articles(
                     &site_url_inner,
                     &start_inner,
                     &end_inner,
-                    10000,
+                    0,
                 )
                 .await?;
                 Ok::<_, crate::error::Error>((pages, queries))
@@ -241,7 +242,9 @@ pub(crate) fn exec_gsc_sync_articles(
     // 7b. Append per-page daily snapshots (issue #23). Best-effort: the
     // snapshot pull is additive — a failure here must not fail the sync.
     // Append-only by contract (INSERT OR IGNORE); never deleted on re-sync.
-    let snapshots_written = {
+    // Paginated via startRow (#262); analytics logs pages/partial=true on
+    // mid-loop API errors after partial success.
+    let (daily_rows_fetched, snapshots_written) = {
         let token_daily = token.clone();
         let site_daily = site_url.clone();
         let start_daily = start_str.clone();
@@ -254,7 +257,8 @@ pub(crate) fn exec_gsc_sync_articles(
                     &site_daily,
                     &start_daily,
                     &end_daily,
-                    25000,
+                    // Full tape: 0 / API max both mean unlimited pagination (#262).
+                    crate::gsc::analytics::GSC_API_MAX_ROWS,
                 )
                 .await
             })
@@ -263,21 +267,32 @@ pub(crate) fn exec_gsc_sync_articles(
 
         match daily_result {
             Ok(Ok(rows)) => {
-                match crate::db::insert_gsc_page_daily_snapshots(&db, &task.project_id, &rows) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        log::warn!("[gsc_sync] Failed to write daily snapshots: {}", e);
-                        0
-                    }
-                }
+                let fetched = rows.len();
+                let written =
+                    match crate::db::insert_gsc_page_daily_snapshots(&db, &task.project_id, &rows) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            log::warn!("[gsc_sync] Failed to write daily snapshots: {}", e);
+                            0
+                        }
+                    };
+                log::info!(
+                    "[gsc_sync] Daily snapshots: fetched={} written={} (INSERT OR IGNORE)",
+                    fetched,
+                    written
+                );
+                (fetched, written)
             }
             Ok(Err(e)) => {
-                log::warn!("[gsc_sync] Daily snapshot fetch failed (non-fatal): {}", e);
-                0
+                log::warn!(
+                    "[gsc_sync] Daily snapshot fetch failed (non-fatal, partial=true if any prior pages logged above): {}",
+                    e
+                );
+                (0, 0)
             }
             Err(_) => {
                 log::warn!("[gsc_sync] Daily snapshot fetch thread panicked (non-fatal)");
-                0
+                (0, 0)
             }
         }
     };
@@ -466,6 +481,16 @@ pub(crate) fn exec_gsc_sync_articles(
             ));
     }
 
+    log::info!(
+        "[gsc_sync] Summary: pages={} query_rows={} matched={}/{} daily_fetched={} daily_written={}",
+        page_rows.len(),
+        query_rows.len(),
+        matched,
+        matched + unmatched,
+        daily_rows_fetched,
+        snapshots_written
+    );
+
     let summary = serde_json::json!({
         "matched": matched,
         "unmatched": unmatched,
@@ -474,6 +499,7 @@ pub(crate) fn exec_gsc_sync_articles(
         "query_rows": query_rows.len(),
         "query_articles": query_matched,
         "target_keywords_updated": target_keyword_updated,
+        "daily_rows_fetched": daily_rows_fetched,
         "daily_snapshots_written": snapshots_written,
         "site": site_url,
         "period_days": days,
@@ -482,13 +508,15 @@ pub(crate) fn exec_gsc_sync_articles(
     StepResult {
         success: true,
         message: format!(
-            "GSC sync: matched {}/{} articles ({} GSC pages, {} query rows, {} articles with query data, {} target keywords updated)",
+            "GSC sync: matched {}/{} articles ({} GSC pages, {} query rows, {} articles with query data, {} target keywords updated, {} daily rows written of {} fetched)",
             matched,
             matched + unmatched,
             page_rows.len(),
             query_rows.len(),
             query_matched,
-            target_keyword_updated
+            target_keyword_updated,
+            snapshots_written,
+            daily_rows_fetched
         ),
         output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
         artifact_key: None,

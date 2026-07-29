@@ -341,11 +341,15 @@ list-tasks -t content_outcome_review -s todo
 
 ### B. Refresh ground truth (if stale)
 
-There is **no** `refresh_ground_truth` CLI yet (dual-path until it lands).
+**Dual-path still applies for live ad-hoc probes** (`gsc-performance` /
+`gsc-movers` / `gsc-queries`). For **desk tape** (`gsc_page_daily` totals,
+movers, inventories), `collect_gsc` + **`execute-task` this run** is enough —
+paginated page-daily sync keeps desk totals trustworthy (#262). There is no
+separate `refresh_ground_truth` product; do not treat its absence as a blocker.
 
 | Need | Do |
 |------|-----|
-| Live demand / deltas | `gsc-performance`, `gsc-movers`, `gsc-queries` (cheap truth) |
+| Live demand / deltas | `gsc-performance`, `gsc-movers`, `gsc-queries` (cheap ad-hoc truth) |
 | Stale snapshots / desk cache | `create-task -t collect_gsc` then **`execute-task` this run** if needed |
 | Clarity (if configured) | same pattern with `collect_clarity` |
 | PostHog (if MCP available) | Optional desk pass — see [PostHog desk (optional)](#posthog-desk-optional); not a CLI task |
@@ -840,7 +844,8 @@ match / user skip).
 - Future `not_before` `content_outcome_review` rows left for later (do not execute early).
 
 ## Product / CLI gaps (if any)
-- e.g. no `refresh_ground_truth` yet — used collect_gsc / live gsc-* dual-path
+- Real product/CLI gaps only (missing tools, auth). Desk tape refresh is
+  `collect_gsc` + execute — not blocked on a `refresh_ground_truth` product.
 
 ## Recommended next actions
 …
@@ -941,10 +946,12 @@ or flag product friction. Not a CLI tool, not demand truth, not
 `posthog-weekly-insights`. Project must match the PageSeeds site or the pass
 is skipped.
 
-**Dual-path freshness:** until `refresh_ground_truth` exists, use `collect_gsc`
-and/or live `gsc-*` then desk reads. Prefer desk over soft audits when both
-answer the same question. Desk JSON exposes `freshness.stale` / `freshness.hint`
-on `site-overview` and `articles` — honor those before treating zeros as demand.
+**Dual-path freshness:** live ad-hoc probes (`gsc-performance` / `gsc-movers` /
+`gsc-queries`) remain available; desk tape is refreshed by `collect_gsc` +
+execute (paginated page-daily #262) — sufficient for trustworthy desk totals.
+Prefer desk over soft audits when both answer the same question. Desk JSON
+exposes `freshness.stale` / `freshness.hint` (and `evidence_coverage`) on
+`site-overview` and `articles` — honor those before treating zeros as demand.
 
 **MCP (#92):** mount **desk tools first**; skill = operator policy. Tighten soft
 guidance if agents thrash — not hard rails first.

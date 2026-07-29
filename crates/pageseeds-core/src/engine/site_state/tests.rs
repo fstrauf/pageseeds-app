@@ -187,20 +187,72 @@ fn site_overview_totals_articles_live() {
     ];
     crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
 
+    // Evidence for both live articles (catalog total includes redirected `gone`
+    // → indexed 2 / total 3 ≈ 0.667). `coverage()` does not filter redirects.
+    let now = Utc::now().to_rfc3339();
+    for (id, slug, title) in [(1i64, "alpha", "Alpha"), (2, "beta", "Beta")] {
+        conn.execute(
+            r#"INSERT INTO article_evidence (
+                   project_id, article_id, slug, content_hash, embedding_json,
+                   word_count, title, top_queries_json, updated_at
+               ) VALUES ('proj1', ?1, ?2, 'h', NULL, 100, ?3, '[]', ?4)"#,
+            rusqlite::params![id, slug, title, &now],
+        )
+        .unwrap();
+    }
+
     let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
     assert_eq!(overview.totals.articles_live, 2);
     assert_eq!(overview.totals.articles_redirected, 1);
     assert!(overview.totals.impressions > 0.0);
     assert!(!overview.top_pages.is_empty());
-    assert!(overview.hints.iter().any(|h| h.contains("Evidence index")));
-    assert!(overview.freshness.evidence_index_at.is_none());
-    assert_eq!(overview.freshness.evidence_coverage, 0.0);
+    // Evidence rows present → coverage > 0, no unconditional evidence hint (#262).
+    assert!(
+        overview.freshness.evidence_coverage > 0.0,
+        "expected evidence_coverage > 0, got {}",
+        overview.freshness.evidence_coverage
+    );
+    assert!((overview.freshness.evidence_coverage - (2.0 / 3.0)).abs() < 0.01);
+    assert!(overview.freshness.evidence_index_at.is_some());
+    assert!(
+        !overview.hints.iter().any(|h| h.contains("Evidence index")),
+        "evidence hint must not appear when coverage > 0: {:?}",
+        overview.hints
+    );
     // Fresh insert → not stale (tape age ≤ GSC_METRICS_MAX_AGE_DAYS).
     assert!(!overview.freshness.stale);
     assert_eq!(overview.freshness.source, "gsc_page_daily");
     assert!(overview.freshness.gsc_at.is_some());
     assert!(overview.freshness.age_days.is_some());
     assert!(overview.freshness.hint.is_none());
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn site_overview_evidence_hint_when_no_index() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    insert_article(&conn, "proj1", 1, "alpha", "Alpha", "content/a.mdx", "published", 200);
+
+    let (d1, d2) = recent_dates();
+    let rows = vec![
+        daily_row("https://example.com/blog/alpha", &d1, 5.0, 100.0),
+        daily_row("https://example.com/blog/alpha", &d2, 10.0, 200.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.freshness.evidence_coverage, 0.0);
+    assert!(overview.freshness.evidence_index_at.is_none());
+    assert!(
+        overview.hints.iter().any(|h| h.contains("Evidence index")),
+        "expected evidence hint when indexed==0 and live articles > 0: {:?}",
+        overview.hints
+    );
 
     let _ = fs::remove_dir_all(&project);
 }
