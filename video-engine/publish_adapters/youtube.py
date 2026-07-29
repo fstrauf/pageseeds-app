@@ -85,6 +85,32 @@ def refresh_youtube_token(creds: dict[str, str]) -> str:
     return data["access_token"]
 
 
+def set_youtube_thumbnail(access_token: str, video_id: str, video_path: Path) -> str | None:
+    """Set the clip's hook-card jpg as the video thumbnail. Soft-fail: a missing
+    file or insufficient scope (upload-only tokens can't thumbnails.set) never
+    fails the publish — returns a note string or None on success."""
+    thumb = video_path.with_suffix(".jpg")
+    if not thumb.is_file():
+        return "no thumbnail file next to video"
+    url = f"https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video_id}"
+    req = urllib.request.Request(
+        url,
+        data=thumb.read_bytes(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "image/jpeg",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60):
+            return None
+    except urllib.error.HTTPError as e:
+        return f"thumbnail set failed ({e.code}) — needs full youtube scope"
+    except urllib.error.URLError as e:
+        return f"thumbnail set failed: {e}"
+
+
 def youtube_resumable_upload(access_token: str, video_path: Path, metadata: dict) -> dict:
     size = video_path.stat().st_size
     init_body = json.dumps(metadata).encode("utf-8")
@@ -202,6 +228,8 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> dict:
     video_id = result.get("id")
     if not video_id:
         raise PublishError("publish: YouTube upload succeeded but no video id in response")
+
+    thumb_note = set_youtube_thumbnail(token, video_id, video_path)
 
     published_at = utc_now_iso()
     youtube_published = {
